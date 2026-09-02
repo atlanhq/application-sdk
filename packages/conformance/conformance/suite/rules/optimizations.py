@@ -11,6 +11,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -18,6 +19,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O001",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="OrjsonOverStdlibJson",
         tier=EnforcementTier.WARN,
@@ -58,6 +60,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="O002",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="LegacyAssetSerialization",
         tier=EnforcementTier.WARN,
@@ -95,6 +98,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="O003",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="UntypedAssetMapperReturn",
         tier=EnforcementTier.WARN,
@@ -134,6 +138,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="O004",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="LegacyPyatlanAssetImport",
         tier=EnforcementTier.WARN,
@@ -182,6 +187,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="O006",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="DirectRocksdictImport",
         tier=EnforcementTier.WARN,
@@ -243,6 +249,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="O005",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="UnresolvedAppNamePlaceholder",
         tier=EnforcementTier.WARN,

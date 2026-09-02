@@ -5,6 +5,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -12,6 +13,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L001",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="FStringInLogMessage",
         tier=EnforcementTier.BLOCK,
@@ -49,6 +51,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L002",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="NonCanonicalLoggerFactory",
         tier=EnforcementTier.BLOCK,
@@ -106,6 +109,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L003",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ExtraKwargsWrongFramework",
         tier=EnforcementTier.WARN,
@@ -129,6 +133,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L004",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfoLog",
         tier=EnforcementTier.BLOCK,
@@ -161,6 +166,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L005",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="PrintInProductionCode",
         tier=EnforcementTier.WARN,
@@ -187,6 +193,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L006",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="InfoInTightLoop",
         tier=EnforcementTier.WARN,
@@ -211,6 +218,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L007",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="LoggerCriticalUsage",
         tier=EnforcementTier.WARN,
@@ -235,6 +243,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L008",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="UnguardedExpensiveDebug",
         tier=EnforcementTier.WARN,
@@ -271,6 +280,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L009",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="WarnThenRaiseDuplication",
         tier=EnforcementTier.WARN,
@@ -293,6 +303,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L010",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="CredentialInLogOutput",
         tier=EnforcementTier.BLOCK,
@@ -325,6 +336,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L011",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="StringConcatenationInLog",
         tier=EnforcementTier.BLOCK,
@@ -349,6 +361,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L012",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="StdlibExtraReservedKeyCollision",
         tier=EnforcementTier.BLOCK,
@@ -378,6 +391,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L013",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="StdlibArbitraryKwargs",
         tier=EnforcementTier.BLOCK,
@@ -404,6 +418,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L014",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="StructlogEventKwargOverwrite",
         tier=EnforcementTier.WARN,
@@ -427,6 +442,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L015",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="DictConfigDisableExistingLoggers",
         tier=EnforcementTier.WARN,
@@ -451,6 +467,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L016",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="BasicConfigNoopAfterFirstCall",
         tier=EnforcementTier.WARN,
@@ -475,6 +492,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L017",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="LoggerExceptionUsage",
         tier=EnforcementTier.WARN,
@@ -506,6 +524,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L018",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="KwargsInApplicationLogCalls",
         tier=EnforcementTier.WARN,
@@ -531,6 +550,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L019",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="DiscardedBindResult",
         tier=EnforcementTier.WARN,
@@ -555,6 +575,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L020",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="DeprecatedLoggingWarn",
         tier=EnforcementTier.WARN,
@@ -577,6 +598,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L021",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="MissingLoggingLintRules",
         tier=EnforcementTier.WARN,

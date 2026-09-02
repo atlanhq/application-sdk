@@ -35,6 +35,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -42,6 +43,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="I001",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileWrongBaseImage",
         tier=EnforcementTier.BLOCK,
@@ -91,6 +93,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I002",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileEntrypointOverride",
         tier=EnforcementTier.BLOCK,
@@ -135,6 +138,16 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I003",
+        canonical_reference=(
+            "atlan-mysql-app — ENV ATLAN_APP_MODULE is declared in the Dockerfile as "
+            "well as atlan.yaml, so the image runs on its own."
+        ),
+        rule_interactions=(
+            "The value must match atlan.yaml's deploy.env exactly; read it from there "
+            "rather than inferring it from the App subclass, or the two drift and the "
+            "container starts the wrong class."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileAppModuleMissing",
         tier=EnforcementTier.BLOCK,
@@ -176,6 +189,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I004",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileAppModeHardcoded",
         tier=EnforcementTier.BLOCK,
@@ -216,6 +230,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I005",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileRootUser",
         tier=EnforcementTier.BLOCK,

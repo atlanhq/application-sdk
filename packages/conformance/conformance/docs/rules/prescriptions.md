@@ -78,7 +78,7 @@ reassigned.
 
 ## P001 — `UnboundedContractFields` {#p001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
 
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
 
@@ -89,6 +89,19 @@ suppression keeps every opt-out visible in review and auditable in SARIF. Custom
 impact: payload size scales with the customer's data, so the app that passed every test
 fails only in the tenant with the largest source system — the customer's crawl dies
 mid-run with a serialization error nothing in their configuration explains.
+
+### Canonical reference
+
+- **Compliant example:** atlan-mysql-app — its generated contract/_input.py subclasses ExtractionInput with no
+  allow_unbounded_fields at all, because every filter is a bounded concrete type.
+- **Interacts with:** B005 + ledger-guard box this in. Narrowing an @entrypoint field's value type trips B005,
+  and `conformance ledger-guard` is append-only (status changes and additions allowed;
+  retypes and deletions refused), so the retype cannot land. Wrapping Any in MaxItems
+  clears P001 AND B005 but the class then raises PayloadSafetyError at import: Any is
+  refused unconditionally.
+- **Already correct when:** A justified inline `# conformance: ignore[P001] <reason>` at the declaration site IS the
+  fix for an @entrypoint contract field whose type is recorded in the ledger — every
+  alternative is blocked. Treat such a site as compliant, not as unremediated.
 
 An `Input`/`Output` contract subclass declared with the `allow_unbounded_fields=True`
 class keyword opts out of the SDK's payload-safety enforcement: arbitrary, untyped
@@ -106,7 +119,7 @@ sanctioned use is the justified inline suppression above — see BLDX-1428.
 
 ## P002 — `CategoryFieldOverride` {#p002}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
 
 > AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy
 
@@ -140,7 +153,7 @@ sanctioned use is the justified inline suppression `# conformance: ignore[P002]
 
 ## P003 — `ErrorCodePrefixMismatch` {#p003}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
 
 > AppError subclass code missing or doesn't start with the parent leaf's category prefix
 
@@ -151,6 +164,15 @@ collapse all their distinct failure modes into one undifferentiated bucket. Cust
 impact: when distinct failure modes share one code, support cannot tell a customer's
 credential expiry from a source-system outage without reading raw logs — the customer
 gets a slower, less accurate answer to 'why did my crawl fail'.
+
+### Canonical reference
+
+- **Compliant example:** application_sdk/errors/leaves.py — the 15 categorical leaves and the prefix each one
+  owns.
+- **Already correct when:** A class whose MRO overrides to_failure_details() builds the wire envelope itself, so
+  `code` is not what a dashboard reads and adding a prefixed one would be dead code
+  beside the real one. Those are exempt. Overriding qualified_code alone is NOT exempt —
+  that is the log surface only.
 
 Every concrete subclass of an `application_sdk.errors` leaf (`AuthError`,
 `InternalError`, `InvalidInputError`, etc.) must declare its own `code: ClassVar[str]`
@@ -177,7 +199,7 @@ code still collapses to the leaf.
 
 ## P004 — `DirectTemporalImport` {#p004}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
 
 > App imports 'temporalio' directly instead of the SDK orchestration seam
 
@@ -203,7 +225,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P005 — `PrivateOrchestrationInternalImport` {#p005}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
 
 > App imports SDK-private orchestration internals instead of the public seam
 
@@ -228,7 +250,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P006 — `TemporalImportOutsideAdapter` {#p006}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `sdk` · **Fix belongs in:** `sdk` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
 
 > SDK imports 'temporalio' outside the execution/_temporal adapter
 
@@ -254,7 +276,7 @@ refactored.  Suppress a deliberate exception with `# conformance: ignore[P006]
 
 ## P007 — `RawTemporalInPublicSurface` {#p007}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `sdk` · **Fix belongs in:** `sdk` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
 
 > SDK public API re-exports or exposes a raw 'temporalio' type
 
@@ -278,7 +300,7 @@ Suppress a reviewed exception with `# conformance: ignore[P007] <reason>`.
 
 ## P008 — `FrameworkTransferInsideTask` {#p008}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
 > App calls self.upload()/self.download() inside a @task method
 
@@ -310,7 +332,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P009 — `ManualObjectStoreConstruction` {#p009}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
 > App constructs its own cloud client or object store instead of the SDK storage seam
 
@@ -338,7 +360,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P010 — `ManualFileReferenceConstruction` {#p010}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
 > FileReference constructed with SDK-managed durability fields (storage_path/is_durable/file_count)
 
@@ -365,7 +387,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P011 — `RawBytesInContract` {#p011}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
 > Input/Output contract field annotated bytes/bytearray/memoryview — risks the 2MB payload limit
 
@@ -392,7 +414,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P012 — `FilePathStringInContract` {#p012}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
 > Input/Output contract field is a `str` path that should be a durable FileReference
 
@@ -422,7 +444,7 @@ visible in SARIF.
 
 ## P013 — `UntypedEntrypointBoundary` {#p013}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.6.0
 
 > @entrypoint (or implicit run()) input/output is not an SDK Input/Output subclass
 
@@ -436,6 +458,14 @@ the violation earlier (PR/CI) and covers pre-decorator code paths. Customer impa
 because the runtime rejection fires at import, an untyped entrypoint that reaches a
 release does not degrade gracefully — the app crash-loops at container start in the
 tenant, taking every workflow the customer runs on it down with the one bad method.
+
+### Canonical reference
+
+- **Compliant example:** atlan-mysql-app — @entrypoint methods take a generated AppInputContract and return an
+  Output subclass.
+- **Interacts with:** Resolution is by bare class name. Two files declaring the same name, or a class
+  shadowing its own generated base (`class X(_X)` over `from generated import X as _X`),
+  used to read as violations on correct code.
 
 A method decorated with `@entrypoint` (or a concrete `run()` override on an `App`
 subclass, which is the implicit single-entrypoint form) must declare:
@@ -462,7 +492,7 @@ conformance: ignore[P013] <reason>` at the method definition.
 
 ## P014 — `UntypedTaskBoundary` {#p014}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.6.0
 
 > @task input/output is not an SDK Input/Output subclass
 
@@ -500,7 +530,7 @@ conformance: ignore[P014] <reason>` at the method definition.
 
 ## P015 — `UnmodeledBoundedContractField` {#p015}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-modeling` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `contract-modeling` · **Autofixable:** — · **Since:** 0.6.0
 
 > Input/Output contract field uses a container of primitives/Any — replace with a typed nested model
 
@@ -533,7 +563,7 @@ conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
 
 ## P016 — `EntryPointContractCodeDrift` {#p016}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `entrypoint-alignment` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `entrypoint-alignment` · **Autofixable:** — · **Since:** 0.6.0
 
 > Entry-point names in @entrypoint code do not match app/generated/ contract dirs
 
@@ -546,6 +576,14 @@ returns 404 — with no caller-side workaround (BLDX-1425). Customer impact: the
 clicks 'create workflow' in their tenant and the setup flow 404s — the app is
 effectively uninstallable from the marketplace, and nothing on the customer's side can
 route around it.
+
+### Canonical reference
+
+- **Compliant example:** atlan-mysql-app / atlan-metabase-app / atlan-openapi-app — the @entrypoint set matches
+  the contract's entrypoints exactly; none carries a bespoke one-off entrypoint.
+- **Already correct when:** A temporary migration entrypoint is not a reason to widen the contract. Remove it once
+  its job is done — and check the DAG node, the module, the ledger (sunset, never
+  delete) and the docs together, since the entrypoint is only the visible end of it.
 
 An app's entry-point names are declared in two independent places:
 
@@ -622,7 +660,7 @@ stays visible in SARIF.
 
 ## P017 — `ManualWorkerBootstrap` {#p017}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `entrypoint-conformance` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `entrypoint-conformance` · **Autofixable:** — · **Since:** 0.6.0
 
 > App manually constructs a Temporal worker or client instead of using the SDK launcher
 
@@ -659,7 +697,7 @@ unavoidable exception outside that exemption and stays visible in SARIF.
 
 ## P018 — `ManualServerBootstrap` {#p018}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `entrypoint-conformance` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `entrypoint-conformance` · **Autofixable:** — · **Since:** 0.6.0
 
 > App manually constructs a FastAPI/uvicorn HTTP server instead of using the SDK launcher
 
@@ -687,7 +725,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P019 — `RawHttpToAtlan` {#p019}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `client-seam` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `client-seam` · **Autofixable:** — · **Since:** 0.7.0
 
 > Raw HTTP request to an Atlan endpoint (/api/meta, /api/service) instead of the pyatlan client
 
@@ -726,7 +764,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P020 — `NonDeterministicPrimitiveInWorkflow` {#p020}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
 
 > Non-deterministic time/uuid/sleep/random call in workflow-context code
 
@@ -759,7 +797,7 @@ exception with `# conformance: ignore[P020] <reason>`.
 
 ## P021 — `SideEffectIoInWorkflow` {#p021}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
 
 > File / network / env / process I/O in workflow-context code
 
@@ -784,7 +822,7 @@ conformance: ignore[P021] <reason>`.
 
 ## P022 — `UnawaitedCoroutine` {#p022}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
 
 > A same-class async method is called without await (dropped coroutine)
 
@@ -814,7 +852,7 @@ constructed coroutine is deliberately discarded and that is provably harmless.
 
 ## P023 — `BlockingCallInAsyncDef` {#p023}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
 
 > Event-loop re-entry bridge or blocking sync call inside an async def
 
@@ -873,7 +911,7 @@ to residue.  Land as `WARN`; suppress with `# conformance: ignore[P023] <reason>
 
 ## P024 — `SyncAtlanClientInApp` {#p024}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
 
 > Synchronous pyatlan AtlanClient used instead of the async client
 
@@ -903,7 +941,7 @@ suppress with `# conformance: ignore[P024] <reason>`.
 
 ## P025 — `AppNameContractCodeDrift` {#p025}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `app-name-alignment` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `app-name-alignment` · **Autofixable:** — · **Since:** 0.9.0
 
 > App name in code, atlan.yaml, or .env.example do not agree
 
@@ -972,7 +1010,7 @@ Suppress with `# conformance: ignore[P025] <reason>` on the App class definition
 
 ## P026 — `GetattrOnTypedContractField` {#p026}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.9.0
 
 > getattr() with a default on a typed entrypoint/task contract param — defeats the typed boundary
 
@@ -997,7 +1035,7 @@ Fix: use attribute access (`param.field`).  Suppress with `# conformance: ignore
 
 ## P027 — `AppStateAsCrossTaskChannel` {#p027}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `state-seam` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `state-seam` · **Autofixable:** — · **Since:** 0.9.0
 
 > get_app_state(KEY) with no matching set_app_state(KEY) writer anywhere — dead cross-task side channel
 
@@ -1025,7 +1063,7 @@ scanned source.
 
 ## P028 — `ManualQualifiedNameFString` {#p028}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-modeling` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `asset-modeling` · **Autofixable:** — · **Since:** 0.9.0
 
 > Asset qualifiedName composed by hand with an f-string instead of via pyatlan asset creators
 
@@ -1054,7 +1092,7 @@ ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
 
 ## P029 — `SdrManifestMissingAgentJson` {#p029}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `toolkit` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR agent manifest must surface agent_json + extraction_method at the top level of dag.extract.inputs.args
 
@@ -1069,6 +1107,17 @@ to status-only test pipelines. Customer impact: both failure modes land on the c
 — an agent crawl that hangs against their firewalled source or completes green with zero
 assets in their catalog — and both look like a working product until the customer asks
 where their metadata went.
+
+### Canonical reference
+
+- **Compliant example:** atlan-mysql-app / atlan-metabase-app — both declare SDR and carry agent_json plus
+  extraction_method in dag.extract.inputs.args.
+- **Interacts with:** Not a toolkit-version gap: bumping an affected app to the newest toolkit and
+  regenerating does NOT add the field. It comes from the renderer's per-widget emission.
+- **Already correct when:** The toolkit emits agent_json defensively but historically not extraction_method, so an
+  SDR app with no extraction-method widget is half-wired through no fault of its own.
+  Fix the renderer; adding the widget app-side also switches the Self-Deployed Runtime
+  option on in the form, which is a product decision rather than a conformance fix.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, every *agent
 extraction* `manifest.json` under `app/generated/` must surface both `agent_json` and
@@ -1113,7 +1162,7 @@ alone does not clear the   runtime failure.
 
 ## P030 — `SdrUploadNotCalled` {#p030}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR app has no self.upload() call in source — ENABLE_ATLAN_UPLOAD path unreachable
 
@@ -1130,6 +1179,16 @@ customer-facing failure class — data loss disguised as success. The tenant rep
 green run while zero assets reach the customer's catalog, so it is the customer who
 discovers the gap, after trusting the green status for however long it took them to
 look.
+
+### Canonical reference
+
+- **Compliant example:** atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the generated tree they
+  produce under app/generated/.
+- **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
+  hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
+  contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
+  the post-processing step and rewrites unrelated generated files. Diff atlan.yaml
+  afterwards, which regeneration can silently strip hand-written comments from.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one Python
 source file (outside `tests/`) must contain a `self.upload(` call.
@@ -1212,7 +1271,7 @@ absence of `self.upload()` is by design, not a gap.
 
 ## P031 — `SharedDefaultExecutorOffload` {#p031}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.13.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.13.0
 
 > Thread offload onto asyncio's shared default executor instead of run_in_thread()
 
@@ -1246,7 +1305,7 @@ Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
 
 ## P032 — `ReservedPreflightActivityName` {#p032}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > An app @task registers the 'preflight' activity name reserved by the SDK gate
 
@@ -1272,7 +1331,7 @@ resolvable and is not flagged.
 
 ## P033 — `DuplicateInWorkflowPreflight` {#p033}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > App defines Handler.preflight_check and a separate preflight-named @task that will drift
 
@@ -1293,7 +1352,7 @@ Remediation: delete the app-owned preflight activity and keep the single
 
 ## P034 — `UntypedPreflightCheckFailure` {#p034}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > PreflightCheck(passed=False) constructed without a typed error= — untyped failure
 
@@ -1317,7 +1376,7 @@ zero. A locally-defined, non-SDK class named `PreflightCheck` is not flagged.
 
 ## P035 — `PreflightMetadataContractParity` {#p035}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > A preflight_check metadata key is not declared on any entrypoint Input contract
 
@@ -1348,7 +1407,7 @@ into extra keys via either `model_config` form: `ConfigDict(extra="allow")` or
 
 ## P036 — `HandRolledProcessIsolation` {#p036}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.15.0
 
 > Bare ProcessPoolExecutor / multiprocessing child instead of the run_fault_isolated() / run_best_effort() seam
 
@@ -1384,7 +1443,7 @@ never touches the worker) with `# conformance: ignore[P036] <reason>`.
 
 ## P037 — `SdrAgentJsonNotConsumed` {#p037}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR app resolves credentials by credential_guid only and never routes through an agent-aware resolver — agent_json is ignored
 
@@ -1432,7 +1491,7 @@ the agent-aware call.
 
 ## P038 — `SdrArtifactMisrooted` {#p038}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR object-store prefix rooted from the empty-defaulting input application_name field instead of APPLICATION_NAME
 
@@ -1447,6 +1506,16 @@ the wrong-root case (observed for a document-store connector in fleet testing). 
 impact: the same data loss disguised as success that P030 polices, one seam later — the
 run goes green, the upload reports success, and zero assets reach the customer's catalog
 because the publish step reads a prefix nothing was ever written to.
+
+### Canonical reference
+
+- **Compliant example:** atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the generated tree they
+  produce under app/generated/.
+- **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
+  hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
+  contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
+  the post-processing step and rewrites unrelated generated files. Diff atlan.yaml
+  afterwards, which regeneration can silently strip hand-written comments from.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, the object-store
 output path/prefix (`artifacts/apps/<identity>/workflows/...`) must be rooted from the
@@ -1492,7 +1561,7 @@ empty-defaulting workflow arg.
 
 ## P039 — `SdrAgentJsonDroppedByInputContract` {#p039}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR generated extract-input contract drops the forwarded agent_json (bare Input subclass, no agent_json field, extra fields rejected)
 
@@ -1508,6 +1577,16 @@ extraction never receives the customer's credentials, so their crawl either fail
 outright or completes green with zero assets in their catalog — and because the manifest
 and the connector code both look correct, nothing on our side points at the cause until
 the customer asks where their metadata went.
+
+### Canonical reference
+
+- **Compliant example:** atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the generated tree they
+  produce under app/generated/.
+- **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
+  hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
+  contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
+  the post-processing step and rewrites unrelated generated files. Diff atlan.yaml
+  afterwards, which regeneration can silently strip hand-written comments from.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml` whose generated
 manifest declares agent routing (the `{{agent-json}}` placeholder at the extract-args
@@ -1554,7 +1633,7 @@ counterexample connectors in fleet testing do.
 
 ## P040 — `TransformTemplateReservedKeyword` {#p040}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `transform-templates` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `transform-templates` · **Autofixable:** — · **Since:** 0.18.0
 
 > Transform SQL template references an unquoted DuckDB reserved keyword in source_query
 
@@ -1628,7 +1707,7 @@ render identically, so the upgrade is the fix and the template edit is unnecessa
 
 ## P042 — `SdrHandRolledUploadBridge` {#p042}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
 
 > SDR app performs the tenant-bucket transfer through a hand-rolled upload_to_atlan bridge instead of App.upload()
 
@@ -1692,7 +1771,7 @@ being expressible.
 
 ## P043 — `NonPublicErrorControlFlow` {#p043}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `error-seam` · **Autofixable:** — · **Since:** 0.21.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `error-seam` · **Autofixable:** — · **Since:** 0.21.0
 
 > App branches on an SDK error class that application_sdk.errors does not export
 
@@ -1735,7 +1814,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P044 — `DirectStoragePrefixTransfer` {#p044}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.21.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.21.0
 
 > App transfers whole prefixes via storage.upload_prefix/download_prefix instead of FileReference + App.upload()/App.download()
 
@@ -1793,7 +1872,7 @@ performs that transfer automatically — so the two shapes cannot share a tier.
 
 ## P045 — `PrivateErrorClassImport` {#p045}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `error-seam` · **Autofixable:** — · **Since:** 0.21.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `error-seam` · **Autofixable:** — · **Since:** 0.21.0
 
 > App imports an SDK error class from an internal module instead of application_sdk.errors
 
@@ -1832,7 +1911,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P046 — `LocaleDependentTextIO` {#p046}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `portability` · **Autofixable:** — · **Since:** 0.24.0
+**Tier:** `warn` · **Scope:** `sdk` · **Fix belongs in:** `sdk` · **Category:** `portability` · **Autofixable:** — · **Since:** 0.24.0
 
 > Text file IO without encoding= — read_text/write_text or a text-mode open() decoding by platform locale
 
@@ -1892,7 +1971,7 @@ Suppress a reviewed exception with a justification: `# conformance: ignore[P046]
 
 ## P047 — `PreflightFailureLoggedAsWarning` {#p047}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.24.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.24.0
 
 > logger.warning() inside preflight_check — failure invisible under the default ERROR filter
 
@@ -1920,7 +1999,7 @@ functions the method calls are not followed.
 
 ## P048 — `AppDerivedPersistentArtifactPrefix` {#p048}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `persistence-seam` · **Autofixable:** — · **Since:** 0.24.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `persistence-seam` · **Autofixable:** — · **Since:** 0.24.0
 
 > App builds the connection-scoped persistent-artifacts layout itself instead of deriving it from the SDK's get_persistent_s3_prefix
 
@@ -1979,7 +2058,7 @@ in SARIF and turns a silent fork into a reviewed decision.
 
 ## P049 — `StrictConnectionQualifiedNameParse` {#p049}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `persistence-seam` · **Autofixable:** — · **Since:** 0.24.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `persistence-seam` · **Autofixable:** — · **Since:** 0.24.0
 
 > App parses connection_qualified_name itself and raises, where the SDK warns and proceeds
 
@@ -2052,7 +2131,7 @@ stricter contract is still expressible with a justified `# conformance: ignore[P
 
 ## P050 — `NonAtomicDestinationWrite` {#p050}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `storage-atomicity` · **Autofixable:** — · **Since:** 0.25.0
+**Tier:** `warn` · **Scope:** `sdk` · **Fix belongs in:** `sdk` · **Category:** `storage-atomicity` · **Autofixable:** — · **Since:** 0.25.0
 
 > os.open(..., O_TRUNC) writes a destination in place with no os.replace publish in scope
 
@@ -2090,7 +2169,7 @@ SARIF.
 
 ## P051 — `SdrPreflightUnavailable` {#p051}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
 
 > SDR app locks application-sdk below the 3.30.0 floor for interactive setup (test auth / preflight / metadata browsing)
 

@@ -68,6 +68,39 @@ class RuleMechanism(str, Enum):
     TEST = "test"
 
 
+class FixLocus(str, Enum):
+    """*Where the fix for this rule belongs* — the first question a remediator
+    must answer, and the one the catalog used to leave implicit.
+
+    A finding says a repo is wrong; it does not say which repo, or which file in
+    it, is the one to change. Three rules were mis-routed to app teams for weeks
+    because the answer was "not the app": one wanted a value only the
+    contract-toolkit renderer emits, one anchored on a generated file the app is
+    forbidden to edit, and one asked for a manifest key the toolkit stopped
+    emitting. Declaring the locus makes that visible before anyone opens a PR.
+
+    * ``APP``       — hand-written application source. The common case.
+    * ``CONTRACT``  — the pkl contract source (``contract/*.pkl``); the finding
+      may *anchor* on generated output, but the edit belongs upstream of it and
+      must be followed by the repo's own regeneration task.
+    * ``TOOLKIT``   — the ``contract-toolkit`` renderer. No app-side change can
+      resolve it; the app only picks the fix up on its next toolkit bump.
+    * ``SDK``       — ``application_sdk`` itself.
+    * ``CI``        — workflow and CI configuration under ``.github/``.
+    * ``PACKAGING`` — the app's build/deploy descriptors: ``pyproject.toml``,
+      ``uv.lock``, ``Dockerfile``, ``atlan.yaml``.
+    * ``TESTS``     — the app's own test suite.
+    """
+
+    APP = "app"
+    CONTRACT = "contract"
+    TOOLKIT = "toolkit"
+    SDK = "sdk"
+    CI = "ci"
+    PACKAGING = "packaging"
+    TESTS = "tests"
+
+
 class RuleScope(str, Enum):
     """Where a rule applies — the consumer surface it governs.
 

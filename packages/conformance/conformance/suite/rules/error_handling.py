@@ -5,6 +5,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -12,6 +13,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E001",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="BareExceptPass",
         tier=EnforcementTier.BLOCK,
@@ -40,6 +42,20 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E002",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — a comment stating why the "
+            "failure is expected, plus a DEBUG log carrying exc_info=True, is the "
+            "shape the rule's own message asks for."
+        ),
+        terminal_state=(
+            "Control flow must not change — the swallow is existing, deliberate "
+            "behaviour and the fix only stops the cause being discarded. Resolve the "
+            "module's logger from its own source rather than assuming the name "
+            "`logger`, and check it is bound ABOVE the handler: a bootstrap shim "
+            "binds its logger below an import-time try/except, so logging there "
+            "raises NameError inside the very block being made observable."
+        ),
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="TypedExceptPass",
         tier=EnforcementTier.BLOCK,
@@ -67,6 +83,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E003",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="BroadContextlibSuppress",
         tier=EnforcementTier.WARN,
@@ -91,6 +108,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E004",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="BroadExceptClause",
         tier=EnforcementTier.WARN,
@@ -122,6 +140,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E005",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfo",
         tier=EnforcementTier.WARN,
@@ -150,6 +169,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E006",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="BareExceptWithBody",
         tier=EnforcementTier.BLOCK,
@@ -175,6 +195,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E007",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ErrorToReturnValue",
         tier=EnforcementTier.WARN,
@@ -198,6 +219,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E008",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ImportErrorWithoutLogging",
         tier=EnforcementTier.WARN,
@@ -222,6 +244,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E009",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ExceptBlockOnlyAssigns",
         tier=EnforcementTier.WARN,
@@ -246,6 +269,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E010",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="AsyncioGatherExceptionsUnexamined",
         tier=EnforcementTier.WARN,
@@ -271,6 +295,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E011",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="LoggingFilterUnsafeBody",
         tier=EnforcementTier.WARN,
@@ -300,6 +325,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E012",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="UntypedBuiltinRaise",
         tier=EnforcementTier.WARN,
@@ -327,6 +353,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E013",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="LegacyAtlanErrorRaise",
         tier=EnforcementTier.BLOCK,
@@ -355,6 +382,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E014",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ExceptLoopControlSwallow",
         tier=EnforcementTier.WARN,
@@ -382,6 +410,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E015",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ExceptionTextInErrorMessage",
         tier=EnforcementTier.WARN,
@@ -413,6 +442,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E016",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="MissingExceptionChaining",
         tier=EnforcementTier.WARN,
@@ -444,6 +474,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E017",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="SecretNamedEvidenceKey",
         tier=EnforcementTier.BLOCK,
@@ -476,6 +507,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E018",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="BareParentLeafRaise",
         tier=EnforcementTier.WARN,
@@ -509,6 +541,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E019",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ExceptionTextInContractField",
         tier=EnforcementTier.WARN,
@@ -553,6 +586,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E020",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="HttpFailureToEmptyReturn",
         tier=EnforcementTier.WARN,

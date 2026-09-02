@@ -45,7 +45,7 @@ Suppress a finding on the violating line or the line directly above it:
 
 ## T001 — `UnmarkedIntegrationTest` {#t001}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `test-marking` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-marking` · **Autofixable:** — · **Since:** 0.4.0
 
 > Test under tests/integration/ is not marked with a pytest marker that deselects it from the unit job
 
@@ -75,7 +75,7 @@ hidden behaviour.
 
 ## T002 — `MissingSdrTestClass` {#t002}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR app declares self_deployed_runtime but no test drives the SDR (agent-mode) path
 
@@ -123,7 +123,7 @@ class TestMyAppSDR(BaseSDRIntegrationTest):
 
 ## T003 — `DeprecatedSdrHarness` {#t003}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
 
 > Subclasses the deprecated BaseSDRIntegrationTest harness (removed in v4.0)
 
@@ -200,7 +200,7 @@ migration).
 
 ## T004 — `DevEntrypointRequiresAppModule` {#t004}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `dev-entrypoint` · **Autofixable:** — · **Since:** 0.10.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `dev-entrypoint` · **Autofixable:** — · **Since:** 0.10.0
 
 > Root main.py calls application_sdk.main.main() directly, which requires ATLAN_APP_MODULE and breaks CI's dev-mode boot
 
@@ -248,7 +248,7 @@ out-of-band even for CI (e.g. some utility/CSA apps).
 
 ## T005 — `AssertionFreeTest` {#t005}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
 
 > Test has a non-empty body but no recognised assertion — it runs but verifies nothing
 
@@ -303,7 +303,7 @@ folding the no-raise expectation into a test that also asserts on the return val
 
 ## T006 — `EmptyTestBody` {#t006}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
 
 > Test body is a stub — only 'pass', '...', or a docstring
 
@@ -329,7 +329,7 @@ intentionally-empty test used purely to assert collection/import succeeds (rare)
 
 ## T007 — `VacuousAssertion` {#t007}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
 
 > Every assertion in this test is a constant-true expression that can never fail
 
@@ -371,7 +371,7 @@ contains real assertions elsewhere (in which case T007 shouldn't fire in the fir
 
 ## T008 — `UncollectableTestFile` {#t008}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.12.0
 
 > File defines test*/Test* collectables but its filename doesn't match pytest's collection glob — never collected
 
@@ -410,7 +410,7 @@ docstring).
 
 ## T009 — `UnconditionalModuleSkip` {#t009}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.12.0
 
 > Module-level pytest.skip(allow_module_level=True) is unconditional — the whole file is permanently disabled
 
@@ -451,7 +451,7 @@ the file is intentionally, permanently disabled pending removal in a tracked fol
 
 ## T010 — `MissingUnitTestSuite` {#t010}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
 
 > No collectable unit tests under tests/unit/
 
@@ -481,7 +481,7 @@ assertions (record counts, on-disk side effects, error paths via `pytest.raises`
 
 ## T011 — `MissingIntegrationTestSuite` {#t011}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
 
 > No collectable integration tests under tests/integration/
 
@@ -521,7 +521,7 @@ State the reason in a comment above the table. Suppress a single instance instea
 
 ## T012 — `MissingE2ETestSuite` {#t012}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
 
 > No collectable end-to-end tests under tests/e2e/
 
@@ -561,7 +561,7 @@ State the reason in a comment above the table. Suppress a single instance instea
 
 ## T013 — `TestFileOutsideTierDir` {#t013}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
 
 > Collectable test file lives outside the four canonical tier directories (tests/unit, tests/integration, tests/e2e, tests/ui)
 
@@ -592,7 +592,7 @@ T008-adjacent confusion).
 
 ## T014 — `CoverageGateDisabled` {#t014}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `coverage-config` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `coverage-config` · **Autofixable:** — · **Since:** 0.12.0
 
 > Coverage is configured but fail_under is absent or 0 — the number is measured but never enforced
 
@@ -639,7 +639,7 @@ tracking issue that will set a real floor.
 
 ## T015 — `CoverageOmitsProductCode` {#t015}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `coverage-config` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `coverage-config` · **Autofixable:** — · **Since:** 0.12.0
 
 > coverage omit/source excludes real product code under app/, inflating the reported percentage
 
@@ -681,7 +681,7 @@ with no branch logic worth covering).
 
 ## T016 — `E2EDeploymentNameNotInherited` {#t016}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.13.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.13.0
 
 > e2e CI compose overlay hard-codes ATLAN_DEPLOYMENT_NAME instead of inheriting the sdr-e2e per-leg value
 
@@ -733,7 +733,7 @@ hard-coded name is deliberate.
 
 ## T017 — `E2EAgentSpecPinsQueue` {#t017}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.13.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.13.0
 
 > e2e agent_spec() override hard-codes the queue instead of inheriting the per-leg ATLAN_DEPLOYMENT_NAME
 
@@ -792,7 +792,7 @@ whose overlay also hard-codes the same un-suffixed value).
 
 ## T018 — `IntegrationTierDeselectedByAddopts` {#t018}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.16.0
 
 > pyproject addopts '-m not <marker>' deselects tests under tests/integration/, emptying or thinning the directory-scoped integration CI job
 
@@ -866,7 +866,7 @@ explicitly-configured CI job (rare — prefer the directory + runtime-skip patte
 
 ## T019 — `AsyncioTestLoopScopeUnset` {#t019}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `test-async-config` · **Autofixable:** — · **Since:** 0.17.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-async-config` · **Autofixable:** — · **Since:** 0.17.0
 
 > pyproject sets asyncio_default_fixture_loop_scope to a broadened scope with asyncio_default_test_loop_scope unset (defaults to 'function') AND a test drives workflow execution from its body, so that test hangs on the fixture-owned worker/client
 
@@ -951,7 +951,7 @@ state that reason.
 
 ## T020 — `BespokeFullDagE2EWorkflow` {#t020}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
 
 > Workflow calls the SDK's sdr-e2e action directly instead of delegating to tests-reusable.yaml
 
@@ -1009,7 +1009,7 @@ ignore[T020] <reason>` on the `uses:` line and state which native dependency for
 
 ## T021 — `E2ESuiteUnreachableInCI` {#t021}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
 
 > tests/e2e/ ships collectable suites but nothing in .github/workflows/ runs them
 
@@ -1067,7 +1067,7 @@ manual scale harness that must never run in CI — and say so.
 
 ## T022 — `E2ETwoStorePostureDisabled` {#t022}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
 
 > SDR app's tests-reusable.yaml caller does not set two-store: true, so a missing App.upload() bridge greens
 
@@ -1119,7 +1119,7 @@ for an app whose extract genuinely produces no artifacts to bridge.
 
 ## T023 — `E2EHarnessScaffoldHandWritten` {#t023}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
 
 > Test module hand-declares e2e scaffold (identity attrs, CredentialBody, MustacheSubstitutions) the toolkit generates from contract/app.pkl
 
@@ -1181,7 +1181,7 @@ malformed on purpose).
 
 ## T024 — `E2ERunModeUnset` {#t024}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
 
 > e2e test class never declares mode, inheriting RunMode.DIRECT — the CI-side worker under test is never routed to
 
@@ -1231,7 +1231,7 @@ is set dynamically (e.g. parametrised from an env var) rather than as a class at
 
 ## T025 — `EntrypointWithoutE2ECoverage` {#t025}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.22.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.22.0
 
 > A bundle (multi-entrypoint) contract entrypoint has no e2e suite
 

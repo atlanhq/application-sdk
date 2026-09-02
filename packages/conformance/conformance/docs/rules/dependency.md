@@ -31,7 +31,7 @@ Suppress a finding on the violating line or the line directly above it:
 
 ## D001 — `UnpinnedSdkDependency` {#d001}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Application SDK dependency is missing or its version specifier is not bounded on both ends
 
@@ -53,7 +53,7 @@ the SDK are also exempt — packages whose `[project].name` starts with
 
 ## D002 — `RedeclaredSdkManagedDependency` {#d002}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Dependency redeclared in the app's pyproject.toml is already managed by the SDK
 
@@ -74,7 +74,7 @@ the runtime environment, this rule is skipped silently.
 
 ## D003 — `UnusedDependency` {#d003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `dependency-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `dependency-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A package declared in [project.dependencies] is never imported in source
 
@@ -108,7 +108,7 @@ synced environment for this reason.  See BLDX-1462.
 
 ## D004 — `RedeclaredSdkManagedDependencyInGroups` {#d004}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
 
 > SDK-managed dependency redeclared in a [dependency-groups] table
 
@@ -129,7 +129,7 @@ this rule is skipped silently. Cite: BLDX-1410.
 
 ## D005 — `UnknownSdkExtra` {#d005}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
 
 > Reference to an atlan-application-sdk extra the SDK does not publish
 
@@ -152,7 +152,7 @@ findings route to residue rather than auto-fix.  Cite: BLDX-1410.
 
 ## D006 — `IncompatibleRequiresPython` {#d006}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `python-version` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `python-version` · **Autofixable:** yes · **Since:** 0.5.0
 
 > App requires-python lower bound is below the SDK's minimum supported Python version
 
@@ -172,7 +172,7 @@ from installed metadata, so this rule needs no resolved environment. Cite: BLDX-
 
 ## D007 — `NonStandardBuildBackend` {#d007}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `build-system` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `build-system` · **Autofixable:** yes · **Since:** 0.5.0
 
 > Build backend is not Hatchling
 
@@ -190,7 +190,7 @@ uniform; a different backend diverges from that baseline.  A pyproject with no
 
 ## D008 — `WeakenedTypeChecking` {#d008}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `tooling-baseline` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `tooling-baseline` · **Autofixable:** yes · **Since:** 0.5.0
 
 > pyright typeCheckingMode is weaker than the SDK baseline 'standard'
 
@@ -208,7 +208,7 @@ scope (they can be legitimate).  Cite: BLDX-1410.
 
 ## D009 — `RemoteDaprComponentFetch` {#d009}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dapr-components` · **Autofixable:** yes · **Since:** 0.12.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dapr-components` · **Autofixable:** yes · **Since:** 0.12.0
 
 > A poe task fetches Dapr component YAMLs from GitHub instead of the installed application-sdk wheel
 
@@ -237,7 +237,7 @@ Docker build, where `uv sync` precedes `poe download-components`). Inline suppre
 
 ## D010 — `QueryTransformerWithoutDuckdb` {#d010}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `runtime-dependencies` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `runtime-dependencies` · **Autofixable:** — · **Since:** 0.18.0
 
 > App imports the SDK query transformer but duckdb is not resolved (no [sql]/[incremental] extra, no direct dependency)
 
@@ -312,7 +312,7 @@ with no app-side edit.  Bump the SDK; do not reach for a suppression.
 
 ## D011 — `ConformanceDependencyContract` {#d011}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dependency-tooling` · **Autofixable:** yes · **Since:** 0.23.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-tooling` · **Autofixable:** yes · **Since:** 0.23.0
 
 > atlan-application-sdk-conformance is undeclared, declared in [project.dependencies], pinned to a non-floating specifier, or missing from uv.lock
 
@@ -341,6 +341,12 @@ ruleset would have blocked, and because the gate reported success the first thin
 reveals it is the customer's own failed crawl. Where a declaration is missing outright,
 the remediation loop cannot run in the repo at all, so nothing can be fixed there even
 once it is found.
+
+### Canonical reference
+
+- **Compliant example:** Any app declaring the suite in a [dependency-groups] entry with a floating range.
+- **Already correct when:** The specifier must be able to float. Pinning is what freezes one repo's D-series leg to
+  a single suite version while every other leg runs the latest.
 
 Every app should declare `atlan-application-sdk-conformance` in a dev/test dependency
 array, with a specifier that can float, and have it resolved in `uv.lock`.  At most one

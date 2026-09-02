@@ -21,6 +21,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -28,6 +29,26 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P001",
+        canonical_reference=(
+            "atlan-mysql-app — its generated contract/_input.py subclasses "
+            "ExtractionInput with no allow_unbounded_fields at all, because every "
+            "filter is a bounded concrete type."
+        ),
+        rule_interactions=(
+            "B005 + ledger-guard box this in. Narrowing an @entrypoint field's value "
+            "type trips B005, and `conformance ledger-guard` is append-only (status "
+            "changes and additions allowed; retypes and deletions refused), so the "
+            "retype cannot land. Wrapping Any in MaxItems clears P001 AND B005 but "
+            "the class then raises PayloadSafetyError at import: Any is refused "
+            "unconditionally."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[P001] <reason>` at the "
+            "declaration site IS the fix for an @entrypoint contract field whose type "
+            "is recorded in the ledger — every alternative is blocked. Treat such a "
+            "site as compliant, not as unremediated."
+        ),
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="UnboundedContractFields",
         tier=EnforcementTier.BLOCK,
@@ -66,6 +87,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P002",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="CategoryFieldOverride",
         tier=EnforcementTier.BLOCK,
@@ -112,6 +134,18 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P003",
+        canonical_reference=(
+            "application_sdk/errors/leaves.py — the 15 categorical leaves and the "
+            "prefix each one owns."
+        ),
+        terminal_state=(
+            "A class whose MRO overrides to_failure_details() builds the wire "
+            "envelope itself, so `code` is not what a dashboard reads and adding a "
+            "prefixed one would be dead code beside the real one. Those are exempt. "
+            "Overriding qualified_code alone is NOT exempt — that is the log surface "
+            "only."
+        ),
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ErrorCodePrefixMismatch",
         tier=EnforcementTier.BLOCK,
@@ -159,6 +193,16 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P013",
+        canonical_reference=(
+            "atlan-mysql-app — @entrypoint methods take a generated AppInputContract "
+            "and return an Output subclass."
+        ),
+        rule_interactions=(
+            "Resolution is by bare class name. Two files declaring the same name, or "
+            "a class shadowing its own generated base (`class X(_X)` over `from "
+            "generated import X as _X`), used to read as violations on correct code."
+        ),
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="UntypedEntrypointBoundary",
         tier=EnforcementTier.BLOCK,
@@ -217,6 +261,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P014",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="UntypedTaskBoundary",
         tier=EnforcementTier.BLOCK,
@@ -269,6 +314,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P015",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="UnmodeledBoundedContractField",
         tier=EnforcementTier.WARN,
@@ -320,6 +366,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P026",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="GetattrOnTypedContractField",
         tier=EnforcementTier.WARN,
@@ -358,6 +405,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P027",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="AppStateAsCrossTaskChannel",
         tier=EnforcementTier.WARN,
@@ -399,6 +447,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P028",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="ManualQualifiedNameFString",
         tier=EnforcementTier.WARN,

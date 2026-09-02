@@ -43,6 +43,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -50,6 +51,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P050",
+        fix_locus=FixLocus.SDK,
         scope=RuleScope.SDK,
         name="NonAtomicDestinationWrite",
         tier=EnforcementTier.WARN,

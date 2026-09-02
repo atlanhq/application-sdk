@@ -22,6 +22,7 @@ from typing import Any, Literal
 
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -65,6 +66,40 @@ class RuleDefinition(BaseModel):
 
     category: str
     """Rule family, e.g. ``"silent-swallow"``."""
+
+    fix_locus: FixLocus
+    """Where the fix belongs — app, contract, toolkit, sdk, ci, packaging, tests.
+
+    Required (no default) so every rule must answer it explicitly, the same way
+    ``scope`` is required; ``test_catalog_all_have_fix_locus`` enforces it for
+    present and future rules.  A finding tells you a repo is wrong, not which
+    file to change, and three rules were mis-routed to app teams for weeks
+    because the honest answer was "not the app"."""
+
+    canonical_reference: str = ""
+    """A repo (and ideally a file) that shows the compliant shape.
+
+    Prefer one of the four public reference apps — ``hello-world``, ``openapi``,
+    ``mysql``, ``metabase`` — because those are maintained as exemplars.  An
+    arbitrary connector may be mid-migration and is not a safe model.  One line
+    naming a compliant example ends most of the argument about what "fixed"
+    looks like."""
+
+    rule_interactions: str = ""
+    """Other rules or gates that constrain this one's fix.
+
+    Some fixes are boxed in by a second rule and the obvious remedy is illegal:
+    narrowing an ``@entrypoint`` field's type to satisfy one rule trips another,
+    and the append-only ledger guard blocks the retype outright.  Stating the
+    interaction here stops each reader re-deriving the deadlock."""
+
+    terminal_state: str = ""
+    """What "already correct" looks like, when that is not simply zero findings.
+
+    For a suppress-only rule a justified inline directive IS the fix, not a
+    failure to remediate.  Without saying so, an automated lane re-opens settled
+    work every cycle and a reviewer cannot tell a deliberate carve-out from an
+    unfixed violation."""
 
     autofixable: bool = False
     short_description: str = ""

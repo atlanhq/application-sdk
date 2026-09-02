@@ -25,7 +25,7 @@ Suppress a finding on the violating line or the line directly above it:
 
 ## I001 — `DockerfileWrongBaseImage` {#i001}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-base` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-base` · **Autofixable:** yes · **Since:** 0.5.0
 
 > Final-stage FROM does not use the approved base image registry.atlan.com/public/app-runtime-base:3
 
@@ -54,7 +54,7 @@ line before the FROM instruction.
 
 ## I002 — `DockerfileEntrypointOverride` {#i002}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-entrypoint` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-entrypoint` · **Autofixable:** yes · **Since:** 0.5.0
 
 > CMD or ENTRYPOINT is overridden; the base image entrypoint manages daprd and graceful drain and must not be replaced
 
@@ -79,7 +79,7 @@ environment where daprd is required.  Inline suppression: `# conformance: ignore
 
 ## I003 — `DockerfileAppModuleMissing` {#i003}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-env` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-env` · **Autofixable:** — · **Since:** 0.5.0
 
 > ENV ATLAN_APP_MODULE is not set; the runtime needs this to locate and instantiate the application class
 
@@ -89,6 +89,14 @@ start.  An image that omits this variable will fail to start with a cryptic impo
 deployed.  Enforcing the variable at lint time closes that gap.  Customer impact: the
 image ships, deploys into the tenant, and crash-loops with an import error — an outage
 the customer sees first, on a release every pre-deploy gate passed.
+
+### Canonical reference
+
+- **Compliant example:** atlan-mysql-app — ENV ATLAN_APP_MODULE is declared in the Dockerfile as well as
+  atlan.yaml, so the image runs on its own.
+- **Interacts with:** The value must match atlan.yaml's deploy.env exactly; read it from there rather than
+  inferring it from the App subclass, or the two drift and the container starts the
+  wrong class.
 
 The Dockerfile must contain `ENV ATLAN_APP_MODULE=<module>:<AppClass>` with a non-empty
 value.  The platform runtime imports this module path and instantiates the named class
@@ -102,7 +110,7 @@ the Dockerfile.
 
 ## I004 — `DockerfileAppModeHardcoded` {#i004}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-env` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-env` · **Autofixable:** yes · **Since:** 0.5.0
 
 > ENV ATLAN_APP_MODE is hardcoded in the Dockerfile; runtime mode must be supplied at deploy time, not baked into the image
 
@@ -124,7 +132,7 @@ different environments.  Set `ATLAN_APP_MODE` in the deployment manifest (Kubern
 
 ## I005 — `DockerfileRootUser` {#i005}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-security` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-security` · **Autofixable:** yes · **Since:** 0.5.0
 
 > USER root or USER 0 in the final stage sets the container user to root, violating the non-root execution policy
 

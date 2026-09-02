@@ -24,7 +24,7 @@ Suppress a finding on the violating line or the line directly above it:
 
 ## C001 — `UnpinnedActionReference` {#c001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.2.0
 
 > External GitHub Action not pinned to a full commit digest
 
@@ -45,7 +45,7 @@ local `./` composite-action refs are exempt (no version to pin).
 
 ## C002 — `BootstrapWorkflowDrift` {#c002}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `ci-consistency` · **Autofixable:** yes · **Since:** 0.3.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `ci` · **Category:** `ci-consistency` · **Autofixable:** yes · **Since:** 0.3.0
 
 > Managed CI workflow is absent or has drifted from the bootstrap canonical
 
@@ -97,7 +97,7 @@ silently reverting the app to Harbor. Set it with `--use-ghcr-base` or by hand; 
 
 ## C003 — `GitignoreMissingEntry` {#c003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.4.0
 
 > .gitignore is absent or missing a standard required entry
 
@@ -121,7 +121,7 @@ overall.
 
 ## C004 — `UnretriedToolDownload` {#c004}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `ci-reliability` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `ci-reliability` · **Autofixable:** — · **Since:** 0.18.0
 
 > CI downloads a tool over the network with no retry
 

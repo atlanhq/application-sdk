@@ -52,6 +52,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -59,6 +60,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P019",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="RawHttpToAtlan",
         tier=EnforcementTier.WARN,

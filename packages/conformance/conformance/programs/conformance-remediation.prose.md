@@ -96,6 +96,44 @@ Forme auto-wires these subscriptions from the matching `#### facet` names in
 the area responsibilities.  This node is clean only when every subscribed
 facet is clean.
 
+### Canonical reference
+
+Before editing anything, read the rule's own **Canonical reference** block in
+`docs/rules/<series>.md`. It answers three questions the finding text does not,
+and getting them wrong is the most common way a remediation makes a repo worse:
+
+- **Compliant example** — a maintained reference app (`hello-world`, `openapi`,
+  `atlan-mysql-app`, `atlan-metabase-app`) that already has the shape you are
+  trying to reach. Copy from those, never from an arbitrary connector: a
+  connector may be mid-migration and is not a model of anything.
+- **Interacts with** — the other rule or gate that constrains this fix. Some
+  obvious remedies are illegal: a second rule forbids the edit, or an
+  append-only guard refuses it. Check before you spend the attempt.
+- **Already correct when** — what a settled carve-out looks like. For a
+  suppress-only rule a justified inline directive IS the fix; re-"fixing" it
+  every cycle is churn, not progress.
+
+Then route by the rule's **`fix_locus`**, shown in the same doc as
+*Fix belongs in*:
+
+| locus | edit here |
+|---|---|
+| `app` | hand-written application source |
+| `contract` | `contract/*.pkl`, then the repo's OWN generate task — never the generated output, and never a bare `pkl eval`, which skips post-processing and rewrites unrelated files |
+| `toolkit` | the `contract-toolkit` renderer; **no app-side change can resolve it** |
+| `sdk` | `application_sdk` itself |
+| `ci` | `.github/**` |
+| `packaging` | `pyproject.toml`, `uv.lock`, `Dockerfile`, `atlan.yaml` |
+| `tests` | the app's own test suite |
+
+A finding whose locus is not `app` and which you are about to fix by editing app
+source is a finding you have misread. Stop and re-read the block above.
+
+A new rule cannot be added without declaring `fix_locus`; the meta-tests
+`test_catalog_all_have_fix_locus` and `test_non_app_loci_explain_themselves`
+enforce that, and require the guidance block for any BLOCK rule the app cannot
+fix on its own.
+
 ### Continuity
 
 Input-driven: re-render when any `*.py` file or `.github/` file under `scope`

@@ -10,6 +10,7 @@ from conformance.suite.schema import load_catalog
 from conformance.suite.schema.catalog import RuleDefinition, validate_catalog
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -890,6 +891,7 @@ def test_duplicate_id_raises() -> None:
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
         category="test",
+        fix_locus=FixLocus.APP,
     )
     r2 = RuleDefinition(
         id="E001",
@@ -898,6 +900,7 @@ def test_duplicate_id_raises() -> None:
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
         category="test",
+        fix_locus=FixLocus.APP,
     )
     with pytest.raises(ValueError, match="duplicate rule ID"):
         _combine_rules((r1,), (r2,))
@@ -913,6 +916,7 @@ def test_invalid_rule_id_raises() -> None:
             mechanism=RuleMechanism.STATIC,
             scope=RuleScope.BOTH,
             category="test",
+            fix_locus=FixLocus.APP,
         )
 
 
@@ -930,7 +934,8 @@ def _rule(**overrides) -> RuleDefinition:
             "scope": RuleScope.BOTH,
             "category": "test",
             **overrides,
-        }
+        },
+        fix_locus=FixLocus.APP,
     )
 
 
@@ -1061,6 +1066,7 @@ def test_validate_catalog_raises_on_duplicate() -> None:
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
         category="test",
+        fix_locus=FixLocus.APP,
     )
     r2 = RuleDefinition(
         id="E001",
@@ -1069,6 +1075,7 @@ def test_validate_catalog_raises_on_duplicate() -> None:
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
         category="test",
+        fix_locus=FixLocus.APP,
     )
     with pytest.raises(ValueError, match="duplicate rule ID"):
         validate_catalog([r1, r2])
@@ -1150,6 +1157,7 @@ def test_docker_build_is_accepted_by_the_model() -> None:
         scope=RuleScope.APP,
         category="dockerfile-probe",
         orthogonal_gate="docker-build",
+        fix_locus=FixLocus.APP,
     )
     assert rule.orthogonal_gate == "docker-build"
     props = rule.to_reporting_descriptor().properties
@@ -1164,4 +1172,81 @@ def test_docker_build_is_accepted_by_the_model() -> None:
             scope=RuleScope.APP,
             category="dockerfile-probe",
             orthogonal_gate="docker-buidl",
+            fix_locus=FixLocus.APP,
         )
+
+
+# ── fix_locus and the guidance fields ────────────────────────────────────────
+
+
+def test_catalog_all_have_fix_locus() -> None:
+    """Every rule must say where its fix belongs.
+
+    A finding tells you a repo is wrong, not which file to change. Three rules
+    were routed to app teams for weeks when the honest answer was "not the app"
+    — the value came from the toolkit renderer, or the finding anchored on a
+    generated file the app may not edit.
+    """
+    bad = [r.id for r in load_catalog() if not isinstance(r.fix_locus, FixLocus)]
+    assert not bad, f"Rules with invalid/missing fix_locus: {bad}"
+
+
+def test_fix_locus_is_a_required_field() -> None:
+    """No default, so a new rule cannot silently inherit someone else's locus."""
+    with pytest.raises(ValidationError):
+        RuleDefinition(  # pyright: ignore[reportCallIssue]  # fix_locus omitted
+            id="E999",
+            name="NoLocus",
+            tier=EnforcementTier.WARN,
+            mechanism=RuleMechanism.STATIC,
+            scope=RuleScope.BOTH,
+            category="test",
+        )
+
+
+def test_non_app_loci_explain_themselves() -> None:
+    """A BLOCK rule the app cannot fix alone must say what to do instead.
+
+    ``fix_locus`` values other than APP and TESTS mean an app engineer reading
+    the finding will look in the wrong place. A blocking finding with no route
+    to a fix is what stalls a remediation lane indefinitely, so those rules have
+    to carry at least one of ``canonical_reference`` / ``rule_interactions`` /
+    ``terminal_state``.
+    """
+    needs_help = {FixLocus.TOOLKIT, FixLocus.SDK, FixLocus.CONTRACT}
+    silent = [
+        r.id
+        for r in load_catalog()
+        if r.fix_locus in needs_help
+        and r.tier is EnforcementTier.BLOCK
+        and not (r.canonical_reference or r.rule_interactions or r.terminal_state)
+    ]
+    assert not silent, (
+        "BLOCK rules whose fix is not in the app must carry guidance "
+        f"(canonical_reference / rule_interactions / terminal_state): {silent}"
+    )
+
+
+def test_canonical_references_name_something_checkable() -> None:
+    """A canonical reference has to be verifiable.
+
+    Free-text encouragement is worse than nothing here, because it gets trusted.
+    Require one of the maintained reference apps or a concrete path/module, so a
+    reader can go and look at the compliant shape rather than infer it.
+    """
+    anchors = (
+        "hello-world",
+        "openapi",
+        "atlan-mysql-app",
+        "atlan-metabase-app",
+        "application_sdk",
+        "contract_schema.lock.json",
+        "[dependency-groups]",
+    )
+    vague = [
+        r.id
+        for r in load_catalog()
+        if r.canonical_reference
+        and not any(a in r.canonical_reference for a in anchors)
+    ]
+    assert not vague, f"canonical_reference names nothing checkable: {vague}"

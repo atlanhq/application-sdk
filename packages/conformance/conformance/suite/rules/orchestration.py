@@ -27,6 +27,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -34,6 +35,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P004",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="DirectTemporalImport",
         tier=EnforcementTier.WARN,
@@ -70,6 +72,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P005",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="PrivateOrchestrationInternalImport",
         tier=EnforcementTier.WARN,
@@ -105,6 +108,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P006",
+        fix_locus=FixLocus.SDK,
         scope=RuleScope.SDK,
         name="TemporalImportOutsideAdapter",
         tier=EnforcementTier.WARN,
@@ -139,6 +143,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P007",
+        fix_locus=FixLocus.SDK,
         scope=RuleScope.SDK,
         name="RawTemporalInPublicSurface",
         tier=EnforcementTier.WARN,

@@ -27,6 +27,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -39,6 +40,7 @@ _HELP_BASE = (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P020",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="NonDeterministicPrimitiveInWorkflow",
         tier=EnforcementTier.WARN,
@@ -85,6 +87,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P021",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="SideEffectIoInWorkflow",
         tier=EnforcementTier.WARN,
@@ -120,6 +123,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P022",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="UnawaitedCoroutine",
         tier=EnforcementTier.BLOCK,
@@ -162,6 +166,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P023",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="BlockingCallInAsyncDef",
         tier=EnforcementTier.WARN,
@@ -241,6 +246,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P024",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="SyncAtlanClientInApp",
         tier=EnforcementTier.WARN,
@@ -281,6 +287,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P031",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="SharedDefaultExecutorOffload",
         tier=EnforcementTier.WARN,
@@ -329,6 +336,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P036",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="HandRolledProcessIsolation",
         tier=EnforcementTier.WARN,

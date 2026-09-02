@@ -49,7 +49,7 @@ They are documented alongside the orchestration, storage and client seam rules i
 
 ## E001 — `BareExceptPass` {#e001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > Bare 'except: pass' silently discards every exception
 
@@ -69,7 +69,7 @@ even cleanup paths should log at DEBUG.
 
 ## E002 — `TypedExceptPass` {#e002}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > Typed 'except SomeError: pass' discards exception silently
 
@@ -80,6 +80,16 @@ an incomplete crawl to the tenant as a clean success — the customer discovers 
 their catalog weeks later, and by then no artifact exists to explain which items were
 lost or why.
 
+### Canonical reference
+
+- **Compliant example:** atlan-mysql-app / atlan-metabase-app — a comment stating why the failure is expected,
+  plus a DEBUG log carrying exc_info=True, is the shape the rule's own message asks for.
+- **Already correct when:** Control flow must not change — the swallow is existing, deliberate behaviour and the fix
+  only stops the cause being discarded. Resolve the module's logger from its own source
+  rather than assuming the name `logger`, and check it is bound ABOVE the handler: a
+  bootstrap shim binds its logger below an import-time try/except, so logging there
+  raises NameError inside the very block being made observable.
+
 A typed catch that still discards silently loses the stack trace entirely. Acceptable
 only for truly trivial best-effort operations where failure is 100% expected AND the
 surrounding code handles the missing result, AND there is a comment explaining the
@@ -89,7 +99,7 @@ reasoning.
 
 ## E003 — `BroadContextlibSuppress` {#e003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > contextlib.suppress() — check whether scope is too broad
 
@@ -105,7 +115,7 @@ the suppressed exception type before classifying.
 
 ## E004 — `BroadExceptClause` {#e004}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `overly-broad-catch` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `overly-broad-catch` · **Autofixable:** — · **Since:** 0.2.0
 
 > Overly broad 'except Exception/BaseException' without exc_info
 
@@ -129,7 +139,7 @@ no-traceback boundary.
 
 ## E005 — `ExceptBlockMissingExcInfo` {#e005}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `missing-traceback` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `missing-traceback` · **Autofixable:** yes · **Since:** 0.2.0
 
 > except block logs without exc_info=True — stack trace discarded
 
@@ -150,7 +160,7 @@ sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodi
 
 ## E006 — `BareExceptWithBody` {#e006}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > Bare 'except:' (no type) — catches SystemExit and KeyboardInterrupt
 
@@ -167,7 +177,7 @@ SystemExit.  Always specify at least `except Exception:`.
 
 ## E007 — `ErrorToReturnValue` {#e007}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
 
 > except block returns a value without logging — error hidden
 
@@ -183,7 +193,7 @@ domain-specific exception instead.
 
 ## E008 — `ImportErrorWithoutLogging` {#e008}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `optional-import` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `optional-import` · **Autofixable:** — · **Since:** 0.2.0
 
 > except ImportError without logging — environment issues hidden
 
@@ -200,7 +210,7 @@ later with a confusing AttributeError).
 
 ## E009 — `ExceptBlockOnlyAssigns` {#e009}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
 
 > except block only assigns a variable — error hidden with no log
 
@@ -215,7 +225,7 @@ no logging.  Add a `logger.warning(..., exc_info=True)` before the assignment.
 
 ## E010 — `AsyncioGatherExceptionsUnexamined` {#e010}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `asyncio-unexamined` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `asyncio-unexamined` · **Autofixable:** — · **Since:** 0.2.0
 
 > asyncio.gather(return_exceptions=True) results not checked for exceptions
 
@@ -232,7 +242,7 @@ silently.  The pattern is only a bug when results are not checked;
 
 ## E011 — `LoggingFilterUnsafeBody` {#e011}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `filter-safety` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `filter-safety` · **Autofixable:** — · **Since:** 0.2.0
 
 > logging.Filter.filter() body not wrapped in try/except — can crash caller
 
@@ -253,7 +263,7 @@ propagate.
 
 ## E012 — `UntypedBuiltinRaise` {#e012}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
 
 > raise ValueError/RuntimeError/... where a typed AppError applies
 
@@ -271,7 +281,7 @@ require `TypeError`/`ValueError` for stdlib interoperability.
 
 ## E013 — `LegacyAtlanErrorRaise` {#e013}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `legacy-raise` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `legacy-raise` · **Autofixable:** — · **Since:** 0.2.0
 
 > raise ClientError/ApiError/... (deprecated AtlanError stack)
 
@@ -290,7 +300,7 @@ in v4.0.  Replace with the appropriate leaf from `application_sdk.errors`.
 
 ## E014 — `ExceptLoopControlSwallow` {#e014}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > except block exits loop silently (continue/break) without logging
 
@@ -308,7 +318,7 @@ log at WARNING/ERROR with `exc_info=True`.
 
 ## E015 — `ExceptionTextInErrorMessage` {#e015}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.2.0
 
 > Caught exception text interpolated into typed error message= — leaks unsanitised text
 
@@ -330,7 +340,7 @@ summary.
 
 ## E016 — `MissingExceptionChaining` {#e016}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `exception-chaining` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `exception-chaining` · **Autofixable:** yes · **Since:** 0.2.0
 
 > raise inside except block missing 'from exc' cause — breaks exception chain
 
@@ -353,7 +363,7 @@ None` (intentional suppression).
 
 ## E017 — `SecretNamedEvidenceKey` {#e017}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `security` · **Autofixable:** — · **Since:** 0.2.0
 
 > Error evidence kwarg ending in _secret/_password/_token — rejected by wire layer at runtime
 
@@ -376,7 +386,7 @@ before any code runs.  Rename the evidence field to a safe key (e.g. `credential
 
 ## E018 — `BareParentLeafRaise` {#e018}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
 
 > Raising a bare AppError leaf class without a domain subclass overriding code
 
@@ -399,7 +409,7 @@ suppressing.
 
 ## E019 — `ExceptionTextInContractField` {#e019}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.9.0
 
 > Caught exception text interpolated into a returned contract message= field — leaks unsanitised text
 
@@ -432,7 +442,7 @@ follow-up kept symmetric across E015/E019.
 
 ## E020 — `HttpFailureToEmptyReturn` {#e020}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.9.0
 
 > Checked HTTP-response failure returns an empty/None sentinel instead of raising — silently publishes a failure as success
 

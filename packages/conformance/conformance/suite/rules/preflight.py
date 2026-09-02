@@ -21,6 +21,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -33,6 +34,7 @@ _HELP_BASE = (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P032",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="ReservedPreflightActivityName",
         tier=EnforcementTier.BLOCK,
@@ -71,6 +73,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P033",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="DuplicateInWorkflowPreflight",
         tier=EnforcementTier.WARN,
@@ -103,6 +106,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P034",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="UntypedPreflightCheckFailure",
         tier=EnforcementTier.WARN,
@@ -138,6 +142,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P035",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="PreflightMetadataContractParity",
         tier=EnforcementTier.WARN,
@@ -180,6 +185,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P047",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="PreflightFailureLoggedAsWarning",
         tier=EnforcementTier.WARN,
