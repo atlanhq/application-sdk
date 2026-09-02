@@ -35,6 +35,43 @@ from application_sdk.errors.leaves import (
 )
 
 
+def _init_storage_evidence(
+    err: StorageError,
+    *,
+    key: str | None = None,
+    target: str | None = None,
+    http_status: int | None = None,
+    provider_code: str | None = None,
+    error_code: ErrorCode | None = None,
+) -> None:
+    """Set the shared storage evidence fields on *err*.
+
+    Every ``Storage*`` class hand-writes its own ``__init__`` to keep the
+    positional-message signature its callers rely on, and that duplication is
+    exactly why ``service`` and ``target`` were never set on any of them: they
+    are fields of the categorical parent, so ``to_failure_details()`` emitted
+    them as ``null`` on every storage failure the SDK has ever reported.
+    Centralising the assignment means a field added here reaches every
+    subclass at once. (FND-957)
+
+    ``service`` is a constant for this whole module, matching the convention
+    :class:`~application_sdk.errors.leaves.ObjectStoreReadError` and
+    :class:`~application_sdk.errors.leaves.ObjectStoreDownloadError` already
+    use.
+
+    Note on ``target``: pass a store-and-key identity such as
+    ``gs://bucket/prefix/key``, never a raw request URL. ``redact_secrets``
+    strips ``X-Goog-Credential=`` but not ``X-Goog-Signature=``, so a signed
+    URL placed here would put bearer-equivalent material on the wire.
+    """
+    err.service = "object_store"
+    err.target = target
+    err.key = key
+    err.http_status = http_status
+    err.provider_code = provider_code
+    err._error_code = error_code
+
+
 @dataclass(kw_only=True)
 class StorageError(DependencyUnavailableError):
     """Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
@@ -43,6 +80,12 @@ class StorageError(DependencyUnavailableError):
     """
 
     key: str | None = None
+    # The backend's own verdict, parsed from the driver error by
+    # ``storage.ops._obstore_http_evidence``. Before FND-957 the status existed
+    # only inside the free-text cause, so no consumer could branch on it —
+    # and the cause was usually truncated before it arrived.
+    http_status: int | None = None
+    provider_code: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE"
@@ -55,10 +98,19 @@ class StorageError(DependencyUnavailableError):
         key: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
     ) -> None:
         DependencyUnavailableError.__init__(self, message=message, cause=cause)
-        self.key = key
-        self._error_code = error_code
+        _init_storage_evidence(
+            self,
+            key=key,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+            error_code=error_code,
+        )
 
     @property
     def error_code(self) -> ErrorCode:
@@ -72,6 +124,10 @@ class StorageError(DependencyUnavailableError):
         parts = [f"[{self.error_code.code}] {self.message}"]
         if self.key:
             parts.append(f"key={self.key}")
+        if self.http_status:
+            parts.append(f"http_status={self.http_status}")
+        if self.provider_code:
+            parts.append(f"provider_code={self.provider_code}")
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
@@ -102,8 +158,19 @@ class StorageBucketRelocationError(StorageError):
         key: str | None = None,
         cause: Exception | None = None,
         suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
     ) -> None:
-        StorageError.__init__(self, message, key=key, cause=cause)
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
         self.suggested_action = suggested_action
 
 
@@ -127,10 +194,19 @@ class StorageNotFoundError(NotFoundError, StorageError):
         key: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
     ) -> None:
         NotFoundError.__init__(self, message=message, cause=cause)
-        self.key = key
-        self._error_code = error_code
+        _init_storage_evidence(
+            self,
+            key=key,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+            error_code=error_code,
+        )
 
     @property
     def error_code(self) -> ErrorCode:
@@ -144,6 +220,10 @@ class StorageNotFoundError(NotFoundError, StorageError):
         parts = [f"[{self.error_code.code}] {self.message}"]
         if self.key:
             parts.append(f"key={self.key}")
+        if self.http_status:
+            parts.append(f"http_status={self.http_status}")
+        if self.provider_code:
+            parts.append(f"provider_code={self.provider_code}")
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
@@ -169,10 +249,19 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
         key: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
     ) -> None:
         AppPermissionDeniedError.__init__(self, message=message, cause=cause)
-        self.key = key
-        self._error_code = error_code
+        _init_storage_evidence(
+            self,
+            key=key,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+            error_code=error_code,
+        )
 
     @property
     def error_code(self) -> ErrorCode:
@@ -186,6 +275,10 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
         parts = [f"[{self.error_code.code}] {self.message}"]
         if self.key:
             parts.append(f"key={self.key}")
+        if self.http_status:
+            parts.append(f"http_status={self.http_status}")
+        if self.provider_code:
+            parts.append(f"provider_code={self.provider_code}")
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
@@ -211,10 +304,19 @@ class StorageConfigError(InvalidInputError, StorageError):
         key: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
     ) -> None:
         InvalidInputError.__init__(self, message=message, cause=cause)
-        self.key = key
-        self._error_code = error_code
+        _init_storage_evidence(
+            self,
+            key=key,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+            error_code=error_code,
+        )
 
     @property
     def error_code(self) -> ErrorCode:
@@ -228,6 +330,10 @@ class StorageConfigError(InvalidInputError, StorageError):
         parts = [f"[{self.error_code.code}] {self.message}"]
         if self.key:
             parts.append(f"key={self.key}")
+        if self.http_status:
+            parts.append(f"http_status={self.http_status}")
+        if self.provider_code:
+            parts.append(f"provider_code={self.provider_code}")
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
@@ -359,7 +465,7 @@ class StorageEmptyUploadError(DataIntegrityError, StorageError):
     ) -> None:
         DataIntegrityError.__init__(self, message=message, cause=cause)
         self.local_path = local_path
-        self._error_code = error_code
+        _init_storage_evidence(self, error_code=error_code)
 
     @property
     def error_code(self) -> ErrorCode:
@@ -440,10 +546,9 @@ class StorageIntegrityError(DataIntegrityError, StorageError):
             observed=observed,
             location=key,
         )
-        self.key = key
         self.local_path = local_path
         self.check = check
-        self._error_code = error_code
+        _init_storage_evidence(self, key=key, error_code=error_code)
 
     @property
     def error_code(self) -> ErrorCode:
