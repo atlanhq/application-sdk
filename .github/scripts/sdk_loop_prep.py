@@ -305,9 +305,10 @@ def contribution_digest(repo: str, base_ref: str, head: str, runner=_sh) -> str 
 
     Fails closed. Every unreadable answer is None rather than an empty digest,
     because two empty digests compare equal and would fast-track a PR nobody
-    successfully looked at. A file whose patch GitHub omits (binary, or too
-    large to inline) falls back to its blob sha, which is stricter than patch
-    text rather than looser: it can only decline a fast track, never grant one.
+    successfully looked at. A file whose patch GitHub omits (binary, oversized,
+    or mode-only) is unknown: a blob sha is content-only and the compare object
+    has no mode, so hashing the blob would grant a fast track on a chmod that
+    changed nothing GitHub can show. Unknown is a decline.
     """
     done = runner(["gh", "api", f"repos/{repo}/compare/{base_ref}...{head}"])
     if done.returncode != 0:
@@ -330,11 +331,11 @@ def contribution_digest(repo: str, base_ref: str, head: str, runner=_sh) -> str 
         if not isinstance(entry, dict):
             return None
         patch = entry.get("patch")
-        if patch is None:
-            blob = str(entry.get("sha") or "")
-            if not blob:
-                return None
-            patch = f"blob:{blob}"
+        if not patch:
+            # Omitted or empty: binaries, oversized files, chmod-only. No
+            # mode field exists to distinguish those, so this file cannot
+            # prove the contribution unchanged.
+            return None
         parts.append(
             "\n".join(
                 [
@@ -347,31 +348,9 @@ def contribution_digest(repo: str, base_ref: str, head: str, runner=_sh) -> str 
     return hashlib.sha256("\x00".join(sorted(parts)).encode("utf-8")).hexdigest()
 
 
-def human_review_after(repo: str, pr: int, when: str, runner=_sh) -> bool | None:
-    """Whether a person reviewed after `when`. None when it cannot be read.
-
-    ANY human review counts, not only CHANGES_REQUESTED.
-    `sdk-review-dismiss-on-human.yml` exists because human review activity of
-    any kind invalidates a bot approval, and a person leaving a COMMENT review
-    to raise a concern must not be fast-tracked straight past.
-
-    Fails closed: None is returned on an unreadable listing and the caller
-    treats it as "assume somebody did", because the cost of being wrong here
-    is re-stamping an approval over a human's objection.
-    """
-    done = runner(
-        [
-            "gh",
-            "api",
-            f"repos/{repo}/pulls/{pr}/reviews",
-            "--paginate",
-            "--jq",
-            '.[] | [(.submitted_at // ""), (.user.login // ""), (.user.type // "")] | @tsv',
-        ]
-    )
-    if done.returncode != 0:
-        return None
-    for line in (done.stdout or "").splitlines():
+def _activity_after(stdout: str, when: str) -> bool | None:
+    """Parse a timestamp/login/type TSV listing. None if a row is malformed."""
+    for line in (stdout or "").splitlines():
         if not line.strip():
             continue
         fields = line.split("\t")
@@ -385,6 +364,50 @@ def human_review_after(repo: str, pr: int, when: str, runner=_sh) -> bool | None
         if submitted and submitted > when:
             return True
     return False
+
+
+def human_review_after(repo: str, pr: int, when: str, runner=_sh) -> bool | None:
+    """Whether a person reviewed or commented after `when`. None if unread.
+
+    ANY human review counts, not only CHANGES_REQUESTED — and so does a
+    top-level PR comment. `sdk-review-dismiss-on-human.yml` dismisses the
+    bot approval on both surfaces (`pull_request_review` and `issue_comment`);
+    listing only `pulls/{pr}/reviews` would re-stamp READY_TO_MERGE over a
+    comment that just dismissed it.
+
+    Fails closed: None is returned on an unreadable listing and the caller
+    treats it as "assume somebody did", because the cost of being wrong here
+    is re-stamping an approval over a human's objection.
+    """
+    reviews = runner(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/pulls/{pr}/reviews",
+            "--paginate",
+            "--jq",
+            '.[] | [(.submitted_at // ""), (.user.login // ""), (.user.type // "")] | @tsv',
+        ]
+    )
+    if reviews.returncode != 0:
+        return None
+    saw = _activity_after(reviews.stdout, when)
+    if saw is not False:
+        return saw
+
+    comments = runner(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/issues/{pr}/comments",
+            "--paginate",
+            "--jq",
+            '.[] | [(.created_at // ""), (.user.login // ""), (.user.type // "")] | @tsv',
+        ]
+    )
+    if comments.returncode != 0:
+        return None
+    return _activity_after(comments.stdout, when)
 
 
 def fast_track_decision(
@@ -433,11 +456,13 @@ def fast_track_decision(
     reviewed_since = human_review_after(repo, pr, created, runner=runner)
     if reviewed_since is None:
         return FastTrackDecision(
-            False, "could not read the PR's reviews — assuming a human has weighed in"
+            False,
+            "could not read the PR's reviews or comments — assuming a human has weighed in",
         )
     if reviewed_since:
         return FastTrackDecision(
-            False, "a human reviewed after the last verdict — their read wins"
+            False,
+            "a human commented or reviewed after the last verdict — their read wins",
         )
 
     # The cheap case, and a real one: the head never moved. The verdict still

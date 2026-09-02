@@ -103,15 +103,23 @@ def test_the_digest_is_over_patch_text_not_the_blob_at_head() -> None:
     ), "a blob sha must not enter the digest while a patch is available"
 
 
-def test_a_file_with_no_patch_falls_back_to_its_blob() -> None:
-    """GitHub omits `patch` for binaries and oversized files. Falling back to
-    the blob sha is STRICTER than patch text, not looser: it can only decline a
-    fast track, never grant one on a file nobody could compare."""
-    binary_a = _compare([{"filename": "logo.png", "status": "modified", "sha": "aaa"}])
-    binary_b = _compare([{"filename": "logo.png", "status": "modified", "sha": "bbb"}])
-    assert contribution_digest(
-        "o/r", "main", REVIEWED, runner=lambda a: _Done(0, binary_a)
-    ) != contribution_digest("o/r", "main", LIVE, runner=lambda a: _Done(0, binary_b))
+def test_a_file_with_no_patch_is_unknown_even_when_a_blob_is_present() -> None:
+    """GitHub omits `patch` for binaries, oversized files, and chmod-only
+    changes. A blob sha is content-only and the compare object has no mode, so
+    hashing the blob would grant a fast track on a mode-only change. Unknown
+    is a decline."""
+    omitted = _compare([{"filename": "a.py", "status": "modified", "sha": "aaa"}])
+    empty = _compare(
+        [{"filename": "a.py", "status": "modified", "patch": "", "sha": "aaa"}]
+    )
+    assert (
+        contribution_digest("o/r", "main", LIVE, runner=lambda a: _Done(0, omitted))
+        is None
+    )
+    assert (
+        contribution_digest("o/r", "main", LIVE, runner=lambda a: _Done(0, empty))
+        is None
+    )
 
 
 def test_every_unreadable_answer_is_none_and_never_an_empty_digest() -> None:
@@ -158,6 +166,27 @@ def _reviews(rows: list[tuple[str, str, str]]) -> str:
     return "\n".join("\t".join(r) for r in rows)
 
 
+def _route(
+    *,
+    reviews: _Done | None = None,
+    comments: _Done | None = None,
+    compare: _Done | None = None,
+):
+    """Send each gh call to the listing it actually hits."""
+
+    def runner(args: list[str]) -> _Done:
+        joined = " ".join(args)
+        if "compare" in joined:
+            return compare if compare is not None else _Done(0, _one_file(PATCH))
+        if "/reviews" in joined:
+            return reviews if reviews is not None else _Done(0, "")
+        if "/comments" in joined:
+            return comments if comments is not None else _Done(0, "")
+        return _Done(1)
+
+    return runner
+
+
 def test_any_human_review_after_the_verdict_counts_not_just_changes_requested() -> None:
     """`sdk-review-dismiss-on-human.yml` exists because human review activity
     of ANY kind invalidates a bot approval. A person leaving a COMMENT review
@@ -165,7 +194,10 @@ def test_any_human_review_after_the_verdict_counts_not_just_changes_requested() 
     rows = _reviews([("2026-09-01T10:00:00Z", "someone", "User")])
     assert (
         human_review_after(
-            "o/r", 1, "2026-09-01T09:00:00Z", runner=lambda a: _Done(0, rows)
+            "o/r",
+            1,
+            "2026-09-01T09:00:00Z",
+            runner=_route(reviews=_Done(0, rows)),
         )
         is True
     )
@@ -184,7 +216,10 @@ def test_bot_reviews_and_atlan_ci_are_not_human_activity() -> None:
     )
     assert (
         human_review_after(
-            "o/r", 1, "2026-09-01T09:00:00Z", runner=lambda a: _Done(0, rows)
+            "o/r",
+            1,
+            "2026-09-01T09:00:00Z",
+            runner=_route(reviews=_Done(0, rows), comments=_Done(0, rows)),
         )
         is False
     )
@@ -195,7 +230,10 @@ def test_a_human_review_before_the_verdict_does_not_count() -> None:
     rows = _reviews([("2026-08-31T10:00:00Z", "someone", "User")])
     assert (
         human_review_after(
-            "o/r", 1, "2026-09-01T09:00:00Z", runner=lambda a: _Done(0, rows)
+            "o/r",
+            1,
+            "2026-09-01T09:00:00Z",
+            runner=_route(reviews=_Done(0, rows), comments=_Done(0, rows)),
         )
         is False
     )
@@ -204,11 +242,35 @@ def test_a_human_review_before_the_verdict_does_not_count() -> None:
 def test_an_unreadable_review_listing_is_none_not_no_reviews() -> None:
     """Collapsing "the API did not answer" into "nobody objected" is how a bot
     re-stamps an approval over a human's objection."""
-    assert human_review_after("o/r", 1, "x", runner=lambda a: _Done(1)) is None
+    assert human_review_after("o/r", 1, "x", runner=_route(reviews=_Done(1))) is None
     malformed = human_review_after(
-        "o/r", 1, "x", runner=lambda a: _Done(0, "only-one-field")
+        "o/r", 1, "x", runner=_route(reviews=_Done(0, "only-one-field"))
     )
     assert malformed is None
+    comments_unreadable = human_review_after(
+        "o/r",
+        1,
+        "x",
+        runner=_route(reviews=_Done(0, ""), comments=_Done(1)),
+    )
+    assert comments_unreadable is None
+
+
+def test_a_human_issue_comment_after_the_verdict_counts() -> None:
+    """The dismiss workflow fires on `issue_comment`, not only on pull reviews.
+    A top-level PR comment is not in `pulls/{pr}/reviews`, so listing only
+    that endpoint would re-stamp READY_TO_MERGE over the comment that just
+    dismissed the approval."""
+    comments = _reviews([("2026-09-01T10:00:00Z", "a-person", "User")])
+    assert (
+        human_review_after(
+            "o/r",
+            1,
+            "2026-09-01T09:00:00Z",
+            runner=_route(reviews=_Done(0, ""), comments=_Done(0, comments)),
+        )
+        is True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -227,11 +289,10 @@ def _decide(**over):
         verdict=approve.READY,
         reviewed_head=REVIEWED,
         ready=approve.READY,
-        runner=lambda a: _Done(
-            0,
-            _one_file(PATCH)
-            if "compare" in " ".join(a)
-            else _reviews([("2026-08-01T00:00:00Z", "atlan-ci", "User")]),
+        runner=_route(
+            reviews=_Done(0, _reviews([("2026-08-01T00:00:00Z", "atlan-ci", "User")])),
+            comments=_Done(0, ""),
+            compare=_Done(0, _one_file(PATCH)),
         ),
     )
     kwargs.update(over)
@@ -254,7 +315,7 @@ def test_an_unmoved_head_fast_tracks_without_reading_any_diff() -> None:
 
     def runner(args):
         assert "compare" not in " ".join(args), "an unmoved head needs no diff read"
-        return _Done(0, _reviews([]))
+        return _route(reviews=_Done(0, _reviews([])), comments=_Done(0, ""))(args)
 
     out = _decide(head=REVIEWED, runner=runner)
     assert out.fires
@@ -271,25 +332,37 @@ def test_needs_fixes_is_never_fast_tracked() -> None:
 
 
 def test_a_changed_diff_is_reviewed() -> None:
-    out = _decide(
-        runner=lambda a: _Done(
-            0,
-            _one_file(PATCH if REVIEWED in " ".join(a) else PATCH + "\n+extra")
-            if "compare" in " ".join(a)
-            else _reviews([]),
-        )
-    )
+    def runner(args):
+        joined = " ".join(args)
+        if "compare" in joined:
+            patch = PATCH if REVIEWED in joined else PATCH + "\n+extra"
+            return _Done(0, _one_file(patch))
+        return _route(reviews=_Done(0, _reviews([])), comments=_Done(0, ""))(args)
+
+    out = _decide(runner=runner)
     assert not out.fires
     assert "diff has changed" in out.reason
 
 
 def test_a_human_reviewing_after_the_verdict_blocks_the_fast_track() -> None:
     out = _decide(
-        runner=lambda a: _Done(
-            0,
-            _one_file(PATCH)
-            if "compare" in " ".join(a)
-            else _reviews([("2026-09-01T10:00:00Z", "a-person", "User")]),
+        runner=_route(
+            reviews=_Done(0, _reviews([("2026-09-01T10:00:00Z", "a-person", "User")])),
+            comments=_Done(0, ""),
+            compare=_Done(0, _one_file(PATCH)),
+        )
+    )
+    assert not out.fires
+    assert "human" in out.reason
+
+
+def test_a_human_issue_comment_after_the_verdict_blocks_the_fast_track() -> None:
+    """The hole the review named: reviews listing is empty, comments is not."""
+    out = _decide(
+        runner=_route(
+            reviews=_Done(0, ""),
+            comments=_Done(0, _reviews([("2026-09-01T10:00:00Z", "a-person", "User")])),
+            compare=_Done(0, _one_file(PATCH)),
         )
     )
     assert not out.fires
