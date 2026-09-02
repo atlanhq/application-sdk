@@ -65,6 +65,13 @@ class ClassRecord:
 # is exactly the harm P003 exists to catch.
 EMISSION_OVERRIDES: frozenset[str] = frozenset({"to_failure_details"})
 
+# ``AppError.to_failure_details`` is the *default* envelope, not a replacement.
+# When this repo is scanned, that method is in the class registry, and walking
+# every ancestor would credit every leaf subclass with an exemption — hollowing
+# P003 on dogfood. The 15 leaves inherit that default; they are stops too.
+# Mixins (not in these sets) still propagate.
+_EMISSION_STOPS: frozenset[str] = frozenset({"AppError"}) | frozenset(LEAF_PREFIX_MAP)
+
 
 def _overrides_emission(cls_node: ast.ClassDef) -> bool:
     """True if *cls_node* defines its own code-emission method."""
@@ -81,12 +88,13 @@ def resolve_emission_override(
     cache: dict[str, bool],
     visiting: set[str],
 ) -> bool:
-    """True if *name* or any scanned ancestor overrides code emission.
+    """True if *name* or a non-leaf mixin ancestor overrides code emission.
 
-    Walks the same base chain :func:`resolve_leaf_prefix` does, so a mixin that
-    carries the override is credited to every class that mixes it in. Bases
-    outside the scanned tree cannot be inspected and simply do not confirm an
-    override, which keeps the exemption conservative.
+    Mixins that carry ``to_failure_details`` are credited to every class that
+    mixes them in. ``AppError`` and the 15 leaves are resolution stops: their
+    method is the default envelope, not a replacement, so inheriting from them
+    must not buy the exemption. Bases outside the scanned tree cannot be
+    inspected and simply do not confirm an override.
     """
     if name in cache:
         return cache[name]
@@ -98,7 +106,9 @@ def resolve_emission_override(
         return False
     visiting.add(name)
     result = rec.overrides_emission or any(
-        resolve_emission_override(base, by_name, cache, visiting) for base in rec.bases
+        resolve_emission_override(base, by_name, cache, visiting)
+        for base in rec.bases
+        if base not in _EMISSION_STOPS
     )
     visiting.discard(name)
     cache[name] = result

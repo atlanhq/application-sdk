@@ -288,9 +288,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                     break
             if leaf_prefix is None:
                 continue
-            # A class that replaces to_failure_details()/qualified_code emits its
-            # code by its own route, so `code` is not what a dashboard sees and
-            # prefixing it would be dead. P003 has nothing to say about those.
+            # A class that replaces to_failure_details emits its code by its
+            # own route, so `code` is not what a dashboard sees and prefixing
+            # it would be dead. P003 has nothing to say about those.
             if resolve_emission_override(rec.name, by_name, emission_cache, set()):
                 continue
             if rec.code_value is None:

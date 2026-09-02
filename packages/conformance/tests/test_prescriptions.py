@@ -596,6 +596,33 @@ def test_p003_silent_when_a_mixin_ancestor_overrides_emission(tmp_path: Path) ->
     assert [f.rule_id for f in findings] == []
 
 
+def test_p003_still_fires_when_apperror_is_in_the_scanned_tree(tmp_path: Path) -> None:
+    """``AppError.to_failure_details`` is the default envelope, not an exemption.
+
+    When this repo is scanned, ``application_sdk/errors/base.py`` is in the tree
+    and every leaf inherits that method. Crediting it as an override would
+    hollow P003 on dogfood. Mixins (the previous test) still silence; this
+    chain must still fire.
+    """
+    files = {
+        "base.py": (
+            "class AppError(Exception):\n"
+            "    def to_failure_details(self):\n"
+            "        return None\n"
+        ),
+        "leaves.py": (
+            "from base import AppError\n" "class AuthError(AppError):\n" "    pass\n"
+        ),
+        "errors.py": (
+            "from leaves import AuthError\n"
+            "class ConnectorAuthError(AuthError):\n"
+            "    pass\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
 def test_p003_still_fires_when_only_qualified_code_is_overridden(
     tmp_path: Path,
 ) -> None:
@@ -618,7 +645,7 @@ def test_p003_still_fires_when_only_qualified_code_is_overridden(
 def test_p003_still_fires_when_the_override_is_an_unrelated_method(
     tmp_path: Path,
 ) -> None:
-    """Only the two emission methods buy the exemption — not any override."""
+    """Only ``to_failure_details`` buys the exemption — not any override."""
     src = (
         "class ConnectorAuthError(AuthError):\n"
         "    def __str__(self):\n"
