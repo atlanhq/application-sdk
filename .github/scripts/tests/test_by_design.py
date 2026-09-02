@@ -23,7 +23,13 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import sdk_loop_by_design as bd  # noqa: E402
-from sdk_loop_findings import Finding, load_severity, normalise  # noqa: E402
+from sdk_loop_findings import (  # noqa: E402
+    Finding,
+    audit_comment,
+    compute_verdict,
+    load_severity,
+    normalise,
+)
 
 DATA = (
     pathlib.Path(__file__).resolve().parents[3]
@@ -286,3 +292,74 @@ def test_normalise_without_a_filter_is_unchanged() -> None:
     sev = load_severity()
     result = normalise([_f(pattern_id="T201")], sev)
     assert len(result.kept) == 1
+
+
+# ---------------------------------------------------------------------------
+# A guardrail cannot be lost on the way to the verdict either
+# ---------------------------------------------------------------------------
+
+
+def test_an_under_rated_guardrail_still_blocks() -> None:
+    """The suppression route the by-design filter does not cover.
+
+    `normalise` used to route findings to `kept` or `prose` on severity alone,
+    and the pattern clamp only ever LOWERS. So a model that emitted a guardrail
+    pattern at LOW — a determinism violation it under-rated — put it in
+    `prose`, where `compute_verdict` never looks. The guardrail's BLOCKED
+    verdict never fired and a merge-blocking fact rendered as a passing remark.
+
+    Same failure this module exists to prevent, one layer up: a guardrail
+    silently not counting.
+    """
+    sev = load_severity()
+    guarded = next(
+        (p for entry in sev.guardrails.values() for p in entry["patterns"]), None
+    )
+    assert guarded, "severity.yaml defines no guardrail patterns"
+
+    finding = _f(pattern_id=guarded, severity="LOW", confidence=0.1)
+    result = normalise([finding], sev, by_design=bd.load_by_design(DATA))
+
+    assert result.kept == [finding], "the guardrail was routed to prose"
+    assert not result.prose
+    assert sev.in_findings(
+        finding.severity
+    ), "the guardrail was kept at a severity that does not render into Findings"
+    assert compute_verdict(result.kept, sev) == "BLOCKED"
+
+
+def test_the_guardrail_floor_is_the_mildest_blocking_severity() -> None:
+    """Floored, not escalated. The model's rating is evidence about how bad the
+    defect is; the guardrail decides only that it counts. Promoting an
+    under-rated finding straight to BLOCKING would overstate it."""
+    sev = load_severity()
+    assert sev.lowest_blocking() == "MEDIUM"
+    assert sev.in_findings("MEDIUM") and not sev.in_findings("LOW")
+
+
+def test_a_verdict_that_legitimately_has_no_findings_is_not_a_violation() -> None:
+    """`NEEDS_REBASE` and `NEEDS_HUMAN` are both decided before any finding
+    exists — one from mergeStateStatus, one from what the reviewer could not
+    determine. Flagging them reported every rebase round as a contract
+    violation, contaminating the measurement the audit exists to produce."""
+    for verdict in ("NEEDS_REBASE", "NEEDS_HUMAN"):
+        body = (
+            "<!-- SDK_REVIEW -->\n"
+            f"<!-- VERDICT: {verdict} -->\n"
+            f"<!-- REVIEWED_HEAD: {'a' * 40} -->\n"
+            "### Findings\n\n"
+        )
+        problems = [p for p in audit_comment(body) if "Findings is empty" in p]
+        assert not problems, f"{verdict} was reported as a violation: {problems}"
+
+
+def test_an_empty_findings_list_with_needs_fixes_is_still_a_violation() -> None:
+    """The exemption is narrow on purpose: NEEDS_FIXES with nothing to fix
+    would leave the resolve loop with no work and no way to terminate."""
+    body = (
+        "<!-- SDK_REVIEW -->\n"
+        "<!-- VERDICT: NEEDS_FIXES -->\n"
+        f"<!-- REVIEWED_HEAD: {'a' * 40} -->\n"
+        "### Findings\n\n"
+    )
+    assert any("Findings is empty" in p for p in audit_comment(body))
