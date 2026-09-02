@@ -2,6 +2,27 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.26.0] - 2026-09-02
+
+### Features
+
+- P051 — SDR app below the interactive-setup SDK floor (#3598) ([acc5e16](https://github.com/atlanhq/application-sdk/commit/acc5e16))
+- add K018/K019/K020 for connector config-key drift (#3555) ([773ac49](https://github.com/atlanhq/application-sdk/commit/773ac49))
+
+### Bug fixes
+
+- P003 exempts classes that override code emission (#3616) ([3909ce2](https://github.com/atlanhq/application-sdk/commit/3909ce2))
+- P013/P014 resolve boundary types the way Python does (#3618) ([786f3e2](https://github.com/atlanhq/application-sdk/commit/786f3e2))
+- K009 false-positive shapes (#3601) ([ac75e62](https://github.com/atlanhq/application-sdk/commit/ac75e62))
+- K011 false-positive shapes (#3586) ([99439f6](https://github.com/atlanhq/application-sdk/commit/99439f6))
+- D010 false-positive shapes (#3585) ([76867f1](https://github.com/atlanhq/application-sdk/commit/76867f1))
+- I005 false-positive shapes (#3587) ([b257c58](https://github.com/atlanhq/application-sdk/commit/b257c58))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.24.0 (#3602) ([dd5fd53](https://github.com/atlanhq/application-sdk/commit/dd5fd53))
+- chore(conformance): P025 false-positive shapes (#3584) ([75b2ad2](https://github.com/atlanhq/application-sdk/commit/75b2ad2))
+
 ## [0.25.0] - 2026-08-31
 
 ### Features

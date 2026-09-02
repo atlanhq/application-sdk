@@ -166,6 +166,13 @@ don't silently inherit the bare leaf's code.  Suppress with `# conformance: igno
 <reason>` at the declaration when an intermediate is genuinely abstract — see
 typed-error-prescription §4 and BLDX-1431.
 
+Exempt: classes whose own MRO overrides `to_failure_details()` — usually via a shared
+connector error mixin.  Those build the wire envelope themselves, so `code` is not what
+a dashboard reads and prefixing it would change nothing observable.  The exemption is
+inherited, so the override may sit on the mixin rather than on each exception class.
+Overriding `qualified_code` alone does NOT exempt: that is the log surface, and the wire
+code still collapses to the leaf.
+
 ---
 
 ## P004 — `DirectTemporalImport` {#p004}
@@ -441,6 +448,12 @@ Violations include: missing annotation, a primitive / container type (`dict`, `l
 that exists in the scanned source tree but does not transitively subclass
 `Input`/`Output` (e.g. a plain `pydantic.BaseModel` subclass or a dataclass).
 
+Annotations resolve against the *defining module* first: when two files declare the same
+class name, the one in the file being scanned wins, matching Python. A base that
+de-aliases to the class's own name (`class X(_X)` over `from generated import X as _X`)
+is an import of a same-named class, so the chain reads as unresolvable rather than as a
+proven non-contract.
+
 Suppressed declarations are still emitted to the SARIF report. This rule is `BLOCK`
 (suppress-only): an unsuppressed violation fails the conformance gate — suppress with `#
 conformance: ignore[P013] <reason>` at the method definition.
@@ -472,6 +485,12 @@ Violations include: missing annotation, a primitive / container type (`dict`, `l
 `str`, `Any`, etc. — even subscripted/bounded forms like `dict[str, str]`), or a class
 that exists in the scanned source tree but does not transitively subclass
 `Input`/`Output` (e.g. a plain `pydantic.BaseModel` subclass or a dataclass).
+
+Annotations resolve against the *defining module* first: when two files declare the same
+class name, the one in the file being scanned wins, matching Python. A base that
+de-aliases to the class's own name (`class X(_X)` over `from generated import X as _X`)
+is an import of a same-named class, so the chain reads as unresolvable rather than as a
+proven non-contract.
 
 Suppressed declarations are still emitted to the SARIF report. This rule is `BLOCK`
 (suppress-only): an unsuppressed violation fails the conformance gate — suppress with `#

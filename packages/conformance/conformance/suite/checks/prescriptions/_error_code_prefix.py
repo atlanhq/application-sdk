@@ -50,6 +50,69 @@ class ClassRecord:
     bases: list[str] = field(default_factory=list)
     code_value: str | None = None
     code_node: ast.AST | None = None
+    overrides_emission: bool = False
+
+
+# The ONE method that, when overridden, takes the emitted code out of ``code``'s
+# hands. ``AppError.to_failure_details()`` builds the ``FailureDetails`` wire
+# envelope and is what puts ``code`` in front of a dashboard; a class that
+# replaces it supplies its own code by another route, so demanding a prefix on
+# ``code`` is meaningless there.
+#
+# ``qualified_code`` is deliberately NOT in this set. It is only the
+# log-line/human-readable surface — a class that overrides it while leaving
+# ``to_failure_details`` alone still emits the bare leaf code on the wire, which
+# is exactly the harm P003 exists to catch.
+EMISSION_OVERRIDES: frozenset[str] = frozenset({"to_failure_details"})
+
+# ``AppError.to_failure_details`` is the *default* envelope, not a replacement.
+# When this repo is scanned, that method is in the class registry, and walking
+# every ancestor would credit every leaf subclass with an exemption — hollowing
+# P003 on dogfood. The 15 leaves inherit that default; they are stops too.
+# Mixins (not in these sets) still propagate.
+_EMISSION_STOPS: frozenset[str] = frozenset({"AppError"}) | frozenset(LEAF_PREFIX_MAP)
+
+
+def _overrides_emission(cls_node: ast.ClassDef) -> bool:
+    """True if *cls_node* defines its own code-emission method."""
+    return any(
+        isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef)
+        and stmt.name in EMISSION_OVERRIDES
+        for stmt in cls_node.body
+    )
+
+
+def resolve_emission_override(
+    name: str,
+    by_name: dict[str, ClassRecord],
+    cache: dict[str, bool],
+    visiting: set[str],
+) -> bool:
+    """True if *name* or a non-leaf mixin ancestor overrides code emission.
+
+    Mixins that carry ``to_failure_details`` are credited to every class that
+    mixes them in. ``AppError`` and the 15 leaves are resolution stops: their
+    method is the default envelope, not a replacement, so inheriting from them
+    must not buy the exemption. Bases outside the scanned tree cannot be
+    inspected and simply do not confirm an override.
+    """
+    if name in cache:
+        return cache[name]
+    if name in visiting:
+        return False
+    rec = by_name.get(name)
+    if rec is None:
+        cache[name] = False
+        return False
+    visiting.add(name)
+    result = rec.overrides_emission or any(
+        resolve_emission_override(base, by_name, cache, visiting)
+        for base in rec.bases
+        if base not in _EMISSION_STOPS
+    )
+    visiting.discard(name)
+    cache[name] = result
+    return result
 
 
 def _is_classvar_annotation(annotation: ast.expr | None) -> bool:
@@ -228,6 +291,7 @@ def collect_classes(
                 bases=bases,
                 code_value=code_value,
                 code_node=code_node,
+                overrides_emission=_overrides_emission(node),
             )
         )
     return records
@@ -309,7 +373,17 @@ def resolve_ancestor(
         return None
     visiting.add(name)
     result: bool = False
+    same_name_base = False
     for base in rec.bases:
+        if base == name:
+            # A base that de-aliases to the class's own name is an import of a
+            # SAME-NAMED class from another module — Python forbids literal
+            # self-inheritance, so this is always
+            # ``from other import X as _X`` + ``class X(_X)``. The registry is
+            # keyed on the bare name and cannot hold both, so the chain is
+            # genuinely unresolvable rather than definitively negative.
+            same_name_base = True
+            continue
         sub = resolve_ancestor(
             base, target, by_name, cache, visiting, known_targets, known_ancestors
         )
@@ -318,6 +392,12 @@ def resolve_ancestor(
             break
         # sub is None (external base) or False — keep looking.
     visiting.discard(name)
+    if not result and same_name_base:
+        # Unknown, not "does not subclass": firing here is a false positive on a
+        # class that shadows its own generated base (the standard toolkit shape).
+        if not known_targets:
+            cache[name] = None
+        return None
     if not known_targets:
         cache[name] = result
     return result

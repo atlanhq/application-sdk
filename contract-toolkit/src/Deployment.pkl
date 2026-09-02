@@ -21,6 +21,10 @@ class KedaTemporalConfig {
 class KedaConfig {
   enabled: Boolean = true
   minReplicaCount: Int = 0
+  /// Replica ceiling. Omit to inherit the chart's fallback chain (chart-wide
+  /// `keda.maxReplicaCount`, then the platform's `maxWorkerReplicaCount`,
+  /// then 10).
+  maxReplicaCount: Int? = null
   /// Seconds KEDA waits after the queue drains before scaling to zero.
   /// Omit to use the Helm chart default.
   cooldownPeriod: Int? = null
@@ -32,6 +36,25 @@ class ResourceConfig {
   limits: Mapping<String, String> = new Mapping {}
 }
 
+/// Vertical Pod Autoscaler settings.
+///
+/// `updateMode` is constrained to the four casings the Kubernetes VPA actually
+/// accepts, so a contract cannot emit the lowercase `off` that YAML 1.1 loaders
+/// coerce to boolean `false`.
+///
+/// On a `Pool`, this block alone decides whether the pool is clamped: the chart
+/// does not fall back to an app-level VPA flag, so a pool that never sets
+/// `enabled = true` is never clamped. `maxAllowed` is swapped as a WHOLE dict at
+/// each chart fallback step rather than merged key-by-key, so declaring only
+/// `memory` leaves cpu on the chart default (`2000m`) rather than on any
+/// app-level value.
+class VpaConfig {
+  enabled: Boolean = false
+  updateMode: String?(this == null || List("Off", "Initial", "Recreate", "Auto").contains(this)) = null
+  minAllowed: Mapping<String, String> = new Mapping {}
+  maxAllowed: Mapping<String, String> = new Mapping {}
+}
+
 /// Per-pool deployment configuration. The pool key must be lowercase kebab-case
 /// and exactly match the string passed to `@task(pool="…")` in Python — the
 /// runtime routes activities to the corresponding task queue via that name.
@@ -39,6 +62,13 @@ class ResourceConfig {
 /// Until conformance rule P016 (BLDX-1485) ships, the pool-key / `@task(pool=…)`
 /// alignment is enforced only by reading. A typo silently routes activities to an
 /// unstaffed queue and they hang until `start_to_close_timeout`.
+///
+/// The pool key is the ONLY source of the pool's task queue. Both sides derive it
+/// from the key and nothing carries it between them: the chart renders
+/// `atlan-<app>-<deploymentName>-<key>`, and `application_sdk`'s
+/// `resolve_pool_queue()` derives the same string from `ATLAN_APPLICATION_NAME` +
+/// `ATLAN_DEPLOYMENT_NAME`. There is deliberately no `taskQueue` field here —
+/// declaring one would let the poll target and the routing target drift.
 ///
 /// ```pkl
 /// deploy = new DeployConfig {
@@ -57,6 +87,10 @@ class Pool {
   replicaCount: Int? = null
   keda: KedaConfig = new KedaConfig {}
   resources: ResourceConfig? = null
+  /// Per-pool VPA. Independent of any app-level VPA setting — the chart gates a
+  /// pool's VPA on this block alone, so omitting it (the default) means this
+  /// pool's requests are never clamped.
+  vpa: VpaConfig? = null
   env: Mapping<String, String> = new Mapping {}
   envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
   /// Per-pool escape hatch for `atlan.yaml` keys not yet modelled as typed fields.
@@ -96,10 +130,17 @@ class DeployConfig {
   /// `overrides` from the first pool are applied.
   overrides: Mapping<String, Any> = new Mapping {}
   /// Named worker-pool map. Pool keys must be lowercase kebab-case.
-  /// An empty map (the default) emits no `pools:` block in `atlan.yaml`.
-  /// Order matters: the first key in insertion order drives the synthesised
-  /// top-level `deploy:` block (keda, resources, env). Put the primary
-  /// always-on pool first; placing a scale-to-zero pool first will silently
-  /// synthesise a scale-to-zero `deploy:` block.
+  /// An empty map (the default) emits no pool config in `atlan.yaml`.
+  ///
+  /// Order matters. The FIRST key in insertion order is the app's main worker:
+  /// its keda/resources/env drive the synthesised top-level `deploy:` block.
+  /// Put the primary always-on pool first; placing a scale-to-zero pool first
+  /// will silently synthesise a scale-to-zero `deploy:` block.
+  ///
+  /// Every key AFTER the first renders a dedicated worker pool as a
+  /// `deploy.workerPools[]` entry — the shape the `atlan-app` chart reads. Those
+  /// pools each get their own TemporalWorkerDeployment, KEDA ScaledObject, and
+  /// task queue. `atlan.yaml` also carries a top-level `pools:` mirror of the
+  /// whole map for tooling that reads the contract shape directly.
   pools: Mapping<KebabCase, Pool> = new Mapping {}
 }
