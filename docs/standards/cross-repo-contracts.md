@@ -168,18 +168,34 @@ nothing retries. A break costs rows, not runs, and nothing goes red:
   reach for nothing. Putting auth in front of that route therefore drops every
   row the fleet writes, with no error anywhere. It needs the header added here,
   released, and the fleet bumped **first**.
-- **The compensating control is network policy, not application auth.** Any
-  workload that can reach
-  `system-workflows.system-workflows-app.svc.cluster.local:8000` can POST a
-  row for any `workflow_slug`, `app_id` and verdict, and because the write is
-  abandoned neither side can tell a forged row from a real one afterwards.
-  That is accepted for this first ship: the route is cluster-internal, the
-  Iceberg writer principal lives only in that app, and NetworkPolicy on the
-  `system-workflows` Service is what keeps the audience to in-cluster app
-  pods. An app-to-app credential (workload identity, or a short-lived service
-  token bound to `app_id`) is a follow-up that has to land in both repos
-  together; until it does, do not expose this Service outside the cluster
-  and do not drop the NetworkPolicy that restricts who can dial it.
+- **Nothing authenticates this write, and that is accepted for the first ship.**
+  Any workload that can reach
+  `system-workflows.system-workflows-app.svc.cluster.local:8000` can POST a row
+  for any `workflow_slug`, `app_id` and verdict — every field that attributes a
+  row is asserted by the caller — and because the write is abandoned, neither side
+  can tell a forged row from a real one afterwards.
+
+  What bounds it: the address is a cluster-internal Service DNS name, so the trust
+  boundary is "any workload already running inside the tenant's cluster", not the
+  internet; the Iceberg writer principal stays in the receiving app; and the
+  `payload` narrowing above means no row carries handler-authored text either way.
+  What does **not** bound it, despite being the obvious candidate: this repo
+  neither owns nor asserts a `NetworkPolicy` in front of that Service. If one is
+  wanted it belongs to the receiving app's chart, and this SDK would not notice
+  its absence — so do not read this entry as a record that one exists.
+
+  What that makes the rows worth: unauthenticated, self-asserted observability
+  data, good for counting and trending preflight outcomes across the fleet, which
+  is what they exist for. Nothing that has to be *trustworthy* should be built on
+  them — billing, access decisions, or anything a customer sees as authoritative.
+
+  What would change the answer: the table starts feeding a decision that must be
+  trustworthy, the receiver becomes reachable beyond the cluster, or a tenant
+  begins hosting workloads that are not first-party. The fix is then the one the
+  SDK cannot make alone — workload identity, or a short-lived service token bound
+  to `app_id` — agreed with the `system-workflows` owners and rolled out in the
+  order the bullet above demands: header added here, released, fleet bumped,
+  *then* enforced at the receiver.
 - **The two enum vocabularies must stay in step.** `PreflightResultOrigin` and
   `ExtractionMethod` are validated against the receiver's own enums; a value it
   does not accept is a 422 and a dropped row, visible only as one WARNING

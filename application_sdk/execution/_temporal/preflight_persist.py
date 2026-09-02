@@ -31,7 +31,7 @@ from pydantic import BaseModel, ValidationError
 from application_sdk.contracts.base import SerializableEnum
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.errors.base import redact_wire_value
-from application_sdk.handler.contracts import PreflightOutput
+from application_sdk.handler.contracts import PreflightCheck, PreflightOutput
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -73,11 +73,26 @@ _AGENT_HINT_KEYS = ("agent_json", "agent-json", "agent_name", "agent-name")
 #: implementation of that envelope for a reader that does not want it.
 _PREFLIGHT_KEY = "preflight"
 
-#: Handler-authored free text that must not cross the app boundary. The store
-#: derives its columns from the typed routing fields (``status``, ``code``,
-#: ``category``, ``audience``, ``retryable``); these three are the residual
-#: that :func:`redact_wire_value` cannot close, because it is pattern-based.
-_RELAY_FREE_TEXT_KEYS = frozenset({"message", "suggested_action", "evidence"})
+# What may cross the app boundary, named field by field. This is an allowlist and
+# not a list of things to strip, because the two fail in opposite directions: a
+# strip-list is complete only until someone adds a field. ``FailureDetails`` alone
+# already carries a fourth piece of free text past the obvious three —
+# ``cause_repr``, the exception's own string, which is pattern-redacted where it
+# is built and so is no safer here than a check message. An allowlist fails
+# closed: a field added to any of these models later stays inside the tenant
+# until someone names it here.
+
+#: Aggregate verdict fields that may cross: a closed enum and a duration.
+_VERDICT_WIRE_FIELDS = frozenset({"status", "total_duration_ms"})
+
+#: Per-check fields that may cross: which check, whether it passed, how long it
+#: took. ``name`` is the app's own identifier for the check ("connectivity"), not
+#: a description of what went wrong.
+_CHECK_WIRE_FIELDS = frozenset({"name", "passed", "duration_ms"})
+
+#: Typed-failure fields that may cross: the routing fields the store derives its
+#: columns from. ``code`` is app-owned but a code, not a sentence.
+_ERROR_WIRE_FIELDS = frozenset({"category", "code", "retryable", "audience"})
 
 
 class PreflightCheckResult(BaseModel):
@@ -127,35 +142,63 @@ def _or_none(value: str | None) -> str | None:
     return (value.strip() or None) if value else None
 
 
-def _drop_handler_authored_text(value: Any) -> Any:
-    """Strip :data:`_RELAY_FREE_TEXT_KEYS` from a dumped verdict, recursively.
+def _typed_error(error: Any) -> dict[str, Any] | None:
+    """A check's typed failure narrowed to :data:`_ERROR_WIRE_FIELDS`.
 
-    This is the allowlist the relay uses: typed routing fields stay, free text
-    does not. Pattern-based redaction cannot close a DSN, a ``host:port`` or an
-    opaque internal id that a connector put in a check message, and this write
-    is the path that would otherwise ship that text to another app.
+    Args:
+        error: The ``error`` value from a check's wire dump, if it has one.
+
+    Returns:
+        The routing fields, or ``None`` when the check carries no typed failure.
     """
-    if isinstance(value, dict):
-        return {
-            key: _drop_handler_authored_text(item)
-            for key, item in value.items()
-            if key not in _RELAY_FREE_TEXT_KEYS
-        }
-    if isinstance(value, list):
-        return [_drop_handler_authored_text(item) for item in value]
-    return value
+    if not isinstance(error, dict):
+        return None
+    return {key: value for key, value in error.items() if key in _ERROR_WIRE_FIELDS}
+
+
+def _check_payload(check: PreflightCheck) -> dict[str, Any]:
+    """One check as the store receives it: identity and outcome, no prose.
+
+    Args:
+        check: The check the handler ran.
+
+    Returns:
+        The allowlisted fields, with the typed failure narrowed in place.
+    """
+    wire = check.to_wire()
+    payload = {key: value for key, value in wire.items() if key in _CHECK_WIRE_FIELDS}
+    if (error := _typed_error(wire.get("error"))) is not None:
+        payload["error"] = error
+    return payload
 
 
 def verdict_payload(result: PreflightOutput) -> dict[str, Any]:
-    """*result* as the ``preflight`` block the store reads, secret-redacted.
+    """*result* as the ``preflight`` block the store reads — typed fields only.
 
-    Checks go through :meth:`PreflightCheck.to_wire` so a failed check's typed
-    error is the one on the wire, matching the frontend path's precedence.
-    Handler-authored free text (``message``, ``suggested_action``, ``evidence``)
-    is then dropped: the store derives its columns from the typed routing
-    fields, and those three are not redacted where they are built. Remaining
-    strings are walked by :func:`~application_sdk.errors.base.redact_wire_value`
-    as belt-and-braces for anything else that still matches a secret pattern.
+    Two layers, and the first is the one that holds:
+
+    1. **The allowlist** — :data:`_VERDICT_WIRE_FIELDS`,
+       :data:`_CHECK_WIRE_FIELDS`, :data:`_ERROR_WIRE_FIELDS`. What crosses is a
+       closed enum, a bool, two durations, the check's name and the failure's
+       code. No prose does: ``message``, ``suggested_action``, ``evidence`` and
+       ``cause_repr`` are written by the handler or lifted off its exception, so a
+       connector is free to put a DSN, an internal host or a customer identifier
+       in one, and this is the boundary where that would leave the tenant's own
+       app for another.
+    2. **Redaction, still** —
+       :func:`~application_sdk.errors.base.redact_wire_value` walks what survives.
+       It cannot be the control, because it is pattern-based and a bare credential
+       matches nothing; but ``name`` and ``code`` are strings an app chooses, and
+       a URL that ends up in one is worth catching.
+
+    Dropping the prose costs the store the human-readable reason, deliberately:
+    that reason stays inside the tenant, where ``/sage`` already serves the whole
+    verdict to the setup widget off the same :meth:`PreflightCheck.to_wire` dump —
+    unchanged, and unaffected by this narrowing. Relaying it here too needs
+    redaction where ``FailureDetails`` is built rather than a second pattern walk
+    at this boundary; until that exists, the typed ``category`` / ``code`` pair is
+    what carries *why* a check failed. See
+    ``docs/standards/cross-repo-contracts.md``.
 
     Args:
         result: The verdict the handler reached.
@@ -163,9 +206,12 @@ def verdict_payload(result: PreflightOutput) -> dict[str, Any]:
     Returns:
         ``{"preflight": ...}``, ready to send.
     """
-    block = result.model_dump(mode="json", exclude_none=True)
-    block["checks"] = [check.to_wire() for check in result.checks]
-    return {_PREFLIGHT_KEY: redact_wire_value(_drop_handler_authored_text(block))}
+    dumped = result.model_dump(mode="json", exclude_none=True)
+    block = {key: value for key, value in dumped.items() if key in _VERDICT_WIRE_FIELDS}
+    if (aggregate := _typed_error(dumped.get("error"))) is not None:
+        block["error"] = aggregate
+    block["checks"] = [_check_payload(check) for check in result.checks]
+    return {_PREFLIGHT_KEY: redact_wire_value(block)}
 
 
 def extraction_method(input: PreflightGateInput) -> ExtractionMethod:

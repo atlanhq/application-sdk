@@ -328,6 +328,42 @@ class TestNothingSecretReachesTheStore:
         assert "evidence" not in error
         assert error["code"] == "AUTH"
 
+    def test_the_exceptions_own_string_does_not_cross_either(self):
+        # `cause_repr` is the fourth piece of free text on FailureDetails, and the
+        # one a strip-list of the obvious three misses. It is redacted where it is
+        # built, but only by the same patterns — so a driver that names an internal
+        # host in its exception still hands it to this boundary.
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="connectivity",
+                    passed=False,
+                    error=FailureDetails(
+                        category=FailureCategory.AUTH,
+                        code="AUTH",
+                        retryable=False,
+                        message="refused",
+                        cause_repr="OperationalError: db-prod.internal:5432 refused",
+                    ),
+                )
+            ],
+        )
+        row = persist.build_check_result(_gate(workflow_slug=SLUG), verdict)
+        assert row is not None
+        assert "db-prod.internal:5432" not in row.model_dump_json()
+        assert "cause_repr" not in row.payload["preflight"]["checks"][0]["error"]
+
+    def test_a_field_added_to_the_contract_later_does_not_cross_by_default(self):
+        # The allowlist's whole point: it fails closed. A new field on any of these
+        # models stays inside the tenant until someone names it, rather than
+        # crossing the moment it is added.
+        assert "debug_note" not in persist._CHECK_WIRE_FIELDS
+        payload = persist._check_payload(
+            PreflightCheck(name="auth", passed=True, duration_ms=1.0)
+        )
+        assert set(payload) <= persist._CHECK_WIRE_FIELDS | {"error"}
+
     def test_redaction_leaves_the_shape_alone(self):
         value = {"a": ["x", {"b": 1}], "c": True, "d": None}
         assert persist.redact_wire_value(value) == value
