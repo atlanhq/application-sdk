@@ -42,6 +42,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
+from sdk_loop_by_design import load_by_design
 from sdk_loop_common import (
     MAX_ROUNDS,
     PLAYBOOK_RESOLVE,
@@ -69,7 +70,10 @@ from sdk_loop_common import (
     usage_cost_usd,
     usage_total,
 )
-from sdk_loop_findings import audit_comment
+from sdk_loop_findings import audit_comment, load_severity
+from sdk_loop_live import FINDINGS_RELPATH, RedGreenJob, deliver, post_comment
+from sdk_loop_pack import build_pack
+from sdk_loop_pack import render as render_pack
 from sdk_loop_prep import (  # noqa: E402
     OUTCOME_UPDATED,
     PrepResult,
@@ -78,6 +82,8 @@ from sdk_loop_prep import (  # noqa: E402
     needs_agent,
     pr_state,
 )
+from sdk_loop_refute import CROSS_FAMILY
+from sdk_loop_routing import load_routing
 
 #: Wall-clock per phase. Review is the slower of the two: it walks the whole
 #: five-phase playbook including sub-agents, where a resolve round is mostly
@@ -91,6 +97,16 @@ TIMEOUT_RESOLVE_S = 30 * 60
 #: Prep is bookkeeping, not review. If a mechanical fix has not landed in ten
 #: minutes it is not mechanical, and the review will say so far more cheaply.
 TIMEOUT_PREP_S = 10 * 60
+
+#: The challenger gets one call over the findings; it does not need the review's
+#: budget, and a refuter that wanders for half an hour is not refuting.
+TIMEOUT_REFUTE_S = 8 * 60
+
+#: How long render waits for red-green after the model stages finish. It has
+#: usually been running for minutes by then; this is the tail, not the run.
+REDGREEN_JOIN_S = 4 * 60
+
+REFUTE_BRIEF = ".mothership/pr-loop/REFUTE.md"
 
 #: Outcomes a phase can report to the next job. Only `ok` continues to the
 #: paired phase; `reaim` sends the loop back to review on the new head.
@@ -194,6 +210,13 @@ def prep_prompt(pr: int, failing: tuple[str, ...]) -> str:
     )
 
 
+def pr_title(repo: str, pr: int) -> str:
+    out = _sh(
+        ["gh", "pr", "view", str(pr), "--json", "title", "-q", ".title"], cwd=repo
+    )
+    return (out.stdout or "").strip()
+
+
 def pr_files(repo: str, pr: int) -> list[str]:
     """Paths the PR touches. Deleted files included — classifying from
     `+++ b/` diff headers alone would miss them, as §11 warns."""
@@ -243,6 +266,7 @@ def review_prompt(
     solo: str = "",
     agents: Sequence[str] = (),
     pack: str = "",
+    output_path: str = "",
 ) -> str:
     """Hand the reviewer the playbook, its brief and its context — do not send it looking.
 
@@ -307,6 +331,16 @@ def review_prompt(
 
     if pack:
         parts += [pack, "", "---", ""]
+
+    if output_path:
+        # REVIEW.md: "Write one JSON object to the path named in your prompt."
+        # This is the naming. Without it the reviewer has been told to write
+        # to a path and given none — and the runtime reads nothing.
+        parts += [
+            f"Write your JSON to `{output_path}`. Create the directory if needed.",
+            "Post nothing to the PR yourself; the runner renders and posts.",
+            "",
+        ]
 
     parts += [
         f"PR #{pr}, sha {sha}, round {round_no} of {MAX_ROUNDS} of an @sdk-loop run.",
@@ -721,6 +755,26 @@ def main(argv: list[str] | None = None) -> int:
             f"scope={scope} agents={len(fan_out)}" + (f" solo={solo}" if solo else "")
         )
 
+        # Everything determinate, before the model starts. The pack is the
+        # reviewer's first turn; red-green needs nothing the model produces,
+        # so it runs alongside the model stages and is joined before render.
+        diff_text = _sh(["gh", "pr", "diff", str(pr)], cwd=repo).stdout or ""
+        routing = load_routing()
+        pack = build_pack(
+            repo=pathlib.Path(repo), diff=diff_text, scope=scope, routing=routing
+        )
+        findings_path = pathlib.Path(workspace) / FINDINGS_RELPATH
+        findings_path.parent.mkdir(parents=True, exist_ok=True)
+        if findings_path.exists():
+            findings_path.unlink()
+        base_ref = os.environ.get("BASE_SHA") or "origin/main"
+        redgreen_job = RedGreenJob(
+            repo=pathlib.Path(repo),
+            base_ref=base_ref,
+            files=pack.files,
+            workdir=pathlib.Path(workspace) / ".sdk-loop" / "redgreen-base",
+        )
+
         print(f"::group::review round {round_no} — agent transcript")
         result = run_agent(
             REVIEW_MODEL,
@@ -733,6 +787,8 @@ def main(argv: list[str] | None = None) -> int:
                 scope=scope,
                 solo=solo,
                 agents=fan_out,
+                pack=render_pack(pack, solo or "reviewer"),
+                output_path=str(findings_path),
             ),
             workspace,
             TIMEOUT_REVIEW_S,
@@ -741,6 +797,54 @@ def main(argv: list[str] | None = None) -> int:
             subagent_names=fan_out,
         )
         print("::endgroup::")
+
+        # The live path. The model wrote JSON and posted nothing; the runner
+        # gates, challenges, renders and posts. If the gate fails there is no
+        # comment, and the existing interpreter below reports the failure the
+        # same way it always did — deliberately, not by accident.
+        if result.completed and findings_path.exists():
+            sev = load_severity()
+
+            def challenge(prompt: str) -> str:
+                out = run_agent(
+                    RESOLVE_MODEL,
+                    prompt,
+                    workspace,
+                    TIMEOUT_REFUTE_S,
+                    transcript_path=transcript,
+                )
+                return out.stdout if out.completed else ""
+
+            live = deliver(
+                payload_text=findings_path.read_text(encoding="utf-8"),
+                pack=pack,
+                sev=sev,
+                by_design=load_by_design(),
+                challenge=challenge,
+                challenge_brief=pathlib.Path(REFUTE_BRIEF).read_text(encoding="utf-8"),
+                # RESOLVE_MODEL is a different family from REVIEW_MODEL, so the
+                # strong form of the challenge is available on this lane.
+                challenge_mode=CROSS_FAMILY,
+                diff=diff_text,
+                redgreen_report=redgreen_job.join(timeout_s=REDGREEN_JOIN_S),
+                pr=pr,
+                pr_title=pr_title(repo, pr),
+                reviewed_head=state.live,
+                answers_trigger=os.environ.get("COMMENT_ID") or None,
+                model=REVIEW_MODEL,
+                run_url=os.environ.get("GHA_RUN_URL", ""),
+            )
+            if live.should_post:
+                url = post_comment(repo, pr, live.body, _sh)
+                print(
+                    f"posted {live.verdict}: {len(live.kept)} findings, "
+                    f"{live.dropped} dropped, challenge={live.challenged} {url}"
+                )
+            else:
+                print(f"::warning::review not posted — {live.failure}")
+        elif result.completed:
+            print(f"::warning::the reviewer completed but wrote no {FINDINGS_RELPATH}")
+
         comments = json.loads(
             _sh(
                 ["gh", "api", f"repos/{repo}/issues/{pr}/comments", "--paginate"]
