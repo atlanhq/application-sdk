@@ -271,6 +271,14 @@ COMPARE_FILE_CAP = 300
 #: had previously succeeded.
 NON_HUMAN_REVIEWERS = frozenset({"atlan-ci"})
 
+#: The comment prefix that starts a loop run, matched exactly as
+#: `sdk-loop.yml`'s fence matches it (`startsWith(comment.body, '@sdk-loop')`).
+#: A comment like this is a person ASKING for this run, not a concern raised
+#: against it, so it must not count as the human activity that blocks a fast
+#: track — otherwise the trigger would veto the run it just started and the
+#: fast track could never fire from a comment at all.
+LOOP_TRIGGER = "@sdk-loop"
+
 
 @dataclass(frozen=True)
 class FastTrackDecision:
@@ -349,7 +357,15 @@ def contribution_digest(repo: str, base_ref: str, head: str, runner=_sh) -> str 
 
 
 def _activity_after(stdout: str, when: str) -> bool | None:
-    """Parse a timestamp/login/type TSV listing. None if a row is malformed."""
+    """Parse a timestamp/login/type[/is-trigger] TSV listing.
+
+    None if a row is malformed. The optional fourth field is `"true"` when the
+    row is a `LOOP_TRIGGER` comment; those are skipped (see `LOOP_TRIGGER`).
+    It arrives as a jq-computed boolean rather than the comment body because a
+    body can contain tabs and newlines, which would break this TSV apart — and
+    because keeping the skip here, in Python, keeps it under test instead of
+    buried in a `--jq` string the fake runner in the tests cannot exercise.
+    """
     for line in (stdout or "").splitlines():
         if not line.strip():
             continue
@@ -358,6 +374,8 @@ def _activity_after(stdout: str, when: str) -> bool | None:
             return None
         submitted, login, kind = fields[0], fields[1], fields[2]
         if kind == "Bot" or login in NON_HUMAN_REVIEWERS:
+            continue
+        if len(fields) > 3 and fields[3] == "true":
             continue
         # String compare is correct for ISO-8601 UTC timestamps, which is what
         # both the reviews and the comments endpoints return.
@@ -374,6 +392,10 @@ def human_review_after(repo: str, pr: int, when: str, runner=_sh) -> bool | None
     bot approval on both surfaces (`pull_request_review` and `issue_comment`);
     listing only `pulls/{pr}/reviews` would re-stamp READY_TO_MERGE over a
     comment that just dismissed it.
+
+    The one comment that does NOT count is a `LOOP_TRIGGER` one: that is the
+    request for this run, not a concern about it, and counting it would leave
+    the fast track unable to ever fire from a comment trigger.
 
     Fails closed: None is returned on an unreadable listing and the caller
     treats it as "assume somebody did", because the cost of being wrong here
@@ -402,7 +424,8 @@ def human_review_after(repo: str, pr: int, when: str, runner=_sh) -> bool | None
             f"repos/{repo}/issues/{pr}/comments",
             "--paginate",
             "--jq",
-            '.[] | [(.created_at // ""), (.user.login // ""), (.user.type // "")] | @tsv',
+            '.[] | [(.created_at // ""), (.user.login // ""), (.user.type // ""), '
+            f'(((.body // "") | startswith("{LOOP_TRIGGER}")) | tostring)] | @tsv',
         ]
     )
     if comments.returncode != 0:

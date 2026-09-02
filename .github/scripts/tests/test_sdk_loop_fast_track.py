@@ -273,6 +273,63 @@ def test_a_human_issue_comment_after_the_verdict_counts() -> None:
     )
 
 
+def test_the_loop_trigger_comment_does_not_block_the_run_it_started() -> None:
+    """`@sdk-loop` is how a person ASKS for this run. It is posted after the
+    last verdict by definition, so counting it as blocking human activity
+    would mean a comment-triggered fast track could never fire at all."""
+    trigger = "\t".join(
+        ("2026-09-01T10:00:00Z", "a-person", "User", "true"),
+    )
+    assert (
+        human_review_after(
+            "o/r",
+            1,
+            "2026-09-01T09:00:00Z",
+            runner=_route(reviews=_Done(0, ""), comments=_Done(0, trigger)),
+        )
+        is False
+    )
+
+
+def test_a_comment_that_is_not_the_trigger_still_blocks() -> None:
+    """The skip is scoped to the trigger, not to comments generally: the same
+    row with the flag unset is a concern and must still block."""
+    concern = "\t".join(
+        ("2026-09-01T10:00:00Z", "a-person", "User", "false"),
+    )
+    assert (
+        human_review_after(
+            "o/r",
+            1,
+            "2026-09-01T09:00:00Z",
+            runner=_route(reviews=_Done(0, ""), comments=_Done(0, concern)),
+        )
+        is True
+    )
+
+
+def test_the_comments_listing_asks_github_for_the_trigger_flag() -> None:
+    """Wiring, not decision. The skip above reads a fourth TSV field, so it is
+    dead code unless the query actually computes it — and it has to test the
+    same prefix `sdk-loop.yml`'s fence triggers on, or the two disagree about
+    what a trigger is."""
+    seen: list[str] = []
+
+    def runner(args: list[str]) -> _Done:
+        joined = " ".join(args)
+        if "/comments" in joined:
+            seen.append(joined)
+        return _Done(0, "")
+
+    human_review_after("o/r", 1, "2026-09-01T09:00:00Z", runner=runner)
+    assert seen, "the comments endpoint was never listed"
+    assert f'startswith("{prep.LOOP_TRIGGER}")' in seen[0]
+    assert "tostring" in seen[0], "the flag must reach the TSV as true/false"
+    assert (
+        prep.LOOP_TRIGGER == "@sdk-loop"
+    ), "the fence in sdk-loop.yml triggers on this exact prefix"
+
+
 # ---------------------------------------------------------------------------
 # The decision
 # ---------------------------------------------------------------------------
@@ -367,6 +424,23 @@ def test_a_human_issue_comment_after_the_verdict_blocks_the_fast_track() -> None
     )
     assert not out.fires
     assert "human" in out.reason
+
+
+def test_a_trigger_only_comment_thread_still_fast_tracks() -> None:
+    """The whole point, end to end. On the comment path the trigger is always
+    the newest comment, so if it blocked, this decision could only ever be
+    reached by `workflow_dispatch` — the feature would be dead where it is
+    actually used."""
+    trigger = "\t".join(("2026-09-01T10:00:00Z", "a-person", "User", "true"))
+    out = _decide(
+        runner=_route(
+            reviews=_Done(0, ""),
+            comments=_Done(0, trigger),
+            compare=_Done(0, _one_file(PATCH)),
+        )
+    )
+    assert out.fires
+    assert "byte-identical" in out.reason
 
 
 def test_every_missing_precondition_declines() -> None:
