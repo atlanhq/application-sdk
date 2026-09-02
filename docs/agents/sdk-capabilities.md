@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.31.0
-source-sha:    b8b3aa596e605d1c40adff57e4367a123771cf9c
-source-date:   2026-09-02T11:49:20+01:00
+source-sha:    f65e4b9324aef9a80b45b8b976437aebeb551bcf
+source-date:   2026-09-02T10:42:50Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -25,7 +25,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 65 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 45 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
@@ -2016,6 +2016,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any)`
 - **Summary:** Last-resort escape hatch: run a blocking function in a thread pool.
 - **Defined in:** `application_sdk/_runtime/offload.py`
+
+#### `stop_heartbeat_task`
+
+- **Import:** `from application_sdk.execution.heartbeat import stop_heartbeat_task`
+- **Signature:** `stop_heartbeat_task(task: asyncio.Task, stop_event: asyncio.Event, task_name: str) -> None`
+- **Summary:** Stop an ``auto_heartbeat_loop`` task, letting nothing escape.
+- **Defined in:** `application_sdk/execution/heartbeat.py`
 
 #### `submit_in_thread`
 
@@ -6496,7 +6503,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `passed: bool` `= False` — Whether the check passed.
   - `message: str` `= ''` — Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
   - `error: FailureDetails | None` — Typed failure for a failed check — set only on failed checks.
-  - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
+  - `duration_ms: float` `= -1.0` — How long the check took in milliseconds. ``-1.0`` means not measured —
   - `resolved_message: str` — Message under the precedence rule: a failed check's ``error`` wins.
   - `resolved_suggested_action: str` — Suggested action from a failed check's ``error``; empty otherwise.
 - **Defined in:** `application_sdk/handler/contracts.py`

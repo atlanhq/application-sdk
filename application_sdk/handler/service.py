@@ -258,6 +258,11 @@ def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
 
 def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
     dumped = check.model_dump(mode="json", exclude_none=True)
+    # The -1.0 "not measured" sentinel belongs to the telemetry row
+    # (check_matrix), not to this display payload — the frontend should see
+    # no duration rather than a negative one.
+    if dumped.get("duration_ms", 0) < 0:
+        del dumped["duration_ms"]
     dumped["message"] = check.resolved_message
     if check.resolved_suggested_action:
         dumped["suggested_action"] = check.resolved_suggested_action
@@ -2826,6 +2831,26 @@ def create_app_handler_service(
         ]
         context = _create_context(credentials)
         with bind_handler_context(context):
+            from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
+                PreflightSurface,
+                emit_preflight_check_outcome,
+                emit_preflight_crash_outcome,
+            )
+
+            def _crash_row(e: BaseException) -> None:
+                emit_preflight_crash_outcome(
+                    logger,
+                    app_name,
+                    e,
+                    surface=PreflightSurface.HTTP,
+                    entrypoint=entrypoint,
+                    request_id=context.request_id_str,
+                )
+
+            # Seeded from the *requested* value, not "", so a raise before
+            # validation still names what the caller asked for — an empty
+            # seed would be stamped as "<implicit>" and misattribute the row.
+            entrypoint = preflight_input.entrypoint or ""
             try:
                 logger.info(
                     "Preflight check started: app=%s request=%s",
@@ -2843,11 +2868,6 @@ def create_app_handler_service(
                     result = await ep_fn(preflight_input, context)
                 else:
                     result = await handler.preflight_check(preflight_input)
-                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
-                    PreflightSurface,
-                    emit_preflight_check_outcome,
-                )
-
                 emit_preflight_check_outcome(
                     logger,
                     app_name,
@@ -2916,6 +2936,7 @@ def create_app_handler_service(
                     e,
                     exc_info=True,
                 )
+                _crash_row(e)
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
@@ -2928,13 +2949,21 @@ def create_app_handler_service(
                     e,
                     exc_info=True,
                 )
+                _crash_row(e)
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
                 ) from None
-            except HTTPException:
-                # Deliberate HTTP responses (e.g. 400 from a malformed
-                # entrypoint name) are already client-facing — pass them
-                # through rather than masking them as a generic 500.
+            except HTTPException as e:
+                # Deliberate client-facing responses (e.g. 400 from a malformed
+                # entrypoint name) pass through unrecorded — the response *is*
+                # the channel, so a row would double-count what the caller can
+                # already see. A 5xx raised this way is a crash wearing an HTTP
+                # status: it reaches none of the boundary handlers around it, so
+                # without this it drops out of the setup funnel's denominator —
+                # the same hole on this surface that CONNECT-1170 gap 3 closed
+                # for handler raises.
+                if e.status_code >= 500:
+                    _crash_row(e)
                 raise
             except Exception as e:
                 # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
@@ -2945,6 +2974,7 @@ def create_app_handler_service(
                     e,
                     exc_info=True,
                 )
+                _crash_row(e)
                 raise HTTPException(
                     status_code=500, detail="Internal server error"
                 ) from None

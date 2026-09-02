@@ -410,3 +410,23 @@ class TestUnderlyingErrorType:
         looped.cause = looped
         looped.__cause__ = looped
         assert underlying_error_type(looped) == "_ActivityErrorStub"
+
+
+class TestGateActivityHeartbeat:
+    """CONNECT-1170 gap 3: the gate is scheduled without a heartbeat.
+
+    With ``heartbeat_timeout`` unset, Temporal cannot detect a stalled gate
+    before ``start_to_close`` (it burns the full budget before retrying), and
+    cancellation is never delivered to the worker — which is what lets an
+    abandoned attempt keep running and emit an orphan verdict row (gap 1).
+    """
+
+    async def test_gate_activity_is_scheduled_with_a_heartbeat_timeout(self) -> None:
+        exec_mock, exec_patch = _exec(
+            PreflightOutput(status=PreflightStatus.READY, checks=[])
+        )
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        heartbeat = exec_mock.call_args.kwargs.get("heartbeat_timeout")
+        assert heartbeat is not None
+        assert heartbeat.total_seconds() > 0
