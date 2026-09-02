@@ -57,9 +57,15 @@ never_ci_owned:
   - TemporalImportOutsideAdapter
   - RawTemporalInPublicSurface
   - LoggerCriticalUsage
-  # Guardrails with no deterministic gate at all.
-  - G2-contract-evolution
-  - G3-determinism
+  # Guardrails with no deterministic gate at all. Findings carry these
+  # pattern_ids, never the G2/G3 aliases — those land on Finding.guardrail
+  # after normalise stamps them. Listing the aliases would make the
+  # load-time guard inert for the rules it claims to protect.
+  - field-removed
+  - field-renamed
+  - field-type-changed
+  - io-in-workflow
+  - non-deterministic-in-workflow
 
 suppress:
   # -------------------------------------------------------------------------
@@ -111,9 +117,10 @@ suppress:
     reason: >-
       The sdk-tests job enforces fail_under=85 and blocks below it. Whether the
       tests are MEANINGFUL is the reviewer's question and is not suppressed —
-      only the raw percentage comparison is.
+      only the raw-threshold claim is. Matching `coverage` near a percentage
+      would also drop "0% coverage of the new branch".
     match:
-      evidence: '(?i)\bcoverage\b[^.\n]{0,40}\b\d{1,3}\s*%'
+      evidence: '(?i)\bfail_under\b|coverage dropped to|(?:raw )?coverage[- ]percentage comparison'
 
   # -------------------------------------------------------------------------
   # owner: by-design — intentional in this location
@@ -171,12 +178,15 @@ suppress:
     source: review-policy
     reason: >-
       `CredentialRef` is a serialisable reference and carries no secret
-      material, so passing one through a Temporal payload is safe and is the
-      sanctioned pattern. `CredentialResolver` is restricted to `@task` methods
-      on purpose — resolution needs I/O to the secret store, which a workflow
-      method may not do.
+      material, so treating one as a secret in a Temporal payload is the
+      false-positive claim. Naming the type is not: `credential-resolve-outside-task`
+      and "use CredentialRef instead of a raw secret" both quote it on
+      purpose, and dropping them because they named the type would hide a
+      real defect. `CredentialResolver` restricted to `@task` is also
+      intentional, but a finding that the resolver ran outside `@task` is
+      real and must survive.
     match:
-      evidence: '\bCredentialRef\b|\bCredentialResolver\b'
+      evidence: '(?i)\bCredentialRef\b.{0,80}(?:treated as (?:a )?(?:secret|credential)|(?:is|as) (?:a )?(?:secret|credential)|(?:unsafe|not safe) to pass|secret.{0,40}(?:Temporal )?payload)'
 
   - id: error-code-scheme
     owner: by-design
@@ -184,10 +194,12 @@ suppress:
     reason: >-
       `AAF-{COMPONENT}-{ID:03d}` is the intentional error-code format, and
       `NonRetryableError` / `RetryableError` are deliberately the only two base
-      classes. Proposals for alternative schemes or a deeper hierarchy are not
-      findings.
+      classes. The false-positive claim is a proposal for an alternative
+      scheme or a deeper hierarchy — not a finding that quotes those
+      identifiers, which is how a real wrong-leaf or swallowed-exception
+      finding is written.
     match:
-      evidence: 'AAF-[A-Z]+-\d{3}|\bNonRetryableError\b|\bRetryableError\b'
+      evidence: '(?i)(?:alternative|different|new|additional|deeper|another).{0,50}(?:error[- ]code scheme|error hierarch)|(?:suggest(?:ing|ed)?|propos(?:e|al|ing)).{0,60}(?:error[- ]code scheme|error hierarch|additional error)'
 
   # -------------------------------------------------------------------------
   # Conditional — by-design UNLESS the reviewer substantiates the exception.

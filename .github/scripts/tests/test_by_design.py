@@ -78,6 +78,45 @@ def test_no_ci_gate_entry_claims_a_rule_ci_does_not_block() -> None:
             ), f"{entry.id} claims CI owns {sorted(entry.pattern_ids & loaded.never_ci_owned)}"
 
 
+def test_a_ci_gate_entry_over_a_guardrail_pattern_fails_to_load(tmp_path) -> None:
+    """G2/G3 findings carry `io-in-workflow` / `field-removed`, never the aliases.
+
+    Listing `G2-contract-evolution` in never_ci_owned made the load-time guard
+    inert for the guardrails it claimed to protect: a later `ci-gate` entry
+    naming the real id would load, and the guardrail would then be enforced
+    by nobody. Same shape as the WARN-tier test below; different ids.
+    """
+    bad = tmp_path / "by_design.yaml"
+    bad.write_text(
+        "version: 1\n"
+        "never_ci_owned: [io-in-workflow]\n"
+        "suppress:\n"
+        "  - id: wrong\n"
+        "    owner: ci-gate\n"
+        "    reason: CI blocks it\n"
+        "    match:\n"
+        "      pattern_ids: [io-in-workflow]\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(bd.ByDesignError, match="never_ci_owned"):
+        bd.load_by_design(bad)
+
+
+def test_never_ci_owned_lists_the_real_g2_g3_pattern_ids() -> None:
+    """The shipped file must name what findings actually emit."""
+    loaded = bd.load_by_design(DATA)
+    for pid in (
+        "field-removed",
+        "field-renamed",
+        "field-type-changed",
+        "io-in-workflow",
+        "non-deterministic-in-workflow",
+    ):
+        assert pid in loaded.never_ci_owned, pid
+    assert "G2-contract-evolution" not in loaded.never_ci_owned
+    assert "G3-determinism" not in loaded.never_ci_owned
+
+
 def test_a_ci_gate_entry_over_a_warn_tier_rule_fails_to_load(tmp_path) -> None:
     """Asserting the guard fires, not merely that today's file is clean."""
     bad = tmp_path / "by_design.yaml"
@@ -248,13 +287,58 @@ def test_substantiation_is_read_from_evidence_or_attack_path() -> None:
             "the Dapr seam is the abstraction layer",
         ),
         (
-            _f(evidence='raise NonRetryableError("AAF-STORAGE-001")'),
-            "intentional error scheme",
+            _f(
+                evidence=(
+                    "consider an alternative error-code scheme instead of "
+                    "AAF-STORAGE-001 / NonRetryableError"
+                )
+            ),
+            "scheme-proposal claim, not the identifier",
         ),
     ],
 )
 def test_known_non_findings_are_dropped(finding: Finding, why: str) -> None:
     assert bd.load_by_design(DATA).match(finding) is not None, why
+
+
+def test_naming_credential_ref_is_not_enough_to_suppress() -> None:
+    """Token-not-claim: quoting CredentialResolver is how a real finding is written.
+
+    The short-circuit does not save this — credential-resolve-outside-task is
+    not a guardrail. Matching the type name would drop it.
+    """
+    loaded = bd.load_by_design(DATA)
+    real = _f(
+        pattern_id="credential-resolve-outside-task",
+        evidence="CredentialResolver.resolve() called in run()",
+    )
+    recommend = _f(evidence="use CredentialRef instead of a raw secret in the contract")
+    false_positive = _f(
+        evidence="CredentialRef treated as a secret in a Temporal payload"
+    )
+    assert loaded.match(real) is None
+    assert loaded.match(recommend) is None
+    assert loaded.match(false_positive) is not None
+
+
+def test_quoting_an_error_class_from_a_real_defect_is_not_suppressed() -> None:
+    """review-policy forbids proposing a new hierarchy, not quoting the existing one."""
+    loaded = bd.load_by_design(DATA)
+    real = _f(evidence='raise NonRetryableError("AAF-STORAGE-001")')
+    proposal = _f(
+        evidence="consider an alternative error-code scheme instead of NonRetryableError"
+    )
+    assert loaded.match(real) is None
+    assert loaded.match(proposal) is not None
+
+
+def test_meaningful_coverage_commentary_is_not_the_raw_threshold_claim() -> None:
+    """`coverage` near a percentage is how a 'tests are meaningful?' finding is written."""
+    loaded = bd.load_by_design(DATA)
+    meaningful = _f(evidence="0% coverage of the new branch")
+    threshold = _f(evidence="coverage dropped to 80, below fail_under=85")
+    assert loaded.match(meaningful) is None
+    assert loaded.match(threshold) is not None
 
 
 def test_warn_tier_rules_are_still_reported_outside_their_seam() -> None:
