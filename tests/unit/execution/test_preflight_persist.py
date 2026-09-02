@@ -176,9 +176,9 @@ class TestWhatTheRowSaysAboutTheSource:
 class TestThePayloadMatchesWhatTheOtherWriterSends:
     """The ``preflight`` block is the contract between every writer and the store."""
 
-    def test_a_failed_checks_typed_error_wins_over_its_deprecated_message(self):
-        # What the frontend path records, so both writers put the same string in
-        # the same place rather than leaving the store to re-derive it.
+    def test_a_failed_checks_typed_error_keeps_the_routing_fields(self):
+        # Free text is dropped at the relay; the store derives columns from the
+        # typed routing fields, which both writers still share.
         verdict = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
@@ -190,8 +190,10 @@ class TestThePayloadMatchesWhatTheOtherWriterSends:
                 )
             ],
         )
-        block = persist.verdict_payload(verdict)["preflight"]
-        assert block["checks"][0]["message"] == "login refused"
+        check = persist.verdict_payload(verdict)["preflight"]["checks"][0]
+        assert "message" not in check
+        assert check["error"]["code"] == "AUTH"
+        assert check["error"]["category"] == "AUTH"
 
     def test_the_aggregate_verdict_fields_are_carried(self):
         verdict = PreflightOutput(
@@ -201,7 +203,7 @@ class TestThePayloadMatchesWhatTheOtherWriterSends:
         )
         block = persist.verdict_payload(verdict)["preflight"]
         assert block["status"] == "partial"
-        assert block["message"] == "two of three"
+        assert "message" not in block
         assert block["total_duration_ms"] == 12.5
 
     def test_the_frontends_display_envelope_is_not_synthesised(self):
@@ -213,15 +215,16 @@ class TestThePayloadMatchesWhatTheOtherWriterSends:
 
 
 class TestNothingSecretReachesTheStore:
-    """Redaction here is load-bearing, not defence in depth.
+    """Handler-authored free text is dropped, not pattern-redacted.
 
-    ``FailureDetails`` redacts only ``cause_repr``, and only where it is built.
-    ``message``, ``suggested_action`` and ``evidence`` values reach the wire
-    exactly as the handler wrote them — and a driver exception routinely carries
-    a connection string.
+    ``FailureDetails`` redacts only ``cause_repr`` where it is built.
+    ``message``, ``suggested_action`` and ``evidence`` are written as the
+    handler left them, and a pattern walker cannot catch a DSN, a
+    ``host:port`` or an opaque id that matches none of its regexes. The
+    relay therefore does not send those fields at all.
     """
 
-    def test_a_typed_errors_message_and_action_are_redacted(self):
+    def test_a_typed_errors_message_and_action_are_dropped(self):
         secret = "db://svc:hunter2@example-host:3306"
         verdict = PreflightOutput(
             status=PreflightStatus.NOT_READY,
@@ -238,13 +241,17 @@ class TestNothingSecretReachesTheStore:
         )
         row = persist.build_check_result(_gate(workflow_slug=SLUG), verdict)
         assert row is not None
-        assert "hunter2" not in row.model_dump_json()
+        dumped = row.model_dump_json()
+        assert "hunter2" not in dumped
+        check = row.payload["preflight"]["checks"][0]
+        assert "message" not in check
+        assert "suggested_action" not in check.get("error", {})
 
-    def test_evidence_values_are_redacted(self):
+    def test_evidence_is_dropped(self):
         # The model's own validator rejects secret-*named* keys; nothing checks
-        # the values, so this is the gap redact() closes. Built as a wire
-        # FailureDetails because evidence is derived from the producing error's
-        # dataclass fields and cannot be passed to a leaf directly.
+        # the values. Built as a wire FailureDetails because evidence is derived
+        # from the producing error's dataclass fields and cannot be passed to a
+        # leaf directly.
         verdict = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
@@ -264,8 +271,9 @@ class TestNothingSecretReachesTheStore:
         row = persist.build_check_result(_gate(workflow_slug=SLUG), verdict)
         assert row is not None
         assert "hunter2" not in row.model_dump_json()
+        assert "evidence" not in row.payload["preflight"]["checks"][0]["error"]
 
-    def test_a_driver_message_is_redacted(self):
+    def test_a_driver_message_is_dropped(self):
         verdict = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
@@ -278,7 +286,47 @@ class TestNothingSecretReachesTheStore:
         )
         row = persist.build_check_result(_gate(workflow_slug=SLUG), verdict)
         assert row is not None
-        assert "hunter2" not in row.model_dump_json()
+        dumped = row.model_dump_json()
+        assert "hunter2" not in dumped
+        assert "message" not in row.payload["preflight"]["checks"][0]
+
+    def test_a_secret_that_matches_no_redact_pattern_is_still_dropped(self):
+        # The residual `redact_wire_value` cannot close: a host:port and an
+        # opaque internal id match none of `redact_secrets`' regexes.
+        leaked = "db-prod.internal:5432 ticket=INC-9f3c2a1b"
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="connectivity",
+                    passed=False,
+                    message=f"could not reach {leaked}",
+                    error=FailureDetails(
+                        category=FailureCategory.AUTH,
+                        code="AUTH",
+                        retryable=False,
+                        message=leaked,
+                        suggested_action=f"page oncall about {leaked}",
+                        evidence={
+                            "host": "db-prod.internal:5432",
+                            "ticket": "INC-9f3c2a1b",
+                        },
+                    ),
+                )
+            ],
+        )
+        row = persist.build_check_result(_gate(workflow_slug=SLUG), verdict)
+        assert row is not None
+        dumped = row.model_dump_json()
+        assert "db-prod.internal:5432" not in dumped
+        assert "INC-9f3c2a1b" not in dumped
+        check = row.payload["preflight"]["checks"][0]
+        assert "message" not in check
+        error = check["error"]
+        assert "message" not in error
+        assert "suggested_action" not in error
+        assert "evidence" not in error
+        assert error["code"] == "AUTH"
 
     def test_redaction_leaves_the_shape_alone(self):
         value = {"a": ["x", {"b": 1}], "c": True, "d": None}

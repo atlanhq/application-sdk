@@ -73,6 +73,12 @@ _AGENT_HINT_KEYS = ("agent_json", "agent-json", "agent_name", "agent-name")
 #: implementation of that envelope for a reader that does not want it.
 _PREFLIGHT_KEY = "preflight"
 
+#: Handler-authored free text that must not cross the app boundary. The store
+#: derives its columns from the typed routing fields (``status``, ``code``,
+#: ``category``, ``audience``, ``retryable``); these three are the residual
+#: that :func:`redact_wire_value` cannot close, because it is pattern-based.
+_RELAY_FREE_TEXT_KEYS = frozenset({"message", "suggested_action", "evidence"})
+
 
 class PreflightCheckResult(BaseModel):
     """The write route's request body.
@@ -87,10 +93,12 @@ class PreflightCheckResult(BaseModel):
             without one is not built at all.
         origin: Which interface produced the check. Always
             :attr:`PreflightResultOrigin.ACTIVITY` from here.
-        payload: The verdict, inside its ``preflight`` envelope, secret-redacted.
-            Kept as ``dict[str, Any]``: this is a relay boundary, and the store
-            derives its own columns from it, so typing it here would bind the
-            SDK to that schema.
+        payload: The verdict, inside its ``preflight`` envelope. Handler-authored
+            free text (``message``, ``suggested_action``, ``evidence``) is dropped
+            before send; remaining strings are secret-redacted. Kept as
+            ``dict[str, Any]``: this is a relay boundary, and the store derives
+            its own columns from it, so typing it here would bind the SDK to
+            that schema.
         extraction_method: Whether the source was reached through a customer-hosted
             agent.
         connection_qualified_name: The checked workflow's connection asset. Absent
@@ -119,18 +127,35 @@ def _or_none(value: str | None) -> str | None:
     return (value.strip() or None) if value else None
 
 
+def _drop_handler_authored_text(value: Any) -> Any:
+    """Strip :data:`_RELAY_FREE_TEXT_KEYS` from a dumped verdict, recursively.
+
+    This is the allowlist the relay uses: typed routing fields stay, free text
+    does not. Pattern-based redaction cannot close a DSN, a ``host:port`` or an
+    opaque internal id that a connector put in a check message, and this write
+    is the path that would otherwise ship that text to another app.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _drop_handler_authored_text(item)
+            for key, item in value.items()
+            if key not in _RELAY_FREE_TEXT_KEYS
+        }
+    if isinstance(value, list):
+        return [_drop_handler_authored_text(item) for item in value]
+    return value
+
+
 def verdict_payload(result: PreflightOutput) -> dict[str, Any]:
     """*result* as the ``preflight`` block the store reads, secret-redacted.
 
-    Checks go through :meth:`PreflightCheck.to_wire`, which stamps each check's
-    *resolved* message — a failed check's typed error wins over its deprecated
-    ``message`` field. That is what the frontend path records, so both writers
-    put the same string in the same place, and it is the SDK's existing
-    convention for putting a check on a wire rather than a second one.
-
-    The whole dump is walked by :func:`~application_sdk.errors.base.redact_wire_value`
-    rather than named fields, because ``message``, ``suggested_action`` and
-    ``evidence`` are handler-authored and are not redacted where they are built.
+    Checks go through :meth:`PreflightCheck.to_wire` so a failed check's typed
+    error is the one on the wire, matching the frontend path's precedence.
+    Handler-authored free text (``message``, ``suggested_action``, ``evidence``)
+    is then dropped: the store derives its columns from the typed routing
+    fields, and those three are not redacted where they are built. Remaining
+    strings are walked by :func:`~application_sdk.errors.base.redact_wire_value`
+    as belt-and-braces for anything else that still matches a secret pattern.
 
     Args:
         result: The verdict the handler reached.
@@ -140,7 +165,7 @@ def verdict_payload(result: PreflightOutput) -> dict[str, Any]:
     """
     block = result.model_dump(mode="json", exclude_none=True)
     block["checks"] = [check.to_wire() for check in result.checks]
-    return {_PREFLIGHT_KEY: redact_wire_value(block)}
+    return {_PREFLIGHT_KEY: redact_wire_value(_drop_handler_authored_text(block))}
 
 
 def extraction_method(input: PreflightGateInput) -> ExtractionMethod:

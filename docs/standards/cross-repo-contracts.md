@@ -123,6 +123,18 @@ nothing retries. A break costs rows, not runs, and nothing goes red:
   reach for nothing. Putting auth in front of that route therefore drops every
   row the fleet writes, with no error anywhere. It needs the header added here,
   released, and the fleet bumped **first**.
+- **The compensating control is network policy, not application auth.** Any
+  workload that can reach
+  `system-workflows.system-workflows-app.svc.cluster.local:8000` can POST a
+  row for any `workflow_slug`, `app_id` and verdict, and because the write is
+  abandoned neither side can tell a forged row from a real one afterwards.
+  That is accepted for this first ship: the route is cluster-internal, the
+  Iceberg writer principal lives only in that app, and NetworkPolicy on the
+  `system-workflows` Service is what keeps the audience to in-cluster app
+  pods. An app-to-app credential (workload identity, or a short-lived service
+  token bound to `app_id`) is a follow-up that has to land in both repos
+  together; until it does, do not expose this Service outside the cluster
+  and do not drop the NetworkPolicy that restricts who can dial it.
 - **The two enum vocabularies must stay in step.** `PreflightResultOrigin` and
   `ExtractionMethod` are validated against the receiver's own enums; a value it
   does not accept is a 422 and a dropped row, visible only as one WARNING
