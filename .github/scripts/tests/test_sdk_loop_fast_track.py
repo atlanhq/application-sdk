@@ -20,7 +20,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-import sdk_loop_phase as phase  # noqa: E402
+import sdk_loop_prep as prep  # noqa: E402
 import sdk_review_approve as approve  # noqa: E402
 from sdk_loop_finalize import STOP_TEXT  # noqa: E402
 from sdk_loop_prep import (  # noqa: E402
@@ -388,9 +388,8 @@ def _drive_prep(monkeypatch, tmp_path, *, fires: bool, posted: bool) -> dict[str
     monkeypatch.setenv("HEAD_REF", "a-branch")
     monkeypatch.setenv("BASE_SHA", LIVE)
 
-    monkeypatch.setattr(phase, "live_head", lambda *a, **k: LIVE)
     monkeypatch.setattr(
-        phase,
+        prep,
         "pr_state",
         lambda *a, **k: {
             "mergeStateStatus": "CLEAN",
@@ -398,10 +397,10 @@ def _drive_prep(monkeypatch, tmp_path, *, fires: bool, posted: bool) -> dict[str
             "baseRefName": "main",
         },
     )
-    monkeypatch.setattr(phase, "failing_checks", lambda *a, **k: ())
+    monkeypatch.setattr(prep, "failing_checks", lambda *a, **k: ())
     monkeypatch.setattr(
-        phase,
-        "_fast_track",
+        prep,
+        "fast_track_check",
         lambda *a, **k: type(_decide())(
             fires=fires,
             reason="every commit since came from base",
@@ -409,9 +408,9 @@ def _drive_prep(monkeypatch, tmp_path, *, fires: bool, posted: bool) -> dict[str
             reviewed_head=REVIEWED,
         ),
     )
-    monkeypatch.setattr(phase, "_post_fast_track", lambda *a, **k: posted)
+    monkeypatch.setattr(prep, "post_fast_track", lambda *a, **k: posted)
 
-    assert phase.main() == 0, "prep must never fail the run"
+    assert prep.main() == 0, "prep must never fail the run"
     written = {}
     for line in out.read_text(encoding="utf-8").splitlines():
         if "=" in line:
@@ -450,3 +449,45 @@ def test_a_verdict_comment_that_did_not_post_is_not_reported_as_a_fast_track(
     assert (
         written.get("outcome") == "clean"
     ), "it falls through to the ordinary prep result"
+
+
+def test_the_fast_track_lives_in_the_step_that_runs_on_a_clean_pr() -> None:
+    """The alignment that its first draft missed.
+
+    `sdk-loop-phase.yml` runs `sdk_loop_prep.py` first and gates the opencode
+    install and `sdk_loop_phase.py` on `steps.prep.outputs.needs_agent`. On a
+    clean PR that is false, so the deterministic step IS the phase and
+    `phase.py`'s prep branch never executes. A fast track placed there passed
+    every test and could not fire for the one case it exists for — a clean PR
+    whose only new commits are merges from base.
+
+    So: the check lives in `prep.main()`, `phase.py` carries no copy, and a
+    fired fast track reports `needs_agent=false` so the workflow skips the
+    install rather than paying for an agent that has nothing to do.
+    """
+    phase_src = pathlib.Path(".github/scripts/sdk_loop_phase.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_fast_track" not in phase_src, "a second copy in phase.py is dead code"
+    assert "fast_track_check" not in phase_src
+    assert "OUTCOME_FAST_TRACK" not in phase_src
+
+    workflow = pathlib.Path(".github/workflows/sdk-loop-phase.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "run: python3 .github/scripts/sdk_loop_prep.py" in workflow
+    assert "steps.prep.outputs.needs_agent == 'true'" in workflow, (
+        "the agent phase is gated on needs_agent — that gate is why the fast "
+        "track must run in the prep step"
+    )
+    # The comment links to the run that carried the verdict forward; the step
+    # needs the URL to do so.
+    prep_step = workflow.split("name: Prep — deterministic pass")[1].split("- name:")[0]
+    assert "GHA_RUN_URL" in prep_step
+
+
+def test_a_fired_fast_track_skips_the_agent_install(monkeypatch, tmp_path) -> None:
+    """`needs_agent` gates 18 seconds of npm install and a model call. A fast
+    track has nothing for either."""
+    written = _drive_prep(monkeypatch, tmp_path, fires=True, posted=True)
+    assert written.get("needs_agent") == "false"

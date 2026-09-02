@@ -237,6 +237,9 @@ jobs:
           PR_NUMBER: ${{ inputs.pr }}
           BASE_SHA: ${{ inputs.base_sha }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # The fast-track verdict comment links back to the run that carried
+          # it forward, so a reader can tell it from a freshly computed one.
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/sdk_loop_prep.py
 
       - name: Cache the opencode install

@@ -48,6 +48,8 @@ import os
 import subprocess
 from dataclasses import dataclass, field
 
+import sdk_review_approve as approve
+
 OUTCOME_CLEAN = "clean"
 OUTCOME_UPDATED = "updated"
 OUTCOME_CONFLICTS = "conflicts"
@@ -512,6 +514,66 @@ def fast_track_comment(
     return "\n".join(lines)
 
 
+def fast_track_check(
+    repo: str, pr: int, head: str, state: dict[str, str] | None
+) -> FastTrackDecision | None:
+    """Ask whether the last verdict can be re-stamped on `head`.
+
+    Author-filtered on purpose, and NOT through the loop's own
+    `is_verdict_comment`, which tests the marker alone. A marker is text any PR
+    author can type, and the comment this leads to can drive an `atlan-ci`
+    APPROVE — so the trusted-bot check in `sdk_review_approve` is the one that
+    has to apply. That module is also where the verdict and head are parsed,
+    so this lane never grows a second parser to drift against the first.
+
+    None means "could not even ask" — no base branch to compare against.
+    """
+    base_ref = (state or {}).get("baseRefName", "")
+    if not base_ref:
+        print("fast track skipped: could not read the PR's base branch")
+        return None
+    client = approve.Client(repo, str(pr))
+    comment = client.latest_summary_comment()
+    body = (comment or {}).get("body") or ""
+    return fast_track_decision(
+        repo=repo,
+        pr=pr,
+        head=head,
+        base_ref=base_ref,
+        verdict_comment=comment,
+        verdict=approve.extract_verdict(body),
+        reviewed_head=approve.extract_reviewed_head(body),
+        ready=approve.READY,
+    )
+
+
+def post_fast_track(
+    repo: str, pr: int, fast: FastTrackDecision, run_url: str = ""
+) -> bool:
+    """Post the carried-forward verdict comment. True when it landed.
+
+    Posted under this step's installation token, which is
+    `atlan-app-fleet[bot]` — one of the two logins
+    `sdk-review-approve-on-verdict.yml` accepts as a verdict author. That
+    workflow, not this one, posts the approval: it holds the `atlan-ci`
+    credential that satisfies CODEOWNERS and the guards that decide whether an
+    approval is still warranted by the time it fires.
+    """
+    body = fast_track_comment(pr, fast, approve.READY, run_url)
+    done = subprocess.run(
+        ["gh", "pr", "comment", str(pr), "--repo", repo, "--body", body],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        print(
+            f"::warning::could not post the fast-track verdict: {done.stderr.strip()}"
+        )
+        return False
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     """The deterministic pass, as a step of its own.
 
@@ -537,6 +599,44 @@ def main(argv: list[str] | None = None) -> int:
         or state.get("mergeable") == "CONFLICTING"
     )
     result = decide(state, () if conflicted else failing_checks(repo, pr), baseline)
+
+    # Before spending a review: has this PR's own diff changed since the last
+    # one? A merge from base moves the head sha and dismisses the approval
+    # without touching a line the author wrote, and re-reading an identical
+    # diff can only reach an identical verdict more slowly.
+    #
+    # This lives HERE, in the deterministic step, and not in the agent phase —
+    # because on a clean PR this step IS the phase. The workflow gates the
+    # opencode install and `sdk_loop_phase.py` on `needs_agent`, which is
+    # false for a clean PR, so a fast track placed in the phase would never
+    # execute for the exact case it exists for. Its first draft did that: the
+    # tests were green and the feature could not fire.
+    #
+    # Gated on OUTCOME_CLEAN, which is doing real work rather than being tidy:
+    # `decide` returns CLEAN only when the checks read succeeded and found
+    # nothing failing. An unreadable check state is UNKNOWN, not CLEAN, so a
+    # PR whose CI could not be read is reviewed properly instead of carried
+    # forward on an assumption.
+    if result.outcome == OUTCOME_CLEAN:
+        fast = fast_track_check(repo, pr, result.new_base_sha, state)
+        if fast is not None and fast.fires:
+            if post_fast_track(repo, pr, fast, os.environ.get("GHA_RUN_URL", "")):
+                result = PrepResult(
+                    OUTCOME_FAST_TRACK,
+                    new_base_sha=fast.head,
+                    ci_state=result.ci_state,
+                    detail=f"fast-tracked without a review — {fast.reason}",
+                )
+            else:
+                # The comment IS the mechanism: it is what
+                # `sdk-review-approve-on-verdict.yml` reads to post the
+                # approval. If it did not land there is nothing to approve, so
+                # fall through and review the PR rather than cancel the chain
+                # on a fast track that left no trace.
+                print("::warning::fast track was earned but the comment did not post")
+        elif fast is not None:
+            print(f"fast track declined: {fast.reason}")
+
     wants = needs_agent(result)
 
     path = os.environ.get("GITHUB_OUTPUT")
