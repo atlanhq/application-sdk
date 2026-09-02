@@ -11,6 +11,51 @@ that pins it. **Before changing anything on this list, read the entry.** If you
 are adding a value that another repo will read, add an entry and a pinning test
 with it.
 
+## The typed failure envelope (`FailureDetails`)
+
+| | |
+|---|---|
+| **Produced by** | `AppError.to_failure_details()` in `application_sdk/errors/base.py`, wrapped into `ApplicationError(details=…)` by `_to_application_error()` in `application_sdk/execution/_temporal/activities.py` |
+| **Served at** | `ApplicationError.details[0]` on every failed activity, plus `non_retryable` on the error itself |
+| **Key** | `category`, `code`, `retryable`, `audience` at the top level; per-error context under `evidence` |
+| **Read by** | The Automation Engine, which attributes a failed run from these fields instead of parsing exception strings; connector-pulse, which buckets runs by `failure_category` / `failure_code` for the failure boards |
+| **Pinned by** | `TestFailureEnvelopeWireContract` in `tests/unit/errors/test_wire_contract.py` |
+
+The envelope is the whole point of the typed-error hierarchy: a consumer is
+supposed to branch on a field rather than regex a message. That makes the field
+*names*, the enum *spellings*, and the category-to-code relationship a contract,
+not an implementation detail.
+
+What this means in practice:
+
+- **`category` is coarse; `code` is the specific cause.** A consumer that keys a
+  customer-facing attribution on `category` alone will mis-attribute the moment
+  any app adds a leaf in that category — and every category already has several.
+  This is not hypothetical; it has happened. If you need a `code` that does not
+  exist yet, add one here rather than inferring it from the category downstream.
+- **Renaming a field, or changing an enum's spelling, is a breaking change** for
+  a consumer that cannot vote in this repo's CI. `FailureCategory` and
+  `Audience` serialise by member *name*, so renaming a member is a wire change
+  even though it looks like a local refactor.
+- **`evidence` is per-`service`, not comparable across producers.** Two raise
+  sites may report the same `code` and still populate `evidence` differently —
+  the object-store write path sets `target` to a `scheme://bucket/key` URI,
+  while the boot-time preflight gate sets it to the Dapr binding name for the
+  same condition. Both are "what we were talking to" for their own producer.
+  A consumer may group by `code` and read `evidence` for context, but must not
+  assume a key holds the same *kind* of value across every producer of that
+  code. If you need one that does, say so here and make it so at both sites.
+- **Adding an `evidence` key is safe; repurposing one is not.** Evidence is the
+  producing dataclass's fields, so a new field appears automatically — but a
+  field that changes meaning silently changes what a consumer reads. Note that
+  `evidence` keys are also gated by the secret-name denylist in
+  `errors/wire.py`, which rejects the envelope outright rather than dropping the
+  key.
+- **`retryable` is not advisory.** It becomes `non_retryable=not
+  effective_retryable` on the `ApplicationError`, so it *is* Temporal's retry
+  decision. Flipping it for an existing failure class changes production retry
+  behaviour, not just a dashboard label — coordinate it before landing.
+
 ## The served manifest's resolved `task_queue`
 
 | | |

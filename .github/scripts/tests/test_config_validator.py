@@ -800,3 +800,563 @@ vpa:
 """)
         types = {(v.rule, v.field) for v in exc.value.violations}
         assert ("invalid_type", "vpa.maxAllowed.cpu") in types
+
+
+# ---------------------------------------------------------------------------
+# Rule: workerPools — count ceiling
+# ---------------------------------------------------------------------------
+
+# Pools only render under split + TWC; every pass-case config below needs both
+# or the inert-block rule fires instead.
+_SPLIT_TWC = "splitDeploymentEnabled: true\ntemporalWorkerDeployment: {enabled: true}\n"
+
+
+def _pools_yaml(count: int) -> str:
+    entries = "".join(f"  - name: tier{i}\n" for i in range(count))
+    return f"{_SPLIT_TWC}workerPools:\n{entries}"
+
+
+class TestWorkerPoolCount:
+    def test_absent_pools_passes(self):
+        validate_config(_SPLIT_TWC)
+
+    def test_empty_pool_list_passes(self):
+        validate_config(_SPLIT_TWC + "workerPools: []\n")
+
+    def test_ten_pools_passes(self):
+        validate_config(_pools_yaml(10))
+
+    def test_eleven_pools_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(_pools_yaml(11))
+        assert any(
+            v.rule == "worker_pool_count_ceiling" and v.actual == 11
+            for v in exc.value.violations
+        )
+
+
+# ---------------------------------------------------------------------------
+# Rule: workerPools — infra ceilings per pool
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerPoolCeilings:
+    def test_memory_request_above_ceiling_fails(self):
+        # The ARUN-1041 example: 40Gi is not schedulable on current infra.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: heavy
+    resources:
+      requests: {cpu: 250m, memory: 40Gi}
+      limits:   {cpu: 1,    memory: 40Gi}
+"""
+            )
+        assert any(
+            v.rule == "requests_memory_ceiling"
+            and v.field == "workerPools[0].resources.requests.memory"
+            for v in exc.value.violations
+        )
+
+    def test_cpu_request_above_ceiling_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: heavy
+    resources:
+      requests: {cpu: 8, memory: 1Gi}
+      limits:   {cpu: 8, memory: 2Gi}
+"""
+            )
+        assert any(
+            v.rule == "requests_cpu_ceiling"
+            and v.field == "workerPools[0].resources.requests.cpu"
+            for v in exc.value.violations
+        )
+
+    def test_vpa_max_above_ceiling_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: heavy
+    vpa:
+      enabled: true
+      maxAllowed: {cpu: 8, memory: 40Gi}
+"""
+            )
+        fields = {(v.rule, v.field) for v in exc.value.violations}
+        assert ("vpa_max_cpu_ceiling", "workerPools[0].vpa.maxAllowed.cpu") in fields
+        assert (
+            "vpa_max_memory_ceiling",
+            "workerPools[0].vpa.maxAllowed.memory",
+        ) in fields
+
+    def test_at_ceiling_passes(self):
+        validate_config(
+            _SPLIT_TWC
+            + """
+workerPools:
+  - name: heavy
+    vpa:
+      enabled: true
+      maxAllowed: {cpu: "7", memory: 27Gi}
+    resources:
+      requests: {cpu: "7", memory: 27Gi}
+      limits:   {cpu: "7", memory: 27Gi}
+"""
+        )
+
+    def test_violation_field_carries_pool_index(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: light
+    resources:
+      requests: {cpu: 100m, memory: 1Gi}
+  - name: heavy
+    resources:
+      requests: {cpu: 100m, memory: 40Gi}
+"""
+            )
+        assert [v.field for v in exc.value.violations] == [
+            "workerPools[1].resources.requests.memory"
+        ]
+
+    def test_invalid_quantity_reports_pool_path(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: heavy
+    resources:
+      requests: {memory: 4GB}
+"""
+            )
+        assert any(
+            v.rule == "invalid_quantity"
+            and v.field == "workerPools[0].resources.requests.memory"
+            for v in exc.value.violations
+        )
+
+
+# ---------------------------------------------------------------------------
+# Rule: workerPools — requests <= the pool's effective vpa.maxAllowed
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerPoolVpaClamp:
+    def test_chart_default_max_applies_when_nothing_declared(self):
+        # Pool VPA on with no maxAllowed anywhere → chart default 6Gi clamps.
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: heavy
+    vpa: {enabled: true}
+    resources:
+      requests: {cpu: 250m, memory: 8Gi}
+"""
+            )
+        assert any(
+            v.rule == "requests_exceeds_vpa_max_memory" for v in exc.value.violations
+        )
+
+    def test_inherits_app_level_max_allowed(self):
+        validate_config(
+            _SPLIT_TWC
+            + """
+vpa:
+  enabled: true
+  maxAllowed: {cpu: "2", memory: 16Gi}
+workerPools:
+  - name: heavy
+    vpa: {enabled: true}
+    resources:
+      requests: {cpu: 250m, memory: 8Gi}
+"""
+        )
+
+    def test_pool_max_allowed_overrides_app_level(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+vpa:
+  enabled: true
+  maxAllowed: {cpu: "2", memory: 16Gi}
+workerPools:
+  - name: heavy
+    vpa:
+      enabled: true
+      maxAllowed: {memory: 4Gi}
+    resources:
+      requests: {cpu: 250m, memory: 8Gi}
+"""
+            )
+        assert any(
+            v.rule == "requests_exceeds_vpa_max_memory" for v in exc.value.violations
+        )
+
+    def test_partial_pool_max_allowed_leaves_other_resource_unclamped(self):
+        # Helm's `default` swaps the whole maxAllowed dict, so declaring only
+        # memory means VPA never bounds cpu — a 6-core request must not trip
+        # the clamp rule (the 7-core infra ceiling still applies).
+        validate_config(
+            _SPLIT_TWC
+            + """
+workerPools:
+  - name: heavy
+    vpa:
+      enabled: true
+      maxAllowed: {memory: 16Gi}
+    resources:
+      requests: {cpu: 6, memory: 8Gi}
+"""
+        )
+
+    def test_pool_does_not_inherit_app_vpa_enabled(self):
+        # The chart gates the pool VPA on the pool's own vpa.enabled, so an
+        # app-level enable must not clamp a pool that never opted in.
+        validate_config(
+            _SPLIT_TWC
+            + """
+vpa:
+  enabled: true
+  maxAllowed: {memory: 4Gi}
+workerPools:
+  - name: heavy
+    resources:
+      requests: {cpu: 250m, memory: 8Gi}
+"""
+        )
+
+    def test_pool_update_mode_off_skips_clamp(self):
+        validate_config(
+            _SPLIT_TWC
+            + """
+workerPools:
+  - name: heavy
+    vpa:
+      enabled: true
+      updateMode: "Off"
+      maxAllowed: {memory: 4Gi}
+    resources:
+      requests: {cpu: 250m, memory: 8Gi}
+"""
+        )
+
+    def test_pool_inherits_app_update_mode_off(self):
+        validate_config(
+            _SPLIT_TWC
+            + """
+vpa:
+  enabled: true
+  updateMode: "Off"
+workerPools:
+  - name: heavy
+    vpa:
+      enabled: true
+      maxAllowed: {memory: 4Gi}
+    resources:
+      requests: {cpu: 250m, memory: 8Gi}
+"""
+        )
+
+    def test_pool_update_mode_overrides_app_off(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+vpa:
+  enabled: true
+  updateMode: "Off"
+workerPools:
+  - name: heavy
+    vpa:
+      enabled: true
+      updateMode: Auto
+      maxAllowed: {memory: 4Gi}
+    resources:
+      requests: {cpu: 250m, memory: 8Gi}
+"""
+            )
+        assert any(
+            v.rule == "requests_exceeds_vpa_max_memory" for v in exc.value.violations
+        )
+
+    def test_unquoted_off_loads_as_bool_and_still_skips_clamp(self):
+        # PyYAML's YAML 1.1 loader coerces unquoted `off` to False.
+        validate_config(
+            _SPLIT_TWC
+            + """
+workerPools:
+  - name: heavy
+    vpa:
+      enabled: true
+      updateMode: off
+      maxAllowed: {memory: 4Gi}
+    resources:
+      requests: {cpu: 250m, memory: 8Gi}
+"""
+        )
+
+    def test_clamp_fix_points_at_the_pool_vpa(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: heavy
+    vpa:
+      enabled: true
+      maxAllowed: {memory: 4Gi}
+    resources:
+      requests: {memory: 8Gi}
+"""
+            )
+        clamp = next(
+            v
+            for v in exc.value.violations
+            if v.rule == "requests_exceeds_vpa_max_memory"
+        )
+        assert "workerPools[0].vpa.maxAllowed.memory" in clamp.fix
+
+
+# ---------------------------------------------------------------------------
+# Rule: workerPools — relational rules per pool
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerPoolRelational:
+    def test_requests_above_limits_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: heavy
+    resources:
+      requests: {memory: 8Gi}
+      limits:   {memory: 4Gi}
+"""
+            )
+        assert any(
+            v.rule == "requests_le_limits"
+            and v.field == "workerPools[0].resources.requests.memory"
+            for v in exc.value.violations
+        )
+
+    def test_vpa_min_above_max_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: heavy
+    vpa:
+      enabled: true
+      minAllowed: {memory: 8Gi}
+      maxAllowed: {memory: 4Gi}
+"""
+            )
+        assert any(
+            v.rule == "vpa_min_le_max"
+            and v.field == "workerPools[0].vpa.minAllowed.memory"
+            for v in exc.value.violations
+        )
+
+    def test_keda_min_above_max_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: heavy
+    keda: {minReplicaCount: 4, maxReplicaCount: 2}
+"""
+            )
+        assert any(
+            v.rule == "keda_min_le_max"
+            and v.field == "workerPools[0].keda.minReplicaCount"
+            for v in exc.value.violations
+        )
+
+
+# ---------------------------------------------------------------------------
+# Rule: workerPools — name / taskQueue identity
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerPoolIdentity:
+    def test_missing_name_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(_SPLIT_TWC + "workerPools:\n  - taskQueue: q\n")
+        assert any(
+            v.rule == "worker_pool_name_required" and v.field == "workerPools[0].name"
+            for v in exc.value.violations
+        )
+
+    def test_blank_name_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(_SPLIT_TWC + 'workerPools:\n  - name: "  "\n')
+        assert any(v.rule == "worker_pool_name_required" for v in exc.value.violations)
+
+    def test_duplicate_name_fails_on_the_later_entry(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC + "workerPools:\n  - name: heavy\n  - name: heavy\n"
+            )
+        dupes = [
+            v for v in exc.value.violations if v.rule == "worker_pool_name_duplicate"
+        ]
+        assert [v.field for v in dupes] == ["workerPools[1].name"]
+        assert "workerPools[0]" in dupes[0].expected
+
+    def test_duplicate_task_queue_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - name: light
+    taskQueue: shared-q
+  - name: heavy
+    taskQueue: shared-q
+"""
+            )
+        assert any(
+            v.rule == "worker_pool_task_queue_duplicate"
+            and v.field == "workerPools[1].taskQueue"
+            for v in exc.value.violations
+        )
+
+    def test_distinct_names_and_queues_pass(self):
+        validate_config(
+            _SPLIT_TWC
+            + """
+workerPools:
+  - name: light
+    taskQueue: light-q
+  - name: heavy
+    taskQueue: heavy-q
+"""
+        )
+
+    def test_omitted_task_queues_are_not_duplicates(self):
+        # taskQueue defaults per-pool from the pool name, so several pools
+        # leaving it unset is normal, not a collision.
+        validate_config(_SPLIT_TWC + "workerPools:\n  - name: light\n  - name: heavy\n")
+
+
+# ---------------------------------------------------------------------------
+# Rule: declared workerPools require split + TWC
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerPoolsRequireSplitTwc:
+    def test_split_disabled_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                "splitDeploymentEnabled: false\n"
+                "temporalWorkerDeployment: {enabled: true}\n"
+                "workerPools:\n  - name: heavy\n"
+            )
+        inert = next(
+            v
+            for v in exc.value.violations
+            if v.rule == "worker_pools_require_split_twc"
+        )
+        assert inert.actual == ["splitDeploymentEnabled"]
+
+    def test_twc_disabled_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                "splitDeploymentEnabled: true\n"
+                "temporalWorkerDeployment: {enabled: false}\n"
+                "workerPools:\n  - name: heavy\n"
+            )
+        inert = next(
+            v
+            for v in exc.value.violations
+            if v.rule == "worker_pools_require_split_twc"
+        )
+        assert inert.actual == ["temporalWorkerDeployment.enabled"]
+
+    def test_both_absent_lists_both_flags(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config("workerPools:\n  - name: heavy\n")
+        inert = next(
+            v
+            for v in exc.value.violations
+            if v.rule == "worker_pools_require_split_twc"
+        )
+        assert inert.actual == [
+            "splitDeploymentEnabled",
+            "temporalWorkerDeployment.enabled",
+        ]
+
+    def test_both_enabled_passes(self):
+        validate_config(_SPLIT_TWC + "workerPools:\n  - name: heavy\n")
+
+    def test_magnitude_rules_still_run_when_inert(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                """
+workerPools:
+  - name: heavy
+    resources:
+      requests: {memory: 40Gi}
+"""
+            )
+        rules = {v.rule for v in exc.value.violations}
+        assert "worker_pools_require_split_twc" in rules
+        assert "requests_memory_ceiling" in rules
+
+
+# ---------------------------------------------------------------------------
+# workerPools shape
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerPoolShape:
+    def test_mapping_instead_of_list_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(_SPLIT_TWC + "workerPools:\n  heavy:\n    name: heavy\n")
+        assert any(
+            v.rule == "invalid_type" and v.field == "workerPools"
+            for v in exc.value.violations
+        )
+
+    def test_non_mapping_entry_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(_SPLIT_TWC + "workerPools:\n  - heavy\n")
+        assert any(
+            v.rule == "invalid_type" and v.field == "workerPools[0]"
+            for v in exc.value.violations
+        )
+
+    def test_non_mapping_entry_does_not_mask_valid_siblings(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                _SPLIT_TWC
+                + """
+workerPools:
+  - heavy
+  - name: light
+    resources:
+      requests: {memory: 40Gi}
+"""
+            )
+        fields = {v.field for v in exc.value.violations}
+        assert "workerPools[0]" in fields
+        assert "workerPools[1].resources.requests.memory" in fields

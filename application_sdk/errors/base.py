@@ -18,7 +18,20 @@ _BASE_FIELDS: frozenset[str] = frozenset(
     {"message", "retryable", "cause", "app_name", "run_id", "suggested_action"}
 )
 
-_CAUSE_MAX_LEN = 500
+# Cap for the cause string carried on the wire envelope. Sized so a full
+# provider error response survives intact. An object-store error's ``str()`` is
+# "[preamble + request URL][provider XML/JSON body][Rust ``Debug source:`` dump]"
+# — measured at ~800 chars for a typical artifact key. The previous 500 spent
+# 374 on the URL preamble alone and cut the provider's ``<Message>`` in half,
+# deleting the only sentence that named what the store rejected. (FND-957)
+_CAUSE_MAX_LEN = 2000
+# Past the cap, keep BOTH ends rather than the head only: a backend error puts
+# the request URL at the head and what the provider said at the tail, so a
+# head-only cut spends the whole budget on boilerplate. The two lengths sum to
+# less than _CAUSE_MAX_LEN so the elision marker only appears when there is
+# genuinely something elided.
+_CAUSE_HEAD_LEN = 1200
+_CAUSE_TAIL_LEN = 700
 _TRACEBACK_MAX_LEN = 8000
 #: Recursion bound for :func:`redact_wire_value`. A pathologically deep
 #: hand-built structure must truncate rather than overflow the stack.
@@ -48,6 +61,10 @@ _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNOREC
 # failure. It also has no word boundary in this alternation, so it would match
 # the tail of ``run_guid=`` and ``correlation_uuid=`` — redacting the exact
 # correlation IDs an on-call needs.
+# A generic ``token`` is deliberately NOT here, for the same reason ``uid``
+# is not: it would redact ``next_token=`` / ``page_token=`` /
+# ``continuation_token=``, the pagination cursors an on-call needs to see.
+# The list stays an enumeration of things that are only ever credentials.
 # ``signature`` and ``sig`` cover presigned object-store URLs, which object-store
 # errors quote verbatim in their message: AWS SigV4 ``X-Amz-Signature``, GCS
 # ``X-Goog-Signature``, and Azure SAS ``sig``. ``credential`` already matched
@@ -151,11 +168,33 @@ def redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) 
     return value
 
 
+# ``object_store`` (via obstore) appends a multi-line Rust ``Debug`` dump to
+# every error's ``str()``. It sits *after* the provider's XML/JSON body, so it
+# competes with the diagnostic for the budget — and a keep-the-tail truncation
+# would preserve the dump and drop the body. Measured on a real GCS write
+# failure: [374 chars URL+status][206 chars provider XML][218 chars Debug dump].
+# Strip it before capping; the routing-relevant facts reach consumers as typed
+# evidence instead. (FND-957)
+_DEBUG_SOURCE_TAIL_RE = re.compile(r"\n+Debug source:\n.*\Z", re.DOTALL)
+
+
 def sanitize_cause_repr(exc: BaseException) -> str:
-    """Return a length-capped, secret-redacted string for a cause exception."""
-    text = redact_secrets(str(exc))
+    """Return a length-capped, secret-redacted string for a cause exception.
+
+    Truncation keeps both ends. A backend error puts the request URL at the
+    head and the reason at the tail, so a head-only cut spends the whole
+    budget on boilerplate and deletes the diagnostic. Redaction runs *before*
+    truncation, so retaining a tail can never expose an unredacted secret.
+    (FND-957)
+    """
+    text = _DEBUG_SOURCE_TAIL_RE.sub("", redact_secrets(str(exc)))
     if len(text) > _CAUSE_MAX_LEN:
-        text = text[:_CAUSE_MAX_LEN] + "…"
+        elided = len(text) - _CAUSE_HEAD_LEN - _CAUSE_TAIL_LEN
+        text = (
+            text[:_CAUSE_HEAD_LEN]
+            + f"…[{elided} chars elided]…"
+            + text[-_CAUSE_TAIL_LEN:]
+        )
     return f"{type(exc).__name__}: {text}"
 
 

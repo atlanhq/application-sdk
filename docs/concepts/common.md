@@ -225,8 +225,52 @@ fd = e.to_failure_details()
 # fd.code          — str (app-owned fine-grained code, e.g. "NOT_FOUND_STORAGE")
 # fd.suggested_action — str | None (imperative hint; voice shifts with audience)
 # fd.evidence      — dict of per-error structured context (dataclass fields)
-# fd.cause_repr    — str | None (sanitised str of wrapped exception: "{ExcType}: {msg}", URL/secret-redacted; cause message capped at 500 chars; never the live object)
+# fd.cause_repr    — str | None (sanitised str of wrapped exception: "{ExcType}: {msg}", URL/secret-redacted; cause message capped at 2000 chars; never the live object)
 ```
+
+#### How `cause_repr` is sanitised
+
+Three steps, in this order — the order is what makes the result safe:
+
+1. **Redact.** `redact_secrets` strips URL userinfo and known secret query-params,
+   including the presigned-URL signatures (`X-Amz-Signature`, `X-Goog-Signature`,
+   Azure's `sig=`) that object-store errors quote verbatim.
+2. **Strip the driver's debug dump.** `object_store` appends a multi-line Rust
+   `Debug source:` block to every error's `str()`. It sits *after* the provider's
+   own explanation, so it would otherwise compete for the budget.
+3. **Cap at 2000 chars, keeping both ends** — 1200 from the head, 700 from the
+   tail, with `…[N chars elided]…` between them. A backend error puts the request
+   URL at the head and the reason at the tail, so a head-only cut spends the whole
+   budget on boilerplate and deletes the diagnostic.
+
+Redaction runs *before* truncation, so keeping a tail can never expose an
+unredacted secret. Do not reorder these.
+
+#### Storage failures carry the backend's verdict
+
+Every `Storage*` error populates `evidence` with `service` (always
+`"object_store"`), `target` (a credential-free `scheme://bucket/key` identity —
+never the request URL, never `store.config`), and, when the failure was a backend
+HTTP rejection, `http_status` and `provider_code` parsed from the driver message:
+
+```python
+# fd.evidence == {
+#     "service":       "object_store",
+#     "target":        "gs://example-bucket/artifacts/apps/…/table.json",
+#     "key":           "artifacts/apps/…/table.json",
+#     "http_status":   400,
+#     "provider_code": "PreconditionFailed",
+#     …
+# }
+```
+
+`http_status` and `provider_code` are **evidence, not routing** — they ride the
+envelope so a consumer holding context the SDK lacks can branch on them, but the
+SDK reclassifies on only two conditions (a missing Azure container, and a bucket
+mid-relocation). Everything else stays a retryable `StorageError`. `target`'s
+*shape* is per-producer: see the `evidence` bullet in
+[cross-repo-contracts.md](../standards/cross-repo-contracts.md) before comparing
+it across raise sites.
 
 Tenant identity is intentionally absent from `FailureDetails`. Per-tenant attribution is
 the consumer's responsibility (e.g., the Automation Engine attaches tenant from its own
