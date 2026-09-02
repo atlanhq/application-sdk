@@ -1865,10 +1865,10 @@ connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_fact
 
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
-| `SqlTree` | `sqltree` | `dict[str, Any]` | `sqlQuery`, `cred`, `excludePatterns`, `databaseExcludePatterns`, `desc`, `multiSelect` (emits `ui.multiple`), `dependsOn` (scope to sibling field), `databasesUnselectable` (lock DB-level selection), `additionalPropertiesToIncludeInCredentialBody`, `validationRules`, `includeDefault` |
-| `APITree` | `apitree` | `dict[str, Any]` | Legacy API tree. Emits `{}` as the config default; generated input also accepts JSON object strings such as `"{}"` and coerces them to dicts. `credentialType`, `metadataTemplate`, `desc` |
-| `ApiTreeSelect` | `apiTreeSelect` | `dict[str, Any]` | Workflows-v2 API tree selector used by Power BI-style metadata pickers. Emits `{}` as the config default; generated input also accepts JSON object strings. `credentialType`, `cred`, `metadataTemplate`, `metadataTransformer`, `strict`, `multiSelect`, `desc` |
-| `DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` | Maps DSN names to connection qualified names. `mapConfig` carries heading/content/input/connection labels. |
+| `SqlTree` | `sqltree` | `dict[str, str]` | `sqlQuery`, `cred`, `excludePatterns`, `databaseExcludePatterns`, `desc`, `multiSelect` (emits `ui.multiple`), `dependsOn` (scope to sibling field), `databasesUnselectable` (lock DB-level selection), `additionalPropertiesToIncludeInCredentialBody`, `validationRules`, `includeDefault` |
+| `APITree` | `apitree` | `dict[str, object]` | Legacy API tree. Nested folder selections (`{"catalog": {"db": {}}}`). Emits `{}` as the config default; generated input also accepts JSON object strings such as `"{}"` and coerces them to dicts. `credentialType`, `metadataTemplate`, `desc` |
+| `ApiTreeSelect` | `apiTreeSelect` | `dict[str, object]` | Workflows-v2 API tree selector used by Power BI-style metadata pickers. Nested folder selections. Emits `{}` as the config default; generated input also accepts JSON object strings. `credentialType`, `cred`, `metadataTemplate`, `metadataTransformer`, `strict`, `multiSelect`, `desc` |
+| `DsnTreeMap` | `dsnTreeMap` | `dict[str, str]` | Maps DSN names to connection qualified names. `mapConfig` carries heading/content/input/connection labels. |
 | `GlossarySelector` | `GlossarySelector` | `str` | Glossary picker. `selectorMode = "multiple"`, `showGlossaryIcon`, `showGlossaryCount`, `placeholderText` |
 
 #### Complex

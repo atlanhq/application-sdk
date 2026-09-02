@@ -492,9 +492,9 @@ and is UI-only — separate from `validationRules`. See `docs/reference.md` and 
 | Class | Widget | Python Type |
 |---|---|---|
 | `Widgets.SqlTree` | `sqltree` | `dict[str, str]` |
-| `Widgets.APITree` | `apitree` | `dict[str, Any]` |
-| `Widgets.ApiTreeSelect` | `apiTreeSelect` | `dict[str, Any]` |
-| `Widgets.DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` |
+| `Widgets.APITree` | `apitree` | `dict[str, object]` |
+| `Widgets.ApiTreeSelect` | `apiTreeSelect` | `dict[str, object]` |
+| `Widgets.DsnTreeMap` | `dsnTreeMap` | `dict[str, str]` |
 | `Widgets.GlossarySelector` | `GlossarySelector` | `str` |
 
 ### Complex & Utility

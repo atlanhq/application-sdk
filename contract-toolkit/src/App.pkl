@@ -3016,14 +3016,17 @@ local function getInputPyField(k: String, u: Widgets.UIElement): String =
           getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
         else
           "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
-    else if (u is Widgets.SqlTree || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap)
-      // Values are bounded strings (schema/folder names, JSON-encoded selections,
-      // or a DSN -> connectionQualifiedName mapping); `str` avoids the SDK's
-      // AAF-CTR-002 rejection of `Any`, which would otherwise force
-      // allow_unbounded_fields=True into the generated contract for every app
-      // using one of these widgets.  Pydantic's lax mode coerces non-string leaf
-      // values (e.g. booleans) to str during model construction.
+    else if (u is Widgets.SqlTree || u is Widgets.DsnTreeMap)
+      // Values are bounded strings (schema names / JSON-encoded selections, or a
+      // DSN -> connectionQualifiedName mapping); `str` avoids the SDK's
+      // AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
+      // leaf values (e.g. booleans) to str during model construction.
       getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
+    else if (u is Widgets.APITree || u is Widgets.ApiTreeSelect)
+      // Nested folder-tree payloads ({"catalog": {"db": {}}}); `object` is
+      // payload-safe (unlike Any) so generated contracts do not inherit an
+      // allow_unbounded_fields opt-out they never asked for.
+      getPyDefaultFactoryField(k, "Annotated[dict[str, object], MaxItems(1000)]", "dict")
     else if (u is Widgets.NestedInput || u is Widgets.AgentSelector)
       // Genuinely nested payloads — these keep Any and the opt-out that goes with it.
       getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")

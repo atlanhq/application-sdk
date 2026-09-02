@@ -1,0 +1,115 @@
+// Generated SDK input types for tree/map widgets.
+//
+// SqlTree and DsnTreeMap are string maps (`dict[str, str]`). APITree and
+// ApiTreeSelect store nested folder selections (`{"catalog": {"db": {}}}`),
+// so they must stay nested-safe without using `Any` (AAF-CTR-002). Cover
+// both App.pkl and NativeApp.pkl — NativeApp is the path single-entrypoint
+// apps still amend, and SqlTree-only example coverage never touches these
+// widgets.
+
+amends "pkl:test"
+
+import "../src/App.pkl" as App
+import "../src/Config.pkl"
+import "../src/Connectors.pkl"
+import "../src/NativeApp.pkl"
+
+local treeInputs = new Mapping {
+  ["sql_tree"] = new App.SqlTree {
+    title = "SQL tree"
+    sqlQuery = "show schemas"
+    credentialType = "test-cred"
+  }
+  ["api_tree"] = new App.APITree {
+    title = "API tree"
+    credentialType = "test-cred"
+  }
+  ["api_tree_select"] = new App.ApiTreeSelect {
+    title = "API tree select"
+    credentialType = "test-cred"
+  }
+  ["dsn_map"] = new App.DsnTreeMap {
+    title = "DSN map"
+    mapConfig {
+      ["heading"] = "DSNs"
+    }
+  }
+}
+
+local appTrees = (App) {
+  name = "tree-input-types"
+  displayName = "Tree Input Types"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.API
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs = treeInputs
+      }
+    }
+  }
+}
+
+local nativeTrees = (NativeApp) {
+  name = "native-tree-input-types"
+  displayName = "Native Tree Input Types"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.API
+  workflowTypeOverride = "NativeTreeInputTypesWorkflow"
+  hasCredentialConfig = false
+  hasPublishStep = false
+  uiConfig = new Config.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["sql_tree"] = new Config.SqlTree {
+            title = "SQL tree"
+            sqlQuery = "show schemas"
+            credentialType = "test-cred"
+          }
+          ["api_tree"] = new Config.APITree {
+            title = "API tree"
+            credentialType = "test-cred"
+          }
+          ["api_tree_select"] = new Config.ApiTreeSelect {
+            title = "API tree select"
+            credentialType = "test-cred"
+          }
+          ["dsn_map"] = new Config.DsnTreeMap {
+            title = "DSN map"
+            mapConfig {
+              ["heading"] = "DSNs"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+local appInputPy: String = appTrees.output.files["app/generated/_input.py"].text
+local nativeInputPy: String = nativeTrees.output.files["_input.py"].text
+
+local function assertsTreeFieldTypes(inputPy: String): Boolean =
+  inputPy.contains("sql_tree: Annotated[dict[str, str], MaxItems(1000)]")
+    && inputPy.contains("dsn_map: Annotated[dict[str, str], MaxItems(1000)]")
+    && inputPy.contains("api_tree: Annotated[dict[str, object], MaxItems(1000)]")
+    && inputPy.contains("api_tree_select: Annotated[dict[str, object], MaxItems(1000)]")
+    && !inputPy.contains("api_tree: Annotated[dict[str, str]")
+    && !inputPy.contains("api_tree: Annotated[dict[str, Any]")
+    && !inputPy.contains("api_tree_select: Annotated[dict[str, str]")
+    && !inputPy.contains("api_tree_select: Annotated[dict[str, Any]")
+    && !inputPy.contains("sql_tree: Annotated[dict[str, Any]")
+    && !inputPy.contains("dsn_map: Annotated[dict[str, Any]")
+
+facts {
+  ["App.pkl types SqlTree and DsnTreeMap as dict[str, str], APITree and ApiTreeSelect as dict[str, object]"] {
+    assertsTreeFieldTypes(appInputPy)
+  }
+
+  ["NativeApp.pkl types SqlTree and DsnTreeMap as dict[str, str], APITree and ApiTreeSelect as dict[str, object]"] {
+    assertsTreeFieldTypes(nativeInputPy)
+  }
+}
