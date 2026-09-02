@@ -17,6 +17,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import sdk_loop_sarif as sarif  # noqa: E402
 from sdk_loop_sarif import (  # noqa: E402
     STATE_COMPLETE,
     STATE_PARTIAL,
@@ -45,10 +46,23 @@ def _gh(payload, code=0):
 # --------------------------------------------------------------------------
 
 
+def _rule_doc_count() -> int:
+    """The rule docs on disk, counted the way `load_catalog` finds them."""
+    return len(list(sarif.CATALOG.glob("*.md")))
+
+
 def test_the_real_catalog_parses() -> None:
-    """All 167 generated rule docs, read the way the runner will read them."""
+    """Every generated rule doc, read the way the runner will read them.
+
+    Compared against the docs on disk rather than a literal. The literal was
+    167; the catalog reached 171 on main the same day this merged and the test
+    went red on every PR. A count that must be edited whenever a rule ships
+    tests whether somebody remembered, not whether the parser works.
+    """
     catalog = load_catalog()
-    assert len(catalog) == 167, f"parsed {len(catalog)}"
+    on_disk = _rule_doc_count()
+    assert len(catalog) == on_disk, f"parsed {len(catalog)} of {on_disk} rule docs"
+    assert len(catalog) >= 160, "the catalog shrank — did the docs move?"
     assert catalog["L001"].tier == "block"
     assert catalog["L001"].scope == "both"
 
