@@ -499,8 +499,11 @@ window of a bucket relocation, a condition a production RCA traced under multi-h
 dying at their final upload. The probe is deliberately stricter than a small-artifact-only
 workload's real writes; an app whose artifacts never exceed the part size should weigh that
 before opting in. A mid-run relocation (starting after the gate passed) is covered separately:
-the upload path itself classifies the rejection as `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION` with a
-platform-attributed hint instead of a generic storage failure.
+both object-store write paths — `upload_file` and `_put`, so `put_json` and friends too —
+classify the rejection as `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION` with a platform-attributed
+hint instead of a generic storage failure. The failure also carries the backend's own verdict as
+evidence (`http_status`, `provider_code`, and a credential-free `target`); see
+[Common — Wire envelope](common.md#wire-envelope).
 
 ```python
 class MyConnector(App):
