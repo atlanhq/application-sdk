@@ -117,7 +117,7 @@ def test_main_passes_no_subagents_for_a_solo_scope(
         "a config-only PR routes to one agent; registering any means `Task` "
         "can dispatch, and the cold-start cost this change removes comes back"
     )
-    assert "Do not dispatch it" in str(captured.get("prompt", ""))
+    assert "no sub-agents are registered" in str(captured.get("prompt", ""))
 
 
 def test_the_registration_set_covers_everything_the_playbook_dispatches() -> None:
@@ -176,8 +176,10 @@ def test_the_prompt_tells_a_solo_review_not_to_dispatch() -> None:
         solo = review_prompt(
             1, 1, "a" * 40, DismissalLedger(), scope="config-only", solo="ci-config"
         )
-        assert "Do not dispatch it" in solo
-        assert "agents/ci-config.md" in solo
+        assert "no sub-agents are registered" in solo
+        # The brief is INJECTED, not named. A solo reviewer that had to open a
+        # file to learn its own domain would spend a turn doing it.
+        assert "# CI and configuration" in solo
         files = ["application_sdk/a.py"]
         fan = review_prompt(
             1,
