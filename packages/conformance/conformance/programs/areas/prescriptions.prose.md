@@ -495,7 +495,7 @@ drafting.
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
 
-**SDR-readiness rules (P029/P030, P037/P038/P039, P042)** — all suggest-only,
+**SDR-readiness rules (P029/P030, P037/P038/P039, P042, P051)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on
 `self_deployed_runtime: true` in `atlan.yaml`.  Suggest-only is about *how the
 loop treats them* — never auto-edit an SDR finding, always draft and route to
@@ -578,6 +578,22 @@ say so.
   route to residue for a human to sequence against a distributed e2e.  If the
   bridge exists because `App.upload()` cannot express something the app needs,
   record that in the residue as an SDK gap rather than a suppression.
+
+- **P051 SdrPreflightUnavailable** (WARN) — an SDR app (`self_deployed_runtime:
+  true` in `atlan.yaml`) locks `atlan-application-sdk` below `3.30.0` in
+  `uv.lock`.  The interactive-setup surfaces (test authentication, preflight
+  checks, metadata browsing) first ship at that floor; heracles rejects
+  interactive dispatch below it (`BelowFloorError`) and the frontend hides the
+  widgets.  The detector reads the *locked* version (what the worker ships),
+  not the pyproject specifier.  Suggest-only, `classification` is always
+  `"judgment"`, never auto-edit.
+
+  Draft a residue that raises `atlan-application-sdk` to `>= 3.30.0` in
+  `pyproject.toml`, then `uv lock --upgrade-package atlan-application-sdk`,
+  rebuild and redeploy the worker.  The floor is necessary but not sufficient:
+  contract widgets still have to be declared for the interactive UX to appear.
+  Do not bump this to BLOCK — the app still extracts and publishes; it only
+  lacks the onboarding UX.
 
 - **P037 SdrAgentJsonNotConsumed** (WARN) — the app performs custom credential
   resolution (a bare `CredentialRef(credential_guid=...)` construction or a

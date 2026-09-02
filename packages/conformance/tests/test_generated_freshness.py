@@ -449,6 +449,44 @@ def test_k009_suppressed_after_earlier_hash(tmp_path: Path) -> None:
     assert findings[0].suppression_justification == "migration tracked"
 
 
+def test_k009_placeholder_in_yaml_comment_is_silent(tmp_path: Path) -> None:
+    """A {name} inside an explanatory YAML comment is prose, not a leftover.
+
+    Modeled on atlan-powerbi-app atlan.yaml:17-20 — the comment documents the
+    runtime URL template `GET /workflows/v1/manifest?entrypoint={name}` while
+    the actual generated entrypoint names are concrete.
+    """
+    files = _clean_files()
+    files["atlan.yaml"] = (
+        _BANNER
+        + "name: atlan-powerbi\n"
+        + "# Generated entrypoints land under `contract/generated/` so the SDK's\n"
+        + "# `GET /workflows/v1/manifest?entrypoint={name}` resolves correctly.\n"
+        + "entrypoints:\n"
+        + "  - crawl\n"
+    )
+    assert [f for f in _scan(tmp_path, files) if f.rule_id == "K009"] == []
+
+
+def test_k009_placeholder_in_yaml_value_still_fires(tmp_path: Path) -> None:
+    """The same URL template as a real field *value* (not a comment) still fires.
+
+    The quoted scalar carries a # hash-route *before* the placeholder, so a
+    naive "cut the line at the first #" narrowing would wrongly hide it —
+    comment stripping must respect YAML quoting.
+    """
+    files = _clean_files()
+    files["atlan.yaml"] = (
+        _BANNER
+        + "name: atlan-powerbi\n"
+        + 'manifest_url: "https://tenant.atlan.com/#/workflows/v1/manifest?entrypoint={name}"\n'
+    )
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K009"]
+    assert len(findings) == 1
+    assert findings[0].file == "atlan.yaml"
+    assert findings[0].line == 3
+
+
 # ---------------------------------------------------------------------------
 # K010 — missing E2E scaffolding
 # ---------------------------------------------------------------------------
