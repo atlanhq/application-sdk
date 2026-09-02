@@ -270,7 +270,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `OTEL_EXPORTER_TIMEOUT_SECONDS` | `30` | Timeout for OTLP export operations. |
 | `OTEL_BATCH_DELAY_MS` | `5000` | Delay between batch exports (milliseconds). |
 | `OTEL_BATCH_SIZE` | `512` | Maximum export batch size. |
-| `OTEL_QUEUE_SIZE` | `2048` | Maximum export queue size. |
+| `OTEL_QUEUE_SIZE` | `2048` | Maximum export queue size **per lane**. Each OTLP log endpoint has two queues of this size: a WARNING+ priority lane and an INFO/DEBUG bulk lane, so buffered records per endpoint can reach twice this value. See `docs/concepts/monitoring.md`. |
 | `ATLAN_ENABLE_OBSERVABILITY_STORE_SINK` | `true` | Write observability data to the object store sink. **Fallback:** `ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK`. |
 | `ATLAN_BASE_URL` | _(empty)_ | Atlan instance base URL. Used by the events interceptor. |
 

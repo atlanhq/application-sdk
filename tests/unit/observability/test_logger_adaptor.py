@@ -1824,6 +1824,40 @@ class TestCreateLogRecord:
         otel = logger_adapter._create_log_record(rec)
         assert otel.severity_number == SeverityNumber.UNSPECIFIED
 
+    @pytest.mark.parametrize(
+        ("level", "expected"),
+        [
+            ("DEBUG", "DEBUG"),
+            ("INFO", "INFO"),
+            ("ACTIVITY", "INFO"),
+            ("WARNING", "WARN"),
+            ("ERROR", "ERROR"),
+            ("CRITICAL", "FATAL"),
+        ],
+    )
+    def test_known_levels_map_to_otel_severity_enum(
+        self, logger_adapter: AtlanLoggerAdapter, level: str, expected: str
+    ):
+        """The record must carry a ``SeverityNumber`` enum, not the stdlib int.
+
+        The OTLP encoder reads ``.value`` off the enum; a bare int has none and
+        was exported as 0 (UNSPECIFIED), leaving only ``severity_text`` populated.
+        """
+        from opentelemetry._logs import SeverityNumber
+
+        rec = {
+            "timestamp": 1.0,
+            "level": level,
+            "message": "x",
+            "file": "f.py",
+            "line": 1,
+            "function": "fn",
+            "extra": {},
+        }
+        otel = logger_adapter._create_log_record(rec)
+        assert otel.severity_number is SeverityNumber[expected]
+        assert otel.severity_text == level
+
 
 class TestLoggingMethodsForwardToLoguru:
     """The level-specific methods must call into the loguru logger correctly.
@@ -2575,8 +2609,11 @@ class TestSecondaryWorkflowLogsExporter:
             mock.patch(
                 "application_sdk.observability.logger_adaptor.OTLPLogExporter"
             ) as mock_exporter,
+            # The severity-routed processor builds two BatchLogRecordProcessor
+            # lanes per endpoint; patch the upstream class where the router
+            # imports it so no export threads start in tests.
             mock.patch(
-                "application_sdk.observability.logger_adaptor.BatchLogRecordProcessor"
+                "application_sdk.observability.otlp_log_queue.BatchLogRecordProcessor"
             ),
             mock.patch("application_sdk.observability.logger_adaptor.LoggerProvider"),
         ):
@@ -2605,8 +2642,11 @@ class TestSecondaryWorkflowLogsExporter:
             secondary_endpoint=self.SECONDARY_SENTINEL,
         )
         endpoints = self._endpoints_passed_to_exporter(mock_exporter)
-        assert endpoints.count(self.PRIMARY_SENTINEL) == 1
-        assert endpoints.count(self.SECONDARY_SENTINEL) == 1
+        # Two exporters per endpoint: one per severity lane (bulk + priority),
+        # each owning its own gRPC channel so a stalled bulk export never
+        # blocks a WARNING+ flush.
+        assert endpoints.count(self.PRIMARY_SENTINEL) == 2
+        assert endpoints.count(self.SECONDARY_SENTINEL) == 2
 
     def test_secondary_skipped_when_flag_false(self):
         """Secondary exporter must not be constructed when the flag is off,
@@ -2658,6 +2698,71 @@ def _make_temporalio_record(
         args=(),
         exc_info=None,
     )
+
+
+def _make_uvicorn_access_record(
+    path: str, status: int, *, name: str = "uvicorn.access"
+) -> logging.LogRecord:
+    return logging.LogRecord(
+        name=name,
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("10.0.0.1:1234", "GET", path, "1.1", status),
+        exc_info=None,
+    )
+
+
+class TestProbeAccessLogFilter:
+    """Successful health/readiness probe access lines are dropped at the source."""
+
+    @pytest.fixture
+    def filt(self):
+        from application_sdk.observability.logger_adaptor import _ProbeAccessLogFilter
+
+        return _ProbeAccessLogFilter()
+
+    @pytest.mark.parametrize(
+        "path", ["/server/health", "/server/ready", "/health", "/ready", "/metrics"]
+    )
+    def test_successful_probe_hits_are_dropped(self, filt, path):
+        assert filt.filter(_make_uvicorn_access_record(path, 200)) is False
+        # Query strings do not defeat the match.
+        assert filt.filter(_make_uvicorn_access_record(f"{path}?x=1", 200)) is False
+
+    @pytest.mark.parametrize("status", [500, 503, 404])
+    def test_failing_probes_still_log(self, filt, status):
+        assert (
+            filt.filter(_make_uvicorn_access_record("/server/health", status)) is True
+        )
+
+    def test_other_paths_pass_through(self, filt):
+        assert (
+            filt.filter(_make_uvicorn_access_record("/workflows/v1/start", 200)) is True
+        )
+
+    def test_non_uvicorn_records_pass_through(self, filt):
+        rec = _make_uvicorn_access_record("/server/health", 200, name="my.app")
+        assert filt.filter(rec) is True
+
+    def test_malformed_args_pass_through(self, filt):
+        rec = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="free-form %s",
+            args=("text",),
+            exc_info=None,
+        )
+        assert filt.filter(rec) is True
+
+    def test_filter_is_installed_on_the_uvicorn_access_logger(self):
+        from application_sdk.observability.logger_adaptor import _ProbeAccessLogFilter
+
+        installed = logging.getLogger("uvicorn.access").filters
+        assert any(isinstance(f, _ProbeAccessLogFilter) for f in installed)
 
 
 class TestCloudflareTimeoutFilter:

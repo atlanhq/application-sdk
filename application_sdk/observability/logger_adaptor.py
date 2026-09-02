@@ -9,10 +9,9 @@ from typing import Any, ClassVar
 
 from loguru import logger
 from opentelemetry import trace as otel_trace
-from opentelemetry._logs import LogRecord, SeverityNumber
+from opentelemetry._logs import LogRecord
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
 
 from application_sdk.constants import (
@@ -49,6 +48,10 @@ from application_sdk.observability.logger_adaptor_errors import (
     UnsupportedLogRecordError,
 )
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.otlp_log_queue import (
+    SeverityRoutedLogRecordProcessor,
+    severity_from_levelno,
+)
 from application_sdk.observability.utils import (
     build_otel_resource,
     get_observability_dir,
@@ -670,8 +673,63 @@ class _CloudflareTimeoutFilter(logging.Filter):
             return True  # conformance: ignore[E007] logging adapter; log call would recurse; returning default is correct fallback
 
 
+class _ProbeAccessLogFilter(logging.Filter):
+    """Drop uvicorn access lines for successful health/readiness probes.
+
+    Kubernetes hits ``/server/health`` and ``/server/ready`` every few seconds,
+    and uvicorn's access logger turns each into an INFO record that the stdlib
+    bridge then exports like any application log. On a real run those lines
+    were the only unattributed rows in the run's log window and pure noise in
+    the customer-facing view. The SDK's own request-log middleware already
+    skips these paths (``EXCLUDED_LOG_PATHS``); this applies the same list to
+    uvicorn's access logger, which the middleware cannot reach.
+
+    Only *successful* (2xx/3xx) probe hits are dropped. A failing probe is a
+    signal and still logs. Anything that does not look like a uvicorn access
+    record passes through untouched.
+    """
+
+    _excluded: ClassVar[frozenset[str] | None] = None
+
+    @classmethod
+    def _excluded_paths(cls) -> frozenset[str]:
+        if cls._excluded is None:
+            # Lazy: the middleware package imports this module at import time.
+            from application_sdk.server.middleware._constants import (  # noqa: PLC0415
+                EXCLUDED_LOG_PATHS,
+            )
+
+            cls._excluded = EXCLUDED_LOG_PATHS
+        return cls._excluded
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if record.name != "uvicorn.access":
+                return True
+            args = record.args
+            # uvicorn: '%s - "%s %s HTTP/%s" %d' % (client, method, path, version, status)
+            if not isinstance(args, tuple) or len(args) < 5:
+                return True
+            path = str(args[2]).split("?", 1)[0]
+            status = args[4]
+            if (
+                path in self._excluded_paths()
+                and isinstance(status, int)
+                and 200 <= status < 400
+            ):
+                return False
+            return True
+        # conformance: ignore[E004] logging filter; a malformed record must pass through, never raise
+        except Exception:
+            return True  # conformance: ignore[E007] logging adapter; log call would recurse; returning default is correct fallback
+
+
 _intercept_handler = InterceptHandler()
 _intercept_handler.addFilter(_CloudflareTimeoutFilter())
+# Filters on a named logger run before propagation, so this sees uvicorn's
+# access records at their source even though uvicorn attaches no handlers
+# (``log_config=None`` in main.py) and everything reaches the root bridge.
+logging.getLogger("uvicorn.access").addFilter(_ProbeAccessLogFilter())
 logging.basicConfig(
     level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[_intercept_handler]
 )
@@ -955,34 +1013,23 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # plus an optional secondary exporter to OTEL_WORKFLOW_LOGS_ENDPOINT
         # for archival pipelines (e.g. an OTel collector that writes to S3).
         # Set up the provider first so _log_sink can see logger_provider below.
+        #
+        # Each endpoint gets a severity-routed processor: WARNING+ records sit
+        # in their own batch queue so an INFO burst (publish phases log per
+        # asset) can never evict them, and every eviction is counted and
+        # reported. See ``otlp_log_queue`` for the RCA that motivated this.
         try:
             otlp_processors = []
 
             if ENABLE_OTLP_LOGS or _has_remote_otlp_endpoint():
                 otlp_processors.append(
-                    BatchLogRecordProcessor(
-                        OTLPLogExporter(
-                            endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                            timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                        ),
-                        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
-                        max_export_batch_size=OTEL_BATCH_SIZE,
-                        max_queue_size=OTEL_QUEUE_SIZE,
-                    )
+                    self._build_otlp_processor(OTEL_EXPORTER_OTLP_ENDPOINT)
                 )
                 logging.info("OTLP exporter enabled: %s", OTEL_EXPORTER_OTLP_ENDPOINT)
 
             if ENABLE_OTLP_WORKFLOW_LOGS and OTEL_WORKFLOW_LOGS_ENDPOINT:
                 otlp_processors.append(
-                    BatchLogRecordProcessor(
-                        OTLPLogExporter(
-                            endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
-                            timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                        ),
-                        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
-                        max_export_batch_size=OTEL_BATCH_SIZE,
-                        max_queue_size=OTEL_QUEUE_SIZE,
-                    )
+                    self._build_otlp_processor(OTEL_WORKFLOW_LOGS_ENDPOINT)
                 )
                 logging.info(
                     "OTLP workflow logs exporter enabled: %s",
@@ -1037,6 +1084,25 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # Mark initialization complete only after all sinks are successfully added
         AtlanLoggerAdapter._initialized = True
 
+    @staticmethod
+    def _build_otlp_processor(endpoint: str) -> SeverityRoutedLogRecordProcessor:
+        """Build the severity-routed OTLP processor for one collector endpoint.
+
+        The factory is invoked once per lane (bulk + priority), so each lane
+        owns its own gRPC channel and a stalled bulk export never blocks a
+        priority flush.
+        """
+        return SeverityRoutedLogRecordProcessor(
+            lambda: OTLPLogExporter(
+                endpoint=endpoint,
+                timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+            ),
+            endpoint=endpoint,
+            schedule_delay_millis=OTEL_BATCH_DELAY_MS,
+            max_export_batch_size=OTEL_BATCH_SIZE,
+            max_queue_size=OTEL_QUEUE_SIZE,
+        )
+
     def process_record(self, record: Any) -> dict[str, Any]:
         """Process a log record into a standardized dictionary format.
 
@@ -1074,8 +1140,12 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         Returns:
             LogRecord: OpenTelemetry LogRecord object with mapped severity and attributes.
         """
-        severity_number = SEVERITY_MAPPING.get(
-            record["level"], SeverityNumber.UNSPECIFIED
+        # SEVERITY_MAPPING yields stdlib level numbers (INFO=20, WARNING=30…),
+        # but the OTLP encoder reads ``.value`` off a ``SeverityNumber`` enum and
+        # silently exports 0 (UNSPECIFIED) for anything else. Translate so the
+        # numeric severity downstream filters key on is actually populated.
+        severity_number = severity_from_levelno(
+            SEVERITY_MAPPING.get(record["level"], logging.NOTSET)
         )
 
         # Start with base attributes

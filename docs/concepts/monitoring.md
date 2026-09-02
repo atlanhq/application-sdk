@@ -289,6 +289,49 @@ env:
     value: "http://$(K8S_NODE_IP):4317"
 ```
 
+### OTLP log export: severity-routed queues and drop accounting
+
+Each OTLP log endpoint gets **two** batch queues, not one:
+
+| Lane | Carries | Capacity |
+|------|---------|----------|
+| priority | WARNING, ERROR, CRITICAL | `OTEL_QUEUE_SIZE` (default 2048) |
+| bulk | DEBUG, INFO, and the INFO/DEBUG-mapped custom levels (ACTIVITY, METRIC, TRACING) | `OTEL_QUEUE_SIZE` (default 2048) |
+
+Why: the upstream `BatchLogRecordProcessor` evicts the *oldest* buffered record
+when its queue is full, regardless of severity, and logs `Queue full, dropping
+Log.` at most once per 20 s with no count. A publish phase that logs per asset
+can emit thousands of INFO records in seconds; with a single queue those
+records evicted whatever was still waiting to be exported. Routing WARNING+
+into its own queue means an INFO burst can never evict a warning or error.
+
+Every eviction is counted per lane and reported through the SDK logger as a
+WARNING carrying the numbers: immediately on the first drop, then at most once
+every 30 s, and once more at shutdown.
+
+```
+OTLP log export dropped 1187 record(s) in the last 30s (INFO/DEBUG=1187, WARNING+=0):
+the collector at http://...:4317 accepted records slower than the app emitted them. ...
+```
+
+Reading it: `INFO/DEBUG` drops mean the collector was slower than emission for
+a while, so trim the app's INFO volume or raise `OTEL_QUEUE_SIZE`. A non-zero
+`WARNING+` count means the collector stalled long enough to fill the priority
+lane too, and the run's warnings and errors are incomplete downstream. The
+upstream `Queue full, dropping Log.` line still appears; the SDK report is the
+one with numbers.
+
+Two related details:
+
+- Exported records carry a real `SeverityNumber` (INFO=9, WARN=13, ERROR=17,
+  FATAL=21). Earlier releases passed the stdlib level number where the enum
+  was expected, so the encoder exported 0 (UNSPECIFIED) and only
+  `SeverityText` was populated.
+- Successful `GET /server/health` and `GET /server/ready` probe hits are not
+  exported as log records. Kubernetes probes them every few seconds, and the
+  resulting access lines were pure noise in every run's log view. A probe that
+  fails (non-2xx) is still logged.
+
 ---
 
 ## Structured Logging and `self.logger`
