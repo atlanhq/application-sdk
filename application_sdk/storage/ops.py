@@ -509,11 +509,18 @@ def _storage_error_for(
 ) -> Exception:
     """Build the typed storage error for a failed write.
 
-    Order is load-bearing. The Azure container probe is consulted first because
-    it is the one case whose remediation is a config change rather than a
-    retry. The parsed status and provider code decide next, because they are
-    structured; the message-substring classifiers elsewhere in this module are
-    heuristics over prose and must not pre-empt them.
+    Only two conditions reclassify: a missing Azure container, and a bucket
+    mid-relocation. Everything else — including a bare ``PreconditionFailed``
+    — is a retryable ``StorageError``. The parsed ``http_status`` and
+    ``provider_code`` are *evidence, not routing*: they ride on the envelope so
+    a consumer holding context the SDK lacks can branch on them, and so a
+    future case can argue for its own leaf from data rather than inference.
+
+    Order is load-bearing, but not for the retry verdict — both reclassifying
+    branches are retryable. It decides which ``code`` and which
+    ``suggested_action`` an operator sees, and those are wrong if a broader
+    rule matches first. Do not reorder without re-reading the notes at each
+    branch.
 
     Every branch carries the same evidence, so a consumer reads ``http_status``,
     ``provider_code`` and ``target`` off the envelope regardless of which leaf
@@ -543,18 +550,20 @@ def _storage_error_for(
     if _is_azure_container_not_found(exc):
         return StorageConfigError(_azure_container_not_found_message(key), **evidence)
 
-    # Relocation is checked BEFORE the precondition rule below, and the order is
-    # load-bearing rather than stylistic. A bucket mid-relocation is rejected
-    # with the same HTTP 400 / `PreconditionFailed` pair this classifier would
-    # otherwise be a plain retryable storage failure — but the verdicts differ:
-    # opposites. A relocation is temporary and platform-side: it clears when the
-    # move finishes, so it must stay retryable and PLATFORM-attributed. Letting
-    # the precondition rule win would mark a self-healing condition permanently
-    # failed and bill it to the connector.
+    # Relocation is checked BEFORE the generic fallthrough below, and the order
+    # is load-bearing rather than stylistic — though not for the reason it might
+    # look. Both outcomes are retryable, so nothing here changes a retry
+    # decision. What the order buys is the *specific* code
+    # (DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION, which the preflight gate
+    # stamps for the same condition) and the remediation hint telling an
+    # operator to wait the move out. Fall through to the generic StorageError
+    # first and both are silently lost: the failure still retries, but nobody
+    # can tell a relocation from any other storage blip.
     #
     # The detection is deliberately the preflight gate's, not a second one: its
     # rule requires BOTH the "precondition" and "relocation" tokens, so a plain
-    # etag/if-match 412 can never be misread as a relocation.
+    # etag/if-match 412 can never be misread as a relocation and pick up a
+    # "wait for the move to finish" hint for a move that is not happening.
     from application_sdk.storage.preflight import (  # noqa: PLC0415 — error path only; avoids a module-load cycle
         RELOCATION_BUCKET,
         _classify_access_error,
