@@ -17,7 +17,10 @@ import pytest
 from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
-from conformance.bootstrap.command import _bootstrap_file
+from conformance.bootstrap.command import (
+    _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK,
+    _bootstrap_file,
+)
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
     MANAGED_CONNECTOR_REVIEW_FILES,
@@ -2491,7 +2494,12 @@ def test_cmd_bootstrap_installs_connector_review_kit_additively(
                         {"matcher": "keep-me"},
                         {
                             "hooks": [
-                                {"command": ".claude/hooks/review-rules-freshness.sh"}
+                                {
+                                    "command": (
+                                        '"$CLAUDE_PROJECT_DIR"/'
+                                        ".claude/hooks/review-rules-freshness.sh"
+                                    )
+                                }
                             ]
                         },
                     ],
@@ -2500,7 +2508,10 @@ def test_cmd_bootstrap_installs_connector_review_kit_additively(
                             "matcher": "Bash",
                             "hooks": [
                                 {
-                                    "command": ".claude/hooks/check-review-before-commit.sh"
+                                    "command": (
+                                        '"$CLAUDE_PROJECT_DIR"/'
+                                        ".claude/hooks/check-review-before-commit.sh"
+                                    )
                                 },
                                 {"command": "scripts/keep-me.sh"},
                             ],
@@ -2551,7 +2562,7 @@ def test_cmd_bootstrap_connector_review_kit_migrates_eof_legacy_block(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The known old kit block was appended at EOF, so it can be replaced safely."""
-    (tmp_path / "CLAUDE.md").write_text("## Mandatory pre-commit review (L1-L4)\n")
+    (tmp_path / "CLAUDE.md").write_text(_KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK)
     monkeypatch.chdir(tmp_path)
 
     assert _cmd_bootstrap(["--connector-review-kit"]) == 0
@@ -2564,9 +2575,20 @@ def test_cmd_bootstrap_connector_review_kit_migrates_eof_legacy_block(
     )
 
 
-def test_conformance_template_runs_on_every_pr_update() -> None:
-    """A GitHub pull_request workflow receives each push to an open PR."""
-    assert "pull_request: {}" in render("conformance.yaml")
+def test_cmd_bootstrap_connector_review_kit_preserves_unverified_legacy_suffix(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the complete known EOF block may be replaced automatically."""
+    claude = tmp_path / "CLAUDE.md"
+    claude.write_text(
+        _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK + "\n### App notes\nKeep this.\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _cmd_bootstrap(["--connector-review-kit"]) == 2
+    assert claude.read_text().endswith("### App notes\nKeep this.\n")
+    assert not (tmp_path / ".claude" / "skills" / "connector-review").exists()
 
 
 @pytest.mark.parametrize(

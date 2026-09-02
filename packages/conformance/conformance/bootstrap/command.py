@@ -421,6 +421,30 @@ _RETIRED_CONNECTOR_REVIEW_HOOK_COMMANDS = frozenset(
     }
 )
 _CONNECTOR_REVIEW_REMINDER_COMMAND = ".claude/hooks/connector-review-reminder.sh"
+_KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK = """\
+## Mandatory pre-commit review (L1–L4)
+
+Before ANY `git commit`, the current changes MUST pass the `connector-review`
+skill: the L1 conformance suite plus every applicable L2/L3/L4 review rule.
+A PreToolUse hook blocks unreviewed commits; editing after a review invalidates
+it, so re-review after fixes.
+
+- L2/L4 rules: fetched from `atlanhq/application-sdk@main` into
+  `.mothership/.cache/review-rulesets/` by `scripts/fetch-review-rules.sh`.
+- L3 rules: `.mothership/review-rulesets/connector-app/` (this repo).
+- Never restate rule text in this file or in prompts — the rule files are the
+  only authority. If a rule seems wrong, change it in its source repo.
+- Local review is fast feedback. The PR-label CI review remains authoritative.
+- Emergency bypass (humans only, discouraged): `SKIP_CONNECTOR_REVIEW=1`.
+"""
+
+
+def _is_retired_connector_review_hook(command: object) -> bool:
+    """Match the old fixed hook paths, including project-directory prefixes."""
+    return isinstance(command, str) and any(
+        command == path or command.endswith(f"/{path}")
+        for path in _RETIRED_CONNECTOR_REVIEW_HOOK_COMMANDS
+    )
 
 
 def _merge_connector_review_settings(dest: pathlib.Path) -> str | None:
@@ -459,7 +483,7 @@ def _merge_connector_review_settings(dest: pathlib.Path) -> str | None:
                 for hook in entry_hooks
                 if not (
                     isinstance(hook, dict)
-                    and hook.get("command") in _RETIRED_CONNECTOR_REVIEW_HOOK_COMMANDS
+                    and _is_retired_connector_review_hook(hook.get("command"))
                 )
             ]
             if len(kept_hooks) == len(entry_hooks):
@@ -514,7 +538,10 @@ def _merge_connector_review_claude(dest: pathlib.Path) -> str:
     if begin == -1 and end == -1:
         if "## Mandatory pre-commit review" in text:
             legacy_begin = text.index("## Mandatory pre-commit review")
-            if "\n## " in text[legacy_begin + 1 :]:
+            if (
+                text[legacy_begin:].rstrip()
+                != _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK.rstrip()
+            ):
                 raise ConnectorReviewMergeError(
                     dest, "unmarked connector-review block; migrate it manually first"
                 )
