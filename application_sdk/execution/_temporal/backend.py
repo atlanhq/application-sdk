@@ -25,7 +25,10 @@ from temporalio.runtime import (
 )
 
 from application_sdk.app.entrypoint import canonical_workflow_type
-from application_sdk.common.dispatch import resolve_dispatch_workflow_id
+from application_sdk.common.dispatch import (
+    StampFailurePolicy,
+    resolve_dispatch_workflow_id,
+)
 from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
@@ -250,7 +253,7 @@ class TemporalExecutorBackend:
         """
         correlation_id = _stamp_start_correlation(input_data, context)
         workflow_id = resolve_dispatch_workflow_id(
-            input_data, context.app_name, on_stamp_failure="warn"
+            input_data, context.app_name, on_stamp_failure=StampFailurePolicy.WARN
         )
 
         workflow_name, ep_meta = _resolve_workflow_name(app_cls, entry_point)
@@ -295,7 +298,7 @@ class TemporalExecutorBackend:
         """
         correlation_id = _stamp_start_correlation(input_data, context)
         workflow_id = resolve_dispatch_workflow_id(
-            input_data, context.app_name, on_stamp_failure="warn"
+            input_data, context.app_name, on_stamp_failure=StampFailurePolicy.WARN
         )
 
         workflow_name, _ = _resolve_workflow_name(app_cls, entry_point)

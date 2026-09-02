@@ -13,7 +13,10 @@ from unittest import mock
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from application_sdk.common.dispatch import resolve_dispatch_workflow_id
+from application_sdk.common.dispatch import (
+    StampFailurePolicy,
+    resolve_dispatch_workflow_id,
+)
 
 
 class _WfInput:
@@ -77,7 +80,7 @@ class TestResolveDispatchWorkflowId:
             "application_sdk.observability.logger_adaptor.get_logger"
         ) as get_logger:
             resolved = resolve_dispatch_workflow_id(
-                _Frozen(), "my-app", on_stamp_failure="warn"
+                _Frozen(), "my-app", on_stamp_failure=StampFailurePolicy.WARN
             )
 
         assert re.fullmatch(r"my-app-[0-9a-f]{8}", resolved)
@@ -121,9 +124,35 @@ class TestStampFailurePolicy:
             "application_sdk.observability.logger_adaptor.get_logger"
         ) as get_logger:
             resolved = resolve_dispatch_workflow_id(
-                inp, "my-app", on_stamp_failure="warn"
+                inp, "my-app", on_stamp_failure=StampFailurePolicy.WARN
             )
 
         assert resolved.startswith("my-app-")
         assert inp.workflow_id == ""
         get_logger.return_value.warning.assert_called_once()
+
+    def test_a_bare_string_still_selects_the_policy(self) -> None:
+        """Untyped callers exist; ``StrEnum`` members equal their values, so a
+        bare ``"warn"`` must reach the same branch the member does."""
+
+        class _Frozen:
+            __slots__ = ()
+
+        with mock.patch("application_sdk.observability.logger_adaptor.get_logger"):
+            resolved = resolve_dispatch_workflow_id(
+                _Frozen(),
+                "my-app",
+                on_stamp_failure="warn",  # type: ignore[arg-type]
+            )
+
+        assert resolved.startswith("my-app-")
+
+    def test_an_unknown_policy_fails_loudly(self) -> None:
+        """The value is coerced rather than compared: a typo must not fall
+        through to the *less* strict branch and dispatch a divergent run."""
+        with pytest.raises(ValueError, match="not a valid StampFailurePolicy"):
+            resolve_dispatch_workflow_id(
+                _WfInput(),
+                "my-app",
+                on_stamp_failure="Warn",  # type: ignore[arg-type]
+            )

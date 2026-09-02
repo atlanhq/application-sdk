@@ -12,9 +12,34 @@ collapse every run of a session onto one shared prefix).
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from enum import StrEnum
+from typing import Any
 
 from pydantic import ValidationError
+
+
+class StampFailurePolicy(StrEnum):
+    """What a rejected ``workflow_id`` stamp does to the dispatch."""
+
+    RAISE = "raise"
+    """Let the assignment error propagate — the production default.
+
+    ``/workflows/v1/start`` answers it through its own boundary clauses, as
+    it always has (``ValidationError`` -> 500, ``TypeError`` -> 400), and the
+    workflow is never dispatched. A run whose ``Input.workflow_id`` disagrees
+    with the ID Temporal runs it under is the shape this module exists to
+    rule out, so the production path refuses it rather than logging it.
+    """
+
+    WARN = "warn"
+    """Log at WARNING and dispatch anyway — the integration kit's policy.
+
+    ``TemporalExecutorBackend`` dispatches the dict and frozen test doubles
+    the kit deliberately accepts; those cannot take the stamp, are out of
+    scope for the artifact-path collision, and failing them would block
+    suites that never read the field. The WARNING is what lets a suite that
+    does hit the path find out it did.
+    """
 
 
 def resolve_dispatch_workflow_id(
@@ -22,7 +47,7 @@ def resolve_dispatch_workflow_id(
     app_name: str,
     *,
     explicit_workflow_id: str = "",
-    on_stamp_failure: Literal["raise", "warn"] = "raise",
+    on_stamp_failure: StampFailurePolicy = StampFailurePolicy.RAISE,
 ) -> str:
     """Resolve the Temporal dispatch ID and stamp it onto ``input_data``.
 
@@ -38,16 +63,8 @@ def resolve_dispatch_workflow_id(
     stamp cannot be repaired: that run's field diverges from its dispatch ID,
     which is exactly the shape this function exists to rule out. The two
     dispatch paths answer that differently, and ``on_stamp_failure`` makes the
-    asymmetry deliberate:
-
-    - ``"raise"`` (default, the ``/workflows/v1/start`` handler) lets the
-      assignment error propagate untouched, so the handler's own boundary
-      clauses answer it as they always have — ``ValidationError`` → 500,
-      ``TypeError`` → 400 — and the workflow is never dispatched.
-    - ``"warn"`` (``TemporalExecutorBackend``) tolerates the dict/frozen test
-      doubles the integration kit accepts: the input is dispatched with its
-      field unchanged and the divergence is logged at WARNING, so a suite that
-      hits the path can find out it did.
+    asymmetry deliberate — see :class:`StampFailurePolicy` for what each
+    member means and why that path chose it.
 
     Two shapes are accepted here that the handler's previous inline copy would
     have rejected, both unreachable through a real ``Input``: an input carrying
@@ -56,6 +73,10 @@ def resolve_dispatch_workflow_id(
     default there unless a subclass declares another), and an input without
     ``config_hash`` (every real ``Input`` has it).
     """
+    # Coerced rather than compared: an untyped caller passing a bare string
+    # gets a loud ValueError on an unknown value, where ``is`` would have
+    # quietly fallen through to the *less* strict branch.
+    policy = StampFailurePolicy(on_stamp_failure)
     workflow_id = explicit_workflow_id or getattr(input_data, "workflow_id", "")
     if not workflow_id:
         from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
@@ -69,7 +90,7 @@ def resolve_dispatch_workflow_id(
             if config_hash
             else f"{app_name}-{short_id}"
         )
-    if on_stamp_failure == "raise":
+    if policy is StampFailurePolicy.RAISE:
         input_data.workflow_id = workflow_id
         return workflow_id
     try:
