@@ -59,6 +59,24 @@ MAX_NEARBY_TESTS = 12
 #: milliseconds; the bound exists so a runaway repo cannot stall a review.
 MAX_SCANNED_FILES = 4000
 
+#: Sentinel key meaning "the caller scan hit its budget", so `render` can say so
+#: instead of reporting an incomplete search as a finished one.
+SCAN_EXHAUSTED = "\x00scan-exhausted"
+
+
+def _is_vendored(rel: str) -> bool:
+    """Paths that are never this repo's own source.
+
+    Matched on a path segment rather than a prefix: a virtualenv can sit at the
+    root or inside a package, and either way its contents are not callers.
+    """
+    return any(
+        part in (".venv", "venv", "node_modules", ".git", "site-packages")
+        or part.endswith(".egg-info")
+        for part in rel.split("/")
+    )
+
+
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _NEW_FILE = re.compile(r"^\+\+\+ b/(.+)$")
 _OLD_FILE = re.compile(r"^--- a/(.+)$")
@@ -292,13 +310,21 @@ def find_callers(
 
     hits: dict[str, list[str]] = {name: [] for name in wanted}
     scanned = 0
+    exhausted = False
     for path in sorted((repo / scan_root).rglob("*.py")):
+        rel = str(path.relative_to(repo))
+        # Skipped BEFORE the budget is charged. Counting first spent the cap on
+        # files that were never read, and `sorted()` puts dot-prefixed
+        # directories first — so a repo with a checked-out `.venv` could
+        # exhaust the budget before reaching one source file, leaving
+        # `find_callers` empty while the pack printed "no references found in
+        # this repo" as a fact.
+        if rel in defining or _is_vendored(rel):
+            continue
         scanned += 1
         if scanned > MAX_SCANNED_FILES:
+            exhausted = True
             break
-        rel = str(path.relative_to(repo))
-        if rel in defining or "/.venv/" in f"/{rel}" or rel.startswith(".venv/"):
-            continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -307,7 +333,39 @@ def find_callers(
             bucket = hits[match]
             if rel not in bucket and len(bucket) < MAX_CALLERS_PER_SYMBOL:
                 bucket.append(rel)
-    return {name: tuple(paths) for name, paths in hits.items() if paths}
+    found = {name: tuple(paths) for name, paths in hits.items() if paths}
+    if exhausted:
+        # Surfaced rather than swallowed: an empty result after an exhausted
+        # scan is indistinguishable from a genuine zero, and the reviewer sizes
+        # findings on reachability.
+        found[SCAN_EXHAUSTED] = ()
+    return found
+
+
+def _test_roots(repo: Path, files: Sequence[ChangedFile]) -> list[Path]:
+    """Where this repo keeps tests for the files being changed.
+
+    The repo-root `tests/` is not the only one. `.github/scripts/` keeps its
+    suite in `.github/scripts/tests/` — which is where every CI-lane PR, the
+    most common input this lane sees, puts its tests. Looking only at
+    `repo/tests` returned nothing for those, and `render` then silently dropped
+    both the section and its instruction to check it before calling anything
+    untested. Silently, because an empty section and an absent one look the
+    same to the reviewer.
+
+    So: the root suite, plus a `tests/` directory beside any changed file.
+    """
+    roots: list[Path] = []
+    if (repo / "tests").is_dir():
+        roots.append(repo / "tests")
+    for changed in files:
+        for parent in (repo / changed.path).parents:
+            candidate = parent / "tests"
+            if candidate.is_dir() and candidate not in roots:
+                roots.append(candidate)
+            if parent == repo:
+                break
+    return roots
 
 
 def nearby_tests(repo: Path, files: Iterable[ChangedFile]) -> tuple[str, ...]:
@@ -318,17 +376,22 @@ def nearby_tests(repo: Path, files: Iterable[ChangedFile]) -> tuple[str, ...]:
     among the most expensive false positives available: it is plausible, it is
     tedious to refute, and refuting it is the author's job.
     """
+    # Materialised once: `files` may be a generator, and it is walked twice.
+    changed = list(files)
     modules = {
         Path(f.path).stem
-        for f in files
+        for f in changed
         if f.is_python and not f.is_test and not f.is_deleted
     }
     if not modules:
         return ()
+    candidates: list[Path] = []
+    for root in _test_roots(repo, changed):
+        for path in sorted(root.rglob("test_*.py")):
+            if path not in candidates:
+                candidates.append(path)
     out: list[str] = []
-    for path in (
-        sorted((repo / "tests").rglob("test_*.py")) if (repo / "tests").exists() else []
-    ):
+    for path in candidates:
         rel = str(path.relative_to(repo))
         if Path(rel).stem.removeprefix("test_") in modules:
             out.append(rel)
@@ -420,6 +483,13 @@ def render(pack: Pack, agent: str) -> str:
 
     if pack.gate:
         lines += ["", "## Already blocked by CI — do not restate", "", pack.gate]
+
+    if SCAN_EXHAUSTED in pack.callers:
+        lines += [
+            "",
+            "The caller scan hit its file budget, so the references above are "
+            "incomplete. Do not read a missing reference as proof nothing calls it.",
+        ]
 
     if pack.truncated:
         lines += ["", "## Truncated", ""]
