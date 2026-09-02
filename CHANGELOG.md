@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.32.0 (September 02, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.31.0...v3.32.0
+
+### Features
+
+- FND-1125 integration-kit fidelity — workflow_id stamp, local-scratch fixture, pre-run guards, shared preflight capture (#3579) (by @sachi-atlan in [5325ecd](https://github.com/atlanhq/application-sdk/commit/5325ecd))
+- persist the gate's verdict to the results store (CONNECT-1142) (#3529) (by @prateek11rai in [8f65ab4](https://github.com/atlanhq/application-sdk/commit/8f65ab4))
+
+### Bug Fixes
+
+- carry the backend verdict on storage failures instead of losing it (#3469) (by @vaibhavatlan in [fc02866](https://github.com/atlanhq/application-sdk/commit/fc02866))
+- orphaned-attempt rows, gate heartbeat, crash-marked outcome rows (#3521) (by @fyzanshaik-atlan in [d5b1d21](https://github.com/atlanhq/application-sdk/commit/d5b1d21))
+
+
 ## v3.31.0 (August 31, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.30.0...v3.31.0
