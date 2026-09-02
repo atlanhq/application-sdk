@@ -165,6 +165,12 @@ don't silently inherit the bare leaf's code.  Suppress with `# conformance: igno
 <reason>` at the declaration when an intermediate is genuinely abstract — see
 typed-error-prescription §4 and BLDX-1431.
 
+Exempt: classes whose own MRO overrides `to_failure_details()` or `qualified_code` —
+usually via a shared connector error mixin.  Those build the wire envelope themselves,
+so `code` is not what a dashboard reads and prefixing it would change nothing
+observable.  The exemption is inherited, so the override may sit on the mixin rather
+than on each exception class.
+
 ---
 
 ## P004 — `DirectTemporalImport` {#p004}

@@ -146,6 +146,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "leaf's code.  Suppress with ``# conformance: ignore[P003] <reason>``\n"
             "at the declaration when an intermediate is genuinely abstract — see\n"
             "typed-error-prescription §4 and BLDX-1431.\n"
+            "\n"
+            "Exempt: classes whose own MRO overrides ``to_failure_details()`` or\n"
+            "``qualified_code`` — usually via a shared connector error mixin.  Those\n"
+            "build the wire envelope themselves, so ``code`` is not what a dashboard\n"
+            "reads and prefixing it would change nothing observable.  The exemption\n"
+            "is inherited, so the override may sit on the mixin rather than on each\n"
+            "exception class.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003",
     ),

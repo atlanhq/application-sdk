@@ -559,6 +559,56 @@ def test_p003_fires_on_empty_code(tmp_path: Path) -> None:
     assert [f.rule_id for f in findings] == ["P003"]
 
 
+def test_p003_silent_when_class_overrides_to_failure_details(tmp_path: Path) -> None:
+    """A class that builds its own wire envelope does not emit ``code``.
+
+    ``to_failure_details()`` is what produces the ``FailureDetails.code`` a
+    dashboard reads. When a class replaces it, prefixing ``code`` changes
+    nothing observable, so P003's premise ("collapses to the bare leaf") is
+    false and the finding is noise.
+    """
+    src = (
+        "class ConnectorAuthError(AuthError):\n"
+        "    def to_failure_details(self):\n"
+        "        details = super().to_failure_details()\n"
+        '        return details.model_copy(update={"code": self.error_code.code})\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == []
+
+
+def test_p003_silent_when_a_mixin_ancestor_overrides_emission(tmp_path: Path) -> None:
+    """The override is usually on a shared mixin, not on each exception class."""
+    files = {
+        "mixin.py": (
+            "class _ConnectorErrorMixin:\n"
+            "    @property\n"
+            "    def qualified_code(self):\n"
+            '        return f"{self.category.name}.{self.error_code.code}"\n'
+        ),
+        "errors.py": (
+            "from mixin import _ConnectorErrorMixin\n"
+            "class ConnectorAuthError(_ConnectorErrorMixin, AuthError):\n"
+            "    pass\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings] == []
+
+
+def test_p003_still_fires_when_the_override_is_an_unrelated_method(
+    tmp_path: Path,
+) -> None:
+    """Only the two emission methods buy the exemption — not any override."""
+    src = (
+        "class ConnectorAuthError(AuthError):\n"
+        "    def __str__(self):\n"
+        '        return "boom"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
 def test_p003_fires_on_lowercase_prefix(tmp_path: Path) -> None:
     """Prefix match is case-sensitive (startswith); lowercase prefix must fire."""
     src = (

@@ -50,6 +50,54 @@ class ClassRecord:
     bases: list[str] = field(default_factory=list)
     code_value: str | None = None
     code_node: ast.AST | None = None
+    overrides_emission: bool = False
+
+
+# Methods that, when overridden, take the emitted code out of ``code``'s hands.
+# ``AppError.to_failure_details()`` is what builds the wire envelope and
+# ``qualified_code`` is what log surfaces read; a class that replaces either one
+# supplies its own code by another route, so ``code: ClassVar[str]`` is no
+# longer what reaches a dashboard and demanding a prefix on it is meaningless.
+EMISSION_OVERRIDES: frozenset[str] = frozenset({"to_failure_details", "qualified_code"})
+
+
+def _overrides_emission(cls_node: ast.ClassDef) -> bool:
+    """True if *cls_node* defines its own code-emission method."""
+    return any(
+        isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef)
+        and stmt.name in EMISSION_OVERRIDES
+        for stmt in cls_node.body
+    )
+
+
+def resolve_emission_override(
+    name: str,
+    by_name: dict[str, ClassRecord],
+    cache: dict[str, bool],
+    visiting: set[str],
+) -> bool:
+    """True if *name* or any scanned ancestor overrides code emission.
+
+    Walks the same base chain :func:`resolve_leaf_prefix` does, so a mixin that
+    carries the override is credited to every class that mixes it in. Bases
+    outside the scanned tree cannot be inspected and simply do not confirm an
+    override, which keeps the exemption conservative.
+    """
+    if name in cache:
+        return cache[name]
+    if name in visiting:
+        return False
+    rec = by_name.get(name)
+    if rec is None:
+        cache[name] = False
+        return False
+    visiting.add(name)
+    result = rec.overrides_emission or any(
+        resolve_emission_override(base, by_name, cache, visiting) for base in rec.bases
+    )
+    visiting.discard(name)
+    cache[name] = result
+    return result
 
 
 def _is_classvar_annotation(annotation: ast.expr | None) -> bool:
@@ -228,6 +276,7 @@ def collect_classes(
                 bases=bases,
                 code_value=code_value,
                 code_node=code_node,
+                overrides_emission=_overrides_emission(node),
             )
         )
     return records
