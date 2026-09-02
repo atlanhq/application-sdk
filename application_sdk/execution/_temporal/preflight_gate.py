@@ -865,8 +865,9 @@ _CLIENT_FAULT_CATEGORIES = frozenset(
 #:
 #: A table rather than a branch for the same reason as
 #: ``_LOG_ROW_IS_ONLY_CHANNEL`` above — the policy has to be *enumerable*, so
-#: ``test_every_interactive_outcome_has_a_level_policy`` fails CI for a new
-#: outcome nobody routed. A real crash is evidence about handler health and is
+#: ``test_every_interactive_outcome_has_a_level_policy`` fails CI for an
+#: outcome added to ``INTERACTIVE_RAISE_OUTCOMES`` without both surface
+#: entries. A real crash is evidence about handler health and is
 #: loud everywhere; a client fault is the response working as designed, so it
 #: stays quiet where the response carries it (HTTP) and goes loud only where
 #: the row is the customer's only sight of it (SDR).

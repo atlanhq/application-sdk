@@ -567,11 +567,16 @@ class TestPreflightEndpoint:
                     assert c.args[0] != "Preflight check outcome"
 
     def test_crash_row_names_the_requested_entrypoint(self) -> None:
-        # The row is seeded from the requested entrypoint, so a raise is
-        # attributed to what the caller asked for rather than being stamped
-        # "<implicit>" whenever it lands before validation.
+        # The raise must land BEFORE _validated_entrypoint reassigns
+        # `entrypoint`, because that window is the only one the seed governs.
         client = _make_client(handler=_FailingHandler())
-        with patch("application_sdk.handler.service.logger") as ml:
+        with (
+            patch(
+                "application_sdk.handler.service._validated_entrypoint",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch("application_sdk.handler.service.logger") as ml,
+        ):
             response = client.post(
                 "/workflows/v1/check",
                 json={"credentials": [], "entrypoint": "alpha"},
