@@ -15,13 +15,16 @@ boundary a consumer actually reads. (FND-957)
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 import pytest
 
+from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError
 from application_sdk.storage.errors import (
     StorageBucketRelocationError,
+    StorageEmptyUploadError,
     StorageError,
     StorageNotFoundError,
 )
@@ -61,7 +64,7 @@ class TestFailureEnvelopeWireContract:
         ],
     )
     def test_category_serialises_to_the_expected_wire_string(
-        self, factory, wire: str
+        self, factory: Callable[[], AppError], wire: str
     ) -> None:
         """Consumers match these strings literally, so the spelling is the contract.
 
@@ -75,11 +78,39 @@ class TestFailureEnvelopeWireContract:
         payload = json.loads(factory().to_failure_details().model_dump_json())
         assert payload["category"] == wire
 
-    def test_audience_serialises_by_member_name(self) -> None:
-        payload = json.loads(
-            AuthError(message="x").to_failure_details().model_dump_json()
-        )
-        assert payload["audience"] in {a.name for a in Audience}
+    @pytest.mark.parametrize(
+        ("factory", "wire"),
+        [
+            (lambda: AuthError(message="x"), "USER"),
+            (lambda: StorageError("x", key="k"), "PLATFORM"),
+            (lambda: StorageEmptyUploadError("x"), "APP_OWNER"),
+        ],
+    )
+    def test_audience_serialises_to_the_expected_wire_string(
+        self, factory: Callable[[], AppError], wire: str
+    ) -> None:
+        """``Audience`` is contract for the same reason ``FailureCategory`` is.
+
+        The doc entry names both, and this used to assert only that the value
+        was *some* member name — which passes for any of the three, so it
+        pinned neither the spelling nor the serialisation mode. Every member
+        has ``name == value`` here too, so membership could not have told a
+        ``.name`` serialiser from a ``.value`` one. Pin the exact string per
+        leaf, off the serialised payload, and cover all three members: a
+        renamed member now reddens here instead of at a consumer.
+        """
+        payload = json.loads(factory().to_failure_details().model_dump_json())
+        assert payload["audience"] == wire
+
+    def test_every_audience_member_is_covered_by_the_pins_above(self) -> None:
+        """Guard against a fourth member arriving unpinned.
+
+        The parametrisation above spells out one leaf per ``Audience`` member.
+        Adding a member without adding a case would leave a wire value nothing
+        asserts, and the gap would be invisible — every existing test stays
+        green. This fails the moment the enum grows.
+        """
+        assert {a.name for a in Audience} == {"USER", "PLATFORM", "APP_OWNER"}
 
     def test_category_is_coarse_and_code_is_the_specific_cause(self) -> None:
         """The relationship a consumer must not collapse.

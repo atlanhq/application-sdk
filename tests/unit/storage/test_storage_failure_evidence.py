@@ -199,16 +199,18 @@ def test_a_real_outage_stays_retryable_even_when_the_key_contains_412() -> None:
     assert fd.evidence["http_status"] == 503
 
 
-def test_bucket_relocation_wins_over_the_precondition_rule() -> None:
-    """Ordering is safety-critical, not stylistic.
+def test_bucket_relocation_is_matched_before_the_generic_fallthrough() -> None:
+    """Ordering decides the code and the hint, not the retry verdict.
 
-    A bucket mid-relocation is rejected with the same HTTP 400 /
-    ``PreconditionFailed`` pair that would otherwise route to
-    a plain retryable storage failure — but the verdicts differ. A relocation
-    is temporary and platform-side: it clears when the move finishes, so it must
-    stay retryable and PLATFORM-attributed. If the precondition rule won, a
-    self-healing condition would be marked permanently failed and billed to the
-    connector.
+    A relocation and a generic storage failure are both retryable, so getting
+    this order wrong loses no run. What it loses is the diagnosis: the specific
+    code the preflight gate stamps for the same condition, and the hint telling
+    an operator to wait the move out. Fall through first and a relocation is
+    indistinguishable from any other blip — which is the state this branch
+    exists to get us out of.
+
+    The reported FND-957 message shape, verbatim, so upstream wording drift
+    fails here rather than silently degrading to the generic leaf.
     """
     exc = _GenericError(
         "Generic GCS error: Error performing POST "
@@ -220,6 +222,7 @@ def test_bucket_relocation_wins_over_the_precondition_rule() -> None:
     err = _storage_error_for(exc, "artifacts/t.json", "upload failed")
     fd = err.to_failure_details()
     assert type(err).__name__ == "StorageBucketRelocationError"
+    assert fd.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
     assert fd.retryable is True
     assert fd.audience is Audience.PLATFORM
     assert fd.suggested_action is not None
