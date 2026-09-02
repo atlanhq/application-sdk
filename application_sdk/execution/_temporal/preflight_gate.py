@@ -37,6 +37,12 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import TimeoutType
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk.constants import (
+        APP_ID,
+        APPLICATION_VERSION,
+        PREFLIGHT_RESULTS_ENDPOINT,
+        PREFLIGHT_RESULTS_TIMEOUT_SECONDS,
+    )
     from application_sdk.contracts.base import SerializableEnum
     from application_sdk.credentials.errors import CredentialNotFoundError
     from application_sdk.credentials.ingress import normalize_agent_json
@@ -50,6 +56,9 @@ with workflow.unsafe.imports_passed_through():
         DependencyUnavailableError,
         InternalError,
         PreconditionError,
+    )
+    from application_sdk.execution._temporal.preflight_persist import (
+        persist_check_result,
     )
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
@@ -229,6 +238,15 @@ class PreflightGateInput(BaseModel):
     entrypoint: str = ""
     """Bare entry-point name of the gated workflow (for per-entrypoint checks)."""
 
+    workflow_slug: str = ""
+    """AE's slug for the workflow being gated, copied from
+    :attr:`~application_sdk.contracts.base.Input.workflow_slug`.
+
+    Carried as its own field rather than read back out of
+    :attr:`extraction_snapshot`, so the one reader that needs it does not depend
+    on how the snapshot happens to be shaped. Empty when AE did not dispatch this
+    run, which is what makes the verdict unattributable."""
+
     credential_ref_fields: dict[str, str] = Field(default_factory=dict)
     """Named credential refs to resolve on the gate path, ``{ref_name: guid_field}``
     — copied secret-free from the input's
@@ -292,6 +310,7 @@ class PreflightGateInput(BaseModel):
             agent_json=normalize_agent_json(getattr(input_data, "agent_json", None)),
             credential_ref=getattr(input_data, "credential_ref", None),
             entrypoint=entrypoint,
+            workflow_slug=getattr(input_data, "workflow_slug", "") or "",
             credential_ref_fields=credential_ref_fields,
             extraction_snapshot=snapshot,
         )
@@ -591,12 +610,6 @@ def _config_from_snapshot(
     return config
 
 
-def _dump_check(check: PreflightCheck) -> dict[str, Any]:
-    dumped = check.model_dump(mode="json", exclude_none=True)
-    dumped["message"] = check.resolved_message
-    return dumped
-
-
 def _check_matrix_json(checks: list[PreflightCheck]) -> str:
     """Compact per-check matrix for the outcome event, as one JSON string.
 
@@ -670,7 +683,7 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
         or joined
         or "Preflight check failed; aborting before extraction"
     )
-    checks_payload = {"checks": [_dump_check(c) for c in result.checks]}
+    checks_payload = {"checks": [c.to_wire() for c in result.checks]}
     return ApplicationError(
         f"Preflight failed: {reason}",
         details,
@@ -1385,6 +1398,38 @@ def build_preflight_gate_activity(
                 **extra,
             )
 
+        def _persist(verdict: PreflightOutput) -> None:
+            """Append this verdict to the tenant's preflight-results store.
+
+            Called once beside every emitted outcome, so "an outcome row implies a
+            store row" is one rule rather than three call sites drifting apart.
+            Scheduled and abandoned — it never blocks, and its response is not
+            recorded (CONNECT-1142).
+
+            ``persist_check_result`` already swallows its own failures. Caught
+            again here on purpose: the rule is that a results store can never
+            fail a customer's run, and a rule that holds only while another
+            module keeps its promise is not enforced where it matters. The cost
+            of the duplicate is one ``except`` that should never fire.
+            """
+            try:
+                persist_check_result(
+                    input,
+                    verdict,
+                    app_id=APP_ID,
+                    app_version=APPLICATION_VERSION,
+                    endpoint=PREFLIGHT_RESULTS_ENDPOINT,
+                    timeout=PREFLIGHT_RESULTS_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                logger.warning(
+                    "preflight result not persisted; the run is unaffected "
+                    "app_name=%s entrypoint=%s",
+                    app_name,
+                    entry,
+                    exc_info=True,
+                )
+
         def _no_verdict(exc: BaseException) -> PreflightOutput:
             """Apply gate mode to a source we could not verify.
 
@@ -1419,6 +1464,7 @@ def build_preflight_gate_activity(
                 # nothing — on the one path where the cause is the whole diagnostic.
                 exc_info=exc,
             )
+            _persist(unverifiable)
             if enforce:
                 raise block_error
             return unverifiable
@@ -1581,6 +1627,7 @@ def build_preflight_gate_activity(
                 CLASSIFICATION_VERDICT,
                 audience=block_error.details[0].audience.value,
             )
+            _persist(result)
             if enforce:
                 raise block_error
             # Soft: the verdict stays honest NOT_READY; the gate just does not
@@ -1589,6 +1636,7 @@ def build_preflight_gate_activity(
         _emit_outcome(
             "proceeded", result.status.value, result.checks, CLASSIFICATION_VERDICT
         )
+        _persist(result)
         return result
 
     return preflight_gate
