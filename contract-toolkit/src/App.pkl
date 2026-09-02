@@ -105,6 +105,7 @@ typealias DaprComponents = DeploymentPkg.DaprComponents
 typealias KedaTemporalConfig = DeploymentPkg.KedaTemporalConfig
 typealias KedaConfig = DeploymentPkg.KedaConfig
 typealias ResourceConfig = DeploymentPkg.ResourceConfig
+typealias VpaConfig = DeploymentPkg.VpaConfig
 typealias DeployConfig = DeploymentPkg.DeployConfig
 typealias Pool = DeploymentPkg.Pool
 
@@ -3806,6 +3807,7 @@ local function renderKedaConfig(k: KedaConfig): Mapping<String, Any> = new Mappi
   ["enabled"] = k.enabled
   when (k.enabled) {
     ["minReplicaCount"] = k.minReplicaCount
+    when (k.maxReplicaCount != null) { ["maxReplicaCount"] = k.maxReplicaCount }
     when (k.cooldownPeriod != null) { ["cooldownPeriod"] = k.cooldownPeriod }
     ["temporal"] = new Mapping {
       ["targetQueueSize"] = k.temporal.targetQueueSize
@@ -3813,15 +3815,61 @@ local function renderKedaConfig(k: KedaConfig): Mapping<String, Any> = new Mappi
   }
 }
 
+local function renderResourceConfig(r: ResourceConfig): Mapping<String, Any> = new Mapping {
+  when (!r.requests.isEmpty) { ["requests"] = r.requests }
+  when (!r.limits.isEmpty) { ["limits"] = r.limits }
+}
+
+local function renderVpaConfig(v: VpaConfig): Mapping<String, Any> = new Mapping {
+  ["enabled"] = v.enabled
+  when (v.updateMode != null) { ["updateMode"] = v.updateMode }
+  when (!v.minAllowed.isEmpty) { ["minAllowed"] = v.minAllowed }
+  when (!v.maxAllowed.isEmpty) { ["maxAllowed"] = v.maxAllowed }
+}
+
+/// Contract-shape `pools:` entry — the mirror of the whole `pools` map that
+/// `atlan.yaml` carries at top level for tooling reading the contract directly.
 local function renderPool(p: Pool): Mapping<String, Any> = new Mapping {
   when (p.replicaCount != null) { ["replicaCount"] = p.replicaCount }
   ["keda"] = renderKedaConfig(p.keda)
-  when (p.resources != null) {
-    ["resources"] = new Mapping {
-      when (!p.resources!!.requests.isEmpty) { ["requests"] = p.resources!!.requests }
-      when (!p.resources!!.limits.isEmpty) { ["limits"] = p.resources!!.limits }
-    }
+  when (p.resources != null) { ["resources"] = renderResourceConfig(p.resources!!) }
+  when (p.vpa != null) { ["vpa"] = renderVpaConfig(p.vpa!!) }
+  when (!p.env.isEmpty) { ["env"] = p.env }
+  when (!p.envOverrides.isEmpty) { ["envOverrides"] = p.envOverrides }
+}
+
+/// Chart-shape `deploy.workerPools[]` entry for one dedicated pool.
+///
+/// The `atlan-app` chart reads a LIST keyed by `name` with a FLAT `keda` block —
+/// not the contract's `pools:` mapping with `keda.temporal.targetQueueSize` and
+/// `keda.enabled`. This function owns that translation so no app has to
+/// hand-write it, and so the pool key stays the single source of the pool's
+/// identity.
+///
+/// `taskQueue` is deliberately never emitted: the chart derives
+/// `atlan-<app>-<deploymentName>-<name>` and `application_sdk`'s
+/// `resolve_pool_queue()` derives the same string, so emitting one would create
+/// a second source that can drift from the routing side.
+///
+/// `keda.enabled`, `replicaCount`, `env`, and `envOverrides` are emitted but NOT
+/// yet honored per-pool by the chart (`subcharts/atlan-app` reads only `name`,
+/// `taskQueue`, `resources`, `keda`, `vpa`, `capacityType`,
+/// `maxConcurrentActivities`, `terminationGracePeriodSeconds`). They are emitted
+/// rather than dropped so the contract stays the declaration of intent and the
+/// chart gap is visible in the generated manifest instead of silently vanishing
+/// at render time. Tracked in ARUN-1041.
+local function renderWorkerPool(poolName: String, p: Pool): Mapping<String, Any> = new Mapping {
+  ["name"] = poolName
+  when (p.replicaCount != null) { ["replicaCount"] = p.replicaCount }
+  ["keda"] = new Mapping {
+    ["enabled"] = p.keda.enabled
+    ["minReplicaCount"] = p.keda.minReplicaCount
+    when (p.keda.maxReplicaCount != null) { ["maxReplicaCount"] = p.keda.maxReplicaCount }
+    when (p.keda.cooldownPeriod != null) { ["cooldownPeriod"] = p.keda.cooldownPeriod }
+    ["targetQueueSize"] = p.keda.temporal.targetQueueSize
   }
+  when (p.resources != null) { ["resources"] = renderResourceConfig(p.resources!!) }
+  when (p.vpa != null) { ["vpa"] = renderVpaConfig(p.vpa!!) }
   when (!p.env.isEmpty) { ["env"] = p.env }
   when (!p.envOverrides.isEmpty) { ["envOverrides"] = p.envOverrides }
 }
@@ -3852,17 +3900,26 @@ local function renderDeployYaml(d: DeployConfig): Mapping<String, Any> =
     deepMergeMapping(globalFields, d.overrides)
   else
     let (firstPool: Pool = (new Listing<Pool> { for (_, p in d.pools) { p } }).first)
+    let (firstPoolName: String = (new Listing<String> { for (k, _ in d.pools) { k } }).first)
+    // Pools after the first render as chart-shape `workerPools[]` entries. The
+    // first pool IS the app's main worker (its config synthesises the `deploy:`
+    // block below), so emitting it here too would render a duplicate
+    // TemporalWorkerDeployment polling a second queue.
+    let (extraPools: Listing<Mapping<String, Any>> = new Listing {
+      for (pName, p in d.pools) {
+        when (pName != firstPoolName) {
+          deepMergeMapping(renderWorkerPool(pName, p), p.overrides)
+        }
+      }
+    })
     let (poolFields: Mapping<String, Any> = new Mapping {
       when (firstPool.replicaCount != null) { ["replicaCount"] = firstPool.replicaCount }
       ["keda"] = renderKedaConfig(firstPool.keda)
-      when (firstPool.resources != null) {
-        ["resources"] = new Mapping {
-          when (!firstPool.resources!!.requests.isEmpty) { ["requests"] = firstPool.resources!!.requests }
-          when (!firstPool.resources!!.limits.isEmpty) { ["limits"] = firstPool.resources!!.limits }
-        }
-      }
+      when (firstPool.resources != null) { ["resources"] = renderResourceConfig(firstPool.resources!!) }
+      when (firstPool.vpa != null) { ["vpa"] = renderVpaConfig(firstPool.vpa!!) }
       when (!firstPool.env.isEmpty) { ["env"] = firstPool.env }
       when (!firstPool.envOverrides.isEmpty) { ["envOverrides"] = firstPool.envOverrides }
+      when (!extraPools.isEmpty) { ["workerPools"] = extraPools }
     })
     deepMergeMapping(
       deepMergeMapping(globalFields, poolFields),

@@ -314,9 +314,35 @@ Implemented in **PR #2351** (application-sdk), which covers:
 - **Phase 4** (BLDX-1375): `@task(pool=...)` decorator; `ATLAN_POOL_<POOL>_QUEUE`
   resolution in `_create_task_activity_wrapper`.
 
+- **Phase 5** (ARUN-1041): wired the contract to the chart. The Helm prerequisite
+  below had landed out-of-repo under a different shape than this ADR assumed —
+  `deploy.workerPools`, a **list** keyed by `name` with a **flat** `keda` block,
+  rather than the contract's `pools:` mapping with `keda.temporal.targetQueueSize`.
+  Nothing read `pools:`. Consequences, all now closed:
+  - Pools after the first were emitted only into the ignored `pools:` block, so a
+    second declared pool was **never staffed** — the failure this ADR set out to
+    prevent. `App.pkl` now renders every pool after the first as a
+    `deploy.workerPools[]` entry and owns the mapping→list and
+    nested→flat-`keda` translation.
+  - `resolve_pool_queue()` read `ATLAN_TASK_QUEUE`, which the chart does not set,
+    so on a chart deployment every `@task(pool=...)` resolved to `None` and its
+    activities silently ran on the workflow's default queue. It now falls back to
+    `task_queue_from_env()`, reproducing the chart's own
+    `atlan-<app>-<deploymentName>-<pool>` byte-for-byte. No `taskQueue` is
+    generated: the pool key stays the single source, derived independently and
+    identically on both sides.
+  - `Pool.vpa` (typed `VpaConfig`) and `KedaConfig.maxReplicaCount` added, so the
+    per-pool knobs CI validates are expressible in the contract instead of
+    reached for through the untyped `overrides` escape hatch.
+
 Tracking:
 - **BLDX-1485** — P016 `PoolKeyMismatch` conformance rule (not yet implemented).
-- Helm chart update (out-of-repo) — hard prerequisite before any production pool is staffed.
+- **ARUN-1041** — chart does not yet honor `workerPools[].env`, `envOverrides`, or
+  `replicaCount`; the toolkit emits them so the gap is visible rather than
+  silently dropped. Also open: `capacityType`,
+  `maxConcurrentActivities`, and `terminationGracePeriodSeconds` are chart-side
+  pool knobs with no typed contract field yet, and app-level `vpa` /
+  `workerResources` still reach `atlan.yaml` only via `deploy.overrides`.
 - Option 3 escalation backstop — separate lower-priority follow-up.
 
 ---

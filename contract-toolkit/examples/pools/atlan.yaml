@@ -33,6 +33,26 @@ deploy:
       memory: 4Gi
   env:
     WORKER_TYPE: hot
+  workerPools:
+  - name: cold
+    keda:
+      enabled: true
+      minReplicaCount: 0
+      maxReplicaCount: 4
+      cooldownPeriod: 30
+      targetQueueSize: 5
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    vpa:
+      enabled: true
+      updateMode: Auto
+      maxAllowed:
+        cpu: '2'
+        memory: 4Gi
+    env:
+      WORKER_TYPE: cold
 pools:
   hot:
     keda:
@@ -54,6 +74,7 @@ pools:
     keda:
       enabled: true
       minReplicaCount: 0
+      maxReplicaCount: 4
       cooldownPeriod: 30
       temporal:
         targetQueueSize: 5
@@ -61,5 +82,11 @@ pools:
       requests:
         cpu: 100m
         memory: 256Mi
+    vpa:
+      enabled: true
+      updateMode: Auto
+      maxAllowed:
+        cpu: '2'
+        memory: 4Gi
     env:
       WORKER_TYPE: cold
