@@ -22,6 +22,19 @@ Three rounds of measured trimming (FND-1232):
 3. This file: rationale out of agent context. External calibration:
    PR-Agent's whole rendered `/review` prompt is ~1,428 tokens.
 
+## Considered and rejected
+
+- **Splitting the router by lane** — three files (loop procedure, mothership
+  procedure, shared contract) instead of one. Measured by classifying every
+  `##`/`###` block of the router as loop-only, mothership-only or shared and
+  summing characters: mothership-only text the loop lane reads anyway is
+  ~1,511 of ~12,627 tokens — **11%** — and Phase 0 is the only genuinely split
+  section. An 11% return does not pay for restructuring a merge-gating
+  playbook into three files that can then drift from each other, and every
+  such split adds a way for a lane to read the wrong procedure. The
+  condition-gated `sections/` split already took the large, cleanly separable
+  blocks; what is left in the router is shared by construction.
+
 ## Incident index — what taught each rule
 
 - **Lane marker (`LANE: sdk-loop`), Runtime**: an agent spent a paid turn on
