@@ -33,6 +33,9 @@ _CAUSE_MAX_LEN = 2000
 _CAUSE_HEAD_LEN = 1200
 _CAUSE_TAIL_LEN = 700
 _TRACEBACK_MAX_LEN = 8000
+#: Recursion bound for :func:`redact_wire_value`. A pathologically deep
+#: hand-built structure must truncate rather than overflow the stack.
+_REDACT_MAX_DEPTH: int = 32
 # Matches userinfo in URLs for any scheme: https://user:pass@host → https://***@host,
 # postgresql://user:pass@host → postgresql://***@host (SQLAlchemy/JDBC-style
 # connection strings embed credentials the same way http URLs do).
@@ -89,6 +92,80 @@ def redact_secrets(text: str) -> str:
     text = _URL_USERINFO_RE.sub(r"\1***@", text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
     return text
+
+
+def redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) -> Any:
+    """Redact every string reachable inside a value bound for the wire.
+
+    Strings are redacted wherever they appear inside dict / list / tuple / set
+    structures; other non-string values are left untouched. The recursive
+    counterpart to :func:`redact_secrets`, which handles one string.
+
+    Args:
+        value: Any value bound for a wire — typically a ``model_dump`` result or
+            an evidence mapping.
+        seen: Container ids on the current recursion path. Callers pass nothing;
+            the walker threads it through itself.
+        depth: Current recursion depth. Callers pass nothing.
+
+    Returns:
+        The same shape with every reachable string redacted. A revisited
+        container yields ``None`` and anything past :data:`_REDACT_MAX_DEPTH`
+        yields ``"…"``, so a hostile structure truncates rather than hangs.
+    """
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        if seen is None:
+            seen = set()
+        # Guard the two ways a hand-built container can crash the walk:
+        #   * a self-referential container recurses forever — prune a revisit
+        #     rather than render it;
+        #   * a pathologically deep acyclic structure overflows the stack —
+        #     bound depth and truncate past it.
+        # ``seen`` is a mutable add/remove recursion stack shared along the path,
+        # so diamond-shared (acyclic) subcontainers are redacted, not falsely
+        # pruned, and no frozenset is allocated per level.
+        if id(value) in seen:
+            return None
+        if depth >= _REDACT_MAX_DEPTH:
+            return "…"
+        seen.add(id(value))
+        try:
+            return {k: redact_wire_value(v, seen, depth + 1) for k, v in value.items()}
+        finally:
+            seen.discard(id(value))
+    if isinstance(value, (list, tuple, set, frozenset)):
+        if seen is None:
+            seen = set()
+        if id(value) in seen:
+            return None
+        if depth >= _REDACT_MAX_DEPTH:
+            return "…"
+        seen.add(id(value))
+        try:
+            redacted = [redact_wire_value(v, seen, depth + 1) for v in value]
+        finally:
+            seen.discard(id(value))
+        if isinstance(value, tuple) and hasattr(type(value), "_fields"):
+            # A NamedTuple takes positional fields, not an iterable —
+            # ``type(value)(redacted)`` crashes a 2+-field one and silently
+            # retypes a 1-field one (its sole field becomes the redacted
+            # *list*). Rebuild with positional expansion so the shape survives.
+            try:
+                return type(value)(*redacted)
+            except Exception:  # noqa: BLE001 — see fallback below
+                return tuple(redacted)
+        try:
+            return type(value)(redacted)
+        except Exception:  # noqa: BLE001 — a connector-authored container
+            # subclass whose constructor raises (any type, not just
+            # TypeError/ValueError) must not crash through the degrade either;
+            # fall back to a plain container of the same shape. Values are
+            # redacted either way, and evidence serialises as JSON arrays
+            # regardless.
+            return tuple(redacted) if isinstance(value, tuple) else redacted
+    return value
 
 
 # ``object_store`` (via obstore) appends a multi-line Rust ``Debug`` dump to

@@ -2,7 +2,7 @@
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.31.0
 source-sha:    f65e4b9324aef9a80b45b8b976437aebeb551bcf
-source-date:   2026-09-02T10:42:50+00:00
+source-date:   2026-09-02T10:42:50Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 64 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 65 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 319 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 327 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -1456,6 +1456,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import redact_secrets`
 - **Signature:** `redact_secrets(text: str)`
 - **Summary:** Redact URL userinfo and known secret query-params from a string.
+- **Defined in:** `application_sdk/errors/base.py`
+
+#### `redact_wire_value`
+
+- **Import:** `from application_sdk.errors import redact_wire_value`
+- **Signature:** `redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0)`
+- **Summary:** Redact every string reachable inside a value bound for the wire.
 - **Defined in:** `application_sdk/errors/base.py`
 
 #### `safe_traceback`
@@ -3219,7 +3226,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AppExecutor`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import AppExecutor`
-- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend) -> None`
+- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend, ...)`
 - **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
@@ -3914,6 +3921,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The scenario's starting state could not be read, so nothing was dispatched.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
 
+#### `PreflightOutcomeCapture`
+
+- **Import:** `from application_sdk.testing import PreflightOutcomeCapture`
+- **Signature:** `class PreflightOutcomeCapture()`
+- **Summary:** A stand-in for the gate's logger that keeps the rows it was handed.
+- **Defined in:** `application_sdk/testing/preflight.py`
+
 #### `PublishedVersion`
 
 - **Import:** `from application_sdk.testing.e2e.client import PublishedVersion`
@@ -4367,6 +4381,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
+#### `capture_preflight_outcomes`
+
+- **Import:** `from application_sdk.testing import capture_preflight_outcomes`
+- **Signature:** `capture_preflight_outcomes(monkeypatch: pytest.MonkeyPatch)`
+- **Summary:** Patch the gate's logger with a :class:`PreflightOutcomeCapture` and yield it.
+- **Defined in:** `application_sdk/testing/preflight.py`
+
 #### `check_no_stale_pollers`
 
 - **Import:** `from application_sdk.testing.harness import check_no_stale_pollers`
@@ -4559,7 +4580,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `executor`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import executor`
-- **Signature:** `executor(temporal_client: Client, worker: None, integration_task_queue: str) -> AppExecutor`
+- **Signature:** `executor(temporal_client: Client, ...)`
 - **Summary:** Executor submitting to the running worker's task queue.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
@@ -4569,6 +4590,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `exists(*, description: str | None = None)`
 - **Summary:** Assert that the actual value is not None.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `first_outcome_or_none`
+
+- **Import:** `from application_sdk.testing import first_outcome_or_none`
+- **Signature:** `first_outcome_or_none(mock_logger: MagicMock)`
+- **Summary:** The first outcome row, or ``None`` — for paths asserting no row was emitted.
+- **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `format_validation_report`
 
@@ -5058,6 +5086,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert that the actual value is one of the given options.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `outcome_level`
+
+- **Import:** `from application_sdk.testing import outcome_level`
+- **Signature:** `outcome_level(mock_logger: MagicMock)`
+- **Summary:** The level the latest outcome row was emitted at, or ``None`` if no row was.
+- **Defined in:** `application_sdk/testing/preflight.py`
+
+#### `outcome_rows`
+
+- **Import:** `from application_sdk.testing import outcome_rows`
+- **Signature:** `outcome_rows(mock_logger: MagicMock)`
+- **Summary:** Every outcome row a ``MagicMock`` gate logger was called with, oldest first.
+- **Defined in:** `application_sdk/testing/preflight.py`
+
 #### `parametrize_scenarios`
 
 - **Import:** `from application_sdk.testing.integration import parametrize_scenarios`
@@ -5205,6 +5247,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Collect the literal values a run is holding, for :func:`redact`'s ``secrets``.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
+#### `single_outcome`
+
+- **Import:** `from application_sdk.testing import single_outcome`
+- **Signature:** `single_outcome(mock_logger: MagicMock)`
+- **Summary:** The single outcome row from a ``MagicMock`` gate logger, asserting exactly one.
+- **Defined in:** `application_sdk/testing/preflight.py`
+
 #### `stale_version_pollers`
 
 - **Import:** `from application_sdk.testing.harness.temporal import stale_version_pollers`
@@ -5252,6 +5301,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.integration.fixtures import temporal_client`
 - **Signature:** `temporal_client(embedded_temporal: EmbeddedRuntime, ...)`
 - **Summary:** Connect to the embedded dev server, in its namespace.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `temporary_path`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import temporary_path`
+- **Signature:** `temporary_path(tmp_path_factory: pytest.TempPathFactory, integration_options: KitOptions) -> Iterator[Path]`
+- **Summary:** Point ``constants.TEMPORARY_PATH`` at a session temp dir, and yield it.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `validate_asset`
@@ -5419,6 +5475,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `Outcome: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `OUTCOME_LEVELS`
+
+- **Import:** `from application_sdk.testing import OUTCOME_LEVELS`
+- **Signature:** `OUTCOME_LEVELS: tuple[str, ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `PLACEHOLDER`
 
@@ -6197,6 +6260,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
   - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
   - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `Output`

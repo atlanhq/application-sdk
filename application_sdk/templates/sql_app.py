@@ -103,6 +103,7 @@ from application_sdk.errors import (
     AppError,
     FailureDetails,
     redact_secrets,
+    redact_wire_value,
     safe_traceback,
     sanitize_cause_repr,
 )
@@ -168,10 +169,6 @@ _PROBE_FAILURE_LEAVES: dict[str, type[AppError]] = {
 _BASE_ERROR_FIELD_NAMES: frozenset[str] = frozenset(
     f.name for f in dataclasses.fields(AppError)
 )
-
-#: Recursion bound for the evidence redaction walker. A pathologically deep
-#: hand-built structure must truncate rather than overflow the stack.
-_REDACT_MAX_DEPTH: int = 32
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -260,74 +257,6 @@ def _root_cause(exc: BaseException) -> BaseException:
     return exc
 
 
-def _redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) -> Any:
-    """Redact every string reachable inside a value bound for the wire.
-
-    Strings are redacted wherever they appear inside dict / list / tuple / set
-    structures; other non-string values are left untouched. Used for evidence
-    on both wire crossings — serialising a typed error
-    (:func:`SqlApp._redact_typed_error`) and rebuilding one from an envelope
-    (:func:`_error_from_failure_details`).
-    """
-    if isinstance(value, str):
-        return redact_secrets(value)
-    if isinstance(value, dict):
-        if seen is None:
-            seen = set()
-        # Guard the two ways a hand-built container can crash the probe — both
-        # escape the ``except ValidationError`` degrade, and a crashed activity
-        # is retried, stacking failed_login_attempts on the source (the cycle
-        # this classifier exists to break):
-        #   * a self-referential container recurses forever — prune a revisit
-        #     rather than render it (the same id-tracking pattern
-        #     ``_root_cause`` uses for the ``__cause__`` walk);
-        #   * a pathologically deep acyclic structure overflows the stack —
-        #     bound depth and truncate past it.
-        # ``seen`` is a mutable add/remove recursion stack shared along the
-        # path, so diamond-shared (acyclic) subcontainers are redacted, not
-        # falsely pruned, and no frozenset is allocated per level.
-        if id(value) in seen:
-            return None
-        if depth >= _REDACT_MAX_DEPTH:
-            return "…"
-        seen.add(id(value))
-        try:
-            return {k: _redact_wire_value(v, seen, depth + 1) for k, v in value.items()}
-        finally:
-            seen.discard(id(value))
-    if isinstance(value, (list, tuple, set, frozenset)):
-        if seen is None:
-            seen = set()
-        if id(value) in seen:
-            return None
-        if depth >= _REDACT_MAX_DEPTH:
-            return "…"
-        seen.add(id(value))
-        try:
-            redacted = [_redact_wire_value(v, seen, depth + 1) for v in value]
-        finally:
-            seen.discard(id(value))
-        if isinstance(value, tuple) and hasattr(type(value), "_fields"):
-            # A NamedTuple takes positional fields, not an iterable —
-            # ``type(value)(redacted)`` crashes a 2+-field one and silently
-            # retypes a 1-field one (its sole field becomes the redacted
-            # *list*). Rebuild with positional expansion so the shape survives.
-            try:
-                return type(value)(*redacted)
-            except Exception:  # noqa: BLE001 — see fallback below
-                return tuple(redacted)
-        try:
-            return type(value)(redacted)
-        except Exception:  # noqa: BLE001 — a connector-authored container
-            # subclass whose constructor raises (any type, not just
-            # TypeError/ValueError) must not crash through the degrade either;
-            # fall back to a plain container of the same shape. Values are
-            # redacted either way, and evidence serialises as JSON arrays
-            # regardless.
-            return tuple(redacted) if isinstance(value, tuple) else redacted
-    return value
-
-
 def _redact_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     """Redact every string reachable inside an evidence mapping's values.
 
@@ -335,7 +264,7 @@ def _redact_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     (:func:`secret_named_evidence_keys`); this handles secret-*carrying*
     values under any key.
     """
-    return {k: _redact_wire_value(v) for k, v in evidence.items()}
+    return {k: redact_wire_value(v) for k, v in evidence.items()}
 
 
 def _failure_details_degraded(err: AppError) -> FailureDetails | None:
@@ -839,7 +768,7 @@ class SqlApp(App):
         for f in dataclasses.fields(err):
             if f.name in _BASE_ERROR_FIELD_NAMES:
                 continue
-            setattr(err, f.name, _redact_wire_value(getattr(err, f.name)))
+            setattr(err, f.name, redact_wire_value(getattr(err, f.name)))
         return err
 
     @staticmethod

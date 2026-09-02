@@ -294,8 +294,22 @@ bad = secret_named_evidence_keys({"host": "db.internal", "api_key": "…"})
 ```
 
 The denylist is a name check, not a value check: it cannot see a credential sitting in an
-innocently-named key, or nested inside a dict or list value. Redact values yourself with
-`redact_secrets` before attaching them as evidence.
+innocently-named key, or nested inside a dict or list value. Redact values yourself before
+attaching them as evidence — `redact_secrets` for a single string, `redact_wire_value` for
+anything with structure:
+
+```python
+from application_sdk.errors import redact_wire_value
+
+# Walks dicts, lists, tuples and sets to any depth, redacting every string it
+# reaches and leaving the shape alone. Cycle- and depth-guarded, so a hostile
+# structure truncates rather than hanging the worker.
+safe = redact_wire_value({"dsn": "postgresql://u:p@host/db", "tags": ["pwd=hunter2"]})
+# {'dsn': 'postgresql://***@host/db', 'tags': ['pwd=***']}
+```
+
+Use it on anything handler-authored that crosses a wire: `message`, `suggested_action` and
+`evidence` are not redacted where they are built, unlike `FailureDetails.cause_repr`.
 
 ### Legacy error-code namespaces (backward-compat only)
 

@@ -402,6 +402,20 @@ class PreflightCheck(BaseModel):
             return self.error.suggested_action or ""
         return ""
 
+    def to_wire(self) -> dict[str, Any]:
+        """This check as the dict every consumer outside the SDK receives.
+
+        ``message`` is overwritten with :attr:`resolved_message`, so a failed
+        check's typed ``error`` wins over its deprecated ``message`` field and a
+        reader never has to apply that precedence itself.
+
+        Returns:
+            The check, JSON-mode dumped with unset fields dropped.
+        """
+        dumped = self.model_dump(mode="json", exclude_none=True)
+        dumped["message"] = self.resolved_message
+        return dumped
+
 
 class PreflightInput(BaseModel):
     """Input for the preflight_check handler operation."""

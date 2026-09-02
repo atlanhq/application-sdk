@@ -68,6 +68,7 @@ from sdk_loop_common import (
     usage_cost_usd,
     usage_total,
 )
+from sdk_loop_findings import audit_comment
 from sdk_loop_prep import (  # noqa: E402
     OUTCOME_UPDATED,
     PrepResult,
@@ -429,6 +430,36 @@ class ReviewOutcome:
     verdict_url: str = ""
 
 
+def audit_verdict_contract(verdict_comment: dict[str, Any] | None) -> list[str]:
+    """Check the model's own verdict comment against the renderer's contract.
+
+    Step 1 of the pr-loop migration runs `sdk_loop_findings` BEHIND the current
+    playbook: the reviewer still composes and posts the comment, and this
+    reports where that comment differs from what the renderer would have
+    guaranteed. It is the evidence that de-risks handing the renderer the job
+    for real — before anything on the approval path depends on it.
+
+    Deliberately non-fatal, and deliberately not a byte comparison. The comment
+    carries model prose no renderer reproduces, so only the part with one
+    correct answer is checked: the markers, the verdict token, and the
+    empty-Findings invariant. Failing a round on a diagnostic would make the
+    measurement cost a review.
+
+    Returns the violations so a caller can assert on them; the phase only
+    prints.
+    """
+    if verdict_comment is None:
+        return []
+    problems = audit_comment(verdict_comment.get("body") or "")
+    if not problems:
+        print("verdict contract: clean")
+        return []
+    print(f"::warning::verdict contract: {len(problems)} violation(s)")
+    for problem in problems:
+        print(f"  - {problem}")
+    return problems
+
+
 def interpret_review(
     result: AgentResult,
     verdict_comment: dict[str, Any] | None,
@@ -773,11 +804,11 @@ def main(argv: list[str] | None = None) -> int:
             ).stdout
             or "[]"
         )
-        outcome = interpret_review(
-            result,
-            newest_verdict(comments, answers_trigger=os.environ.get("COMMENT_ID")),
-            state.live,
+        verdict_comment = newest_verdict(
+            comments, answers_trigger=os.environ.get("COMMENT_ID")
         )
+        outcome = interpret_review(result, verdict_comment, state.live)
+        audit_verdict_contract(verdict_comment)
         counts = opencode_usage(workspace)
         usage, cost = format_usage(counts), usage_total(counts)
         usd = usage_cost_usd(counts, REVIEW_MODEL)

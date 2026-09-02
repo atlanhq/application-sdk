@@ -66,6 +66,20 @@ class AppRegistrationMissingError(PreconditionError):
 
 
 @dataclass(kw_only=True)
+class AppNameMismatchError(PreconditionError):
+    """``ATLAN_APPLICATION_NAME`` disagrees with the App's registered name."""
+
+    code: ClassVar[str] = "PRECONDITION_APP_NAME_MISMATCH"
+
+
+@dataclass(kw_only=True)
+class InfrastructureReplacedError(PreconditionError):
+    """The global infrastructure context is no longer the one the kit installed."""
+
+    code: ClassVar[str] = "PRECONDITION_INFRASTRUCTURE_REPLACED"
+
+
+@dataclass(kw_only=True)
 class GoldenLayoutError(InvalidInputError):
     """A declared golden-corpus layout is self-inconsistent."""
 

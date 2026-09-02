@@ -1,0 +1,132 @@
+# Which specialists this lane dispatches, and how deep they go.
+#
+# THIS FILE IS NEVER READ BY A MODEL. The runner resolves the route before the
+# reviewer starts and tells each specialist only which one it is.
+#
+# ---------------------------------------------------------------------------
+# Why this file exists rather than a table in a playbook
+# ---------------------------------------------------------------------------
+#
+# The routing this lane used until now lived as a markdown table in the OTHER
+# lane's playbook, mirrored into a Python dict, with a drift check parsing the
+# markdown to keep them in step. That made the old playbook the author of the
+# new lane's behaviour: retiring or restructuring it would silently change who
+# reviews what, and the redesign cannot claim to have replaced a document it
+# still takes instructions from.
+#
+# So this lane owns its routing outright. The old table stays where it is and
+# keeps governing the sandbox lane; nothing here is derived from it.
+#
+# ---------------------------------------------------------------------------
+# What changed in the move, and why
+# ---------------------------------------------------------------------------
+#
+# The scope buckets are kept, because they encode real knowledge about this
+# repository's layout that no principle replaces — `packages/conformance/`
+# genuinely does need a different reader than `application_sdk/`.
+#
+# `depth` is new. The old table routed on scope alone, so a 40-line change and
+# a 4,000-line change in the same directory got an identical review. Inspection
+# research is consistent and unkind here: defect detection runs 70-90% at
+# 200-400 changed lines, 87% under 100, and collapses to 28% past 1,000. A
+# reviewer handed a 3,000-line diff and one budget does not escape that curve by
+# being a model — it fails the same way, more confidently. Splitting the pass
+# per module keeps each unit inside the range where finding things actually
+# works.
+
+version: 1
+
+# --------------------------------------------------------------------------
+# scope -> specialists
+# --------------------------------------------------------------------------
+#
+# `agents` is the set the scope always dispatches. `also` is added when the
+# condition holds — these were special cases buried in Python before, which
+# meant the routing could not be read off any single artefact.
+
+routes:
+  full:
+    agents: [correctness, quality, structure]
+    also:
+      reachability: always
+      ci-config: when_touches_config
+      conformance: when_touches_conformance
+    why: >-
+      A change inside application_sdk/ is the case every other route is a
+      narrowing of. Reachability rides along because the severity of everything
+      the other three find depends on who calls it.
+
+  minor:
+    agents: [correctness]
+    why: >-
+      The fast path. Correctness alone rather than nothing, because guardrail
+      coverage — determinism, contract breaks, secrets — must not depend on a
+      diff being large enough to earn a full review.
+
+  mixed-sdk-toolkit:
+    agents: [correctness, quality, structure, toolkit-review]
+    also:
+      reachability: always
+    why: >-
+      Touches both the SDK and the generator that 80+ repos regenerate from, so
+      it needs both readings; neither subsumes the other.
+
+  contract-toolkit:
+    agents: [toolkit-review]
+    why: >-
+      Judged by what its generated artifacts become downstream, which is a
+      different question from whether the toolkit's own code is sound.
+
+  tests-only:
+    agents: [quality]
+    why: >-
+      The whole diff is tests, so the only question is whether they could fail.
+
+  tests-focused:
+    agents: [quality, correctness]
+    why: >-
+      Mostly tests with some source. Correctness joins because a test change
+      accompanying a source change is exactly where a hollow test hides.
+
+  conformance-only:
+    agents: [conformance]
+    also:
+      ci-config: when_touches_config
+    why: >-
+      Reviewing the detectors that judge every other repo. A defect here is a
+      fleet defect.
+
+  config-only:
+    agents: [ci-config]
+    why: >-
+      Workflows, actions and dependencies — the machinery that decides whether
+      anything else is enforced at all.
+
+  docs-only:
+    agents: []
+    why: >-
+      No specialist. Dispatching one produces prose findings on prose, which is
+      the purest form of the effective false positive: correct, unactioned, and
+      corrosive to trust in everything else the lane says.
+
+# --------------------------------------------------------------------------
+# depth — how much diff one pass may carry
+# --------------------------------------------------------------------------
+#
+# Evaluated top to bottom; the first rule whose ceiling the diff fits under
+# wins. `per_module` runs the scope's specialists once per changed module and
+# then sweeps for classes across the results, so no single pass exceeds the
+# range where detection holds up.
+
+depth:
+  - max_changed_lines: 400
+    mode: single_pass
+    why: >-
+      Inside the band where inspection research puts detection at 70-90%.
+
+  - max_changed_lines: null
+    mode: per_module
+    why: >-
+      Past ~400 changed lines a single pass degrades toward 28% and the review
+      returns a confident verdict over code it did not really read. Splitting is
+      the only lever that does not require the author to split the PR.

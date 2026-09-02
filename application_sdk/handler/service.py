@@ -57,6 +57,7 @@ from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app.entrypoint import canonical_workflow_type
+from application_sdk.common.dispatch import resolve_dispatch_workflow_id
 from application_sdk.common.task_queue import (
     resolve_manifest_tokens,
     task_queue_from_env,
@@ -1194,23 +1195,21 @@ def _register_workflow_routes(
 
             input_data = input_type.model_validate(body)
 
-            if explicit_workflow_id:
-                workflow_id = explicit_workflow_id
-            else:
-                config_hash = input_data.config_hash()
-                workflow_id = f"{app_name}-{config_hash}-{uuid4().hex[:8]}"
-
             # Populate framework-managed fields on input_data before Temporal dispatch.
             # These fields are declared on Input (contracts/base.py) but the /start
             # handler constructs input_data before generating them — so they must be
             # injected after the fact.
             #
-            # workflow_id: always set by the framework (caller value is popped at
-            #   line 607 and used only if explicitly provided).
+            # workflow_id: resolved and stamped by the shared dispatch helper —
+            #   the same body the executor backend uses, so the two dispatch
+            #   paths cannot drift. The caller value is popped from the body
+            #   before validation and used only if explicitly provided.
             # correlation_id: respect caller-supplied value if present (docstring:
             #   "Caller-supplied correlation ID for tracing across systems"), only
             #   generate a UUID when the caller didn't provide one.
-            input_data.workflow_id = workflow_id
+            workflow_id = resolve_dispatch_workflow_id(
+                input_data, app_name, explicit_workflow_id=explicit_workflow_id or ""
+            )
 
             correlation_id = input_data.correlation_id or str(uuid4())
             input_data.correlation_id = correlation_id

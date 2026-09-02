@@ -101,8 +101,35 @@ RELEASE_CHANNEL = os.getenv("ATLAN_RELEASE_CHANNEL", "")
 APP_SDK_VERSION = os.getenv("ATLAN_SDK_VERSION", "")
 #: App type from Global Marketplace (connector, system, etc.)
 APP_TYPE = os.getenv("ATLAN_APP_TYPE", "")
+#: Global Marketplace's own id for this app — the card's ``installation_id``. One
+#: per app and stable across releases and tenants, unlike RELEASE_ID. Empty on a
+#: deployment whose chart does not stamp it yet, which every reader must tolerate.
+APP_ID = os.getenv("ATLAN_APP_ID", "")
 #: Release publication timestamp from Global Marketplace (ISO 8601)
 PUBLISHED_AT = os.getenv("ATLAN_PUBLISHED_AT", "")
+# Preflight-results store (CONNECT-1142). The system-workflows app holds the only
+# writer principal for the tenant's Iceberg namespace, so apps post a row there.
+#: Where the gate posts its verdict — the whole URL, path included, and never
+#: composed from parts here. The route belongs to the app that serves it, so the
+#: SDK holding a base address and appending a path would hardcode another repo's
+#: route layout and ship it stale the day that entrypoint's prefix changes.
+#:
+#: The default is the in-cluster address the platform's own resolution rule
+#: produces for that app (``http://{app}.{app}-app.svc.cluster.local:8000``),
+#: pinned rather than configured: the app cannot be renamed without moving the
+#: Iceberg namespace its table lives in, so the name — and therefore the host —
+#: cannot change. Overridable because the SDK also runs off-cluster, where it
+#: must be pointable at a stub, or at nothing.
+PREFLIGHT_RESULTS_ENDPOINT = os.getenv(
+    "ATLAN_PREFLIGHT_RESULTS_ENDPOINT",
+    "http://system-workflows.system-workflows-app.svc.cluster.local:8000"
+    "/continuous-preflight/check-results",
+)
+#: Bound on that POST. Generous: the app opens a Polaris catalog, may create the
+#: table and commits a Parquet file. Nothing waits on it.
+PREFLIGHT_RESULTS_TIMEOUT_SECONDS = float(
+    os.getenv("ATLAN_PREFLIGHT_RESULTS_TIMEOUT_SECONDS", "30")
+)
 # REMOVED: APP_DASHBOARD_HOST, APP_DASHBOARD_PORT, SQL_SERVER_MIN_VERSION,
 # SQL_QUERIES_PATH — unused internally, v2-only external consumers.
 
