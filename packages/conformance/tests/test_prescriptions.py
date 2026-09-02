@@ -2606,17 +2606,23 @@ def test_p013_silent_when_a_class_shadows_its_own_generated_base(
     own name. That is never literal self-inheritance — it is an import of a
     same-named class the bare-name registry cannot hold twice — so the chain is
     unresolvable, not a proven non-Input.
+
+    Scan order is load-bearing: ``by_name`` is first-wins, so ``contracts.py``
+    must be registered before ``generated.py``. Otherwise the generated
+    ``AppInputContract(Input)`` occupies the name, the annotation resolves
+    ``True`` against it, and neither file-local shadowing nor ``same_name_base``
+    runs — the old resolver is silent on that fixture too.
     """
     files = {
-        "generated.py": (
-            "from application_sdk.contracts import Input\n"
-            "class AppInputContract(Input):\n"
-            "    connection_id: str = ''\n"
-        ),
         "contracts.py": (
             "from generated import AppInputContract as _GeneratedAppInputContract\n"
             "class AppInputContract(_GeneratedAppInputContract):\n"
             "    include_filter: str = ''\n"
+        ),
+        "generated.py": (
+            "from application_sdk.contracts import Input\n"
+            "class AppInputContract(Input):\n"
+            "    connection_id: str = ''\n"
         ),
         "connector.py": (
             _APP_IMPORTS + "from application_sdk.contracts import Output\n"
