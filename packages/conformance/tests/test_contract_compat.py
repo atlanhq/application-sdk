@@ -955,14 +955,63 @@ def test_b005_narrowing_is_still_a_break(tmp_path: Path) -> None:
     assert "B005" in _ids(findings)
 
 
-def test_b005_moving_off_any_is_not_a_break(tmp_path: Path) -> None:
+def test_b005_nested_list_widening_is_not_a_break(tmp_path: Path) -> None:
+    """list[str] -> list[str | None] is producer-safe; every old item still validates."""
+    findings = _scan_typed(tmp_path, "list[str | None]", "list[str]")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_nested_list_narrowing_is_still_a_break(tmp_path: Path) -> None:
+    """The inverse of nested list widening must keep firing."""
+    findings = _scan_typed(tmp_path, "list[str]", "list[str | None]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_nested_dict_widening_is_not_a_break(tmp_path: Path) -> None:
+    """dict[str, int] -> dict[str, int | None] is producer-safe on values."""
+    findings = _scan_typed(tmp_path, "dict[str, int | None]", "dict[str, int]")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_nested_dict_narrowing_is_still_a_break(tmp_path: Path) -> None:
+    """The inverse of nested dict widening must keep firing."""
+    findings = _scan_typed(tmp_path, "dict[str, int]", "dict[str, int | None]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_moving_off_any_in_place_is_not_a_break(tmp_path: Path) -> None:
     """P001 refuses Any on a contract field at class-definition time.
 
-    So the app is *required* to move to a concrete type, and B005 forbidding it
-    was a direct contradiction between two block-tier rules.
+    Replacing Any in the same outer shape is the required migration, not a
+    break. A constructor change off Any is still a break — see the fire tests
+    below.
     """
-    findings = _scan_typed(tmp_path, "ConnectionRef | None", "dict[str, Any] | None")
+    findings = _scan_typed(tmp_path, "dict[str, str] | None", "dict[str, Any] | None")
     assert "B005" not in _ids(findings)
+
+
+def test_b005_nested_any_replaced_in_place_is_not_a_break(tmp_path: Path) -> None:
+    """list[Any] -> list[str] keeps the constructor; only the Any slot changes."""
+    findings = _scan_typed(tmp_path, "list[str]", "list[Any]")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_constructor_change_off_any_still_fires(tmp_path: Path) -> None:
+    """dict[str, Any] -> list[str] is a payload break, not a P001 migration."""
+    findings = _scan_typed(tmp_path, "list[str]", "dict[str, Any]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_constructor_change_off_any_union_still_fires(tmp_path: Path) -> None:
+    """Same constructor-swap, with a None arm that used to look like 'off Any'."""
+    findings = _scan_typed(tmp_path, "ConnectionRef | None", "dict[str, Any] | None")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_nested_narrowing_off_any_still_fires(tmp_path: Path) -> None:
+    """Replacing an inner container that held Any, not Any itself, is a break."""
+    findings = _scan_typed(tmp_path, "dict[str, str]", "dict[str, list[Any]]")
+    assert "B005" in _ids(findings)
 
 
 def test_b005_a_swap_between_two_concrete_types_still_fires(tmp_path: Path) -> None:
@@ -985,6 +1034,31 @@ def test_split_union_does_not_tear_nested_brackets() -> None:
         "dict[str, int | None]",
         "None",
     }
+
+
+def test_is_widening_recurses_into_list_and_dict() -> None:
+    from conformance.suite.checks.deprecation._contract_compat import _is_widening
+
+    assert _is_widening("list[str]", "list[str | None]")
+    assert not _is_widening("list[str | None]", "list[str]")
+    assert _is_widening("dict[str, int]", "dict[str, int | None]")
+    assert not _is_widening("dict[str, int | None]", "dict[str, int]")
+
+
+def test_any_replaced_in_place_requires_the_same_constructor() -> None:
+    from conformance.suite.checks.deprecation._contract_compat import (
+        _any_replaced_in_place,
+        _parse_canonical,
+    )
+
+    def ok(old: str, new: str) -> bool:
+        return _any_replaced_in_place(_parse_canonical(old), _parse_canonical(new))
+
+    assert ok("dict[str, Any]", "dict[str, str]")
+    assert ok("dict[str, Any] | None", "dict[str, str] | None")
+    assert not ok("dict[str, Any]", "list[str]")
+    assert not ok("dict[str, Any] | None", "ConnectionRef | None")
+    assert not ok("dict[str, list[Any]]", "dict[str, str]")
 
 
 _EP_INHERITED = """\
