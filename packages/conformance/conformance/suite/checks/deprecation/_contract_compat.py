@@ -14,6 +14,7 @@ resolved live fields against the committed ledger.
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
@@ -59,22 +60,162 @@ def _split_union(canonical: str) -> frozenset[str]:
     return frozenset(m.strip() for m in members if m.strip())
 
 
+# Structural view of a canonical type string. Canonical forms are produced by
+# ast.unparse after _canonical_type, so they round-trip through ast.parse.
+
+
+@dataclass(frozen=True, slots=True)
+class _TName:
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class _TApp:
+    ctor: str
+    args: tuple[_TNode, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _TUnion:
+    members: frozenset[_TNode]
+
+
+_TNode = _TName | _TApp | _TUnion
+
+
+def _ctor_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    return ast.unparse(node)
+
+
+def _node_from_ast(node: ast.expr) -> _TNode:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        parts: list[_TNode] = []
+
+        def flatten(n: ast.expr) -> None:
+            if isinstance(n, ast.BinOp) and isinstance(n.op, ast.BitOr):
+                flatten(n.left)
+                flatten(n.right)
+            else:
+                parts.append(_node_from_ast(n))
+
+        flatten(node)
+        members: set[_TNode] = set()
+        for part in parts:
+            if isinstance(part, _TUnion):
+                members.update(part.members)
+            else:
+                members.add(part)
+        if len(members) == 1:
+            return next(iter(members))
+        return _TUnion(frozenset(members))
+    if isinstance(node, ast.Subscript):
+        sl = node.slice
+        args = (
+            tuple(_node_from_ast(e) for e in sl.elts)
+            if isinstance(sl, ast.Tuple)
+            else (_node_from_ast(sl),)
+        )
+        return _TApp(_ctor_name(node.value), args)
+    if isinstance(node, ast.Name):
+        return _TName(node.id)
+    if isinstance(node, ast.Constant) and node.value is None:
+        return _TName("None")
+    if isinstance(node, ast.Constant) and node.value is Ellipsis:
+        return _TName("...")
+    return _TName(ast.unparse(node))
+
+
+def _parse_canonical(canonical: str) -> _TNode:
+    try:
+        tree = ast.parse(canonical, mode="eval")
+    except SyntaxError:
+        return _TName(canonical)
+    return _node_from_ast(tree.body)
+
+
+def _contains_any(node: _TNode) -> bool:
+    if isinstance(node, _TName):
+        return node.name == "Any"
+    if isinstance(node, _TApp):
+        return any(_contains_any(a) for a in node.args)
+    return any(_contains_any(m) for m in node.members)
+
+
+def _is_subtype(old: _TNode, new: _TNode) -> bool:
+    """True when every payload that validated as *old* still validates as *new*.
+
+    ``Any`` is not treated as a top type: moving onto ``Any`` is not a
+    widening (P001 forbids it as a destination, and it is not producer-safe
+    in the other direction either).
+    """
+    if old == new:
+        return True
+    if isinstance(old, _TUnion):
+        return all(_is_subtype(m, new) for m in old.members)
+    if isinstance(new, _TUnion):
+        return any(_is_subtype(old, m) for m in new.members)
+    if isinstance(old, _TApp) and isinstance(new, _TApp):
+        if old.ctor != new.ctor or len(old.args) != len(new.args):
+            return False
+        return all(_is_subtype(a, b) for a, b in zip(old.args, new.args, strict=True))
+    return False
+
+
 def _is_widening(old: str, new: str) -> bool:
     """True when *new* accepts everything *old* did, and more.
 
-    A widened field cannot break a producer: every payload that validated
-    before still validates. The detector cannot otherwise tell this from a
-    narrowing, and has flagged widenings as breaks.
+    Recurses into parameterized containers, so ``list[str]`` →
+    ``list[str | None]`` is a widening the same way ``str`` → ``str | None``
+    is. A top-level union-set comparison would treat those as unrelated
+    strings and flag a producer-safe change as a break.
     """
-    old_members, new_members = _split_union(old), _split_union(new)
-    return old_members < new_members
+    old_n, new_n = _parse_canonical(old), _parse_canonical(new)
+    return old_n != new_n and _is_subtype(old_n, new_n)
 
 
-def _mentions_any(canonical: str) -> bool:
-    """True when ``Any`` appears as a type token in *canonical*."""
-    import re as _re
+def _union_members(node: _TNode) -> frozenset[_TNode]:
+    if isinstance(node, _TUnion):
+        return node.members
+    return frozenset({node})
 
-    return bool(_re.search(r"\bAny\b", canonical))
+
+def _match_union(old_ms: list[_TNode], new_ms: list[_TNode]) -> bool:
+    """True when every old arm pairs with a distinct new arm (Any may match any)."""
+    if not old_ms:
+        return not new_ms
+    o, rest = old_ms[0], old_ms[1:]
+    for i, n in enumerate(new_ms):
+        if _any_replaced_in_place(o, n) and _match_union(
+            rest, new_ms[:i] + new_ms[i + 1 :]
+        ):
+            return True
+    return False
+
+
+def _any_replaced_in_place(old: _TNode, new: _TNode) -> bool:
+    """True when *new* is *old* with ``Any`` replaced at the same positions.
+
+    Same constructor and same union arms required: ``dict[str, Any]`` →
+    ``dict[str, str]`` is the P001-required migration, but ``dict[str, Any]``
+    → ``list[str]`` is a payload break.
+    """
+    if isinstance(old, _TName) and old.name == "Any":
+        return True
+    if isinstance(old, _TUnion) or isinstance(new, _TUnion):
+        old_ms, new_ms = list(_union_members(old)), list(_union_members(new))
+        if len(old_ms) != len(new_ms):
+            return False
+        return _match_union(old_ms, new_ms)
+    if isinstance(old, _TApp) and isinstance(new, _TApp):
+        if old.ctor != new.ctor or len(old.args) != len(new.args):
+            return False
+        return all(
+            _any_replaced_in_place(a, b)
+            for a, b in zip(old.args, new.args, strict=True)
+        )
+    return old == new
 
 
 def _retype_is_compatible(
@@ -91,11 +232,16 @@ def _retype_is_compatible(
             "the type was widened, so every payload that validated against the "
             "recorded type still validates"
         )
-    if _mentions_any(ledger_type) and not _mentions_any(live_type):
+    old_n, new_n = _parse_canonical(ledger_type), _parse_canonical(live_type)
+    if (
+        _contains_any(old_n)
+        and not _contains_any(new_n)
+        and _any_replaced_in_place(old_n, new_n)
+    ):
         return (
             "the recorded type contained Any, which payload-safety (P001) "
-            "refuses at class-definition time — moving to a concrete type is "
-            "required, not optional"
+            "refuses at class-definition time — moving to a concrete type in "
+            "the same outer shape is required, not optional"
         )
     return None
 
@@ -238,9 +384,10 @@ def scan_contract_compat(
                                 f"Contract field '{class_node.name}.{lf.field}' "
                                 f"(ledger type: '{lf.type}', status: '{lf.status}') "
                                 "was removed from the contract. Entrypoint contract "
-                                "fields are permanent — mark it 'deprecated' or "
-                                "'sunset' and keep it. Removal breaks every consumer "
-                                "that already serializes this field. "
+                                "fields are permanent — mark it 'deprecated' and keep "
+                                "it, or mark it 'sunset' to retire it. An unmarked "
+                                "removal breaks every consumer that already serializes "
+                                "this field. "
                                 "Suppress with '# conformance: ignore[B005] <reason>' "
                                 "only if this contract has no deployed consumers."
                             ),
