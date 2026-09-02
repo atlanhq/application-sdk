@@ -1687,6 +1687,104 @@ class TestCancelledAttemptSuppression:
         assert _outcome_event(m) is None
 
 
+class TestAnAbandonedAttemptWritesNothingAnywhere:
+    """The suppression covers the store, not only the log.
+
+    Gap 1 was an orphaned attempt corrupting the outcome *series*; once the
+    verdict is also persisted (CONNECT-1142) the same attempt can corrupt the
+    *store* the same way — appending a stale verdict beside the live attempt's
+    row. These assert the converse of "an outcome row implies a store row":
+    no row means no write, on both abandonment signals.
+    """
+
+    @staticmethod
+    def _not_ready() -> PreflightOutput:
+        return PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+
+    async def test_an_attempt_past_its_deadline_does_not_persist(self) -> None:
+        gate = _verdict_gate(self._not_ready(), enforce=False)
+        dead_attempt = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=300),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
+            mock.patch(f"{_GATE}.persist_check_result") as persist,
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+        persist.assert_not_called()
+
+    async def test_a_cancelled_attempt_does_not_persist(self) -> None:
+        gate = _verdict_gate(self._not_ready(), enforce=False)
+        inside_deadline = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=inside_deadline),
+            mock.patch(f"{_GATE}.activity.is_cancelled", return_value=True),
+            mock.patch(f"{_GATE}.persist_check_result") as persist,
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+        persist.assert_not_called()
+
+    async def test_an_abandoned_proceed_does_not_persist(self) -> None:
+        # The READY path too: it reaches _emit_outcome by a different branch,
+        # and a stale "this source is fine" row is the worse one to leave.
+        gate = _verdict_gate(
+            PreflightOutput(status=PreflightStatus.READY, checks=[]), enforce=False
+        )
+        dead_attempt = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=300),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
+            mock.patch(f"{_GATE}.persist_check_result") as persist,
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+        persist.assert_not_called()
+
+    async def test_an_abandoned_unverifiable_source_does_not_persist(self) -> None:
+        # And the no_verdict path, the third _emit_outcome call site.
+        class _Crashing(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise RuntimeError("driver blew up")
+
+        # attempts=1 so this abandoned attempt is also the final one: on a
+        # non-final attempt _no_verdict defers by raising and never reaches the
+        # emit site, which would make the assertion below vacuous.
+        gate = build_preflight_gate_activity(
+            _Crashing(), app_name="myapp", enforce=False, attempts=1
+        )
+        dead_attempt = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=300),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
+            mock.patch(f"{_GATE}.persist_check_result") as persist,
+            mock.patch(_LOGGER) as m,
+        ):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        assert _outcome_event(m) is None
+        persist.assert_not_called()
+
+
 class TestTheVerdictIsPersisted:
     """Every outcome the gate emits also leaves a row in the tenant's store.
 

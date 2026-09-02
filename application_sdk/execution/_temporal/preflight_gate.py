@@ -1564,12 +1564,12 @@ def build_preflight_gate_activity(
         def _emit_outcome(
             outcome: str,
             reason: str,
-            checks: list[PreflightCheck],
+            verdict: PreflightOutput,
             classification: str,
             audience: str | None = None,
             exc_info: BaseException | None = None,
         ) -> None:
-            """Emit the gate's one queryable row.
+            """Emit the gate's one queryable row, and persist the same verdict.
 
             Single site for all three activity-side outcomes so the attribute set
             cannot drift between them — a consumer that finds ``gate_duration_ms``
@@ -1591,7 +1591,17 @@ def build_preflight_gate_activity(
             ``check_matrix``: per-check durations are handler-authored and a
             handler abandoned at ``start_to_close`` keeps running and reports a
             duration past the budget.
+
+            Takes the whole ``verdict`` rather than its ``checks`` so
+            :func:`_persist` runs here too, behind the same liveness guard.
+            The store and the log are two views of one outcome; an abandoned
+            attempt that skipped the row but still appended a stale verdict
+            next to the live attempt's row would corrupt the store exactly the
+            way CONNECT-1170 gap 1 corrupted the event series. Coupling them in
+            one function is what makes "no row, no store write" unmissable at
+            the three call sites instead of a rule each has to remember.
             """
+            checks = verdict.checks
             if not _attempt_is_live():
                 # WARNING, not DEBUG: a handler outrunning its Temporal deadline
                 # is a real anomaly, and at DEBUG a suppressed orphan would be
@@ -1634,12 +1644,14 @@ def build_preflight_gate_activity(
                 },
                 **extra,
             )
+            _persist(verdict)
 
         def _persist(verdict: PreflightOutput) -> None:
             """Append this verdict to the tenant's preflight-results store.
 
-            Called once beside every emitted outcome, so "an outcome row implies a
-            store row" is one rule rather than three call sites drifting apart.
+            Called from :func:`_emit_outcome` only, so "an outcome row implies a
+            store row" — and its converse, no row means no write — holds by
+            construction rather than by three call sites remembering it.
             Scheduled and abandoned — it never blocks, and its response is not
             recorded (CONNECT-1142).
 
@@ -1694,7 +1706,7 @@ def build_preflight_gate_activity(
                 if enforce
                 else PreflightRowOutcome.WOULD_BLOCK.value,
                 block_error.details[0].code,
-                unverifiable.checks,
+                unverifiable,
                 CLASSIFICATION_SOURCE_UNVERIFIABLE,
                 audience=block_error.details[0].audience.value,
                 # The exception, not exc_info=True: on the budget-overrun path this
@@ -1703,7 +1715,6 @@ def build_preflight_gate_activity(
                 # nothing — on the one path where the cause is the whole diagnostic.
                 exc_info=exc,
             )
-            _persist(unverifiable)
             if enforce:
                 raise block_error
             return unverifiable
@@ -1904,11 +1915,10 @@ def build_preflight_gate_activity(
                     if enforce
                     else PreflightRowOutcome.WOULD_BLOCK.value,
                     block_error.details[0].code,
-                    result.checks,
+                    result,
                     CLASSIFICATION_VERDICT,
                     audience=block_error.details[0].audience.value,
                 )
-                _persist(result)
                 if enforce:
                     raise block_error
                 # Soft: the verdict stays honest NOT_READY; the gate just does not
@@ -1917,10 +1927,9 @@ def build_preflight_gate_activity(
             _emit_outcome(
                 PreflightRowOutcome.PROCEEDED.value,
                 result.status.value,
-                result.checks,
+                result,
                 CLASSIFICATION_VERDICT,
             )
-            _persist(result)
             return result
         finally:
             await stop_heartbeat_task(
