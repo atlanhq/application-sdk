@@ -2822,3 +2822,37 @@ def test_p001_ignores_private_any_fields(tmp_path: Path) -> None:
         "    name: str = ''\n"
     )
     assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == []
+
+
+def test_p001_ignores_public_classvar_any(tmp_path: Path) -> None:
+    """Runtime skips ClassVar regardless of the field name — not a payload field."""
+    src = (
+        "from typing import Any, ClassVar\n"
+        "class MyInput(Input):\n"
+        "    schema_marker: ClassVar[Any] = None\n"
+        "    name: str = ''\n"
+    )
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == []
+
+
+def test_p001_fires_on_falsy_optout_with_any_field(tmp_path: Path) -> None:
+    """A falsy keyword is an opt-back-in: runtime still validates and raises."""
+    src = (
+        "from typing import Any\n"
+        "class MyInput(Input, allow_unbounded_fields=False):\n"
+        "    payload: dict[str, Any] = {}\n"
+    )
+    findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
+    assert len(findings) == 1
+    assert "PayloadSafetyError" in findings[0].message
+
+
+def test_p001_fires_on_none_optout_with_any_field(tmp_path: Path) -> None:
+    src = (
+        "from typing import Any\n"
+        "class MyInput(Input, allow_unbounded_fields=None):\n"
+        "    payload: Any = None\n"
+    )
+    findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
+    assert len(findings) == 1
+    assert "does NOT set" in findings[0].message

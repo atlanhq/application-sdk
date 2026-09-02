@@ -28,6 +28,50 @@ from conformance.suite.schema.findings import Finding
 _CONTRACT_BASES = frozenset({"Input", "Output"})
 
 
+def _simple_name(node: ast.expr | None) -> str | None:
+    """Bare or dotted terminal name (``Any``, ``typing.Any`` → ``Any``)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _annotated_arg(node: ast.expr | None) -> ast.expr | None:
+    """Inner type of ``Annotated[T, ...]``, or ``None`` if *node* is not that."""
+    if not isinstance(node, ast.Subscript) or _simple_name(node.value) != "Annotated":
+        return None
+    sl = node.slice
+    if isinstance(sl, ast.Tuple) and sl.elts:
+        return sl.elts[0]
+    return sl
+
+
+def _unwrap_annotated(node: ast.expr | None) -> ast.expr | None:
+    """Strip leading ``Annotated[...]`` wrappers, matching runtime ``get_origin``."""
+    while node is not None:
+        inner = _annotated_arg(node)
+        if inner is None:
+            return node
+        node = inner
+    return node
+
+
+def _is_classvar_annotation(annotation: ast.expr | None) -> bool:
+    """True if the annotation is ``ClassVar`` / ``ClassVar[...]`` (any form).
+
+    Runtime ``validate_payload_safety`` skips ``ClassVar`` regardless of the
+    field name — unwrap ``Annotated`` first so ``Annotated[ClassVar[Any], ...]``
+    is not a false positive either.
+    """
+    node = _unwrap_annotated(annotation)
+    if node is None:
+        return False
+    if isinstance(node, ast.Subscript):
+        return _simple_name(node.value) == "ClassVar"
+    return _simple_name(node) == "ClassVar"
+
+
 def _mentions_any(node: ast.expr | None) -> bool:
     """True if ``Any`` appears anywhere in an annotation.
 
@@ -46,13 +90,18 @@ def _mentions_any(node: ast.expr | None) -> bool:
 
 
 def _any_typed_fields(node: ast.ClassDef) -> list[str]:
-    """Names of annotated class fields whose type mentions ``Any``."""
+    """Names of annotated class fields whose type mentions ``Any``.
+
+    Mirrors ``validate_payload_safety``: private names and ``ClassVar``
+    annotations are not payload fields, so they must not trip the inverse.
+    """
     return [
         stmt.target.id
         for stmt in node.body
         if isinstance(stmt, ast.AnnAssign)
         and isinstance(stmt.target, ast.Name)
         and not stmt.target.id.startswith("_")
+        and not _is_classvar_annotation(stmt.annotation)
         and _mentions_any(stmt.annotation)
     ]
 
@@ -78,6 +127,11 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
         self._findings: list[Finding] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        # Do not couple the two checks through for/else: a falsy literal
+        # (False/None/0/"") is a genuine opt-back-in at runtime
+        # (``if allow_unbounded_fields:`` is false, so validation still
+        # runs and raises PayloadSafetyError). The inverse must still fire.
+        opted_out = False
         for kw in node.keywords:
             if kw.arg != "allow_unbounded_fields":
                 continue
@@ -85,7 +139,7 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             # __init_subclass__ does ``if allow_unbounded_fields:``.  So
             # ``=True``, ``=1`` and dynamic values (``=FLAG``, ``=(expr)``) all
             # opt out.  Only an explicit literal-falsy value (False/None/0/"")
-            # is a genuine opt-back-in and must NOT be flagged.
+            # is a genuine opt-back-in and must NOT be flagged as an opt-out.
             if isinstance(kw.value, ast.Constant) and not kw.value.value:
                 break
             self._findings.append(
@@ -104,8 +158,9 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
                     directives=self._directives,
                 )
             )
+            opted_out = True
             break
-        else:
+        if not opted_out:
             self._check_missing_optout(node)
         self.generic_visit(node)
 
