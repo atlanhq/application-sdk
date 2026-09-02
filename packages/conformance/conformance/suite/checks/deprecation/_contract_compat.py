@@ -38,6 +38,68 @@ from ._ledger_schema import ContractField, ContractLedger, regen_command
 # ── Main scan function ────────────────────────────────────────────────────────
 
 
+def _split_union(canonical: str) -> frozenset[str]:
+    """Union members of a canonical type string, split at bracket depth 0.
+
+    ``"dict[str, Any] | None"`` -> ``{"dict[str, Any]", "None"}``. Splitting
+    naively on ``|`` would tear ``dict[str, int | None]`` apart.
+    """
+    members, depth, cur = [], 0, ""
+    for ch in canonical:
+        if ch in "[(":
+            depth += 1
+        elif ch in "])":
+            depth -= 1
+        if ch == "|" and depth == 0:
+            members.append(cur)
+            cur = ""
+            continue
+        cur += ch
+    members.append(cur)
+    return frozenset(m.strip() for m in members if m.strip())
+
+
+def _is_widening(old: str, new: str) -> bool:
+    """True when *new* accepts everything *old* did, and more.
+
+    A widened field cannot break a producer: every payload that validated
+    before still validates. The detector cannot otherwise tell this from a
+    narrowing, and has flagged widenings as breaks.
+    """
+    old_members, new_members = _split_union(old), _split_union(new)
+    return old_members < new_members
+
+
+def _mentions_any(canonical: str) -> bool:
+    """True when ``Any`` appears as a type token in *canonical*."""
+    import re as _re
+
+    return bool(_re.search(r"\bAny\b", canonical))
+
+
+def _retype_is_compatible(
+    ledger_type: str, live_type: str, *, inherited: bool
+) -> str | None:
+    """Why this retype is not a break, or None if it genuinely might be."""
+    if inherited:
+        return (
+            "the field is inherited and its type is set by the base class, so "
+            "this app did not make the change and cannot revert it"
+        )
+    if _is_widening(ledger_type, live_type):
+        return (
+            "the type was widened, so every payload that validated against the "
+            "recorded type still validates"
+        )
+    if _mentions_any(ledger_type) and not _mentions_any(live_type):
+        return (
+            "the recorded type contained Any, which payload-safety (P001) "
+            "refuses at class-definition time — moving to a concrete type is "
+            "required, not optional"
+        )
+    return None
+
+
 def scan_contract_compat(
     paths: list[Path],
     root: Path,
@@ -159,6 +221,13 @@ def scan_contract_compat(
                 live = live_by_name.get(lf.field)
                 if live is None and lf.field in present_names:
                     continue  # ambiguous name — the field lives on a sibling
+                if live is None and lf.status == "sunset":
+                    # The rule's own message names 'sunset' as the remedy for a
+                    # retired field, but the status was never read — so marking
+                    # it did nothing and the finding outlived the retirement.
+                    # A sunset field is withdrawn by decision; 'deprecated'
+                    # still means shipped-but-discouraged and must stay present.
+                    continue
                 if live is None:
                     findings.append(
                         make_finding(
@@ -179,6 +248,10 @@ def scan_contract_compat(
                         )
                     )
                 elif live.canonical_type != lf.type:
+                    if _retype_is_compatible(
+                        lf.type, live.canonical_type, inherited=live.node is None
+                    ):
+                        continue
                     inherited_note = (
                         " (inherited from a base class or mixin)"
                         if live.node is None

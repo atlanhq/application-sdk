@@ -214,18 +214,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "the record, and `conformance ledger-guard` enforces it."
         ),
         rule_interactions=(
-            "ledger-guard is append-only, so 'fix the ledger' is not available: a "
-            "recorded type cannot change and an entry cannot be deleted. Setting a "
-            "removed field's status to sunset does NOT clear the finding — the field "
-            "has to come back onto the contract class."
+            "ledger-guard is append-only: a recorded type cannot change and an entry "
+            "cannot be deleted — only the status may move. That is why `sunset` is "
+            "the retirement path rather than a retype or a delete. P001 also bears "
+            "on this: it refuses `Any` on a contract field, so moving off `Any` is "
+            "required and no longer counts as a break here."
         ),
         terminal_state=(
-            "One rule id covers three different situations and they do not share a "
-            "fix: a field genuinely removed, a type WIDENED (not a break at all, and "
-            "the detector cannot tell it from a narrowing), and an SDK-driven "
-            "migration. Before treating a removal as dead code, grep the whole repo — "
-            "including scripts/ and *.sh JSONPath args like $.extract.outputs.<field> "
-            "— for readers the contract does not know about."
+            "Four shapes are NOT breaks and do not fire: a field whose ledger status "
+            "is `sunset` (the retirement marker — `deprecated` still requires the "
+            "field to be present), a type that was WIDENED, an INHERITED field whose "
+            "base class changed the type, and a move OFF `Any`. To retire a field "
+            "deliberately, mark it `sunset` in contract_schema.lock.json. Before "
+            "treating a removal as dead code, grep the whole repo — including "
+            "scripts/ and *.sh JSONPath args like $.extract.outputs.<field> — for "
+            "readers the contract does not know about."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.BOTH,
