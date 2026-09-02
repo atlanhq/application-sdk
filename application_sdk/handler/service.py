@@ -2848,7 +2848,10 @@ def create_app_handler_service(
                     request_id=context.request_id_str,
                 )
 
-            entrypoint = ""
+            # Seeded from the *requested* value, not "", so a raise before
+            # validation still names what the caller asked for — an empty
+            # seed would be stamped as "<implicit>" and misattribute the row.
+            entrypoint = preflight_input.entrypoint or ""
             try:
                 logger.info(
                     "Preflight check started: app=%s request=%s",
@@ -2951,10 +2954,17 @@ def create_app_handler_service(
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
                 ) from None
-            except HTTPException:
-                # Deliberate HTTP responses (e.g. 400 from a malformed
-                # entrypoint name) are already client-facing — pass them
-                # through rather than masking them as a generic 500.
+            except HTTPException as e:
+                # Deliberate client-facing responses (e.g. 400 from a malformed
+                # entrypoint name) pass through unrecorded — the response *is*
+                # the channel, so a row would double-count what the caller can
+                # already see. A 5xx raised this way is a crash wearing an HTTP
+                # status: it reaches none of the boundary handlers around it, so
+                # without this it drops out of the setup funnel's denominator —
+                # the same hole on this surface that CONNECT-1170 gap 3 closed
+                # for handler raises.
+                if e.status_code >= 500:
+                    _crash_row(e)
                 raise
             except Exception as e:
                 # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.

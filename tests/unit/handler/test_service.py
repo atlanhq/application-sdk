@@ -524,6 +524,67 @@ class TestPreflightEndpoint:
         assert kwargs["outcome"] == "crashed"
         assert kwargs["preflight_surface"] == "http"
 
+    def test_a_5xx_httpexception_still_emits_a_crash_row(self) -> None:
+        # An HTTPException is not proof of a deliberate client-facing response.
+        # A 5xx raised inside the body reaches none of the other boundary
+        # handlers, so without a row it leaves the funnel's denominator — the
+        # defect gap 3 closed for handler raises, on the same surface.
+        from fastapi import HTTPException
+
+        class _ServiceUnavailableHandler(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise HTTPException(status_code=503, detail="upstream is down")
+
+        client = _make_client(handler=_ServiceUnavailableHandler())
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 503
+        rows = [
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "crashed"
+        assert rows[0]["preflight_surface"] == "http"
+
+    def test_a_4xx_httpexception_emits_no_row(self) -> None:
+        # The other half: a deliberate client-facing status stays unrecorded,
+        # because the response itself is the channel.
+        from fastapi import HTTPException
+
+        class _ConflictHandler(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise HTTPException(status_code=409, detail="already connected")
+
+        client = _make_client(handler=_ConflictHandler())
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 409
+        for level in ("info", "warning", "error"):
+            for c in getattr(ml, level).call_args_list:
+                if c.args:
+                    assert c.args[0] != "Preflight check outcome"
+
+    def test_crash_row_names_the_requested_entrypoint(self) -> None:
+        # The row is seeded from the requested entrypoint, so a raise is
+        # attributed to what the caller asked for rather than being stamped
+        # "<implicit>" whenever it lands before validation.
+        client = _make_client(handler=_FailingHandler())
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post(
+                "/workflows/v1/check",
+                json={"credentials": [], "entrypoint": "alpha"},
+            )
+        assert response.status_code == 500
+        rows = [
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert len(rows) == 1
+        assert rows[0]["entrypoint"] == "alpha"
+
     def test_malformed_entrypoint_400_emits_no_crash_row(self) -> None:
         client = _make_client()
         with patch("application_sdk.handler.service.logger") as ml:
