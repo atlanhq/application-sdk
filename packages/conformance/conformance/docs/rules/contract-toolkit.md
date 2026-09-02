@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**17 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
+**20 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -32,6 +32,9 @@ Suppress a finding on the violating line or the line directly above it:
 | [K015](#k015) | `LegacyWorkflowTypeContractDrift` | `block` | `app` | `contract-toolkit` | — | 0.23.0 |
 | [K016](#k016) | `EntrypointArtifactSchemaMissing` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
 | [K017](#k017) | `ArtifactSchemaWriterMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
+| [K018](#k018) | `ManifestArgNotDeclaredOnInputContract` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
+| [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
+| [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 
 ---
 
@@ -875,5 +878,198 @@ edit.
 construction. Suppressing states that the declaration and the writer are allowed to
 disagree, which leaves the consuming side reading an assertion the producer does not
 honour.
+
+---
+
+## K018 — `ManifestArgNotDeclaredOnInputContract` {#k018}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.24.0
+
+> app/generated/**/manifest.json sends an extract-node arg the entrypoint's Input contract cannot receive
+
+**Rationale:** K006 checks that a manifest's $.extract.outputs.<field> references resolve against the
+entrypoint's Output contract. Nothing checked the other direction, and that is the
+direction that loses customer configuration. contract-toolkit 0.9.0 moved manifest args
+out of the args.metadata{} envelope into flat top-level slots; an app whose Input
+contract still declares only the nested shape silently stops receiving every filter and
+toggle, because Pydantic drops undeclared keys before model_dump(). The trap that makes
+it invisible is that allow_unbounded_fields=True looks like protection but is not — it
+suppresses the SDK's unknown-key error without setting extra='allow', so the keys are
+still dropped. Nothing in either language's own tooling notices: pkl compiles the
+manifest with no visibility into the Python model, and the model validates happily
+against a payload missing nothing it knows about. Measured directly on a connector app:
+feeding it the flat args its own manifest declares logs 'Unknown keys in payload ...
+silently dropped by Pydantic: [extraction_method, fetch_partitions, include_filter,
+temp_table_regex]' and yields metadata == {}. The failure is fail-open — an empty
+include-filter means crawl everything — so it reaches the customer as a catalogue flood
+rather than an error.  The same flattening has a second, platform-side failure path that
+this rule cannot see and must not be confused with: the workflow re-render in
+atlan-local-marketplace-app recovers config by matching template paths, so a relocated
+key is dropped from the published DAG before the payload ever reaches the app
+(CONNECT-1318, and its own build_allparams_flat docstring documents the limitation). An
+app that passes K018 is still exposed to that one; it needs an identity-keyed read-merge
+on the platform write paths, tracked separately in APPPLAT-371. K018's scope is strictly
+what the app itself controls — whether the payload it *is* sent can be received.
+
+A **flat** key in the `extract` node's `inputs.args` of a committed
+`app/generated/**/manifest.json` — `args.<key>`, not `args.metadata.<key>` — is not
+declared on the corresponding entrypoint's Python `Input` contract, directly or via any
+inherited base class or SDK mixin — and the contract does not set Pydantic
+`extra='allow'`.
+
+The Automation Engine sends the key at runtime; Pydantic drops it before `model_dump()`
+and the entrypoint runs on the field's default. For an include/exclude filter that
+default is empty, and an empty include-filter means crawl everything — the failure is
+fail-open, so it surfaces as unexpected assets in the catalogue rather than as a
+workflow error.
+
+Keys still inside an `args.metadata` envelope are **not** checked here: an app still
+emitting that envelope consumes it by design until it migrates, so demanding flat
+declarations of those keys would be wrong. The envelope itself is K020.
+
+**Scope.** This rule checks only that the app can *receive* the payload the Automation
+Engine sends it. A filter can also be lost upstream, in the platform's workflow
+re-render, before the payload is built at all (CONNECT-1318 / APPPLAT-371) — same
+fail-open symptom, different failing step, not detectable from an app repo. Passing K018
+does not clear an app of that one.
+
+**Fix** — any one of:
+
+* declare the field on the entrypoint's `Input` model; * mix in the SDK base that
+already supplies it — `application_sdk.templates.contracts.sql_metadata.ExtractionInput`
+provides `include_filter`, `exclude_filter`, `temp_table_regex` and `extraction_method`;
+* or set `model_config = ConfigDict(extra='allow')` when the app genuinely wants to read
+arbitrary AE-supplied keys off `model_extra`.
+
+**Do not** add a `@model_validator(mode='before')` that folds the flat keys back into a
+`metadata` dict. It makes the value reachable again, so it looks like a fix, but it
+rebuilds the nested envelope the platform moved away from: the app goes on reading
+`workflow_args['metadata']['some-kebab-key']` instead of a typed field, the contract
+still does not describe what the app consumes, and the next key relocation breaks it in
+exactly the same way. Flat args are the contract — receive them as declared fields. The
+rule does not inspect validators at all, so a legitimate normaliser neither exempts an
+app nor implicates one.
+
+`allow_unbounded_fields=True` does **not** satisfy this rule, and the difference from
+`extra='allow'` is the entire point. That SDK class kwarg suppresses the unknown-key
+*error* only; it does not set Pydantic `extra='allow'`, so the keys are still dropped
+before `model_dump()`. Real `extra='allow'` keeps them in `model_extra` and does satisfy
+the rule.
+
+**Never hand-edit** `app/generated/manifest.json` to work around a finding — it is a
+`pkl eval` output (K004/K005 and the generated-artifact freshness gate catch a
+hand-edited manifest). If the arg is genuinely not wanted, remove it from
+`contract/app.pkl` and re-run `pkl eval -m . contract/app.pkl`.
+
+**Suppress** with `# conformance: ignore[K018] <reason>` on the `Input` class definition
+(or the comment-only line directly above it).
+
+---
+
+## K019 — `FormKeyMissingFromManifestArgs` {#k019}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.24.0
+
+> a contract/app.pkl uiConfig form key has no matching {{...}} placeholder in any generated manifest.json
+
+**Rationale:** The manifest args template is not only how a value reaches the run — it is also the
+persistence schema. The connection's DefaultParameters are populated from that template,
+so a form key absent from it is not stored, and the frontend rehydrate strips it on the
+next Update. One omission therefore produces two symptoms: the setting never takes
+effect, and the user watches their input vanish when they reopen the form. The second
+symptom reads as a frontend bug, which is how this class gets filed against the wrong
+team and stays open. In WARE-1323 five of six regex form keys were exposed in the
+Snowflake crawler form but missing from the args template; the gap survived roughly six
+months because every layer worked in isolation and no test pinned the chain together.
+Both sides are statically comparable — the widgets in contract/app.pkl's uiConfig and
+the {{...}} placeholders in the generated manifest — so this is exactly the drift CI
+should catch instead of a customer.
+
+A form key declared as a widget in `contract/app.pkl`'s `uiConfig` block has no matching
+`{{form-key}}` placeholder anywhere in the committed `app/generated/**/manifest.json`
+files.
+
+The Automation Engine substitutes `{{...}}` only for keys present in the args template,
+so the value never reaches `workflow_args` and the field falls back to its default.
+Worse, the connection's `DefaultParameters` are populated *from* that same template: a
+field absent from it is never persisted, and the frontend rehydrate strips it when the
+connection is reopened for Update. The user sets the value, saves, comes back, and it is
+gone (WARE-1323).
+
+**Fix:** wire the key into the `extract` node's args in `contract/app.pkl` and
+regenerate with `pkl eval -m . contract/app.pkl`. If the field is genuinely unused,
+remove the widget instead — leaving a dead control in the wizard is how the next person
+re-reports the same bug. Add a regression test asserting every form key in the contract
+has a matching `{{...}}` in the args template.
+
+The rule reports in one direction only. A `{{...}}` placeholder with no matching form
+key (`{{credential}}`, `{{agent-json}}`) is an SDK-injected system arg, not a
+user-facing field, and is never flagged.
+
+**Never hand-edit** `app/generated/manifest.json` to add the placeholder — it is a `pkl
+eval` output and the next toolkit run reverts the edit.
+
+**Suppress** with `// conformance: ignore[K019] <reason>` on the widget's line in
+`contract/app.pkl` (or the comment-only line directly above it) — for example a field
+the frontend consumes directly and deliberately never sends to the workflow.
+
+---
+
+## K020 — `ManifestArgsLegacyNestedEnvelope` {#k020}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.24.0
+
+> the extract node still emits the legacy args.metadata{} envelope instead of flat top-level args
+
+**Rationale:** Flat top-level args are the contract, and every layer of the stack already agrees on
+that: contract-toolkit's flatManifestArgs defaults to true ('Set to false only for
+legacy apps that intentionally consume args.metadata'), ExtractionInput declares the
+standard config set flat, and the SDK's _normalize_ae_payload canonicalises a nested
+payload up into those flat fields. An app still emitting args.metadata{} is the only
+layer holding the old shape, and it pays for it twice: its Input contract cannot be
+checked by K018 (the keys are not where the contract says they are), and it is carrying
+an unexploded migration. Measured 2026-09-01 across 34 apps: 6 entrypoints across 5 apps
+still nest. Three set flatManifestArgs = false explicitly; two do not set it at all and
+would render flat today, so their committed manifest simply predates the flattening —
+proved by a third app on the same toolkit with the same unset flag that renders flat.
+That second group is the dangerous one: the next regeneration flips nested to flat, and
+that transition is exactly where the platform re-render drops config, because it
+recovers values by matching template paths and a relocated key resolves to nothing. The
+migration has to happen; the rule exists so it happens deliberately, with the published
+workflows checked, instead of as a side effect of someone's unrelated regenerate.
+
+The `extract` node of a committed `app/generated/**/manifest.json` carries an
+`args.metadata{}` block instead of flat top-level args.
+
+`flatManifestArgs` defaults to `true` in the toolkit, so a modern contract renders flat
+with no configuration at all. There are two ways to end up nested, and the fix differs:
+
+* **Explicit opt-out** — `contract/app.pkl` sets `flatManifestArgs = false`. Remove the
+override rather than setting it `true` (the default already is), move whatever the app
+reads out of `args.metadata` onto declared flat fields on its `Input` contract, and
+regenerate with `pkl eval -m . contract/app.pkl`. A contract that also sets
+`manifestMetadataArgs` is pinning specific keys into the envelope and has to unpick that
+in the same change. * **Stale artifact** — the contract does not set the flag, so it
+would render flat today; the committed manifest predates the flattening and was never
+regenerated. Regenerate and commit the result.
+
+**Regenerating is the risky moment, so do it deliberately.** Published workflow versions
+carry the nested shape. The platform's workflow re-render recovers config by matching
+template *paths*, so a key moving from `args.metadata.x` to `args.x` resolves to nothing
+and is stripped from the published DAG — the failure is fail-open, so an emptied
+include-filter means the next crawl takes everything (CONNECT-1318 / APPPLAT-371). After
+the first re-render, verify published workflows still carry their filters instead of
+assuming. Coordinate with the platform-side read-merge work if the app has live tenants
+with non-trivial filters.
+
+Once flat, declare the migrated keys on the entrypoint's `Input` contract so K018 covers
+them from then on.
+
+**Never hand-edit** `app/generated/manifest.json` to flatten it by hand — it is a `pkl
+eval` output and the next toolkit run reverts the edit.
+
+**Suppress** with `// conformance: ignore[K020] <reason>` in `contract/app.pkl` when an
+app is deliberately staying on the legacy envelope for now — a suppression here is a
+statement that the migration is scheduled, not that the shape is fine.
 
 ---
