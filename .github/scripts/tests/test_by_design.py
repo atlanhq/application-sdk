@@ -353,6 +353,39 @@ def test_quoting_an_error_class_from_a_real_defect_is_not_suppressed() -> None:
     assert loaded.match(proposal) is not None
 
 
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        # An adjective next to the noun is not a proposal: this one reports a
+        # mis-routed leaf, and matching `new` + `error hierarch` suppressed it.
+        "the new error hierarchy routes storage failures to a retryable leaf",
+        # Wrong-leaf findings say "instead of" about the CLASSES, not about the
+        # scheme, so the comparative branch must not reach them either.
+        "raise RetryableError instead of NonRetryableError for a permanent failure",
+        "the error hierarchy is not applied consistently in this handler",
+    ],
+)
+def test_error_scheme_defects_are_not_scheme_proposals(evidence: str) -> None:
+    """Only a proposal to REPLACE the scheme is by-design; defects in it are real."""
+    assert bd.load_by_design(DATA).match(_f(evidence=evidence)) is None
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        # The claim this entry exists to suppress. The previous regex wanted
+        # "alternative|new|…" and "error hierarch", so "custom" + "exception
+        # hierarchy" walked straight past it.
+        "consider using a custom exception hierarchy instead of NonRetryableError",
+        "suggest a deeper error hierarchy",
+        "propose an additional error class for storage failures",
+    ],
+)
+def test_scheme_proposals_are_dropped_however_they_are_phrased(evidence: str) -> None:
+    """Paraphrases of the proposal are the same non-finding, so all must drop."""
+    assert bd.load_by_design(DATA).match(_f(evidence=evidence)) is not None
+
+
 def test_meaningful_coverage_commentary_is_not_the_raw_threshold_claim() -> None:
     """`coverage` near a percentage is how a 'tests are meaningful?' finding is written."""
     loaded = bd.load_by_design(DATA)

@@ -201,12 +201,16 @@ suppress:
     reason: >-
       `AAF-{COMPONENT}-{ID:03d}` is the intentional error-code format, and
       `NonRetryableError` / `RetryableError` are deliberately the only two base
-      classes. The false-positive claim is a proposal for an alternative
-      scheme or a deeper hierarchy — not a finding that quotes those
-      identifiers, which is how a real wrong-leaf or swallowed-exception
-      finding is written.
+      classes. The false-positive claim is a PROPOSAL for an alternative
+      scheme or a deeper hierarchy, so the match needs the proposal language
+      and not just the words a real finding also uses: an adjective alone let
+      "the new error hierarchy routes storage failures to a retryable leaf"
+      through as a suppression, while a proposal phrased as "consider using a
+      custom exception hierarchy" escaped entirely. A wrong-leaf or
+      swallowed-exception finding names the same identifiers on purpose and
+      must survive.
     match:
-      evidence: '(?i)(?:alternative|different|new|additional|deeper|another).{0,50}(?:error[- ]code scheme|error hierarch)|(?:suggest(?:ing|ed)?|propos(?:e|al|ing)).{0,60}(?:error[- ]code scheme|error hierarch|additional error)'
+      evidence: '(?i)(?:\b(?:consider\w*|suggest\w*|propos\w*|recommend\w*)\b[^.\n]{0,60}\b(?:alternative|different|new|custom|additional|deeper|another|richer|separate|granular)\b[^.\n]{0,40}(?:error[- ]code (?:scheme|format)|(?:error|exception)[ -](?:class(?:es)?|hierarch\w*)|error taxonomy)|\b(?:alternative|different|new|custom|additional|deeper|another|richer|separate|granular)\b[^.\n]{0,40}(?:error[- ]code (?:scheme|format)|(?:error|exception)[ -](?:class(?:es)?|hierarch\w*)|error taxonomy)[^.\n]{0,60}\b(?:instead of|rather than|in place of)\b)'
 
   # -------------------------------------------------------------------------
   # Conditional — by-design UNLESS the reviewer substantiates the exception.
