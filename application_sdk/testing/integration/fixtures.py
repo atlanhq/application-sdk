@@ -108,6 +108,17 @@ fixture would otherwise silently observe cleanup disabled (BLDX-1283). The optio
 is one-way: ``preserve_artifacts=False`` leaves the variable untouched rather
 than forcing ``"true"``.
 
+``store_root`` covers the object store a run writes through. The local scratch
+tree it also writes — the ``{TEMPORARY_PATH}/artifacts/apps/{APPLICATION_NAME}``
+root the SDK derives a run's paths under — is left at the SDK default unless a
+suite requests ``temporary_path``, which redirects it at a session temp dir. Two
+pre-run guards cover the ways that identity goes wrong silently:
+``_verify_app_name`` (an explicitly set ``ATLAN_APPLICATION_NAME`` that is not
+the App's registered name splits the run's identity in two) and
+``_verify_infrastructure`` (a per-test fixture that calls ``set_infrastructure``
+after the session fixture sends the run to a store the fixtures never expose).
+Both fail loudly, for the same reason the ordering and registration checks do.
+
 Mocked infrastructure is the default for this tier: ``MockSecretStore``,
 ``MockStateStore`` and a ``LocalStore`` under a session temp dir. A suite that
 needs something else overrides the ``infrastructure`` fixture — which
@@ -124,6 +135,7 @@ reference for that hand-written shape.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -137,7 +149,9 @@ import pytest_asyncio
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.fake_source import HttpFakeSourceFactory
 from application_sdk.testing.integration._errors import (
+    AppNameMismatchError,
     AppRegistrationMissingError,
+    InfrastructureReplacedError,
     IntegrationEnvOrderingError,
 )
 
@@ -212,6 +226,8 @@ class KitOptions:
             to ``"false"`` when unset, so the run's output files survive for the
             suite to assert on. An explicit environment value always wins.
         store_root_prefix: ``tmp_path_factory`` prefix for the LocalStore root.
+        temporary_path_prefix: ``tmp_path_factory`` prefix for the local run
+            scratch root handed out by :func:`temporary_path`.
     """
 
     data_converter: bool = True
@@ -219,6 +235,7 @@ class KitOptions:
     log_level: str = "error"
     preserve_artifacts: bool = True
     store_root_prefix: str = "sdk-store"
+    temporary_path_prefix: str = "sdk-local"
 
 
 @dataclass(frozen=True)
@@ -234,6 +251,11 @@ class AppExecutor:
     """
 
     backend: TemporalExecutorBackend
+    expected_infrastructure: InfrastructureContext | None = None
+    """The context :func:`infrastructure` installed, re-checked before each run.
+
+    ``None`` disables the check, for an executor built outside the kit.
+    """
 
     async def execute_app(
         self,
@@ -255,6 +277,8 @@ class AppExecutor:
         from application_sdk.execution.retry import (  # noqa: PLC0415 — deferred: keeps execution (and temporalio) off the conftest's import path
             RetryPolicy,
         )
+
+        _verify_infrastructure(self.expected_infrastructure)
 
         app_name = _app_name_of(app_cls) or execution_id_prefix or "app"
         context = AppContext(
@@ -348,7 +372,96 @@ def _verify_registration(app_cls: type[App]) -> str:
                 "overrides; the import is what populates the registry."
             ),
         )
+    _verify_app_name(app_cls, app_name)
     return app_name
+
+
+def _verify_app_name(app_cls: type[App], app_name: str) -> None:
+    """Fail when an explicitly set ``ATLAN_APPLICATION_NAME`` is not the App's name.
+
+    The variable is what ``application_sdk.constants.APPLICATION_NAME`` carries,
+    and the SDK builds a run's local artifact root from it
+    (``{TEMPORARY_PATH}/artifacts/apps/{APPLICATION_NAME}/workflows/...``) while
+    the App's own registered name drives the task queue and the observability
+    tags. Disagreeing values do not fail anything loudly — the run writes its
+    files under one identity and reports itself under another, and the suite
+    looks for artifacts where they were never written.
+
+    Only a suite that explicitly set the variable is checked — an adopter who
+    never sets it gets the SDK default (``"default"``), which is a different
+    conversation and not one to fail a session over. The value *compared* is
+    ``constants.APPLICATION_NAME``, the import-time snapshot, because that is
+    what actually builds the artifact root — the live environment is only the
+    opt-in signal, so the guard stays correct even if something changes the
+    variable mid-session (``_verify_env_ordering`` pins the two equal at
+    import, but by construction beats by side effect).
+    """
+    if os.environ.get(APPLICATION_NAME_ENV) is None:
+        return
+    from application_sdk import (  # noqa: PLC0415 — deferred by convention only; sibling guards import it the same way
+        constants,
+    )
+
+    configured = constants.APPLICATION_NAME
+    if configured == app_name:
+        return
+    raise AppNameMismatchError(
+        message=(
+            f"{APPLICATION_NAME_ENV} snapshotted into constants.APPLICATION_NAME "
+            f"as {configured!r} but {app_cls.__name__} is registered as "
+            f"{app_name!r}. The run's local artifact root is built from the "
+            f"former and its task queue and observability tags from the latter, "
+            f"so artifacts land under {configured!r} while the run reports "
+            f"itself as {app_name!r}."
+        ),
+        resource=app_cls.__name__,
+        expected_state=f"constants.APPLICATION_NAME == {app_name!r}",
+        actual_state=f"constants.APPLICATION_NAME == {configured!r}",
+        suggested_action=(
+            f"Set os.environ.setdefault({APPLICATION_NAME_ENV!r}, {app_name!r}) in "
+            "conftest.py, above the application_sdk imports."
+        ),
+    )
+
+
+def _verify_infrastructure(expected: InfrastructureContext | None) -> None:
+    """Fail when something replaced the kit's infrastructure context before a run.
+
+    :func:`infrastructure` is session-scoped and installs its context globally.
+    A per-test fixture that also calls ``set_infrastructure`` — common in suites
+    that predate the kit and point the SDK at a per-test ``LocalStore`` — silently
+    wins, and the run then reads and writes a store the suite never inspects:
+    every artifact assertion fails with "no files", pointing at the App rather
+    than at the fixture that moved the store.
+    """
+    if expected is None:
+        return
+    from application_sdk.infrastructure import (  # noqa: PLC0415 — deferred: keeps the infrastructure package off the conftest's import path
+        get_infrastructure,
+    )
+
+    current = get_infrastructure()
+    if current is expected:
+        return
+    raise InfrastructureReplacedError(
+        message=(
+            "The global infrastructure context is not the one this kit installed, "
+            "so the run would use a different object store than the fixtures "
+            "expose. Something called set_infrastructure() after the session "
+            "fixture — typically a per-test autouse fixture carried over from "
+            "before the kit."
+        ),
+        resource="InfrastructureContext",
+        expected_state="the context installed by the kit's infrastructure fixture",
+        actual_state="None"
+        if current is None
+        else f"{type(current).__name__} instance",
+        suggested_action=(
+            "Have that fixture stand aside for kit tests — e.g. return early when "
+            '"executor" is in request.fixturenames — or scope it to the '
+            "directory that needs it."
+        ),
+    )
 
 
 @contextmanager
@@ -543,6 +656,75 @@ def store_root(
     return tmp_path_factory.mktemp(integration_options.store_root_prefix)
 
 
+@pytest.fixture(scope="session")
+def temporary_path(
+    tmp_path_factory: pytest.TempPathFactory, integration_options: KitOptions
+) -> Iterator[Path]:
+    """Point ``constants.TEMPORARY_PATH`` at a session temp dir, and yield it.
+
+    :func:`store_root` covers the object store; this covers the other half a run
+    touches — the local scratch tree the SDK builds a run's paths under
+    (``{TEMPORARY_PATH}/artifacts/apps/{APPLICATION_NAME}/workflows/...``).
+    Left alone it is the repo-relative ``./local/tmp/``, so a suite that asserts
+    on run files reads a directory earlier runs also wrote into, and one that
+    does not still litters the working tree.
+
+    Not autouse: requesting it is what opts a suite in, exactly as
+    ``store_root`` works. Most consumers bind the constant at import time
+    (``from application_sdk.constants import TEMPORARY_PATH`` at module top);
+    patching ``constants`` alone would miss every one of them already imported.
+    The fixture therefore patches ``constants.TEMPORARY_PATH`` — which covers
+    modules imported after it runs — and then every already-imported
+    ``application_sdk`` module carrying its own binding of the old value. All
+    patches are undone on teardown rather than left set. The scan matches by
+    value, so a module that stored a *derived* path at import time (say, a
+    pre-computed abspath) would be missed — no current consumer does that.
+
+    **The redirect is session-wide, and that reaches other tiers.** Scope is
+    ``session`` because the consumers are class-scoped run fixtures, which
+    cannot depend on a function-scoped one — so once any test requests this, the
+    constant stays redirected for every test that follows in the same process,
+    integration and unit alike. ``pytest tests/`` is one process.
+
+    A unit test asserting on a default-rooted path therefore starts failing the
+    moment an integration test earlier in the session opts in, and the failure
+    names that unit test rather than this fixture. Such a test should pin the
+    constant itself instead of leaning on the ambient default::
+
+        monkeypatch.setattr(constants, "TEMPORARY_PATH", "local/tmp")
+
+    Not hypothetical in either direction: it broke two path-normalising unit
+    tests in a connector suite, and this repo's own guard tests had to stop
+    consuming the fixture — they drive ``__wrapped__`` function-scoped — for the
+    same reason.
+    """
+    from application_sdk import (  # noqa: PLC0415 — deferred by convention only; sibling fixtures import it the same way
+        constants,
+    )
+
+    path = tmp_path_factory.mktemp(integration_options.temporary_path_prefix)
+    previous = constants.TEMPORARY_PATH
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr(constants, "TEMPORARY_PATH", str(path))
+    for name, module in list(sys.modules.items()):
+        if (
+            name.startswith("application_sdk")
+            and module is not None
+            and module is not constants
+            and getattr(module, "TEMPORARY_PATH", None) == previous
+        ):
+            patcher.setattr(module, "TEMPORARY_PATH", str(path))
+    logger.info(
+        "TEMPORARY_PATH redirected to %s for the rest of this session; a later "
+        "test asserting on a default-rooted path must pin the constant itself",
+        path,
+    )
+    try:
+        yield path
+    finally:
+        patcher.undo()
+
+
 @contextmanager
 def kit_infrastructure(
     store_root: Path,
@@ -691,9 +873,16 @@ async def worker(
 
 @pytest.fixture(scope="session")
 def executor(
-    temporal_client: Client, worker: None, integration_task_queue: str
+    temporal_client: Client,
+    worker: None,
+    integration_task_queue: str,
+    infrastructure: InfrastructureContext,
 ) -> AppExecutor:
-    """Executor submitting to the running worker's task queue."""
+    """Executor submitting to the running worker's task queue.
+
+    Carries the installed infrastructure context so each run can check it is
+    still the live one — see :func:`_verify_infrastructure`.
+    """
     from application_sdk.execution import (  # noqa: PLC0415 — deferred: keeps temporalio off the conftest's import path
         TemporalExecutorBackend,
     )
@@ -702,7 +891,8 @@ def executor(
     return AppExecutor(
         backend=TemporalExecutorBackend(
             client=temporal_client, task_queue=integration_task_queue
-        )
+        ),
+        expected_infrastructure=infrastructure,
     )
 
 
@@ -725,5 +915,6 @@ __all__ = [
     "reset_http_fake_sources",
     "store_root",
     "temporal_client",
+    "temporary_path",
     "worker",
 ]
