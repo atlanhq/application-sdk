@@ -1691,7 +1691,7 @@ class InfoBanner extends UIElement {
 /// Widget that maps Power BI ODBC Data Source Names (DSNs) to Atlan connections.
 ///
 /// The frontend stores the mapping as a JSON object of `dsn -> connectionQualifiedName`,
-/// so generated Python input is `dict[str, Any]`.
+/// so generated Python input is `dict[str, str]`.
 class DsnTreeMap extends UIElement {
   fixed type = "object"
   required: Boolean? = false
