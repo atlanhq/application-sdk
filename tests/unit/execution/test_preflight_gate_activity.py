@@ -1361,6 +1361,139 @@ class TestEmitPreflightCheckOutcome:
         assert type(kwargs[PREFLIGHT_SURFACE_KEY]) is str
 
 
+class TestTheVerdictIsPersisted:
+    """Every outcome the gate emits also leaves a row in the tenant's store.
+
+    One rule rather than three call sites: the extraction and the write itself are
+    covered in ``test_preflight_persist.py``, so these assert only *that* the gate
+    hands each verdict over, and that it does so before any hard-mode raise.
+    """
+
+    SLUG = "example-source-aBcD1234"
+
+    def _input(self) -> PreflightGateInput:
+        return PreflightGateInput(entrypoint="crawl", workflow_slug=self.SLUG)
+
+    async def test_a_proceeding_run_is_persisted(self) -> None:
+        gate = _verdict_gate(PreflightOutput(status=PreflightStatus.READY))
+        with mock.patch(f"{_GATE}.persist_check_result") as persist:
+            await gate(self._input())
+        assert persist.call_count == 1
+        assert persist.call_args.args[1].status is PreflightStatus.READY
+
+    async def test_a_soft_mode_block_is_persisted(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        with mock.patch(f"{_GATE}.persist_check_result") as persist:
+            await gate(self._input())
+        assert persist.call_count == 1
+
+    async def test_a_hard_mode_block_is_persisted_before_it_raises(self) -> None:
+        # The row must survive the abort: a blocked run is the one whose verdict
+        # the store most needs.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        gate = _verdict_gate(out, enforce=True)
+        with mock.patch(f"{_GATE}.persist_check_result") as persist:
+            with pytest.raises(ApplicationError):
+                await gate(self._input())
+        assert persist.call_count == 1
+
+    async def test_a_source_that_could_not_be_verified_is_persisted(self) -> None:
+        class _Crashing(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise RuntimeError("driver blew up")
+
+        gate = build_preflight_gate_activity(
+            _Crashing(), app_name="myapp", enforce=False
+        )
+        with mock.patch(f"{_GATE}.persist_check_result") as persist:
+            result = await gate(self._input())
+        assert result.status is PreflightStatus.NOT_READY
+        assert persist.call_count == 1
+
+    async def test_the_slug_travels_into_the_row_builder(self) -> None:
+        gate = _verdict_gate(PreflightOutput(status=PreflightStatus.READY))
+        with mock.patch(f"{_GATE}.persist_check_result") as persist:
+            await gate(self._input())
+        assert persist.call_args.args[0].workflow_slug == self.SLUG
+
+
+class TestPersistenceCanNeverFailTheRun:
+    """A results store is not allowed to break a customer's run.
+
+    ``persist_check_result`` swallows its own failures, so these raise *through*
+    it — the boundary the gate itself must hold, whatever the module below does.
+    Every outcome is covered, because the two that raise are the ones where a
+    stray exception would be hardest to tell apart from the deliberate block.
+    """
+
+    SLUG = "example-source-aBcD1234"
+
+    def _input(self) -> PreflightGateInput:
+        return PreflightGateInput(entrypoint="crawl", workflow_slug=self.SLUG)
+
+    @staticmethod
+    def _exploding():
+        return mock.patch(
+            f"{_GATE}.persist_check_result", side_effect=RuntimeError("store down")
+        )
+
+    @staticmethod
+    def _not_ready() -> PreflightOutput:
+        return PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+
+    async def test_a_healthy_run_still_proceeds(self) -> None:
+        gate = _verdict_gate(PreflightOutput(status=PreflightStatus.READY))
+        with self._exploding():
+            result = await gate(self._input())
+        assert result.status is PreflightStatus.READY
+
+    async def test_a_soft_mode_verdict_is_still_returned(self) -> None:
+        gate = _verdict_gate(self._not_ready(), enforce=False)
+        with self._exploding():
+            result = await gate(self._input())
+        assert result.status is PreflightStatus.NOT_READY
+
+    async def test_a_hard_mode_block_still_raises_the_block_and_not_the_store(
+        self,
+    ) -> None:
+        # The failure mode this guards: a store error escaping here would abort
+        # the run too, but as an untyped fault — so the workflow would fail open
+        # instead of reporting a preflight block, and the customer would see the
+        # wrong reason for the wrong outcome.
+        gate = _verdict_gate(self._not_ready(), enforce=True)
+        with self._exploding(), pytest.raises(ApplicationError) as excinfo:
+            await gate(self._input())
+        assert "store down" not in str(excinfo.value)
+
+    async def test_an_unverifiable_source_still_reaches_its_verdict(self) -> None:
+        class _Crashing(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise RuntimeError("driver blew up")
+
+        gate = build_preflight_gate_activity(
+            _Crashing(), app_name="myapp", enforce=False
+        )
+        with self._exploding():
+            result = await gate(self._input())
+        assert result.status is PreflightStatus.NOT_READY
+
+
 class TestPreflightGateStorageChecks:
     """The per-app opt-in storage probe folded into the gate verdict."""
 

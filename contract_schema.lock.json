@@ -85,6 +85,12 @@
       "type": "str"
     },
     {
+      "contract": "ExtractionInput",
+      "field": "workflow_slug",
+      "status": "active",
+      "type": "str"
+    },
+    {
       "contract": "ExtractionOutput",
       "field": "artifacts",
       "status": "active",
@@ -337,6 +343,12 @@
       "type": "str"
     },
     {
+      "contract": "IncrementalExtractionInput",
+      "field": "workflow_slug",
+      "status": "active",
+      "type": "str"
+    },
+    {
       "contract": "IncrementalExtractionOutput",
       "field": "artifacts",
       "status": "active",
@@ -561,6 +573,12 @@
     {
       "contract": "QueryExtractionInput",
       "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "workflow_slug",
       "status": "active",
       "type": "str"
     },

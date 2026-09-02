@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 64 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 65 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 45 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -1456,6 +1456,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import redact_secrets`
 - **Signature:** `redact_secrets(text: str)`
 - **Summary:** Redact URL userinfo and known secret query-params from a string.
+- **Defined in:** `application_sdk/errors/base.py`
+
+#### `redact_wire_value`
+
+- **Import:** `from application_sdk.errors import redact_wire_value`
+- **Signature:** `redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0)`
+- **Summary:** Redact every string reachable inside a value bound for the wire.
 - **Defined in:** `application_sdk/errors/base.py`
 
 #### `safe_traceback`
@@ -6246,6 +6253,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
   - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
   - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `Output`
