@@ -2049,3 +2049,111 @@ class TestInlineImportContracts:
         from application_sdk.observability.correlation import (  # noqa: F401
             get_correlation_context,
         )
+
+
+# =============================================================================
+# App.upload() — asset validation runs alongside the transfer (FND-1339)
+# =============================================================================
+class TestUploadValidationAlongsideTransfer:
+    """The warn-only scan overlaps the transfer and dies with a failed one."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _app() -> App:
+        from application_sdk.app.context import AppContext
+
+        class _UpApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        app = _UpApp()
+        app._context = AppContext(
+            app_name=app._app_name,
+            app_version="1",
+            run_id="run-1",
+            _storage=object(),  # type: ignore[arg-type]
+        )
+        return app
+
+    async def test_scan_overlaps_the_transfer_and_is_awaited(self) -> None:
+        import asyncio
+
+        from application_sdk.app import base as base_module
+        from application_sdk.contracts.storage import UploadInput, UploadOutput
+
+        events: list[str] = []
+        scan_started = asyncio.Event()
+
+        async def fake_scan(local_path, app_name, *, timeout=None):
+            events.append("scan:start")
+            scan_started.set()
+            await asyncio.sleep(0.05)
+            events.append("scan:end")
+
+        async def fake_transfer(*args, **kwargs):
+            # Bytes move while the scan is already running — it no longer gates them.
+            await scan_started.wait()
+            events.append("transfer")
+            return UploadOutput()
+
+        app = self._app()
+        with (
+            mock.patch.object(
+                base_module, "_warn_on_invalid_transformed_assets", fake_scan
+            ),
+            mock.patch(
+                "application_sdk.storage.transfer.upload", side_effect=fake_transfer
+            ),
+        ):
+            await app.upload(UploadInput(local_path="/tmp/out"))
+
+        assert events == ["scan:start", "transfer", "scan:end"]
+
+    async def test_failed_transfer_cancels_the_scan(self) -> None:
+        import asyncio
+
+        from application_sdk.app import base as base_module
+        from application_sdk.contracts.storage import UploadInput
+
+        scan_started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def hanging_scan(local_path, app_name, *, timeout=None):
+            scan_started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        async def failing_transfer(*args, **kwargs):
+            # Let the scan get under way first, so the cancel has something to
+            # interrupt rather than a task that never started.
+            await scan_started.wait()
+            raise RuntimeError("boom")
+
+        app = self._app()
+        with (
+            mock.patch.object(
+                base_module, "_warn_on_invalid_transformed_assets", hanging_scan
+            ),
+            mock.patch(
+                "application_sdk.storage.transfer.upload",
+                side_effect=failing_transfer,
+            ),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            await app.upload(UploadInput(local_path="/tmp/out"))
+
+        await asyncio.wait_for(cancelled.wait(), timeout=1)

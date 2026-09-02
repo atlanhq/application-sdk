@@ -194,7 +194,9 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
+| `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store transfers for large objects and for downloads. Large uploads each hold `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` × `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` of buffer, so this stays narrow. |
+| `ATLAN_MAX_CONCURRENT_SMALL_TRANSFERS` | `32` | Concurrent uploads for *small* objects within one directory transfer (`App.upload` of a directory, `FileReference` directory persist). A directory hand-off over a high-latency store is bound by round trips, not bandwidth — `N` small files at `L` seconds per request take `N × L / fan-out` — and small objects hold no part buffers, so this is the tier that is safe to widen. Peak buffer memory is at most `ATLAN_STORAGE_SMALL_OBJECT_BYTES` × this value. |
+| `ATLAN_STORAGE_SMALL_OBJECT_BYTES` | `4194304` (4 MiB) | Objects at or below this size take the small-object tier above. `0` disables the tier so every file is bounded by `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS`. |
 | `ATLAN_OBSTORE_READ_TIMEOUT` | `90s` | **Progress-based** liveness bound: a transfer fails only if no bytes arrive for this long (the timer resets on every successful read). The primary timeout — a slow-but-progressing transfer survives; a genuine stall fails fast. |
 | `ATLAN_OBSTORE_TIMEOUT` | `30m` | **Overall-request** wall-clock backstop per object-store request. Scales with file size, not throughput, so it is deliberately generous; `ATLAN_OBSTORE_READ_TIMEOUT` is the real liveness bound. |
 | `ATLAN_STORAGE_RESUME_DOWNLOADS` | `true` | Kill-switch for resumable chunked downloads. When enabled, an interrupted chunked download keeps its in-flight part file and checkpoint sidecar (`.sdk-partial/{name}.part` and `.sdk-partial/{name}.transfer-state` beside the destination), and a retry fetches only the missing ranges. Set to `false` to restore delete-partial-on-failure behaviour. |

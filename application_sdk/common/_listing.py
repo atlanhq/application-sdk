@@ -169,3 +169,18 @@ def safe_list_directory(path: Path) -> list[Path]:
     """
     _flush_directory_metadata(path)
     return list(_scandir_recursive(path))
+
+
+def file_sizes(paths: list[Path]) -> list[int]:
+    """Return ``st_size`` for every path, in order.
+
+    One blocking pass over a listing so a transfer can size its fan-out per
+    file without a ``stat`` on the event loop for each of thousands of files.
+    Run it via ``run_in_thread``, like :func:`safe_list_directory`.
+
+    Raises:
+        OSError: If any path cannot be stat-ed (removed between listing and
+            sizing, permission denied). Surfaced, not swallowed, for the same
+            reason :func:`safe_list_directory` surfaces traversal errors.
+    """
+    return [p.stat().st_size for p in paths]

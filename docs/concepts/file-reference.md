@@ -284,7 +284,10 @@ async def transform(self, input: TransformInput) -> TransformOutput:
         process(parquet_file)
 ```
 
-The SDK uploads every file in the directory recursively (bounded concurrency),
+The SDK uploads every file in the directory recursively (bounded concurrency:
+small objects fan out `ATLAN_MAX_CONCURRENT_SMALL_TRANSFERS` wide, large ones
+`ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` — see
+[Directory uploads](storage.md#directory-uploads-round-trips-not-bytes)),
 preserves the directory structure under the storage prefix, and recreates it on
 download. `file_count` on the durable ref tells you how many files were uploaded.
 

@@ -731,6 +731,7 @@ async def _finalize_upload_integrity(
     digest: str | None,
     verify: bool | None,
     write_sidecar: bool | None,
+    defer_remote_verify: bool = False,
 ) -> None:
     """Validate a completed upload, then record its digest (FND-306).
 
@@ -756,6 +757,12 @@ async def _finalize_upload_integrity(
         digest: Streaming SHA-256, or ``None`` when hashing was off.
         verify: Per-call verification flag (``None`` → env default).
         write_sidecar: Per-call sidecar flag (``None`` → env default).
+        defer_remote_verify: When ``True``, run the local-truncation check but
+            skip the readback HEAD — the caller has taken over the readback
+            (a directory upload verifies every object against one listing of
+            its prefix instead of one HEAD each, FND-1339). Such a caller must
+            also hold the sidecar back (``write_sidecar=False``) until its own
+            readback has passed, or the ordering guarantee above is lost.
 
     Raises:
         StorageIntegrityError: If the local file shrank while being read.
@@ -766,29 +773,30 @@ async def _finalize_upload_integrity(
         integrity.check_local_file_stable(
             key, path, declared_size=declared_size, bytes_read=bytes_sent
         )
-        remote_meta = await get_file_meta(key, resolved, normalize=False)
-        if remote_meta is None:
-            # The writer reported success but the object is not there. The
-            # zero-byte case is the known one (some S3-style backends drop
-            # empty objects), and a size comparison would pass it — 0 sent,
-            # 0 found — so absence is checked separately from length.
-            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+        if not defer_remote_verify:
+            remote_meta = await get_file_meta(key, resolved, normalize=False)
+            if remote_meta is None:
+                # The writer reported success but the object is not there. The
+                # zero-byte case is the known one (some S3-style backends drop
+                # empty objects), and a size comparison would pass it — 0 sent,
+                # 0 found — so absence is checked separately from length.
+                from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
-            raise StorageError(
-                f"Upload of '{key}' reported success but the object is absent "
-                f"from the store afterwards ({bytes_sent} bytes sent from "
-                f"{path}). Some S3-style backends silently drop empty objects; "
-                f"others need read-your-writes consistency that this store "
-                f"does not offer.",
-                key=key,
+                raise StorageError(
+                    f"Upload of '{key}' reported success but the object is "
+                    f"absent from the store afterwards ({bytes_sent} bytes sent "
+                    f"from {path}). Some S3-style backends silently drop empty "
+                    f"objects; others need read-your-writes consistency that "
+                    f"this store does not offer.",
+                    key=key,
+                )
+            integrity.check_transfer_size(
+                "upload",
+                key,
+                expected=bytes_sent,
+                actual=remote_meta[0],
+                local_path=path,
             )
-        integrity.check_transfer_size(
-            "upload",
-            key,
-            expected=bytes_sent,
-            actual=remote_meta[0],
-            local_path=path,
-        )
 
     if digest is not None and integrity.sidecar_writes_enabled(write_sidecar):
         await integrity.write_digest_sidecar(store, key, digest)
@@ -805,6 +813,7 @@ async def upload_file(
     compute_hash: bool = True,
     verify: bool | None = None,
     write_sidecar: bool | None = None,
+    defer_remote_verify: bool = False,
 ) -> str | None:
     """Stream-upload a local file to *key* in the store.
 
@@ -859,6 +868,13 @@ async def upload_file(
         write_sidecar: Write the ``{key}.sha256`` sidecar.  ``None`` (default)
             follows ``ATLAN_STORAGE_WRITE_SIDECARS``.  Ignored when
             *compute_hash* is ``False`` (there is no digest to record).
+        defer_remote_verify: When ``True`` and verification is on, skip this
+            call's readback HEAD; the local-truncation check still runs.  For
+            callers that verify a whole batch against one listing of the
+            target prefix instead of one HEAD per object — the shape
+            :func:`application_sdk.storage.transfer.upload` uses for
+            directories (FND-1339).  Pair it with ``write_sidecar=False`` and
+            write the sidecars once that readback has passed.
 
     Returns:
         Hex-encoded SHA-256 digest of the uploaded file if *compute_hash* is
@@ -1014,6 +1030,7 @@ async def upload_file(
         digest=digest,
         verify=verify,
         write_sidecar=write_sidecar,
+        defer_remote_verify=defer_remote_verify,
     )
 
     if not retain_local_copy:
