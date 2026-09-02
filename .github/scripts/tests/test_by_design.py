@@ -321,6 +321,27 @@ def test_naming_credential_ref_is_not_enough_to_suppress() -> None:
     assert loaded.match(false_positive) is not None
 
 
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        # A recommendation TO use the ref. It names `secret` and `payload`
+        # because those describe the defect it replaces, so neither word can
+        # carry the match.
+        "use CredentialRef instead of a raw secret in the Temporal payload",
+        # Asserts the OPPOSITE of the false-positive claim, so a bare
+        # "is a credential" alternative cannot carry it either.
+        "CredentialRef is a credential reference (no actual secrets)",
+    ],
+)
+def test_credential_ref_sentences_that_are_not_the_claim_survive(evidence: str) -> None:
+    """The claim is "the ref itself is secret material" — nothing weaker.
+
+    An earlier revision matched `secret` near `payload` and a bare
+    "is a credential", which dropped both of these real findings.
+    """
+    assert bd.load_by_design(DATA).match(_f(evidence=evidence)) is None
+
+
 def test_quoting_an_error_class_from_a_real_defect_is_not_suppressed() -> None:
     """review-policy forbids proposing a new hierarchy, not quoting the existing one."""
     loaded = bd.load_by_design(DATA)
@@ -339,6 +360,17 @@ def test_meaningful_coverage_commentary_is_not_the_raw_threshold_claim() -> None
     threshold = _f(evidence="coverage dropped to 80, below fail_under=85")
     assert loaded.match(meaningful) is None
     assert loaded.match(threshold) is not None
+
+
+def test_lowering_the_coverage_gate_is_not_the_threshold_claim() -> None:
+    """CI enforces `fail_under`; it cannot notice the PR *lowering* it.
+
+    So a finding that names `fail_under` to report the gate being weakened is
+    the reviewer's to make, and a bare `fail_under` alternative ate it.
+    """
+    loaded = bd.load_by_design(DATA)
+    assert loaded.match(_f(evidence="fail_under lowered from 85 to 70")) is None
+    assert loaded.match(_f(evidence="the PR lowers fail_under from 85 to 70")) is None
 
 
 def test_warn_tier_rules_are_still_reported_outside_their_seam() -> None:

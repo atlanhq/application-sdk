@@ -118,9 +118,12 @@ suppress:
       The sdk-tests job enforces fail_under=85 and blocks below it. Whether the
       tests are MEANINGFUL is the reviewer's question and is not suppressed —
       only the raw-threshold claim is. Matching `coverage` near a percentage
-      would also drop "0% coverage of the new branch".
+      would also drop "0% coverage of the new branch", and a bare `fail_under`
+      would drop "fail_under lowered from 85 to 70" — weakening the gate is a
+      real finding, so the threshold has to be named as a comparison, not just
+      mentioned.
     match:
-      evidence: '(?i)\bfail_under\b|coverage dropped to|(?:raw )?coverage[- ]percentage comparison'
+      evidence: '(?i)coverage dropped to|below fail_under|(?:raw )?coverage[- ]percentage comparison'
 
   # -------------------------------------------------------------------------
   # owner: by-design — intentional in this location
@@ -178,15 +181,19 @@ suppress:
     source: review-policy
     reason: >-
       `CredentialRef` is a serialisable reference and carries no secret
-      material, so treating one as a secret in a Temporal payload is the
-      false-positive claim. Naming the type is not: `credential-resolve-outside-task`
-      and "use CredentialRef instead of a raw secret" both quote it on
-      purpose, and dropping them because they named the type would hide a
-      real defect. `CredentialResolver` restricted to `@task` is also
-      intentional, but a finding that the resolver ran outside `@task` is
-      real and must survive.
+      material, so the only false-positive claim is that the ref ITSELF is
+      secret material (or is unsafe to serialise because of it). Everything
+      else that names the type is a real finding and must survive:
+      `credential-resolve-outside-task`, "use CredentialRef instead of a raw
+      secret in the Temporal payload" (a recommendation TO use it), and
+      "CredentialRef is a credential reference (no actual secrets)" (which
+      asserts the opposite of the claim). So the match cannot lean on
+      `secret` near `payload`, nor on a bare "is a credential" — both are
+      words the real findings have to use. `CredentialResolver` restricted to
+      `@task` is also intentional, but a finding that the resolver ran
+      outside `@task` is real and must survive.
     match:
-      evidence: '(?i)\bCredentialRef\b.{0,80}(?:treated as (?:a )?(?:secret|credential)|(?:is|as) (?:a )?(?:secret|credential)|(?:unsafe|not safe) to pass|secret.{0,40}(?:Temporal )?payload)'
+      evidence: '(?i)\bCredentialRef\b.{0,80}(?:treated as (?:a )?(?:secret|credential|sensitive)|(?:is|contains|carries|holds)\s+(?:a\s+|the\s+)?secret material|\bis\s+(?:a\s+)?secret\b|(?:unsafe|not safe|insecure)\s+to\s+(?:pass|serialise|serialize|send)|leaks?\s+(?:a\s+)?(?:secret|credential))'
 
   - id: error-code-scheme
     owner: by-design
