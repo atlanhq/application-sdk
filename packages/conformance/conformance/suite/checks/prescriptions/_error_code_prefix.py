@@ -309,7 +309,17 @@ def resolve_ancestor(
         return None
     visiting.add(name)
     result: bool = False
+    same_name_base = False
     for base in rec.bases:
+        if base == name:
+            # A base that de-aliases to the class's own name is an import of a
+            # SAME-NAMED class from another module — Python forbids literal
+            # self-inheritance, so this is always
+            # ``from other import X as _X`` + ``class X(_X)``. The registry is
+            # keyed on the bare name and cannot hold both, so the chain is
+            # genuinely unresolvable rather than definitively negative.
+            same_name_base = True
+            continue
         sub = resolve_ancestor(
             base, target, by_name, cache, visiting, known_targets, known_ancestors
         )
@@ -318,6 +328,12 @@ def resolve_ancestor(
             break
         # sub is None (external base) or False — keep looking.
     visiting.discard(name)
+    if not result and same_name_base:
+        # Unknown, not "does not subclass": firing here is a false positive on a
+        # class that shadows its own generated base (the standard toolkit shape).
+        if not known_targets:
+            cache[name] = None
+        return None
     if not known_targets:
         cache[name] = result
     return result

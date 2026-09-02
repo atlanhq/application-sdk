@@ -357,6 +357,7 @@ def check_p013_p014(
     by_name: dict[str, ClassRecord],
     file_directives: dict[Path, dict[int, _IgnoreDirective]],
     root: Path,
+    file_records: dict[Path, list[ClassRecord]] | None = None,
 ) -> list[Finding]:
     """Emit P013/P014 for entrypoint/task methods with untyped boundary types.
 
@@ -364,11 +365,20 @@ def check_p013_p014(
     collected during the Pass 1 scan in ``scan_all`` — both must cover the full
     set of Python source files so cross-file inheritance resolution is complete.
 
+    ``by_name`` is keyed on the bare class name and is first-wins, so when two
+    files define the same name it can hold the wrong one. Python resolves an
+    annotation against the *defining module's* namespace, so when
+    ``file_records`` is supplied the classes defined in the file being scanned
+    shadow the global registry for that file — otherwise a boundary type that
+    genuinely subclasses ``Input`` reads as a violation because a same-named
+    class elsewhere in the tree does not.
+
     P013 fires for ``@entrypoint`` methods and for implicit ``run()`` overrides
     on ``App`` subclasses.  P014 fires for ``@task`` methods.  Each rule checks
     both the input parameter annotation and the return annotation.
     """
     findings: list[Finding] = []
+    file_records = file_records or {}
 
     # Memoised resolution caches shared across all files (keyed by class name).
     input_cache: dict[str, bool | None] = {}
@@ -392,6 +402,17 @@ def check_p013_p014(
         # Per-file import aliases for de-aliasing annotation class names
         # (e.g. `from .contracts import FetchInput as MyAlias`).
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+
+        # Classes defined in THIS file shadow the global first-wins registry,
+        # matching how Python resolves the annotation. Only pay for a private
+        # cache when a name is actually shadowed — otherwise the memoised
+        # resolution is shared across the whole scan as before.
+        local = {rec.name: rec for rec in file_records.get(path, [])}
+        shadows = any(by_name.get(name) is not rec for name, rec in local.items())
+        registry = {**by_name, **local} if shadows else by_name
+        in_cache = {} if shadows else input_cache
+        out_cache = {} if shadows else output_cache
+        this_app_cache = {} if shadows else app_cache
 
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
@@ -427,7 +448,7 @@ def check_p013_p014(
                         if (
                             base_name == "App"
                             or resolve_ancestor(
-                                base_name, "App", by_name, app_cache, set()
+                                base_name, "App", registry, this_app_cache, set()
                             )
                             is True
                         ):
@@ -454,11 +475,11 @@ def check_p013_p014(
                     rule_id=rule_id,
                     filename=filename,
                     directives=directives,
-                    by_name=by_name,
+                    by_name=registry,
                     sdk_contract_imports=sdk_contract_names,
                     sdk_contract_module_aliases=prov.sdk_contract_module_aliases,
                     aliases=aliases,
-                    cache=input_cache,
+                    cache=in_cache,
                 )
                 if finding is not None:
                     findings.append(finding)
@@ -473,11 +494,11 @@ def check_p013_p014(
                     rule_id=rule_id,
                     filename=filename,
                     directives=directives,
-                    by_name=by_name,
+                    by_name=registry,
                     sdk_contract_imports=sdk_contract_names,
                     sdk_contract_module_aliases=prov.sdk_contract_module_aliases,
                     aliases=aliases,
-                    cache=output_cache,
+                    cache=out_cache,
                 )
                 if finding is not None:
                     findings.append(finding)

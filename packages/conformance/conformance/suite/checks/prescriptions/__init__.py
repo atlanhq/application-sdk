@@ -292,7 +292,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                 findings.append(emit_p003(rec, leaf_prefix, directives))
 
     # Pass 4 — emit P013/P014 (cross-file boundary-type enforcement)
-    findings.extend(check_p013_p014(file_trees, by_name, file_directives, root))
+    findings.extend(
+        check_p013_p014(file_trees, by_name, file_directives, root, file_records)
+    )
 
     # Pass 5 — emit P027 (app-wide app_state read-with-no-writer)
     findings.extend(check_p027(file_trees, file_directives, root))

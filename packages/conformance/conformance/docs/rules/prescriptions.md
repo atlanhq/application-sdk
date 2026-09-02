@@ -441,6 +441,12 @@ Violations include: missing annotation, a primitive / container type (`dict`, `l
 that exists in the scanned source tree but does not transitively subclass
 `Input`/`Output` (e.g. a plain `pydantic.BaseModel` subclass or a dataclass).
 
+Annotations resolve against the *defining module* first: when two files declare the same
+class name, the one in the file being scanned wins, matching Python. A base that
+de-aliases to the class's own name (`class X(_X)` over `from generated import X as _X`)
+is an import of a same-named class, so the chain reads as unresolvable rather than as a
+proven non-contract.
+
 Suppressed declarations are still emitted to the SARIF report. This rule is `BLOCK`
 (suppress-only): an unsuppressed violation fails the conformance gate — suppress with `#
 conformance: ignore[P013] <reason>` at the method definition.
@@ -472,6 +478,12 @@ Violations include: missing annotation, a primitive / container type (`dict`, `l
 `str`, `Any`, etc. — even subscripted/bounded forms like `dict[str, str]`), or a class
 that exists in the scanned source tree but does not transitively subclass
 `Input`/`Output` (e.g. a plain `pydantic.BaseModel` subclass or a dataclass).
+
+Annotations resolve against the *defining module* first: when two files declare the same
+class name, the one in the file being scanned wins, matching Python. A base that
+de-aliases to the class's own name (`class X(_X)` over `from generated import X as _X`)
+is an import of a same-named class, so the chain reads as unresolvable rather than as a
+proven non-contract.
 
 Suppressed declarations are still emitted to the SARIF report. This rule is `BLOCK`
 (suppress-only): an unsuppressed violation fails the conformance gate — suppress with `#
