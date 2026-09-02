@@ -315,3 +315,93 @@ def test_a_deleted_file_still_counts_its_removed_lines() -> None:
     pack = build_pack(repo=REPO, diff=diff, scope="full", routing=routing)
     assert pack.changed_lines == 900
     assert pack.mode == "per_module", "a large deletion was sized as a small change"
+
+
+def test_tests_beside_the_changed_file_are_found_not_just_the_root_suite(
+    tmp_path,
+) -> None:
+    """`.github/scripts/` keeps its suite in `.github/scripts/tests/` — where
+    every CI-lane PR, the most common input this lane sees, puts its tests.
+    Looking only at `repo/tests` returned nothing for those, and `render` then
+    dropped both the section and its instruction to check it before calling
+    anything untested. Silently: an empty section and an absent one look the
+    same to the reviewer.
+    """
+    scripts = tmp_path / ".github" / "scripts"
+    (scripts / "tests").mkdir(parents=True)
+    (scripts / "widget.py").write_text("x = 1\n", encoding="utf-8")
+    (scripts / "tests" / "test_widget.py").write_text(
+        "import pytest\n", encoding="utf-8"
+    )
+
+    changed = parse_diff(
+        "diff --git a/.github/scripts/widget.py b/.github/scripts/widget.py\n"
+        "--- a/.github/scripts/widget.py\n+++ b/.github/scripts/widget.py\n"
+        "@@ -0,0 +1 @@\n+x = 1\n"
+    )
+    found = nearby_tests(tmp_path, changed)
+    assert ".github/scripts/tests/test_widget.py" in found
+
+
+def test_a_generator_of_changed_files_is_not_consumed_twice(tmp_path) -> None:
+    """`files` is typed Iterable and is now walked twice — once for the test
+    roots and once for the module names. A generator would be empty on the
+    second pass and silently return no tests."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_app.py").write_text("import pytest\n", encoding="utf-8")
+    changed = parse_diff(
+        "diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n"
+        "@@ -0,0 +1 @@\n+x = 1\n"
+    )
+    assert nearby_tests(tmp_path, iter(changed)) == ("tests/test_app.py",)
+
+
+def test_vendored_directories_do_not_consume_the_scan_budget(tmp_path) -> None:
+    """`sorted()` puts dot-prefixed directories first, and the budget used to be
+    charged before the skip — so a checked-out `.venv` could exhaust the cap
+    before one source file was read. `find_callers` then returned {} and the
+    pack printed "no references found in this repo" as a fact.
+    """
+    (tmp_path / "a.py").write_text("def target():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "caller.py").write_text("target()\n", encoding="utf-8")
+    venv = tmp_path / ".venv" / "lib"
+    venv.mkdir(parents=True)
+    for i in range(pack_mod.MAX_SCANNED_FILES + 50):
+        (venv / f"v{i}.py").write_text("pass\n", encoding="utf-8")
+
+    changed = parse_diff(
+        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1,2 @@\n"
+        "+def target():\n+    return 1\n"
+    )
+    callers = find_callers(tmp_path, touched_symbols(tmp_path, changed))
+    assert callers.get("target") == (
+        "caller.py",
+    ), "the vendored tree ate the budget before the real caller was reached"
+    assert pack_mod.SCAN_EXHAUSTED not in callers
+
+
+def test_an_exhausted_scan_is_stated_not_reported_as_zero(tmp_path) -> None:
+    """An empty result after a cut-short scan is indistinguishable from a
+    genuine zero, and the reviewer sizes findings on reachability."""
+    (tmp_path / "a.py").write_text("def target():\n    return 1\n", encoding="utf-8")
+    for i in range(5):
+        (tmp_path / f"f{i}.py").write_text("pass\n", encoding="utf-8")
+    changed = parse_diff(
+        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1,2 @@\n"
+        "+def target():\n+    return 1\n"
+    )
+    symbols = touched_symbols(tmp_path, changed)
+
+    original = pack_mod.MAX_SCANNED_FILES
+    pack_mod.MAX_SCANNED_FILES = 2
+    try:
+        callers = find_callers(tmp_path, symbols)
+    finally:
+        pack_mod.MAX_SCANNED_FILES = original
+
+    assert pack_mod.SCAN_EXHAUSTED in callers
+    routing = load_routing(ROUTING_DATA)
+    pack = build_pack(repo=REPO, diff=DIFF, scope="full", routing=routing)
+    pack.callers = callers
+    assert "caller scan hit its file budget" in render(pack, "correctness")
