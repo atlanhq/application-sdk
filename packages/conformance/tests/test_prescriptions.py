@@ -2530,3 +2530,124 @@ def test_p028_no_finding_on_dynamic_prefix_embedded_qn() -> None:
     # flagging it (which would reintroduce a false positive on non-rooted keys).
     src = 'k = f"{run_id}/{connection_qn}/current-state"\n'
     assert "P028" not in _ids(src)
+
+
+# ── P013/P014 same-bare-name resolution ───────────────────────────────────────
+
+
+def test_p014_silent_when_a_same_named_class_lives_in_another_file(
+    tmp_path: Path,
+) -> None:
+    """The annotation resolves to the class defined in the SAME module.
+
+    Two files define ``LineageInput``: a plain ``BaseModel`` in models.py and
+    the real boundary contract next to the ``@task`` that uses it. Python binds
+    the module-local one; a bare-name registry that keeps whichever it saw first
+    can bind the other and report a violation on correct code.
+    """
+    files = {
+        "models.py": (
+            "from pydantic import BaseModel\n"
+            "class LineageInput(BaseModel):\n"
+            "    path: str = ''\n"
+        ),
+        "workflow.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Input, Output\n"
+            "class LineageInput(Input):\n"
+            "    path: str = ''\n"
+            "class LineageOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def process(self, input: LineageInput) -> LineageOutput:\n"
+            "        return LineageOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
+def test_p014_still_fires_when_the_local_class_is_the_untyped_one(
+    tmp_path: Path,
+) -> None:
+    """Shadowing must not become a blanket excuse: if the module-local class is
+    the plain BaseModel, P014 still fires even though a valid same-named
+    contract exists elsewhere."""
+    files = {
+        "contracts.py": (
+            "from application_sdk.contracts import Input\n"
+            "class LineageInput(Input):\n"
+            "    path: str = ''\n"
+        ),
+        "workflow.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from pydantic import BaseModel\n"
+            "class LineageInput(BaseModel):\n"
+            "    path: str = ''\n"
+            "class LineageOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def process(self, input: LineageInput) -> LineageOutput:\n"
+            "        return LineageOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id == "P014"] == ["P014"]
+
+
+def test_p013_silent_when_a_class_shadows_its_own_generated_base(
+    tmp_path: Path,
+) -> None:
+    """The toolkit shape: the app subclasses the generated class of the SAME name.
+
+    ``from app.generated.input import AppInputContract as _Generated`` followed by
+    ``class AppInputContract(_Generated)`` de-aliases the base back to the class's
+    own name. That is never literal self-inheritance — it is an import of a
+    same-named class the bare-name registry cannot hold twice — so the chain is
+    unresolvable, not a proven non-Input.
+    """
+    files = {
+        "generated.py": (
+            "from application_sdk.contracts import Input\n"
+            "class AppInputContract(Input):\n"
+            "    connection_id: str = ''\n"
+        ),
+        "contracts.py": (
+            "from generated import AppInputContract as _GeneratedAppInputContract\n"
+            "class AppInputContract(_GeneratedAppInputContract):\n"
+            "    include_filter: str = ''\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import AppInputContract\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def extract(self, input: AppInputContract) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
+def test_p013_still_fires_on_a_resolvable_unrelated_base(tmp_path: Path) -> None:
+    """The self-name escape hatch must not leak: an ordinary resolvable class
+    that does not reach Input is still a violation."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "from pydantic import BaseModel\n"
+            "class NotAContract(BaseModel):\n"
+            "    x: int = 0\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: NotAContract) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id == "P013"] == ["P013"]
