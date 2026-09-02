@@ -1,0 +1,238 @@
+# Canonical by-design / do-not-flag data for the @sdk-loop lane.
+#
+# THIS FILE IS NEVER READ BY A MODEL. `sdk_loop_by_design.py` loads it and
+# filters the findings the reviewer returns. That is deliberate, and it is the
+# whole point: `.mothership/pr-review/references/retro-log.md` asks the model to
+# remember 185 lines of exceptions and withdraw its own findings. Asking a model
+# to reliably not-say something is the weakest possible mechanism, it costs
+# context on every round, and a miss is invisible — the finding just appears.
+#
+# Google's static-analysis programme measures the thing that matters here as the
+# EFFECTIVE false-positive rate: a finding after which the developer took no
+# positive action, whether or not it was technically correct. Their contract is
+# that an analyser above ~10% gets disabled outright. Everything in this file is
+# a pattern that scored 0% action across real reviews, so it is the runner's job
+# to drop it, not the reviewer's job to resist raising it.
+#
+# `retro-log.md` stays the human-facing record for the mothership sandbox lane,
+# which still reads it. This file is the machine-applied copy for the loop lane.
+#
+# ---------------------------------------------------------------------------
+# Two kinds of suppression, and why the distinction is load-bearing
+# ---------------------------------------------------------------------------
+#
+#   owner: ci-gate    "a deterministic gate already BLOCKS this, so restating
+#                      it costs a round and tells the author nothing new."
+#
+#   owner: by-design  "this is intentional HERE. The pattern is real elsewhere;
+#                      in this location it is the sanctioned implementation."
+#
+#   owner: tech-debt  "known, tracked, and not this PR's problem."
+#
+# The distinction is not bookkeeping. A `ci-gate` claim is a factual assertion
+# about CI that can be WRONG, and when it is wrong the rule silently stops being
+# enforced by anyone: CI does not block it and the reviewer has been told to
+# stay quiet. `never_ci_owned` below lists the rules CI surfaces but does NOT
+# block; a `ci-gate` entry naming one of them fails to load rather than
+# suppressing anything. A `by-design` entry may name them freely, because it
+# makes a claim about a location rather than about CI.
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Rules no `ci-gate` entry may claim, because CI does not block them.
+# ---------------------------------------------------------------------------
+#
+# Sourced from retro-log.md's "WARN-tier conformance rules" note and the
+# guardrail table in pr-review/CLAUDE.md. The reviewer is the ONLY enforcement
+# for these. A `ci-gate` entry naming one is a configuration bug, and
+# `load_by_design()` raises on it.
+never_ci_owned:
+  # WARN-tier conformance: surfaced, never blocking.
+  - MissingExceptionChaining
+  - OrjsonOverStdlibJson
+  - UnmarkedIntegrationTest
+  - DirectTemporalImport
+  - PrivateOrchestrationInternalImport
+  - TemporalImportOutsideAdapter
+  - RawTemporalInPublicSurface
+  - LoggerCriticalUsage
+  # Guardrails with no deterministic gate at all.
+  - G2-contract-evolution
+  - G3-determinism
+
+suppress:
+  # -------------------------------------------------------------------------
+  # owner: ci-gate — a deterministic gate already blocks it
+  # -------------------------------------------------------------------------
+
+  - id: ci-logging-hygiene
+    owner: ci-gate
+    added: "2026-06-24"
+    source: ci-redundancy-audit
+    reason: >-
+      ruff extend-select (G001/G003/G004, T201, LOG009) and the conformance
+      L-series both block these. Judgement residue is still fair game — "this
+      log line leaks a credential", "this is the wrong level" — but the
+      mechanical match belongs to CI.
+    match:
+      pattern_ids: [G001, G003, G004, T201, LOG009]
+
+  - id: ci-import-and-exception-lint
+    owner: ci-gate
+    added: "2026-06-24"
+    source: ci-redundancy-audit
+    reason: >-
+      ruff (PLC0415, F401/F403, S110/S112, isort) and the BLOCK-tier
+      conformance E-series (BareExceptPass, TypedExceptPass) block these
+      mechanically. Note that MissingExceptionChaining is deliberately NOT
+      here — it is WARN-tier and stays the reviewer's job.
+    match:
+      pattern_ids: [PLC0415, F401, F403, S110, S112, BareExceptPass, TypedExceptPass]
+
+  - id: ci-single-source-block-rules
+    owner: ci-gate
+    added: "2026-06-24"
+    source: ci-redundancy-audit
+    reason: >-
+      Each is blocked by exactly one deterministic gate — a BLOCK-tier
+      conformance rule or the Trivy gate. Flag the scoping judgement, never the
+      mechanical match.
+    match:
+      pattern_ids:
+        - UnpinnedActionReference
+        - ErrorCodePrefixMismatch
+        - CategoryFieldOverride
+
+  - id: ci-coverage-threshold
+    owner: ci-gate
+    added: "2026-06-24"
+    source: ci-redundancy-audit
+    reason: >-
+      The sdk-tests job enforces fail_under=85 and blocks below it. Whether the
+      tests are MEANINGFUL is the reviewer's question and is not suppressed —
+      only the raw percentage comparison is.
+    match:
+      evidence: '(?i)\bcoverage\b[^.\n]{0,40}\b\d{1,3}\s*%'
+
+  # -------------------------------------------------------------------------
+  # owner: by-design — intentional in this location
+  # -------------------------------------------------------------------------
+
+  - id: seam-temporal
+    owner: by-design
+    source: review-policy
+    reason: >-
+      `execution/_temporal/` IS the Temporal abstraction layer. Direct
+      `temporalio` imports are what an adapter seam looks like from the inside.
+      Outside this path the same finding is real, which is why the suppression
+      is scoped by path and not by rule id.
+    match:
+      paths: ["**/execution/_temporal/**"]
+      pattern_ids:
+        - DirectTemporalImport
+        - TemporalImportOutsideAdapter
+        - RawTemporalInPublicSurface
+        - PrivateOrchestrationInternalImport
+
+  - id: seam-dapr
+    owner: by-design
+    source: review-policy
+    reason: >-
+      `infrastructure/_dapr/` IS the Dapr abstraction layer; direct `dapr`
+      imports there are the implementation, not a violation of it.
+    match:
+      paths: ["**/infrastructure/_dapr/**"]
+      evidence: '(?m)^\s*(from\s+dapr|import\s+dapr)\b'
+
+  - id: seam-redis
+    owner: by-design
+    source: review-policy
+    reason: >-
+      `infrastructure/_redis/` IS the Redis abstraction layer.
+    match:
+      paths: ["**/infrastructure/_redis/**"]
+      evidence: '(?m)^\s*(from\s+redis|import\s+redis)\b'
+
+  - id: pytest-asyncio-marker
+    owner: by-design
+    added: "2026-05-20"
+    source: team-guidance
+    reason: >-
+      Unit tests run under `asyncio_mode="auto"`, so `@pytest.mark.asyncio` is
+      neither required nor forbidden — it is a style preference the team has
+      explicitly settled. Earlier guidance calling it redundant was retracted.
+      Neither its presence nor its absence is a finding.
+    match:
+      evidence: '@pytest\.mark\.asyncio|pytest\.mark\.asyncio'
+
+  - id: credential-ref-in-payloads
+    owner: by-design
+    source: review-policy
+    reason: >-
+      `CredentialRef` is a serialisable reference and carries no secret
+      material, so passing one through a Temporal payload is safe and is the
+      sanctioned pattern. `CredentialResolver` is restricted to `@task` methods
+      on purpose — resolution needs I/O to the secret store, which a workflow
+      method may not do.
+    match:
+      evidence: '\bCredentialRef\b|\bCredentialResolver\b'
+
+  - id: error-code-scheme
+    owner: by-design
+    source: review-policy
+    reason: >-
+      `AAF-{COMPONENT}-{ID:03d}` is the intentional error-code format, and
+      `NonRetryableError` / `RetryableError` are deliberately the only two base
+      classes. Proposals for alternative schemes or a deeper hierarchy are not
+      findings.
+    match:
+      evidence: 'AAF-[A-Z]+-\d{3}|\bNonRetryableError\b|\bRetryableError\b'
+
+  # -------------------------------------------------------------------------
+  # Conditional — by-design UNLESS the reviewer substantiates the exception.
+  # -------------------------------------------------------------------------
+  #
+  # These are the entries retro-log.md states with a threshold ("only flag if
+  # the path is hot", "only flag if heartbeat is set"). The runner cannot
+  # measure call frequency, and neither can the model — but the model CAN be
+  # required to show its working. `unless_evidence` inverts the burden: the
+  # pattern is suppressed by default and survives only when the finding's own
+  # evidence or attack_path substantiates the condition that makes it real.
+
+  - id: threadpool-in-cold-path
+    owner: by-design
+    source: review-policy
+    reason: >-
+      A `ThreadPoolExecutor` per query is acceptable in low-frequency paths
+      (<10 calls per workflow execution). It is a real finding only on a hot
+      path (100+ calls) or where the task heartbeats.
+    match:
+      evidence: '\bThreadPoolExecutor\b'
+    unless_evidence: '(?i)\b(hot path|per row|per record|heartbeat|\d{3,}\s*(calls|invocations|times)|N\+1)\b'
+
+  - id: run-in-thread-default-executor
+    owner: by-design
+    source: review-policy
+    reason: >-
+      `run_in_thread` uses the default executor for non-heartbeat tasks by
+      design. It matters only when the task sets `heartbeat_timeout_seconds`
+      AND the blocking call is long-running (>5s).
+    match:
+      evidence: '\brun_in_thread\b'
+    unless_evidence: '(?i)heartbeat_timeout_seconds|\blong[- ]running\b'
+
+  # -------------------------------------------------------------------------
+  # owner: tech-debt — known, tracked, not this PR's problem
+  # -------------------------------------------------------------------------
+
+  - id: utils-dumping-ground
+    owner: tech-debt
+    source: review-policy
+    reason: >-
+      `common/utils.py` is a known mixed-utility dumping ground, tracked
+      separately. Structural findings there are noise on any PR that happens to
+      touch the file. Security findings are NOT suppressed.
+    match:
+      paths: ["**/common/utils.py"]
+      categories: [structure, quality, maintainability]

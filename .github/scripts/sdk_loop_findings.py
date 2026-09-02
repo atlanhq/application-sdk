@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import yaml
+from sdk_loop_by_design import ByDesign
 
 #: Canonical severity data. Never read by a model — see the file's own header.
 SEVERITY_DATA = (
@@ -258,7 +259,11 @@ def parse_finding(raw: dict[str, Any]) -> Finding:
     return Finding(**known)
 
 
-def normalise(findings: Iterable[Finding], sev: Severity) -> Normalised:
+def normalise(
+    findings: Iterable[Finding],
+    sev: Severity,
+    by_design: ByDesign | None = None,
+) -> Normalised:
     """Clamp severities, apply per-severity floors, and split by destination.
 
     Order matters and is the reverse of the obvious one: clamp BEFORE the floor
@@ -283,6 +288,22 @@ def normalise(findings: Iterable[Finding], sev: Severity) -> Normalised:
         guardrail = sev.guardrail_for(finding.pattern_id)
         if guardrail is not None:
             finding.guardrail = guardrail[0]
+
+        # After the guardrail is stamped, because the by-design filter refuses
+        # to touch guardrail findings and needs the field set to know. Before
+        # the floor, because a suppressed finding should be reported as
+        # suppressed — "dropped: by-design" is auditable, "dropped: below the
+        # HIGH floor" for the same finding hides which mechanism removed it.
+        if by_design is not None:
+            entry = by_design.match(finding)
+            if entry is not None:
+                out.dropped.append(
+                    Dropped(
+                        finding,
+                        f"by-design [{entry.id}, {entry.owner}]: {entry.reason}",
+                    )
+                )
+                continue
 
         if guardrail is None and finding.confidence < sev.floor(finding.severity):
             out.dropped.append(
