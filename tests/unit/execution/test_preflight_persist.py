@@ -6,9 +6,12 @@ import asyncio
 from unittest import mock
 
 import pytest
+from pydantic import Field
 
 from application_sdk import constants
 from application_sdk.contracts.base import Input
+from application_sdk.contracts.types import ConnectionRef
+from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import AuthError
 from application_sdk.errors.wire import FailureDetails
@@ -28,12 +31,17 @@ CONNECTION_QN = "default/example-source/1700000000"
 
 
 class _ExtractionInput(Input):
-    """A minimal gate-eligible input, shaped like a connector's."""
+    """A minimal gate-eligible input, shaped and typed like a connector's.
+
+    Using the real field types means this exercises the same validation path a
+    connector's own input does, rather than a looser one that would accept a
+    shape the gate never sees.
+    """
 
     extraction_method: str = ""
     credential_guid: str = ""
-    agent_json: object | None = None
-    connection: dict = {}
+    agent_json: AgentCredentialSpec | None = None
+    connection: ConnectionRef = Field(default_factory=ConnectionRef)
 
 
 def _gate(**overrides) -> PreflightGateInput:
