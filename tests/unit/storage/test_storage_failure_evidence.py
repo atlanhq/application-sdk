@@ -26,12 +26,12 @@ from obstore.store import GCSStore, S3Store
 
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.storage.errors import (
+    StorageBucketRelocationError,
     StorageConfigError,
     StorageError,
     StorageIntegrityError,
     StorageNotFoundError,
     StoragePermissionError,
-    StoragePreconditionError,
 )
 from application_sdk.storage.ops import _obstore_http_evidence, _storage_error_for
 
@@ -73,8 +73,8 @@ def test_storage_error_sets_service_so_evidence_is_not_all_null() -> None:
         (StorageError, {"key": "artifacts/t.json"}),
         (StorageNotFoundError, {"key": "artifacts/t.json"}),
         (StoragePermissionError, {"key": "artifacts/t.json"}),
-        (StoragePreconditionError, {"key": "artifacts/t.json"}),
         (StorageConfigError, {"key": "artifacts/t.json"}),
+        (StorageBucketRelocationError, {"key": "artifacts/t.json"}),
         (StorageIntegrityError, {"key": "artifacts/t.json"}),
     ],
 )
@@ -132,27 +132,34 @@ def test_status_and_provider_code_land_in_evidence() -> None:
 # ── 3. the retry verdict follows the backend, not the raise site ────────────
 
 
-def test_precondition_is_not_retryable() -> None:
-    """The reported failure. Retrying an identical conditional write cannot succeed.
+def test_a_non_relocation_precondition_stays_a_retryable_storage_error() -> None:
+    """No leaf of its own — deliberately, after review.
 
-    Shipping it as ``DEPENDENCY_UNAVAILABLE``/``retryable=true`` spent the whole
-    retry budget re-sending a request the store had already refused, and routed
-    it to PLATFORM as though the object store were down.
+    An earlier revision routed any ``PreconditionFailed`` to a dedicated
+    non-retryable leaf. The single real instance of that status we
+    have turned out to be a bucket relocation (see the relocation test below):
+    temporary, platform-side and self-healing. That made the prior on
+    "unclassified precondition means permanent" weak, and a wrongly-permanent
+    verdict fails a run that would have recovered on its own.
+
+    The status and provider code still reach ``evidence``, which is exactly what
+    a future non-relocation case would need to argue for its own leaf.
     """
     err = _storage_error_for(
         _gcs_http_error("400 Bad Request", "PreconditionFailed"),
         "artifacts/t.json",
         "upload failed",
     )
-    assert isinstance(err, StoragePreconditionError)
+    assert type(err) is StorageError
     fd = err.to_failure_details()
-    assert fd.category is FailureCategory.PRECONDITION
-    assert fd.retryable is False
-    assert fd.audience is Audience.APP_OWNER
+    assert fd.category is FailureCategory.DEPENDENCY_UNAVAILABLE
+    assert fd.retryable is True
+    assert fd.evidence["http_status"] == 400
+    assert fd.evidence["provider_code"] == "PreconditionFailed"
 
 
-def test_azure_condition_not_met_is_a_precondition() -> None:
-    """412 is the canonical status; the provider's own token also decides."""
+def test_azure_condition_not_met_also_stays_retryable() -> None:
+    """A canonical 412 gets the same treatment, and keeps its evidence."""
     err = _storage_error_for(
         _GenericError(
             "Generic MicrosoftAzure error: Error performing PUT "
@@ -163,8 +170,11 @@ def test_azure_condition_not_met_is_a_precondition() -> None:
         "artifacts/t.json",
         "upload failed",
     )
-    assert isinstance(err, StoragePreconditionError)
-    assert err.to_failure_details().retryable is False
+    assert type(err) is StorageError
+    fd = err.to_failure_details()
+    assert fd.retryable is True
+    assert fd.evidence["http_status"] == 412
+    assert fd.evidence["provider_code"] == "ConditionNotMet"
 
 
 def test_a_real_outage_stays_retryable_even_when_the_key_contains_412() -> None:
@@ -194,7 +204,7 @@ def test_bucket_relocation_wins_over_the_precondition_rule() -> None:
 
     A bucket mid-relocation is rejected with the same HTTP 400 /
     ``PreconditionFailed`` pair that would otherwise route to
-    ``StoragePreconditionError`` — but the verdicts are opposites. A relocation
+    a plain retryable storage failure — but the verdicts differ. A relocation
     is temporary and platform-side: it clears when the move finishes, so it must
     stay retryable and PLATFORM-attributed. If the precondition rule won, a
     self-healing condition would be marked permanently failed and billed to the
@@ -219,7 +229,9 @@ def test_a_plain_precondition_is_not_mistaken_for_a_relocation() -> None:
     """The converse guard: the relocation rule needs BOTH tokens.
 
     An etag/if-match 412 says "precondition" and nothing about a relocation, so
-    it must still reach the non-retryable precondition leaf.
+    it must NOT pick up the relocation code or its remediation hint — telling an
+    operator to wait out a move that is not happening is worse than saying
+    nothing.
     """
     exc = _GenericError(
         "Generic MicrosoftAzure error: Error performing PUT "
@@ -228,8 +240,10 @@ def test_a_plain_precondition_is_not_mistaken_for_a_relocation() -> None:
         "<Error><Code>ConditionNotMet</Code></Error>"
     )
     err = _storage_error_for(exc, "artifacts/t.json", "upload failed")
-    assert isinstance(err, StoragePreconditionError)
-    assert err.to_failure_details().retryable is False
+    assert type(err) is StorageError
+    fd = err.to_failure_details()
+    assert fd.code == "DEPENDENCY_UNAVAILABLE_STORAGE"
+    assert fd.suggested_action is None
 
 
 @pytest.mark.parametrize(

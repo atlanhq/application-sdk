@@ -20,7 +20,6 @@ from application_sdk.errors import (
     STORAGE_NOT_FOUND,
     STORAGE_OPERATION,
     STORAGE_PERMISSION,
-    STORAGE_PRECONDITION,
     STORAGE_PREFLIGHT,
     STORAGE_RELOCATION,
     ErrorCode,
@@ -283,67 +282,6 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
-
-
-@dataclass(kw_only=True)
-class StoragePreconditionError(PreconditionError, StorageError):
-    """The store evaluated a precondition and refused the request.
-
-    Covers a conditional put/get whose condition did not hold, and a request
-    the backend rejected as invalid for the object's current state.
-
-    Categorical parent is ``PreconditionError`` (category=PRECONDITION,
-    non-retryable); domain parent is ``StorageError`` so ``except
-    StorageError:`` still catches. That split is the point of this class:
-    before FND-957 every write failure — including deterministic ones — was
-    raised as a plain ``StorageError``, so it shipped as
-    ``DEPENDENCY_UNAVAILABLE`` with ``retryable=true`` and the orchestrator
-    spent its whole retry budget re-sending a request the store had already
-    decided it would refuse.
-
-    The retry verdict follows the litmus test in
-    :class:`~application_sdk.errors.leaves.DependencyUnavailableError`: a call
-    that needs system state to change before it can succeed is a
-    ``PRECONDITION``, not an outage. This applies to the *write* path, where
-    the SDK re-sends an identical request on every attempt. A read that
-    re-derives its condition between attempts (the mid-download etag miss
-    handled in ``storage.chunked``) genuinely can succeed on a fresh attempt
-    and deliberately does not use this class.
-
-    ``audience`` is APP_OWNER rather than ``PreconditionError``'s USER default:
-    the artifact store belongs to the deployment, not to the customer's source
-    system, so a customer cannot act on this.
-    """
-
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_PRECONDITION
-    code: ClassVar[str] = "PRECONDITION_STORAGE"
-    default_retryable: ClassVar[bool] = False
-    audience: ClassVar[Audience] = Audience.APP_OWNER
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        key: str | None = None,
-        cause: Exception | None = None,
-        error_code: ErrorCode | None = None,
-        target: str | None = None,
-        http_status: int | None = None,
-        provider_code: str | None = None,
-    ) -> None:
-        PreconditionError.__init__(self, message=message, cause=cause)
-        _init_storage_evidence(
-            self,
-            key=key,
-            target=target,
-            http_status=http_status,
-            provider_code=provider_code,
-            error_code=error_code,
-        )
-
-    # ``error_code`` and ``__str__`` resolve to StorageError's via the MRO
-    # (PreconditionError defines neither), so they are deliberately not
-    # re-declared here.
 
 
 @dataclass(kw_only=True)

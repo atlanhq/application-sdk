@@ -45,7 +45,7 @@ import re
 import tempfile
 import time
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 import obstore
 import orjson
@@ -422,14 +422,23 @@ _LOG_CAUSE_MAX_LEN = 8000
 _OBSTORE_HTTP_STATUS_RE = re.compile(r"status code:\s*(\d{3})")
 _PROVIDER_CODE_RE = re.compile(r"<Code>([^<>]{1,64})</Code>")
 
-# The provider's own token for "you asked for a condition I will not satisfy".
-# Deliberately keyed off this rather than off :func:`_is_precondition`: that
-# helper's ``"412" in msg`` fallback matches object keys and run GUIDs that
-# merely contain the digits 412 (~1 key in 94 for our artifact layout), which
-# would reclassify a genuine 503 outage as a permanent failure.
-_PRECONDITION_PROVIDER_CODES: frozenset[str] = frozenset(
-    {"preconditionfailed", "conditionnotmet", "invalidprecondition"}
-)
+
+class _StorageEvidence(TypedDict):
+    """The kwargs every branch of :func:`_storage_error_for` splats into a leaf.
+
+    Typed rather than ``dict[str, Any]`` so pyright checks the splat against
+    each ``__init__`` it reaches. Under ``Any`` that check is silently skipped,
+    and the failure mode is the one this module exists to prevent: add a field
+    here, miss one leaf's ``__init__``, and the ``TypeError`` surfaces at raise
+    time — on the error path, under load, replacing the failure it was meant to
+    describe.
+    """
+
+    key: str
+    cause: Exception
+    http_status: int | None
+    provider_code: str | None
+    target: str | None
 
 
 def _obstore_http_evidence(exc: BaseException) -> tuple[int | None, str | None]:
@@ -514,11 +523,10 @@ def _storage_error_for(
         StorageBucketRelocationError,
         StorageConfigError,
         StorageError,
-        StoragePreconditionError,
     )
 
     http_status, provider_code = _obstore_http_evidence(exc)
-    evidence: dict[str, Any] = {
+    evidence: _StorageEvidence = {
         "key": key,
         "cause": exc,
         "http_status": http_status,
@@ -538,7 +546,7 @@ def _storage_error_for(
     # Relocation is checked BEFORE the precondition rule below, and the order is
     # load-bearing rather than stylistic. A bucket mid-relocation is rejected
     # with the same HTTP 400 / `PreconditionFailed` pair this classifier would
-    # otherwise route to `StoragePreconditionError` — but the two verdicts are
+    # otherwise be a plain retryable storage failure — but the verdicts differ:
     # opposites. A relocation is temporary and platform-side: it clears when the
     # move finishes, so it must stay retryable and PLATFORM-attributed. Letting
     # the precondition rule win would mark a self-healing condition permanently
@@ -559,26 +567,20 @@ def _storage_error_for(
             suggested_action=hint,
             **evidence,
         )
-    # 412 is the canonical precondition status; GCS also returns 400 with a
-    # PreconditionFailed body, and either reading -- the condition did not
-    # hold, or the condition itself was rejected as invalid -- fails
-    # identically on every retry of the same request. That makes it a
-    # PRECONDITION rather than an outage, per the litmus test on
-    # ``DependencyUnavailableError``.
+    # Nothing else reclassifies. A 403 or 404 is genuinely ambiguous here:
+    # ``upload_file`` accepts an explicit store, so the same status arrives both
+    # from the deployment's own artifact store (audience APP_OWNER) and from a
+    # caller-supplied store pointing at a customer bucket (audience USER).
+    # Routing audience off the status would put customer-facing attribution on
+    # our own infrastructure half the time.
     #
-    # Deliberately the ONLY status that changes the leaf. A 403 or 404 is
-    # genuinely ambiguous here: ``upload_file`` accepts an explicit store, so
-    # the same status arrives both from the deployment's own artifact store
-    # (where the audience is APP_OWNER) and from a caller-supplied store
-    # pointing at a customer bucket (where it is USER). Routing audience off
-    # the status would put customer-facing attribution on our own
-    # infrastructure half the time. The status still reaches ``evidence``, so a
-    # consumer holding the context we lack can branch on it.
-    if http_status == 412 or (
-        provider_code is not None
-        and provider_code.lower() in _PRECONDITION_PROVIDER_CODES
-    ):
-        return StoragePreconditionError(message, **evidence)
+    # A bare ``PreconditionFailed`` that is *not* a relocation deliberately
+    # stays a retryable ``StorageError`` too. The one real instance we have of
+    # that status turned out to be a relocation — temporary and self-healing —
+    # so the prior on "unclassified precondition means permanent" is weak, and
+    # a wrongly-permanent verdict fails a run that would have recovered. The
+    # status and provider code still reach ``evidence``, which is what a future
+    # non-relocation case would need to make the argument for its own leaf.
     return StorageError(message, **evidence)
 
 

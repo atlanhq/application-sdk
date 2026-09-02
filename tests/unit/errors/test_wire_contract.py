@@ -20,7 +20,11 @@ import pytest
 
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError
-from application_sdk.storage.errors import StorageError, StoragePreconditionError
+from application_sdk.storage.errors import (
+    StorageBucketRelocationError,
+    StorageError,
+    StorageNotFoundError,
+)
 
 
 class TestFailureEnvelopeWireContract:
@@ -49,22 +53,27 @@ class TestFailureEnvelopeWireContract:
         }
 
     @pytest.mark.parametrize(
-        ("member", "wire"),
+        ("factory", "wire"),
         [
-            (FailureCategory.PRECONDITION, "PRECONDITION"),
-            (FailureCategory.DEPENDENCY_UNAVAILABLE, "DEPENDENCY_UNAVAILABLE"),
-            (FailureCategory.AUTH, "AUTH"),
+            (lambda: AuthError(message="x"), "AUTH"),
+            (lambda: StorageError("x", key="k"), "DEPENDENCY_UNAVAILABLE"),
+            (lambda: StorageNotFoundError("x", key="k"), "NOT_FOUND"),
         ],
     )
-    def test_category_serialises_by_member_name(
-        self, member: FailureCategory, wire: str
+    def test_category_serialises_to_the_expected_wire_string(
+        self, factory, wire: str
     ) -> None:
         """Consumers match these strings literally, so the spelling is the contract.
 
-        ``FailureCategory`` serialises by member *name*, which means renaming a
-        member is a wire change even though it reads as a local refactor.
+        Read off the *serialised* payload, not off ``member.name``. Every
+        ``FailureCategory`` member currently has ``name == value``, so an
+        assertion against ``.name`` stays green even if the serialiser is
+        switched to ``.value`` — and then breaks silently the first time a
+        member's name and value diverge. Going through ``model_dump_json`` is
+        what actually pins the wire.
         """
-        assert member.name == wire
+        payload = json.loads(factory().to_failure_details().model_dump_json())
+        assert payload["category"] == wire
 
     def test_audience_serialises_by_member_name(self) -> None:
         payload = json.loads(
@@ -80,20 +89,21 @@ class TestFailureEnvelopeWireContract:
         alone therefore mis-attributes as soon as any app adds a leaf in that
         category — the defect tracked in FND-1140.
         """
-        precondition = StoragePreconditionError(
-            "refused", key="artifacts/k.json"
+        relocation = StorageBucketRelocationError(
+            "bucket relocating", key="artifacts/k.json"
         ).to_failure_details()
         generic = StorageError(
             "unavailable", key="artifacts/k.json"
         ).to_failure_details()
 
-        assert precondition.category is FailureCategory.PRECONDITION
-        assert precondition.code == "PRECONDITION_STORAGE"
+        # Identical category. A consumer reading only `category` cannot tell a
+        # transient store outage from a bucket mid-relocation, which have
+        # different operator responses and different remediation hints.
+        assert relocation.category is FailureCategory.DEPENDENCY_UNAVAILABLE
         assert generic.category is FailureCategory.DEPENDENCY_UNAVAILABLE
+        assert relocation.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
         assert generic.code == "DEPENDENCY_UNAVAILABLE_STORAGE"
-        # Same subsystem, same audience-relevant surface, different verdicts:
-        # only `code` separates them.
-        assert precondition.code != generic.code
+        assert relocation.code != generic.code
 
     def test_retryable_becomes_temporals_non_retryable(self) -> None:
         """``retryable`` is the retry decision, not a label.
@@ -106,7 +116,7 @@ class TestFailureEnvelopeWireContract:
         from application_sdk.execution._temporal.activities import _to_application_error
 
         permanent = _to_application_error(
-            StoragePreconditionError("refused", key="artifacts/k.json")
+            StorageNotFoundError("missing", key="artifacts/k.json")
         )
         transient = _to_application_error(
             StorageError("unavailable", key="artifacts/k.json")
@@ -117,8 +127,8 @@ class TestFailureEnvelopeWireContract:
     def test_storage_evidence_keys_reach_the_wire(self) -> None:
         """The fields a consumer branches on instead of parsing the message."""
         payload = json.loads(
-            StoragePreconditionError(
-                "refused",
+            StorageBucketRelocationError(
+                "bucket relocating",
                 key="artifacts/k.json",
                 http_status=400,
                 provider_code="PreconditionFailed",
@@ -140,12 +150,12 @@ class TestFailureEnvelopeWireContract:
 
         from application_sdk.errors.wire import FailureDetails
 
-        original = StoragePreconditionError(
-            "refused", key="artifacts/k.json", http_status=400
+        original = StorageBucketRelocationError(
+            "bucket relocating", key="artifacts/k.json", http_status=400
         ).to_failure_details()
         restored = TypeAdapter(FailureDetails).validate_json(original.model_dump_json())
 
-        assert restored.category is FailureCategory.PRECONDITION
-        assert restored.code == "PRECONDITION_STORAGE"
-        assert restored.retryable is False
+        assert restored.category is FailureCategory.DEPENDENCY_UNAVAILABLE
+        assert restored.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+        assert restored.retryable is True
         assert restored.evidence["http_status"] == 400

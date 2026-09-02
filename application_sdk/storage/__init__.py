@@ -78,7 +78,6 @@ from application_sdk.storage.errors import (
     StorageIntegrityError,
     StorageNotFoundError,
     StoragePermissionError,
-    StoragePreconditionError,
 )
 from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import (
@@ -136,7 +135,6 @@ __all__ = [
     "StorageNotFoundError",
     "StoragePermissionError",
     "StorageBucketRelocationError",
-    "StoragePreconditionError",
     "StorageConfigError",
     "StorageBindingNotFoundError",
     "StorageBindingBrokenError",

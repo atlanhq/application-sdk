@@ -31,13 +31,20 @@ What this means in practice:
 - **`category` is coarse; `code` is the specific cause.** A consumer that keys a
   customer-facing attribution on `category` alone will mis-attribute the moment
   any app adds a leaf in that category — and every category already has several.
-  This is not hypothetical: it is the defect in FND-1140, where a bare
-  `category == "PRECONDITION"` test reports unrelated failures as a
-  delete-percentage circuit-breaker abort the customer is told to fix.
+  This is not hypothetical; it has happened. If you need a `code` that does not
+  exist yet, add one here rather than inferring it from the category downstream.
 - **Renaming a field, or changing an enum's spelling, is a breaking change** for
   a consumer that cannot vote in this repo's CI. `FailureCategory` and
   `Audience` serialise by member *name*, so renaming a member is a wire change
   even though it looks like a local refactor.
+- **`evidence` is per-`service`, not comparable across producers.** Two raise
+  sites may report the same `code` and still populate `evidence` differently —
+  the object-store write path sets `target` to a `scheme://bucket/key` URI,
+  while the boot-time preflight gate sets it to the Dapr binding name for the
+  same condition. Both are "what we were talking to" for their own producer.
+  A consumer may group by `code` and read `evidence` for context, but must not
+  assume a key holds the same *kind* of value across every producer of that
+  code. If you need one that does, say so here and make it so at both sites.
 - **Adding an `evidence` key is safe; repurposing one is not.** Evidence is the
   producing dataclass's fields, so a new field appears automatically — but a
   field that changes meaning silently changes what a consumer reads. Note that
@@ -47,7 +54,7 @@ What this means in practice:
 - **`retryable` is not advisory.** It becomes `non_retryable=not
   effective_retryable` on the `ApplicationError`, so it *is* Temporal's retry
   decision. Flipping it for an existing failure class changes production retry
-  behaviour, not just a dashboard label — coordinate it (FND-957).
+  behaviour, not just a dashboard label — coordinate it before landing.
 
 ## The served manifest's resolved `task_queue`
 
