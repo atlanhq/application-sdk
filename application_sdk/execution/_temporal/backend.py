@@ -25,6 +25,10 @@ from temporalio.runtime import (
 )
 
 from application_sdk.app.entrypoint import canonical_workflow_type
+from application_sdk.common.dispatch import (
+    StampFailurePolicy,
+    resolve_dispatch_workflow_id,
+)
 from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
@@ -247,19 +251,9 @@ class TemporalExecutorBackend:
                 ``legacy_workflow_types`` alias, which is inbound-only. When
                 omitted, defaults to the app name (single-entry-point apps).
         """
-        from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
-
         correlation_id = _stamp_start_correlation(input_data, context)
-
-        prefix = context.app_name
-        config_hash = (
-            input_data.config_hash() if hasattr(input_data, "config_hash") else ""
-        )
-        short_id = uuid4().hex[:8]
-        workflow_id = (
-            f"{prefix}-{config_hash}-{short_id}"
-            if config_hash
-            else f"{prefix}-{short_id}"
+        workflow_id = resolve_dispatch_workflow_id(
+            input_data, context.app_name, on_stamp_failure=StampFailurePolicy.WARN
         )
 
         workflow_name, ep_meta = _resolve_workflow_name(app_cls, entry_point)
@@ -302,19 +296,9 @@ class TemporalExecutorBackend:
                 ``legacy_workflow_types`` alias, which is inbound-only. When
                 omitted, defaults to the app name (single-entry-point apps).
         """
-        from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
-
         correlation_id = _stamp_start_correlation(input_data, context)
-
-        prefix = context.app_name
-        config_hash = (
-            input_data.config_hash() if hasattr(input_data, "config_hash") else ""
-        )
-        short_id = uuid4().hex[:8]
-        workflow_id = (
-            f"{prefix}-{config_hash}-{short_id}"
-            if config_hash
-            else f"{prefix}-{short_id}"
+        workflow_id = resolve_dispatch_workflow_id(
+            input_data, context.app_name, on_stamp_failure=StampFailurePolicy.WARN
         )
 
         workflow_name, _ = _resolve_workflow_name(app_cls, entry_point)

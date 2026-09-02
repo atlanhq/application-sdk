@@ -46,6 +46,8 @@ class EchoOutput(Output):
 
 
 class EchoApp(App):
+    name = "kitsmoke"
+
     @task
     async def add_one(self, input: EchoInput) -> EchoOutput:
         return EchoOutput(result=input.value + 1)
