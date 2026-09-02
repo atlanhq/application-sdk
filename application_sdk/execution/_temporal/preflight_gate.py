@@ -861,6 +861,30 @@ _CLIENT_FAULT_CATEGORIES = frozenset(
 )
 
 
+#: Per ``(outcome, row-is-only-channel)``: is the interactive row loud (ERROR)?
+#:
+#: A table rather than a branch for the same reason as
+#: ``_LOG_ROW_IS_ONLY_CHANNEL`` above — the policy has to be *enumerable*, so
+#: ``test_every_interactive_outcome_has_a_level_policy`` fails CI for a new
+#: outcome nobody routed. A real crash is evidence about handler health and is
+#: loud everywhere; a client fault is the response working as designed, so it
+#: stays quiet where the response carries it (HTTP) and goes loud only where
+#: the row is the customer's only sight of it (SDR).
+_INTERACTIVE_ROW_IS_LOUD: dict[tuple[PreflightRowOutcome, bool], bool] = {
+    (PreflightRowOutcome.CRASHED, False): True,
+    (PreflightRowOutcome.CRASHED, True): True,
+    (PreflightRowOutcome.CLIENT_FAULT, False): False,
+    (PreflightRowOutcome.CLIENT_FAULT, True): True,
+}
+
+#: The outcomes :func:`emit_preflight_crash_outcome` can attribute a raise to.
+#: The gate's own verdict values never reach that site.
+INTERACTIVE_RAISE_OUTCOMES: tuple[PreflightRowOutcome, ...] = (
+    PreflightRowOutcome.CRASHED,
+    PreflightRowOutcome.CLIENT_FAULT,
+)
+
+
 def _is_client_fault(exc: BaseException) -> bool:
     """Whether ``exc`` is a client-facing input error, not a handler crash.
 
@@ -895,9 +919,10 @@ def emit_preflight_crash_outcome(
       ``outcome="crashed"`` at ERROR on every surface;
     - a client-input error (:func:`_is_client_fault` — an explicit sub-500
       ``http_status`` or a typed 4xx-class category, e.g. a wrong password)
-      emits ``outcome="client_fault"`` instead, at the surface's level policy:
-      ERROR where the row is the only channel (SDR), INFO where the response
-      already carries the failure (HTTP). Dropping these entirely would
+      emits ``outcome="client_fault"`` instead, at the level
+      ``_INTERACTIVE_ROW_IS_LOUD`` routes it to: ERROR where the row is the
+      only channel (SDR), INFO where the response already carries the failure
+      (HTTP). Dropping these entirely would
       re-open the denominator hole for the boundary steps (secret-store probe,
       credential resolution) the SDR surface wraps.
 
@@ -906,13 +931,17 @@ def emit_preflight_crash_outcome(
     class name otherwise. The split lives here, at the single emit site, so
     every surface applies the same judgement.
     """
-    client_fault = _is_client_fault(exc)
-    if not client_fault:
-        emit = log.error
-    elif _log_row_is_only_channel(surface):
-        emit = log.error
-    else:
-        emit = log.info
+    outcome = (
+        PreflightRowOutcome.CLIENT_FAULT
+        if _is_client_fault(exc)
+        else PreflightRowOutcome.CRASHED
+    )
+    # Default-loud on a table miss, mirroring :func:`_log_row_is_only_channel`:
+    # one level too loud beats losing the row.
+    loud = _INTERACTIVE_ROW_IS_LOUD.get(
+        (outcome, _log_row_is_only_channel(surface)), True
+    )
+    emit = log.error if loud else log.info
     extra: dict[str, Any] = {}
     if isinstance(exc, AppError):
         extra[FAILURE_AUDIENCE_KEY] = type(exc).audience.value
@@ -920,9 +949,7 @@ def emit_preflight_crash_outcome(
         extra["request_id"] = request_id
     emit(
         PREFLIGHT_CHECK_EVENT,
-        outcome=PreflightRowOutcome.CLIENT_FAULT.value
-        if client_fault
-        else PreflightRowOutcome.CRASHED.value,
+        outcome=outcome.value,
         reason=exc.code if isinstance(exc, AppError) else type(exc).__name__,
         app_name=app_name,
         entrypoint=entrypoint or "<implicit>",
@@ -995,8 +1022,11 @@ def _attempt_is_live() -> bool:
     """Whether this activity attempt is still the one Temporal is waiting on.
 
     An abandoned attempt (its ``start_to_close`` window closed, the retry
-    already scheduled) that emits a verdict row corrupts the
-    ``(workflow_run_id, outcome)`` series the next attempt also writes to
+    already scheduled) that emits a verdict row corrupts the outcome series
+    the next attempt also writes to: both rows land under one
+    ``workflow_run_id`` with *different* outcomes, so deduping on
+    ``(workflow_run_id, gate_attempt)`` — see the emit site's note — is what
+    keeps the highest attempt's verdict rather than an arbitrary one
     (CONNECT-1170 gap 1). Two signals, most reliable first: Temporal's own
     cancellation flag — delivered in heartbeat responses, no clocks involved —
     marks the abandoned attempt directly now that the gate beats. The deadline

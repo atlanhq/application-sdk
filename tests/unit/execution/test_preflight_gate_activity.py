@@ -27,10 +27,12 @@ from application_sdk.errors.leaves import (
     DependencyUnavailableError,
 )
 from application_sdk.execution._temporal.preflight_gate import (
+    _INTERACTIVE_ROW_IS_LOUD,
     _LOG_ROW_IS_ONLY_CHANNEL,
     EMPTY_CHECK_MATRIX,
     FAILURE_AUDIENCE_KEY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
+    INTERACTIVE_RAISE_OUTCOMES,
     PREFLIGHT_CHECK_EVENT,
     PreflightGateInput,
     PreflightSurface,
@@ -1366,6 +1368,17 @@ class TestEmitPreflightCheckOutcome:
         # notice — and pyright only warns, since this repo sets
         # reportArgumentType = "warning".
         assert set(_LOG_ROW_IS_ONLY_CHANNEL) == set(PreflightSurface)
+
+    def test_every_interactive_outcome_has_a_level_policy(self) -> None:
+        # The same enforcing half for the *outcome* vocabulary. Adding a member
+        # to INTERACTIVE_RAISE_OUTCOMES without routing it at both surfaces
+        # fails here; _INTERACTIVE_ROW_IS_LOUD defaults a miss to loud, so
+        # runtime would silently mis-level it instead.
+        assert set(_INTERACTIVE_ROW_IS_LOUD) == {
+            (outcome, only_channel)
+            for outcome in INTERACTIVE_RAISE_OUTCOMES
+            for only_channel in (False, True)
+        }
 
     @pytest.mark.parametrize("surface", list(PreflightSurface))
     def test_every_surface_emits_one_row_carrying_its_wire_string(
