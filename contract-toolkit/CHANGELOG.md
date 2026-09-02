@@ -6,6 +6,13 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.24.0] - 2026-09-02
+
+### Features
+
+- register qlik-sense-enterprise-windows connector type (#3615) ([5b65d6b](https://github.com/atlanhq/application-sdk/commit/5b65d6b))
+- optional transformed_nondata_prefix on the publish node (#3594) ([c4a0959](https://github.com/atlanhq/application-sdk/commit/c4a0959))
+
 ## [0.23.0] - 2026-08-25
 
 ### Features
