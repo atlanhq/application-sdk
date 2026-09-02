@@ -208,6 +208,15 @@ jobs:
         with:
           python-version: '3.14'
 
+      # The phase scripts run under the runner's python3, NOT `uv run` — and
+      # since the verdict renderer landed they import PyYAML. CI never saw the
+      # gap because pytest runs under uv, which has the project's deps; the
+      # workflow does not. Every review after that merge failed on import until
+      # this line. test_the_phase_job_installs_what_the_scripts_import derives
+      # the list from the scripts, so the next new import fails CI, not prod.
+      - name: Install what .github/scripts import
+        run: pip install "pyyaml>=6.0.2,<7.0.0"
+
       # A loop is up to 17 phase jobs, each on a fresh runner, so anything
       # installed per job is paid for 17 times. Cache the global npm store so
       # only the first job of a run pays the download.
