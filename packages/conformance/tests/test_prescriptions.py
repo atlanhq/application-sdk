@@ -582,9 +582,9 @@ def test_p003_silent_when_a_mixin_ancestor_overrides_emission(tmp_path: Path) ->
     files = {
         "mixin.py": (
             "class _ConnectorErrorMixin:\n"
-            "    @property\n"
-            "    def qualified_code(self):\n"
-            '        return f"{self.category.name}.{self.error_code.code}"\n'
+            "    def to_failure_details(self):\n"
+            "        details = super().to_failure_details()\n"
+            '        return details.model_copy(update={"code": self.error_code.code})\n'
         ),
         "errors.py": (
             "from mixin import _ConnectorErrorMixin\n"
@@ -594,6 +594,25 @@ def test_p003_silent_when_a_mixin_ancestor_overrides_emission(tmp_path: Path) ->
     }
     findings = _scan_files(tmp_path, files)
     assert [f.rule_id for f in findings] == []
+
+
+def test_p003_still_fires_when_only_qualified_code_is_overridden(
+    tmp_path: Path,
+) -> None:
+    """``qualified_code`` is the log surface, not the wire.
+
+    A class that overrides only that still ships ``code`` — the bare leaf — in
+    ``FailureDetails``, which is precisely the collapse P003 exists to catch.
+    Exempting on it would silence a true positive.
+    """
+    src = (
+        "class ConnectorAuthError(AuthError):\n"
+        "    @property\n"
+        "    def qualified_code(self):\n"
+        '        return f"{self.category.name}.{self.error_code.code}"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
 
 
 def test_p003_still_fires_when_the_override_is_an_unrelated_method(

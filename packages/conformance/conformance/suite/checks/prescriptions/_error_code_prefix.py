@@ -53,12 +53,17 @@ class ClassRecord:
     overrides_emission: bool = False
 
 
-# Methods that, when overridden, take the emitted code out of ``code``'s hands.
-# ``AppError.to_failure_details()`` is what builds the wire envelope and
-# ``qualified_code`` is what log surfaces read; a class that replaces either one
-# supplies its own code by another route, so ``code: ClassVar[str]`` is no
-# longer what reaches a dashboard and demanding a prefix on it is meaningless.
-EMISSION_OVERRIDES: frozenset[str] = frozenset({"to_failure_details", "qualified_code"})
+# The ONE method that, when overridden, takes the emitted code out of ``code``'s
+# hands. ``AppError.to_failure_details()`` builds the ``FailureDetails`` wire
+# envelope and is what puts ``code`` in front of a dashboard; a class that
+# replaces it supplies its own code by another route, so demanding a prefix on
+# ``code`` is meaningless there.
+#
+# ``qualified_code`` is deliberately NOT in this set. It is only the
+# log-line/human-readable surface — a class that overrides it while leaving
+# ``to_failure_details`` alone still emits the bare leaf code on the wire, which
+# is exactly the harm P003 exists to catch.
+EMISSION_OVERRIDES: frozenset[str] = frozenset({"to_failure_details"})
 
 
 def _overrides_emission(cls_node: ast.ClassDef) -> bool:

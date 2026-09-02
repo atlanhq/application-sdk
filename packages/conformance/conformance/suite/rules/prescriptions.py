@@ -147,12 +147,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "at the declaration when an intermediate is genuinely abstract — see\n"
             "typed-error-prescription §4 and BLDX-1431.\n"
             "\n"
-            "Exempt: classes whose own MRO overrides ``to_failure_details()`` or\n"
-            "``qualified_code`` — usually via a shared connector error mixin.  Those\n"
-            "build the wire envelope themselves, so ``code`` is not what a dashboard\n"
-            "reads and prefixing it would change nothing observable.  The exemption\n"
-            "is inherited, so the override may sit on the mixin rather than on each\n"
-            "exception class.\n"
+            "Exempt: classes whose own MRO overrides ``to_failure_details()`` —\n"
+            "usually via a shared connector error mixin.  Those build the wire\n"
+            "envelope themselves, so ``code`` is not what a dashboard reads and\n"
+            "prefixing it would change nothing observable.  The exemption is\n"
+            "inherited, so the override may sit on the mixin rather than on each\n"
+            "exception class.  Overriding ``qualified_code`` alone does NOT exempt:\n"
+            "that is the log surface, and the wire code still collapses to the leaf.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003",
     ),
