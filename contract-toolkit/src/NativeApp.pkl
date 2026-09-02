@@ -3056,7 +3056,13 @@ local function getInputPyField(k: String, u: Config.UIElement): String =
         getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
       else
         "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
-  else if (u is Config.NestedInput || u is Config.APITree || u is Config.ApiTreeSelect || u is Config.DsnTreeMap || u is Config.SqlTree || u is Config.AgentSelector)
+  else if (u is Config.SqlTree || u is Config.APITree || u is Config.ApiTreeSelect || u is Config.DsnTreeMap)
+    // Same bounded-string treatment App.pkl gives these widgets: `str` avoids the
+    // SDK's AAF-CTR-002 rejection of `Any`, which would otherwise force
+    // allow_unbounded_fields=True into the generated contract.
+    getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
+  else if (u is Config.NestedInput || u is Config.AgentSelector)
+    // Genuinely nested payloads — these keep Any and the opt-out that goes with it.
     getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
   else
     "\(k): str = \"\""
