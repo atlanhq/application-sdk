@@ -31,7 +31,7 @@ def integration_source():
     ...
 ```
 
-The star-import brings in the six kit fixtures (`store_root`, `infrastructure`, `embedded_temporal`, `temporal_client`, `worker`, `executor`) and the five `integration_*` override points. A connector overrides what it needs and gets the rest. There is no binding boilerplate and no names to get right; a suite whose tests already use a different name aliases in the ordinary way:
+The star-import brings in the seven kit fixtures (`store_root`, `temporary_path`, `infrastructure`, `embedded_temporal`, `temporal_client`, `worker`, `executor`) and the five `integration_*` override points. A connector overrides what it needs and gets the rest. There is no binding boilerplate and no names to get right; a suite whose tests already use a different name aliases in the ordinary way:
 
 ```python
 @pytest.fixture(scope="session")
@@ -67,7 +67,19 @@ def infrastructure(store_root, integration_secrets):
 | `integration_source` | `None` | The connector has a source to bring up: a testcontainer, an in-process HTTP fake, a credential dict. Whatever it yields is handed to `integration_secrets` and otherwise untouched. |
 | `integration_secrets` | `{}` | Credentials are read from the secret store rather than passed inline. Receives `integration_source`; returns a `{key: json}` mapping seeded into `MockSecretStore`. |
 | `integration_options` | `KitOptions()` | Any knob in the table below needs changing. |
+| `temporary_path` | Not requested — the SDK default `./local/tmp/` stands | The suite asserts on a run's **local** files. Requesting it points `TEMPORARY_PATH` — the constant and every already-imported module binding of it — at a session temp dir, so run files leave the working tree and two runs of the same suite cannot read each other's artifacts. Undone on teardown. **Session-wide while it stands** — see the caveat below. |
 | `infrastructure` | Mocked stores + `LocalStore` under `store_root` | The suite needs a real store. It receives `store_root`, `integration_source` and `integration_secrets`, so it can point at whatever the source fixture brought up. Must be a generator fixture so teardown still runs. |
+
+> **`temporary_path` redirects for the whole session.** Its scope has to be `session` — the run fixtures that consume it are class-scoped, and a class-scoped fixture cannot depend on a function-scoped one. So the first test to request it moves `TEMPORARY_PATH` for every test that follows in the same process, and `pytest tests/` runs your integration and unit tiers in one process.
+>
+> The symptom lands somewhere else: a unit test that asserts on a default-rooted path (`local/tmp/...`) starts failing once an integration test earlier in the session opts in, and the failure names the unit test. Fix it where the assumption lives, by pinning the constant in that test rather than relying on the ambient default:
+>
+> ```python
+> monkeypatch.setattr(constants, "TEMPORARY_PATH", "local/tmp")
+> ```
+>
+> This has bitten twice already — two path-normalising unit tests in a connector suite, and this repo's own guard tests, which now drive `__wrapped__` function-scoped to avoid it.
+
 
 `integration_secrets` serves `credential_ref` named-path and agent-spec resolution only. An input routed by legacy `credential_guid` resolves through `DaprCredentialVault` over a live daprd and never reads this store.
 

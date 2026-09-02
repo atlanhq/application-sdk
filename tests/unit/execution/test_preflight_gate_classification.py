@@ -60,6 +60,7 @@ from application_sdk.observability.logger_adaptor import (
     GATE_TIMEOUT_KEY,
     PREFLIGHT_SURFACE_KEY,
 )
+from application_sdk.testing.preflight import outcome_rows, single_outcome
 
 _GATE = "application_sdk.execution._temporal.preflight_gate"
 
@@ -104,31 +105,10 @@ def _gate(handler, *, enforce: bool, budget: float = 0.3):
     )
 
 
-def _outcome_rows(mock_logger) -> list[dict]:
-    # All three levels: the outcome row is the level carrier (FND-901) — a
-    # block or an unverifiable source emits it at error, advisory-failure
-    # proceeds at warning, healthy rows at info.
-    return [
-        c.kwargs
-        for c in [
-            *mock_logger.info.call_args_list,
-            *mock_logger.warning.call_args_list,
-            *mock_logger.error.call_args_list,
-        ]
-        if c.args and c.args[0] == "Preflight gate outcome"
-    ]
-
-
-def _outcome(mock_logger) -> dict:
-    """The single outcome row for one gate invocation.
-
-    Asserts exactly one: a gate call emits at most one outcome row, and
-    returning the *first* match would hide a double-emission — which is exactly
-    how a re-entrant ``_no_verdict`` slipped past this suite once already.
-    """
-    rows = _outcome_rows(mock_logger)
-    assert len(rows) == 1, f"expected exactly 1 outcome event, got {len(rows)}: {rows}"
-    return rows[0]
+# Both scans are shared: application_sdk.testing.preflight owns them, including
+# the exactly-one assertion that catches a double emission.
+_outcome_rows = outcome_rows
+_outcome = single_outcome
 
 
 def _no_outcome(mock_logger) -> bool:
