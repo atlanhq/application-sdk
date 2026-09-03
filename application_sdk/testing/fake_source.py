@@ -582,9 +582,11 @@ class HttpFakeSource:
                 # serve_forever, and therefore stop(), inside accept(). TLS 1.2
                 # is the floor: a test fake has no reason to speak 1.0/1.1, and
                 # leaving them enabled trips CodeQL py/insecure-protocol.
-                if self.ssl_context.minimum_version < ssl.TLSVersion.TLSv1_2:
-                    self.ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-                server.socket = self.ssl_context.wrap_socket(
+                tls = self.ssl_context
+                tls.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
+                if tls.minimum_version < ssl.TLSVersion.TLSv1_2:
+                    tls.minimum_version = ssl.TLSVersion.TLSv1_2
+                server.socket = tls.wrap_socket(  # codeql[py/insecure-protocol]
                     server.socket, server_side=True, do_handshake_on_connect=False
                 )
             thread = threading.Thread(
