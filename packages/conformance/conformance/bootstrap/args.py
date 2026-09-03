@@ -63,14 +63,22 @@ TRISTATE_FLAGS = (
 # ``--resync=1``.
 #
 # ``--resync`` is deliberately one blanket flag rather than a per-file
-# ``--resync-<name>`` or a target list: it covers every write-if-absent
-# scaffold whose canonical can be re-rendered from values read back off the
-# file itself, and both current members (tests.yaml, renovate.json) carry the
+# ``--resync-<name>`` or a target list: it covers everything bootstrap owns
+# that a bare re-run deliberately leaves alone, and its members carry the
 # same risk profile, so there is nothing for a caller to choose between. The
 # two write-if-absent files it does NOT cover are excluded structurally, not
 # by omission — see ``_sync_gitignore`` and ``_sync_contract_ledger``.
+#
+# ``--resync`` therefore implies ``--connector-review-kit``: the kit is
+# centrally managed and its merges preserve per-repo content (a marked block
+# in CLAUDE.md, an additive hook entry in .claude/settings.json), so it is a
+# structural catch-up target like the scaffolds. The flag survives on its own
+# for the repo that wants the kit *without* resyncing tests.yaml/renovate.json,
+# and ``main()`` still distinguishes the two: an unmergeable review block is
+# fatal when the kit was asked for by name, and skipped when it was implied.
 PRESENCE_FLAGS = {
     "--resync": "resync",
+    "--connector-review-kit": "connector_review_kit",
 }
 
 # Flags that used to exist, mapped to why they are gone. A caller still
@@ -255,7 +263,8 @@ disk in every caller repo. All of these always overwrite (re-running eradicates 
 tests.yaml, renovate.json, and contract_schema.lock.json are write-if-absent by default;
 pass --enforce true|false (or --renovate-automerge true|false) to also update
 renovate.json's enforcement mode, and --resync to pull the resyncable scaffolds'
-structure forward without disturbing their per-repo values.
+structure forward without disturbing their per-repo values — which also installs or
+updates the local connector review kit (see --connector-review-kit).
 
 The tests gate is not one of these levers. `tests / Tests Gate` becoming a required,
 unbypassable status check on the default branch is a GitHub branch-protection setting
@@ -324,7 +333,8 @@ options:
   --resync                    re-render the resyncable write-if-absent scaffolds from
                               their canonical templates, so structural catch-up lands
                               in a repo scaffolded by an older bootstrap. Covers
-                              tests.yaml and renovate.json. Off by default: these are
+                              tests.yaml and renovate.json, and implies
+                              --connector-review-kit. Off by default: these are
                               write-if-absent precisely so apps can customise them, and
                               a bare re-run must never clobber that.
                               Each re-render reuses the per-repo values read back off
@@ -351,6 +361,24 @@ options:
                               app's own ignores) and contract_schema.lock.json
                               (append-only, owned by `gen-contract-ledger`, with B005/
                               B006 tracking its drift).
+                              The connector review kit rides along under different
+                              rules — it is centrally owned rather than read back off
+                              disk, so it re-renders whole, and its two merge targets
+                              (a marked block in CLAUDE.md, one hook entry in
+                              .claude/settings.json) preserve everything around them.
+                              A target that can't be merged safely skips the kit with a
+                              message and leaves the rest of the resync to finish,
+                              rather than failing the run.
+  --connector-review-kit      install or update the centrally-managed local connector
+                              review kit (skill, non-blocking reminder, and rule-fetch
+                              script). Implied by --resync; pass it alone to adopt the
+                              kit without resyncing tests.yaml/renovate.json. Otherwise
+                              opt-in, so a bare bootstrap run never changes local
+                              Claude configuration. Existing unmarked review blocks
+                              stop for manual migration rather than being overwritten:
+                              passed by name that is an error (exit 2, nothing
+                              written); implied by --resync it is a skip, so one
+                              hand-edited CLAUDE.md cannot block a fleet resync.
   --json                       after the normal output, print one final JSON line:
                               {"skipped": bool, "touched": [...], "unchanged": [...]}.
                               `touched` lists every path this invocation actually wrote
