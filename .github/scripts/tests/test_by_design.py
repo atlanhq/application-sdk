@@ -16,6 +16,7 @@ load is malformed.
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 import pytest
@@ -31,10 +32,8 @@ from sdk_loop_findings import (  # noqa: E402
     normalise,
 )
 
-DATA = (
-    pathlib.Path(__file__).resolve().parents[3]
-    / ".mothership/pr-loop/data/by_design.yaml"
-)
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+DATA = REPO_ROOT / ".mothership/pr-loop/data/by_design.yaml"
 
 
 def _f(**kw) -> Finding:
@@ -286,15 +285,6 @@ def test_substantiation_is_read_from_evidence_or_attack_path() -> None:
             ),
             "the Dapr seam is the abstraction layer",
         ),
-        (
-            _f(
-                evidence=(
-                    "consider an alternative error-code scheme instead of "
-                    "AAF-STORAGE-001 / NonRetryableError"
-                )
-            ),
-            "scheme-proposal claim, not the identifier",
-        ),
     ],
 )
 def test_known_non_findings_are_dropped(finding: Finding, why: str) -> None:
@@ -342,15 +332,26 @@ def test_credential_ref_sentences_that_are_not_the_claim_survive(evidence: str) 
     assert bd.load_by_design(DATA).match(_f(evidence=evidence)) is None
 
 
-def test_quoting_an_error_class_from_a_real_defect_is_not_suppressed() -> None:
-    """review-policy forbids proposing a new hierarchy, not quoting the existing one."""
+def test_nothing_about_the_error_scheme_is_suppressed_any_more() -> None:
+    """Both directions are kept now, and the second is the deliberate trade.
+
+    Round 2 of this PR's review asserted the proposal was dropped and the
+    defect kept. Rounds 3-7 showed the two cannot be told apart in prose — see
+    `test_there_is_no_error_scheme_entry_and_here_is_why`. So the proposal is
+    reported too: the author dismisses it in one round, which is the cheap
+    direction of being wrong. The defect assertion is the one that matters and
+    it is unchanged.
+    """
     loaded = bd.load_by_design(DATA)
     real = _f(evidence='raise NonRetryableError("AAF-STORAGE-001")')
     proposal = _f(
         evidence="consider an alternative error-code scheme instead of NonRetryableError"
     )
     assert loaded.match(real) is None
-    assert loaded.match(proposal) is not None
+    assert loaded.match(proposal) is None, (
+        "a proposal about the error scheme is now reported, not suppressed — "
+        "if something dropped it, an entry has grown back"
+    )
 
 
 @pytest.mark.parametrize(
@@ -360,9 +361,17 @@ def test_quoting_an_error_class_from_a_real_defect_is_not_suppressed() -> None:
         # mis-routed leaf, and matching `new` + `error hierarch` suppressed it.
         "the new error hierarchy routes storage failures to a retryable leaf",
         # Wrong-leaf findings say "instead of" about the CLASSES, not about the
-        # scheme, so the comparative branch must not reach them either.
+        # scheme. A comparative branch (adjective + noun + instead of) with no
+        # proposal verb used to swallow these; the keep-regression is the
+        # load-bearing test that it stays gone.
         "raise RetryableError instead of NonRetryableError for a permanent failure",
         "the error hierarchy is not applied consistently in this handler",
+        # Same class, leaf named: adjective + noun + instead of the correct leaf.
+        "the new error hierarchy routes permanent storage failures to RetryableError instead of NonRetryableError",
+        "a separate exception class is swallowed here in place of being re-raised",
+        "the custom exception hierarchy maps timeouts to NonRetryableError rather than RetryableError",
+        "a new exception class is used here instead of chaining the original",
+        "an additional error class swallows the original rather than re-raising",
     ],
 )
 def test_error_scheme_defects_are_not_scheme_proposals(evidence: str) -> None:
@@ -370,20 +379,46 @@ def test_error_scheme_defects_are_not_scheme_proposals(evidence: str) -> None:
     assert bd.load_by_design(DATA).match(_f(evidence=evidence)) is None
 
 
-@pytest.mark.parametrize(
-    "evidence",
-    [
-        # The claim this entry exists to suppress. The previous regex wanted
-        # "alternative|new|…" and "error hierarch", so "custom" + "exception
-        # hierarchy" walked straight past it.
-        "consider using a custom exception hierarchy instead of NonRetryableError",
-        "suggest a deeper error hierarchy",
-        "propose an additional error class for storage failures",
-    ],
-)
-def test_scheme_proposals_are_dropped_however_they_are_phrased(evidence: str) -> None:
-    """Paraphrases of the proposal are the same non-finding, so all must drop."""
-    assert bd.load_by_design(DATA).match(_f(evidence=evidence)) is not None
+def test_there_is_no_error_scheme_entry_and_here_is_why() -> None:
+    """Removed after five review rounds, on purpose. Do not re-add it as a regex.
+
+    The entry suppressed proposals to replace the error scheme — a genuine
+    false positive, and a cheap one: the author says "that's intentional" and
+    loses a round. But a proposal and a defect report about the same code quote
+    the same nouns, and a reviewer's soft opener ("consider the new error class
+    here: it swallows the original") is indistinguishable from a proposal verb.
+    Each round narrowed the regex around the sentences the previous round
+    quoted; the class survived one paraphrase away every time. The last round
+    built the best remaining fix (`unless_evidence`), verified it rescued six
+    defect reports, and found four more it still swallowed. The discriminator
+    is what the sentence MEANS, and that is not in the prose.
+
+    So the fact lives in `agents/structure.md`, where a model reading the code
+    can tell a proposal from a defect. Suppression here is one-directional in
+    cost — too broad deletes a real defect silently, too narrow costs a round —
+    and this entry was on the wrong side of it.
+    """
+    ids = {e.id for e in bd.load_by_design(DATA).entries}
+    assert "error-code-scheme" not in ids
+    # And no evidence-only entry quietly took over the job under another name.
+    for entry in bd.load_by_design(DATA).entries:
+        if entry.evidence is not None and not (entry.pattern_ids or entry.paths):
+            assert not re.search(
+                r"error|exception|Retryable|AAF", entry.evidence.pattern, re.I
+            ), f"{entry.id} matches error-scheme prose — see this test's docstring"
+
+
+def test_the_error_scheme_fact_moved_to_the_brief() -> None:
+    """Removing the suppression without moving the guidance would bring back the
+    false positive it existed for. The brief is where discrimination is
+    possible, and it has to draw the exact line the regex could not."""
+    brief = (REPO_ROOT / ".mothership/pr-loop/agents/structure.md").read_text(
+        encoding="utf-8"
+    )
+    text = " ".join(brief.split())
+    assert "intentionally the only two base classes" in text
+    assert "is not a finding" in text
+    assert "raises the wrong leaf" in text, "the brief must name the defect side too"
 
 
 def test_meaningful_coverage_commentary_is_not_the_raw_threshold_claim() -> None:
