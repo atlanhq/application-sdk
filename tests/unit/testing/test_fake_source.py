@@ -151,6 +151,44 @@ class TestLifecycle:
         assert fake.base_url.startswith("http://127.0.0.1:")
         assert fake.port > 0
 
+    def test_defaults_to_loopback_so_the_fixture_case_is_unchanged(self) -> None:
+        """The default bind is the loopback/ephemeral pair fixtures rely on."""
+        source = HttpFakeSource()
+        assert source.bind_host == "127.0.0.1"
+        assert source.requested_port == 0
+        with source:
+            assert source.base_url.startswith("http://127.0.0.1:")
+            assert source.port != 0
+
+    def test_serves_a_requested_port_when_one_is_given(self) -> None:
+        """A fixed port is what a peer reaching the fake by name must dial."""
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        chosen = probe.getsockname()[1]
+        probe.close()
+
+        source = HttpFakeSource(port=chosen)
+        with source:
+            assert source.port == chosen
+            assert source.base_url == f"http://127.0.0.1:{chosen}"
+
+    def test_wildcard_bind_reports_a_dialable_base_url(self) -> None:
+        """A wildcard listens everywhere, so base_url must not echo it back.
+
+        ``0.0.0.0`` is an accept-on-every-interface instruction, not an address
+        anything can connect to. Reporting it verbatim would hand callers a URL
+        that fails at connect time, far from its cause, so base_url reports
+        loopback — a real route to this server — and the response below proves
+        the reported URL actually serves.
+        """
+        source = HttpFakeSource(bind_host="0.0.0.0")  # noqa: S104 — the case under test
+        source.route(r"/ping", lambda _r: FakeResponse.json_({"ok": True}))
+        with source:
+            assert "0.0.0.0" not in source.base_url
+            assert source.base_url == f"http://127.0.0.1:{source.port}"
+            with urllib.request.urlopen(f"{source.base_url}/ping", timeout=5) as resp:
+                assert json.loads(resp.read()) == {"ok": True}
+
     def test_base_url_before_start_is_an_error_not_a_hang(self) -> None:
         source = HttpFakeSource()
         with pytest.raises(FakeSourceNotRunningError, match="not running"):

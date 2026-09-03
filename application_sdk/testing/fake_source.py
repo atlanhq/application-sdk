@@ -96,6 +96,7 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 _LOOPBACK = "127.0.0.1"
+_WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})  # noqa: S104 — compared against, never bound by default
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 _CONNECTION_TIMEOUT_SECONDS = 5.0
 _JOIN_GRACE_SECONDS = 5.0
@@ -365,8 +366,12 @@ class HttpFakeSource:
         warn_unmatched: bool = True,
         name: str = "fake-source",
         connection_timeout: float = _CONNECTION_TIMEOUT_SECONDS,
+        bind_host: str = _LOOPBACK,
+        port: int = 0,
     ) -> None:
         self.name = name
+        self.bind_host = bind_host
+        self.requested_port = port
         self.default_content_type = default_content_type
         self.not_found_body = (
             {"error": "not found"} if not_found_body is None else not_found_body
@@ -424,7 +429,7 @@ class HttpFakeSource:
 
     @property
     def base_url(self) -> str:
-        """``http://127.0.0.1:<port>`` — the value a fixture yields.
+        """``http://<host>:<port>`` — the value a fixture yields.
 
         Only meaningful while the server is running; raises otherwise, because a
         base URL for a stopped server is a hang or a connection error later, far
@@ -437,6 +442,14 @@ class HttpFakeSource:
             )
         host, port = self._server.server_address[:2]
         host_text = host.decode() if isinstance(host, bytes) else str(host)
+        if host_text in _WILDCARD_HOSTS:
+            # A wildcard is an accept-on-every-interface instruction, not an
+            # address anything can dial. Report loopback, which is a real route
+            # to this server for every in-process caller. A peer on another host
+            # cannot use base_url at all and has to be told the reachable name
+            # (a compose service name, say) out of band — there is nothing here
+            # from which that name could be derived.
+            host_text = _LOOPBACK
         return f"http://{host_text}:{port}"
 
     @property
@@ -505,10 +518,18 @@ class HttpFakeSource:
             self._hits.clear()
 
     def start(self) -> Self:
-        """Bind an ephemeral loopback port and serve in a daemon thread."""
+        """Bind ``bind_host``/``port`` and serve in a daemon thread.
+
+        Defaults to an ephemeral loopback port, which is what an in-process
+        fixture wants. A caller serving the fake to peers — a container on a
+        compose network reaching it by service name — passes a wildcard
+        ``bind_host`` and usually a fixed ``port``.
+        """
         if self._server is not None:
             return self
-        server = _FakeSourceServer((_LOOPBACK, 0), _make_handler_class(self))
+        server = _FakeSourceServer(
+            (self.bind_host, self.requested_port), _make_handler_class(self)
+        )
         thread = threading.Thread(
             target=server.serve_forever,
             name=f"{self.name}-server",
