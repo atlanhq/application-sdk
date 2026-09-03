@@ -74,7 +74,7 @@ from sdk_loop_findings import audit_comment, load_severity
 from sdk_loop_live import FINDINGS_RELPATH, RedGreenJob, deliver, post_comment
 from sdk_loop_pack import build_pack
 from sdk_loop_pack import render as render_pack
-from sdk_loop_prep import (  # noqa: E402
+from sdk_loop_prep import (
     OUTCOME_UPDATED,
     PrepResult,
     decide,

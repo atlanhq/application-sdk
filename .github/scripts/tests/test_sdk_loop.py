@@ -1571,3 +1571,36 @@ def test_the_idle_bound_clears_the_worst_measured_healthy_turn() -> None:
     separates the two populations."""
     assert IDLE_TIMEOUT_S > 305, "below the measured max healthy turn gap"
     assert IDLE_TIMEOUT_S < 2000, "no longer catches the 43-minute stall class"
+
+
+def test_a_fast_track_cancels_the_round_chain() -> None:
+    """prep re-stamps the previous verdict on the live head, so a review would
+    re-read a diff whose verdict is already posted. Round 1 is the only gate
+    that needs to say so: rounds 2+ key off the previous pair's outcome, which
+    is empty when round 1 never ran.
+
+    Tested against the GENERATED file because that is what GitHub reads — the
+    generator being right is not the same as the committed workflow being right.
+    """
+    workflow = yaml.safe_load(
+        pathlib.Path(".github/workflows/sdk-loop.yml").read_text(encoding="utf-8")
+    )
+    gate = workflow["jobs"]["review-1"]["if"]
+    assert "needs.prep.outputs.outcome != 'fast_track'" in gate
+
+    # Fail-open, deliberately: a prep that skipped or died emits no outcome, and
+    # '' != 'fast_track' still reviews. Only the one value short-circuits.
+    assert "needs.prep.outputs.outcome == 'fast_track'" not in gate
+
+
+def test_the_summary_can_name_a_fast_track() -> None:
+    """`STOP_REASON` reads review/resolve outcomes newest-first and defaults to
+    'failed'. On a fast track none of those exist, so without prep's term the
+    author is told a phase broke on a run that did exactly what it should."""
+    workflow = yaml.safe_load(
+        pathlib.Path(".github/workflows/sdk-loop.yml").read_text(encoding="utf-8")
+    )
+    stop = workflow["jobs"]["finalize"]["steps"][-1]["env"]["STOP_REASON"]
+    assert stop.index("needs.prep.outputs.outcome == 'fast_track'") < stop.index(
+        "needs.resolve-8.outputs.outcome"
+    ), "the fast-track term must win over the round outcomes it replaces"
