@@ -234,7 +234,16 @@ def review_job(n: int) -> str:
         # `!cancelled()` rather than a dependency on prep SUCCEEDING: a prep
         # that could not tidy the branch must not cost the review. A branch
         # left behind still reviews correctly.
-        gate = "!cancelled() && needs.fence.outputs.proceed == 'true'"
+        # The fast track is the one prep outcome that CANCELS the chain
+        # rather than informing it: prep has already re-stamped the previous
+        # verdict on the live head, so a review would re-read a diff whose
+        # verdict is posted. Every other prep outcome — including a failure —
+        # still reviews, which is why this tests for one value rather than
+        # requiring success.
+        gate = (
+            "!cancelled() && needs.fence.outputs.proceed == 'true' && "
+            "needs.prep.outputs.outcome != 'fast_track'"
+        )
         needs = "[fence, prep]"
         # Fall back to the fence when prep skipped or failed — an empty
         # `new_base_sha` would checkout `ref: ''`.
@@ -334,7 +343,12 @@ def _stop_expr() -> str:
     Read newest-first so the outcome that ended the run wins over the earlier
     rounds that merely continued it.
     """
-    parts = []
+    # A fast track ends the run in prep, so no review or resolve outcome
+    # exists to describe it. Without this the chain falls through to its
+    # 'failed' default and the summary tells the author a phase broke on the
+    # run that did exactly what it was supposed to. Guarded to the one value:
+    # prep's ordinary outcomes describe branch hygiene, not why a run ended.
+    parts = ["needs.prep.outputs.outcome == 'fast_track' && 'fast_track'"]
     for n in range(MAX_ROUNDS, 0, -1):
         parts.append("needs.resolve-%d.outputs.outcome" % n)
         parts.append("needs.review-%d.outputs.outcome" % n)
@@ -342,7 +356,11 @@ def _stop_expr() -> str:
 
 
 def _rounds_expr() -> str:
-    rows = []
+    rows = [
+        '{"number":0,"phase":"prep","outcome":"${{ needs.prep.outputs.outcome }}",'
+        '"verdict":"","sha":"${{ needs.prep.outputs.new_base_sha }}",'
+        '"detail":"${{ needs.prep.outputs.detail }}","cost":"","usage":""}'
+    ]
     for n in range(1, MAX_ROUNDS + 1):
         for phase in ("review", "resolve"):
             job = f"{phase}-{n}"
