@@ -274,6 +274,32 @@ class TestLifecycle:
         with source:
             assert source.base_url.startswith("http://")
 
+    def test_failed_tls_wrap_releases_the_bound_port(self) -> None:
+        """A wrap_socket failure after bind must not leak the listening socket.
+
+        ``_FakeSourceServer`` binds immediately. If wrap then raises, ``_server``
+        is never stored and ``stop()`` cannot close the port — unless start()
+        closes the server on the way out.
+        """
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        chosen = probe.getsockname()[1]
+        probe.close()
+
+        # PROTOCOL_TLS_CLIENT raises after bind: check_hostname needs a hostname
+        # that a server-side wrap never has.
+        source = HttpFakeSource(
+            port=chosen, ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        )
+        with pytest.raises(ValueError, match="check_hostname"):
+            source.start()
+
+        rebound = socket.socket()
+        try:
+            rebound.bind(("127.0.0.1", chosen))
+        finally:
+            rebound.close()
+
     def test_base_url_before_start_is_an_error_not_a_hang(self) -> None:
         source = HttpFakeSource()
         with pytest.raises(FakeSourceNotRunningError, match="not running"):
@@ -911,6 +937,29 @@ class TestThreadTeardown:
     ) -> None:
         HttpFakeSource().stop()
         assert warnings == []
+
+    def test_stop_returns_when_a_tcp_peer_never_handshakes(
+        self, tmp_path: Path
+    ) -> None:
+        """A TCP connect that never speaks TLS must not stall stop() in shutdown()."""
+        cert, key = _self_signed_cert(tmp_path, "127.0.0.1")
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+        source = HttpFakeSource(ssl_context=ctx, connection_timeout=0.2)
+        source.start()
+        peer = socket.create_connection(("127.0.0.1", source.port), timeout=5)
+        try:
+            # Let serve_forever accept and enter the TLS handshake so this
+            # actually covers the hang, not just an idle accept loop.
+            time.sleep(0.05)
+            started = time.monotonic()
+            source.stop()
+            elapsed = time.monotonic() - started
+            budget = 0.2 + fake_source._JOIN_GRACE_SECONDS
+            assert elapsed <= budget
+        finally:
+            peer.close()
+            source.stop()
 
 
 class TestHyphenatedResponseHeaders:

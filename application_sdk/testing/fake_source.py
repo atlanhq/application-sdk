@@ -317,10 +317,39 @@ class _FakeSourceServer(ThreadingHTTPServer):
 
     daemon_threads = True
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        handshake_timeout: float | None = None,
+        **kwargs: Any,
+    ) -> None:
         self._handler_threads: set[threading.Thread] = set()
         self._handler_lock = threading.Lock()
+        self.handshake_timeout = handshake_timeout
         super().__init__(*args, **kwargs)
+
+    def get_request(self) -> tuple[Any, Any]:
+        """Accept one connection, then handshake TLS under ``handshake_timeout``.
+
+        The listening socket is wrapped with ``do_handshake_on_connect=False``, so
+        ``accept()`` returns as soon as TCP completes. Handshake then happens here
+        with the same timeout that bounds :meth:`HttpFakeSource.stop`. Without that,
+        a peer that connects and never speaks TLS parks ``serve_forever`` inside
+        ``SSLSocket.accept()``, and ``shutdown()`` waits forever on it.
+        """
+        request, client_address = super().get_request()
+        handshake = getattr(request, "do_handshake", None)
+        if handshake is None or self.handshake_timeout is None:
+            return request, client_address
+        previous = request.gettimeout()
+        try:
+            request.settimeout(self.handshake_timeout)
+            handshake()
+        except BaseException:
+            request.close()
+            raise
+        request.settimeout(previous)
+        return request, client_address
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
         current = threading.current_thread()
@@ -539,21 +568,30 @@ class HttpFakeSource:
         if self._server is not None:
             return self
         server = _FakeSourceServer(
-            (self.bind_host, self.requested_port), _make_handler_class(self)
+            (self.bind_host, self.requested_port),
+            _make_handler_class(self),
+            handshake_timeout=(
+                self.connection_timeout if self.ssl_context is not None else None
+            ),
         )
-        if self.ssl_context is not None:
-            # Wrap the listening socket, so every accepted connection is a TLS
-            # one. Done here rather than per-request because the handler class
-            # is shared and knows nothing about transport.
-            server.socket = self.ssl_context.wrap_socket(
-                server.socket, server_side=True
+        try:
+            if self.ssl_context is not None:
+                # Wrap the listening socket so every accepted connection is TLS.
+                # Handshake is deferred to get_request (do_handshake_on_connect=
+                # False) so a TCP peer that never speaks TLS cannot stall
+                # serve_forever, and therefore stop(), inside accept().
+                server.socket = self.ssl_context.wrap_socket(
+                    server.socket, server_side=True, do_handshake_on_connect=False
+                )
+            thread = threading.Thread(
+                target=server.serve_forever,
+                name=f"{self.name}-server",
+                daemon=True,
             )
-        thread = threading.Thread(
-            target=server.serve_forever,
-            name=f"{self.name}-server",
-            daemon=True,
-        )
-        thread.start()
+            thread.start()
+        except BaseException:
+            server.server_close()
+            raise
         self._server = server
         self._thread = thread
         return self
