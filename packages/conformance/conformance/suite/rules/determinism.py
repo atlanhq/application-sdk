@@ -364,9 +364,10 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P036",
         canonical_reference=(
             "No reference app builds a ProcessPoolExecutor or a multiprocessing child. The "
-            "seam is application_sdk/_runtime/offload.py — `run_fault_isolated` and "
-            "`run_best_effort`, which own the pool lifecycle, the timeout and what a "
-            "crashed child means for the activity."
+            "seam is application_sdk/execution/heartbeat.py — `run_fault_isolated` and "
+            "`run_best_effort`, re-exported there as the documented app-facing path, which "
+            "own the pool lifecycle, the timeout and what a crashed child means for the "
+            "activity."
         ),
         scope=RuleScope.BOTH,
         name="HandRolledProcessIsolation",

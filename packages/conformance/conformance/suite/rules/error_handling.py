@@ -307,10 +307,11 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "No reference app calls asyncio.gather(return_exceptions=True); per-item "
             "failure is decided at the item, as in atlan-metabase-app "
-            "app/extracts/collections.py. Where an app genuinely needs concurrency the "
-            "seam is application_sdk/_runtime/offload.py — run_in_thread / "
-            "run_fault_isolated / run_best_effort, which surface per-unit failures for "
-            "you."
+            "app/extracts/collections.py. Where an app genuinely needs concurrency, the "
+            "app-facing seam is application_sdk/execution/heartbeat.py — run_in_thread / "
+            "run_fault_isolated / run_best_effort, which surface per-unit failures for you "
+            "(`_runtime.offload` is the SDK-internal path; importing it from an app is "
+            "what P005 exists to catch)."
         ),
         scope=RuleScope.BOTH,
         name="AsyncioGatherExceptionsUnexamined",

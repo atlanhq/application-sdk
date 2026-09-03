@@ -1597,9 +1597,9 @@ worker's process model — the class of bug behind the CNCT-85 worker crash.
 ### What correct looks like
 
 - **Compliant example:** No reference app builds a ProcessPoolExecutor or a multiprocessing child. The seam is
-  application_sdk/_runtime/offload.py — `run_fault_isolated` and `run_best_effort`,
-  which own the pool lifecycle, the timeout and what a crashed child means for the
-  activity.
+  application_sdk/execution/heartbeat.py — `run_fault_isolated` and `run_best_effort`,
+  re-exported there as the documented app-facing path, which own the pool lifecycle, the
+  timeout and what a crashed child means for the activity.
 
 Code constructs a process-based execution primitive directly —
 `ProcessPoolExecutor(...)` or `multiprocessing.Process(...)` / `Pool(...)` — instead of
