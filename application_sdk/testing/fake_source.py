@@ -579,7 +579,11 @@ class HttpFakeSource:
                 # Wrap the listening socket so every accepted connection is TLS.
                 # Handshake is deferred to get_request (do_handshake_on_connect=
                 # False) so a TCP peer that never speaks TLS cannot stall
-                # serve_forever, and therefore stop(), inside accept().
+                # serve_forever, and therefore stop(), inside accept(). TLS 1.2
+                # is the floor: a test fake has no reason to speak 1.0/1.1, and
+                # leaving them enabled trips CodeQL py/insecure-protocol.
+                if self.ssl_context.minimum_version < ssl.TLSVersion.TLSv1_2:
+                    self.ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
                 server.socket = self.ssl_context.wrap_socket(
                     server.socket, server_side=True, do_handshake_on_connect=False
                 )
