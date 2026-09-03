@@ -29,12 +29,49 @@ are spent:
 
 | Layer | Tool | Posture | On finding |
 |-------|------|---------|------------|
-| **Hardcoded secrets** | [`gitleaks`](https://github.com/gitleaks/gitleaks) over the working tree | **Blocking** | any committed secret (API key, token, private key, …) **fails the publish** |
+| **Hardcoded secrets** | [`gitleaks`](https://github.com/gitleaks/gitleaks) over the shipped source | **Blocking** | any committed secret (API key, token, private key, …) **fails the publish** |
 | **Creds-into-logs** | `scan.py` regex scanner (`.github/scripts/credential-leak-gate/`) | **Warn-only** | CRITICAL/HIGH findings annotate the run summary + ping Slack; publish proceeds |
 
 `MEDIUM`/`LOW` creds-into-logs findings (e.g. `helm --set password=` in an e2e
 script, or anything under a `tests/` path) are counted but not surfaced as
 warnings.
+
+### What the gitleaks layer does not scan
+
+The **gitleaks layer** scans a pruned copy of the checkout with `tests/`,
+`test/` and `.github/` removed (FND-678). Nothing under those paths can block a
+publish. The copy matters: the warn-only creds-into-logs layer still scans the
+full `app/` tree afterwards, so this narrowing applies to the blocking layer
+only.
+
+Hermetic fixtures are *built out of* credential-shaped strings, and a
+value-shaped detector cannot tell a generated golden dossier of fake API keys
+from a leak: one such file blocked `atlan-microstrategy-app`'s publish with 148
+`generic-api-key` findings. The alternative — every app carrying a hand-written
+`.gitleaks.toml`, extended one false-positive shape at a time — puts the fleet's
+release path behind a config schema that **fails silently** on the pinned
+gitleaks 8.21.2 (see FND-679: the plural `[[allowlists]]` form is parsed and
+ignored, with no warning and no non-zero exit).
+
+This is a deliberate **narrowing of the gate**, not a false-positive filter. Be
+explicit about the cost: a real credential committed under `tests/` or
+`.github/` is no longer reported by this gate. Measured on the pinned 8.21.2
+against a synthetic tree, pruning took a scan from 152 findings to 2 — it
+dropped 148 fixture false positives *and* 2 genuine planted tokens that lived
+under those paths.
+
+What still covers those paths:
+
+- **The creds-into-logs layer in this same job** — it scans `--root app`, the
+  unpruned tree, and is unaffected.
+- **`S001 HardcodedCredential` / `S002 RawEnvCredentialAccess`** (conformance
+  S-series) read test sources and are not affected by this pruning.
+- **The nightly `credential-leak-scan`** in `atlanhq/connector-pulse` still
+  walks the whole tree, including tests and CI wiring.
+
+Pruning a copy rather than allowlisting is what makes this immune to gitleaks
+config-schema skew, and means it needs no merge with an app-level
+`.gitleaks.toml`.
 
 ## How blocking works
 
@@ -109,8 +146,29 @@ and severity.
 ## Acting on a finding
 
 **Hardcoded secret (gitleaks) — blocks:** remove the secret, **rotate** any
-value that was committed, and re-run. Genuine false positives go in an app-level
-`.gitleaks.toml` config (the gate passes `--config .gitleaks.toml` when present).
+value that was committed, and re-run. Because `tests/`, `test/` and `.github/`
+are not scanned at all, a finding here is in **shipped application source** —
+treat it as real before reaching for an allowlist.
+
+For a genuine false positive in shipped source, an app-level `.gitleaks.toml`
+is still honoured (the gate passes `--config .gitleaks.toml` when present).
+Write it as a **single singular `[allowlist]` table** with `regexTarget =
+"line"`: the pinned 8.21.2 silently ignores the plural `[[allowlists]]` array
+form, so a config written that way validates against a modern local binary and
+does nothing in CI (FND-679). Prefer scoping an entry by the *value shape* over
+the file path, so a real secret added to the same file is still caught:
+
+```toml
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Well-known local-emulator constant, grants access to nothing"
+regexTarget = "line"
+regexes = [
+  '''AccountName=devstoreaccount1''',
+]
+```
 
 **Creds-into-logs (`scan.py`) — warning, does not block:** route the credential
 through the SDK redaction helper before the sink, or drop the log line.

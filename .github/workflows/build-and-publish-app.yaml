@@ -657,6 +657,10 @@ jobs:
   #   1. Hardcoded secrets (gitleaks) — BLOCKING. A committed secret (API key,
   #      token, private key) fails the job, which trips prepare's `!failure()`
   #      and skips build + publish. High precision; honors .gitleaks.toml.
+  #      Scans shipped application source only: `tests/`, `test/` and `.github/`
+  #      are pruned before the scan (FND-678) because hermetic fixtures are made
+  #      of credential-shaped strings that no value-shaped detector can tell from
+  #      a leak.
   #   2. Creds-into-logs (scan.py) — WARN-ONLY. Flags credentials reaching
   #      log/print/format/CLI sinks (the APP-1602 audit class). Pure-regex
   #      detection has an irreducible false-positive rate (it cannot always tell
@@ -741,6 +745,32 @@ jobs:
           # Scan the working tree, not git history: a publish checkout is a
           # single shallow commit. Drop .git so gitleaks doesn't walk internals.
           rm -rf .git
+          # Test fixtures and CI wiring are out of scope for THIS layer (FND-678).
+          # Hermetic fixtures are *built* out of credential-shaped strings — a
+          # generated golden dossier of fake API keys is indistinguishable from a
+          # leak to a value-shaped detector, and blocked atlan-microstrategy-app's
+          # publish on 148 `generic-api-key` hits in a single file. Every app
+          # would otherwise owe the same hand-written `.gitleaks.toml`, one
+          # false-positive shape at a time, on a config schema that fails silently
+          # on the pinned 8.21.2 (FND-679).
+          #
+          # This is a deliberate narrowing of the gate, not a false-positive
+          # filter: a real credential committed under these paths is no longer
+          # reported by gitleaks. It is the tradeoff chosen for the noise. Pruning
+          # rather than allowlisting keeps this immune to gitleaks config-schema
+          # skew and needs no merge with an app's own `.gitleaks.toml` below.
+          #
+          # Prune a COPY, never `app/` itself: the warn-only creds-into-logs layer
+          # below scans `--root app` afterwards, and deleting in place would
+          # silently narrow that layer too. Scanning `.` from inside the copy keeps
+          # reported paths repo-relative (`app/foo.py`), so the summary and Slack
+          # locations are unchanged.
+          SCAN_DIR=/tmp/gitleaks-scan
+          rm -rf "$SCAN_DIR"
+          mkdir -p "$SCAN_DIR"
+          cp -a . "$SCAN_DIR"/
+          rm -rf "$SCAN_DIR/tests" "$SCAN_DIR/test" "$SCAN_DIR/.github"
+          cd "$SCAN_DIR"
           CONFIG_ARGS=()
           if [ -f .gitleaks.toml ]; then
             echo "Using app-level .gitleaks.toml allowlist"
@@ -765,7 +795,7 @@ jobs:
             {
               echo "### ❌ Publish blocked — hardcoded secret(s) detected"
               echo ""
-              echo "gitleaks found ${COUNT} hardcoded secret(s) in the source. Locations only (values withheld):"
+              echo "gitleaks found ${COUNT} hardcoded secret(s) in shipped application source (\`tests/\`, \`test/\` and \`.github/\` are not scanned). Locations only (values withheld):"
               echo ""
               jq -r '.[] | "- `\(.File):\(.StartLine)` — rule: \(.RuleID)"' /tmp/gitleaks-report.json 2>/dev/null || true
               echo ""
