@@ -556,7 +556,7 @@ def _merge_connector_review_claude(dest: pathlib.Path) -> str:
 def _sync_connector_review_kit(
     root: pathlib.Path, settings: str | None, claude: str
 ) -> list[tuple[pathlib.Path, str]]:
-    """Write the opt-in review kit after its merge targets were preflighted."""
+    """Write the review kit after its merge targets were preflighted."""
     changes: list[tuple[pathlib.Path, str]] = []
     for dest_rel, template_name, executable in MANAGED_CONNECTOR_REVIEW_FILES:
         dest = root / dest_rel
@@ -671,12 +671,19 @@ def main(argv: list[str]) -> int:
     # a write-mode toggle, not a template variable, and render() takes an exact
     # keyword set.
     resync = kwargs.pop("resync") == "true"
-    connector_review_kit = kwargs.pop("connector_review_kit") == "true"
+    # --resync is "pull forward everything bootstrap owns that a bare re-run
+    # leaves alone", and the review kit is exactly that: centrally owned, and
+    # merged rather than clobbered, so it belongs to the same catch-up. The
+    # flag stays meaningful on its own for a repo adopting the kit without
+    # resyncing its scaffolds, and which of the two happened decides how an
+    # unmergeable target is reported below.
+    kit_requested = kwargs.pop("connector_review_kit") == "true"
+    connector_review_kit = kit_requested or resync
     apply_bootstrap_autodetection(kwargs, root)
 
-    # Validate shared config before bootstrap writes anything. The kit is
-    # intentionally opt-in and must never overwrite a hand-maintained review
-    # block or malformed settings file during a fleet rollout.
+    # Validate shared config before bootstrap writes anything. The kit must
+    # never overwrite a hand-maintained review block or a malformed settings
+    # file during a fleet rollout.
     connector_review_settings: str | None = None
     connector_review_claude = ""
     if connector_review_kit:
@@ -686,8 +693,22 @@ def main(argv: list[str]) -> int:
             )
             connector_review_claude = _merge_connector_review_claude(root / "CLAUDE.md")
         except ConnectorReviewMergeError as error:
-            print(f"error: {error}", file=sys.stderr)
-            return 2
+            # Asked for by name: the whole invocation was about the kit, so
+            # fail loudly and write nothing.
+            if kit_requested:
+                print(f"error: {error}", file=sys.stderr)
+                return 2
+            # Implied by --resync: the kit is one target among several
+            # independent ones, so skip it the way a scaffold whose values
+            # can't be read back is skipped (see _resync_scaffold) and let the
+            # rest of the resync land. Otherwise one hand-edited CLAUDE.md
+            # would block a repo's tests.yaml/renovate.json catch-up too.
+            print(
+                f"skipped: {error}; the connector review kit was left untouched"
+                " (migrate the block by hand, then re-run with"
+                " --connector-review-kit)"
+            )
+            connector_review_kit = False
 
     # Resolve the two 0-touch levers, each independently expressible:
     #

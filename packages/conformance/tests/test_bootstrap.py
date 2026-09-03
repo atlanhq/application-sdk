@@ -266,6 +266,26 @@ def test_cmd_bootstrap_writes_skill_md(
     assert dest.read_text() == render("remediate.md")
 
 
+@pytest.mark.parametrize("argv", [[], ["--resync"]])
+def test_cmd_bootstrap_restores_a_drifted_remediate_skill(
+    argv: list[str], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The remediate skill is always-overwrite, so it needs no --resync opt-in.
+
+    It is the one managed file a caller most expects --resync to cover, and it
+    is covered more strongly than that: a bare re-run already eradicates its
+    drift. Locked under both argvs so nobody "adds it to --resync" by making
+    it write-if-absent first.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    dest = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
+    dest.write_text("# hand-edited, missing everything newer\n")
+
+    _cmd_bootstrap(argv)
+    assert dest.read_text() == render("remediate.md")
+
+
 def _seed_conformance_pyproject(repo_root: pathlib.Path) -> None:
     """Create a minimal packages/conformance/pyproject.toml naming this exact
     package, matching what the real SDK monorepo checkout has on disk."""
@@ -2589,6 +2609,77 @@ def test_cmd_bootstrap_connector_review_kit_preserves_unverified_legacy_suffix(
     assert _cmd_bootstrap(["--connector-review-kit"]) == 2
     assert claude.read_text().endswith("### App notes\nKeep this.\n")
     assert not (tmp_path / ".claude" / "skills" / "connector-review").exists()
+
+
+def test_resync_installs_the_connector_review_kit(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--resync is the fleet's structural catch-up, so it carries the kit too."""
+    monkeypatch.chdir(tmp_path)
+
+    assert _cmd_bootstrap(["--resync"]) == 0
+
+    for dest_rel, template_name, _executable in MANAGED_CONNECTOR_REVIEW_FILES:
+        assert (tmp_path / dest_rel).read_text() == render(template_name)
+    assert (
+        "BEGIN APPLICATION SDK CONNECTOR REVIEW" in (tmp_path / "CLAUDE.md").read_text()
+    )
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"] == (
+        ".claude/hooks/connector-review-reminder.sh"
+    )
+
+
+def test_bare_rerun_never_installs_the_connector_review_kit(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only --connector-review-kit or the --resync that implies it may opt in.
+
+    The other half of the contract: --resync gained the kit, a bare re-run
+    must still leave local Claude configuration alone.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    assert _cmd_bootstrap([]) == 0
+
+    for dest_rel, _template_name, _executable in MANAGED_CONNECTOR_REVIEW_FILES:
+        assert not (tmp_path / dest_rel).exists()
+    assert not (tmp_path / "CLAUDE.md").exists()
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_resync_skips_an_unmergeable_kit_without_failing_the_run(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One hand-edited CLAUDE.md must not block a repo's scaffold catch-up.
+
+    Passed by name the same block is a hard error (exit 2) — see
+    test_cmd_bootstrap_connector_review_kit_preserves_unverified_legacy_suffix.
+    Implied by --resync it is a skip, so the tests.yaml/renovate.json
+    re-render still lands.
+    """
+    claude = tmp_path / "CLAUDE.md"
+    claude.write_text(
+        _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK + "\n### App notes\nKeep this.\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _cmd_bootstrap(["--resync"]) == 0
+
+    out = capsys.readouterr().out
+    assert "skipped: cannot safely merge" in out
+    assert "--connector-review-kit" in out
+    assert claude.read_text().endswith("### App notes\nKeep this.\n")
+    assert not (tmp_path / ".claude" / "skills" / "connector-review").exists()
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+    # The rest of the resync is unaffected.
+    assert (tmp_path / ".github" / "workflows" / "tests.yaml").read_text() == render(
+        "tests.yaml", app_name=derive_app_name_from_dir(tmp_path)
+    )
 
 
 @pytest.mark.parametrize(

@@ -118,8 +118,9 @@ MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     (".github/scripts/probe_code_scanning.py", "probe_code_scanning.py"),
 )
 
-# Opt-in local connector-review kit. These paths are owned by bootstrap after
-# the fleet rollout invokes ``bootstrap --connector-review-kit``.
+# Local connector-review kit. These paths are owned by bootstrap once a repo
+# opts in, via ``bootstrap --connector-review-kit`` or the ``bootstrap
+# --resync`` that implies it.
 # (destination, template, must be executable)
 MANAGED_CONNECTOR_REVIEW_FILES: tuple[tuple[str, str, bool], ...] = (
     ("scripts/fetch-review-rules.sh", "fetch-review-rules.sh", True),
