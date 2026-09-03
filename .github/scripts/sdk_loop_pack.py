@@ -436,7 +436,7 @@ def build_pack(
     return pack
 
 
-def render(pack: Pack, agent: str) -> str:
+def render(pack: Pack, agent: str, rules_section: str = "") -> str:
     """The reviewer's first turn, as text.
 
     Every cap that bit is stated. A pack that silently truncated would let the
@@ -483,6 +483,12 @@ def render(pack: Pack, agent: str) -> str:
 
     if pack.gate:
         lines += ["", "## Already blocked by CI — do not restate", "", pack.gate]
+
+    # Selected per specialist by `sdk_loop_rules`: full text for rules whose
+    # identifiers the diff contains, a one-line claim for the rest. This is the
+    # sentence in REVIEW.md — "the rules that apply to these paths" — made true.
+    if rules_section:
+        lines += ["", rules_section]
 
     if SCAN_EXHAUSTED in pack.callers:
         lines += [

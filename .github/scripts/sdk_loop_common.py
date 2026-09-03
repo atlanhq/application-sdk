@@ -330,8 +330,8 @@ RESEARCH_DISCIPLINE = """## Before you research anything outside this repo
 
 1. **Check local prior art first — then judge it, do not re-derive it.** The
    answer is often already recorded here: a comment beside the code, a lint
-   config that grandfathers a case *with its reasoning*, `retro-log.md`, the
-   reference rules you own. Verifying a suppression is your job — a reviewer
+   config that grandfathers a case *with its reasoning*, the rules in your
+   context. Verifying a suppression is your job — a reviewer
    who accepts every "false positive, I checked" is how bad ignores land — but
    verifying it means **judging whether the stated evidence is specific and
    checkable**, not independently rebuilding the proof. A justification that
@@ -362,7 +362,11 @@ def _agent_prompt(name: str) -> str:
     the single most dangerous failure mode in a review lane, because nothing
     downstream distinguishes it from a clean pass.
     """
-    path = os.path.join(".mothership", "pr-review", "agents", f"{name}.md")
+    # The loop lane's briefs, not the sandbox lane's. The old briefs emit
+    # three fields the poster must strip, use a severity vocabulary the
+    # renderer fails the round on, and tell the agent to orchestrate; a
+    # sub-agent handed one under the new playbook is running the old contract.
+    path = os.path.join(".mothership", "pr-loop", "agents", f"{name}.md")
     with open(path, encoding="utf-8") as handle:
         return handle.read()
 
@@ -534,7 +538,11 @@ def solo_scope(scope: str, files: Sequence[str] = ()) -> str:
     return agents[0] if len(agents) == 1 else ""
 
 
-def review_subagents(model: str, only: Sequence[str] = ()) -> dict[str, Any]:
+def review_subagents(
+    model: str,
+    only: Sequence[str] = (),
+    context: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """opencode subagent entries for the playbook's Phase 2 agents.
 
     Each is read-only by construction: the review lane holds a token with no
@@ -569,7 +577,20 @@ def review_subagents(model: str, only: Sequence[str] = ()) -> dict[str, Any]:
             # the sub-agent no instructions at all and look exactly like a slow
             # review. Reading it in Python removes the question: the file is
             # either present or the phase fails loudly with a traceback.
-            "prompt": f"{RESEARCH_DISCIPLINE}\n\n{_agent_prompt(name)}",
+            # The brief is the domain; `context` is everything else the
+            # specialist needs — the shared judgement contract, the pack, and
+            # the rules for its paths. Without it a sub-agent has a domain and
+            # no idea what counts as a finding, what the diff is, or which
+            # rules apply — which is what the first cutover shipped.
+            "prompt": "\n\n".join(
+                p
+                for p in (
+                    RESEARCH_DISCIPLINE,
+                    _agent_prompt(name),
+                    (context or {}).get(name, ""),
+                )
+                if p
+            ),
             # Enumerated in full, mirroring the primary agent, because a
             # PARTIAL block here was not equivalent: `external_directory` and
             # `doom_loop` ask unless listed, headless opencode has nobody to
@@ -625,6 +646,7 @@ def opencode_config(
     model: str,
     with_subagents: bool = False,
     subagents: Sequence[str] = (),
+    subagent_context: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """`opencode.json` pinning the only provider and models this lane may use.
 
@@ -688,7 +710,11 @@ def opencode_config(
         # unanswered ask as a rejection — a connector-pulse run starved exactly
         # that way when its skill reads were auto-rejected. So everything a
         # phase legitimately does is allowed outright.
-        **({"agent": review_subagents(model, subagents)} if with_subagents else {}),
+        **(
+            {"agent": review_subagents(model, subagents, subagent_context)}
+            if with_subagents
+            else {}
+        ),
         # Every permission the playbooks can reach, in one place.
         #
         # Headless opencode has nobody to answer an "ask", so it auto-REJECTS
@@ -1272,6 +1298,7 @@ def run_agent(
     subagents: bool = False,
     subagent_names: Sequence[str] = (),
     idle_timeout_s: int = IDLE_TIMEOUT_S,
+    subagent_context: dict[str, str] | None = None,
 ) -> AgentResult:
     """Invoke one agent phase, STREAMING its output to the job log.
 
@@ -1296,7 +1323,12 @@ def run_agent(
     config_path = os.path.join(cwd, "opencode.json")
     with open(config_path, "w", encoding="utf-8") as handle:
         json.dump(
-            opencode_config(model, with_subagents=subagents, subagents=subagent_names),
+            opencode_config(
+                model,
+                with_subagents=subagents,
+                subagents=subagent_names,
+                subagent_context=subagent_context,
+            ),
             handle,
             indent=2,
         )

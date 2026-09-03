@@ -13,7 +13,7 @@ COMMENTER_INTENT, etc.). Follow
 1. `.mothership/pr-review/ORCHESTRATION.md` — your playbook (MANDATORY)
 2. `.mothership/pr-review/severity-rubric.yaml` — pattern → severity map + severity calibration and confidence floors (single source for both)
 3. `.mothership/pr-review/references/retro-log.md` — **MANDATORY: do-not-flag list.** Every candidate finding MUST be checked against the patterns here; matches are withdrawn silently with no inline comment or auto-fix. This is the ONLY do-not-flag list — no other file may carry one.
-4. `.mothership/pr-review/references/*.md` + `agents/*.md`
+4. `.mothership/rules/*.md` (the review rules — shared with the loop lane) + `.mothership/pr-review/references/*.md` + `agents/*.md`
 5. For `contract-toolkit/**` PRs: `contract-toolkit/AGENTS.md`, `.mothership/pr-review/agents/toolkit-review.md`, and `.mothership/pr-review/references/toolkit-consumer-registry.md`
 
 PR metadata and the authoritative diff are fetched in Phase 0 via

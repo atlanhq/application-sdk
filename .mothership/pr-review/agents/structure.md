@@ -8,8 +8,8 @@ the things line-level reviewers miss.
 
 ## Reference Rules — read these first
 
-- `.mothership/pr-review/references/structural-rules.md`
-- `.mothership/pr-review/references/v3-architecture-rules.md`
+- `.mothership/rules/structural-rules.md`
+- `.mothership/rules/v3-architecture-rules.md`
 
 These are yours to read; the orchestrator no longer loads every reference file
 for every review. [STRUCT] maps to structural-rules; v3-architecture-rules is shared with correctness because layering violations read as both.
