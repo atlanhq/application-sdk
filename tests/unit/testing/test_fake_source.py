@@ -14,14 +14,18 @@ outbound traffic from the unit tier — stays enforced.
 
 from __future__ import annotations
 
+import datetime
 import http.client
+import ipaddress
 import json
 import socket
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -40,6 +44,54 @@ from application_sdk.testing.fake_source import (
 )
 
 pytestmark = pytest.mark.allow_hosts(["127.0.0.1"])
+
+
+def _self_signed_cert(tmp_path: "Path", common_name: str) -> tuple["Path", "Path"]:
+    """Generate a throwaway self-signed cert/key pair for a TLS fake.
+
+    Generated per-test rather than committed: a checked-in key, even a test one,
+    trips secret scanners and teaches the wrong habit.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    now = datetime.datetime.now(datetime.UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=5))
+        .not_valid_after(now + datetime.timedelta(hours=1))
+        .add_extension(
+            # An IP SAN, not a DNS one: the unit tier allows connects to
+            # 127.0.0.1 only, and "localhost" resolves to ::1 first on this
+            # runner — which pytest-socket blocks with
+            # SocketConnectBlockedError naming "::1".
+            x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address(common_name))]
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_path = tmp_path / "fake.crt"
+    key_path = tmp_path / "fake.key"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    return cert_path, key_path
+
 
 HYPHENATED = "X-Fake-AuthToken"
 
@@ -188,6 +240,39 @@ class TestLifecycle:
             assert source.base_url == f"http://127.0.0.1:{source.port}"
             with urllib.request.urlopen(f"{source.base_url}/ping", timeout=5) as resp:
                 assert json.loads(resp.read()) == {"ok": True}
+
+    def test_serves_tls_when_given_an_ssl_context(self, tmp_path: Path) -> None:
+        """A TLS fake is reachable over https and says so in base_url.
+
+        Connectors whose client forces an ``https://`` scheme onto whatever host
+        it is handed cannot reach a plain-HTTP fake at all, however correct its
+        routes are. The self-signed cert is generated here rather than committed,
+        so nothing in the repo looks like a real key.
+        """
+        cert, key = _self_signed_cert(tmp_path, "127.0.0.1")
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+
+        source = HttpFakeSource(ssl_context=ctx)
+        source.route(r"/ping", lambda _r: FakeResponse.json_({"ok": True}))
+        with source:
+            assert source.base_url.startswith("https://")
+            client_ctx = ssl.create_default_context(cafile=str(cert))
+            conn = http.client.HTTPSConnection(
+                "127.0.0.1", source.port, context=client_ctx, timeout=5
+            )
+            conn.request("GET", "/ping")
+            resp = conn.getresponse()
+            assert resp.status == 200
+            assert json.loads(resp.read()) == {"ok": True}
+            conn.close()
+
+    def test_plain_http_stays_the_default(self) -> None:
+        """No ssl_context means no behaviour change for every existing caller."""
+        source = HttpFakeSource()
+        assert source.ssl_context is None
+        with source:
+            assert source.base_url.startswith("http://")
 
     def test_base_url_before_start_is_an_error_not_a_hang(self) -> None:
         source = HttpFakeSource()

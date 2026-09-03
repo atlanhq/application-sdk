@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import base64
 import re
+import ssl
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -370,10 +371,12 @@ class HttpFakeSource:
         connection_timeout: float = _CONNECTION_TIMEOUT_SECONDS,
         bind_host: str = _LOOPBACK,
         port: int = 0,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         self.name = name
         self.bind_host = bind_host
         self.requested_port = port
+        self.ssl_context = ssl_context
         self.default_content_type = default_content_type
         self.not_found_body = (
             {"error": "not found"} if not_found_body is None else not_found_body
@@ -452,7 +455,8 @@ class HttpFakeSource:
             # (a compose service name, say) out of band — there is nothing here
             # from which that name could be derived.
             host_text = _LOOPBACK
-        return f"http://{host_text}:{port}"
+        scheme = "https" if self.ssl_context is not None else "http"
+        return f"{scheme}://{host_text}:{port}"
 
     @property
     def port(self) -> int:
@@ -526,12 +530,24 @@ class HttpFakeSource:
         fixture wants. A caller serving the fake to peers — a container on a
         compose network reaching it by service name — passes a wildcard
         ``bind_host`` and usually a fixed ``port``.
+
+        Passing an ``ssl_context`` serves TLS instead of plain HTTP. That is
+        needed by connectors whose client forces an ``https://`` scheme onto
+        whatever host it is given — a plain-HTTP fake is simply unreachable for
+        those, however correct its routes are.
         """
         if self._server is not None:
             return self
         server = _FakeSourceServer(
             (self.bind_host, self.requested_port), _make_handler_class(self)
         )
+        if self.ssl_context is not None:
+            # Wrap the listening socket, so every accepted connection is a TLS
+            # one. Done here rather than per-request because the handler class
+            # is shared and knows nothing about transport.
+            server.socket = self.ssl_context.wrap_socket(
+                server.socket, server_side=True
+            )
         thread = threading.Thread(
             target=server.serve_forever,
             name=f"{self.name}-server",
