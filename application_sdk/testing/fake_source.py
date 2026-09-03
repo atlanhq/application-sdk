@@ -96,7 +96,7 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 _LOOPBACK = "127.0.0.1"
-_WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})  # noqa: S104 — compared against, never bound by default
+_WILDCARD_HOSTS = frozenset({"0.0.0.0", ""})  # noqa: S104 — compared against, never bound by default. "::" is omitted: ThreadingHTTPServer is AF_INET, so bind_host="::" cannot start.
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 _CONNECTION_TIMEOUT_SECONDS = 5.0
 _JOIN_GRACE_SECONDS = 5.0
@@ -352,8 +352,10 @@ class HttpFakeSource:
     or ``None`` for a 404 — so the common case stays a one-liner and the
     uncommon one is still expressible.
 
-    Binding is always loopback: the server is reachable from the test process and
-    from nothing else on the network.
+    Defaults to loopback on an ephemeral port: the server is then reachable from
+    the test process and from nothing else on the network. Pass a wildcard
+    ``bind_host`` (and usually a fixed ``port``) when peers on another host must
+    reach it — IPv4 wildcards only; ``ThreadingHTTPServer`` is AF_INET.
     """
 
     def __init__(
