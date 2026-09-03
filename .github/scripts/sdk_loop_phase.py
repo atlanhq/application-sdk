@@ -84,6 +84,9 @@ from sdk_loop_prep import (
 )
 from sdk_loop_refute import CROSS_FAMILY
 from sdk_loop_routing import load_routing
+from sdk_loop_rules import full_text_budget, load_corpus
+from sdk_loop_rules import render as render_rules
+from sdk_loop_rules import select as select_rules
 
 #: Wall-clock per phase. Review is the slower of the two: it walks the whole
 #: five-phase playbook including sub-agents, where a resolve round is mostly
@@ -107,6 +110,19 @@ TIMEOUT_REFUTE_S = 8 * 60
 REDGREEN_JOIN_S = 4 * 60
 
 REFUTE_BRIEF = ".mothership/pr-loop/REFUTE.md"
+
+#: Prepended to a dispatched specialist's context, after the playbook. The
+#: playbook's output section tells the reader to write one JSON file; a
+#: specialist returns its findings to the primary instead, which assembles and
+#: writes the file. Everything else in the playbook — what counts as a
+#: finding, the nit rules, the class sweep, the schema — applies unchanged.
+SUBAGENT_RETURN_NOTE = """## You are a dispatched specialist
+
+The primary reviewer dispatched you for your domain. Everything above about
+what counts as a finding, severity, nits and the class sweep applies to you
+unchanged — with one difference: **do not write a file**. Return your findings
+as the JSON `findings` array in your reply, in the schema above, and list the
+files you examined. The primary assembles the payload."""
 
 #: Outcomes a phase can report to the next job. Only `ok` continues to the
 #: paired phase; `reaim` sends the loop back to review on the new head.
@@ -775,6 +791,41 @@ def main(argv: list[str] | None = None) -> int:
             workdir=pathlib.Path(workspace) / ".sdk-loop" / "redgreen-base",
         )
 
+        # Everything a specialist needs beyond its brief, built once per
+        # specialist: the shared judgement contract, the pack, and the rules
+        # for these paths — full text where the diff contains what a rule is
+        # about, by name otherwise. The first cutover gave sub-agents a brief
+        # and nothing else: no contract, no diff, no rules.
+        corpus = load_corpus()
+        budget = full_text_budget()
+        changed_paths = [f.path for f in pack.files]
+
+        def context_for(specialist: str) -> str:
+            rules = render_rules(
+                select_rules(
+                    corpus,
+                    specialist=specialist,
+                    changed_paths=changed_paths,
+                    diff=diff_text,
+                    budget_chars=budget,
+                )
+            )
+            return render_pack(pack, specialist, rules_section=rules)
+
+        playbook_text = _read(PLAYBOOK_REVIEW)
+        subagent_context = {
+            name: "\n\n---\n\n".join(
+                p
+                for p in (
+                    playbook_text,
+                    SUBAGENT_RETURN_NOTE,
+                    context_for(name),
+                )
+                if p
+            )
+            for name in fan_out
+        }
+
         print(f"::group::review round {round_no} — agent transcript")
         result = run_agent(
             REVIEW_MODEL,
@@ -787,7 +838,7 @@ def main(argv: list[str] | None = None) -> int:
                 scope=scope,
                 solo=solo,
                 agents=fan_out,
-                pack=render_pack(pack, solo or "reviewer"),
+                pack=context_for(solo) if solo else render_pack(pack, "reviewer"),
                 output_path=str(findings_path),
             ),
             workspace,
@@ -795,6 +846,7 @@ def main(argv: list[str] | None = None) -> int:
             transcript_path=transcript,
             subagents=not solo and bool(fan_out),
             subagent_names=fan_out,
+            subagent_context=subagent_context,
         )
         print("::endgroup::")
 

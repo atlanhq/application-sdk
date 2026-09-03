@@ -526,15 +526,15 @@ def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None
         assert set(cfg["agent"]) == set(PHASE2_AGENTS)
         for name, spec in cfg["agent"].items():
             assert spec["mode"] == "subagent"
-            # Still the EXISTING file and no second copy in the repo — but read
-            # in Python rather than handed over as `{file:./.mothership/...}`.
-            # That template's resolution against a dot-directory was never
-            # verified here, and the same path returns zero matches through the
-            # agent's own Glob; a template that quietly resolved to nothing
-            # would give a domain agent no instructions while it still emitted
-            # a verdict. Asserting against the file's real bytes also proves
-            # the brief exists, which the string form never did.
-            brief = pathlib.Path(f".mothership/pr-review/agents/{name}.md")
+            # The loop lane's OWN brief, read in Python rather than handed over
+            # as `{file:./.mothership/...}` — that template's resolution against
+            # a dot-directory was never verified, and a template that quietly
+            # resolved to nothing would give a domain agent no instructions
+            # while it still emitted a verdict. Asserting the file's real bytes
+            # also proves the brief exists. It is `pr-loop/`, not `pr-review/`:
+            # the first cutover left this on the old lane's briefs, so every
+            # dispatched specialist ran the old contract under the new playbook.
+            brief = pathlib.Path(f".mothership/pr-loop/agents/{name}.md")
             assert (
                 brief.read_text(encoding="utf-8") in spec["prompt"]
             ), f"{name}'s prompt must carry its playbook brief verbatim"
