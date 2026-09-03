@@ -36,6 +36,12 @@ tenants — a re-pointed tag is a supply-chain path for unreviewed code to reach
 customer environment, or to exfiltrate the publishing credentials that sign what
 customers run.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app .github/workflows/checks.yml — third-party actions are pinned to a
+  full 40-character commit SHA with the human-readable version in a trailing comment.
+  Only atlanhq/application-sdk's own reusable refs use @main.
+
 External actions reused via `uses:` must be pinned to a full-length commit SHA (digest),
 never a mutable tag (@v4) or branch (@main). A tag can be re-pointed to malicious code
 after review. Actions in the `atlanhq/` org are exempt (they intentionally track @main);
@@ -53,6 +59,13 @@ local `./` composite-action refs are exempt (no version to pin).
 consistent release gating, current conformance checks. Drift means an app runs an older
 workflow that may lack a recently-added security gate or use a deprecated step —
 invisible until exploited or until the step fails.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app .github/workflows/ — the full bootstrap-managed set, resynced by
+  `atlan-application-sdk-conformance bootstrap` rather than hand-edited. The canonical
+  content is the bootstrap output, so re-running it is the fix; editing the file in
+  place is what caused the drift.
 
 The `atlan-application-sdk-conformance bootstrap` command installs a standard set of CI
 workflow shims into `.github/workflows/`. This rule flags any managed file that is
@@ -106,6 +119,12 @@ virtual environments, build artefacts, or IDE noise — each of which has caused
 or review friction. The standard set is the minimal baseline every app repo should
 carry.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app .gitignore — carries the standard entries this rule checks for,
+  including `.venv/` and `.claude/worktrees/`. A missing entry is usually the newest
+  one, added centrally after the repo was scaffolded.
+
 The `atlan-application-sdk-conformance bootstrap` command scaffolds a standard
 .gitignore when the file is absent. This rule flags any required entry that is missing
 from the file. One finding is emitted per missing entry so each can be triaged or
@@ -129,6 +148,12 @@ overall.
 every run, and those CDNs serve 5xx bursts lasting minutes. A one-shot fetch turns a
 transient upstream blip into a failed build — and on a merge-queue-gating job, into an
 ejected PR that costs a full re-queue. The remediation is almost always a single flag.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app .github/workflows/checks.yml — tooling arrives through
+  `atlanhq/application-sdk/.github/actions/setup-deps`, which owns the retry, instead of
+  each workflow curling a binary of its own. No reference app downloads a tool inline.
 
 Flags a `curl`/`wget` that installs something — it writes the response to a file or
 pipes it into a shell or `tar` — and carries no retry, plus `uv python install`, which

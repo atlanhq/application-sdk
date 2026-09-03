@@ -22,7 +22,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -30,7 +29,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="S001",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app app/credentials.py — credentials arrive as a "
+            "`CredentialRef` resolved by the SDK, or as an inline dict from the secret "
+            "store. No string literal is ever assigned to a credential-named variable in "
+            "the four reference apps."
+        ),
         scope=RuleScope.BOTH,
         name="HardcodedCredential",
         tier=EnforcementTier.WARN,
@@ -71,7 +75,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="S002",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-mysql-app app/client.py — the two os.environ credential writes in "
+            "`get_iam_role_token` carry an inline ignore[S002] explaining that the value "
+            "came from the resolved credentials and is staged into the environment only "
+            "because boto3's token helper has no explicit-credentials parameter. That "
+            "justification is what makes them acceptable."
+        ),
         scope=RuleScope.APP,
         name="RawEnvCredentialAccess",
         tier=EnforcementTier.WARN,

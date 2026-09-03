@@ -39,7 +39,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -47,7 +46,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P043",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — control flow branches on `AppError` and "
+            "`AuthError`, both from `application_sdk.errors`. Branching on a class the "
+            "package does not export binds the app to a name the SDK can move without a "
+            "deprecation cycle."
+        ),
         scope=RuleScope.APP,
         name="NonPublicErrorControlFlow",
         tier=EnforcementTier.WARN,
@@ -104,7 +108,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P045",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-hello-world-app app/errors.py — `from application_sdk.errors import "
+            "InvalidInputError`. The package re-exports every error an app should touch; "
+            "reaching into a submodule for the same class buys nothing and forfeits the "
+            "stability promise."
+        ),
         scope=RuleScope.APP,
         name="PrivateErrorClassImport",
         tier=EnforcementTier.WARN,

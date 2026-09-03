@@ -891,7 +891,6 @@ def test_duplicate_id_raises() -> None:
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
         category="test",
-        fix_locus=FixLocus.APP,
     )
     r2 = RuleDefinition(
         id="E001",
@@ -900,7 +899,6 @@ def test_duplicate_id_raises() -> None:
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
         category="test",
-        fix_locus=FixLocus.APP,
     )
     with pytest.raises(ValueError, match="duplicate rule ID"):
         _combine_rules((r1,), (r2,))
@@ -916,7 +914,6 @@ def test_invalid_rule_id_raises() -> None:
             mechanism=RuleMechanism.STATIC,
             scope=RuleScope.BOTH,
             category="test",
-            fix_locus=FixLocus.APP,
         )
 
 
@@ -935,7 +932,6 @@ def _rule(**overrides) -> RuleDefinition:
             "category": "test",
             **overrides,
         },
-        fix_locus=FixLocus.APP,
     )
 
 
@@ -1066,7 +1062,6 @@ def test_validate_catalog_raises_on_duplicate() -> None:
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
         category="test",
-        fix_locus=FixLocus.APP,
     )
     r2 = RuleDefinition(
         id="E001",
@@ -1075,7 +1070,6 @@ def test_validate_catalog_raises_on_duplicate() -> None:
         mechanism=RuleMechanism.STATIC,
         scope=RuleScope.BOTH,
         category="test",
-        fix_locus=FixLocus.APP,
     )
     with pytest.raises(ValueError, match="duplicate rule ID"):
         validate_catalog([r1, r2])
@@ -1157,7 +1151,6 @@ def test_docker_build_is_accepted_by_the_model() -> None:
         scope=RuleScope.APP,
         category="dockerfile-probe",
         orthogonal_gate="docker-build",
-        fix_locus=FixLocus.APP,
     )
     assert rule.orthogonal_gate == "docker-build"
     props = rule.to_reporting_descriptor().properties
@@ -1172,42 +1165,81 @@ def test_docker_build_is_accepted_by_the_model() -> None:
             scope=RuleScope.APP,
             category="dockerfile-probe",
             orthogonal_gate="docker-buidl",
-            fix_locus=FixLocus.APP,
         )
 
 
 # ── fix_locus and the guidance fields ────────────────────────────────────────
 
 
-def test_catalog_all_have_fix_locus() -> None:
-    """Every rule must say where its fix belongs.
+def test_redundant_fix_locus_is_rejected() -> None:
+    """A locus that only restates ``scope`` cannot be constructed.
 
-    A finding tells you a repo is wrong, not which file to change. Three rules
-    were routed to app teams for weeks when the honest answer was "not the app"
-    — the value came from the toolkit renderer, or the finding anchored on a
-    generated file the app may not edit.
+    ``scope`` already says which repos a rule runs against, and the fix normally
+    lands in that repo's own source.  Spelling that out again put a token on
+    half the catalog that told a reader nothing — and a field that is usually
+    noise stops being read on the occasions it matters, which is exactly when
+    the fix is in the toolkit or the contract.  Rejecting it in the model rather
+    than here means it cannot creep back one rule at a time.
     """
-    bad = [r.id for r in load_catalog() if not isinstance(r.fix_locus, FixLocus)]
-    assert not bad, f"Rules with invalid/missing fix_locus: {bad}"
+    for scope, locus in (
+        (RuleScope.APP, FixLocus.APP),
+        (RuleScope.BOTH, FixLocus.APP),
+        (RuleScope.SDK, FixLocus.SDK),
+    ):
+        with pytest.raises(ValidationError, match="only restates scope"):
+            RuleDefinition(
+                id="E999",
+                name="RedundantLocus",
+                tier=EnforcementTier.WARN,
+                mechanism=RuleMechanism.STATIC,
+                scope=scope,
+                category="test",
+                fix_locus=locus,
+            )
 
 
-def test_fix_locus_is_a_required_field() -> None:
-    """No default, so a new rule cannot silently inherit someone else's locus."""
-    with pytest.raises(ValidationError):
-        RuleDefinition(  # pyright: ignore[reportCallIssue]  # fix_locus omitted
-            id="E999",
-            name="NoLocus",
-            tier=EnforcementTier.WARN,
-            mechanism=RuleMechanism.STATIC,
-            scope=RuleScope.BOTH,
-            category="test",
-        )
+def test_fix_locus_is_optional_and_defaults_to_none() -> None:
+    """Unset is the normal case, and reads as "the repo under scan".
+
+    That is also the more accurate default for a ``both``-scoped rule: a literal
+    ``app`` would have been wrong every time the rule fired on the SDK.
+    """
+    rule = RuleDefinition(
+        id="E999",
+        name="NoLocus",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        scope=RuleScope.BOTH,
+        category="test",
+    )
+    assert rule.fix_locus is None
+
+
+def test_declared_loci_are_surprising_ones() -> None:
+    """Every locus the catalog does declare points away from the obvious place.
+
+    The point of keeping the field at all is the minority of rules where an app
+    engineer reading the finding would look in the wrong file.  This asserts the
+    catalog holds that shape rather than drifting back to a per-rule restatement
+    of ``scope``.
+    """
+    declared = {r.id: r.fix_locus for r in load_catalog() if r.fix_locus is not None}
+    assert (
+        declared
+    ), "the informative loci (contract/toolkit/packaging/ci/tests) are gone"
+    obvious = {
+        r.id
+        for r in load_catalog()
+        if r.fix_locus is not None
+        and r.fix_locus is (FixLocus.SDK if r.scope is RuleScope.SDK else FixLocus.APP)
+    }
+    assert not obvious, f"fix_locus restates scope on: {sorted(obvious)}"
 
 
 def test_non_app_loci_explain_themselves() -> None:
     """A BLOCK rule the app cannot fix alone must say what to do instead.
 
-    ``fix_locus`` values other than APP and TESTS mean an app engineer reading
+    A ``contract``, ``toolkit`` or ``sdk`` locus means an app engineer reading
     the finding will look in the wrong place. A blocking finding with no route
     to a fix is what stalls a remediation lane indefinitely, so those rules have
     to carry at least one of ``canonical_reference`` / ``rule_interactions`` /
@@ -1227,26 +1259,91 @@ def test_non_app_loci_explain_themselves() -> None:
     )
 
 
+#: The only repos a canonical reference may name.  Four maintained reference
+#: apps (``docs/agents/canonical-apps.md``) plus the SDK itself for rules about
+#: SDK-owned surfaces.  An arbitrary connector is excluded on purpose: at any
+#: time some are mid-migration and some carry patterns the SDK has deprecated,
+#: so copying from one reproduces the fleet's median staleness.
+_REFERENCE_REPOS = (
+    "atlan-hello-world-app",
+    "atlan-openapi-app",
+    "atlan-mysql-app",
+    "atlan-metabase-app",
+    "application_sdk",
+)
+
+#: A reference has to point at something a reader can open.  Any of these is
+#: evidence the value names a file or directory rather than describing one: a
+#: slash-separated path (``app/handler.py``, ``tests/unit/``, ``contract/PklProject``),
+#: a bare filename with a known extension, or one of the extensionless files a
+#: repo root carries.  The bar is deliberately low — it only rules out prose.
+_PATH_SHAPED = re.compile(
+    r"(?:[\w.\-]+/[\w.\-]*)"
+    r"|(?:\b[\w\-]+\.(?:py|pkl|ya?ml|json|toml|sql|lock|cfg|txt)\b)"
+    r"|(?:\bDockerfile\b)"
+    r"|(?:\.gitignore\b)"
+)
+
+
+def test_app_facing_rules_name_a_canonical_reference() -> None:
+    """Every rule an app engineer can act on says what correct looks like.
+
+    ``app``- and ``both``-scoped rules are the ones that reach a consumer repo.
+    For those, "where is a version of this that is already right?" is the
+    question the finding text cannot answer and the one that decides whether a
+    fix converges or churns — so it is answered per rule, from a file in a
+    maintained reference app, not left to whoever picks the finding up.
+    """
+    missing = [
+        r.id
+        for r in load_catalog()
+        if r.scope in (RuleScope.APP, RuleScope.BOTH) and not r.canonical_reference
+    ]
+    assert not missing, (
+        "app-facing rules with no canonical_reference — name a file in one of "
+        f"{list(_REFERENCE_REPOS)} that already has the compliant shape: {missing}"
+    )
+
+
 def test_canonical_references_name_something_checkable() -> None:
     """A canonical reference has to be verifiable.
 
     Free-text encouragement is worse than nothing here, because it gets trusted.
-    Require one of the maintained reference apps or a concrete path/module, so a
-    reader can go and look at the compliant shape rather than infer it.
+    Require both a maintained reference repo *and* a path-shaped token, so a
+    reader can open the file rather than infer which one was meant — a bare
+    ``"atlan-mysql-app does this right"`` passes a substring check while
+    answering nothing.
     """
-    anchors = (
-        "hello-world",
-        "openapi",
-        "atlan-mysql-app",
-        "atlan-metabase-app",
-        "application_sdk",
-        "contract_schema.lock.json",
-        "[dependency-groups]",
-    )
     vague = [
         r.id
         for r in load_catalog()
         if r.canonical_reference
-        and not any(a in r.canonical_reference for a in anchors)
+        and not (
+            any(repo in r.canonical_reference for repo in _REFERENCE_REPOS)
+            and _PATH_SHAPED.search(r.canonical_reference)
+        )
     ]
-    assert not vague, f"canonical_reference names nothing checkable: {vague}"
+    assert not vague, (
+        "canonical_reference must name a reference repo AND a concrete path: "
+        f"{vague}"
+    )
+
+
+def test_canonical_references_are_not_shared() -> None:
+    """No two rules may point at the same place.
+
+    A reference reused verbatim across a family is a description of the family,
+    not of the rule — nine contract rules once shared one line naming the whole
+    generated tree, which cannot tell a reader which of the nine they tripped.
+    Uniqueness is the cheapest available proof that each was read from the file
+    it names.
+    """
+    seen: dict[str, list[str]] = {}
+    for rule in load_catalog():
+        if rule.canonical_reference:
+            seen.setdefault(rule.canonical_reference, []).append(rule.id)
+    shared = {ref: ids for ref, ids in seen.items() if len(ids) > 1}
+    assert not shared, (
+        "canonical_reference is shared by several rules, so it is too coarse to "
+        f"have been read from either: { {ref[:60]: ids for ref, ids in shared.items()} }"
+    )

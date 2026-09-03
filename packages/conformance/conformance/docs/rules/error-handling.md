@@ -49,7 +49,7 @@ They are documented alongside the orchestration, storage and client seam rules i
 
 ## E001 — `BareExceptPass` {#e001}
 
-**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > Bare 'except: pass' silently discards every exception
 
@@ -60,6 +60,12 @@ surfaces as missing assets or wrong metadata in a tenant with nothing in the log
 trace it back — a one-line bug becomes a long-running customer escalation that support
 cannot root-cause.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/extracts/questions.py — `fetch_question_queries_single` catches
+  broadly, logs with exc_info=True and appends a residual record before returning.
+  Tolerating a failure and discarding it are different things.
+
 A bare `except: pass` catches KeyboardInterrupt, SystemExit, and GeneratorExit and
 discards them with no trace.  This is the hardest class of bugs to debug.  Replace with
 a typed catch that at minimum logs the error with `exc_info=True`.  Never acceptable —
@@ -69,7 +75,7 @@ even cleanup paths should log at DEBUG.
 
 ## E002 — `TypedExceptPass` {#e002}
 
-**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > Typed 'except SomeError: pass' discards exception silently
 
@@ -80,10 +86,11 @@ an incomplete crawl to the tenant as a clean success — the customer discovers 
 their catalog weeks later, and by then no artifact exists to explain which items were
 lost or why.
 
-### Canonical reference
+### What correct looks like
 
-- **Compliant example:** atlan-mysql-app / atlan-metabase-app — a comment stating why the failure is expected,
-  plus a DEBUG log carrying exc_info=True, is the shape the rule's own message asks for.
+- **Compliant example:** atlan-metabase-app app/api_types.py — `_to_millis` catches ValueError around timestamp
+  parsing and logs the offending value with exc_info=True before returning None. Naming
+  the exception type does not excuse an empty body.
 - **Already correct when:** Control flow must not change — the swallow is existing, deliberate behaviour and the fix
   only stops the cause being discarded. Resolve the module's logger from its own source
   rather than assuming the name `logger`, and check it is bound ABOVE the handler: a
@@ -99,13 +106,20 @@ reasoning.
 
 ## E003 — `BroadContextlibSuppress` {#e003}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > contextlib.suppress() — check whether scope is too broad
 
 **Rationale:** suppress(Exception) is semantically identical to except Exception: pass — it absorbs
 every unexpected failure with no trace. A narrow suppress(FileNotFoundError) is safe;
 anything broader is a hidden failure sink.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/residuals.py — `record_residual_failure`. No reference app uses
+  contextlib.suppress; a deliberately tolerated failure is narrowed to one condition and
+  written to residual/failures.jsonl, so the swallow leaves evidence a reviewer can
+  find.
 
 `contextlib.suppress(Exception)` or `suppress(BaseException)` is HIGH severity; narrow
 `suppress(FileNotFoundError)` on a cleanup path is acceptable.  The checker must inspect
@@ -115,13 +129,20 @@ the suppressed exception type before classifying.
 
 ## E004 — `BroadExceptClause` {#e004}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `overly-broad-catch` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `overly-broad-catch` · **Autofixable:** — · **Since:** 0.2.0
 
 > Overly broad 'except Exception/BaseException' without exc_info
 
 **Rationale:** Without exc_info, the stack trace is gone at the point of capture. A broad catch without
 a traceback also masks completely unexpected exceptions from upstream code, making
 root-cause analysis impossible.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/api_client.py — `_parse_zip` catches Exception per archive member
+  and logs with exc_info=True. Where breadth really is the point, atlan-mysql-app
+  app/handler.py `preflight_check` carries an inline ignore[E004] naming the boundary it
+  guards; both shapes are accepted, an unexplained bare breadth is not.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
@@ -139,13 +160,18 @@ no-traceback boundary.
 
 ## E005 — `ExceptBlockMissingExcInfo` {#e005}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `missing-traceback` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `missing-traceback` · **Autofixable:** yes · **Since:** 0.2.0
 
 > except block logs without exc_info=True — stack trace discarded
 
 **Rationale:** Tracebacks are the primary artifact of incident postmortems. A record that says
 something failed but carries no stack trace forces engineers to reproduce the failure —
 often impossible under production data volumes.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/mysql.py — `_epoch_ms` carries exc_info=True even on its DEBUG line.
+  The level is a volume decision; keeping the traceback is not.
 
 The message is logged but the stack trace is lost.  Add `exc_info=True` to every
 `logger.warning()` / `logger.error()` call inside an except block.  `logger.exception()`
@@ -160,7 +186,7 @@ sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodi
 
 ## E006 — `BareExceptWithBody` {#e006}
 
-**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > Bare 'except:' (no type) — catches SystemExit and KeyboardInterrupt
 
@@ -170,6 +196,12 @@ undefined state. Customer impact: a pod that swallows SIGTERM-driven SystemExit 
 drain cleanly, so every rolling restart or node upgrade in a tenant risks killing
 in-flight customer workflows mid-run instead of handing them off.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/api_client.py — every handler in `validate_spec_url` and
+  `_parse_zip` names a type. A bare `except:` appears nowhere in the four reference
+  apps, so SystemExit and KeyboardInterrupt still unwind the worker.
+
 Like P001 but the block may have a body.  Still catches KeyboardInterrupt and
 SystemExit.  Always specify at least `except Exception:`.
 
@@ -177,13 +209,20 @@ SystemExit.  Always specify at least `except Exception:`.
 
 ## E007 — `ErrorToReturnValue` {#e007}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
 
 > except block returns a value without logging — error hidden
 
 **Rationale:** Converting an exception to a falsy return value (None, [], False) shifts the failure
 point: the caller sees a plausible empty result and fails later, often somewhere
 unrelated, making the original failure invisible.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/extracts/databases.py — `fetch_databases_summaries` logs the HTTP
+  status and records a residual before returning []. Where the sentinel really is the
+  contract, atlan-openapi-app app/api_client.py `redact_url` carries an inline
+  ignore[E007] saying so.
 
 Exception is converted to a return value (None, {}, [], False) with no trace.  Callers
 see a wrong result with no idea why.  At minimum log before returning; prefer raising a
@@ -193,13 +232,19 @@ domain-specific exception instead.
 
 ## E008 — `ImportErrorWithoutLogging` {#e008}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `optional-import` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `optional-import` · **Autofixable:** — · **Since:** 0.2.0
 
 > except ImportError without logging — environment issues hidden
 
 **Rationale:** Silent optional-import guards mask environment misconfigurations. If a preferred module
 is unexpectedly absent, the fallback runs and produces subtly wrong results with no
 signal in the observability stack.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app tests/e2e/test_connection_create.py — the module guard binds `except
+  ImportError as _exc` and carries the text into the pytest.skip reason, so a missing
+  SDK export is readable from the run instead of appearing as an empty skip.
 
 Optional-dependency guard.  Acceptable when the import is genuinely optional AND the
 fallback path is correct AND there is a comment.  Log at DEBUG if the module is
@@ -210,13 +255,19 @@ later with a confusing AttributeError).
 
 ## E009 — `ExceptBlockOnlyAssigns` {#e009}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
 
 > except block only assigns a variable — error hidden with no log
 
 **Rationale:** The exception sets a flag or default and the event record is destroyed. Callers see
 apparently-normal behaviour until they discover the silent fallback later — typically
 under production conditions where it produces wrong results at scale.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/credentials.py — `build_credential_ref` binds the routing error,
+  logs it, and then takes the inline-credentials path. A bound name that is never read
+  is the tell that the handler is a placeholder.
 
 Exception sets a flag or default value with no trace.  Combines P007's error-hiding with
 no logging.  Add a `logger.warning(..., exc_info=True)` before the assignment.
@@ -225,13 +276,21 @@ no logging.  Add a `logger.warning(..., exc_info=True)` before the assignment.
 
 ## E010 — `AsyncioGatherExceptionsUnexamined` {#e010}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `asyncio-unexamined` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `asyncio-unexamined` · **Autofixable:** — · **Since:** 0.2.0
 
 > asyncio.gather(return_exceptions=True) results not checked for exceptions
 
 **Rationale:** gather(return_exceptions=True) turns exceptions into values, indistinguishable from
 normal results in the returned list. Every failed sub-task silently disappears unless
 the caller checks each result for Exception.
+
+### What correct looks like
+
+- **Compliant example:** No reference app calls asyncio.gather(return_exceptions=True); per-item failure is
+  decided at the item, as in atlan-metabase-app app/extracts/collections.py. Where an
+  app genuinely needs concurrency the seam is application_sdk/_runtime/offload.py —
+  run_in_thread / run_fault_isolated / run_best_effort, which surface per-unit failures
+  for you.
 
 `return_exceptions=True` returns exception instances as values in the result list.  If
 the list is not subsequently inspected for `Exception` instances, errors vanish
@@ -242,13 +301,20 @@ silently.  The pattern is only a bug when results are not checked;
 
 ## E011 — `LoggingFilterUnsafeBody` {#e011}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `filter-safety` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `filter-safety` · **Autofixable:** — · **Since:** 0.2.0
 
 > logging.Filter.filter() body not wrapped in try/except — can crash caller
 
 **Rationale:** logging.Filter.filter() exceptions propagate to the code that called logger.info() — not
 to handleError() like handler exceptions. An unguarded filter body is a production crash
 vector hidden inside observability infra.
+
+### What correct looks like
+
+- **Compliant example:** No app writes a logging.Filter. Filtering, redaction and Temporal-context enrichment
+  belong to application_sdk/observability/logger_adaptor.py, reached through
+  `get_logger`; atlan-mysql-app app/client.py shows the whole of an app's logging setup
+  — one import and one module-level logger.
 
 `Logger.handle()` calls `self.filter(record)` with no surrounding try/except — unlike
 handler errors, filter exceptions are NOT caught by `handleError()`.  An unguarded
@@ -263,13 +329,19 @@ propagate.
 
 ## E012 — `UntypedBuiltinRaise` {#e012}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
 
 > raise ValueError/RuntimeError/... where a typed AppError applies
 
 **Rationale:** The Automation Engine receives a typed error envelope (category, audience, retryable,
 code). A bare ValueError delivers an opaque string with none of these — dashboards are
 blind, on-call routing can't branch on it, SLA gates can't classify it. (per ADR-0013)
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/failures.py — six leaves, each subclassing an SDK category
+  (`InvalidInputError`, `AuthError`, `InternalError`, `PreconditionError`) and owning a
+  `code`. Raise one of these, never a bare ValueError or RuntimeError.
 
 SDK code raises a bare Python builtin.  The Automation Engine receives an opaque string
 — no category, code, audience, or retryable field. Dashboards are blind; on-call routing
@@ -281,7 +353,7 @@ require `TypeError`/`ValueError` for stdlib interoperability.
 
 ## E013 — `LegacyAtlanErrorRaise` {#e013}
 
-**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `legacy-raise` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `legacy-raise` · **Autofixable:** — · **Since:** 0.2.0
 
 > raise ClientError/ApiError/... (deprecated AtlanError stack)
 
@@ -292,6 +364,12 @@ customer sees a generic unclassified error with no category or suggested action,
 on-call cannot route the incident by failure type — every occurrence needs a human to
 read the raw string.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/errors.py — every error is imported from
+  `application_sdk.errors`. The deprecated AtlanError stack (ClientError, ApiError, …)
+  appears nowhere in the four reference apps.
+
 `AtlanError` and its subclasses emit a `DeprecationWarning` at construction time and
 reach AE as opaque strings.  They produce no typed wire envelope.  Scheduled for removal
 in v4.0.  Replace with the appropriate leaf from `application_sdk.errors`.
@@ -300,13 +378,19 @@ in v4.0.  Replace with the appropriate leaf from `application_sdk.errors`.
 
 ## E014 — `ExceptLoopControlSwallow` {#e014}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > except block exits loop silently (continue/break) without logging
 
 **Rationale:** A loop that silently absorbs per-item exceptions can complete with a full-looking result
 set that silently omits items. Silent partial failure is harder to detect than an
 outright crash — callers may act on the wrong result for a long time.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/lineage/qi_reader.py — `iter_qi_records` skips an unparseable
+  line only after logging it with exc_info=True. A bare `continue` in an except block
+  turns a shrinking result set into a mystery.
 
 An `except` block inside a loop whose body is only `continue`, `break`, or `pass` — with
 no logging call — silently swallows the exception and resumes or exits the iteration.
@@ -318,7 +402,7 @@ log at WARNING/ERROR with `exc_info=True`.
 
 ## E015 — `ExceptionTextInErrorMessage` {#e015}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.2.0
 
 > Caught exception text interpolated into typed error message= — leaks unsanitised text
 
@@ -326,6 +410,12 @@ log at WARNING/ERROR with `exc_info=True`.
 path/value becomes a separate dashboard bucket instead of one countable signal. It also
 leaks unsanitised upstream text into a field shown to operators and indexed by
 aggregation.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/client.py — `get_iam_role_token` raises IamTokenGenerationError with
+  a fixed operator-facing message and passes the original as `cause=e`. The caught
+  exception's text never lands in `message=`.
 
 A typed `AppError` raise whose `message=` keyword value embeds the caught exception via
 an f-string (`f'…{exc}…'`), `str(exc)`, `repr(exc)`, or string concatenation (`'…: ' +
@@ -340,7 +430,7 @@ summary.
 
 ## E016 — `MissingExceptionChaining` {#e016}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `exception-chaining` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `exception-chaining` · **Autofixable:** yes · **Since:** 0.2.0
 
 > raise inside except block missing 'from exc' cause — breaks exception chain
 
@@ -349,6 +439,12 @@ summary.
 follow __context__. Without explicit chaining the original exception — attached only as
 __context__ — is visible at the interpreter level but dropped from the wire envelope and
 every downstream system that reads it.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — `fetch_metadata` ends `raise
+  MetadataFetchError(cause=e) from e`. Both halves are there: the SDK-visible cause and
+  the Python chain.
 
 A non-bare `raise` inside an `except … as e:` block that does not include `from e` (or
 `from None`).  Without explicit chaining, Python attaches the original as `__context__`
@@ -363,7 +459,7 @@ None` (intentional suppression).
 
 ## E017 — `SecretNamedEvidenceKey` {#e017}
 
-**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `security` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** — · **Since:** 0.2.0
 
 > Error evidence kwarg ending in _secret/_password/_token — rejected by wire layer at runtime
 
@@ -374,6 +470,13 @@ logs, dashboards, or SARIF. Customer impact: the runtime rejection fires exactly
 customer run is already failing, replacing the real error with an opaque secondary crash
 — and the near-miss it guards is the customer's live credential landing in log storage,
 which is a security incident, not a bug.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/connector.py — `download_cloud_spec` raises with service /
+  retryable / suggested_action as its evidence. Evidence describes the failure, never
+  the credential that produced it; application_sdk/errors/wire.py rejects secret-named
+  keys at runtime.
 
 An error construction call that passes a keyword argument whose name ends in `_secret`,
 `_password`, or `_token` — see `application_sdk.errors.wire` §6.  The wire layer
@@ -386,13 +489,19 @@ before any code runs.  Rename the evidence field to a safe key (e.g. `credential
 
 ## E018 — `BareParentLeafRaise` {#e018}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
 
 > Raising a bare AppError leaf class without a domain subclass overriding code
 
 **Rationale:** Each categorical leaf is a dashboard bucket. Raising the parent directly collapses all
 domain failure modes into one bucket — impossible to count separately, route to the
 right rotation, or alert on per failure mode.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/errors.py — every raise site uses a connector-specific subclass
+  with its own `code`, so failures bucket per connector on the dashboard instead of
+  collapsing into the bare category leaf.
 
 Raising a parent leaf directly (`InternalError(...)`, `InvalidInputError(...)`) without
 a domain-specific subclass that overrides `code` collapses all failure modes for a given
@@ -409,7 +518,7 @@ suppressing.
 
 ## E019 — `ExceptionTextInContractField` {#e019}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.9.0
 
 > Caught exception text interpolated into a returned contract message= field — leaks unsanitised text
 
@@ -418,6 +527,12 @@ text leaks just as readily when an except block returns a typed response contrac
 (AuthOutput, PreflightCheck) with message=str(exc). The returned value crosses the typed
 boundary to operators and dashboards, and each distinct str(exc) becomes its own
 aggregation bucket instead of one countable signal.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — `test_auth` returns the fixed message "Authentication
+  failed"; the exception text goes to the log with exc_info=True, not into the contract
+  field a caller renders.
 
 Inside an `except … as exc:` block, a call (typically a typed response/output contract
 such as `AuthOutput` or `PreflightCheck`) is constructed with a `message=` keyword that
@@ -442,7 +557,7 @@ follow-up kept symmetric across E015/E019.
 
 ## E020 — `HttpFailureToEmptyReturn` {#e020}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.9.0
 
 > Checked HTTP-response failure returns an empty/None sentinel instead of raising — silently publishes a failure as success
 
@@ -450,6 +565,13 @@ follow-up kept symmetric across E015/E019.
 converts a remote API failure into an empty successful result — the workflow publishes a
 zero or partial crawl as if it completed, with no error surfaced. Unlike E001/E002/E007
 there is no except/raise to key on; the failure is swallowed by a plain if-guard.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/extracts/databases.py — the one place an HTTP failure returns an
+  empty sentinel carries an inline ignore[E020] naming the residual file that records
+  it. Seven such sites exist across app/extracts/, each justified. Without that evidence
+  trail the empty return has to raise.
 
 An `if` whose test inspects an HTTP response for failure (a negation or comparison on
 `is_success` / `ok` / `status_code`) and whose branch `return`\ s an empty/None sentinel

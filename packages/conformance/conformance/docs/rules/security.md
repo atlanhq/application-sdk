@@ -30,7 +30,7 @@ reassigned.
 
 ## S001 — `HardcodedCredential` {#s001}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `app` · **Category:** `credential-storage` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `credential-storage` · **Autofixable:** — · **Since:** 0.4.0
 
 > String literal assigned to a credential-named variable/argument — a hardcoded secret
 
@@ -38,6 +38,12 @@ reassigned.
 everyone who can read the repo, survives rotation, and cannot be scoped or revoked
 per-deployment. Secrets must be resolved at runtime through the SDK secret store, never
 embedded in the code that ships them.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/credentials.py — credentials arrive as a `CredentialRef` resolved
+  by the SDK, or as an inline dict from the secret store. No string literal is ever
+  assigned to a credential-named variable in the four reference apps.
 
 A non-empty string literal is assigned to (or passed as) a target whose name marks it a
 credential value (`password`, `api_key`, `secret`, `access_key`, `client_secret`,
@@ -58,7 +64,7 @@ suppressed inline with a justification: `# conformance: ignore[S001] <reason>`
 
 ## S002 — `RawEnvCredentialAccess` {#s002}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `app` · **Category:** `credential-resolution` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `credential-resolution` · **Autofixable:** — · **Since:** 0.4.0
 
 > Credential-named environment variable read directly via os.getenv/os.environ
 
@@ -66,6 +72,14 @@ suppressed inline with a justification: `# conformance: ignore[S001] <reason>`
 there is no central audit of which secrets an app consumes, no typed CredentialRef
 contract, and no Dapr-backed resolution. Apps must resolve secrets through the SDK
 mechanism so credential handling stays uniform and auditable.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/client.py — the two os.environ credential writes in
+  `get_iam_role_token` carry an inline ignore[S002] explaining that the value came from
+  the resolved credentials and is staged into the environment only because boto3's token
+  helper has no explicit-credentials parameter. That justification is what makes them
+  acceptable.
 
 Application code reads a credential-named environment variable directly
 (`os.getenv("...SECRET")`, `os.environ["...TOKEN"]`, `os.environ.get("...API_KEY")`)

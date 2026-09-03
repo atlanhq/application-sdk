@@ -5,7 +5,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -13,7 +12,11 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L001",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            'atlan-hello-world-app app/connector.py — `summarize` logs "summarize '
+            'completed record_count=%d message=%s" with the values passed positionally. '
+            "One template, so every run of that line groups together in ClickHouse."
+        ),
         scope=RuleScope.BOTH,
         name="FStringInLogMessage",
         tier=EnforcementTier.BLOCK,
@@ -51,7 +54,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L002",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — `get_logger(__name__)` at module scope, "
+            "imported from application_sdk.observability.logger_adaptor. No reference app "
+            "calls logging.getLogger, structlog.get_logger, or loguru's logger."
+        ),
         scope=RuleScope.BOTH,
         name="NonCanonicalLoggerFactory",
         tier=EnforcementTier.BLOCK,
@@ -109,7 +116,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L003",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "No reference app passes `extra={}`. Context travels positionally in the "
+            '%-style body — atlan-metabase-app app/utils.py, `to_epoch_ms`: "Datetime %r '
+            'did not match format %r", dt_str, fmt.'
+        ),
         scope=RuleScope.BOTH,
         name="ExtraKwargsWrongFramework",
         tier=EnforcementTier.WARN,
@@ -133,7 +144,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L004",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app app/handler.py — every log call inside an except block "
+            "carries exc_info=True, in `test_auth` and in each of the preflight check "
+            "helpers. The rule is about the except block, not about the level."
+        ),
         scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfoLog",
         tier=EnforcementTier.BLOCK,
@@ -166,7 +181,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L005",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — T201 sits in the repo-wide lint select and "
+            "is ignored only for `.github/**/*.py`, where a CI script's stdout is the "
+            "point. No print() exists under app/."
+        ),
         scope=RuleScope.BOTH,
         name="PrintInProductionCode",
         tier=EnforcementTier.WARN,
@@ -193,7 +212,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L006",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app app/extracts/process.py — the per-dashboard skip inside "
+            "`process_assets` logs at DEBUG. INFO belongs to the run's lifecycle, not to "
+            "one iteration of it."
+        ),
         scope=RuleScope.BOTH,
         name="InfoInTightLoop",
         tier=EnforcementTier.WARN,
@@ -218,7 +241,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L007",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "No reference app calls logger.critical(). The top severity in use is ERROR at "
+            "a boundary — atlan-mysql-app app/handler.py, `test_auth`. There is no "
+            "CRITICAL sink behind the adaptor, so the level only costs a reader their "
+            "filter."
+        ),
         scope=RuleScope.BOTH,
         name="LoggerCriticalUsage",
         tier=EnforcementTier.WARN,
@@ -243,7 +271,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L008",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            'atlan-mysql-app app/client.py — `provide_token` logs "IAM token refreshed '
+            'for connection (length: %d)", len(token). The argument is cheap, and %-style '
+            "defers interpolation until the level is known to be enabled."
+        ),
         scope=RuleScope.BOTH,
         name="UnguardedExpensiveDebug",
         tier=EnforcementTier.WARN,
@@ -280,7 +312,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L009",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — `generate_greetings` raises "
+            "InvalidRepeatCountError with no log line before it. The raise is the record; "
+            "whichever handler catches it logs it once."
+        ),
         scope=RuleScope.BOTH,
         name="WarnThenRaiseDuplication",
         tier=EnforcementTier.WARN,
@@ -303,7 +339,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L010",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-mysql-app app/client.py — `get_iam_role_token` logs that AWS "
+            "credentials were staged into the environment and names none of them. Log that "
+            "a credential was used, never the credential."
+        ),
         scope=RuleScope.BOTH,
         name="CredentialInLogOutput",
         tier=EnforcementTier.BLOCK,
@@ -336,7 +376,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L011",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app app/extracts/databases.py — `fetch_databases_summaries` "
+            'logs "Failed to fetch databases: %s" with the status as an argument, so the '
+            "template stays constant across every failure."
+        ),
         scope=RuleScope.BOTH,
         name="StringConcatenationInLog",
         tier=EnforcementTier.BLOCK,
@@ -361,7 +405,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L012",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "No app builds an `extra={}` dict at all — "
+            "application_sdk/observability/logger_adaptor.py takes %-style arguments "
+            "positionally and injects the Temporal context itself, so there is no "
+            "caller-supplied key that can collide with a stdlib LogRecord attribute."
+        ),
         scope=RuleScope.BOTH,
         name="StdlibExtraReservedKeyCollision",
         tier=EnforcementTier.BLOCK,
@@ -391,7 +440,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L013",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-openapi-app app/api_client.py — the logger comes from `get_logger`, "
+            "which accepts the SDK adaptor's kwargs. A stdlib logging.Logger appears "
+            "nowhere in the four reference apps, and it is the stdlib one that raises "
+            "TypeError on arbitrary kwargs."
+        ),
         scope=RuleScope.BOTH,
         name="StdlibArbitraryKwargs",
         tier=EnforcementTier.BLOCK,
@@ -418,7 +472,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L014",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app app/api_types.py — one factory, `get_logger`, in every "
+            "module. structlog is not a dependency of any reference app, so no call site "
+            "can shadow the message with an `event=` kwarg."
+        ),
         scope=RuleScope.BOTH,
         name="StructlogEventKwargOverwrite",
         tier=EnforcementTier.WARN,
@@ -442,7 +500,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L015",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-hello-world-app app/run_dev.py — the app awaits `run_dev_combined` and "
+            "configures no logging of its own. Handler configuration belongs to the SDK "
+            "runtime; an app calling dictConfig is reaching past it."
+        ),
         scope=RuleScope.BOTH,
         name="DictConfigDisableExistingLoggers",
         tier=EnforcementTier.WARN,
@@ -467,7 +529,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L016",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-openapi-app app/run_dev.py — the dev entrypoint boots the SDK runtime "
+            "and never calls logging.basicConfig(). The first caller wins and every later "
+            "call is a silent no-op, which is why the SDK owns this exactly once."
+        ),
         scope=RuleScope.BOTH,
         name="BasicConfigNoopAfterFirstCall",
         tier=EnforcementTier.WARN,
@@ -492,7 +558,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L017",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app app/handler.py — `test_auth` logs warning(..., "
+            "exc_info=True). The level is chosen for the site and exc_info is explicit; "
+            "logger.exception() would have pinned it to ERROR regardless."
+        ),
         scope=RuleScope.BOTH,
         name="LoggerExceptionUsage",
         tier=EnforcementTier.WARN,
@@ -524,7 +594,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L018",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — `generate_greetings` passes its "
+            "values as positional arguments to a %-style template, not as kwargs. Kwargs "
+            "on an application log call do not reach the message a reader greps."
+        ),
         scope=RuleScope.BOTH,
         name="KwargsInApplicationLogCalls",
         tier=EnforcementTier.WARN,
@@ -550,7 +624,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L019",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app app/handler.py — the module-level logger is used directly "
+            "and no reference app calls logger.bind(). Workflow/run correlation is "
+            "injected by the adaptor, so there is no bound logger to discard by accident."
+        ),
         scope=RuleScope.BOTH,
         name="DiscardedBindResult",
         tier=EnforcementTier.WARN,
@@ -575,7 +653,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L020",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app pyproject.toml — LOG009 sits in the lint select list with "
+            "the comment that names the replacement, so logger.warn() cannot reach main in "
+            "that repo."
+        ),
         scope=RuleScope.BOTH,
         name="DeprecatedLoggingWarn",
         tier=EnforcementTier.WARN,
@@ -598,7 +680,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L021",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            'atlan-openapi-app pyproject.toml — `extend-select = ["G001", "G003", '
+            '"G004", "T201", "LOG009"]`, which is the exact set this rule looks for. '
+            "atlan-metabase-app spells the same list one rule per line, with a comment on "
+            "why G002 is deliberately absent."
+        ),
         scope=RuleScope.BOTH,
         name="MissingLoggingLintRules",
         tier=EnforcementTier.WARN,

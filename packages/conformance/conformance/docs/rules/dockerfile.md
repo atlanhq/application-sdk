@@ -38,6 +38,13 @@ user, or broken env).  Customer impact: without the daprd sidecar the app cannot
 its state, secret, or queue components, so the connector bricks on first run in the
 customer's tenant — a day-one install failure discovered by the customer, not by CI.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app Dockerfile — `FROM registry.atlan.com/public/app-runtime-base:3`.
+  atlan-mysql-app Dockerfile reaches the same ref through an overridable `ARG
+  BASE_IMAGE`, which is the shape to copy when SDK PRs need to rebuild the connector on
+  a PR-scoped base.
+
 The final-stage `FROM` instruction must be exactly
 `registry.atlan.com/public/app-runtime-base:3`.  The v3 major tag is the only accepted
 form: `*-latest`, dev-branch tags (e.g. `:main`), pinned patch versions (e.g. `:3.2.1`),
@@ -67,6 +74,12 @@ scale-down events.  Customer impact: every routine tenant operation — a rollin
 a node upgrade, a scale-down — becomes a window where the customer's in-flight crawls
 and requests are dropped mid-run with no handoff.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app Dockerfile — the file ends at its ENV block; no CMD and no ENTRYPOINT
+  anywhere. The base image's entrypoint is what supervises daprd and the graceful drain,
+  so replacing it silently removes both.
+
 Neither `CMD` nor `ENTRYPOINT` may appear in the app Dockerfile.  The base image
 (`app-runtime-base`) ships an entrypoint script that co-launches `daprd` alongside the
 application process and forwards SIGTERM to both, ensuring graceful drain during rolling
@@ -90,7 +103,7 @@ deployed.  Enforcing the variable at lint time closes that gap.  Customer impact
 image ships, deploys into the tenant, and crash-loops with an import error — an outage
 the customer sees first, on a release every pre-deploy gate passed.
 
-### Canonical reference
+### What correct looks like
 
 - **Compliant example:** atlan-mysql-app — ENV ATLAN_APP_MODULE is declared in the Dockerfile as well as
   atlan.yaml, so the image runs on its own.
@@ -122,6 +135,12 @@ manifest.  Customer impact: a worker image baked to server mode never polls the 
 queue — the customer's workflows sit queued forever while every health check reports the
 pod as running and healthy.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app Dockerfile — ATLAN_APP_MODULE and ATLAN_CONTRACT_GENERATED_DIR are
+  baked because they describe the image; ATLAN_APP_MODE is not, because it describes the
+  deployment and arrives from atlan.yaml at schedule time.
+
 `ENV ATLAN_APP_MODE` must not appear in the Dockerfile.  Runtime mode (`worker` /
 `server`) is deployment-specific: the same image may be deployed in different modes in
 different environments.  Set `ATLAN_APP_MODE` in the deployment manifest (Kubernetes
@@ -143,6 +162,12 @@ that turns a container escape into a host root compromise.  Customer impact: the
 container processes the customer's credentials and source data inside their tenant —
 running it as root converts any exploitable app bug into potential host-level access to
 that customer's environment, a direct security exposure for them.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app Dockerfile — no USER directive at all. Ownership is handled by `COPY
+  --chown=appuser:appuser` and the base image's non-root appuser stands, which is what
+  the non-root execution policy requires.
 
 The effective `USER` of the final stage must not be root (`root` or `0`).  A temporary
 `USER root` is allowed when a later `USER` restores a non-root user.  The base image

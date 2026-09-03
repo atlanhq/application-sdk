@@ -21,7 +21,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -48,7 +47,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "is recorded in the ledger — every alternative is blocked. Treat such a "
             "site as compliant, not as unremediated."
         ),
-        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="UnboundedContractFields",
         tier=EnforcementTier.BLOCK,
@@ -87,7 +85,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P002",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app app/errors.py — every subclass overrides `code` and never "
+            "`category`. The category comes from the SDK leaf you chose to extend; "
+            "redeclaring it detaches the class from the taxonomy the dashboards group by."
+        ),
         scope=RuleScope.BOTH,
         name="CategoryFieldOverride",
         tier=EnforcementTier.BLOCK,
@@ -145,7 +147,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Overriding qualified_code alone is NOT exempt — that is the log surface "
             "only."
         ),
-        fix_locus=FixLocus.APP,
         scope=RuleScope.BOTH,
         name="ErrorCodePrefixMismatch",
         tier=EnforcementTier.BLOCK,
@@ -194,15 +195,16 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P013",
         canonical_reference=(
-            "atlan-mysql-app — @entrypoint methods take a generated AppInputContract "
-            "and return an Output subclass."
+            "atlan-metabase-app app/connector.py — `@entrypoint async def "
+            "extract_metadata(self, input: MetabaseInput) -> MetabaseOutput`. Both sides "
+            "of the boundary are SDK Input/Output subclasses, which is what makes the "
+            "payload validatable and the schema evolvable."
         ),
         rule_interactions=(
             "Resolution is by bare class name. Two files declaring the same name, or "
             "a class shadowing its own generated base (`class X(_X)` over `from "
             "generated import X as _X`), used to read as violations on correct code."
         ),
-        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="UntypedEntrypointBoundary",
         tier=EnforcementTier.BLOCK,
@@ -261,7 +263,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P014",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-hello-world-app app/contracts.py — each @task has its own Input/Output "
+            "pair (GenerateGreetingsInput/Output, SummarizeInput/Output) subclassing the "
+            "SDK bases. A dict or a bare str across a task boundary has no schema to "
+            "evolve."
+        ),
         scope=RuleScope.APP,
         name="UntypedTaskBoundary",
         tier=EnforcementTier.BLOCK,
@@ -314,7 +321,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P015",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app app/contracts.py — collection fields are bounded with "
+            "`MaxItems` rather than left as an open list of primitives, which is what "
+            "keeps the payload inside Temporal's limit as the source grows."
+        ),
         scope=RuleScope.APP,
         name="UnmodeledBoundedContractField",
         tier=EnforcementTier.WARN,
@@ -366,7 +377,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P026",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — `self.require(input.greetings_file, "
+            '"greetings_file")`. The field is typed, so the right move is to assert it '
+            "is present, not to getattr past the type with a default that silently changes "
+            "behaviour."
+        ),
         scope=RuleScope.APP,
         name="GetattrOnTypedContractField",
         tier=EnforcementTier.WARN,
@@ -405,7 +421,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P027",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "No reference app uses app state as a cross-task channel; atlan-metabase-app "
+            "app/connector.py mentions `get_app_state` only in a comment about the error "
+            "it raises outside app context. Data between tasks travels as typed Output → "
+            "Input."
+        ),
         scope=RuleScope.APP,
         name="AppStateAsCrossTaskChannel",
         tier=EnforcementTier.WARN,
@@ -447,7 +468,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P028",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-openapi-app app/asset_mapper.py — qualifiedName comes from "
+            "`APISpec.creator()` / `APIPath.creator()`, so the grammar is pyatlan's. Where "
+            "a caller genuinely needs the string and not the asset, atlan-metabase-app "
+            "app/qualified_names.py carries a per-function ignore[P028] naming the creator "
+            "whose grammar it mirrors."
+        ),
         scope=RuleScope.APP,
         name="ManualQualifiedNameFString",
         tier=EnforcementTier.WARN,

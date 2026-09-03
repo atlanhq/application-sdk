@@ -41,7 +41,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -49,7 +48,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P025",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — the App declares `name = "
+            '"hello-world"` and atlan.yaml carries `name: hello-world`. The task queue '
+            "is derived from that name, so any disagreement routes work to a queue no "
+            "worker is listening on."
+        ),
         scope=RuleScope.APP,
         name="AppNameContractCodeDrift",
         tier=EnforcementTier.BLOCK,

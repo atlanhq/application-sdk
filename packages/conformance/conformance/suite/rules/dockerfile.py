@@ -43,6 +43,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="I001",
+        canonical_reference=(
+            "atlan-hello-world-app Dockerfile — `FROM "
+            "registry.atlan.com/public/app-runtime-base:3`. atlan-mysql-app Dockerfile "
+            "reaches the same ref through an overridable `ARG BASE_IMAGE`, which is the "
+            "shape to copy when SDK PRs need to rebuild the connector on a PR-scoped base."
+        ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileWrongBaseImage",
@@ -93,6 +99,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I002",
+        canonical_reference=(
+            "atlan-metabase-app Dockerfile — the file ends at its ENV block; no CMD and no "
+            "ENTRYPOINT anywhere. The base image's entrypoint is what supervises daprd and "
+            "the graceful drain, so replacing it silently removes both."
+        ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileEntrypointOverride",
@@ -189,6 +200,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I004",
+        canonical_reference=(
+            "atlan-openapi-app Dockerfile — ATLAN_APP_MODULE and "
+            "ATLAN_CONTRACT_GENERATED_DIR are baked because they describe the image; "
+            "ATLAN_APP_MODE is not, because it describes the deployment and arrives from "
+            "atlan.yaml at schedule time."
+        ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileAppModeHardcoded",
@@ -230,6 +247,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I005",
+        canonical_reference=(
+            "atlan-mysql-app Dockerfile — no USER directive at all. Ownership is handled "
+            "by `COPY --chown=appuser:appuser` and the base image's non-root appuser "
+            "stands, which is what the non-root execution policy requires."
+        ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileRootUser",

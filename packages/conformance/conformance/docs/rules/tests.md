@@ -59,6 +59,13 @@ unit-deselecting marker' a deterministic, reviewable rule closes that gap withou
 hidden behaviour of an auto-marking conftest hook. The accepted marker set is read from
 the repo's own addopts so it is correct for any app, not just the SDK.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app tests/integration/test_mysql_workflow.py — a module-level `pytestmark =
+  pytest.mark.integration`, which marks every test in the file in one line.
+  atlan-openapi-app tests/integration/test_openapi.py marks per-test with the same
+  marker; either satisfies the unit job's deselection.
+
 Every test collected under `tests/integration/` must carry a marker that the unit job
 deselects (e.g. `integration`, `s3_integration`, `storage_emulator`) so the unit job
 skips it and a dedicated integration job runs it.  A test is considered marked when the
@@ -86,6 +93,12 @@ behaviour. The MSSQL regression (DISTR-752) slipped through status-only CI exact
 because no test drove the SDR path. Either harness satisfies this: an agent-mode e2e
 test (BaseE2ETest subclass with mode = RunMode.AGENT) or a legacy BaseSDRIntegrationTest
 subclass.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app tests/e2e/test_mysql_e2e.py — `TestMySQLE2E` sets `mode =
+  RunMode.AGENT`, which is what drives the SDR (agent-mode) path. An app declaring a
+  self-deployed runtime and never exercising that mode has an untested deployment shape.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one test must
 drive the SDR (agent-mode) execution path. Two harnesses satisfy this rule:
@@ -136,6 +149,12 @@ the app's ordinary handler and unit tests. What is genuinely mode-specific is ag
 credential routing and upload behaviour, which is what T002 asks an agent-mode e2e to
 cover. Surfacing usage now nudges the fleet off the harness before removal. WARN because
 splitting a suite's scenarios across their right homes needs human judgement.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app tests/e2e/test_mysql_e2e.py — the suite extends the generated
+  `MysqlGeneratedE2EBase`, not the retired BaseSDRIntegrationTest. The generated base is
+  regenerated from the contract, so it cannot drift from the app it tests.
 
 `BaseSDRIntegrationTest` (`application_sdk.testing.sdr.base`) is **deprecated** and will
 be removed in v4.0. Any subclass under `tests/` is flagged.
@@ -214,6 +233,13 @@ tests-reusable.yaml path exposes no input to inject ATLAN_APP_MODULE into that j
 main.py that delegates straight to application_sdk.main.main() therefore fails every PR
 with MissingAppModuleError / 'App server failed to start within 60s' (BLDX-1520).
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app main.py — the container entry point imports `main` from app.run_dev and
+  awaits it, so the same path serves the image and `uv run python main.py`. Calling
+  application_sdk.main.main() directly requires ATLAN_APP_MODULE to be set, which CI's
+  dev-mode boot does not set.
+
 Root `main.py` must not call `application_sdk.main.main()` directly (whether via `from
 application_sdk.main import main`, an aliased module import, or a bare dotted call).
 
@@ -261,6 +287,12 @@ coverage' targets are gamed unintentionally: a developer writes a test that exer
 code path to satisfy a coverage gate, intending to add assertions later, and the
 assertions never arrive. Flagging this deterministically closes the gap between 'the
 coverage tool is green' and 'the tests actually verify something.'
+
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app tests/unit/test_connector.py — every test ends in an assertion
+  about the value under test. A test whose body only exercises code is a smoke test
+  wearing a test's name.
 
 A collected test function (`test*`, including methods of a `Test*` class) has a
 non-empty body but contains none of the recognised assertion forms:
@@ -313,6 +345,11 @@ doesn't even exercise the code under test, so it contributes to the visible test
 without contributing any coverage at all. Left in place, it reads as 'this behaviour is
 tested' to anyone scanning the test file, which is actively misleading.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app tests/unit/test_utils.py — the smallest tests in the four reference
+  apps still assert; none is a `pass` or an ellipsis awaiting a body.
+
 A collected test function's body consists solely of `pass`, an `Ellipsis` (`...`), a
 docstring, or some combination of those — no other statement is present.
 
@@ -339,6 +376,12 @@ of the substance. This is the quieter sibling of T005: a reviewer scanning for '
 this test have an assert' sees one and moves on, without noticing it is unconditionally
 true. Both are 'coverage without verification'; this one specifically targets a test
 whose entire assertion surface is a truism.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app tests/unit/test_contracts.py — assertions compare the value under test
+  against an expected one. `assert True`, `assert 1 == 1` and `assert some_object` on a
+  value that is never falsy appear nowhere.
 
 A collected test's only assertion(s) evaluate a literal truthy constant (`assert True`,
 `assert 1`, `assert "non-empty string"`) rather than an expression whose value depends
@@ -383,6 +426,12 @@ reading the directory listing, exactly like a real test file. This is a particul
 dangerous failure mode because it is invisible in the pytest run output: there is no
 error, no skip, nothing — the tests simply never exist as far as CI is concerned.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app tests/unit/ — every collectable module is named test_*.py. A helper
+  that is not meant to be collected goes in conftest.py, as atlan-metabase-app
+  tests/unit/conftest.py does.
+
 A `.py` file under a test-tier directory (`tests/unit`, `tests/integration`,
 `tests/e2e`, `tests/ui`) defines at least one `def test*` function or `class Test*`, but
 its own filename does not match pytest's default collection glob (`test_*.py` /
@@ -422,6 +471,13 @@ precondition (credentials, a live tenant) is absent, and re-enables it automatic
 once the precondition is met. An unconditional skip usually starts as a temporary
 'disable this flaky suite' workaround and is forgotten, silently zeroing out that file's
 contribution to coverage from that point on.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app tests/e2e/test_connection_create.py — the module-level skip is
+  conditional: it fires only from the ImportError raised when the installed SDK predates
+  the agnostic e2e harness. An unconditional module skip disables the file forever and
+  nothing tells you.
 
 A module-level call to `pytest.skip(..., allow_module_level=True)` appears directly in
 the module body (not nested inside an `if` or `try` statement), so it executes — and
@@ -464,6 +520,12 @@ app only end-to-end, so a defect in a helper function has no tier positioned to 
 cheaply. Unlike T011/T012, this rule has no scaffold exemption: even the smallest app
 has some logic worth a fast unit test.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app tests/unit/ — three modules covering the connector, the contracts
+  and the dev entrypoint. This tier is the floor and is not exemptable; even the
+  scaffold app has it.
+
 No collectable pytest tests (`def test*` / `class Test*` in a `test_*.py` / `*_test.py`
 file) exist under `tests/unit/`. This is the universal floor of the tiering architecture
 — unlike `tests/integration/` and `tests/e2e/` (T011/T012), this tier has no
@@ -495,6 +557,13 @@ source. Scaffold/minimal apps that genuinely have no external source to integrat
 against (e.g. a template with no connector logic yet) can opt out via
 [tool.conformance].exempt_test_tiers in pyproject.toml — atlan.yaml is generated from
 the Pkl contract and must not be hand-edited, so the exemption can't live there.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app tests/integration/ — handler auth and preflight against a real MySQL,
+  plus credential resolution against fake secret stores. Where an app genuinely has
+  nothing to exercise at this tier, atlan-hello-world-app pyproject.toml declares
+  `[tool.conformance] exempt_test_tiers` and says why in a comment.
 
 No collectable pytest tests exist under `tests/integration/`. Per the agreed tiering
 architecture, integration tests connect to the real source and run the app's extract
@@ -533,6 +602,12 @@ the agreed architecture, e2e needs only one representative run, not scenario-lev
 coverage, so this rule is the weakest of the three tier rules — it only asks that the
 tier exist at all. Exemptable the same way as T011 for scaffold/minimal apps via
 [tool.conformance].exempt_test_tiers.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app tests/e2e/test_mysql_e2e.py — one full-DAG suite on the generated e2e
+  base. atlan-hello-world-app instead exempts the tier in pyproject.toml, which is the
+  other legitimate end state.
 
 No collectable pytest tests exist under `tests/e2e/`. Per the agreed tiering
 architecture this tier needs only one representative run — the full pipeline including
@@ -574,6 +649,12 @@ picked up by a broad auto-discovery run, or may not — depending on exactly how
 calling workflow scoped test-paths — making its actual execution status ambiguous from
 the file layout alone. Enforcing the placement convention removes that ambiguity.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app tests/ — everything collectable sits under unit/, integration/ or
+  e2e/. None of the four reference apps has a tests/sdr/ or a tests/full_dag/; the tier
+  a test belongs to is a directory, not a naming convention.
+
 A file matching pytest's collection glob (`test_*.py` / `*_test.py`) and defining at
 least one collectable test lives under `tests/` but outside all four canonical tier
 directories (`tests/unit`, `tests/integration`, `tests/e2e`, `tests/ui`) — for example
@@ -606,6 +687,12 @@ at --cov-fail-under=0 and ramps up over time (Athena at 20%, mssql at 60%), so W
 BLOCK) matches the agreed rollout reality — this rule's value is making the '0 is
 temporary, not the final state' expectation visible and trackable, not blocking the
 initial adoption PR.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app pyproject.toml — `fail_under = 84` under [tool.coverage.report].
+  atlan-metabase-app sets 85. A measured number with no fail_under is a report nobody's
+  build ever reads.
 
 `[tool.coverage.report]` exists in `pyproject.toml` — the repo has opted into coverage
 measurement — but `fail_under` is either absent (defaults to 0) or explicitly set to
@@ -650,6 +737,13 @@ than T014's disabled gate — the number moves in the intended direction while m
 less of what actually ships. Legitimate omissions exist (test helpers, generated code
 under app/generated/, vendored code) but those are not product logic; a pattern that
 reaches into ordinary app/ submodules is the signal this rule targets.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app pyproject.toml — coverage omits only `tests/**` and
+  `app/generated/**`, the latter with a comment saying it is regenerated from
+  contract/app.pkl on every contract change. Omitting anything under app/ that a human
+  wrote inflates the number instead of measuring it.
 
 `[tool.coverage.run].omit` contains a pattern matching source under `app/` that is not
 one of the recognised legitimate exclusions (`app/generated/**` — generated contract
@@ -700,6 +794,13 @@ harness's queue, so the top-level AE run flips to Running (its parent lives on t
 always-on automation-engine queue) and then hangs until timeout — observed on
 atlan-mysql-app, ~20 min of dead CI per run, before this rule existed.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app .github/e2e/e2e-full-docker-compose.yaml —
+  `ATLAN_DEPLOYMENT_NAME=${ATLAN_DEPLOYMENT_NAME:-e2e-full-ci-${GITHUB_RUN_ID}}`. The
+  overlay inherits the per-leg value the sdr-e2e action sets and only defaults it;
+  hard-coding it points every leg at one queue.
+
 An e2e CI docker-compose overlay under `.github/` (discovered as a `*.yml`/`*.yaml` with
 a top-level `services:` key that mentions `ATLAN_DEPLOYMENT_NAME`) assigns
 `ATLAN_DEPLOYMENT_NAME` in a service's `environment` to a literal that does not
@@ -749,6 +850,12 @@ queues diverge, no worker polls the harness's queue, the extract node stays Runn
 the run hangs — the exact atlan-metabase-app regression where the overlay was fixed but
 agent_spec was left hard-coded. Fixing the overlay (T016) and the agent_spec (T017) is a
 matched pair: applying one without the other breaks a previously-passing e2e.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app tests/e2e/test_connection_create.py — `agent_spec()` is inherited, not
+  overridden: the generated base derives the worker queue from ATLAN_APPLICATION_NAME +
+  ATLAN_DEPLOYMENT_NAME, so each leg lands on the queue its own CI action provisioned.
 
 An `agent_spec` override under `tests/` returns a hard-coded `AgentSpec(agent_name=...)`
 (a plain string or an f-string such as `f"myconn-e2e-full-ci-{self.run_id}"`) without
@@ -812,6 +919,12 @@ collected tests/unit + tests/integration together, the unit tests made the run
 non-empty, and the addopts-deselected integration tests were silently skipped on every
 run. This is the inverse of T001: keep the marker present (T001), but do not
 addopts-deselect it — the directory is the tier boundary.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `addopts` sets only timeouts, with a comment
+  recording why integration tests are deliberately NOT deselected there: the
+  directory-scoped CI job would collect nothing and pytest would exit 5.
 
 `[tool.pytest.ini_options].addopts` in `pyproject.toml` contains a `-m 'not <marker>'`
 selection expression, and one or more collectable tests under `tests/integration/` carry
@@ -893,6 +1006,12 @@ execute_app/execute_workflow/start_workflow call. A suite that runs all executio
 fixtures and only asserts on the result in test bodies is on the safe path and is not
 flagged.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `asyncio_default_fixture_loop_scope` and
+  `asyncio_default_test_loop_scope` are both "session", with a comment explaining the
+  hang that follows when only the fixture scope is broadened.
+
 `[tool.pytest.ini_options]` in `pyproject.toml` sets
 `asyncio_default_fixture_loop_scope` to a broadened scope (`session` / `package` /
 `module` / `class`) but does not set `asyncio_default_test_loop_scope`, which **defaults
@@ -969,6 +1088,13 @@ hand-rolled exactly this workflow (.github/workflows/sdr-full-dag.yaml) across ~
 connectors before the reusable path was understood; the rule exists so the next sweep
 converges on the caller instead.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app .github/workflows/tests.yaml — the e2e job calls
+  `atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main` and passes
+  inputs. Calling the SDK's sdr-e2e action directly re-implements what the reusable
+  workflow already owns, and then has to track its changes by hand.
+
 A workflow under `.github/workflows/` invokes
 `atlanhq/application-sdk/.github/actions/sdr-e2e` directly, and that same file does not
 delegate to `atlanhq/application-sdk/.github/workflows/tests-reusable.yaml`.
@@ -1030,6 +1156,13 @@ body. A trigger `paths:` filter, an artifact path such as `tests/e2e-results/`, 
 comment mentioning tests/e2e is text about the suites rather than a step that runs them,
 and does not mark them reachable.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app .github/workflows/tests.yaml — the e2e job is reachable from the
+  `e2e` PR label and from workflow_dispatch, so a suite under tests/e2e/ actually runs.
+  A tests/e2e/ directory nothing triggers is a suite that has never failed because it
+  has never run.
+
 The repo has at least one pytest-collectable file under `tests/e2e/` (`test_*.py` /
 `*_test.py`), and nothing under `.github/workflows/` can run it. A suite counts as
 reachable when a `tests-reusable.yaml` caller is wired to run it, when *any* workflow
@@ -1081,6 +1214,12 @@ posture (`two-store: true`) forces the e2e worker's objectstore binding to the C
 store while atlan-objectstore stays the tenant blobstorage, so a forgotten bridge shows
 up as zero downstream assets and lineage instead of a green run. Without it, an SDR
 app's e2e can pass on exactly the bug the fleet has already shipped twice.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app .github/workflows/tests.yaml — the tests-reusable caller sets
+  `two-store: true`, with a comment naming the ADR. Without it the e2e leg runs
+  single-store and a missing App.upload() bridge goes green.
 
 `atlan.yaml` declares `self_deployed_runtime: true`, the repo ships e2e suites, and the
 `tests-reusable.yaml` caller does not pass `two-store: true`.
@@ -1137,6 +1276,13 @@ the app name), and the drift surfaces as a tenant-side AE failure inside a 120-m
 e2e run rather than as a diff. The SDR fleet sweep hand-wrote identity attrs,
 AgentCredentialBody models and MustacheSubstitutions subclasses across every connector
 it touched, which is what this rule exists to stop recurring.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app tests/e2e/test_metabase_e2e.py — identity attributes, the credential
+  body and the Mustache substitutions all come from the generated
+  `MetabaseGeneratedE2EBase` and MetabaseMustacheSubstitutions. Hand-declaring them in
+  the test freezes a copy of what the contract will regenerate.
 
 A module under `tests/` declares scaffolding the contract toolkit generates. Three
 shapes are flagged:
@@ -1197,6 +1343,12 @@ worse outcome. Agent mode is also the self-deployed-runtime path itself, which i
 T002 accepts mode = RunMode.AGENT as an SDR app's coverage. Requiring the declaration
 rather than assuming AGENT keeps a deliberate tier-5 DIRECT run legal and visible.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app tests/e2e/test_metabase_e2e.py — `mode = RunMode.AGENT` is declared
+  on the class. Inheriting the RunMode.DIRECT default means the CI-side worker under
+  test is never the one the run routes to.
+
 A pytest-collectable class (`Test*`) under `tests/` transitively subclasses the SDK e2e
 harness (`BaseE2ETest` / `SQLAppE2ETest`, or a generated `<Name>GeneratedE2EBase`) and
 neither it nor any repo-visible ancestor sets a class-level `mode`.
@@ -1247,6 +1399,13 @@ one per entrypoint. The gap is also invisible: nothing in CI, conformance, or th
 scorecard distinguishes an app whose entrypoints are all covered from one where only the
 default is. Customer impact: a miner that regressed ships, because the only thing that
 would have run it in CI does not exist.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app tests/e2e/ — two suites, test_connection_create.py and
+  test_connection_reuse.py, so each contract entrypoint of the bundle has one. A
+  multi-entrypoint contract with a single e2e suite leaves the other entrypoints
+  unproven end to end.
 
 The app is in **bundle mode** — `app/generated/` holds one `<name>/manifest.json` subdir
 per entrypoint — and at least one of those entrypoints is not exercised by any

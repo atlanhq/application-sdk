@@ -96,16 +96,19 @@ Forme auto-wires these subscriptions from the matching `#### facet` names in
 the area responsibilities.  This node is clean only when every subscribed
 facet is clean.
 
-### Canonical reference
+### What correct looks like
 
-Before editing anything, read the rule's own **Canonical reference** block in
-`docs/rules/<series>.md`. It answers three questions the finding text does not,
-and getting them wrong is the most common way a remediation makes a repo worse:
+Before editing anything, read the rule's own **What correct looks like** block in
+`docs/rules/<series>.md`. Getting these wrong is the most common way a
+remediation makes a repo worse:
 
-- **Compliant example** — a maintained reference app (`hello-world`, `openapi`,
+- **Compliant example** — every `app`- and `both`-scoped rule names a file in a
+  maintained reference app (`atlan-hello-world-app`, `atlan-openapi-app`,
   `atlan-mysql-app`, `atlan-metabase-app`) that already has the shape you are
-  trying to reach. Copy from those, never from an arbitrary connector: a
-  connector may be mid-migration and is not a model of anything.
+  trying to reach. Open it. Copy from those, never from an arbitrary connector:
+  a connector may be mid-migration and is not a model of anything. Several of
+  these blocks also name the *suppression* the reference app carries, which is
+  what a legitimate carve-out looks like when one exists.
 - **Interacts with** — the other rule or gate that constrains this fix. Some
   obvious remedies are illegal: a second rule forbids the edit, or an
   append-only guard refuses it. Check before you spend the attempt.
@@ -113,26 +116,28 @@ and getting them wrong is the most common way a remediation makes a repo worse:
   suppress-only rule a justified inline directive IS the fix; re-"fixing" it
   every cycle is churn, not progress.
 
-Then route by the rule's **`fix_locus`**, shown in the same doc as
-*Fix belongs in*:
+**Where the fix goes.** By default it goes in the hand-written source of the
+repo you are scanning — which is what `Scope` already told you, so most rules
+say nothing further. A rule whose fix lands somewhere else says so explicitly,
+as *Fix belongs in* in the same doc:
 
 | locus | edit here |
 |---|---|
-| `app` | hand-written application source |
 | `contract` | `contract/*.pkl`, then the repo's OWN generate task — never the generated output, and never a bare `pkl eval`, which skips post-processing and rewrites unrelated files |
 | `toolkit` | the `contract-toolkit` renderer; **no app-side change can resolve it** |
-| `sdk` | `application_sdk` itself |
 | `ci` | `.github/**` |
 | `packaging` | `pyproject.toml`, `uv.lock`, `Dockerfile`, `atlan.yaml` |
 | `tests` | the app's own test suite |
+| `app` / `sdk` | only ever shown when it contradicts the scope — a rule that runs on one surface and is fixed on the other |
 
-A finding whose locus is not `app` and which you are about to fix by editing app
-source is a finding you have misread. Stop and re-read the block above.
+So the field is worth reading precisely because it is usually absent. A finding
+that declares a locus, which you are about to fix by editing app source, is a
+finding you have misread. Stop and re-read the block above.
 
-A new rule cannot be added without declaring `fix_locus`; the meta-tests
-`test_catalog_all_have_fix_locus` and `test_non_app_loci_explain_themselves`
-enforce that, and require the guidance block for any BLOCK rule the app cannot
-fix on its own.
+`test_app_facing_rules_name_a_canonical_reference` keeps the compliant example
+present on every rule that can reach a consumer repo, and
+`test_non_app_loci_explain_themselves` keeps guidance on any BLOCK rule the app
+cannot fix on its own.
 
 ### Continuity
 

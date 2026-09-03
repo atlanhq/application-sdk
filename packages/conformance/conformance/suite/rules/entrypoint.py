@@ -27,7 +27,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -35,7 +34,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P017",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-hello-world-app app/run_dev.py — the worker comes from "
+            "`run_dev_combined`. No reference app constructs a Temporal Worker or Client; "
+            "the launcher is what wires interceptors, the activity registry and the task "
+            "queue together."
+        ),
         scope=RuleScope.APP,
         name="ManualWorkerBootstrap",
         tier=EnforcementTier.WARN,
@@ -89,7 +93,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P018",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-openapi-app app/run_dev.py — the HTTP surface comes from the same "
+            "`run_dev_combined` call as the worker. A hand-rolled FastAPI app serves none "
+            "of the SDK's platform endpoints (/workflows/v1/auth, /check, /metadata)."
+        ),
         scope=RuleScope.APP,
         name="ManualServerBootstrap",
         tier=EnforcementTier.WARN,

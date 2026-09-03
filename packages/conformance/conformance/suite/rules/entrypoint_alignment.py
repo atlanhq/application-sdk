@@ -35,9 +35,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P016",
         canonical_reference=(
-            "atlan-mysql-app / atlan-metabase-app / atlan-openapi-app — the "
-            "@entrypoint set matches the contract's entrypoints exactly; none carries "
-            "a bespoke one-off entrypoint."
+            "atlan-openapi-app app/connector.py — the @entrypoint set matches the "
+            "contract's entrypoints exactly; none carries a bespoke one-off entrypoint. "
+            "atlan-metabase-app app/connector.py shows the two-entrypoint form, with a "
+            "comment naming the DAG nodes in contract/app.pkl they correspond to."
         ),
         terminal_state=(
             "A temporary migration entrypoint is not a reason to widen the contract. "

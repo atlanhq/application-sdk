@@ -27,7 +27,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -35,7 +34,11 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P004",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — the only orchestration import is "
+            "`from application_sdk.app import App, task`. temporalio appears in none of "
+            "the four reference apps' source."
+        ),
         scope=RuleScope.APP,
         name="DirectTemporalImport",
         tier=EnforcementTier.WARN,
@@ -72,7 +75,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P005",
-        fix_locus=FixLocus.APP,
+        canonical_reference=(
+            "atlan-metabase-app app/connector.py — imports come from `application_sdk.app` "
+            "and `application_sdk.contracts`, both public. A private orchestration module "
+            "is one the SDK may move without a deprecation cycle."
+        ),
         scope=RuleScope.APP,
         name="PrivateOrchestrationInternalImport",
         tier=EnforcementTier.WARN,
@@ -108,7 +115,6 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P006",
-        fix_locus=FixLocus.SDK,
         scope=RuleScope.SDK,
         name="TemporalImportOutsideAdapter",
         tier=EnforcementTier.WARN,
@@ -143,7 +149,6 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P007",
-        fix_locus=FixLocus.SDK,
         scope=RuleScope.SDK,
         name="RawTemporalInPublicSurface",
         tier=EnforcementTier.WARN,
