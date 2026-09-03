@@ -138,6 +138,10 @@ Runner = Callable[..., subprocess.CompletedProcess]
 Sleeper = Callable[[float], None]
 
 APPROVED = "approved"
+#: Mirrors sdk_loop_findings.MARK_AB. Duplicated rather than imported: this
+#: script runs under `python3` on a bare runner and must stay import-free of
+#: the loop lane, whose modules pull in PyYAML.
+MARK_AB = "<!-- SDK_LOOP_AB -->"
 SKIPPED = "skipped"
 FAILED = "failed"
 
@@ -823,6 +827,17 @@ def stamp_verdict(
                 f"posting)."
             )
             return StampOutcome(SKIPPED, 0, "no summary comment")
+
+    # Before the verdict is even read. A review-only run stamps this on its
+    # comment so the A/B can review merged PRs; the verdict is a measurement,
+    # not a decision, and nothing here — label, approval, status — may act on
+    # it. Checked first so no later guard can be argued into approving it.
+    if MARK_AB in body:
+        print(
+            f"PR #{pr_number}: verdict carries {MARK_AB} — a review-only run. "
+            "Nothing to stamp."
+        )
+        return StampOutcome(SKIPPED, 0, "review-only verdict")
 
     verdict = extract_verdict(body)
     if not verdict:

@@ -237,6 +237,7 @@ def deliver(
     run_url: str,
     needs_human: bool = False,
     conflicting: bool = False,
+    review_only: bool = False,
 ) -> LiveResult:
     """From the reviewer's file to the comment `main()` will post.
 
@@ -314,6 +315,7 @@ def deliver(
         answers_trigger=answers_trigger,
         model=model,
         run_url=run_url,
+        review_only=review_only,
     )
     return LiveResult(
         body=body,

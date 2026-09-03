@@ -67,6 +67,11 @@ on:
         required: false
         default: ''
         description: 'Consecutive re-aims so far. A re-aim is not progress, so it gets a budget of its own.'
+      review_only:
+        type: string
+        required: false
+        default: 'false'
+        description: "'true' on a review-only run: the verdict carries the A/B marker so nothing approves on it."
     secrets:
       LITELLM_API_KEY:
         required: true
@@ -317,6 +322,7 @@ jobs:
           PRIOR_SHA: ${{ inputs.prior_sha }}
           SPENT_SO_FAR: ${{ inputs.spent_so_far }}
           REAIMS_SO_FAR: ${{ inputs.reaims_so_far }}
+          REVIEW_ONLY: ${{ inputs.review_only }}
           SDK_LOOP_MAX_TOKENS: ${{ vars.SDK_LOOP_MAX_TOKENS }}
           # $HEAD_SHA is referenced 9 times by the playbook (the
           # moved-since-dispatch guard, the delta diff range, the commit-status

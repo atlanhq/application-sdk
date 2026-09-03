@@ -42,6 +42,12 @@ STOP_TEXT = {
         "from base — so the verdict was re-stamped on the live head and no round "
         "ran. Push a change and the next `@sdk-loop` reviews it properly."
     ),
+    "review_only": (
+        "**Review only.** One review ran and stopped by request: no fixes were "
+        "attempted, no approval was cast, and the verdict carries the A/B marker "
+        "so nothing downstream acts on it. Compare it with the review the PR "
+        "actually received."
+    ),
     "no_progress": (
         "**Stalled.** A resolve round changed nothing and contested nothing, so "
         "another identical round could not do better."
