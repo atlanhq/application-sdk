@@ -24,6 +24,8 @@ Environment:
     RUN_ID              this workflow run, so it can exclude itself
     GHA_RUN_URL         link included in whatever it posts
     WORKFLOW_FILE       e.g. sdk-loop.yml
+    REVIEW_ONLY         'true' on a review-only dispatch: a closed or merged PR is
+                        accepted, and the chain stops after Review 1
 """
 
 from __future__ import annotations
@@ -111,11 +113,32 @@ def decide(
     return FenceDecision(proceed=True, reason="ok")
 
 
+def admit_state(state: str | None, review_only: bool) -> str | None:
+    """Why a PR in this state may not be driven — or None to proceed.
+
+    The full loop refuses anything but OPEN: its resolver pushes, and a push
+    to a merged or closed branch is work nobody asked for. A review-only run
+    admits any state, because nothing after Review 1 runs — the review reads
+    the diff against base, which a merged PR still has.
+    """
+    if state == "OPEN" or review_only:
+        return None
+    return f"the PR is {str(state).lower()}, not open."
+
+
 MARK_START = "<!-- SDK_LOOP_STARTED -->"
 MARK_DECLINE = "<!-- SDK_LOOP_DECLINED -->"
 
 
-def start_comment(pr: str, run_url: str, sha: str) -> str:
+def start_comment(pr: str, run_url: str, sha: str, review_only: bool = False) -> str:
+    if review_only:
+        return (
+            f"{MARK_START}\n"
+            f"🔁 **`@sdk-loop`** review-only run on `{sha[:8]}`.\n\n"
+            "One review, no fixes, no approval: the verdict is posted for "
+            "comparison and nothing on this PR changes because of it.\n\n"
+            f"[Watch it run]({run_url})"
+        )
     return (
         f"{MARK_START}\n"
         f"🔁 **`@sdk-loop`** started on `{sha[:8]}`.\n\n"
@@ -206,8 +229,14 @@ def main(argv: list[str] | None = None) -> int:
             "headRefName,headRefOid,baseRefName,isDraft,state",
         ]
     )
-    if pr.get("state") != "OPEN":
-        reason = f"the PR is {str(pr.get('state')).lower()}, not open."
+    # A review-only run is the A/B's instrument: it reviews a PR whose human
+    # outcome is already known, so the PR is usually merged. That is safe
+    # precisely because nothing after Review 1 runs — the resolver never sees
+    # a branch it could push to. The full loop still refuses a closed PR:
+    # pushing fixes to a merged branch is work nobody asked for.
+    review_only = os.environ.get("REVIEW_ONLY", "").strip().lower() == "true"
+    reason = admit_state(pr.get("state"), review_only)
+    if reason:
         emit_outputs(proceed="false", reason=reason)
         post_comment(repo, pr_number, decline_comment(reason, run_url))
         return 0
@@ -220,8 +249,17 @@ def main(argv: list[str] | None = None) -> int:
         base_sha=pr["headRefOid"],
         base_ref=pr["baseRefName"],
         comment_id=os.environ.get("COMMENT_ID", ""),
+        # A string, like every other output, and defined on BOTH triggers. The
+        # chain gates read this rather than `inputs.review_only` directly: on
+        # an issue_comment run `inputs` is empty, and a dispatch boolean
+        # arrives as the string 'false', which a bare `if:` reads as true.
+        review_only="true" if review_only else "false",
     )
-    post_comment(repo, pr_number, start_comment(pr_number, run_url, pr["headRefOid"]))
+    post_comment(
+        repo,
+        pr_number,
+        start_comment(pr_number, run_url, pr["headRefOid"], review_only=review_only),
+    )
     print(f"baseline {pr['headRefOid'][:8]} on {pr['headRefName']}")
     return 0
 

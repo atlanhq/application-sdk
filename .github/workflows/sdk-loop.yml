@@ -1,6 +1,7 @@
 # @sdk-loop — drive a PR to merge-ready without supervision.
 #
 #   fence -> review 1 -> resolve 1 -> review 2 -> ... -> review 8 -> finalize
+#   fence -> review 1 -> finalize                    (workflow_dispatch review_only)
 #
 # One workflow run, one job per phase, up to 8 review/resolve pairs. The review
 # phase runs on xai/grok-4.6 — the same model the existing lanes review with
@@ -64,6 +65,14 @@ on:
       pr:
         description: 'PR number to drive'
         required: true
+      review_only:
+        description: >-
+          Review once and stop. Accepts a merged or closed PR, runs no
+          resolver, casts no approval. The A/B's instrument: it reviews PRs
+          whose human outcome is already known.
+        type: boolean
+        required: false
+        default: false
 
 # Keyed on the PR alone: loops on different PRs never contend. `cancel-in-
 # progress: false` because cancelling could kill a resolve phase mid-push —
@@ -107,6 +116,12 @@ jobs:
       head_ref: ${{ steps.fence.outputs.head_ref }}
       base_sha: ${{ steps.fence.outputs.base_sha }}
       reason: ${{ steps.fence.outputs.reason }}
+      # 'true' | 'false', on both triggers. The round gates read THIS, not
+      # `inputs.review_only`: `inputs` is empty on an issue_comment run, and a
+      # dispatch boolean arrives as a string, so `!inputs.review_only` would be
+      # false for the literal 'false'. The fence normalises once; every gate
+      # compares against one string.
+      review_only: ${{ steps.fence.outputs.review_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -123,6 +138,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WORKFLOW_FILE: sdk-loop.yml
+          REVIEW_ONLY: ${{ inputs.review_only }}
         run: python3 .github/scripts/sdk_loop_fence.py
 
       # The same acknowledgement the other two lanes give: an emoji within
@@ -142,7 +158,9 @@ jobs:
   prep:
     name: Prep
     needs: [fence]
-    if: needs.fence.outputs.proceed == 'true'
+    if: >-
+      needs.fence.outputs.proceed == 'true' &&
+      needs.fence.outputs.review_only != 'true'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -170,12 +188,14 @@ jobs:
       prior_sha: ''
       spent_so_far: ''
       reaims_so_far: ''
+      review_only: ${{ needs.fence.outputs.review_only || 'false' }}
 
   resolve-1:
     name: Resolve 1
     needs: [fence, review-1]
     if: >-
-      !cancelled() && needs.review-1.outputs.outcome == 'ok'
+      !cancelled() && needs.fence.outputs.review_only != 'true' &&
+      needs.review-1.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -192,7 +212,7 @@ jobs:
     name: Review 2
     needs: [fence, review-1, resolve-1]
     if: >-
-      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-1.outputs.outcome == 'ok' || needs.resolve-1.outputs.outcome == 'reaim' || needs.review-1.outputs.outcome == 'reaim')
+      !cancelled() && needs.fence.outputs.proceed == 'true' && needs.fence.outputs.review_only != 'true' && (needs.resolve-1.outputs.outcome == 'ok' || needs.resolve-1.outputs.outcome == 'reaim' || needs.review-1.outputs.outcome == 'reaim')
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -206,12 +226,14 @@ jobs:
       prior_sha: ${{ needs.review-1.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-1.outputs.spent_total || needs.review-1.outputs.spent_total }}
       reaims_so_far: ${{ needs.review-1.outputs.reaims }}
+      review_only: ${{ needs.fence.outputs.review_only || 'false' }}
 
   resolve-2:
     name: Resolve 2
     needs: [fence, review-2, resolve-1]
     if: >-
-      !cancelled() && needs.review-2.outputs.outcome == 'ok'
+      !cancelled() && needs.fence.outputs.review_only != 'true' &&
+      needs.review-2.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -228,7 +250,7 @@ jobs:
     name: Review 3
     needs: [fence, review-2, resolve-2]
     if: >-
-      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-2.outputs.outcome == 'ok' || needs.resolve-2.outputs.outcome == 'reaim' || needs.review-2.outputs.outcome == 'reaim')
+      !cancelled() && needs.fence.outputs.proceed == 'true' && needs.fence.outputs.review_only != 'true' && (needs.resolve-2.outputs.outcome == 'ok' || needs.resolve-2.outputs.outcome == 'reaim' || needs.review-2.outputs.outcome == 'reaim')
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -242,12 +264,14 @@ jobs:
       prior_sha: ${{ needs.review-2.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-2.outputs.spent_total || needs.review-2.outputs.spent_total }}
       reaims_so_far: ${{ needs.review-2.outputs.reaims }}
+      review_only: ${{ needs.fence.outputs.review_only || 'false' }}
 
   resolve-3:
     name: Resolve 3
     needs: [fence, review-3, resolve-2]
     if: >-
-      !cancelled() && needs.review-3.outputs.outcome == 'ok'
+      !cancelled() && needs.fence.outputs.review_only != 'true' &&
+      needs.review-3.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -264,7 +288,7 @@ jobs:
     name: Review 4
     needs: [fence, review-3, resolve-3]
     if: >-
-      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-3.outputs.outcome == 'ok' || needs.resolve-3.outputs.outcome == 'reaim' || needs.review-3.outputs.outcome == 'reaim')
+      !cancelled() && needs.fence.outputs.proceed == 'true' && needs.fence.outputs.review_only != 'true' && (needs.resolve-3.outputs.outcome == 'ok' || needs.resolve-3.outputs.outcome == 'reaim' || needs.review-3.outputs.outcome == 'reaim')
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -278,12 +302,14 @@ jobs:
       prior_sha: ${{ needs.review-3.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-3.outputs.spent_total || needs.review-3.outputs.spent_total }}
       reaims_so_far: ${{ needs.review-3.outputs.reaims }}
+      review_only: ${{ needs.fence.outputs.review_only || 'false' }}
 
   resolve-4:
     name: Resolve 4
     needs: [fence, review-4, resolve-3]
     if: >-
-      !cancelled() && needs.review-4.outputs.outcome == 'ok'
+      !cancelled() && needs.fence.outputs.review_only != 'true' &&
+      needs.review-4.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -300,7 +326,7 @@ jobs:
     name: Review 5
     needs: [fence, review-4, resolve-4]
     if: >-
-      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-4.outputs.outcome == 'ok' || needs.resolve-4.outputs.outcome == 'reaim' || needs.review-4.outputs.outcome == 'reaim')
+      !cancelled() && needs.fence.outputs.proceed == 'true' && needs.fence.outputs.review_only != 'true' && (needs.resolve-4.outputs.outcome == 'ok' || needs.resolve-4.outputs.outcome == 'reaim' || needs.review-4.outputs.outcome == 'reaim')
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -314,12 +340,14 @@ jobs:
       prior_sha: ${{ needs.review-4.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-4.outputs.spent_total || needs.review-4.outputs.spent_total }}
       reaims_so_far: ${{ needs.review-4.outputs.reaims }}
+      review_only: ${{ needs.fence.outputs.review_only || 'false' }}
 
   resolve-5:
     name: Resolve 5
     needs: [fence, review-5, resolve-4]
     if: >-
-      !cancelled() && needs.review-5.outputs.outcome == 'ok'
+      !cancelled() && needs.fence.outputs.review_only != 'true' &&
+      needs.review-5.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -336,7 +364,7 @@ jobs:
     name: Review 6
     needs: [fence, review-5, resolve-5]
     if: >-
-      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-5.outputs.outcome == 'ok' || needs.resolve-5.outputs.outcome == 'reaim' || needs.review-5.outputs.outcome == 'reaim')
+      !cancelled() && needs.fence.outputs.proceed == 'true' && needs.fence.outputs.review_only != 'true' && (needs.resolve-5.outputs.outcome == 'ok' || needs.resolve-5.outputs.outcome == 'reaim' || needs.review-5.outputs.outcome == 'reaim')
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -350,12 +378,14 @@ jobs:
       prior_sha: ${{ needs.review-5.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-5.outputs.spent_total || needs.review-5.outputs.spent_total }}
       reaims_so_far: ${{ needs.review-5.outputs.reaims }}
+      review_only: ${{ needs.fence.outputs.review_only || 'false' }}
 
   resolve-6:
     name: Resolve 6
     needs: [fence, review-6, resolve-5]
     if: >-
-      !cancelled() && needs.review-6.outputs.outcome == 'ok'
+      !cancelled() && needs.fence.outputs.review_only != 'true' &&
+      needs.review-6.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -372,7 +402,7 @@ jobs:
     name: Review 7
     needs: [fence, review-6, resolve-6]
     if: >-
-      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-6.outputs.outcome == 'ok' || needs.resolve-6.outputs.outcome == 'reaim' || needs.review-6.outputs.outcome == 'reaim')
+      !cancelled() && needs.fence.outputs.proceed == 'true' && needs.fence.outputs.review_only != 'true' && (needs.resolve-6.outputs.outcome == 'ok' || needs.resolve-6.outputs.outcome == 'reaim' || needs.review-6.outputs.outcome == 'reaim')
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -386,12 +416,14 @@ jobs:
       prior_sha: ${{ needs.review-6.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-6.outputs.spent_total || needs.review-6.outputs.spent_total }}
       reaims_so_far: ${{ needs.review-6.outputs.reaims }}
+      review_only: ${{ needs.fence.outputs.review_only || 'false' }}
 
   resolve-7:
     name: Resolve 7
     needs: [fence, review-7, resolve-6]
     if: >-
-      !cancelled() && needs.review-7.outputs.outcome == 'ok'
+      !cancelled() && needs.fence.outputs.review_only != 'true' &&
+      needs.review-7.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -408,7 +440,7 @@ jobs:
     name: Review 8
     needs: [fence, review-7, resolve-7]
     if: >-
-      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-7.outputs.outcome == 'ok' || needs.resolve-7.outputs.outcome == 'reaim' || needs.review-7.outputs.outcome == 'reaim')
+      !cancelled() && needs.fence.outputs.proceed == 'true' && needs.fence.outputs.review_only != 'true' && (needs.resolve-7.outputs.outcome == 'ok' || needs.resolve-7.outputs.outcome == 'reaim' || needs.review-7.outputs.outcome == 'reaim')
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -422,12 +454,14 @@ jobs:
       prior_sha: ${{ needs.review-7.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-7.outputs.spent_total || needs.review-7.outputs.spent_total }}
       reaims_so_far: ${{ needs.review-7.outputs.reaims }}
+      review_only: ${{ needs.fence.outputs.review_only || 'false' }}
 
   resolve-8:
     name: Resolve 8
     needs: [fence, review-8, resolve-7]
     if: >-
-      !cancelled() && needs.review-8.outputs.outcome == 'ok'
+      !cancelled() && needs.fence.outputs.review_only != 'true' &&
+      needs.review-8.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -457,6 +491,6 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.fence.outputs.pr }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          STOP_REASON: ${{ needs.prep.outputs.outcome == 'fast_track' && 'fast_track' || needs.resolve-8.outputs.outcome || needs.review-8.outputs.outcome || needs.resolve-7.outputs.outcome || needs.review-7.outputs.outcome || needs.resolve-6.outputs.outcome || needs.review-6.outputs.outcome || needs.resolve-5.outputs.outcome || needs.review-5.outputs.outcome || needs.resolve-4.outputs.outcome || needs.review-4.outputs.outcome || needs.resolve-3.outputs.outcome || needs.review-3.outputs.outcome || needs.resolve-2.outputs.outcome || needs.review-2.outputs.outcome || needs.resolve-1.outputs.outcome || needs.review-1.outputs.outcome || 'failed' }}
+          STOP_REASON: ${{ needs.prep.outputs.outcome == 'fast_track' && 'fast_track' || needs.fence.outputs.review_only == 'true' && 'review_only' || needs.resolve-8.outputs.outcome || needs.review-8.outputs.outcome || needs.resolve-7.outputs.outcome || needs.review-7.outputs.outcome || needs.resolve-6.outputs.outcome || needs.review-6.outputs.outcome || needs.resolve-5.outputs.outcome || needs.review-5.outputs.outcome || needs.resolve-4.outputs.outcome || needs.review-4.outputs.outcome || needs.resolve-3.outputs.outcome || needs.review-3.outputs.outcome || needs.resolve-2.outputs.outcome || needs.review-2.outputs.outcome || needs.resolve-1.outputs.outcome || needs.review-1.outputs.outcome || 'failed' }}
           ROUNDS_JSON: '[{"number":0,"phase":"prep","outcome":"${{ needs.prep.outputs.outcome }}","verdict":"","sha":"${{ needs.prep.outputs.new_base_sha }}","detail":"${{ needs.prep.outputs.detail }}","cost":"","usage":""},{"number":1,"phase":"review","outcome":"${{ needs.review-1.outputs.outcome }}","verdict":"${{ needs.review-1.outputs.verdict }}","sha":"${{ needs.review-1.outputs.new_base_sha }}","detail":"${{ needs.review-1.outputs.detail }}","cost":"${{ needs.review-1.outputs.cost }}","usd":"${{ needs.review-1.outputs.usd }}","usage":"${{ needs.review-1.outputs.usage }}"},{"number":1,"phase":"resolve","outcome":"${{ needs.resolve-1.outputs.outcome }}","verdict":"${{ needs.resolve-1.outputs.verdict }}","sha":"${{ needs.resolve-1.outputs.new_base_sha }}","detail":"${{ needs.resolve-1.outputs.detail }}","cost":"${{ needs.resolve-1.outputs.cost }}","usd":"${{ needs.resolve-1.outputs.usd }}","usage":"${{ needs.resolve-1.outputs.usage }}"},{"number":2,"phase":"review","outcome":"${{ needs.review-2.outputs.outcome }}","verdict":"${{ needs.review-2.outputs.verdict }}","sha":"${{ needs.review-2.outputs.new_base_sha }}","detail":"${{ needs.review-2.outputs.detail }}","cost":"${{ needs.review-2.outputs.cost }}","usd":"${{ needs.review-2.outputs.usd }}","usage":"${{ needs.review-2.outputs.usage }}"},{"number":2,"phase":"resolve","outcome":"${{ needs.resolve-2.outputs.outcome }}","verdict":"${{ needs.resolve-2.outputs.verdict }}","sha":"${{ needs.resolve-2.outputs.new_base_sha }}","detail":"${{ needs.resolve-2.outputs.detail }}","cost":"${{ needs.resolve-2.outputs.cost }}","usd":"${{ needs.resolve-2.outputs.usd }}","usage":"${{ needs.resolve-2.outputs.usage }}"},{"number":3,"phase":"review","outcome":"${{ needs.review-3.outputs.outcome }}","verdict":"${{ needs.review-3.outputs.verdict }}","sha":"${{ needs.review-3.outputs.new_base_sha }}","detail":"${{ needs.review-3.outputs.detail }}","cost":"${{ needs.review-3.outputs.cost }}","usd":"${{ needs.review-3.outputs.usd }}","usage":"${{ needs.review-3.outputs.usage }}"},{"number":3,"phase":"resolve","outcome":"${{ needs.resolve-3.outputs.outcome }}","verdict":"${{ needs.resolve-3.outputs.verdict }}","sha":"${{ needs.resolve-3.outputs.new_base_sha }}","detail":"${{ needs.resolve-3.outputs.detail }}","cost":"${{ needs.resolve-3.outputs.cost }}","usd":"${{ needs.resolve-3.outputs.usd }}","usage":"${{ needs.resolve-3.outputs.usage }}"},{"number":4,"phase":"review","outcome":"${{ needs.review-4.outputs.outcome }}","verdict":"${{ needs.review-4.outputs.verdict }}","sha":"${{ needs.review-4.outputs.new_base_sha }}","detail":"${{ needs.review-4.outputs.detail }}","cost":"${{ needs.review-4.outputs.cost }}","usd":"${{ needs.review-4.outputs.usd }}","usage":"${{ needs.review-4.outputs.usage }}"},{"number":4,"phase":"resolve","outcome":"${{ needs.resolve-4.outputs.outcome }}","verdict":"${{ needs.resolve-4.outputs.verdict }}","sha":"${{ needs.resolve-4.outputs.new_base_sha }}","detail":"${{ needs.resolve-4.outputs.detail }}","cost":"${{ needs.resolve-4.outputs.cost }}","usd":"${{ needs.resolve-4.outputs.usd }}","usage":"${{ needs.resolve-4.outputs.usage }}"},{"number":5,"phase":"review","outcome":"${{ needs.review-5.outputs.outcome }}","verdict":"${{ needs.review-5.outputs.verdict }}","sha":"${{ needs.review-5.outputs.new_base_sha }}","detail":"${{ needs.review-5.outputs.detail }}","cost":"${{ needs.review-5.outputs.cost }}","usd":"${{ needs.review-5.outputs.usd }}","usage":"${{ needs.review-5.outputs.usage }}"},{"number":5,"phase":"resolve","outcome":"${{ needs.resolve-5.outputs.outcome }}","verdict":"${{ needs.resolve-5.outputs.verdict }}","sha":"${{ needs.resolve-5.outputs.new_base_sha }}","detail":"${{ needs.resolve-5.outputs.detail }}","cost":"${{ needs.resolve-5.outputs.cost }}","usd":"${{ needs.resolve-5.outputs.usd }}","usage":"${{ needs.resolve-5.outputs.usage }}"},{"number":6,"phase":"review","outcome":"${{ needs.review-6.outputs.outcome }}","verdict":"${{ needs.review-6.outputs.verdict }}","sha":"${{ needs.review-6.outputs.new_base_sha }}","detail":"${{ needs.review-6.outputs.detail }}","cost":"${{ needs.review-6.outputs.cost }}","usd":"${{ needs.review-6.outputs.usd }}","usage":"${{ needs.review-6.outputs.usage }}"},{"number":6,"phase":"resolve","outcome":"${{ needs.resolve-6.outputs.outcome }}","verdict":"${{ needs.resolve-6.outputs.verdict }}","sha":"${{ needs.resolve-6.outputs.new_base_sha }}","detail":"${{ needs.resolve-6.outputs.detail }}","cost":"${{ needs.resolve-6.outputs.cost }}","usd":"${{ needs.resolve-6.outputs.usd }}","usage":"${{ needs.resolve-6.outputs.usage }}"},{"number":7,"phase":"review","outcome":"${{ needs.review-7.outputs.outcome }}","verdict":"${{ needs.review-7.outputs.verdict }}","sha":"${{ needs.review-7.outputs.new_base_sha }}","detail":"${{ needs.review-7.outputs.detail }}","cost":"${{ needs.review-7.outputs.cost }}","usd":"${{ needs.review-7.outputs.usd }}","usage":"${{ needs.review-7.outputs.usage }}"},{"number":7,"phase":"resolve","outcome":"${{ needs.resolve-7.outputs.outcome }}","verdict":"${{ needs.resolve-7.outputs.verdict }}","sha":"${{ needs.resolve-7.outputs.new_base_sha }}","detail":"${{ needs.resolve-7.outputs.detail }}","cost":"${{ needs.resolve-7.outputs.cost }}","usd":"${{ needs.resolve-7.outputs.usd }}","usage":"${{ needs.resolve-7.outputs.usage }}"},{"number":8,"phase":"review","outcome":"${{ needs.review-8.outputs.outcome }}","verdict":"${{ needs.review-8.outputs.verdict }}","sha":"${{ needs.review-8.outputs.new_base_sha }}","detail":"${{ needs.review-8.outputs.detail }}","cost":"${{ needs.review-8.outputs.cost }}","usd":"${{ needs.review-8.outputs.usd }}","usage":"${{ needs.review-8.outputs.usage }}"},{"number":8,"phase":"resolve","outcome":"${{ needs.resolve-8.outputs.outcome }}","verdict":"${{ needs.resolve-8.outputs.verdict }}","sha":"${{ needs.resolve-8.outputs.new_base_sha }}","detail":"${{ needs.resolve-8.outputs.detail }}","cost":"${{ needs.resolve-8.outputs.cost }}","usd":"${{ needs.resolve-8.outputs.usd }}","usage":"${{ needs.resolve-8.outputs.usage }}"}]'
         run: python3 .github/scripts/sdk_loop_finalize.py

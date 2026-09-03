@@ -47,6 +47,11 @@ from typing import Any, Iterable, Sequence
 import yaml
 from sdk_loop_by_design import ByDesign
 
+#: Stamped on a review-only run's verdict. The approval workflow refuses to
+#: act on it and telemetry filters on it, so an A/B row can never approve a
+#: merged PR or be counted as a real review.
+MARK_AB = "<!-- SDK_LOOP_AB -->"
+
 #: Canonical severity data. Never read by a model — see the file's own header.
 SEVERITY_DATA = (
     Path(__file__).resolve().parents[2] / ".mothership/pr-loop/data/severity.yaml"
@@ -423,6 +428,7 @@ def render_markers(
     *,
     answers_trigger: str | None = None,
     toolkit_artifact_hash: str | None = None,
+    review_only: bool = False,
 ) -> str:
     """The five-marker block, in the frozen order.
 
@@ -456,6 +462,11 @@ def render_markers(
         lines.append(f"<!-- ANSWERS_TRIGGER: {trigger} -->")
     if toolkit_artifact_hash:
         lines.append(f"<!-- TOOLKIT_ARTIFACT_HASH: {toolkit_artifact_hash} -->")
+    if review_only:
+        # Last, and additive: every existing parser reads the markers above by
+        # regex, not by position, so an extra trailing line changes nothing for
+        # them. The approval path reads THIS one and stands down.
+        lines.append(MARK_AB)
     return "\n".join(lines)
 
 
@@ -509,6 +520,7 @@ def render_summary(
     model: str = "",
     run_url: str = "",
     heading_subject: str = "SDK",
+    review_only: bool = False,
 ) -> str:
     """The whole verdict comment.
 
@@ -523,6 +535,7 @@ def render_summary(
             reviewed_head,
             answers_trigger=answers_trigger,
             toolkit_artifact_hash=toolkit_artifact_hash,
+            review_only=review_only,
         ),
         f"## {heading_subject} {kind} (@sdk-loop): PR #{pr_number} — {pr_title}",
         "",

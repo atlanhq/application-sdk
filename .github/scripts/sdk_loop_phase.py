@@ -885,6 +885,7 @@ def main(argv: list[str] | None = None) -> int:
                 answers_trigger=os.environ.get("COMMENT_ID") or None,
                 model=REVIEW_MODEL,
                 run_url=os.environ.get("GHA_RUN_URL", ""),
+                review_only=os.environ.get("REVIEW_ONLY", "").lower() == "true",
             )
             if live.should_post:
                 url = post_comment(repo, pr, live.body, _sh)
