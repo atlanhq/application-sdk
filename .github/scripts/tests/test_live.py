@@ -410,3 +410,34 @@ def test_post_comment_returns_empty_when_gh_writes_nothing() -> None:
         stdout = ""
 
     assert live.post_comment("o/r", 7, "BODY", lambda *a, **k: R()) == ""
+
+
+def test_suppressed_findings_are_rendered_where_a_human_can_see_them(pack, sev) -> None:
+    """The clause that justifies machine suppression. `Normalised.dropped` had a
+    good audit string and no consumer, so "over-suppression is discoverable
+    instead of silent" was true of a data structure and false of anything the
+    author saw. Now it is in the comment — collapsed, but there."""
+    result = _deliver(
+        pack,
+        sev,
+        _payload(
+            findings=[_finding(pattern_id="T201", title="print in prod", line=11)]
+        ),
+        by_design=load_by_design(),
+    )
+    assert result.dropped == 1
+    assert "Suppressed before review (1)" in result.body
+    assert "print in prod" in result.body
+    assert (
+        "ci-logging-hygiene" in result.body
+    ), "the entry that caused the drop is named"
+    assert (
+        "<details>" in result.body
+    ), "collapsed — there to be checked, not read every time"
+
+
+def test_nothing_suppressed_renders_no_section(pack, sev) -> None:
+    result = _deliver(
+        pack, sev, _payload(findings=[_finding()]), by_design=load_by_design()
+    )
+    assert "Suppressed before review" not in result.body

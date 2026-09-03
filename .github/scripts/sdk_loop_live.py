@@ -298,6 +298,7 @@ def deliver(
     extras = [refute.render(arbitration)]
     if redgreen_report is not None:
         extras.append(redgreen.render(redgreen_report))
+    extras.append(render_dropped(normalised.dropped))
     summary = "\n\n".join(p for p in [notes, *extras] if p)
 
     body = render_summary(
@@ -321,6 +322,37 @@ def deliver(
         dropped=len(normalised.dropped) + len(arbitration.dropped),
         challenged=arbitration.mode,
     )
+
+
+def render_dropped(dropped: Sequence[Any]) -> str:
+    """The audit trail the by-design filter promises, where a human can read it.
+
+    `normalise()` records every finding it drops against the entry that caused
+    it. Until this, that record was a property of a data structure nobody
+    rendered — "over-suppression is discoverable instead of silent" was true of
+    `Normalised.dropped` and false of anything the author saw. Machine
+    suppression is only safer than asking a model to stay quiet if the human
+    can see what was suppressed, so this is not decoration: it is the clause
+    that justifies the filter.
+
+    Collapsed by default. It is there to be checked, not read every time; a
+    suppressed list that dominates the summary trains people to skip it.
+    """
+    if not dropped:
+        return ""
+    lines = [
+        "<details>",
+        f"<summary><strong>Suppressed before review ({len(dropped)})</strong> — "
+        "by-design and CI-owned patterns, listed so a wrong suppression can be "
+        "seen</summary>",
+        "",
+    ]
+    for item in dropped:
+        finding = item.finding
+        where = f"`{finding.file}`" + (f":{finding.line}" if finding.line else "")
+        lines.append(f"- {where} — {finding.title}  \n  _{item.reason}_")
+    lines += ["", "</details>"]
+    return "\n".join(lines)
 
 
 def post_comment(repo: str, pr: int, body: str, sh: Callable[..., Any]) -> str:
