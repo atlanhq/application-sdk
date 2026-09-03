@@ -310,3 +310,52 @@ def test_the_sandbox_lanes_briefs_point_at_the_moved_files() -> None:
         ), f"{brief.name} still names a rule under references/"
         for rel in re.findall(r"`?(\.mothership/rules/[a-z0-9-]+-rules\.md)`?", text):
             assert (REPO / rel).exists(), f"{brief.name} points at missing {rel}"
+
+
+# ---------------------------------------------------------------------------
+# The toolkit specialist knows which contract a surface reaches
+# ---------------------------------------------------------------------------
+
+#: The public vocabulary for consumer-facing toolkit contracts. The old lane's
+#: consumer registry maps changed surfaces onto these and runs the checks; the
+#: new lane cannot open a consumer, so it must at least name the contract for
+#: the human who can.
+TOOLKIT_CONTRACTS = (
+    "UI rendering compatibility",
+    "Manifest substitution compatibility",
+    "Workflow execution contract",
+    "Generated SDK input contract",
+    "Representative app pattern",
+)
+
+
+def test_the_toolkit_brief_maps_surfaces_onto_every_public_contract(
+    monkeypatch,
+) -> None:
+    """A brief that says "say what a consumer sees" without saying which
+    consumer contracts exist leaves the reviewer to invent the taxonomy. Each
+    contract the registry names must reach the toolkit specialist, tied to a
+    concrete surface."""
+    monkeypatch.chdir(REPO)
+    text = common._agent_prompt("toolkit-review")
+    for contract in TOOLKIT_CONTRACTS:
+        assert contract in text, f"toolkit brief never names {contract!r}"
+    for surface in ("Config.pkl", "_input.py", "task queues", "NativeAppBundle.pkl"):
+        assert surface in text, f"toolkit brief does not map {surface!r}"
+
+
+def test_nothing_the_loop_lane_reads_names_an_internal_repository() -> None:
+    """The loop lane's output is posted publicly, and its briefs say so. The
+    consumer registry that names repositories and clone locations stays in the
+    sandbox lane; nothing under pr-loop/ or rules/ may carry one. The family
+    glob `atlanhq/atlan-*-app` is the SDK's own public vocabulary and passes."""
+    for path in [*(REPO / ".mothership/pr-loop").rglob("*"), *RULES_DIR.glob("*.md")]:
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            named = re.findall(r"atlanhq/([\w.*-]+)", line)
+            if any("*" not in n and not n.startswith("application-sdk") for n in named):
+                raise AssertionError(
+                    f"{path.relative_to(REPO)} names an internal repository: {line.strip()[:100]}"
+                )

@@ -23,6 +23,25 @@ migration, not a bump — say so, and say what the migration is.
 consumers have committed turns their freshness check red until they regenerate.
 That is sometimes correct and always worth stating.
 
+## Which contract a changed surface implicates
+
+You cannot open a consumer here. You can still say which consumer-facing
+contract a change reaches, so the human who can verify it knows where to look.
+Name the contract by these terms — they are the public vocabulary for it:
+
+| Changed surface | Contract implicated |
+|---|---|
+| `Config.pkl`, `Widgets.pkl` | UI rendering compatibility |
+| Credential fields in `NativeApp.pkl`, `Credential.pkl`, or the examples | UI rendering compatibility |
+| `manifest.json` rendering — node args, placeholders, static values, output refs | Manifest substitution compatibility |
+| Typed nodes, DAG defaults, dependencies, labels, task queues, workflow or activity names | Workflow execution contract |
+| Generated `_input.py` — field names, defaults, aliases, SDK import behaviour | Generated SDK input contract |
+| `NativeAppBundle.pkl`, the generated root `atlan.yaml`, bundle shared credentials | Manifest substitution compatibility **and** workflow execution contract |
+| The PR claims a system-app or default-node compatibility story | Representative app pattern |
+
+A change that reaches one of these and carries no evidence the contract still
+holds is a NEEDS_HUMAN finding naming the contract, not a pass.
+
 ## What earns a finding here
 
 Say what a consumer sees on their next bump. "This changes the emitted key" is
