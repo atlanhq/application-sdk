@@ -2,6 +2,16 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.27.0] - 2026-09-03
+
+### Features
+
+- centralize connector review kit (#3644) ([82f8687](https://github.com/atlanhq/application-sdk/commit/82f8687))
+
+### Bug fixes
+
+- P001 also catches the opt-out removed from a contract that needs it (#3630) ([8fd12e7](https://github.com/atlanhq/application-sdk/commit/8fd12e7))
+
 ## [0.26.0] - 2026-09-02
 
 ### Features
