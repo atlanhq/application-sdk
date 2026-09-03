@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import yaml
+from sdk_loop_by_design import ByDesign
 
 #: Canonical severity data. Never read by a model — see the file's own header.
 SEVERITY_DATA = (
@@ -82,6 +83,13 @@ VERDICT_FIXES = "NEEDS_FIXES"
 VERDICT_BLOCKED = "BLOCKED"
 VERDICT_HUMAN = "NEEDS_HUMAN"
 VERDICT_REBASE = "NEEDS_REBASE"
+
+#: Verdicts that are correct with an empty `### Findings`. Both non-READY cases
+#: are decided BEFORE any finding exists — `conflicting` comes from
+#: mergeStateStatus and `needs_human` from what the reviewer could not
+#: determine — so flagging them reports every rebase round as a contract
+#: violation and contaminates the measurement this audit exists to produce.
+_EMPTY_FINDINGS_IS_VALID = frozenset({"READY_TO_MERGE", "NEEDS_REBASE", "NEEDS_HUMAN"})
 
 #: Verdict precedence when several apply at once. BLOCKED outranks NEEDS_HUMAN
 #: because a guardrail violation is a fact about the code, while NEEDS_HUMAN is
@@ -143,6 +151,17 @@ class Severity:
         if entry is None:
             raise SchemaError(f"unmapped severity {severity!r}")
         return bool(entry["in_findings"])
+
+    def lowest_blocking(self) -> str:
+        """The least severe severity that still renders under `### Findings`.
+
+        Used to floor a guardrail finding. `display` is written worst-first, so
+        the last in-findings entry is the mildest severity that still blocks.
+        """
+        for name in reversed(list(self.display)):
+            if self.display[name]["in_findings"]:
+                return name
+        raise SchemaError("no severity renders into `### Findings`")
 
     def inline(self, severity: str) -> bool:
         return bool(self.display[severity]["inline_comment"])
@@ -258,7 +277,11 @@ def parse_finding(raw: dict[str, Any]) -> Finding:
     return Finding(**known)
 
 
-def normalise(findings: Iterable[Finding], sev: Severity) -> Normalised:
+def normalise(
+    findings: Iterable[Finding],
+    sev: Severity,
+    by_design: ByDesign | None = None,
+) -> Normalised:
     """Clamp severities, apply per-severity floors, and split by destination.
 
     Order matters and is the reverse of the obvious one: clamp BEFORE the floor
@@ -283,6 +306,33 @@ def normalise(findings: Iterable[Finding], sev: Severity) -> Normalised:
         guardrail = sev.guardrail_for(finding.pattern_id)
         if guardrail is not None:
             finding.guardrail = guardrail[0]
+            # A guardrail is reported regardless of confidence — and, it turns
+            # out, regardless of the severity the model picked. The clamp above
+            # only ever LOWERS, so a model that under-rates a guardrail pattern
+            # (a determinism violation emitted as LOW, say) would land it in
+            # `prose`. `compute_verdict` reads only `kept`, so the guardrail's
+            # BLOCKED verdict would never fire and a merge-blocking fact would
+            # render as a passing remark. Floor it to the mildest severity that
+            # still blocks: the model's rating is evidence about how bad the
+            # defect is, never about whether the guardrail counts.
+            if not sev.in_findings(finding.severity):
+                finding.severity = sev.lowest_blocking()
+
+        # After the guardrail is stamped, because the by-design filter refuses
+        # to touch guardrail findings and needs the field set to know. Before
+        # the floor, because a suppressed finding should be reported as
+        # suppressed — "dropped: by-design" is auditable, "dropped: below the
+        # HIGH floor" for the same finding hides which mechanism removed it.
+        if by_design is not None:
+            entry = by_design.match(finding)
+            if entry is not None:
+                out.dropped.append(
+                    Dropped(
+                        finding,
+                        f"by-design [{entry.id}, {entry.owner}]: {entry.reason}",
+                    )
+                )
+                continue
 
         if guardrail is None and finding.confidence < sev.floor(finding.severity):
             out.dropped.append(
@@ -620,7 +670,7 @@ def audit_comment(body: str) -> list[str]:
 
     findings_empty = _findings_are_empty(text)
     if verdict is not None:
-        if findings_empty and verdict != VERDICT_READY:
+        if findings_empty and verdict not in _EMPTY_FINDINGS_IS_VALID:
             problems.append(
                 f"### Findings is empty but the verdict is {verdict}; the resolve "
                 "loop has nothing left to fix and cannot terminate"
