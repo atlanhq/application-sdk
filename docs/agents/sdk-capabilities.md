@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.31.0
-source-sha:    f65e4b9324aef9a80b45b8b976437aebeb551bcf
-source-date:   2026-09-02T10:42:50Z
+source-sha:    f3045c7ac582ccbdd1064752739cacaca68eecd6
+source-date:   2026-09-02T13:38:19+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -33,7 +33,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
-| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
+| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 327 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
@@ -3164,6 +3164,15 @@ SQL metadata extractor templates and their contracts
 - **Signature:** `class SqlQueryExtractor`
 - **Summary:** Abstract base class for SQL query extraction apps.
 - **Defined in:** `application_sdk/templates/sql_query_extractor.py`
+
+### Constants and Enums
+
+#### `FilterMap`
+
+- **Import:** `from application_sdk.templates.contracts import FilterMap`
+- **Signature:** `FilterMap`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 ## `application_sdk.testing`
 

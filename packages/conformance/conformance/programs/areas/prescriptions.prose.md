@@ -187,26 +187,44 @@ Drafts a **proposed** fix for human review.  This area is suggest-only: the
 proposal is recorded in residue and **never applied** — see **Why suggest-only**
 above.  `classification` is always `"judgment"` for all P-series rules.
 
-- **P001 UnboundedContractFields** — the contract opts out of payload safety
-  via the `allow_unbounded_fields=True` class keyword.  Read the contract's
-  fields around `finding.line`, then draft, in order of preference:
+- **P001 UnboundedContractFields** — two shapes, same rule.  Read the
+  contract's fields around `finding.line` first, then decide.
 
-  1. **The real fix (preferred)** — remove `allow_unbounded_fields=True` and
-     bound each field the payload-safety validator would reject: wrap an
-     unbounded `list[T]` as `Annotated[list[T], MaxItems(N)]` and an unbounded
-     `dict[K, V]` as `Annotated[dict[K, V], MaxItems(N)]`, choosing `N` from
-     the field's realistic cardinality and **stating that assumption** in the
-     proposal (e.g. ~10000 ≈ ~1MB JSON, well under Temporal's 2MB limit).  A
-     scalar-only contract needs only the opt-out removed.  Add
-     `from typing import Annotated` and
-     `from application_sdk.contracts.types import MaxItems` if missing.
+  **Inspect for `Any` before touching the opt-out.**  Runtime
+  `validate_payload_safety` refuses `Any` unconditionally — wrapping it in
+  `MaxItems` does not make it acceptable.  Dropping `allow_unbounded_fields`
+  while an `Any`-typed field remains raises `PayloadSafetyError` at
+  class-definition time and the app will not import.  That is the edit that
+  broke nine apps; do not draft it.
+
+  Then draft, in order of preference:
+
+  1. **Type the field concretely (preferred)** — replace `Any` (and
+     `dict[str, Any]` / `list[Any]`) with a concrete bounded type.  For
+     filter maps use `FilterMap` from
+     `application_sdk.templates.contracts` (a bounded
+     `dict[str, list[str]]`).  Only after every field would pass
+     `validate_payload_safety`, remove `allow_unbounded_fields=True`.
      Return `outcome = "fix"`.
 
-  2. **Fallback** — if a field is genuinely unbounded with no sensible cap,
-     draft an inline `# conformance: ignore[P001] <concise justification>` on
+  2. **Bound an otherwise-legal unbounded collection** — wrap an unbounded
+     `list[T]` as `Annotated[list[T], MaxItems(N)]` and an unbounded
+     `dict[K, V]` as `Annotated[dict[K, V], MaxItems(N)]` **only when `T` /
+     `V` is already a legal payload type** (not `Any`).  Choose `N` from
+     the field's realistic cardinality and **state that assumption** in the
+     proposal (e.g. ~10000 ≈ ~1MB JSON, well under Temporal's 2MB limit).
+     A scalar-only contract needs only the opt-out removed.  Add
+     `from typing import Annotated` and
+     `from application_sdk.contracts.types import MaxItems` if missing.
+     Remove the opt-out last.  Return `outcome = "fix"`.
+
+  3. **Keep the opt-out with a justified suppression** — if a field cannot
+     be concretely typed (an `@entrypoint` contract field: B005 forbids
+     changing its recorded type and `ledger-guard` is append-only), draft
+     an inline `# conformance: ignore[P001] <concise justification>` on
      the declaration line, where the justification explains *why* unbounded
      fields are unavoidable here (not merely that the rule is suppressed).
-     Return `outcome = "suppress"`.
+     Do **not** remove `allow_unbounded_fields`.  Return `outcome = "suppress"`.
 
 - **P002 CategoryFieldOverride** — a non-canonical subclass of `AppError` (or
   any of its 15 categorical leaves) redeclares the `category` ClassVar in its
