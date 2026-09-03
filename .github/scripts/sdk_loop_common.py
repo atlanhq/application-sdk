@@ -89,7 +89,15 @@ PROVIDER = "gateway"
 #: typo'd alias fails closed at config time instead of as a paid 400 mid-run.
 ALLOWED_MODELS = (REVIEW_MODEL, RESOLVE_MODEL)
 
-PLAYBOOK_REVIEW = ".mothership/pr-review/ORCHESTRATION.md"
+#: The loop lane's playbook. Injected into the reviewer's prompt rather
+#: than read by it — see `sdk_loop_phase.review_prompt`. The sandbox lane
+#: keeps `.mothership/pr-review/ORCHESTRATION.md`, which `sdk_review_dispatch`
+#: names for itself; the two lanes no longer share a document.
+PLAYBOOK_REVIEW = ".mothership/pr-loop/REVIEW.md"
+PLAYBOOK_REVIEW_STAGES = (
+    ".mothership/pr-loop/HYPOTHESES.md",
+    ".mothership/pr-loop/REFUTE.md",
+)
 PLAYBOOK_RESOLVE = ".mothership/pr-resolve/ORCHESTRATION.md"
 
 TRIGGER = "@sdk-loop"

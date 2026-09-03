@@ -36,11 +36,13 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
+from sdk_loop_by_design import load_by_design
 from sdk_loop_common import (
     MAX_ROUNDS,
     PLAYBOOK_RESOLVE,
@@ -68,7 +70,10 @@ from sdk_loop_common import (
     usage_cost_usd,
     usage_total,
 )
-from sdk_loop_findings import audit_comment
+from sdk_loop_findings import audit_comment, load_severity
+from sdk_loop_live import FINDINGS_RELPATH, RedGreenJob, deliver, post_comment
+from sdk_loop_pack import build_pack
+from sdk_loop_pack import render as render_pack
 from sdk_loop_prep import (
     OUTCOME_UPDATED,
     PrepResult,
@@ -77,6 +82,8 @@ from sdk_loop_prep import (
     needs_agent,
     pr_state,
 )
+from sdk_loop_refute import CROSS_FAMILY
+from sdk_loop_routing import load_routing
 
 #: Wall-clock per phase. Review is the slower of the two: it walks the whole
 #: five-phase playbook including sub-agents, where a resolve round is mostly
@@ -90,6 +97,16 @@ TIMEOUT_RESOLVE_S = 30 * 60
 #: Prep is bookkeeping, not review. If a mechanical fix has not landed in ten
 #: minutes it is not mechanical, and the review will say so far more cheaply.
 TIMEOUT_PREP_S = 10 * 60
+
+#: The challenger gets one call over the findings; it does not need the review's
+#: budget, and a refuter that wanders for half an hour is not refuting.
+TIMEOUT_REFUTE_S = 8 * 60
+
+#: How long render waits for red-green after the model stages finish. It has
+#: usually been running for minutes by then; this is the tail, not the run.
+REDGREEN_JOIN_S = 4 * 60
+
+REFUTE_BRIEF = ".mothership/pr-loop/REFUTE.md"
 
 #: Outcomes a phase can report to the next job. Only `ok` continues to the
 #: paired phase; `reaim` sends the loop back to review on the new head.
@@ -193,6 +210,13 @@ def prep_prompt(pr: int, failing: tuple[str, ...]) -> str:
     )
 
 
+def pr_title(repo: str, pr: int) -> str:
+    out = _sh(
+        ["gh", "pr", "view", str(pr), "--json", "title", "-q", ".title"], cwd=repo
+    )
+    return (out.stdout or "").strip()
+
+
 def pr_files(repo: str, pr: int) -> list[str]:
     """Paths the PR touches. Deleted files included — classifying from
     `+++ b/` diff headers alone would miss them, as §11 warns."""
@@ -219,6 +243,19 @@ def diff_lines(repo: str, pr: int) -> int:
     return sum(1 for line in out.splitlines() if line[:1] in "+-")
 
 
+def _read(path: str) -> str:
+    """A pr-loop artefact, or empty when it is missing.
+
+    Empty rather than raising: a missing brief should degrade the review, not
+    abort the round. The prompt states what it could not load so the reader can
+    see a thinner review for what it is.
+    """
+    try:
+        return pathlib.Path(path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def review_prompt(
     pr: int,
     round_no: int,
@@ -228,160 +265,100 @@ def review_prompt(
     scope: str = "",
     solo: str = "",
     agents: Sequence[str] = (),
+    pack: str = "",
+    output_path: str = "",
 ) -> str:
-    """Point the agent at the playbook. The playbook is NOT restated here.
+    """Hand the reviewer the playbook, its brief and its context — do not send it looking.
 
-    Everything about what a good review is lives in
-    `.mothership/pr-review/ORCHESTRATION.md`, unchanged and read from this
-    runner's own checkout. Duplicating any of it into this prompt would create
-    a second copy to keep in sync, which is the failure this lane is designed
-    to avoid.
+    This used to open with "Read <playbook> and follow it exactly". That one
+    sentence bought eight measured orientation turns before the diff was
+    touched: reading a 1,700-line router in two calls because a default Read
+    truncates, re-reading it per specialist, grepping for callers, deriving a
+    scope the harness had already computed.
+
+    Injection removes all of it. The playbook is 8.1 KB, the brief is one to two
+    KB, and the pack is assembled in milliseconds from facts this process
+    already holds — so the reviewer's first turn contains the diff, the files
+    worth reading, which specialist it is, and what the gate found.
+
+    The instructions that used to live here are gone with the thing they
+    described. There is no "read it in one call with an explicit limit" because
+    nothing is read; no "do not read the brief of an agent you dispatch" because
+    briefs arrive inlined; no pointer into `.mothership/pr-review/` at all.
     """
-    parts = [
-        f"Read {PLAYBOOK_REVIEW} and follow it exactly for PR #{pr}.",
-        "",
-        # CONTRACT: the playbook's "Runtime" section keys its lane table on
-        # this exact string, and skips its sandbox-only Appendix A when it is
-        # present. Emitting it beats letting the agent infer the lane: a live
-        # transcript shows one spending a turn on
-        # `ls /workspace/application-sdk || echo NO` before reviewing
-        # anything, and an inference that goes the wrong way sends it into
-        # steps whose write calls 403 against this phase's read-only token.
-        # test_the_lane_marker_matches_the_playbook_contract pins both halves.
-        LANE_MARKER,
-        "",
-        f"You are reviewing sha {sha}. Stamp that sha as REVIEWED_HEAD.",
-        f"This is round {round_no} of {MAX_ROUNDS} of an @sdk-loop run;",
-        f"stamp the footer line `Round {round_no} of {MAX_ROUNDS} · @sdk-loop`.",
-        "",
-        "You are READ-ONLY. Your token carries no write scope — do not attempt",
-        "to push, and do not treat a push failure as something to work around.",
-        "",
-        "§2a dispatches domain agents via the Agent tool. On this runtime that",
-        "tool is called `Task`. Only the agents §2a routes YOUR scope to are",
-        "registered — never all of them — so `Task` cannot reach a specialist",
-        "the routing did not choose.",
-        "",
-        "When two or more ARE registered, dispatch them in parallel.",
-        "Do NOT do their work yourself in one pass: a single agent covering",
-        "several domains still produces a verdict, just a worse one, and",
-        "nothing in the output would say so.",
-        "",
-        # MEASURED WASTE. The #3529 review read correctness.md, quality.md,
-        # structure.md and reachability.md into its OWN context and then
-        # dispatched all four. Every brief is already inlined into that agent's
-        # registered prompt by `review_subagents`, so the parent paid to carry
-        # four copies of instructions it does not execute through every turn
-        # that followed — and a scope=full review registers seven.
-        "The specialist briefs under `.mothership/pr-review/agents/` are ALREADY",
-        "inlined into each registered agent's own prompt. Do NOT read the brief of",
-        "an agent you are going to dispatch — that loads instructions you never",
-        "execute into every turn that follows. Read a brief only for a domain you",
-        "are reviewing yourself because §2a registered no agent for it.",
-        "",
-        # The playbook is ~1700 lines. A default Read stops around line 1048, so
-        # every measured review spent a SECOND turn on `offset=1049` to fetch
-        # the remainder — one round trip, at whatever that round trip costs, for
-        # nothing.
-        f"Read {PLAYBOOK_REVIEW} in ONE call with an explicit `limit` well past",
-        "its end (5000 is safe at any size). A default read truncates near line",
-        "1048 and costs an extra round trip to fetch the rest. Do not cite a",
-        "line count here — the playbook is actively being trimmed and a stale",
-        "number invites a limit that truncates again.",
-        "",
-        # Turn count is this lane's cost driver, not tool time: measured review
-        # turns run ~10s early and 75-90s by turn 12 as context accumulates, so
-        # a step split across three turns costs three minutes where one would
-        # cost one. Phase 3 is where that is cheapest to fix — it is purely
-        # mechanical, and it runs last, where the turns are most expensive. It
-        # took 1-3.5 minutes against the playbook's own "~30s" on every measured
-        # run.
-        "Phase 3 is mechanical and runs where turns are slowest. Emit it as ONE",
-        "shell block: build the summary with a heredoc, stamp REVIEWED_HEAD and",
-        "ANSWERS_TRIGGER, query the review threads, resolve the bot-owned ones and",
-        "post the comment — in a single invocation. Do not use the Write tool for",
-        "the summary, and do not split the thread query from the resolve. Same",
-        "commands, same order, one round trip.",
-        "",
-        "**Your review_scope is already settled — do NOT re-derive it.** §11's",
-        "classification is file-list arithmetic with no judgement in it, so the",
-        "harness computed it before you started. Running that sixty-line bash",
-        "block again spends a turn to reach the same answer.",
-        "",
-        "The second rule is measured, not stylistic. A dispatch with one agent",
-        "buys no parallelism — there is nothing to run alongside — and costs a",
-        "cold start: you have already read the playbook, the diff and every",
-        "changed file, and the sub-agent begins with none of it and re-reads",
-        "its way back. Three `config-only`/`conformance-only` reviews spent",
-        "904s, ~9min and 26min inside that one call, with per-step latency",
-        "climbing 4s → 58s → 185s → 526s as the re-read context accumulated.",
-        "The 26-minute one reached step 11 of 25 before it was killed. The",
-        "parent reaches the same point in under a minute.",
-        "",
-        "SKIP §2b (the Wave 2 cross-model adversarial). Two reasons, and either",
-        "alone is sufficient:",
-        "",
-        "  * It cannot run here. §2b curls `$PROXY_BASE/proxy/litellm/...` with",
-        "    `$PROXY_JWT`; both are mothership sandbox variables and neither",
-        "    exists on this runner. Attempting it wastes the run's most",
-        "    expensive optional step on a call that cannot succeed, and logs",
-        "    'adversarial: unavailable' as though something were broken.",
-        "  * It would be redundant. In this lane the resolve phase opens by",
-        "    contesting every finding you raise (pr-resolve §3d, 'Fix every",
-        "    finding or prove it false'), so the challenge happens either way —",
-        "    by an agent that can also act on the answer.",
-        "",
-        "Record it as `Cross-model adversarial: skipped (@sdk-loop — resolve",
-        "phase contests findings)`, NOT as unavailable.",
+    playbook = _read(PLAYBOOK_REVIEW)
+    parts: list[str] = []
+
+    if playbook:
+        parts += [playbook, "", "---", ""]
+    else:
+        parts += [
+            f"WARNING: {PLAYBOOK_REVIEW} could not be read. Review conservatively",
+            'and return `"status": "partial"`.',
+            "",
+        ]
+
+    # Kept although the new playbook carries no lane conditionals: the marker is
+    # free, and a future artefact that does branch on lane would otherwise fail
+    # silently by waiting for a line nobody sends.
+    parts += [LANE_MARKER, ""]
+
+    if solo:
+        brief = _read(f".mothership/pr-loop/agents/{solo}.md")
+        if brief:
+            parts += [brief, "", "---", ""]
+        parts += [
+            f"You are the `{solo}` specialist and the only one on this PR.",
+            "Review it yourself; no sub-agents are registered, so `Task` has",
+            "nothing to delegate to.",
+            "",
+        ]
+    elif agents:
+        parts += [
+            f"review_scope = `{scope}`. Registered for this PR: {', '.join(agents)}.",
+            "Those, and only those, can be dispatched — do them in parallel.",
+            # The delegation tool is `Task` on this runtime, not `Agent`. Naming
+            # it is not cosmetic: an agent that reaches for the wrong name burns
+            # a turn discovering the tool does not exist, and the routing has
+            # already decided that these specialists run.
+            "The delegation tool on this runtime is called `Task`.",
+            "Each dispatched agent arrives with its own brief and this context",
+            "already inlined. Do NOT read the brief of an agent you dispatch —",
+            "that loads instructions you never execute into every turn that",
+            "follows, which a measured review paid for four times over.",
+            "",
+        ]
+
+    if pack:
+        parts += [pack, "", "---", ""]
+
+    if output_path:
+        # REVIEW.md: "Write one JSON object to the path named in your prompt."
+        # This is the naming. Without it the reviewer has been told to write
+        # to a path and given none — and the runtime reads nothing.
+        parts += [
+            f"Write your JSON to `{output_path}`. Create the directory if needed.",
+            "Post nothing to the PR yourself; the runner renders and posts.",
+            "",
+        ]
+
+    parts += [
+        f"PR #{pr}, sha {sha}, round {round_no} of {MAX_ROUNDS} of an @sdk-loop run.",
+        "You are READ-ONLY: your token carries no write scope. Do not attempt to",
+        "push, and do not treat a push failure as something to work around.",
         "",
     ]
-    if solo:
+
+    if prior_sha:
         parts += [
-            f"review_scope = `{scope}`, which §2a routes to exactly ONE",
-            f"specialist: `{solo}`.",
-            "",
-            "**Do not dispatch it.** No sub-agents are registered for this run —",
-            "`Task` has nothing to delegate to. Read",
-            f"`.mothership/pr-review/agents/{solo}.md`, adopt that brief as your",
-            "own, review as that specialist, and go straight to §2c.",
-            "",
-            "A dispatch runs agents CONCURRENTLY. With one agent there is nothing",
-            "to run alongside, so it buys no parallelism and costs a cold start:",
-            "you have already read the playbook, the diff and every changed file,",
-            "and a sub-agent would begin with none of it and re-read its way back.",
-            "Three single-agent reviews spent 904s, ~9 minutes and 26 minutes",
-            "inside that one call, per-step latency climbing 4s to 526s as the",
-            "re-read context piled up. The 26-minute one reached step 11 of 25",
-            "before it was killed.",
-            "",
-        ]
-    elif scope:
-        # The REGISTERED set, which is §2a's row plus §1b's reachability and
-        # any mixed-partition specialist — not the markdown table alone.
-        named = ", ".join(agents)
-        parts += [
-            f"review_scope = `{scope}`. Registered for this PR: "
-            f"{named or 'no agents'}.",
-            "Those, and only those, can be dispatched — do them in parallel.",
+            f"A previous round reviewed {prior_sha}; the incremental change is",
+            f"`git diff {prior_sha}..{sha}`. Use it for delta labelling and the",
+            "nit rules. Do NOT narrow the review to it — BLOCKING, CRITICAL and",
+            "HIGH findings are raised on any line of the PR, including code the",
+            "resolver just pushed.",
             "",
         ]
 
-    if prior_sha:
-        # Handed over so §2e labelling and the §2e′ nit rules do not have to
-        # re-derive the range. It is ADDITIONAL context, never a substitute for
-        # the full diff: §2e′ is explicit that Critical/High/Important findings
-        # are raised on any line, including code the resolver just pushed, so a
-        # delta-scoped review would hide precisely the regressions this loop is
-        # most likely to introduce.
-        parts += [
-            f"A previous round of this run reviewed {prior_sha}. The incremental",
-            f"change since then is `git diff {prior_sha}..{sha}`.",
-            "",
-            "Use it for §2e labelling (RESOLVED / STILL PRESENT / NEW) and for the",
-            "§2e′ nit rules. Do NOT narrow the review to it — Critical, High and",
-            "Important findings are still raised on any line of the PR.",
-            "",
-        ]
     section = ledger.as_prompt_section()
     if section:
         parts.append(section)
@@ -778,6 +755,26 @@ def main(argv: list[str] | None = None) -> int:
             f"scope={scope} agents={len(fan_out)}" + (f" solo={solo}" if solo else "")
         )
 
+        # Everything determinate, before the model starts. The pack is the
+        # reviewer's first turn; red-green needs nothing the model produces,
+        # so it runs alongside the model stages and is joined before render.
+        diff_text = _sh(["gh", "pr", "diff", str(pr)], cwd=repo).stdout or ""
+        routing = load_routing()
+        pack = build_pack(
+            repo=pathlib.Path(repo), diff=diff_text, scope=scope, routing=routing
+        )
+        findings_path = pathlib.Path(workspace) / FINDINGS_RELPATH
+        findings_path.parent.mkdir(parents=True, exist_ok=True)
+        if findings_path.exists():
+            findings_path.unlink()
+        base_ref = os.environ.get("BASE_SHA") or "origin/main"
+        redgreen_job = RedGreenJob(
+            repo=pathlib.Path(repo),
+            base_ref=base_ref,
+            files=pack.files,
+            workdir=pathlib.Path(workspace) / ".sdk-loop" / "redgreen-base",
+        )
+
         print(f"::group::review round {round_no} — agent transcript")
         result = run_agent(
             REVIEW_MODEL,
@@ -790,6 +787,8 @@ def main(argv: list[str] | None = None) -> int:
                 scope=scope,
                 solo=solo,
                 agents=fan_out,
+                pack=render_pack(pack, solo or "reviewer"),
+                output_path=str(findings_path),
             ),
             workspace,
             TIMEOUT_REVIEW_S,
@@ -798,6 +797,73 @@ def main(argv: list[str] | None = None) -> int:
             subagent_names=fan_out,
         )
         print("::endgroup::")
+
+        # The live path. The model wrote JSON and posted nothing; the runner
+        # gates, challenges, renders and posts. If the gate fails there is no
+        # comment, and the existing interpreter below reports the failure the
+        # same way it always did — deliberately, not by accident.
+        if result.completed and findings_path.exists():
+            sev = load_severity()
+
+            def challenge(prompt: str) -> str:
+                out = run_agent(
+                    RESOLVE_MODEL,
+                    prompt,
+                    workspace,
+                    TIMEOUT_REFUTE_S,
+                    transcript_path=transcript,
+                )
+                return out.stdout if out.completed else ""
+
+            live = deliver(
+                payload_text=findings_path.read_text(encoding="utf-8"),
+                pack=pack,
+                sev=sev,
+                by_design=load_by_design(),
+                challenge=challenge,
+                challenge_brief=pathlib.Path(REFUTE_BRIEF).read_text(encoding="utf-8"),
+                # RESOLVE_MODEL is a different family from REVIEW_MODEL, so the
+                # strong form of the challenge is available on this lane.
+                challenge_mode=CROSS_FAMILY,
+                diff=diff_text,
+                redgreen_report=redgreen_job.join(timeout_s=REDGREEN_JOIN_S),
+                pr=pr,
+                pr_title=pr_title(repo, pr),
+                reviewed_head=state.live,
+                answers_trigger=os.environ.get("COMMENT_ID") or None,
+                model=REVIEW_MODEL,
+                run_url=os.environ.get("GHA_RUN_URL", ""),
+            )
+            if live.should_post:
+                url = post_comment(repo, pr, live.body, _sh)
+                print(
+                    f"posted {live.verdict}: {len(live.kept)} findings, "
+                    f"{live.dropped} dropped, challenge={live.challenged} {url}"
+                )
+                if not url:
+                    # A failed post must not be read as success from a stale
+                    # comment. Without COMMENT_ID (workflow_dispatch) the
+                    # ANSWERS_TRIGGER filter is a no-op, so newest_verdict
+                    # would adopt an older same-SHA verdict on the PR.
+                    emit_outputs(
+                        outcome=OUTCOME_FAILED,
+                        detail=(
+                            "the review comment did not land — refusing to "
+                            "adopt an existing verdict"
+                        ),
+                        new_base_sha=state.live,
+                        reaims="0",
+                    )
+                    print(
+                        f"review round {round_no}: {OUTCOME_FAILED} "
+                        "post produced no URL"
+                    )
+                    return 1
+            else:
+                print(f"::warning::review not posted — {live.failure}")
+        elif result.completed:
+            print(f"::warning::the reviewer completed but wrote no {FINDINGS_RELPATH}")
+
         comments = json.loads(
             _sh(
                 ["gh", "api", f"repos/{repo}/issues/{pr}/comments", "--paginate"]

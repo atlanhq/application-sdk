@@ -388,16 +388,26 @@ def test_the_resolver_is_told_not_to_trigger_a_review() -> None:
     assert "SDK_LOOP_DISMISSED:" in prompt
 
 
-def test_wave_two_is_skipped_deliberately_not_left_to_fail() -> None:
-    """§2b curls $PROXY_BASE with $PROXY_JWT — mothership sandbox variables
-    that do not exist on a runner. Left alone it burns the run's most
-    expensive optional step on a doomed call and reports 'unavailable', which
-    reads as an outage rather than the design decision it is."""
-    prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
-    assert "SKIP §2b" in prompt
-    assert "PROXY_JWT" in prompt
-    assert "skipped (@sdk-loop" in prompt
-    assert "NOT as unavailable" in prompt
+def test_the_prompt_carries_no_section_numbers_from_the_old_playbook() -> None:
+    """The prompt used to steer the reviewer through a router by section — skip
+    §2b, go to §2c, follow §2a's table. Those sections do not exist in the
+    injected playbook, and a leftover reference sends the reviewer looking for
+    a document it was never given.
+
+    The capability that §2b's skip encoded — no cross-model challenger without
+    $PROXY_BASE — now lives in the refutation stage, which degrades to a
+    same-family challenge and says so in the summary.
+    """
+    prompt = review_prompt(
+        1,
+        1,
+        "a" * 40,
+        DismissalLedger(),
+        scope="full",
+        agents=("correctness", "quality"),
+    )
+    for stale in ("§2a", "§2b", "§2c", "§2e", "§3e", "§11", "Appendix A"):
+        assert stale not in prompt, f"the prompt still steers by {stale}"
 
 
 def test_round_one_gets_no_delta_range() -> None:
@@ -560,37 +570,37 @@ def test_every_agent_the_playbook_dispatches_is_registered() -> None:
 
 
 def test_the_review_prompt_names_the_delegation_tool_for_this_runtime() -> None:
-    prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
+    """`Task`, not `Agent`. An agent reaching for the wrong name burns a turn
+    discovering the tool does not exist, and the routing has already decided
+    these specialists run."""
+    prompt = review_prompt(
+        1,
+        1,
+        "a" * 40,
+        DismissalLedger(),
+        scope="full",
+        agents=("correctness", "quality"),
+    )
     assert "`Task`" in prompt
-    # The multi-domain invariant, which survives the solo-scope change: when
-    # several agents ARE registered, collapsing them into one pass yields a
-    # worse verdict and says nothing about having done so.
-    assert "Do NOT do their work yourself" in prompt
 
 
-def test_the_review_prompt_references_the_playbook_and_never_restates_it() -> None:
-    """The prompt may say what is DIFFERENT about this lane; it must not carry
-    a copy of the review rules, which would be a second thing to keep in sync
-    and would drift silently from the playbook it contradicts."""
-    prompt = review_prompt(42, 3, "a" * 40, DismissalLedger())
-    assert ".mothership/pr-review/ORCHESTRATION.md" in prompt
-    assert f"round 3 of {MAX_ROUNDS}" in prompt
-    # Review policy lives in the playbook. Naming a section to skip is lane
-    # wiring; restating what a finding is, or how to tier one, is not.
-    for restatement in (
-        "Critical",
-        "Important",
-        "READY_TO_MERGE",
-        "NEEDS_FIXES",
-        "### Findings",
-        "severity",
-    ):
-        assert restatement not in prompt, f"prompt restates policy: {restatement}"
+def test_the_review_prompt_carries_the_playbook_rather_than_pointing_at_it() -> None:
+    """The inversion this cutover exists for.
 
+    "Read <playbook> and follow it exactly" bought eight measured orientation
+    turns before the diff was touched — a 1,700-line router fetched in two
+    calls because a default Read truncates, then re-read per specialist. The
+    playbook is now 8.1 KB and arrives in the prompt.
 
-# ---------------------------------------------------------------------------
-# Resolve phase
-# ---------------------------------------------------------------------------
+    The prompt must also point at nothing in the other lane's corpus: one
+    surviving pointer buys the whole orientation sequence back.
+    """
+    prompt = review_prompt(
+        1, 1, "a" * 40, DismissalLedger(), scope="full", agents=("correctness",)
+    )
+    assert "# SDK reviewer" in prompt, "the playbook was not injected"
+    assert "Read .mothership" not in prompt
+    assert ".mothership/pr-review/" not in prompt
 
 
 def test_a_push_that_moved_the_branch_is_progress() -> None:
@@ -1535,17 +1545,20 @@ def test_the_cache_can_actually_be_written() -> None:
     assert "actions: read" not in caller
 
 
-def test_the_review_prompt_bounds_its_own_turn_count() -> None:
-    """Turns, not tool time, are what this lane pays for: measured review turns
-    run ~10s early and 75-90s by turn 12. Each directive here removes at least
-    one round trip that was measured being spent for nothing."""
-    prompt = review_prompt(1, 1, "abc1234", DismissalLedger())
-    # Reading a brief for an agent you are about to dispatch: #3529 read four.
-    assert "Do NOT read the brief of" in prompt
-    # The playbook is ~1700 lines and a default Read truncates near 1048.
-    assert "in ONE call with an explicit `limit`" in prompt
-    # Phase 3 measured 1-3.5 min against the playbook's own "~30s".
-    assert "Emit it as ONE" in prompt
+def test_the_prompt_still_forbids_reading_a_dispatched_agents_brief() -> None:
+    """Measured waste that survives the redesign: a review read four briefs
+    into its own context and then dispatched all four, carrying instructions it
+    never executes through every turn that followed. Briefs arrive inlined in
+    each agent's own prompt, so reading one is pure cost."""
+    prompt = review_prompt(
+        1,
+        1,
+        "a" * 40,
+        DismissalLedger(),
+        scope="full",
+        agents=("correctness", "quality"),
+    )
+    assert "Do NOT read the brief of an agent you dispatch" in prompt
 
 
 def test_the_idle_bound_clears_the_worst_measured_healthy_turn() -> None:
