@@ -69,7 +69,7 @@ from sdk_loop_common import (
     usage_total,
 )
 from sdk_loop_findings import audit_comment
-from sdk_loop_prep import (  # noqa: E402
+from sdk_loop_prep import (
     OUTCOME_UPDATED,
     PrepResult,
     decide,

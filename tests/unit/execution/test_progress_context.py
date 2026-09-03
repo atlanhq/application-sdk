@@ -447,9 +447,10 @@ class TestActivityBinding:
     async def test_tracker_is_unbound_when_cancelled_during_cleanup(self) -> None:
         """`CancelledError` in the cleanup path must not skip the unbind.
 
-        It is a `BaseException`, so the heartbeat cleanup's `except (TimeoutError,
-        Exception)` does not catch it and it propagates straight out of the
-        activity's `finally` — past anything sequenced after the await.
+        It is a `BaseException`, so only ``stop_heartbeat_task``'s explicit
+        ``BaseException`` guards contain it — the cleanup lets nothing escape,
+        the unbind sequenced after it still runs, and the activity's result
+        survives its own heartbeat task dying.
         """
         activity_fn = _register_trivial_app()
         before = current_progress_tracker()
@@ -465,18 +466,16 @@ class TestActivityBinding:
             await stop_event.wait()
             raise asyncio.CancelledError
 
-        with (
-            mock.patch(
-                "application_sdk.execution.heartbeat.auto_heartbeat_loop",
-                new=cancelling_loop,
-            ),
-            pytest.raises(asyncio.CancelledError),
+        with mock.patch(
+            "application_sdk.execution.heartbeat.auto_heartbeat_loop",
+            new=cancelling_loop,
         ):
-            await activity_fn(
+            result = await activity_fn(
                 _task_context("_clean-app", "greet", heartbeating=True),
                 _ProgIn(name="x"),
             )
 
+        assert result == _ProgOut(greeting="ok")
         assert current_progress_tracker() is before
 
     @pytest.mark.asyncio

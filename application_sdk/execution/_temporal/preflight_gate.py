@@ -27,7 +27,7 @@ import asyncio
 import math
 import time
 from collections.abc import Awaitable, Callable, Iterable
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -390,6 +390,24 @@ GATE_ATTEMPTS_MAX = 3
 # and the mode decision — that is the CNCT-99 defect.
 GATE_ACTIVITY_HEADROOM_SECONDS = 5
 
+#: Cap on the heartbeat timeout, matching the SDK-wide default ratio
+#: (``app/task.py``: 10s interval, 60s timeout). The effective values are
+#: derived per attempt by :func:`gate_heartbeat_timings` so they fit inside
+#: whatever ``start_to_close`` the app's budget produced — a fixed 60s against
+#: a floor-budget 10s window would be server-capped to ``start_to_close`` and
+#: could never fire first.
+GATE_HEARTBEAT_TIMEOUT_SECONDS = 60
+
+#: Skew allowance for the liveness deadline check: ``started_time`` is stamped
+#: by the Temporal server, ``now`` by the worker, and the two clocks are not
+#: guaranteed to agree to the second. Kept tighter than
+#: ``GATE_ACTIVITY_HEADROOM_SECONDS`` on purpose: a healthy verdict emits
+#: *before* the deadline (the headroom already reserves 5s for that), so the
+#: grace only needs to absorb clock skew — and the incident that motivated the
+#: guard emitted 3.2s past its deadline, which a 5s grace would have waved
+#: through. 2s suppresses that geometry while tolerating realistic NTP drift.
+GATE_LIVENESS_CLOCK_GRACE_SECONDS = 2
+
 # Floor on what's left after credential resolution. Below this there is no point
 # calling the handler: resolution has eaten the budget, which is a plumbing
 # problem, not evidence about the source. Without this floor a slow vault would
@@ -551,6 +569,21 @@ def gate_retry_policy(attempts: Any) -> RetryPolicy:
     return RetryPolicy(maximum_attempts=resolved, backoff_coefficient=2)
 
 
+def gate_heartbeat_timings(start_to_close_seconds: float) -> tuple[float, float]:
+    """``(heartbeat_timeout, interval)`` that fit inside ``start_to_close``.
+
+    The timeout is at most half the attempt window, so it always fires
+    meaningfully before Temporal's own deadline — at the 5s budget floor
+    (``start_to_close`` 10s) that means 5s, not a server-capped 60s that could
+    never fire first. The interval stays 1:6 with the timeout (floor 1s), so
+    several slow ticks cannot kill a healthy attempt at any legal budget. At
+    the default budget this reproduces the SDK-wide 10s/60s pair.
+    """
+    timeout = min(GATE_HEARTBEAT_TIMEOUT_SECONDS, start_to_close_seconds / 2)
+    interval = max(1.0, timeout / 6)
+    return timeout, interval
+
+
 def gate_timeouts(
     budget_seconds: Any, attempts: Any = None
 ) -> tuple[timedelta, timedelta]:
@@ -628,13 +661,14 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
                 "name": check.name,
                 "passed": check.passed,
                 "error_code": check.error.code if check.error else "",
-                # orjson emits null for nan/inf; we normalize to 0.0 so the
-                # ClickHouse row stays numeric for downstream JSONExtract, and
-                # never raise — a raise here fails the gate open and loses the
-                # whole event.
+                # Publish only a plausible elapsed time; nan/inf (orjson would
+                # emit null) and negatives collapse to the -1.0 "not measured"
+                # sentinel so the ClickHouse row stays numeric for JSONExtract
+                # and garbage never reads as a real duration. Never raise — a
+                # raise here fails the gate open and loses the whole event.
                 "duration_ms": check.duration_ms
-                if math.isfinite(check.duration_ms)
-                else 0.0,
+                if math.isfinite(check.duration_ms) and check.duration_ms >= 0
+                else -1.0,
             }
         )
     return orjson.dumps(rows).decode()
@@ -691,6 +725,26 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
         type=PREFLIGHT_FAILED_ERROR_TYPE,
         non_retryable=True,
     )
+
+
+class PreflightRowOutcome(SerializableEnum):
+    """The ``outcome`` vocabulary the SDK's own machinery stamps on preflight rows.
+
+    Enumerated for the same reason :class:`PreflightSurface` is — dashboards
+    filter on these wire strings, so the set must be discoverable and pinned,
+    not scattered literals. The gate row (``Preflight gate outcome``) uses the
+    first five; the interactive row (``Preflight check outcome``) uses
+    :class:`PreflightStatus` values for verdicts and ``CRASHED`` for a handler
+    that raised. Values are shipped wire strings and must not be reworded.
+    """
+
+    PROCEEDED = "proceeded"
+    BLOCKED = "blocked"
+    WOULD_BLOCK = "would_block"
+    NO_VERDICT = "no_verdict"
+    SKIPPED = "skipped"
+    CRASHED = "crashed"
+    CLIENT_FAULT = "client_fault"
 
 
 class PreflightSurface(SerializableEnum):
@@ -757,8 +811,9 @@ def emit_preflight_check_outcome(
     only channel mirrors the gate's map (``not_ready`` at ERROR, a passed
     verdict carrying a failed advisory check at WARNING, clean at INFO); one
     that returns the verdict by another route stays INFO throughout. Handler
-    crashes are logged at ERROR by each surface's own boundary handler. Callers
-    pass their module logger so the row keeps the surface's source.
+    crashes additionally emit a crash-marked row via
+    :func:`emit_preflight_crash_outcome`. Callers pass their module logger so
+    the row keeps the surface's source.
     """
     failed = [c for c in result.checks if not c.passed]
     # The aggregate error wins over check order, mirroring _build_block_error:
@@ -798,6 +853,129 @@ def emit_preflight_check_outcome(
     )
 
 
+#: Categories the HTTP boundary answers with a 4xx (``service.py``'s
+#: ``_CATEGORY_TO_HTTP``): the response working as designed, not a handler
+#: crash. A wrong password (AUTH → 401) is the single most common preflight
+#: failure; counting it as a crash would let setup-form typos dominate the
+#: crash series and the metric would stop measuring handler health. A
+#: consistency test pins this set against the HTTP mapping so the two
+#: judgements cannot drift.
+_CLIENT_FAULT_CATEGORIES = frozenset(
+    {
+        FailureCategory.AUTH,
+        FailureCategory.PERMISSION,
+        FailureCategory.NOT_FOUND,
+        FailureCategory.ALREADY_EXISTS,
+        FailureCategory.INVALID_INPUT,
+        FailureCategory.PRECONDITION,
+        FailureCategory.RATE_LIMITED,
+        FailureCategory.CANCELLED,
+    }
+)
+
+
+#: Per ``(outcome, row-is-only-channel)``: is the interactive row loud (ERROR)?
+#:
+#: A table rather than a branch for the same reason as
+#: ``_LOG_ROW_IS_ONLY_CHANNEL`` above — the policy has to be *enumerable*, so
+#: ``test_every_interactive_outcome_has_a_level_policy`` fails CI for an
+#: outcome added to ``INTERACTIVE_RAISE_OUTCOMES`` without both surface
+#: entries. A real crash is evidence about handler health and is
+#: loud everywhere; a client fault is the response working as designed, so it
+#: stays quiet where the response carries it (HTTP) and goes loud only where
+#: the row is the customer's only sight of it (SDR).
+_INTERACTIVE_ROW_IS_LOUD: dict[tuple[PreflightRowOutcome, bool], bool] = {
+    (PreflightRowOutcome.CRASHED, False): True,
+    (PreflightRowOutcome.CRASHED, True): True,
+    (PreflightRowOutcome.CLIENT_FAULT, False): False,
+    (PreflightRowOutcome.CLIENT_FAULT, True): True,
+}
+
+#: The outcomes :func:`emit_preflight_crash_outcome` can attribute a raise to.
+#: The gate's own verdict values never reach that site.
+INTERACTIVE_RAISE_OUTCOMES: tuple[PreflightRowOutcome, ...] = (
+    PreflightRowOutcome.CRASHED,
+    PreflightRowOutcome.CLIENT_FAULT,
+)
+
+
+def _is_client_fault(exc: BaseException) -> bool:
+    """Whether ``exc`` is a client-facing input error, not a handler crash.
+
+    An explicit sub-500 ``http_status`` (a ``HandlerError`` the caller already
+    judged client-facing) or a typed category the HTTP boundary maps to a 4xx
+    means the failure is the response working as designed.
+    """
+    status = getattr(exc, "http_status", None)
+    if isinstance(status, int) and status < 500:
+        return True
+    return isinstance(exc, AppError) and type(exc).category in _CLIENT_FAULT_CATEGORIES
+
+
+def emit_preflight_crash_outcome(
+    log: AtlanLoggerAdapter,
+    app_name: str,
+    exc: BaseException,
+    *,
+    surface: PreflightSurface,
+    entrypoint: str | None = None,
+    request_id: str | None = None,
+) -> None:
+    """Emit the outcome row for a raise on an interactive surface.
+
+    A raise (HTTP form check, SDR test connection) produces no verdict body
+    anywhere, so without this row the failure is invisible to the setup-funnel
+    metrics built on the event — the case drops out of the denominator. Every
+    raise is therefore *counted*, but attribution is split so the crash series
+    keeps measuring handler health:
+
+    - a real crash (untyped, or a 5xx-class typed error) emits
+      ``outcome="crashed"`` at ERROR on every surface;
+    - a client-input error (:func:`_is_client_fault` — an explicit sub-500
+      ``http_status`` or a typed 4xx-class category, e.g. a wrong password)
+      emits ``outcome="client_fault"`` instead, at the level
+      ``_INTERACTIVE_ROW_IS_LOUD`` routes it to: ERROR where the row is the
+      only channel (SDR), INFO where the response already carries the failure
+      (HTTP). Dropping these entirely would
+      re-open the denominator hole for the boundary steps (secret-store probe,
+      credential resolution) the SDR surface wraps.
+
+    Emitted in addition to (never instead of) each surface's own boundary
+    error handling. ``reason`` is the typed wire code for an ``AppError``, the
+    class name otherwise. The split lives here, at the single emit site, so
+    every surface applies the same judgement.
+    """
+    outcome = (
+        PreflightRowOutcome.CLIENT_FAULT
+        if _is_client_fault(exc)
+        else PreflightRowOutcome.CRASHED
+    )
+    # Default-loud on a table miss, mirroring :func:`_log_row_is_only_channel`:
+    # one level too loud beats losing the row.
+    loud = _INTERACTIVE_ROW_IS_LOUD.get(
+        (outcome, _log_row_is_only_channel(surface)), True
+    )
+    emit = log.error if loud else log.info
+    extra: dict[str, Any] = {}
+    if isinstance(exc, AppError):
+        extra[FAILURE_AUDIENCE_KEY] = type(exc).audience.value
+    if request_id is not None:
+        extra["request_id"] = request_id
+    emit(
+        PREFLIGHT_CHECK_EVENT,
+        outcome=outcome.value,
+        reason=exc.code if isinstance(exc, AppError) else type(exc).__name__,
+        app_name=app_name,
+        entrypoint=entrypoint or "<implicit>",
+        checks=0,
+        **{
+            CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX,
+            PREFLIGHT_SURFACE_KEY: surface.value,
+        },
+        **extra,
+    )
+
+
 def _is_gate_broken(exc: BaseException) -> bool:
     """Whether ``exc`` is the gate's own plumbing failing, not source evidence.
 
@@ -808,6 +986,32 @@ def _is_gate_broken(exc: BaseException) -> bool:
     defaulting it to fail-open is what let hard mode mean nothing.
     """
     return isinstance(exc, AppError) and type(exc).category in _GATE_BROKEN_CATEGORIES
+
+
+def _activity_info() -> Any:
+    """``activity.info()``, or ``None`` when it cannot be read.
+
+    The single tolerant read every gate helper routes through: no activity
+    context (direct call, unit test) is expected and returns ``None``
+    silently; anything unexpected degrades the same way with a DEBUG log —
+    a helper that exists to stop telemetry reads from breaking a run must
+    never become the thing that breaks one.
+    """
+    try:
+        return activity.info()
+    except RuntimeError:
+        return None
+    except Exception:
+        logger.debug("Could not read activity.info()", exc_info=True)
+        return None
+
+
+def _gate_heartbeat() -> None:
+    try:
+        activity.heartbeat()
+    # conformance: ignore[E002] no activity context — nothing to beat and nothing to report
+    except RuntimeError:
+        pass
 
 
 def _effective_budget(budget_seconds: float) -> float:
@@ -821,26 +1025,54 @@ def _effective_budget(budget_seconds: float) -> float:
     the classification would be lost. Reading the real deadline back off
     ``activity.info()`` makes "the gate's own timeout wins" true by construction.
     """
+    start_to_close = getattr(_activity_info(), "start_to_close_timeout", None)
+    if not isinstance(start_to_close, timedelta):
+        return budget_seconds
+    ceiling = start_to_close.total_seconds() - GATE_ACTIVITY_HEADROOM_SECONDS
+    return min(budget_seconds, ceiling) if ceiling > 0 else budget_seconds
+
+
+def _attempt_is_live() -> bool:
+    """Whether this activity attempt is still the one Temporal is waiting on.
+
+    An abandoned attempt (its ``start_to_close`` window closed, the retry
+    already scheduled) that emits a verdict row corrupts the outcome series
+    the next attempt also writes to: both rows land under one
+    ``workflow_run_id`` with *different* outcomes, so deduping on
+    ``(workflow_run_id, gate_attempt)`` — see the emit site's note — is what
+    keeps the highest attempt's verdict rather than an arbitrary one
+    (CONNECT-1170 gap 1). Two signals, most reliable first: Temporal's own
+    cancellation flag — delivered in heartbeat responses, no clocks involved —
+    marks the abandoned attempt directly now that the gate beats. The deadline
+    check is the fallback for the attempt cancellation cannot reach (a worker
+    whose loop stopped yielding stops beating too); it compares a
+    server-stamped ``started_time`` to the worker's clock, so it carries
+    ``GATE_LIVENESS_CLOCK_GRACE_SECONDS`` of skew allowance rather than
+    trusting two clocks to agree — over-suppressing a *live* attempt's verdict
+    is the worse failure. Tolerant of no activity context (direct calls, unit
+    tests) and of missing fields, mirroring ``_effective_budget``.
+    """
     try:
-        start_to_close = activity.info().start_to_close_timeout
-        if not isinstance(start_to_close, timedelta):
-            return budget_seconds
-        ceiling = start_to_close.total_seconds() - GATE_ACTIVITY_HEADROOM_SECONDS
-        return min(budget_seconds, ceiling) if ceiling > 0 else budget_seconds
-    except RuntimeError:
-        # No activity context (direct call, unit test) — expected, not notable.
-        return budget_seconds
-    # This function exists to stop a budget skew from breaking a run, so it must
-    # never become the thing that breaks one; anything unexpected degrades to the
-    # declared budget.
-    except Exception:
-        logger.debug(
-            "Could not read the activity's start_to_close; using the declared "
-            "preflight budget of %ss",
-            budget_seconds,
-            exc_info=True,
-        )
-        return budget_seconds
+        cancelled = activity.is_cancelled()
+    except RuntimeError:  # no activity context
+        cancelled = False
+    if cancelled:
+        return False
+    info = _activity_info()
+    started_time = getattr(info, "started_time", None)
+    start_to_close = getattr(info, "start_to_close_timeout", None)
+    if not isinstance(started_time, datetime) or not isinstance(
+        start_to_close, timedelta
+    ):
+        return True
+    if started_time.tzinfo is None:
+        started_time = started_time.replace(tzinfo=timezone.utc)
+    deadline = (
+        started_time
+        + start_to_close
+        + timedelta(seconds=GATE_LIVENESS_CLOCK_GRACE_SECONDS)
+    )
+    return datetime.now(timezone.utc) < deadline
 
 
 def _is_definitive_credential_absence(exc: BaseException) -> bool:
@@ -870,10 +1102,7 @@ def _is_definitive_credential_absence(exc: BaseException) -> bool:
 
 def _current_attempt() -> int:
     """This activity attempt, or 1 outside an activity context."""
-    try:
-        return activity.info().attempt
-    except RuntimeError:  # not inside an activity context
-        return 1
+    return getattr(_activity_info(), "attempt", 1)
 
 
 def _is_final_attempt(attempts: int) -> bool:
@@ -886,11 +1115,8 @@ def _is_final_attempt(attempts: int) -> bool:
     activity context (direct calls, unit tests) the answer is ``True`` —
     enforcement must never be skipped just because the attempt is unknown.
     """
-    try:
-        attempt = activity.info().attempt
-    except RuntimeError:  # not inside an activity context
-        return True
-    return attempt >= max(1, attempts)
+    attempt = getattr(_activity_info(), "attempt", None)
+    return True if attempt is None else attempt >= max(1, attempts)
 
 
 def _unverifiable_result(exc: BaseException, app_name: str) -> PreflightOutput:
@@ -1338,12 +1564,12 @@ def build_preflight_gate_activity(
         def _emit_outcome(
             outcome: str,
             reason: str,
-            checks: list[PreflightCheck],
+            verdict: PreflightOutput,
             classification: str,
             audience: str | None = None,
             exc_info: BaseException | None = None,
         ) -> None:
-            """Emit the gate's one queryable row.
+            """Emit the gate's one queryable row, and persist the same verdict.
 
             Single site for all three activity-side outcomes so the attribute set
             cannot drift between them — a consumer that finds ``gate_duration_ms``
@@ -1365,7 +1591,28 @@ def build_preflight_gate_activity(
             ``check_matrix``: per-check durations are handler-authored and a
             handler abandoned at ``start_to_close`` keeps running and reports a
             duration past the budget.
+
+            Takes the whole ``verdict`` rather than its ``checks`` so
+            :func:`_persist` runs here too, behind the same liveness guard.
+            The store and the log are two views of one outcome; an abandoned
+            attempt that skipped the row but still appended a stale verdict
+            next to the live attempt's row would corrupt the store exactly the
+            way CONNECT-1170 gap 1 corrupted the event series. Coupling them in
+            one function is what makes "no row, no store write" unmissable at
+            the three call sites instead of a rule each has to remember.
             """
+            checks = verdict.checks
+            if not _attempt_is_live():
+                # WARNING, not DEBUG: a handler outrunning its Temporal deadline
+                # is a real anomaly, and at DEBUG a suppressed orphan would be
+                # indistinguishable from a gate that never ran — in the series
+                # whose whole point is fidelity.
+                logger.warning(
+                    "Attempt %s was abandoned by Temporal (cancelled or past "
+                    "its deadline); suppressing its outcome row",
+                    _current_attempt(),
+                )
+                return
             if (
                 outcome == "blocked"
                 or classification == CLASSIFICATION_SOURCE_UNVERIFIABLE
@@ -1397,12 +1644,14 @@ def build_preflight_gate_activity(
                 },
                 **extra,
             )
+            _persist(verdict)
 
         def _persist(verdict: PreflightOutput) -> None:
             """Append this verdict to the tenant's preflight-results store.
 
-            Called once beside every emitted outcome, so "an outcome row implies a
-            store row" is one rule rather than three call sites drifting apart.
+            Called from :func:`_emit_outcome` only, so "an outcome row implies a
+            store row" — and its converse, no row means no write — holds by
+            construction rather than by three call sites remembering it.
             Scheduled and abandoned — it never blocks, and its response is not
             recorded (CONNECT-1142).
 
@@ -1453,9 +1702,11 @@ def build_preflight_gate_activity(
             unverifiable = _unverifiable_result(exc, app_name)
             block_error = _build_block_error(unverifiable, app_name)
             _emit_outcome(
-                "blocked" if enforce else "would_block",
+                PreflightRowOutcome.BLOCKED.value
+                if enforce
+                else PreflightRowOutcome.WOULD_BLOCK.value,
                 block_error.details[0].code,
-                unverifiable.checks,
+                unverifiable,
                 CLASSIFICATION_SOURCE_UNVERIFIABLE,
                 audience=block_error.details[0].audience.value,
                 # The exception, not exc_info=True: on the budget-overrun path this
@@ -1464,179 +1715,225 @@ def build_preflight_gate_activity(
                 # nothing — on the one path where the cause is the whole diagnostic.
                 exc_info=exc,
             )
-            _persist(unverifiable)
             if enforce:
                 raise block_error
             return unverifiable
 
         started = time.monotonic()
         budget = _effective_budget(budget_seconds)
-        # Resolve inside the activity (the workflow forwarded only references).
-        try:
-            credentials, credentials_by_name = await _resolve_gate_credentials(input)
-        except Exception as e:
-            # Resolution is gate plumbing, so the default here is the opposite of
-            # the handler path below: only a *provable* credential absence is a
-            # config fact this run can be blamed for. Everything else — including
-            # the resolver's collapsed "unexpected vault error" not-founds —
-            # propagates and fails open.
-            if not _is_definitive_credential_absence(e):
-                raise
-            return _no_verdict(e)
 
-        remaining = budget - (time.monotonic() - started)
-        if remaining < _min_handler_seconds(budget):
-            # Resolution ate the budget. That is the secret store being slow, not
-            # the source being unready — fail open rather than calling the handler
-            # with no time and blaming it for the timeout.
-            raise DependencyUnavailableError(
-                message=(
-                    "Credential resolution consumed the entire preflight budget "
-                    f"({budget:.0f}s); no time left to verify the source"
-                ),
-                service="secret_store",
+        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — lazy: preserves the auto_heartbeat_loop patch seam, same idiom as activities.py
+            auto_heartbeat_loop,
+            stop_heartbeat_task,
+        )
+
+        # Derive the beat interval from the real attempt window (same tolerant
+        # read _effective_budget uses), so it matches the heartbeat_timeout the
+        # workflow scheduled from the same geometry. Outside an activity
+        # context, fall back to the default budget's geometry.
+        real_s2c = getattr(_activity_info(), "start_to_close_timeout", None)
+        s2c_seconds = (
+            real_s2c.total_seconds()
+            if isinstance(real_s2c, timedelta)
+            else GATE_TIMEOUT_DEFAULT_SECONDS + GATE_ACTIVITY_HEADROOM_SECONDS
+        )
+        _, heartbeat_interval = gate_heartbeat_timings(s2c_seconds)
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = asyncio.ensure_future(
+            auto_heartbeat_loop(
+                interval_seconds=heartbeat_interval,
+                heartbeat_fn=_gate_heartbeat,
+                stop_event=heartbeat_stop,
+                task_name=preflight_gate_activity_name(app_name),
             )
-
-        # Floor of the remaining budget, and the one number the handler is told —
-        # the timeout message quotes it too, so what we enforce, what we report,
-        # and what we blame are all the same value. With storage verification
-        # opted in, the storage floor is reserved out of the *advertised*
-        # number: a handler that sizes its probes to this field — exactly what
-        # the docs say to do — must still leave the storage check its floor,
-        # or the opt-in silently degrades to a skip.
-        #
-        # Capped at half the remaining budget, the same shape as
-        # :func:`_min_handler_seconds`: an uncapped reserve starves the source
-        # check on a small declared budget (a 10s budget would hand the handler
-        # 1s, then blame the source for the timeout — precisely what the
-        # credential-resolution guard above exists to prevent), and the storage
-        # dimension is the opt-in extra, never the thing that squeezes out the
-        # check the gate exists for. When the cap bites, the storage check takes
-        # its skip path and says so in a visible row.
-        reserved = (
-            min(_STORAGE_CHECK_MIN_SECONDS, remaining / 2) if verify_storage else 0.0
         )
-        handler_budget = max(1, int(remaining - reserved))
-        # Build form config from the extraction-input snapshot in the activity
-        # frame so app field reads stay outside the deterministic workflow.
-        metadata_dump = _config_from_snapshot(
-            input.extraction_snapshot, input.credential_ref_fields.values()
-        )
-        preflight_input = PreflightInput(
-            credentials=credentials,
-            credentials_by_name=credentials_by_name,
-            entrypoint=input.entrypoint,
-            metadata=BaseMetadataConfig(**metadata_dump),
-            connection_config=BaseConnectionConfig(**metadata_dump),
-            # What is actually left, not the nominal budget: resolution above has
-            # already spent part of it. A handler sizing probes to this number is
-            # sizing to the deadline the wait_for below really enforces.
-            timeout_seconds=handler_budget,
-        )
-        # Redact every resolved secret from logs — the single-triple list and
-        # every named group, without assuming which path populated which.
-        all_creds = [
-            *credentials,
-            *(c for group in credentials_by_name.values() for c in group),
-        ]
-        # _no_verdict raises in hard mode, so it must never be called from inside
-        # this try — the raise would be re-caught below and _no_verdict would run
-        # a second time, double-emitting the outcome row and reclassifying the
-        # failure. Hence the flag: the timeout is handled after the try closes.
-        timed_out = False
         try:
-            with bind_invocation_context(app_name, all_creds):
-                # Deliberately not asyncio.wait_for: it cancels the handler and
-                # then *awaits* it, so a handler that swallows CancelledError
-                # either returns a value (wait_for hands it back and the budget
-                # is never enforced) or keeps running past start_to_close (the
-                # activity is killed and the classification is lost — the very
-                # defect this gate exists to fix). Waiting on the task instead
-                # lets us classify *at* the deadline, whatever the handler does.
-                check = asyncio.ensure_future(handler.preflight_check(preflight_input))
-                done, _ = await asyncio.wait({check}, timeout=remaining)
-                if done:
-                    result = check.result()
-                else:
-                    # Ask it to stop, but never await it — an uncooperative
-                    # handler must not be able to hold the activity open.
-                    check.cancel()
-                    # Abandoning a task without awaiting leaves any exception it
-                    # later raises unretrieved, which asyncio logs on GC. Consume
-                    # it (same fire-and-forget idiom as _runtime/offload.py).
-                    check.add_done_callback(
-                        lambda f: None if f.cancelled() else f.exception()
-                    )
-                    timed_out = True
-        except Exception as e:
-            # A handler that raises the deliberate block itself already carries a
-            # verdict and its own emitted row; pass it straight through rather
-            # than re-wrapping it as an unverifiable source.
-            if _is_gate_broken(e) or is_preflight_block(e):
-                raise
-            return _no_verdict(e)
+            # Resolve inside the activity (the workflow forwarded only references).
+            try:
+                credentials, credentials_by_name = await _resolve_gate_credentials(
+                    input
+                )
+            except Exception as e:
+                # Resolution is gate plumbing, so the default here is the opposite of
+                # the handler path below: only a *provable* credential absence is a
+                # config fact this run can be blamed for. Everything else — including
+                # the resolver's collapsed "unexpected vault error" not-founds —
+                # propagates and fails open.
+                if not _is_definitive_credential_absence(e):
+                    raise
+                return _no_verdict(e)
 
-        if timed_out:
-            return _no_verdict(
-                AppTimeoutError(
+            remaining = budget - (time.monotonic() - started)
+            if remaining < _min_handler_seconds(budget):
+                # Resolution ate the budget. That is the secret store being slow, not
+                # the source being unready — fail open rather than calling the handler
+                # with no time and blaming it for the timeout.
+                raise DependencyUnavailableError(
                     message=(
-                        "Preflight checks did not finish within the "
-                        f"{handler_budget}s budget"
+                        "Credential resolution consumed the entire preflight budget "
+                        f"({budget:.0f}s); no time left to verify the source"
                     ),
-                    app_name=app_name,
-                    retryable=False,
-                )
-            )
-        # Per-app opt-in: the handler certified the source; now certify the
-        # stores this run will upload artifacts to, in whatever budget is left.
-        # Appends checks and may downgrade READY → NOT_READY, so it must run
-        # before the verdict evaluation below. Never raises; see its docstring
-        # for the fail-open/verdict taxonomy note.
-        if verify_storage and await _append_storage_checks(result, budget, started):
-            # A failed probe only becomes a verdict once the app's retry
-            # attempts are exhausted — one flaky probe must not block a
-            # hard-mode run on its first attempt. Same deferral the handler
-            # no-verdict path uses; the retried attempt re-runs everything.
-            if not _is_final_attempt(attempts):
-                from application_sdk.execution.errors import (  # noqa: PLC0415 — avoid import cycle at module load
-                    ApplicationError,
+                    service="secret_store",
                 )
 
-                failed_stores = ", ".join(
-                    c.name
-                    for c in result.checks
-                    if not c.passed and c.name.startswith("objectStoreAccess:")
-                )
-                raise ApplicationError(
-                    "Preflight storage checks failed; deferring to the gate's "
-                    f"retry policy ({failed_stores})",
-                    type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
-                )
-        # The outcome event is the gate's queryable row (connector-pulse builds the
-        # dashboard from it). The activity holds the verdict, so it emits the
-        # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
-        # ``reason`` is the status on proceed, the primary FailureDetails.code on a
-        # block. Activity execution is at-least-once, so a retry after a lost
-        # completion can re-emit — consumers dedupe on (workflow_run_id, outcome).
-        if result.status is PreflightStatus.NOT_READY:
-            block_error = _build_block_error(result, app_name)
-            _emit_outcome(
-                "blocked" if enforce else "would_block",
-                block_error.details[0].code,
-                result.checks,
-                CLASSIFICATION_VERDICT,
-                audience=block_error.details[0].audience.value,
+            # Floor of the remaining budget, and the one number the handler is told —
+            # the timeout message quotes it too, so what we enforce, what we report,
+            # and what we blame are all the same value. With storage verification
+            # opted in, the storage floor is reserved out of the *advertised*
+            # number: a handler that sizes its probes to this field — exactly what
+            # the docs say to do — must still leave the storage check its floor,
+            # or the opt-in silently degrades to a skip.
+            #
+            # Capped at half the remaining budget, the same shape as
+            # :func:`_min_handler_seconds`: an uncapped reserve starves the source
+            # check on a small declared budget (a 10s budget would hand the handler
+            # 1s, then blame the source for the timeout — precisely what the
+            # credential-resolution guard above exists to prevent), and the storage
+            # dimension is the opt-in extra, never the thing that squeezes out the
+            # check the gate exists for. When the cap bites, the storage check takes
+            # its skip path and says so in a visible row.
+            reserved = (
+                min(_STORAGE_CHECK_MIN_SECONDS, remaining / 2)
+                if verify_storage
+                else 0.0
             )
-            _persist(result)
-            if enforce:
-                raise block_error
-            # Soft: the verdict stays honest NOT_READY; the gate just does not
-            # enforce it. The would_block row above is the loud record.
+            handler_budget = max(1, int(remaining - reserved))
+            # Build form config from the extraction-input snapshot in the activity
+            # frame so app field reads stay outside the deterministic workflow.
+            metadata_dump = _config_from_snapshot(
+                input.extraction_snapshot, input.credential_ref_fields.values()
+            )
+            preflight_input = PreflightInput(
+                credentials=credentials,
+                credentials_by_name=credentials_by_name,
+                entrypoint=input.entrypoint,
+                metadata=BaseMetadataConfig(**metadata_dump),
+                connection_config=BaseConnectionConfig(**metadata_dump),
+                # What is actually left, not the nominal budget: resolution above has
+                # already spent part of it. A handler sizing probes to this number is
+                # sizing to the deadline the wait_for below really enforces.
+                timeout_seconds=handler_budget,
+            )
+            # Redact every resolved secret from logs — the single-triple list and
+            # every named group, without assuming which path populated which.
+            all_creds = [
+                *credentials,
+                *(c for group in credentials_by_name.values() for c in group),
+            ]
+            # _no_verdict raises in hard mode, so it must never be called from inside
+            # this try — the raise would be re-caught below and _no_verdict would run
+            # a second time, double-emitting the outcome row and reclassifying the
+            # failure. Hence the flag: the timeout is handled after the try closes.
+            timed_out = False
+            try:
+                with bind_invocation_context(app_name, all_creds):
+                    # Deliberately not asyncio.wait_for: it cancels the handler and
+                    # then *awaits* it, so a handler that swallows CancelledError
+                    # either returns a value (wait_for hands it back and the budget
+                    # is never enforced) or keeps running past start_to_close (the
+                    # activity is killed and the classification is lost — the very
+                    # defect this gate exists to fix). Waiting on the task instead
+                    # lets us classify *at* the deadline, whatever the handler does.
+                    check = asyncio.ensure_future(
+                        handler.preflight_check(preflight_input)
+                    )
+                    done, _ = await asyncio.wait({check}, timeout=remaining)
+                    if done:
+                        result = check.result()
+                    else:
+                        # Ask it to stop, but never await it — an uncooperative
+                        # handler must not be able to hold the activity open.
+                        # check.cancel() still cannot interrupt a probe parked
+                        # in run_in_executor: the gate classifies at the
+                        # deadline, but the thread runs on until it returns.
+                        check.cancel()
+                        # Abandoning a task without awaiting leaves any exception it
+                        # later raises unretrieved, which asyncio logs on GC. Consume
+                        # it (same fire-and-forget idiom as _runtime/offload.py).
+                        check.add_done_callback(
+                            lambda f: None if f.cancelled() else f.exception()
+                        )
+                        timed_out = True
+            except Exception as e:
+                # A handler that raises the deliberate block itself already carries a
+                # verdict and its own emitted row; pass it straight through rather
+                # than re-wrapping it as an unverifiable source.
+                if _is_gate_broken(e) or is_preflight_block(e):
+                    raise
+                return _no_verdict(e)
+
+            if timed_out:
+                return _no_verdict(
+                    AppTimeoutError(
+                        message=(
+                            "Preflight checks did not finish within the "
+                            f"{handler_budget}s budget"
+                        ),
+                        app_name=app_name,
+                        retryable=False,
+                    )
+                )
+            # Per-app opt-in: the handler certified the source; now certify the
+            # stores this run will upload artifacts to, in whatever budget is left.
+            # Appends checks and may downgrade READY → NOT_READY, so it must run
+            # before the verdict evaluation below. Never raises; see its docstring
+            # for the fail-open/verdict taxonomy note.
+            if verify_storage and await _append_storage_checks(result, budget, started):
+                # A failed probe only becomes a verdict once the app's retry
+                # attempts are exhausted — one flaky probe must not block a
+                # hard-mode run on its first attempt. Same deferral the handler
+                # no-verdict path uses; the retried attempt re-runs everything.
+                if not _is_final_attempt(attempts):
+                    from application_sdk.execution.errors import (  # noqa: PLC0415 — avoid import cycle at module load
+                        ApplicationError,
+                    )
+
+                    failed_stores = ", ".join(
+                        c.name
+                        for c in result.checks
+                        if not c.passed and c.name.startswith("objectStoreAccess:")
+                    )
+                    raise ApplicationError(
+                        "Preflight storage checks failed; deferring to the gate's "
+                        f"retry policy ({failed_stores})",
+                        type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+                    )
+            # The outcome event is the gate's queryable row (connector-pulse builds the
+            # dashboard from it). The activity holds the verdict, so it emits the
+            # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
+            # ``reason`` is the status on proceed, the primary FailureDetails.code on a
+            # block. Activity execution is at-least-once, so a retry after a lost
+            # completion can re-emit — consumers dedupe on
+            # (workflow_run_id, gate_attempt), highest attempt wins. Every row
+            # carries gate_attempt (GATE_ATTEMPTS_KEY below); the old
+            # (workflow_run_id, outcome) key kept both rows of an orphaned
+            # attempt-1 + attempt-2 pair, which is CONNECT-1170 gap 1.
+            if result.status is PreflightStatus.NOT_READY:
+                block_error = _build_block_error(result, app_name)
+                _emit_outcome(
+                    PreflightRowOutcome.BLOCKED.value
+                    if enforce
+                    else PreflightRowOutcome.WOULD_BLOCK.value,
+                    block_error.details[0].code,
+                    result,
+                    CLASSIFICATION_VERDICT,
+                    audience=block_error.details[0].audience.value,
+                )
+                if enforce:
+                    raise block_error
+                # Soft: the verdict stays honest NOT_READY; the gate just does not
+                # enforce it. The would_block row above is the loud record.
+                return result
+            _emit_outcome(
+                PreflightRowOutcome.PROCEEDED.value,
+                result.status.value,
+                result,
+                CLASSIFICATION_VERDICT,
+            )
             return result
-        _emit_outcome(
-            "proceeded", result.status.value, result.checks, CLASSIFICATION_VERDICT
-        )
-        _persist(result)
-        return result
+        finally:
+            await stop_heartbeat_task(
+                heartbeat_task, heartbeat_stop, preflight_gate_activity_name(app_name)
+            )
 
     return preflight_gate

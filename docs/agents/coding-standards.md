@@ -148,7 +148,14 @@ beside one). Each row stamps `failure.audience` (who must act) except `proceeded
   the response body rendered in the setup form); SDR failures surface through a workflow
   run log read at the default ERROR filter, so SDR rows mirror the gate — `not_ready` at
   `error`, advisory failure at `warning`, clean at `info`. Handler crashes stay `error`
-  at each surface's boundary handler. The surface is the `PreflightSurface` enum, not a
+  at each surface's boundary handler and additionally emit one
+  `outcome="crashed"` row at `error` on every interactive surface
+  (`emit_preflight_crash_outcome`), so the funnel sees the worst case; a typed
+  client-input error that raises (wrong password, 4xx-class category) is counted
+  as `outcome="client_fault"` instead — at `info` on HTTP where the response is
+  the channel, at `error` on SDR where the row is — so it never pollutes the
+  crash series and never drops from the denominator. The surface is
+  the `PreflightSurface` enum, not a
   string, and its level policy is the `_LOG_ROW_IS_ONLY_CHANNEL` table — a new surface
   fails `test_every_surface_has_a_level_policy` until someone routes it.
 

@@ -293,6 +293,7 @@ def create_activity_from_task(
             NoopHeartbeatController,
             TemporalHeartbeatController,
             auto_heartbeat_loop,
+            stop_heartbeat_task,
         )
         from application_sdk.execution.progress_telemetry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             closed_hold_observer,
@@ -662,20 +663,9 @@ def create_activity_from_task(
             finally:
                 try:
                     if heartbeat_task is not None:
-                        stop_event.set()
-                        try:
-                            await asyncio.wait_for(heartbeat_task, timeout=1.0)
-                        # conformance: ignore[E004] cleanup path cancelling heartbeat task in finally; all exceptions handled by inner cancel+log
-                        except (TimeoutError, Exception):
-                            heartbeat_task.cancel()
-                            try:
-                                await heartbeat_task
-                            # conformance: ignore[E004] heartbeat cancel cleanup in finally; debug-logged with exc_info; swallow is intentional
-                            except Exception:
-                                logger.debug(
-                                    "Heartbeat task did not cancel cleanly",
-                                    exc_info=True,
-                                )
+                        await stop_heartbeat_task(
+                            heartbeat_task, stop_event, context.task_name
+                        )
                 finally:
                     # Nested so the app-instance clears survive the heartbeat
                     # cleanup above raising — in particular a ``CancelledError``,
