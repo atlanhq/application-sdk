@@ -1,0 +1,34 @@
+/// Fixture: App.pkl contract whose `extraction_method` manifest arg is sourced
+/// from a form field with an unrelated name (`mode`) via `manifestTopLevelArgs`.
+///
+/// Neither spelling of "extraction method" appears among the form-field keys,
+/// yet the top-level-args loop still emits `extraction_method`. Proves the
+/// default-emit guard keys on the *emitted arg name*, not on the presence of a
+/// particular form-field key.
+amends "../../src/App.pkl"
+
+name = "extraction-method-renamed-field"
+displayName = "Extraction Method (renamed form field)"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+manifestTopLevelArgs {
+  ["extraction_method"] = "mode"
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["mode"] = new TextInput {
+          title = "Extraction mode"
+          hide = true
+          default = "direct"
+        }
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

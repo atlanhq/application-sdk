@@ -855,10 +855,37 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 |---|---|---|---|
 | `workflowConfigName` | String | `name` | Workflow configmap name / output filename. |
 | `credentialFieldName` | String? | `"{name}_credential"` | Credential ref field in Input class. Null to omit. |
-| `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. |
+| `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. An entry here also counts as "the contract models this arg" for the SDR routing pair — see [SDR routing pair in the extract node](#sdr-routing-pair-in-the-extract-node). |
 | `publishTagPipelineEnabled` | Boolean\|String? | auto | Value for `PublishNode`'s `tag_pipeline_enabled`. Auto-wired when `enable-tags` or `enable-tag-sync` is in the form. |
 | `publishTagAttachmentsPrefix` | String? | auto | Value for `PublishNode`'s `tag_attachments_prefix`. |
 | `notifications` | Boolean | `false` | Top-level app on/off. When set to `true`, appends a run-level notification node (`NotificationNode`, key `notifications`) that fires when the workflow run reaches any terminal state (success or failure). The node depends on the reserved run-level `workflow_complete` tag (a `DependencyCondition` with no `nodeId`), so AE runs it once per run as a finalizer and dispatches the `notification-app`, which fans alerts to the tenant's enabled integrations and decides delivery per integration (`failureOnly`: failure-only vs. all runs). Also skipped when `extraNodes` defines a `notifications` key. See [NotificationNode](#notificationnode). |
+
+#### SDR routing pair in the extract node
+
+The extract node's `inputs.args` always carries `agent_json` and
+`extraction_method`. Heracles/AE derives the agent task queue **and** fills the
+credential-routing spec from the two together at dispatch, so a manifest with only
+one of them leaves a self-deployed-runtime (SDR) run unable to tell direct from
+agent — the gap conformance `P029` reports.
+
+For each of the two args the toolkit asks one question: *will the contract's own
+form fields already emit this arg?* That is true when
+
+- a `uiConfig` property's Python name (`toPyName`, dashes → underscores) is the
+  arg — so `extraction-method` and `extraction_method` both count, as do
+  `agent-json` and `agent_json`; or
+- a `manifestTopLevelArgs` entry names the arg and its form field exists — e.g.
+  `["extraction_method"] = "extraction-method"`, or a renamed field such as
+  `["extraction_method"] = "mode"`.
+
+If so, the arg is templated from that field (`"{{extraction-method}}"`,
+`"{{extraction_method}}"`, `"{{mode}}"`, …) and emitted exactly once. If not, the
+toolkit emits the default placeholder — `"{{agent-json}}"` /
+`"{{extraction-method}}"` — so an app with a single fixed extraction path needs no
+hidden widget to satisfy `P029`. The test is on the *emitted arg*, never on one
+spelling of the form-field key: a guard keyed on the kebab spelling alone made the
+guard and the properties loop both emit `extraction_method` for a snake_case
+widget, and Pkl rejected the duplicate member (FND-96 / FND-1437).
 
 ---
 
@@ -1010,7 +1037,7 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `workflowConfigName` | String | `name` | Workflow configmap name / output filename. |
 | `additionalOutputFiles` | Mapping<String, FileOutput> | `{}` | Explicit opt-in files to emit with this contract, for example a customized `AgentConfig.pkl` output. |
 | `extraNodes` | Mapping<String, DAGNode> | `{}` | Custom DAG nodes. Use `DAGNode` for arbitrary workflows, `PublishNode` for the standard Atlas publish step, `QueryIntelligenceNode` for native QI, `PopularityNode` for popularity metrics, `LineageNode` for the Lineage app, or `LineagePublishNode` for lineage publish. Key `"publish"` replaces auto-generated publish. |
-| `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. These remain top-level in either manifest shape. |
+| `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. These remain top-level in either manifest shape. An entry here also counts as "the contract models this arg" for the SDR routing pair (`agent_json`, `extraction_method`) — same rules as [App.pkl](#sdr-routing-pair-in-the-extract-node). |
 
 ### Credential Config
 

@@ -2819,6 +2819,23 @@ local workflowTypeResolved: String =
     .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
     .toLowerCase()
 
+/// Whether the contract itself sources extract-node arg `argName` — through a
+/// `manifestTopLevelArgs` entry naming it whose form field exists, or through a
+/// uiConfig property whose Python name (`toPyName`) is it.
+///
+/// The default-emit guards for the SDR routing pair (`agent_json`,
+/// `extraction_method`) use this so they key on the arg the two loops in
+/// `generateExtractNode` will emit — not on one spelling of the form-field key.
+/// `extraction-method`, `extraction_method` and a `manifestTopLevelArgs`-renamed
+/// field all spell the same manifest arg; a guard on the kebab spelling alone
+/// emitted a second copy for the snake_case shape, and Pkl rejects the duplicate
+/// member, failing generation outright (atlan-openapi-app; FND-96).
+local function modelsExtractArg(argName: String): Boolean =
+  uiConfig != null && (
+    manifestTopLevelArgs.toMap().any((arg, formField) -> arg == argName && uiConfig!!.properties.containsKey(formField))
+    || uiConfig!!.properties.keys.any((formField) -> toPyName(formField) == argName)
+  )
+
 local function generateExtractNode(): Mapping<String, Any> =
   let (step = pipeline.extract!!)
   let (_extractEhCheck = validateWorkflowNodeErrorHandling(step.errorHandling, "pipeline.extract.errorHandling"))
@@ -2848,21 +2865,24 @@ local function generateExtractNode(): Mapping<String, Any> =
         ["app_name"] = name
         ["credential"] = "{{credential}}"
         // SDR / agent-mode credential slot. Emitted whenever the app does not
-        // model `agent-json` — the gap that silently broke MSSQL's SDR rollout
-        // (atlan-mssql-app#177). When the app DOES model `agent-json`, the loop
-        // below emits it (AgentSelector constrains includeInManifest to true, so the
-        // loop always fires); this guard skips to avoid a duplicate key.
-        when (uiConfig == null || !uiConfig!!.properties.containsKey("agent-json")) {
+        // model `agent_json` — the gap that silently broke MSSQL's SDR rollout
+        // (atlan-mssql-app#177). When the app DOES model it, the loops below emit
+        // it (AgentSelector constrains includeInManifest to true, so the loop
+        // always fires); this guard skips to avoid a duplicate key. "Models it" is
+        // `modelsExtractArg`: decided on the emitted arg, so `agent-json`,
+        // `agent_json` and a `manifestTopLevelArgs`-renamed field all count.
+        when (!modelsExtractArg("agent_json")) {
           ["agent_json"] = "{{agent-json}}"
         }
         // The other half of the SDR routing pair. Heracles/AE derives the agent
         // task queue AND fills the credential-routing spec from `agent_json` +
         // `extraction_method` together at dispatch, so emitting only the first
         // leaves an SDR-declaring app half-wired — the same shape as the
-        // agent-json gap above, and what P029 reports. Emitted only when the app
-        // does not model `extraction-method` itself; when it does, the loop below
-        // emits it and this guard avoids a duplicate key.
-        when (uiConfig == null || !uiConfig!!.properties.containsKey("extraction-method")) {
+        // agent-json gap above, and what P029 reports (FND-96). Emitted only when
+        // the app does not model `extraction_method` itself (the same
+        // `modelsExtractArg` test); when it does, the loops below emit it and
+        // this guard avoids a duplicate key.
+        when (!modelsExtractArg("extraction_method")) {
           ["extraction_method"] = "{{extraction-method}}"
         }
         for (argName, formField in manifestTopLevelArgs) {

@@ -1,0 +1,48 @@
+/// Fixture: NativeApp that models the SDR routing pair under snake_case
+/// form-field keys (`extraction_method`, `agent_json`) — the NativeApp.pkl
+/// counterpart of `app_extraction_method_snake.pkl`. Pair of
+/// `native_app_extraction_method.pkl`, which models the kebab spelling.
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Connectors.pkl"
+import "../../src/Config.pkl"
+
+name = "native-app-extraction-method-snake"
+connector = Connectors.POSTGRES
+icon = "https://assets.atlan.com/assets/postgres.svg"
+workflowType = "PostgresWorkflow"
+
+credentialCommonFields {
+  new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
+    }
+  }
+}
+
+uiConfig = new Config.UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["extraction_method"] = new Config.TextInput {
+          title = "Extraction method"
+          defaultValue = "direct"
+          hide = true
+        }
+        ["agent_json"] = new Config.TextInput {
+          title = "Agent JSON"
+          hide = true
+        }
+        ["credential-guid"] = new Config.CredentialInput {
+          credType = "atlan-connectors-native-app-extraction-method-snake"
+        }
+      }
+    }
+  }
+}

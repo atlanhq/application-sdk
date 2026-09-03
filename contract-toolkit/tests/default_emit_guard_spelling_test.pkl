@@ -1,0 +1,72 @@
+/// Tests that the extract-node default-emit guards for the SDR routing pair
+/// (`agent_json`, `extraction_method`) key on the manifest arg the loops will
+/// emit — not on one spelling of the form-field key.
+///
+/// Three ways an app can model the arg itself, all of which must emit the slot
+/// exactly once (guard skips, loop emits):
+///   1. snake_case form-field key (`extraction_method`) — the openapi shape;
+///      `toPyName` maps it onto the same arg as the kebab spelling (FND-96).
+///   2. kebab key routed through `manifestTopLevelArgs` — the tableau shape.
+///   3. an unrelated form-field name (`mode`) routed through
+///      `manifestTopLevelArgs` — proves the guard reads the emitted arg name.
+///
+/// The kebab-key branches live in `agent_json_default_emit_test.pkl` and
+/// `extraction_method_default_emit_test.pkl`.
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/app_extraction_method_snake.pkl" as snakeApp
+import "fixtures/app_extraction_method_toplevel_mapped.pkl" as mappedApp
+import "fixtures/app_extraction_method_renamed_field.pkl" as renamedApp
+import "fixtures/native_app_extraction_method_snake.pkl" as snakeNative
+
+local function extractArgs(app, manifestKey: String) =
+  let (text = app.output.files[manifestKey].text)
+  let (manifest = new json.Parser { useMapping = true }.parse(text))
+    manifest["dag"]["extract"]["inputs"]["args"]
+
+local function occurrences(app, manifestKey: String, arg: String): Int =
+  app.output.files[manifestKey].text.split("\"\(arg)\"").length - 1
+
+local snakeAppArgs = extractArgs(snakeApp, "app/generated/manifest.json")
+local mappedAppArgs = extractArgs(mappedApp, "app/generated/manifest.json")
+local renamedAppArgs = extractArgs(renamedApp, "app/generated/manifest.json")
+local snakeNativeArgs = extractArgs(snakeNative, "manifest.json")
+
+facts {
+  // 1. snake_case keys (App.pkl): the properties loop emits both args under
+  //    their snake spelling; the guards must not add a second copy.
+  ["App.pkl snake_case extraction_method key emits the slot once, templated from the app's own field"] {
+    snakeAppArgs["extraction_method"] == "{{extraction_method}}"
+    occurrences(snakeApp, "app/generated/manifest.json", "extraction_method") == 1
+  }
+  ["App.pkl snake_case agent_json key emits the slot once, templated from the app's own field"] {
+    snakeAppArgs["agent_json"] == "{{agent_json}}"
+    occurrences(snakeApp, "app/generated/manifest.json", "agent_json") == 1
+  }
+
+  // 2. kebab key routed through manifestTopLevelArgs (App.pkl): the top-level
+  //    loop emits it; the properties loop and the guard both skip.
+  ["App.pkl manifestTopLevelArgs-mapped extraction-method emits the slot once"] {
+    mappedAppArgs["extraction_method"] == "{{extraction-method}}"
+    occurrences(mappedApp, "app/generated/manifest.json", "extraction_method") == 1
+  }
+
+  // 3. unrelated form-field name routed through manifestTopLevelArgs (App.pkl):
+  //    no form-field key spells "extraction method" at all, yet the arg is
+  //    emitted — the guard must read the emitted arg, not a field name.
+  ["App.pkl extraction_method sourced from a renamed form field emits the slot once"] {
+    renamedAppArgs["extraction_method"] == "{{mode}}"
+    occurrences(renamedApp, "app/generated/manifest.json", "extraction_method") == 1
+  }
+
+  // 1. snake_case keys (NativeApp.pkl).
+  ["NativeApp.pkl snake_case extraction_method key emits the slot once"] {
+    snakeNativeArgs["extraction_method"] == "{{extraction_method}}"
+    occurrences(snakeNative, "manifest.json", "extraction_method") == 1
+  }
+  ["NativeApp.pkl snake_case agent_json key emits the slot once"] {
+    snakeNativeArgs["agent_json"] == "{{agent_json}}"
+    occurrences(snakeNative, "manifest.json", "agent_json") == 1
+  }
+}

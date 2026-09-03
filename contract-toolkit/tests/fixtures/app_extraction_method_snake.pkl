@@ -1,0 +1,36 @@
+/// Fixture: App.pkl contract that models the SDR routing pair under snake_case
+/// form-field keys — `extraction_method` and `agent_json` — instead of the
+/// kebab `extraction-method` / `agent-json` most of the fleet uses.
+///
+/// This is the shape atlan-openapi-app ships (a hidden, constant
+/// `extraction_method` TextInput; see FND-96). `toPyName` maps both spellings
+/// onto the same manifest arg, so the default-emit guards must key on the arg
+/// the loops will emit, not on one spelling of the form-field key — otherwise
+/// guard + loop both emit and Pkl rejects the duplicate member.
+amends "../../src/App.pkl"
+
+name = "extraction-method-snake"
+displayName = "Extraction Method (snake_case keys)"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["extraction_method"] = new TextInput {
+          title = "Extraction method"
+          hide = true
+          default = "direct"
+        }
+        ["agent_json"] = new TextInput {
+          title = "Agent JSON"
+          hide = true
+        }
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

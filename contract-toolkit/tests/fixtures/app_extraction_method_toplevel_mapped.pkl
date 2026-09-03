@@ -1,0 +1,35 @@
+/// Fixture: App.pkl contract that models `extraction-method` (kebab) AND routes
+/// it through `manifestTopLevelArgs` — the shape atlan-tableau-app,
+/// atlan-salesforce-app and atlan-ukg-app ship.
+///
+/// The top-level-args loop emits `extraction_method` and the properties loop
+/// skips it (the form field is in `topLevelFormFields`), so the default-emit
+/// guard must skip too. Pins that the guard treats a top-level mapping as
+/// "the app models this arg".
+amends "../../src/App.pkl"
+
+name = "extraction-method-toplevel-mapped"
+displayName = "Extraction Method (manifestTopLevelArgs)"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+manifestTopLevelArgs {
+  ["extraction_method"] = "extraction-method"
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["extraction-method"] = new TextInput {
+          title = "Extraction method"
+          hide = true
+          default = "direct"
+        }
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

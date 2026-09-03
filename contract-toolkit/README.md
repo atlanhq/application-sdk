@@ -156,6 +156,16 @@ when unset, so existing generated output is unchanged.
 
 Automation Engine DAG template. Auto-derived from the declared workflow params and the typed `pipeline` block. Heracles substitutes `{{param}}` placeholders with form values before sending to AE.
 
+The extract node's `inputs.args` always carries the SDR routing pair `agent_json`
+and `extraction_method` — Heracles/AE derives the agent task queue and the
+credential-routing spec from both together. When the contract models either one
+itself — a form field whose Python name is the arg (`extraction-method` or
+`extraction_method`), or a `manifestTopLevelArgs` entry — the arg is templated from
+that field. Otherwise the toolkit emits the `{{agent-json}}` /
+`{{extraction-method}}` placeholder, so an app with a single fixed extraction path
+still satisfies conformance `P029` without a hidden widget. See
+[`docs/reference.md`](docs/reference.md) → *SDR routing pair in the extract node*.
+
 Default pipeline: `extract → publish`. Opt out of publish with
 `pipeline.publish = null`. Add parseQueries, popularity, or lineage steps by
 setting the corresponding `pipeline.*` field. Opt in to notifications
