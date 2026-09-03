@@ -6,6 +6,16 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.24.1] - 2026-09-03
+
+### Bug fixes
+
+- emit extraction_method alongside agent_json (P029) (#3633) ([3e1b634](https://github.com/atlanhq/application-sdk/commit/3e1b634))
+
+### Other changes
+
+- ci(config-validator): validate workerPools against infra ceilings (ARUN-1041) (#3595) ([fd37081](https://github.com/atlanhq/application-sdk/commit/fd37081))
+
 ## [0.24.0] - 2026-09-02
 
 ### Features
