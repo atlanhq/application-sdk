@@ -2855,6 +2855,16 @@ local function generateExtractNode(): Mapping<String, Any> =
         when (uiConfig == null || !uiConfig!!.properties.containsKey("agent-json")) {
           ["agent_json"] = "{{agent-json}}"
         }
+        // The other half of the SDR routing pair. Heracles/AE derives the agent
+        // task queue AND fills the credential-routing spec from `agent_json` +
+        // `extraction_method` together at dispatch, so emitting only the first
+        // leaves an SDR-declaring app half-wired — the same shape as the
+        // agent-json gap above, and what P029 reports. Emitted only when the app
+        // does not model `extraction-method` itself; when it does, the loop below
+        // emits it and this guard avoids a duplicate key.
+        when (uiConfig == null || !uiConfig!!.properties.containsKey("extraction-method")) {
+          ["extraction_method"] = "{{extraction-method}}"
+        }
         for (argName, formField in manifestTopLevelArgs) {
           when (argName != "app_name" && uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"
