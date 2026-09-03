@@ -360,9 +360,17 @@ def test_quoting_an_error_class_from_a_real_defect_is_not_suppressed() -> None:
         # mis-routed leaf, and matching `new` + `error hierarch` suppressed it.
         "the new error hierarchy routes storage failures to a retryable leaf",
         # Wrong-leaf findings say "instead of" about the CLASSES, not about the
-        # scheme, so the comparative branch must not reach them either.
+        # scheme. A comparative branch (adjective + noun + instead of) with no
+        # proposal verb used to swallow these; the keep-regression is the
+        # load-bearing test that it stays gone.
         "raise RetryableError instead of NonRetryableError for a permanent failure",
         "the error hierarchy is not applied consistently in this handler",
+        # Same class, leaf named: adjective + noun + instead of the correct leaf.
+        "the new error hierarchy routes permanent storage failures to RetryableError instead of NonRetryableError",
+        "a separate exception class is swallowed here in place of being re-raised",
+        "the custom exception hierarchy maps timeouts to NonRetryableError rather than RetryableError",
+        "a new exception class is used here instead of chaining the original",
+        "an additional error class swallows the original rather than re-raising",
     ],
 )
 def test_error_scheme_defects_are_not_scheme_proposals(evidence: str) -> None:
@@ -375,14 +383,15 @@ def test_error_scheme_defects_are_not_scheme_proposals(evidence: str) -> None:
     [
         # The claim this entry exists to suppress. The previous regex wanted
         # "alternative|new|…" and "error hierarch", so "custom" + "exception
-        # hierarchy" walked straight past it.
+        # hierarchy" walked straight past it. Coverage is the common proposal
+        # verbs (consider/suggest/propose/recommend), not every paraphrase.
         "consider using a custom exception hierarchy instead of NonRetryableError",
         "suggest a deeper error hierarchy",
         "propose an additional error class for storage failures",
     ],
 )
-def test_scheme_proposals_are_dropped_however_they_are_phrased(evidence: str) -> None:
-    """Paraphrases of the proposal are the same non-finding, so all must drop."""
+def test_scheme_proposals_drop_for_the_common_proposal_verbs(evidence: str) -> None:
+    """The common proposal verbs drop; other paraphrases are under-suppression, not over."""
     assert bd.load_by_design(DATA).match(_f(evidence=evidence)) is not None
 
 
