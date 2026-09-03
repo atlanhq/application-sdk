@@ -1631,4 +1631,89 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k020"
         ),
     ),
+    RuleDefinition(
+        id="K021",
+        scope=RuleScope.APP,
+        name="FilterFieldRejectsAeString",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.26.0",
+        orthogonal_gate="tests",
+        rationale=(
+            "K018 checks that an include_*/exclude_* arg is declared on the "
+            "entrypoint's Input contract; it deliberately does not look at the "
+            "field's type. That leaves the type half of the same hand-off "
+            "unchecked, and the type is what breaks next. Since "
+            "contract-toolkit 0.9.0 the Automation Engine renders filters as flat "
+            "top-level JSON strings — '{}' or '{\"^db$\": [\"^schema$\"]}' — not "
+            "structured objects. A contract that types the field as a strict dict "
+            "with no string-acceptance path rejects that string, and the run dies "
+            "at Pydantic validation. Where K018's failure is fail-open (a dropped "
+            "key silently defaults, and an empty include-filter crawls "
+            "everything), K021's is fail-closed: the whole workflow crashes before "
+            "it starts. Nothing else catches it statically — pkl compiles the "
+            "manifest with no visibility into the Python model, and the model "
+            "itself is well-formed; the mismatch only surfaces at runtime, on the "
+            "tenant, as a crash the customer sees. It is the class atlan-looker-app "
+            "and atlan-fabric-app hit (CONNECT-1333 / CONNECT-1389). The rule keys "
+            "on three exact, structural acceptance conditions — a str union, a "
+            "chain that reaches the SDK ExtractionInput coercer, or an app-local "
+            "mode='before' validator — and stays silent whenever the contract "
+            "chain cannot be fully resolved, so it prefers a false negative to a "
+            "false positive."
+        ),
+        short_description=(
+            "An entrypoint Input contract types an include_*/exclude_* filter as a "
+            "strict dict that rejects the flat JSON string the Automation Engine "
+            "sends"
+        ),
+        full_description=(
+            "An ``include_*`` / ``exclude_*`` filter field on the entrypoint's "
+            "Python ``Input`` contract is typed as a (possibly ``Annotated``) "
+            "strict ``dict`` — with no ``str`` union, no coercing "
+            '``ExtractionInput`` base, and no ``mode="before"`` validator — so it '
+            "cannot accept the value the Automation Engine actually sends.\n"
+            "\n"
+            "Since contract-toolkit 0.9.0 the AE renders include/exclude filters "
+            "as flat top-level JSON **strings** (``'{}'``, "
+            '``\'{"^db$": ["^schema$"]}\'``), not structured objects. Pydantic '
+            "validates the incoming string against a strict ``dict`` field, the "
+            "coercion fails, and the workflow crashes at validation before it does "
+            "any work — the fail-closed sibling of K018's fail-open dropped-key "
+            "case. This is the CONNECT-1333 / CONNECT-1389 class.\n"
+            "\n"
+            "**Fix** — make the field accept the string, any one of:\n"
+            "\n"
+            "* **union with ``str``** — ``include_filter: FilterMap | str`` (or "
+            "``dict[str, list[str]] | str``). Pydantic then tries the ``str`` arm "
+            "and the JSON string validates;\n"
+            "* **base on ``ExtractionInput``** — mix in "
+            "``application_sdk.templates.contracts.sql_metadata.ExtractionInput``, "
+            'whose ``@field_validator("include_filter", "exclude_filter", '
+            'mode="before")`` ``_coerce_filter`` coerces the string first '
+            "(inherited before-validators run by field name, so even a redeclared "
+            "strict ``dict`` is safe under it); or\n"
+            "* **add your own before-validator** — a "
+            '``@field_validator("<field>", mode="before")`` (or a '
+            '``mode="before"`` ``@model_validator``) on the contract that coerces '
+            "the string yourself. An ``after``-mode validator does **not** count: "
+            "it runs after field validation, so the string is already rejected.\n"
+            "\n"
+            "This is the type half of the same hand-off K018 guards by field name; "
+            "an app can pass K018 (the field is declared) and still fail K021 (the "
+            "declared type is wrong). Both are WARN and app-scoped, and both no-op "
+            "on any repo without ``app/generated/``.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K021] <reason>`` on the "
+            "``Input`` class definition (or the comment-only line directly above "
+            "it) — for example when the string is genuinely coerced by a path the "
+            "static check cannot follow.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k021"
+        ),
+    ),
 )
