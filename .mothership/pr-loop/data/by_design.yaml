@@ -36,6 +36,32 @@
 # block; a `ci-gate` entry naming one of them fails to load rather than
 # suppressing anything. A `by-design` entry may name them freely, because it
 # makes a claim about a location rather than about CI.
+#
+# ---------------------------------------------------------------------------
+# What does NOT belong here: a claim only prose can carry
+# ---------------------------------------------------------------------------
+#
+# An entry that matches on `evidence` alone is matching the reviewer's prose,
+# and prose is a weak discriminator when a false positive and a real defect
+# are ABOUT THE SAME CODE. A proposal to replace the error hierarchy and a
+# report that the hierarchy routes a permanent failure to the retryable leaf
+# quote the same nouns; a soft opener ("consider the new error class here: it
+# swallows the original") is indistinguishable from a proposal verb. Four
+# rounds of review narrowed such an entry around the sentences the previous
+# round quoted, and the class survived each time one paraphrase away. The
+# fifth round built the best remaining regex fix and showed it also fails.
+#
+# So: if the only thing that separates the by-design case from the defect is
+# what the sentence MEANS, the entry does not belong in this file. It belongs
+# in the specialist brief, where a model reading the code can tell a proposal
+# from a defect — which is the one thing a regex on the sentence cannot. The
+# cost of leaving such a pattern out is one round of "that's intentional" on
+# a genuine proposal. The cost of leaving it in is a wrong-leaf or
+# swallowed-exception defect vanishing with no trace a human reads.
+#
+# Prose-only entries that remain (`pytest-asyncio-marker`,
+# `credential-ref-in-payloads`, `ci-coverage-threshold`) each passed the test
+# above: their drop-cases, rewritten as defect reports, are still kept.
 
 version: 1
 
@@ -195,23 +221,6 @@ suppress:
     match:
       evidence: '(?i)\bCredentialRef\b.{0,80}(?:treated as (?:a )?(?:secret|credential|sensitive)|(?:is|contains|carries|holds)\s+(?:a\s+|the\s+)?secret material|\bis\s+(?:a\s+)?secret\b|(?:unsafe|not safe|insecure)\s+to\s+(?:pass|serialise|serialize|send)|leaks?\s+(?:a\s+)?(?:secret|credential))'
 
-  - id: error-code-scheme
-    owner: by-design
-    source: review-policy
-    reason: >-
-      `AAF-{COMPONENT}-{ID:03d}` is the intentional error-code format, and
-      `NonRetryableError` / `RetryableError` are deliberately the only two base
-      classes. The false-positive claim is a PROPOSAL for an alternative
-      scheme or a deeper hierarchy, so the match needs the proposal language
-      and not just the words a real finding also uses: an adjective alone let
-      "the new error hierarchy routes storage failures to a retryable leaf"
-      through as a suppression, while a proposal phrased as "consider using a
-      custom exception hierarchy" escaped entirely. A comparative
-      (`instead of` / `rather than` / `in place of`) without a proposal verb
-      is how a wrong-leaf or swallowed-exception finding names the correct
-      leaf, so it must not carry the match either.
-    match:
-      evidence: '(?i)\b(?:consider\w*|suggest\w*|propos\w*|recommend\w*)\b[^.\n]{0,60}\b(?:alternative|different|new|custom|additional|deeper|another|richer|separate|granular)\b[^.\n]{0,40}(?:error[- ]code (?:scheme|format)|(?:error|exception)[ -](?:class(?:es)?|hierarch\w*)|error taxonomy)'
 
   # -------------------------------------------------------------------------
   # Conditional — by-design UNLESS the reviewer substantiates the exception.
