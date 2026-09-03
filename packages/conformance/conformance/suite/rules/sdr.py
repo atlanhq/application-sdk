@@ -72,6 +72,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -79,6 +80,23 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P029",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — both declare SDR and carry "
+            "agent_json plus extraction_method in dag.extract.inputs.args."
+        ),
+        rule_interactions=(
+            "Not a toolkit-version gap: bumping an affected app to the newest toolkit "
+            "and regenerating does NOT add the field. It comes from the renderer's "
+            "per-widget emission."
+        ),
+        terminal_state=(
+            "The toolkit emits agent_json defensively but historically not "
+            "extraction_method, so an SDR app with no extraction-method widget is "
+            "half-wired through no fault of its own. Fix the renderer; adding the "
+            "widget app-side also switches the Self-Deployed Runtime option on in the "
+            "form, which is a product decision rather than a conformance fix."
+        ),
+        fix_locus=FixLocus.TOOLKIT,
         scope=RuleScope.APP,
         name="SdrManifestMissingAgentJson",
         tier=EnforcementTier.BLOCK,
@@ -161,6 +179,19 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P030",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the "
+            "generated tree they produce under app/generated/."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrUploadNotCalled",
         tier=EnforcementTier.BLOCK,
@@ -293,6 +324,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P037",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrAgentJsonNotConsumed",
         tier=EnforcementTier.WARN,
@@ -360,6 +392,19 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P038",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the "
+            "generated tree they produce under app/generated/."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrArtifactMisrooted",
         tier=EnforcementTier.BLOCK,
@@ -443,6 +488,19 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P039",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the "
+            "generated tree they produce under app/generated/."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrAgentJsonDroppedByInputContract",
         tier=EnforcementTier.BLOCK,
@@ -527,6 +585,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P042",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrHandRolledUploadBridge",
         tier=EnforcementTier.WARN,
@@ -616,6 +675,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P051",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrPreflightUnavailable",
         tier=EnforcementTier.WARN,

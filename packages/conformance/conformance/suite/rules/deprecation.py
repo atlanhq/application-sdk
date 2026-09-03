@@ -31,6 +31,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -43,6 +44,7 @@ _HELP_BASE = (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="B001",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="DeprecatedSdkSymbolUsage",
         tier=EnforcementTier.WARN,
@@ -97,6 +99,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="B002",
+        fix_locus=FixLocus.SDK,
         scope=RuleScope.SDK,
         name="MalformedDeprecationNotice",
         tier=EnforcementTier.WARN,
@@ -136,6 +139,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="B003",
+        fix_locus=FixLocus.SDK,
         scope=RuleScope.SDK,
         name="OverdueDeprecationRemoval",
         tier=EnforcementTier.WARN,
@@ -168,6 +172,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="B004",
+        fix_locus=FixLocus.SDK,
         scope=RuleScope.SDK,
         name="UnmarkedDeprecationClaim",
         tier=EnforcementTier.WARN,
@@ -204,6 +209,25 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="B005",
+        canonical_reference=(
+            "Compare against the app's own contract_schema.lock.json: the ledger is "
+            "the record, and `conformance ledger-guard` enforces it."
+        ),
+        rule_interactions=(
+            "ledger-guard is append-only, so 'fix the ledger' is not available: a "
+            "recorded type cannot change and an entry cannot be deleted. Setting a "
+            "removed field's status to sunset does NOT clear the finding — the field "
+            "has to come back onto the contract class."
+        ),
+        terminal_state=(
+            "One rule id covers three different situations and they do not share a "
+            "fix: a field genuinely removed, a type WIDENED (not a break at all, and "
+            "the detector cannot tell it from a narrowing), and an SDK-driven "
+            "migration. Before treating a removal as dead code, grep the whole repo — "
+            "including scripts/ and *.sh JSONPath args like $.extract.outputs.<field> "
+            "— for readers the contract does not know about."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.BOTH,
         name="NonAdditiveContractChange",
         tier=EnforcementTier.BLOCK,
@@ -264,6 +288,19 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="B006",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the "
+            "generated tree they produce under app/generated/."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.BOTH,
         name="StaleContractLedger",
         tier=EnforcementTier.BLOCK,
@@ -323,6 +360,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="B007",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="DaftOnlyDataframeApiUsage",
         tier=EnforcementTier.WARN,

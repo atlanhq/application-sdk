@@ -36,6 +36,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -43,6 +44,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D001",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="UnpinnedSdkDependency",
         tier=EnforcementTier.BLOCK,
@@ -81,6 +83,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D002",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="RedeclaredSdkManagedDependency",
         tier=EnforcementTier.WARN,
@@ -117,6 +120,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D004",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="RedeclaredSdkManagedDependencyInGroups",
         tier=EnforcementTier.WARN,
@@ -152,6 +156,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D005",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="UnknownSdkExtra",
         tier=EnforcementTier.BLOCK,
@@ -189,6 +194,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D006",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="IncompatibleRequiresPython",
         tier=EnforcementTier.WARN,
@@ -224,6 +230,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D007",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="NonStandardBuildBackend",
         tier=EnforcementTier.WARN,
@@ -252,6 +259,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D008",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="WeakenedTypeChecking",
         tier=EnforcementTier.WARN,
@@ -283,6 +291,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D003",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
         name="UnusedDependency",
         tier=EnforcementTier.WARN,
@@ -334,6 +343,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D009",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="RemoteDaprComponentFetch",
         tier=EnforcementTier.BLOCK,
@@ -382,6 +392,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D010",
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="QueryTransformerWithoutDuckdb",
         tier=EnforcementTier.BLOCK,
@@ -485,6 +496,16 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D011",
+        canonical_reference=(
+            "Any app declaring the suite in a [dependency-groups] entry with a "
+            "floating range."
+        ),
+        terminal_state=(
+            "The specifier must be able to float. Pinning is what freezes one repo's "
+            "D-series leg to a single suite version while every other leg runs the "
+            "latest."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="ConformanceDependencyContract",
         tier=EnforcementTier.BLOCK,

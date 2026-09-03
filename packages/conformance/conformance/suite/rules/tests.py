@@ -203,6 +203,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -210,6 +211,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T001",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="UnmarkedIntegrationTest",
         tier=EnforcementTier.WARN,
@@ -257,6 +259,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T002",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="MissingSdrTestClass",
         tier=EnforcementTier.WARN,
@@ -322,6 +325,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T003",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="DeprecatedSdrHarness",
         tier=EnforcementTier.WARN,
@@ -419,6 +423,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T004",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="DevEntrypointRequiresAppModule",
         tier=EnforcementTier.WARN,
@@ -488,6 +493,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T005",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="AssertionFreeTest",
         tier=EnforcementTier.WARN,
@@ -554,6 +560,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T006",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="EmptyTestBody",
         tier=EnforcementTier.WARN,
@@ -593,6 +600,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T007",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="VacuousAssertion",
         tier=EnforcementTier.WARN,
@@ -645,6 +653,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T008",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="UncollectableTestFile",
         tier=EnforcementTier.WARN,
@@ -695,6 +704,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T009",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="UnconditionalModuleSkip",
         tier=EnforcementTier.WARN,
@@ -750,6 +760,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T010",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="MissingUnitTestSuite",
         tier=EnforcementTier.WARN,
@@ -794,6 +805,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T011",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="MissingIntegrationTestSuite",
         tier=EnforcementTier.WARN,
@@ -848,6 +860,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T012",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="MissingE2ETestSuite",
         tier=EnforcementTier.WARN,
@@ -900,6 +913,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T013",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="TestFileOutsideTierDir",
         tier=EnforcementTier.WARN,
@@ -948,6 +962,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T014",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="CoverageGateDisabled",
         tier=EnforcementTier.WARN,
@@ -1014,6 +1029,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T015",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="CoverageOmitsProductCode",
         tier=EnforcementTier.WARN,
@@ -1073,6 +1089,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T016",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2EDeploymentNameNotInherited",
         tier=EnforcementTier.WARN,
@@ -1139,6 +1156,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T017",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2EAgentSpecPinsQueue",
         tier=EnforcementTier.WARN,
@@ -1218,6 +1236,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T018",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="IntegrationTierDeselectedByAddopts",
         tier=EnforcementTier.WARN,
@@ -1314,6 +1333,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T019",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="AsyncioTestLoopScopeUnset",
         tier=EnforcementTier.WARN,
@@ -1423,6 +1443,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T020",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="BespokeFullDagE2EWorkflow",
         tier=EnforcementTier.WARN,
@@ -1499,6 +1520,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T021",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2ESuiteUnreachableInCI",
         tier=EnforcementTier.WARN,
@@ -1576,6 +1598,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T022",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2ETwoStorePostureDisabled",
         tier=EnforcementTier.WARN,
@@ -1646,6 +1669,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T023",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2EHarnessScaffoldHandWritten",
         tier=EnforcementTier.WARN,
@@ -1726,6 +1750,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T024",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2ERunModeUnset",
         tier=EnforcementTier.WARN,
@@ -1793,6 +1818,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T025",
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="EntrypointWithoutE2ECoverage",
         tier=EnforcementTier.WARN,

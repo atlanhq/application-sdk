@@ -37,6 +37,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -44,6 +45,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P008",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="FrameworkTransferInsideTask",
         tier=EnforcementTier.WARN,
@@ -87,6 +89,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P009",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="ManualObjectStoreConstruction",
         tier=EnforcementTier.WARN,
@@ -125,6 +128,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P010",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="ManualFileReferenceConstruction",
         tier=EnforcementTier.WARN,
@@ -163,6 +167,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P011",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="RawBytesInContract",
         tier=EnforcementTier.WARN,
@@ -198,6 +203,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P012",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="FilePathStringInContract",
         tier=EnforcementTier.WARN,
@@ -236,6 +242,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P044",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="DirectStoragePrefixTransfer",
         tier=EnforcementTier.WARN,

@@ -102,6 +102,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -109,6 +110,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K001",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ContractAmendsLegacyModule",
         tier=EnforcementTier.WARN,
@@ -182,6 +184,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K002",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="LegacyContractApi",
         tier=EnforcementTier.WARN,
@@ -275,6 +278,19 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K003",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the "
+            "generated tree they produce under app/generated/."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ContractLockDrift",
         tier=EnforcementTier.BLOCK,
@@ -345,6 +361,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K004",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="MissingGeneratedArtifact",
         tier=EnforcementTier.WARN,
@@ -396,6 +413,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K005",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="GeneratedArtifactBannerStripped",
         tier=EnforcementTier.WARN,
@@ -457,6 +475,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K006",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ManifestContractFieldMismatch",
         tier=EnforcementTier.WARN,
@@ -529,6 +548,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K007",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ToolkitVersionOutdated",
         tier=EnforcementTier.WARN,
@@ -577,6 +597,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K008",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ToolkitSourceNonCanonical",
         tier=EnforcementTier.WARN,
@@ -624,6 +645,19 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K009",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the "
+            "generated tree they produce under app/generated/."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="UnresolvedScaffoldPlaceholder",
         tier=EnforcementTier.BLOCK,
@@ -692,6 +726,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K010",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="E2EScaffoldingMissing",
         tier=EnforcementTier.WARN,
@@ -737,6 +772,19 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K011",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the "
+            "generated tree they produce under app/generated/."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="AppIdMissingFromContract",
         tier=EnforcementTier.BLOCK,
@@ -806,6 +854,19 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K012",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the "
+            "generated tree they produce under app/generated/."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="GeneratePoeTaskMissing",
         tier=EnforcementTier.BLOCK,
@@ -867,6 +928,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K013",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ManifestNodeAppNameMisattributed",
         tier=EnforcementTier.WARN,
@@ -957,6 +1019,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K014",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ReleaseModelUndeclared",
         tier=EnforcementTier.WARN,
@@ -1047,6 +1110,19 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K015",
+        canonical_reference=(
+            "atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the "
+            "generated tree they produce under app/generated/."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="LegacyWorkflowTypeContractDrift",
         tier=EnforcementTier.BLOCK,
@@ -1157,6 +1233,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K016",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="EntrypointArtifactSchemaMissing",
         tier=EnforcementTier.WARN,
@@ -1255,6 +1332,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K017",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ArtifactSchemaWriterMismatch",
         tier=EnforcementTier.WARN,
@@ -1360,6 +1438,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K018",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ManifestArgNotDeclaredOnInputContract",
         tier=EnforcementTier.WARN,
@@ -1478,6 +1557,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K019",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="FormKeyMissingFromManifestArgs",
         tier=EnforcementTier.WARN,
@@ -1549,6 +1629,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K020",
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ManifestArgsLegacyNestedEnvelope",
         tier=EnforcementTier.WARN,

@@ -98,6 +98,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -105,6 +106,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P048",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="AppDerivedPersistentArtifactPrefix",
         tier=EnforcementTier.WARN,
@@ -178,6 +180,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P049",
+        fix_locus=FixLocus.APP,
         scope=RuleScope.APP,
         name="StrictConnectionQualifiedNameParse",
         tier=EnforcementTier.BLOCK,

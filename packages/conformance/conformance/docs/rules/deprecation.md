@@ -35,7 +35,7 @@ reassigned.
 
 ## B001 — `DeprecatedSdkSymbolUsage` {#b001}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `deprecated-symbol-usage` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `deprecated-symbol-usage` · **Autofixable:** — · **Since:** 0.5.0
 
 > Imports, subclasses, or calls an SDK symbol the SDK has marked deprecated
 
@@ -74,7 +74,7 @@ produce false negatives.  All are suppressible with `# conformance: ignore[B001]
 
 ## B002 — `MalformedDeprecationNotice` {#b002}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `sdk` · **Fix belongs in:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A deprecation notice must name both a migration target and a removal version
 
@@ -99,7 +99,7 @@ class emitting `DeprecationWarning` from `__init__` / `__init_subclass__`).
 
 ## B003 — `OverdueDeprecationRemoval` {#b003}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `sdk` · **Fix belongs in:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A deprecation's stated removal version has already been reached by the SDK
 
@@ -121,7 +121,7 @@ cannot be determined the check is skipped (overdue-ness is undecidable).
 
 ## B004 — `UnmarkedDeprecationClaim` {#b004}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `sdk` · **Fix belongs in:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A symbol's docstring claims deprecation but it carries no @deprecated / DeprecationWarning marker
 
@@ -146,7 +146,7 @@ biased toward low false positives at WARN.
 
 ## B005 — `NonAdditiveContractChange` {#b005}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `contract` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
 
 > An entrypoint contract field was removed or had its type changed
 
@@ -162,6 +162,20 @@ property that must already hold; there is no warn-first window. Customer impact:
 deployed tenants keep emitting the old payload shape after the app upgrades under them,
 so the customer's first run on the new version fails or silently mis-parses — a break
 they hit with zero changes on their side.
+
+### Canonical reference
+
+- **Compliant example:** Compare against the app's own contract_schema.lock.json: the ledger is the record, and
+  `conformance ledger-guard` enforces it.
+- **Interacts with:** ledger-guard is append-only, so 'fix the ledger' is not available: a recorded type
+  cannot change and an entry cannot be deleted. Setting a removed field's status to
+  sunset does NOT clear the finding — the field has to come back onto the contract
+  class.
+- **Already correct when:** One rule id covers three different situations and they do not share a fix: a field
+  genuinely removed, a type WIDENED (not a break at all, and the detector cannot tell it
+  from a narrowing), and an SDK-driven migration. Before treating a removal as dead
+  code, grep the whole repo — including scripts/ and *.sh JSONPath args like
+  $.extract.outputs.<field> — for readers the contract does not know about.
 
 Fires when a ledger entry for an entrypoint contract field is either:
 
@@ -192,7 +206,7 @@ status, and commit the updated ledger in the same PR.
 
 ## B006 — `StaleContractLedger` {#b006}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `contract` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
 
 > An entrypoint contract field is missing from contract_schema.lock.json
 
@@ -206,6 +220,16 @@ defeats the backwards-compat guarantee. Customer impact: an unledgered field is 
 away from B005's customer-facing break shipping unnoticed — the removal that corrupts
 deployed tenants' payloads passes CI clean because the guard had nothing to compare
 against.
+
+### Canonical reference
+
+- **Compliant example:** atlan-mysql-app / atlan-metabase-app — contract/app.pkl, and the generated tree they
+  produce under app/generated/.
+- **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
+  hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
+  contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
+  the post-processing step and rewrites unrelated generated files. Diff atlan.yaml
+  afterwards, which regeneration can silently strip hand-written comments from.
 
 Fires when a live entrypoint contract field has no corresponding entry in
 `contract_schema.lock.json`.  This means the ledger was not regenerated after the field
@@ -239,7 +263,7 @@ before the first deploy.
 
 ## B007 — `DaftOnlyDataframeApiUsage` {#b007}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `daft-removal` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `daft-removal` · **Autofixable:** — · **Since:** 0.18.0
 
 > Calls a daft-only DataFrame API (count_rows/to_pylist/.names) — dead on the daft-less SDK runtime
 

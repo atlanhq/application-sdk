@@ -5,6 +5,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -12,6 +13,7 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="C001",
+        fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,
         name="UnpinnedActionReference",
         tier=EnforcementTier.BLOCK,
@@ -43,6 +45,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="C002",
+        fix_locus=FixLocus.CI,
         scope=RuleScope.APP,
         name="BootstrapWorkflowDrift",
         tier=EnforcementTier.WARN,
@@ -109,6 +112,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="C003",
+        fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,
         name="GitignoreMissingEntry",
         tier=EnforcementTier.WARN,
@@ -150,6 +154,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="C004",
+        fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,
         name="UnretriedToolDownload",
         tier=EnforcementTier.WARN,
