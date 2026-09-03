@@ -160,16 +160,39 @@ def _sh(args: list[str], runner: Callable[..., Any] = subprocess.run, **kw: Any)
 
 
 def live_head(
-    repo: str, head_ref: str, runner: Callable[..., Any] = subprocess.run
+    repo: str,
+    head_ref: str,
+    runner: Callable[..., Any] = subprocess.run,
+    pr: str | int | None = None,
 ) -> str:
-    """The branch's current sha, read from the remote, never from the checkout."""
+    """The branch's current sha, read from the remote, never from the checkout.
+
+    This repo deletes the head branch on merge (`delete_branch_on_merge`).
+    A review-only run is aimed at exactly those PRs, so the ref lookup 404s
+    while the pull object still names the reviewed commit as `.head.sha`.
+    Fall back to that rather than failing Review 1 — the only job the run has.
+    """
     proc = _sh(
         ["gh", "api", f"repos/{repo}/git/ref/heads/{head_ref}", "--jq", ".object.sha"],
         runner=runner,
     )
-    if proc.returncode != 0:
+    sha = (proc.stdout or "").strip()
+    if proc.returncode == 0 and sha:
+        return sha
+    pr_id = pr if pr is not None else os.environ.get("PR_NUMBER", "")
+    if not pr_id:
         raise RuntimeError(f"could not read {head_ref}: {proc.stderr.strip()}")
-    return (proc.stdout or "").strip()
+    pull = _sh(
+        ["gh", "api", f"repos/{repo}/pulls/{pr_id}", "--jq", ".head.sha"],
+        runner=runner,
+    )
+    sha = (pull.stdout or "").strip()
+    if pull.returncode != 0 or not sha:
+        detail = proc.stderr.strip()
+        if pull.returncode != 0:
+            detail = f"{detail}; pull {pr_id}: {pull.stderr.strip()}".strip("; ")
+        raise RuntimeError(f"could not read {head_ref}: {detail}")
+    return sha
 
 
 # --------------------------------------------------------------------------
@@ -653,8 +676,14 @@ def main(argv: list[str] | None = None) -> int:
     baseline = os.environ["BASE_SHA"]
     ours = [s for s in os.environ.get("OURS", "").split(",") if s]
     ledger = DismissalLedger.from_json(os.environ.get("LEDGER"))
+    review_only = os.environ.get("REVIEW_ONLY", "").strip().lower() == "true"
 
-    state = head_state(live_head(repo, head_ref), baseline, ours)
+    # Review-only fences on the sha the fence already pinned (headRefOid).
+    # The branch ref is often already gone; looking it up would 404 and kill
+    # the only job this run has. The full loop still reads the live ref so a
+    # push from outside this run is visible.
+    live = baseline if review_only else live_head(repo, head_ref)
+    state = head_state(live, baseline, ours)
     reaims = int(os.environ.get("REAIMS_SO_FAR") or 0)
     if state.moved_by_other and reaim_exhausted(reaims):
         # Stop rather than spend another round on a target that keeps moving.
@@ -885,7 +914,7 @@ def main(argv: list[str] | None = None) -> int:
                 answers_trigger=os.environ.get("COMMENT_ID") or None,
                 model=REVIEW_MODEL,
                 run_url=os.environ.get("GHA_RUN_URL", ""),
-                review_only=os.environ.get("REVIEW_ONLY", "").lower() == "true",
+                review_only=review_only,
             )
             if live.should_post:
                 url = post_comment(repo, pr, live.body, _sh)

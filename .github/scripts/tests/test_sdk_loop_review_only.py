@@ -22,6 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import gen_sdk_loop_workflow as gen  # noqa: E402
 import sdk_loop_finalize as finalize  # noqa: E402
 import sdk_loop_live as live  # noqa: E402
+import sdk_loop_phase  # noqa: E402
 import sdk_loop_refute as refute  # noqa: E402
 import sdk_review_approve as approve  # noqa: E402
 from _gha_expr import evaluate  # noqa: E402
@@ -65,6 +66,8 @@ def test_the_full_loop_still_refuses_a_pr_that_is_not_open(state: str) -> None:
 
 @pytest.mark.parametrize("state", ["MERGED", "CLOSED", "OPEN"])
 def test_a_review_only_run_admits_any_state(state: str) -> None:
+    """Admission is the PR object, not the branch. This repo deletes the head
+    ref on merge; Review 1 still has `headRefOid` as `base_sha`."""
     assert admit_state(state, review_only=True) is None
 
 
@@ -243,3 +246,88 @@ def test_the_approve_script_mirrors_the_marker_it_cannot_import() -> None:
     """sdk_review_approve runs on a bare runner and must not import the loop
     lane. The constant is duplicated; this is what keeps the copies equal."""
     assert approve.MARK_AB == MARK_AB
+
+
+# ---------------------------------------------------------------------------
+# Deleted head ref — this repo has delete_branch_on_merge
+# ---------------------------------------------------------------------------
+
+
+class _Proc:
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_live_head_falls_back_to_the_pull_object_when_the_ref_is_gone() -> None:
+    """Five recently merged PRs in this repo 404 on git/ref/heads/{head}.
+    `.head.sha` on the pull object survives; Review 1 must use it."""
+    seen: list[str] = []
+
+    def runner(args, **_kw):
+        joined = " ".join(str(a) for a in args)
+        seen.append(joined)
+        if "git/ref/heads/" in joined:
+            return _Proc(1, "", "Not Found")
+        if "pulls/42" in joined:
+            return _Proc(0, SHA + "\n")
+        raise AssertionError(joined)
+
+    assert sdk_loop_phase.live_head("o/r", "gone-branch", runner=runner, pr=42) == SHA
+    assert any("git/ref/heads/gone-branch" in s for s in seen)
+    assert any("pulls/42" in s for s in seen)
+
+
+def test_live_head_still_raises_when_the_pull_object_is_gone_too() -> None:
+    def runner(args, **_kw):
+        joined = " ".join(str(a) for a in args)
+        if "git/ref/heads/" in joined:
+            return _Proc(1, "", "Not Found")
+        return _Proc(1, "", "pull 404")
+
+    with pytest.raises(RuntimeError, match="could not read gone-branch"):
+        sdk_loop_phase.live_head("o/r", "gone-branch", runner=runner, pr=42)
+
+
+def test_review_only_main_does_not_look_up_the_deleted_head_ref(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """The right-now crash: Review 1 calls live_head before the agent, the
+    branch is already deleted, the job dies with no verdict. Review-only
+    fences on BASE_SHA (the fence's headRefOid) and never asks the ref."""
+    captured: dict[str, object] = {}
+
+    def fake_run_agent(model, prompt, cwd, timeout_s, **kwargs):
+        captured["ran"] = True
+        return sdk_loop_phase.AgentResult(exit_code=0, stdout="", stderr="")
+
+    def boom(repo, head_ref, runner=None, pr=None):
+        raise AssertionError(f"live_head looked up {head_ref!r} — the ref is gone")
+
+    class _Done:
+        returncode = 0
+        stdout = ""
+
+    monkeypatch.setattr(sdk_loop_phase, "run_agent", fake_run_agent)
+    monkeypatch.setattr(sdk_loop_phase, "live_head", boom)
+    monkeypatch.setattr(
+        sdk_loop_phase, "pr_files", lambda r, p: [".github/workflows/x.yaml"]
+    )
+    monkeypatch.setattr(sdk_loop_phase, "diff_lines", lambda r, p: 85)
+    monkeypatch.setattr(sdk_loop_phase, "_sh", lambda *a, **k: _Done())
+    monkeypatch.setattr(sdk_loop_phase, "opencode_usage", lambda w: {})
+    monkeypatch.setenv("PHASE", "review")
+    monkeypatch.setenv("ROUND", "1")
+    monkeypatch.setenv("REPO", "o/r")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("HEAD_REF", "deleted-on-merge")
+    monkeypatch.setenv("BASE_SHA", SHA)
+    monkeypatch.setenv("REVIEW_ONLY", "true")
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    sdk_loop_phase.main([])
+    # Reaching the agent at all means live_head was not called — boom() would
+    # have raised before run_agent. The later "no findings.json" failure is
+    # the stub, not the deleted-ref crash this test pins.
+    assert captured.get("ran") is True

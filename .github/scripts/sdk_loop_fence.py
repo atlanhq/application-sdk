@@ -120,6 +120,11 @@ def admit_state(state: str | None, review_only: bool) -> str | None:
     to a merged or closed branch is work nobody asked for. A review-only run
     admits any state, because nothing after Review 1 runs — the review reads
     the diff against base, which a merged PR still has.
+
+    Admission does not require the head *ref* to still exist. This repo
+    deletes the branch on merge; Review 1 fences on `headRefOid` (`base_sha`)
+    and `live_head` falls back to the pull object's `.head.sha` if the ref
+    is already gone.
     """
     if state == "OPEN" or review_only:
         return None

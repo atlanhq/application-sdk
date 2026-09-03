@@ -68,6 +68,12 @@ fence from before the output existed keeps looping.
 The fence admits a closed or merged PR **only** under `review_only`. The full
 loop still refuses one — its resolver pushes.
 
+This repo deletes the head branch on merge. Admission is about the PR object,
+not the ref: Review 1 fences on `headRefOid` (the fence's `base_sha`) and
+`live_head` falls back to `pulls/{pr}.head.sha` when `git/ref/heads/{head}`
+404s, so the only job a review-only run has does not die looking up a branch
+GitHub has already deleted.
+
 **The control lane.** `@sdk-review` (mothership) has no state check and would
 run on a merged PR via dispatch, but that is the wrong control: its verdict is
 authored by `mothership-ai[bot]`, so `approve-on-verdict` would act on it, and
