@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import base64
 import re
+import ssl
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -316,10 +317,39 @@ class _FakeSourceServer(ThreadingHTTPServer):
 
     daemon_threads = True
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        handshake_timeout: float | None = None,
+        **kwargs: Any,
+    ) -> None:
         self._handler_threads: set[threading.Thread] = set()
         self._handler_lock = threading.Lock()
+        self.handshake_timeout = handshake_timeout
         super().__init__(*args, **kwargs)
+
+    def get_request(self) -> tuple[Any, Any]:
+        """Accept one connection, then handshake TLS under ``handshake_timeout``.
+
+        The listening socket is wrapped with ``do_handshake_on_connect=False``, so
+        ``accept()`` returns as soon as TCP completes. Handshake then happens here
+        with the same timeout that bounds :meth:`HttpFakeSource.stop`. Without that,
+        a peer that connects and never speaks TLS parks ``serve_forever`` inside
+        ``SSLSocket.accept()``, and ``shutdown()`` waits forever on it.
+        """
+        request, client_address = super().get_request()
+        handshake = getattr(request, "do_handshake", None)
+        if handshake is None or self.handshake_timeout is None:
+            return request, client_address
+        previous = request.gettimeout()
+        try:
+            request.settimeout(self.handshake_timeout)
+            handshake()
+        except BaseException:
+            request.close()
+            raise
+        request.settimeout(previous)
+        return request, client_address
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
         current = threading.current_thread()
@@ -370,10 +400,12 @@ class HttpFakeSource:
         connection_timeout: float = _CONNECTION_TIMEOUT_SECONDS,
         bind_host: str = _LOOPBACK,
         port: int = 0,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         self.name = name
         self.bind_host = bind_host
         self.requested_port = port
+        self.ssl_context = ssl_context
         self.default_content_type = default_content_type
         self.not_found_body = (
             {"error": "not found"} if not_found_body is None else not_found_body
@@ -452,7 +484,8 @@ class HttpFakeSource:
             # (a compose service name, say) out of band — there is nothing here
             # from which that name could be derived.
             host_text = _LOOPBACK
-        return f"http://{host_text}:{port}"
+        scheme = "https" if self.ssl_context is not None else "http"
+        return f"{scheme}://{host_text}:{port}"
 
     @property
     def port(self) -> int:
@@ -526,18 +559,45 @@ class HttpFakeSource:
         fixture wants. A caller serving the fake to peers — a container on a
         compose network reaching it by service name — passes a wildcard
         ``bind_host`` and usually a fixed ``port``.
+
+        Passing an ``ssl_context`` serves TLS instead of plain HTTP. That is
+        needed by connectors whose client forces an ``https://`` scheme onto
+        whatever host it is given — a plain-HTTP fake is simply unreachable for
+        those, however correct its routes are.
         """
         if self._server is not None:
             return self
         server = _FakeSourceServer(
-            (self.bind_host, self.requested_port), _make_handler_class(self)
+            (self.bind_host, self.requested_port),
+            _make_handler_class(self),
+            handshake_timeout=(
+                self.connection_timeout if self.ssl_context is not None else None
+            ),
         )
-        thread = threading.Thread(
-            target=server.serve_forever,
-            name=f"{self.name}-server",
-            daemon=True,
-        )
-        thread.start()
+        try:
+            if self.ssl_context is not None:
+                # Wrap the listening socket so every accepted connection is TLS.
+                # Handshake is deferred to get_request (do_handshake_on_connect=
+                # False) so a TCP peer that never speaks TLS cannot stall
+                # serve_forever, and therefore stop(), inside accept(). TLS 1.2
+                # is the floor: a test fake has no reason to speak 1.0/1.1, and
+                # leaving them enabled trips CodeQL py/insecure-protocol.
+                tls = self.ssl_context
+                tls.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
+                if tls.minimum_version < ssl.TLSVersion.TLSv1_2:
+                    tls.minimum_version = ssl.TLSVersion.TLSv1_2
+                server.socket = tls.wrap_socket(  # codeql[py/insecure-protocol]
+                    server.socket, server_side=True, do_handshake_on_connect=False
+                )
+            thread = threading.Thread(
+                target=server.serve_forever,
+                name=f"{self.name}-server",
+                daemon=True,
+            )
+            thread.start()
+        except BaseException:
+            server.server_close()
+            raise
         self._server = server
         self._thread = thread
         return self
