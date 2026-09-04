@@ -22,22 +22,62 @@ regression rather than as two divergent copies of one rule.
 Run with ``uv run python`` rather than ``python3``: it needs the app's synced
 environment, which is where the SDK is importable. That is also why this step
 lives in this composite — see the step's own comment in ``action.yaml``.
+
+Version skew is the load-bearing detail here
+--------------------------------------------
+Both callers reference this action as ``@main``, so a change lands in every
+repo's next e2e run at once. But the SDK it imports is the **connector repo's
+own pinned version** — the harness is only repinned to a specific SDK ref on
+cross-repo dispatch (``harness-sdk-ref``), and on an ordinary connector PR the
+action's own comment says the harness "comes from the connector's OWN pinned
+SDK".
+
+So on the day this merges, the always-current action would be asking a
+per-app-pinned SDK for a module that only exists from one release onwards.
+Without the guard below that is a ``ModuleNotFoundError`` and a red e2e leg in
+every connector still pinned below it — a fleet-wide break caused purely by
+skew, with nothing wrong in any app.
+
+The guard is an **import probe, not a version comparison**: it asks the exact
+question that matters ("does the SDK on this runner carry the check?") rather
+than a proxy that needs a floor constant kept in step with a release number.
+The skew closes on its own as apps bump, with no second change here.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import sys
 from pathlib import Path
 
-from application_sdk.testing.setup_routes import (
-    DEFAULT_CATALOG_WAIT_SECONDS,
-    RouteCheckSkipped,
-    SetupRouteError,
-    TenantRoutes,
-    verify,
-)
+#: Set when the SDK on this runner predates the route check. Checked before the
+#: import so an older pin skips instead of crashing — see the module docstring.
+#:
+#: ``find_spec`` returns ``None`` for a submodule that does not exist, and
+#: raises ``ModuleNotFoundError`` when a PARENT is missing (no SDK synced at
+#: all, which is not this check's problem and which every other step in the leg
+#: will report). An ``ImportError`` from inside a module that DOES exist is
+#: deliberately not caught here: that is a real defect in a new-enough SDK and
+#: must surface as a failure rather than a skip.
+try:
+    _HAS_CHECK = (
+        importlib.util.find_spec("application_sdk.testing.setup_routes") is not None
+    )
+except ModuleNotFoundError:
+    _HAS_CHECK = False
+
+if _HAS_CHECK:
+    from application_sdk.testing.setup_routes import (
+        DEFAULT_CATALOG_WAIT_SECONDS,
+        RouteCheckSkipped,
+        SetupRouteError,
+        TenantRoutes,
+        verify,
+    )
+else:  # pragma: no cover — exercised by the wiring test in a stripped env
+    DEFAULT_CATALOG_WAIT_SECONDS = 120
 
 
 def _bearer() -> str:
@@ -94,6 +134,20 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+
+    if not _HAS_CHECK:
+        # Skew, not a failure. Named as such so a reader does not go looking for
+        # a broken check: this app's pinned SDK simply predates it, and the skip
+        # disappears when the pin moves.
+        print(
+            "::notice::workflow-setup route check skipped: this app's pinned "
+            "atlan-application-sdk predates application_sdk.testing.setup_routes. "
+            "The check ships with the SDK and runs automatically once this repo's "
+            "SDK pin is bumped past the release that added it; nothing needs "
+            "doing in this repo.",
+            flush=True,
+        )
+        return 0
 
     try:
         lines = verify(

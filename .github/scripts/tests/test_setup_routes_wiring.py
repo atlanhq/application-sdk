@@ -21,6 +21,9 @@ without a runner.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -230,3 +233,136 @@ def test_the_action_stash_copies_the_whole_directory(steps: list[dict]) -> None:
         "the stash names individual files now; add verify_setup_routes.py to it "
         "or restore the whole-directory copy"
     )
+
+
+# ── Version skew: the action is @main, the SDK is per-app-pinned ─────────────
+#
+# Both callers reference this action as `@main`, so a change here reaches every
+# repo's next e2e run at once. The SDK it imports is the CONNECTOR's own pinned
+# version — the harness is repinned only on cross-repo dispatch
+# (`harness-sdk-ref`), and the action's own comment says an ordinary connector
+# PR runs "the connector's OWN pinned SDK".
+#
+# So without a guard, merging this reds the e2e leg of every connector still
+# pinned below the release that adds the check — a fleet-wide break caused
+# purely by skew, with nothing wrong in any app. These tests are the guard's
+# regression net, and the subprocess one is the only one that proves the
+# property rather than describing it.
+
+
+def _run_shell(
+    env_extra: dict[str, str], *args: str
+) -> subprocess.CompletedProcess[str]:
+    """Run the CLI shell in a subprocess with a modified environment."""
+    env = dict(os.environ)
+    env.update(env_extra)
+    return subprocess.run(
+        [sys.executable, str(_SHELL), *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+def _fake_older_sdk(root: Path) -> Path:
+    """An `application_sdk` package whose `testing` has no `setup_routes`.
+
+    This is what an older pinned SDK looks like to the probe: the package and
+    the subpackage import fine, and the submodule simply is not there.
+    """
+    package = root / "application_sdk"
+    (package / "testing").mkdir(parents=True)
+    (package / "__init__.py").write_text('__version__ = "3.0.0"\n')
+    (package / "testing" / "__init__.py").write_text("")
+    return root
+
+
+def test_an_older_pinned_sdk_skips_instead_of_crashing(tmp_path: Path) -> None:
+    """The fleet-safety property, proven by running the real shell.
+
+    A `ModuleNotFoundError` here would be a red e2e leg in every connector
+    pinned below the release that adds the check.
+    """
+    result = _run_shell(
+        {"PYTHONPATH": str(_fake_older_sdk(tmp_path)), "ATLAN_API_KEY": "unused"},
+        "--base-url",
+        "https://tenant.invalid",
+    )
+
+    assert result.returncode == 0, (
+        "the shell did not survive an SDK that predates the check:\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+    assert "ModuleNotFoundError" not in result.stderr
+    assert "::notice::" in result.stdout
+
+
+def test_the_skip_notice_says_no_action_is_needed_in_the_app(tmp_path: Path) -> None:
+    """A skew skip must not read as a task for the connector's author.
+
+    The check ships with the SDK, so the skip clears itself when the pin moves.
+    Saying so is what stops someone opening an issue against their own repo.
+    """
+    result = _run_shell(
+        {"PYTHONPATH": str(_fake_older_sdk(tmp_path)), "ATLAN_API_KEY": "unused"},
+        "--base-url",
+        "https://tenant.invalid",
+    )
+
+    assert "predates" in result.stdout
+    assert "nothing needs" in result.stdout
+
+
+def test_the_skip_does_not_require_a_tenant_token(tmp_path: Path) -> None:
+    """The skew skip comes before the credential read.
+
+    An old-pin repo has no reason to have supplied one, and demanding it would
+    turn the skip back into the failure the guard exists to prevent.
+    """
+    env = {"PYTHONPATH": str(_fake_older_sdk(tmp_path))}
+    # Blank rather than absent: the resolver exports these, so an empty value is
+    # the realistic shape, and `_bearer` treats both the same way.
+    env["ATLAN_API_KEY"] = ""
+    env["E2E_API_KEY"] = ""
+
+    result = _run_shell(env, "--base-url", "https://tenant.invalid")
+
+    assert result.returncode == 0
+    assert "no tenant token" not in result.stdout + result.stderr
+
+
+def test_a_current_sdk_does_not_take_the_skip_path() -> None:
+    """The guard must not swallow the check on an SDK that DOES carry it.
+
+    A probe that answered "absent" for a present module would green every leg
+    forever — the worst outcome available here, since it looks identical to a
+    pass. Run with no PYTHONPATH shim, i.e. this repo's own SDK.
+    """
+    result = _run_shell({"ATLAN_API_KEY": ""}, "--base-url", "https://tenant.invalid")
+
+    assert "predates" not in result.stdout, (
+        "the shell reported an SDK that predates the check while running "
+        "against this repo's own SDK, which contains it"
+    )
+    # It gets as far as needing a credential, which proves it took the real path.
+    assert result.returncode == 1
+    assert "no tenant token" in result.stderr
+
+
+def test_the_probe_is_an_import_check_not_a_version_comparison() -> None:
+    """No release-number floor to keep in step with a changelog.
+
+    A version gate needs a constant bumped by hand at release time; get it
+    wrong in either direction and the check either crashes on old pins or
+    silently skips new ones. The import probe asks the question that actually
+    matters and closes on its own as apps bump.
+    """
+    source = _SHELL.read_text(encoding="utf-8")
+
+    assert "importlib.util.find_spec" in source
+    for version_gate in ("__version__", "packaging", "Version("):
+        assert version_gate not in source, (
+            f"{version_gate!r} suggests a version comparison; the guard is "
+            "deliberately an import probe (see the module docstring)"
+        )
