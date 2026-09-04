@@ -252,6 +252,59 @@ class TestSeedDagFromManifest:
         result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-99")
         assert result["extract"]["inputs"]["task_queue"] == "atlan-openapi-agent-99"
 
+    def test_second_app_owned_node_is_pinned_to_the_worker_queue(
+        self, tmp_path: Path
+    ) -> None:
+        """Every node the app under test owns runs on the version under test.
+
+        A connector whose DAG carries more than one of its own nodes — metabase's
+        ``extract`` + ``extract-lineage``, microstrategy's ``extract`` +
+        ``process`` — must not have the second one substituted with the tenant
+        deployment name: that dispatches it to whatever copy the tenant has
+        installed, which can succeed while producing nothing (every node green,
+        Atlas empty). The selector is ``app_name``, not the node's name.
+        """
+        app = self.harness.connector_short_name
+        dag = {
+            "extract": {
+                "node_type": "workflow",
+                "app_name": app,
+                "app_task_queue": f"atlan-{app}-{{deployment_name}}",
+                "inputs": {
+                    "app_name": app,
+                    "task_queue": f"atlan-{app}-{{deployment_name}}",
+                    "args": {},
+                },
+            },
+            "process": {
+                "node_type": "workflow",
+                "app_name": app,
+                "app_task_queue": f"atlan-{app}-{{deployment_name}}",
+                "inputs": {
+                    "app_name": app,
+                    "task_queue": f"atlan-{app}-{{deployment_name}}",
+                    "args": {},
+                },
+            },
+            "publish": {
+                "node_type": "workflow",
+                "app_name": "publish",
+                "app_task_queue": "atlan-publish-{deployment_name}",
+                "inputs": {
+                    "app_name": "publish",
+                    "task_queue": "atlan-publish-{deployment_name}",
+                    "args": {},
+                },
+            },
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+        result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
+        assert result["extract"]["inputs"]["task_queue"] == "atlan-openapi-agent-1"
+        # the app's own second node follows the worker, not the tenant
+        assert result["process"]["inputs"]["task_queue"] == "atlan-openapi-agent-1"
+        # a system app stays on the tenant's queue
+        assert result["publish"]["inputs"]["task_queue"] == "atlan-publish-production"
+
     def test_non_extract_queue_substitutes_deployment_name(
         self, tmp_path: Path
     ) -> None:
