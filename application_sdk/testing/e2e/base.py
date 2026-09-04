@@ -2298,8 +2298,17 @@ class BaseE2ETest:
 
         deployment_name = self.resolved_tenant_deployment_name()
 
-        def _sub_queue(node_name: str, raw: str) -> str:
-            if node_name == "extract":
+        def _sub_queue(node_name: str, app_name: object, raw: str) -> str:
+            # Pin every node that belongs to the app under test — not only the
+            # one named "extract". A connector whose DAG has more than one of its
+            # own nodes (microstrategy: extract + process) otherwise runs half
+            # its pipeline on the version under test and the other half on
+            # whatever copy the tenant has installed, which can "succeed" while
+            # producing nothing: the run reports every node green and Atlas ends
+            # up empty. System apps (publish, qi, lineage) keep their tenant
+            # queues. ``inputs["app_name"]`` has already had ``{app_name}``
+            # substituted by the time this runs, so the comparison is exact.
+            if node_name == "extract" or app_name == self.connector_short_name:
                 return extract_task_queue
             return raw.replace("{deployment_name}", deployment_name)
 
@@ -2317,7 +2326,7 @@ class BaseE2ETest:
                 )
             tq = inputs.get("task_queue")
             if isinstance(tq, str):
-                inputs["task_queue"] = _sub_queue(name, tq)
+                inputs["task_queue"] = _sub_queue(name, inputs.get("app_name"), tq)
 
         subs_dict = self._mustache_substitutions().model_dump(by_alias=True)
         for name, node in dag.items():
