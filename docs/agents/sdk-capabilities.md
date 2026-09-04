@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.31.0
-source-sha:    f3045c7ac582ccbdd1064752739cacaca68eecd6
-source-date:   2026-09-02T13:38:19+00:00
+sdk-version:   3.32.1
+source-sha:    607133534a06eac4d290be32a20d850988176e5b
+source-date:   2026-09-04T14:24:37+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 327 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 333 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3502,6 +3502,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** One entrypoint DAG run, as a suite *declares* it.
 - **Defined in:** `application_sdk/testing/e2e/base.py`
 
+#### `DatabaseSpec`
+
+- **Import:** `from application_sdk.testing.harness.atlas.seed import DatabaseSpec`
+- **Signature:** `class DatabaseSpec(*, name: str, schemas: tuple[SchemaSpec, ...] = ()) -> None`
+- **Summary:** One database and the schemas under it.
+- **Defined in:** `application_sdk/testing/harness/atlas/seed.py`
+
 #### `DataForgeSource`
 
 - **Import:** `from application_sdk.testing.integration import DataForgeSource`
@@ -4025,12 +4032,33 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Result of executing a single scenario.
 - **Defined in:** `application_sdk/testing/integration/models.py`
 
+#### `SchemaSpec`
+
+- **Import:** `from application_sdk.testing.harness.atlas.seed import SchemaSpec`
+- **Signature:** `class SchemaSpec(*, name: str, tables: tuple[TableSpec, ...] = ()) -> None`
+- **Summary:** One schema and the tables/views under it.
+- **Defined in:** `application_sdk/testing/harness/atlas/seed.py`
+
+#### `SeededConnection`
+
+- **Import:** `from application_sdk.testing.harness.atlas.seed import SeededConnection`
+- **Signature:** `class SeededConnection(*, qualified_name: str, created: Mapping[str, int] = dict()) -> None`
+- **Summary:** What one seeding pass created, for the report and the teardown registry.
+- **Defined in:** `application_sdk/testing/harness/atlas/seed.py`
+
 #### `SeededWorkflow`
 
 - **Import:** `from application_sdk.testing.harness.starters import SeededWorkflow`
 - **Signature:** `class SeededWorkflow(*, slug: str, seed_version: int | None = None)`
 - **Summary:** An AE workflow with a published version, ready to be submitted against.
 - **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `SeedSpec`
+
+- **Import:** `from application_sdk.testing.harness.atlas.seed import SeedSpec`
+- **Signature:** `class SeedSpec(*, ...)`
+- **Summary:** Everything :func:`seed_assets` needs, declared rather than performed.
+- **Defined in:** `application_sdk/testing/harness/atlas/seed.py`
 
 #### `ServiceTarget`
 
@@ -4097,6 +4125,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class SyncBridgeInAsyncContextError(*, ...)`
 - **Summary:** :func:`~application_sdk.testing.harness.run_sync` was called from a running loop.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `TableSpec`
+
+- **Import:** `from application_sdk.testing.harness.atlas.seed import TableSpec`
+- **Signature:** `class TableSpec(*, name: str, type_name: Literal['Table', 'View'] = 'Table', columns: tuple[str, ...] = ()) -> None`
+- **Summary:** One table-level asset, typed strictly as ``Table`` or ``View``.
+- **Defined in:** `application_sdk/testing/harness/atlas/seed.py`
 
 #### `TaskQueueType`
 
@@ -5255,6 +5290,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `secrets_from_environment(environ: Mapping[str, str], *, also: Sequence[str] = ()) -> tuple[str, ...]`
 - **Summary:** Collect the literal values a run is holding, for :func:`redact`'s ``secrets``.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `seed_assets`
+
+- **Import:** `from application_sdk.testing.harness.atlas.seed import seed_assets`
+- **Signature:** `seed_assets(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Create the Connection and the skeleton tree *spec* declares, and wait.
+- **Defined in:** `application_sdk/testing/harness/atlas/seed.py`
 
 #### `single_outcome`
 
