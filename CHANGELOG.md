@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.32.1 (September 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.32.0...v3.32.1
+
+### Bug Fixes
+
+- let HttpFakeSource bind beyond loopback (#3654) (by @vaibhavatlan in [0a6a298](https://github.com/atlanhq/application-sdk/commit/0a6a298))
+- let HttpFakeSource serve TLS (#3657) (by @vaibhavatlan in [bb94049](https://github.com/atlanhq/application-sdk/commit/bb94049))
+
+
 ## v3.32.0 (September 02, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.31.0...v3.32.0
