@@ -2298,17 +2298,42 @@ class BaseE2ETest:
 
         deployment_name = self.resolved_tenant_deployment_name()
 
-        def _sub_queue(node_name: str, app_name: object, raw: str) -> str:
-            # Pin every node that belongs to the app under test — not only the
-            # one named "extract". A connector whose DAG has more than one of its
-            # own nodes (microstrategy: extract + process) otherwise runs half
-            # its pipeline on the version under test and the other half on
-            # whatever copy the tenant has installed, which can "succeed" while
-            # producing nothing: the run reports every node green and Atlas ends
-            # up empty. System apps (publish, qi, lineage) keep their tenant
-            # queues. ``inputs["app_name"]`` has already had ``{app_name}``
-            # substituted by the time this runs, so the comparison is exact.
-            if node_name == "extract" or app_name == self.connector_short_name:
+        # The extract node's task-queue template, read raw (before any
+        # ``{deployment_name}`` substitution) and before the loop below mutates
+        # anything. ``None`` when the manifest has no extract node or its queue
+        # is not a non-empty string — then only the node named "extract" is
+        # pinned, exactly as before.
+        extract_node = dag.get("extract")
+        extract_inputs = (
+            extract_node.get("inputs") if isinstance(extract_node, dict) else None
+        )
+        extract_template = (
+            extract_inputs.get("task_queue")
+            if isinstance(extract_inputs, dict)
+            else None
+        )
+        if not (isinstance(extract_template, str) and extract_template):
+            extract_template = None
+
+        def _sub_queue(node_name: str, raw: str) -> str:
+            # Pin every node whose raw task-queue template equals the extract
+            # node's to the worker under test — not only the node named
+            # "extract". The template is the routing truth: it is exactly the set
+            # of nodes the AE hands to the same worker deployment as extract. A
+            # connector whose DAG has more than one such node (microstrategy:
+            # extract + process; metabase: extract + extract-lineage) otherwise
+            # runs half its pipeline on the version under test and the other
+            # half on whatever copy the tenant has installed, which can "succeed"
+            # while producing nothing: every node green, Atlas empty.
+            #
+            # ``app_name`` is deliberately not consulted: it is not identity. In
+            # a real generated manifest the extract node can carry
+            # ``app_name=<x>-crawler`` while a sibling on the SAME queue template
+            # carries ``app_name=<x>`` (databricks), and the harness's hand-set
+            # ``connector_short_name`` may legitimately differ from both. System
+            # apps (publish, qi, lineage) have their own templates and keep their
+            # tenant queues.
+            if node_name == "extract" or raw == extract_template:
                 return extract_task_queue
             return raw.replace("{deployment_name}", deployment_name)
 
@@ -2326,7 +2351,7 @@ class BaseE2ETest:
                 )
             tq = inputs.get("task_queue")
             if isinstance(tq, str):
-                inputs["task_queue"] = _sub_queue(name, inputs.get("app_name"), tq)
+                inputs["task_queue"] = _sub_queue(name, tq)
 
         subs_dict = self._mustache_substitutions().model_dump(by_alias=True)
         for name, node in dag.items():

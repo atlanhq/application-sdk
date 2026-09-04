@@ -204,6 +204,20 @@ def _write_manifest(tmp_path: Path, dag: dict[str, Any]) -> Path:
     return manifest
 
 
+def _manifest_node(app_name: str, task_queue: str) -> dict[str, Any]:
+    """A manifest DAG node in the shape the contract toolkit generates.
+
+    ``app_name`` and ``task_queue`` are both raw — the ``{deployment_name}``
+    placeholder is left for ``_seed_dag_from_manifest`` to resolve.
+    """
+    return {
+        "node_type": "workflow",
+        "app_name": app_name,
+        "app_task_queue": task_queue,
+        "inputs": {"app_name": app_name, "task_queue": task_queue, "args": {}},
+    }
+
+
 class TestSeedDagFromManifest:
     """Manifest loader: file resolution, queue patching, mustache substitution."""
 
@@ -252,58 +266,200 @@ class TestSeedDagFromManifest:
         result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-99")
         assert result["extract"]["inputs"]["task_queue"] == "atlan-openapi-agent-99"
 
-    def test_second_app_owned_node_is_pinned_to_the_worker_queue(
+    # --- queue-template pinning -----------------------------------------------
+    #
+    # The selector is the node's raw ``inputs.task_queue`` template compared to
+    # the extract node's, never ``app_name`` and never ``connector_short_name``.
+    # The concrete harness under test has ``connector_short_name = "openapi"``;
+    # every fixture below deliberately uses OTHER app names so that a selector
+    # that quietly compared against the harness attribute would fail these.
+
+    def test_every_node_on_the_extract_queue_template_is_pinned(
         self, tmp_path: Path
     ) -> None:
-        """Every node the app under test owns runs on the version under test.
+        """microstrategy shape: ``extract`` + ``process`` share one template.
 
-        A connector whose DAG carries more than one of its own nodes — metabase's
-        ``extract`` + ``extract-lineage``, microstrategy's ``extract`` +
-        ``process`` — must not have the second one substituted with the tenant
-        deployment name: that dispatches it to whatever copy the tenant has
-        installed, which can succeed while producing nothing (every node green,
-        Atlas empty). The selector is ``app_name``, not the node's name.
+        Both follow the worker under test; the system apps (``publish``,
+        ``qi``) have their own templates and keep the tenant's queues. A
+        connector whose second app-owned node is on the critical path otherwise
+        runs its transform on whatever copy the tenant has installed, and the
+        run can report every node green while Atlas ends up empty.
         """
-        app = self.harness.connector_short_name
         dag = {
-            "extract": {
-                "node_type": "workflow",
-                "app_name": app,
-                "app_task_queue": f"atlan-{app}-{{deployment_name}}",
-                "inputs": {
-                    "app_name": app,
-                    "task_queue": f"atlan-{app}-{{deployment_name}}",
-                    "args": {},
-                },
-            },
-            "process": {
-                "node_type": "workflow",
-                "app_name": app,
-                "app_task_queue": f"atlan-{app}-{{deployment_name}}",
-                "inputs": {
-                    "app_name": app,
-                    "task_queue": f"atlan-{app}-{{deployment_name}}",
-                    "args": {},
-                },
-            },
-            "publish": {
-                "node_type": "workflow",
-                "app_name": "publish",
-                "app_task_queue": "atlan-publish-{deployment_name}",
-                "inputs": {
-                    "app_name": "publish",
-                    "task_queue": "atlan-publish-{deployment_name}",
-                    "args": {},
-                },
-            },
+            "extract": _manifest_node(
+                "microstrategy", "atlan-microstrategy-{deployment_name}"
+            ),
+            "process": _manifest_node(
+                "microstrategy", "atlan-microstrategy-{deployment_name}"
+            ),
+            "publish": _manifest_node("publish", "atlan-publish-{deployment_name}"),
+            "qi": _manifest_node(
+                "query-intelligence", "atlan-query-intelligence-{deployment_name}"
+            ),
         }
         self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
         result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
         assert result["extract"]["inputs"]["task_queue"] == "atlan-openapi-agent-1"
-        # the app's own second node follows the worker, not the tenant
         assert result["process"]["inputs"]["task_queue"] == "atlan-openapi-agent-1"
-        # a system app stays on the tenant's queue
         assert result["publish"]["inputs"]["task_queue"] == "atlan-publish-production"
+        assert (
+            result["qi"]["inputs"]["task_queue"]
+            == "atlan-query-intelligence-production"
+        )
+
+    def test_differing_app_names_on_the_same_queue_template_are_both_pinned(
+        self, tmp_path: Path
+    ) -> None:
+        """databricks shape: the app-owned nodes do NOT share an ``app_name``.
+
+        ``extract`` carries ``app_name=databricks-crawler`` and the marker node
+        carries ``app_name=databricks``, yet both sit on
+        ``atlan-databricks-{deployment_name}``. An ``app_name``-based selector
+        misses the marker node (and neither name equals
+        ``connector_short_name``); the queue-template selector pins both.
+        """
+        template = "atlan-databricks-{deployment_name}"
+        dag = {
+            "extract": _manifest_node("databricks-crawler", template),
+            "promote-incremental-marker": _manifest_node("databricks", template),
+            "publish": _manifest_node("publish", "atlan-publish-{deployment_name}"),
+            "qi": _manifest_node(
+                "query-intelligence", "atlan-query-intelligence-{deployment_name}"
+            ),
+            "lineage-app": _manifest_node("lineage", "atlan-lineage-{deployment_name}"),
+            "lineage-publish": _manifest_node(
+                "publish", "atlan-publish-{deployment_name}"
+            ),
+        }
+        assert self.harness.connector_short_name not in {
+            "databricks-crawler",
+            "databricks",
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+        result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
+        assert result["extract"]["inputs"]["task_queue"] == "atlan-openapi-agent-1"
+        assert (
+            result["promote-incremental-marker"]["inputs"]["task_queue"]
+            == "atlan-openapi-agent-1"
+        )
+        # the app_name placeholder substitution is untouched by the pinning
+        assert result["extract"]["inputs"]["app_name"] == "databricks-crawler"
+        assert (
+            result["promote-incremental-marker"]["inputs"]["app_name"] == "databricks"
+        )
+        # system apps stay on the tenant's queues
+        assert result["publish"]["inputs"]["task_queue"] == "atlan-publish-production"
+        assert (
+            result["qi"]["inputs"]["task_queue"]
+            == "atlan-query-intelligence-production"
+        )
+        assert (
+            result["lineage-app"]["inputs"]["task_queue"] == "atlan-lineage-production"
+        )
+        assert (
+            result["lineage-publish"]["inputs"]["task_queue"]
+            == "atlan-publish-production"
+        )
+
+    def test_same_app_name_on_a_different_queue_template_is_not_pinned(
+        self, tmp_path: Path
+    ) -> None:
+        """The decision is queue-based, not app_name-based.
+
+        A node that shares ``extract``'s ``app_name`` — here even the harness's
+        own ``connector_short_name`` — but is routed through a different queue
+        template is a different worker deployment and must keep the tenant's
+        queue.
+        """
+        app = self.harness.connector_short_name
+        dag = {
+            "extract": _manifest_node(app, f"atlan-{app}-{{deployment_name}}"),
+            "sidecar": _manifest_node(app, f"atlan-{app}-sidecar-{{deployment_name}}"),
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+        result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
+        assert result["extract"]["inputs"]["task_queue"] == "atlan-openapi-agent-1"
+        assert (
+            result["sidecar"]["inputs"]["task_queue"]
+            == f"atlan-{app}-sidecar-production"
+        )
+
+    def test_only_extract_is_pinned_when_nothing_shares_its_template(
+        self, tmp_path: Path
+    ) -> None:
+        """mysql / openapi shape: ``extract`` is the app's only node."""
+        dag = {
+            "extract": _manifest_node("mysql", "atlan-mysql-{deployment_name}"),
+            "qi": _manifest_node(
+                "query-intelligence", "atlan-query-intelligence-{deployment_name}"
+            ),
+            "lineage-app": _manifest_node("lineage", "atlan-lineage-{deployment_name}"),
+            "publish": _manifest_node("publish", "atlan-publish-{deployment_name}"),
+            "lineage-publish": _manifest_node(
+                "publish", "atlan-publish-{deployment_name}"
+            ),
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+        result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
+        pinned = {
+            name
+            for name, node in result.items()
+            if node["inputs"]["task_queue"] == "atlan-openapi-agent-1"
+        }
+        assert pinned == {"extract"}
+        for name in ("qi", "lineage-app", "publish", "lineage-publish"):
+            assert "{deployment_name}" not in result[name]["inputs"]["task_queue"]
+            assert result[name]["inputs"]["task_queue"].endswith("-production")
+
+    def test_no_extract_node_pins_nothing_extra(self, tmp_path: Path) -> None:
+        # Without an extract node there is no template to match against; every
+        # node gets the tenant deployment name, and nothing raises.
+        dag = {
+            "process": _manifest_node(
+                "microstrategy", "atlan-microstrategy-{deployment_name}"
+            ),
+            "publish": _manifest_node("publish", "atlan-publish-{deployment_name}"),
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+        result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
+        assert (
+            result["process"]["inputs"]["task_queue"]
+            == "atlan-microstrategy-production"
+        )
+        assert result["publish"]["inputs"]["task_queue"] == "atlan-publish-production"
+
+    @pytest.mark.parametrize("extract_queue", [None, "", 42])
+    def test_extract_without_a_string_queue_falls_back(
+        self, tmp_path: Path, extract_queue: object
+    ) -> None:
+        # An extract node with no usable task_queue template cannot anchor the
+        # comparison: other nodes fall back to deployment-name substitution.
+        extract = _manifest_node(
+            "microstrategy", "atlan-microstrategy-{deployment_name}"
+        )
+        if extract_queue is None:
+            del extract["inputs"]["task_queue"]
+        else:
+            extract["inputs"]["task_queue"] = extract_queue
+        dag = {
+            "extract": extract,
+            "process": _manifest_node(
+                "microstrategy", "atlan-microstrategy-{deployment_name}"
+            ),
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+        result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
+        assert (
+            result["process"]["inputs"]["task_queue"]
+            == "atlan-microstrategy-production"
+        )
+        if isinstance(extract_queue, str):
+            # the node named extract is always pinned when its queue is a
+            # string, exactly as before — an empty one just anchors nothing
+            assert result["extract"]["inputs"]["task_queue"] == "atlan-openapi-agent-1"
+        else:
+            # a non-string extract queue is left exactly as the manifest had it
+            assert result["extract"]["inputs"].get("task_queue") == extract_queue
 
     def test_non_extract_queue_substitutes_deployment_name(
         self, tmp_path: Path
