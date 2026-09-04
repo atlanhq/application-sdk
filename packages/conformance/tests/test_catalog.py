@@ -297,6 +297,12 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # K017: a declared artifact schema contradicted by the app's own writer —
     # same generated-tree + app-Python pairing as K016, neither of which the SDK
     # has (ADR-0020).
+    # K018/K019/K020/K021: inbound-config guards over an app's generated
+    # manifest and its entrypoint Input contract — an undeclared extract arg
+    # (K018), an unwired uiConfig form key (K019), a legacy args.metadata
+    # envelope (K020), and a filter field typed as a strict dict that rejects the
+    # AE's flat JSON string (K021, CONNECT-1333 / CONNECT-1389). All four need an
+    # app's contract/ + app/generated/ tree, which the SDK does not have.
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -387,6 +393,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K018",
         "K019",
         "K020",
+        "K021",
         "P004",
         "P005",
         "P008",
@@ -764,6 +771,7 @@ def test_catalog_k_series_present() -> None:
         "K018",
         "K019",
         "K020",
+        "K021",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"
