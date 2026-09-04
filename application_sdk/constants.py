@@ -180,9 +180,27 @@ CLEANUP_BASE_PATHS = [
 # Key used to store tracked FileReference objects in _app_state during a workflow run
 TRACKED_FILE_REFS_KEY = "_tracked_file_refs"
 
+#: Top-level object-store prefix for quarantined data.
+#:
+#: Raw content pulled straight from a source system is treated as sensitive by
+#: default and routed under this single root instead of the ordinary tier
+#: prefixes, so one restricted access/retention policy can cover all of it. The
+#: tier's own prefix becomes a sub-prefix beneath this root, so lifecycle still
+#: applies to quarantined data. Overridable so a deployment can align the root
+#: with its bucket policy without an SDK release; an empty value falls back to
+#: the default rather than collapsing quarantined paths onto the ordinary ones.
+QUARANTINE_PREFIX = (
+    os.getenv("ATLAN_QUARANTINE_PREFIX", "").strip().strip("/") or "quarantine"
+)
+
 # Object-store prefixes that must never be deleted by cleanup_storage.
 # These store cross-run persistent state (connection configs, incremental markers, etc.)
-PROTECTED_STORAGE_PREFIXES = ("persistent-artifacts/",)
+# The quarantined root needs its own entry: "quarantine/persistent-artifacts/"
+# does not start with "persistent-artifacts/", so it would not be protected.
+PROTECTED_STORAGE_PREFIXES = (
+    "persistent-artifacts/",
+    f"{QUARANTINE_PREFIX}/persistent-artifacts/",
+)
 
 # State Store Constants
 #: Path template for state store files.

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.31.0
-source-sha:    f3045c7ac582ccbdd1064752739cacaca68eecd6
-source-date:   2026-09-02T13:38:19+00:00
+sdk-version:   3.32.1
+source-sha:    67b819a0529ecac1339aa3d4dd51cf0ce8b7bd8a
+source-date:   2026-09-04T08:16:37Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -6240,6 +6240,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `file_count: int` `= 1`
   - `tier: StorageTier` `= StorageTier.TRANSIENT`
   - `auto_materialize: bool` `= True`
+  - `quarantined: bool` `= False`
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `GitReference`
@@ -6319,6 +6320,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `tier: StorageTier` `= StorageTier.RETAINED`
   - `skip_if_exists: bool` `= False`
   - `raise_on_empty: bool` `= False`
+  - `quarantined: bool` `= False`
 - **Defined in:** `application_sdk/contracts/storage.py`
 
 #### `UploadOutput`

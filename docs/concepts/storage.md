@@ -131,6 +131,7 @@ ref = FileReference(
 | `tier` | `StorageTier` | Cleanup tier (see below); default `TRANSIENT` |
 | `is_durable` | `bool` | `True` once the file has been uploaded to the object store; default `False` |
 | `file_count` | `int` | Number of files this reference covers (default `1`) |
+| `quarantined` | `bool` | Store under the quarantine root (see below); default `False` |
 
 `FileReference` is safe to include in `Output` models because it is small (a path string + an enum). The actual file stays in object storage.
 
@@ -158,6 +159,59 @@ FileReference(storage_path="…", tier=StorageTier.RETAINED)
 # Connection config or incremental marker — kept forever
 FileReference(storage_path="…", tier=StorageTier.PERSISTENT)
 ```
+
+---
+
+## Quarantined storage
+
+Tier describes *lifecycle*. How sensitive the data is, is a separate axis.
+
+Set `quarantined=True` when you are storing **raw content pulled straight from a source
+system** — a downloaded workbook, report definition, or any file the customer authored.
+Such files routinely carry warehouse hostnames, database and schema references, usernames,
+authoring filesystem paths, and literal filter values, so they are treated as sensitive by
+default rather than inspected to decide.
+
+The flag is orthogonal to `tier`: quarantined data keeps whichever lifecycle it needs, and
+the tier's ordinary prefix becomes a sub-prefix beneath the quarantine root.
+
+| Tier | Default | `quarantined=True` |
+|------|---------|--------------------|
+| `TRANSIENT` | `file_refs/…` | `quarantine/file_refs/…` |
+| `RETAINED` | `{run_prefix}/file_refs/…` | `quarantine/{run_prefix}/file_refs/…` |
+| `PERSISTENT` | `persistent-artifacts/apps/{app_name}/…` | `quarantine/persistent-artifacts/apps/{app_name}/…` |
+
+```python
+from application_sdk.contracts import StorageTier, UploadInput
+
+# Raw definition files downloaded from the source, kept for the run's consumers.
+await self.upload(
+    UploadInput(
+        local_path="/tmp/definitions",
+        tier=StorageTier.RETAINED,
+        quarantined=True,
+        storage_subdir="definitions",   # placed inside the resolved quarantine prefix
+    )
+)
+```
+
+The root defaults to `quarantine` and is settable with `ATLAN_QUARANTINE_PREFIX`. Access
+control, encryption, and the retention policy are applied to that prefix by the deployment,
+which is what makes the guarantee enforceable rather than per-connector convention.
+
+Three things worth knowing:
+
+- **It is opt-in.** Nothing moves unless you set the flag, so existing storage keys are
+  unchanged. The corollary is that a raw-source write which forgets the flag lands in an
+  ordinary prefix.
+- **`quarantined=True` cannot be combined with an explicit `storage_path`.** An explicit key
+  is used verbatim and bypasses tier resolution, so the pair would quietly write a
+  *non*-quarantined key. Use `storage_subdir` to place files within the resolved prefix.
+- **Quarantine is a location, not redaction.** The bytes still exist at rest. If a raw
+  payload contains live credentials, quarantining it is not sufficient — it should not be
+  stored.
+
+See [ADR-0021](../adr/0021-quarantined-storage.md) for the full rationale.
 
 ---
 

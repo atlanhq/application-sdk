@@ -80,6 +80,7 @@ def _make_storage_path(ref: FileReference, *, output_path: str | None = None) ->
         suffix=suffix,
         run_prefix=output_path or "",
         app_name=APPLICATION_NAME,
+        quarantined=ref.quarantined,
     )
 
 
@@ -95,6 +96,7 @@ def _make_storage_prefix(ref: FileReference, *, output_path: str | None = None) 
     return ref.tier._make_file_ref_prefix(
         run_prefix=output_path or "",
         app_name=APPLICATION_NAME,
+        quarantined=ref.quarantined,
     )
 
 
@@ -256,6 +258,7 @@ async def persist_file_reference(
             storage_path=prefix,
             file_count=len(files),
             tier=ref.tier,
+            quarantined=ref.quarantined,
         )
 
     else:
@@ -323,6 +326,7 @@ async def persist_file_reference(
             is_durable=True,
             storage_path=storage_path,
             tier=ref.tier,
+            quarantined=ref.quarantined,
         )
 
 
@@ -593,6 +597,7 @@ async def _materialize_single_file(
         is_durable=True,
         storage_path=ref.storage_path,
         tier=ref.tier,
+        quarantined=ref.quarantined,
     )
 
 
@@ -733,6 +738,7 @@ async def _materialize_directory(
         storage_path=ref.storage_path,
         file_count=len(data_keys),
         tier=ref.tier,
+        quarantined=ref.quarantined,
     )
 
 

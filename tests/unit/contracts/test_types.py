@@ -245,3 +245,153 @@ class TestStorageTier:
         assert StorageTier("transient") is StorageTier.TRANSIENT
         assert StorageTier("retained") is StorageTier.RETAINED
         assert StorageTier("persistent") is StorageTier.PERSISTENT
+
+
+# =============================================================================
+# Quarantined storage — sensitivity orthogonal to lifecycle
+# =============================================================================
+
+_RUN_PREFIX = "artifacts/apps/myapp/workflows/wf-1/run-1"
+
+
+class TestQuarantinedPathResolution:
+    """Quarantine roots a tier's prefix without changing which tier applies."""
+
+    @pytest.mark.parametrize(
+        ("tier", "expected"),
+        [
+            (StorageTier.TRANSIENT, "file_refs"),
+            (StorageTier.RETAINED, _RUN_PREFIX),
+            (StorageTier.PERSISTENT, "persistent-artifacts/apps/myapp"),
+        ],
+    )
+    def test_upload_prefix_unchanged_when_not_quarantined(
+        self, tier: StorageTier, expected: str
+    ) -> None:
+        """The opt-in guarantee: default keys are byte-identical to before."""
+        assert tier.upload_prefix(run_prefix=_RUN_PREFIX, app_name="myapp") == expected
+
+    @pytest.mark.parametrize(
+        ("tier", "expected"),
+        [
+            (StorageTier.TRANSIENT, "quarantine/file_refs"),
+            (StorageTier.RETAINED, f"quarantine/{_RUN_PREFIX}"),
+            (StorageTier.PERSISTENT, "quarantine/persistent-artifacts/apps/myapp"),
+        ],
+    )
+    def test_upload_prefix_rooted_under_quarantine(
+        self, tier: StorageTier, expected: str
+    ) -> None:
+        """Every tier gets its own default location beneath one root."""
+        assert (
+            tier.upload_prefix(
+                run_prefix=_RUN_PREFIX, app_name="myapp", quarantined=True
+            )
+            == expected
+        )
+
+    def test_each_tier_resolves_a_distinct_quarantine_location(self) -> None:
+        locations = {
+            tier.upload_prefix(
+                run_prefix=_RUN_PREFIX, app_name="myapp", quarantined=True
+            )
+            for tier in StorageTier
+        }
+        assert len(locations) == len(StorageTier)
+        assert all(loc.startswith("quarantine/") for loc in locations)
+
+    @pytest.mark.parametrize("tier", list(StorageTier))
+    def test_file_ref_base_quarantine_is_a_pure_prefix(self, tier: StorageTier) -> None:
+        """Quarantining only prepends — the tier-specific tail is untouched."""
+        plain = tier._file_ref_base(run_prefix=_RUN_PREFIX, app_name="myapp")
+        quarantined = tier._file_ref_base(
+            run_prefix=_RUN_PREFIX, app_name="myapp", quarantined=True
+        )
+        assert quarantined == f"quarantine/{plain}"
+
+    @pytest.mark.parametrize("tier", list(StorageTier))
+    def test_make_file_ref_path_and_prefix_honour_the_flag(
+        self, tier: StorageTier
+    ) -> None:
+        key = tier._make_file_ref_path(
+            suffix=".parquet",
+            run_prefix=_RUN_PREFIX,
+            app_name="myapp",
+            quarantined=True,
+        )
+        prefix = tier._make_file_ref_prefix(
+            run_prefix=_RUN_PREFIX, app_name="myapp", quarantined=True
+        )
+        assert key.startswith("quarantine/") and key.endswith(".parquet")
+        assert prefix.startswith("quarantine/") and prefix.endswith("/")
+
+    def test_retained_still_requires_a_run_prefix_when_quarantined(self) -> None:
+        """Quarantine does not relax a tier's own invariants."""
+        from application_sdk.contracts.types_errors import RunPrefixRequiredError
+
+        with pytest.raises(RunPrefixRequiredError):
+            StorageTier.RETAINED.upload_prefix(app_name="myapp", quarantined=True)
+
+    def test_quarantined_persistent_prefix_is_protected_from_cleanup(self) -> None:
+        """``quarantine/persistent-artifacts/`` does not start with the
+        unquarantined prefix, so it needs its own protection entry."""
+        from application_sdk.constants import PROTECTED_STORAGE_PREFIXES
+
+        key = (
+            StorageTier.PERSISTENT.upload_prefix(app_name="myapp", quarantined=True)
+            + "/state.json"
+        )
+        assert any(key.startswith(p) for p in PROTECTED_STORAGE_PREFIXES)
+
+
+class TestFileReferenceQuarantined:
+    def test_defaults_to_false(self) -> None:
+        assert FileReference().quarantined is False
+
+    def test_from_local_passes_the_flag_through(self, tmp_path: Path) -> None:
+        f = tmp_path / "workbook.twb"
+        f.write_text("<workbook/>")
+        ref = FileReference.from_local(f, tier=StorageTier.RETAINED, quarantined=True)
+        assert ref.quarantined is True
+        assert ref.tier is StorageTier.RETAINED
+
+    def test_round_trips_through_model_dump(self) -> None:
+        ref = FileReference(local_path="/tmp/x", quarantined=True)
+        assert FileReference.model_validate(ref.model_dump()).quarantined is True
+
+    def test_payload_without_the_field_deserialises_as_not_quarantined(self) -> None:
+        """Temporal payloads written before this field existed must still load."""
+        legacy = {"local_path": "/tmp/x", "tier": "retained", "is_durable": True}
+        assert FileReference.model_validate(legacy).quarantined is False
+
+
+class TestUploadInputQuarantined:
+    def test_defaults_to_false(self) -> None:
+        from application_sdk.contracts.storage import UploadInput
+
+        assert UploadInput().quarantined is False
+
+    def test_rejects_explicit_storage_path(self) -> None:
+        """Fail closed: an explicit key bypasses tier resolution, so the pair
+        would write an ordinary, non-quarantined key."""
+        from application_sdk.contracts.storage import UploadInput
+
+        with pytest.raises(ValidationError, match="bypasses quarantine routing"):
+            UploadInput(
+                local_path="/tmp/x",
+                quarantined=True,
+                storage_path="some/verbatim/key",
+            )
+
+    def test_storage_path_still_allowed_when_not_quarantined(self) -> None:
+        from application_sdk.contracts.storage import UploadInput
+
+        assert UploadInput(storage_path="some/verbatim/key").quarantined is False
+
+    def test_storage_subdir_is_the_supported_composition(self) -> None:
+        from application_sdk.contracts.storage import UploadInput
+
+        got = UploadInput(
+            local_path="/tmp/x", quarantined=True, storage_subdir="workbooks"
+        )
+        assert got.quarantined is True and got.storage_subdir == "workbooks"

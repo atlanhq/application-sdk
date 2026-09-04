@@ -397,6 +397,7 @@ def _make_upload_output(
     reason: str,
     *,
     is_dir: bool = False,
+    quarantined: bool = False,
 ) -> UploadOutput:
     """Build an ``UploadOutput`` from the common fields shared across all branches.
 
@@ -417,6 +418,10 @@ def _make_upload_output(
         reason: Human-readable transfer outcome (e.g. ``"uploaded"``).
         is_dir: When ``True``, ensures ``storage_key`` ends with ``"/"`` as
             the canonical object-store prefix convention.
+        quarantined: Sensitivity marker forwarded to ``FileReference``.  The
+            quarantine root is already baked into *storage_key* via the
+            caller's ``_app_prefix``; this records it on the reference so
+            downstream consumers and cleanup can see it.
     """
     from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         UploadOutput,
@@ -429,6 +434,7 @@ def _make_upload_output(
         is_durable=True,
         file_count=file_count,
         tier=tier,
+        quarantined=quarantined,
     )
     return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
 
@@ -486,6 +492,7 @@ async def upload(
     _source_store: ObjectStore | None = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
+    _quarantined: bool = False,
     max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
 ) -> UploadOutput:
     """Upload a local file or directory to the object store.
@@ -547,6 +554,9 @@ async def upload(
             fallback source.  Always ``self.context.storage`` when called via
             ``App.upload()``.
         _app_prefix: Internal prefix injected by the ``App.upload`` task.
+        _quarantined: Internal — sensitivity marker recorded on the returned
+            ``FileReference``.  The quarantine root itself already arrives
+            inside *_app_prefix*, which ``App.upload`` resolves from the tier.
         max_concurrency: Maximum parallel uploads for directory mode
             (default :data:`~application_sdk.constants.MAX_CONCURRENT_STORAGE_TRANSFERS`).
 
@@ -613,7 +623,15 @@ async def upload(
         transferred, reason = await _upload_one(
             resolved, src, key, skip_if_exists=skip_if_exists
         )
-        return _make_upload_output(str(src), key, 1, _tier, int(transferred), reason)
+        return _make_upload_output(
+            str(src),
+            key,
+            1,
+            _tier,
+            int(transferred),
+            reason,
+            quarantined=_quarantined,
+        )
 
     elif local_path and src.is_dir():
         # ── Directory (local exists) ──────────────────────────────────────
@@ -740,7 +758,14 @@ async def upload(
                 prefix,
             )
         return _make_upload_output(
-            str(src), prefix, total_files, _tier, n, reason, is_dir=True
+            str(src),
+            prefix,
+            total_files,
+            _tier,
+            n,
+            reason,
+            is_dir=True,
+            quarantined=_quarantined,
         )
 
     elif (
@@ -802,6 +827,7 @@ async def upload(
                 n,
                 reason,
                 is_dir=True,
+                quarantined=_quarantined,
             )
 
         else:
@@ -820,7 +846,13 @@ async def upload(
                 source_resolved, source_norm, resolved, fallback_key
             )
             return _make_upload_output(
-                _source_ref.local_path, fallback_key, 1, _tier, int(transferred), reason
+                _source_ref.local_path,
+                fallback_key,
+                1,
+                _tier,
+                int(transferred),
+                reason,
+                quarantined=_quarantined,
             )
 
     else:

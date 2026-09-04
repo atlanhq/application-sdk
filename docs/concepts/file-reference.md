@@ -387,6 +387,7 @@ class UploadInput(BaseModel):
     storage_subdir: str | None = None          # append a subdir under the run prefix
     skip_if_exists: bool = False               # skip upload when remote SHA-256 matches
     raise_on_empty: bool = False               # raise if the upload produces 0 files
+    quarantined: bool = False                  # store under the quarantine root
 ```
 
 | Field | Required | Description |
@@ -398,6 +399,7 @@ class UploadInput(BaseModel):
 | `storage_subdir` | No | Subdirectory appended under the run prefix. Useful for grouping related uploads without spelling out the full path. |
 | `skip_if_exists` | No (default `False`) | When `True`, skip uploading files whose SHA-256 already matches the stored `{key}.sha256` sidecar. Useful for retried tasks and idempotent re-uploads. |
 | `raise_on_empty` | No (default `False`) | When `True`, raise `StorageEmptyUploadError` if the upload completes with zero files (e.g. `local_path` pointed at an empty directory). Leave `False` for incremental extractors where a quiet run legitimately produces no output; set `True` when zero files indicates a bug. |
+| `quarantined` | No (default `False`) | Marks the data as sensitive, **orthogonally to `tier`**, so it lands under the quarantine root with the tier's ordinary prefix beneath it. Set it for raw content downloaded from a source system. Cannot be combined with `storage_path` (an explicit key bypasses quarantine routing) — use `storage_subdir` instead. See [Quarantined storage](storage.md#quarantined-storage). |
 
 ### Path Computation
 

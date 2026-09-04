@@ -426,3 +426,155 @@ class TestCleanupStorage:
         assert "file_refs/dir123/part-0.parquet" in deleted_keys
         assert "file_refs/dir123/part-1.parquet" in deleted_keys
         assert result.deleted_count == 2
+
+
+class TestCleanupStorageQuarantined:
+    """Quarantined data lives under a different root, so cleanup has to reach
+    it deliberately — and must still never touch persistent-tier objects."""
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        _clear_app_state()
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _app() -> tuple[App, Any]:
+        from unittest.mock import MagicMock
+
+        from application_sdk.app.context import AppContext
+
+        store = MagicMock()
+        app = _make_app()
+        ctx = AppContext(app_name="test", app_version="0.1.0", run_id="r1")
+        ctx._storage = store
+        app._context = ctx
+        return app, store
+
+    @pytest.mark.asyncio
+    async def test_deletes_quarantined_transient_ref(self) -> None:
+        app, store = self._app()
+        _seed_tracked_refs(
+            [
+                FileReference(
+                    storage_path="quarantine/file_refs/abc123.twb",
+                    tier=StorageTier.TRANSIENT,
+                    quarantined=True,
+                )
+            ]
+        )
+
+        deleted_keys: list[str] = []
+
+        async def _mock_delete(key: str, store: Any, normalize: bool = True) -> bool:
+            deleted_keys.append(key)
+            return True
+
+        with mock.patch(
+            "application_sdk.app.base._get_execution_id_from_task",
+            return_value="wf-test",
+        ):
+            with mock.patch(
+                "application_sdk.storage.ops._resolve_store", return_value=store
+            ):
+                with mock.patch(
+                    "application_sdk.storage.ops.delete", side_effect=_mock_delete
+                ):
+                    with mock.patch("obstore.list", return_value=iter([])):
+                        result = await app.cleanup_storage(StorageCleanupInput())
+
+        assert "quarantine/file_refs/abc123.twb" in deleted_keys
+        assert result.deleted_count == 2  # key + .sha256 sidecar
+
+    @pytest.mark.asyncio
+    async def test_never_deletes_quarantined_persistent_artifacts(self) -> None:
+        """``quarantine/persistent-artifacts/`` does not start with the
+        unquarantined protected prefix — it needs its own entry."""
+        app, store = self._app()
+        _seed_tracked_refs(
+            [
+                FileReference(
+                    storage_path=(
+                        "quarantine/persistent-artifacts/apps/test/state.json"
+                    ),
+                    tier=StorageTier.TRANSIENT,
+                    quarantined=True,
+                )
+            ]
+        )
+
+        async def _mock_delete(key: str, store: Any, normalize: bool = True) -> bool:
+            return True
+
+        with mock.patch(
+            "application_sdk.app.base._get_execution_id_from_task",
+            return_value="wf-test",
+        ):
+            with mock.patch(
+                "application_sdk.storage.ops._resolve_store", return_value=store
+            ):
+                with mock.patch(
+                    "application_sdk.storage.ops.delete", side_effect=_mock_delete
+                ):
+                    result = await app.cleanup_storage(StorageCleanupInput())
+
+        assert result.skipped_count == 1
+        assert result.deleted_count == 0
+
+    @pytest.mark.asyncio
+    async def test_prefix_cleanup_sweeps_the_quarantined_run_prefix(self) -> None:
+        app, store = self._app()
+        listed_prefixes: list[str] = []
+
+        def _tracking_list(resolved: Any, prefix: str = "") -> Any:
+            listed_prefixes.append(prefix)
+            return iter([])
+
+        async def _mock_delete(key: str, store: Any, normalize: bool = True) -> bool:
+            return True
+
+        with mock.patch(
+            "application_sdk.app.base._get_execution_id_from_task",
+            return_value="wf-test",
+        ):
+            with mock.patch(
+                "application_sdk.storage.ops._resolve_store", return_value=store
+            ):
+                with mock.patch(
+                    "application_sdk.storage.ops.delete", side_effect=_mock_delete
+                ):
+                    with mock.patch(
+                        "application_sdk.execution.build_output_path",
+                        return_value="artifacts/apps/test/workflows/wf1/run1",
+                    ):
+                        with mock.patch("obstore.list", side_effect=_tracking_list):
+                            await app.cleanup_storage(
+                                StorageCleanupInput(include_prefix_cleanup=True)
+                            )
+
+        assert "artifacts/apps/test/workflows/wf1/run1/" in listed_prefixes
+        assert "quarantine/artifacts/apps/test/workflows/wf1/run1/" in listed_prefixes
+
+    @pytest.mark.asyncio
+    async def test_no_quarantine_sweep_without_prefix_cleanup(self) -> None:
+        app, store = self._app()
+        listed_prefixes: list[str] = []
+
+        def _tracking_list(resolved: Any, prefix: str = "") -> Any:
+            listed_prefixes.append(prefix)
+            return iter([])
+
+        with mock.patch(
+            "application_sdk.app.base._get_execution_id_from_task",
+            return_value="wf-test",
+        ):
+            with mock.patch(
+                "application_sdk.storage.ops._resolve_store", return_value=store
+            ):
+                with mock.patch("obstore.list", side_effect=_tracking_list):
+                    await app.cleanup_storage(StorageCleanupInput())
+
+        assert not any(p.startswith("quarantine/") for p in listed_prefixes)

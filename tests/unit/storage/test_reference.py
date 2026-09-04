@@ -715,3 +715,70 @@ class TestPersistFileReferenceListingRace:
         assert await _get_bytes(f"{prefix}a.txt", store, normalize=False) == b"a"
         assert await _get_bytes(f"{prefix}b.txt", store, normalize=False) == b"b"
         assert await _get_bytes(f"{prefix}sub/c.txt", store, normalize=False) == b"c"
+
+
+class TestQuarantinedFileReference:
+    """The interceptor auto-persists refs, so a quarantined ref must land
+    under the quarantine root and keep the marker across the round trip."""
+
+    _RUN_PREFIX = "artifacts/apps/myapp/workflows/wf-1/run-1"
+
+    async def test_persist_single_file_under_quarantine_root(
+        self, store, tmp_path
+    ) -> None:
+        f = tmp_path / "workbook.twb"
+        f.write_bytes(b"<workbook/>")
+        ref = FileReference.from_local(f, tier=StorageTier.RETAINED, quarantined=True)
+
+        result = await persist_file_reference(store, ref, output_path=self._RUN_PREFIX)
+
+        assert result.storage_path is not None
+        assert result.storage_path.startswith(
+            f"quarantine/{self._RUN_PREFIX}/file_refs/"
+        )
+        assert result.quarantined is True
+
+    async def test_persist_directory_under_quarantine_root(
+        self, store, tmp_path
+    ) -> None:
+        d = tmp_path / "definitions"
+        d.mkdir()
+        (d / "a.twb").write_bytes(b"a")
+        ref = FileReference.from_local(d, tier=StorageTier.RETAINED, quarantined=True)
+
+        result = await persist_file_reference(store, ref, output_path=self._RUN_PREFIX)
+
+        assert result.storage_path is not None
+        assert result.storage_path.startswith(
+            f"quarantine/{self._RUN_PREFIX}/file_refs/"
+        )
+        assert result.quarantined is True
+
+    async def test_marker_survives_materialize(self, store, tmp_path) -> None:
+        f = tmp_path / "workbook.twb"
+        f.write_bytes(b"<workbook/>")
+        persisted = await persist_file_reference(
+            store,
+            FileReference.from_local(f, tier=StorageTier.RETAINED, quarantined=True),
+            output_path=self._RUN_PREFIX,
+        )
+        f.unlink()
+
+        materialized = await materialize_file_reference(
+            store, persisted, local_dir=str(tmp_path / "back")
+        )
+
+        assert materialized.quarantined is True
+
+    async def test_unquarantined_ref_path_is_unchanged(self, store, tmp_path) -> None:
+        f = tmp_path / "data.txt"
+        f.write_bytes(b"hello")
+        result = await persist_file_reference(
+            store,
+            FileReference.from_local(f, tier=StorageTier.RETAINED),
+            output_path=self._RUN_PREFIX,
+        )
+
+        assert result.storage_path is not None
+        assert result.storage_path.startswith(f"{self._RUN_PREFIX}/file_refs/")
+        assert result.quarantined is False
