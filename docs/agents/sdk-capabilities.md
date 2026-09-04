@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.32.1
-source-sha:    158e0a82071d1eb0a98c53abe7b9950ef4b6f434
-source-date:   2026-09-04T22:17:44+01:00
+source-sha:    6f91b14cea9a0be7db64fc4061b3e836fc0729b9
+source-date:   2026-09-05T00:27:17+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3542,7 +3542,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `Entrypoint`
 
 - **Import:** `from application_sdk.testing.setup_routes import Entrypoint`
-- **Signature:** `class Entrypoint(name: str, config_id: str, declared: frozenset[str] = frozenset(), source: Path | None = None) -> None`
+- **Signature:** `class Entrypoint(name: str, ...)`
 - **Summary:** One entry point, as the committed artifacts describe it.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
 
