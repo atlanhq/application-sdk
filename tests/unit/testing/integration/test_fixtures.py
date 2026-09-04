@@ -660,6 +660,72 @@ print("OK")
         assert result.returncode == 0, result.stderr
         assert "OK" in result.stdout
 
+    def test_lazy_is_the_decorator_not_its_home_submodule(self) -> None:
+        """``from ...integration import lazy`` must yield the callable (FND).
+
+        ``lazy`` is the one name that is both an export and a submodule. The
+        import system binds the *submodule* onto the package as a side effect
+        of any ``from .lazy import ...`` — ``runner`` does one — and an
+        attribute already on the package means ``__getattr__`` is never
+        consulted. Before the eager binding in ``__init__`` that returned the
+        module, and every adopter's ``lazy(...)`` scenario died at collection
+        with ``TypeError: 'module' object is not callable``.
+
+        Subprocess-isolated and run in BOTH orders, because the failure was
+        order-dependent: resolving ``BaseIntegrationTest`` first imports
+        ``runner`` and with it ``.lazy``, which is exactly the poisoned path.
+        """
+        for imports in (
+            "from application_sdk.testing.integration import lazy",
+            # BaseIntegrationTest first: runner imports .lazy, binding the
+            # submodule attribute before `lazy` itself is resolved.
+            "from application_sdk.testing.integration import BaseIntegrationTest, lazy",
+        ):
+            script = f"""
+{imports}
+
+from application_sdk.testing.integration import evaluate_if_lazy, is_lazy
+
+assert callable(lazy), type(lazy)
+wrapped = lazy(lambda: 1)
+assert is_lazy(wrapped)
+assert evaluate_if_lazy(wrapped) == 1
+print("OK")
+"""
+            result = _run_python(script)
+            assert result.returncode == 0, result.stderr
+            assert "OK" in result.stdout
+
+    def test_submodule_path_import_still_works(self) -> None:
+        """The explicit submodule path keeps working alongside the export.
+
+        Connectors that worked around the shadowing import from the submodule
+        directly; both spellings must resolve to the same callable.
+        """
+        script = """
+from application_sdk.testing.integration import lazy as exported
+from application_sdk.testing.integration.lazy import lazy as from_module
+
+assert exported is from_module
+print("OK")
+"""
+        result = _run_python(script)
+        assert result.returncode == 0, result.stderr
+        assert "OK" in result.stdout
+
+    def test_export_submodule_collisions_are_bound_eagerly(self) -> None:
+        """Any name on both lists must be pre-bound so ``__getattr__``'s
+        precedence never decides it. Today that set is exactly ``lazy``; a new
+        collision must add its own eager binding or rename the submodule."""
+        from application_sdk.testing import integration
+
+        collisions = set(integration._LAZY_EXPORTS) & integration._LAZY_SUBMODULES
+        assert collisions == {"lazy"}
+        for name in collisions:
+            bound = integration.__dict__.get(name)
+            assert bound is not None, f"{name} is not eagerly bound"
+            assert not inspect.ismodule(bound), f"{name} is bound to its submodule"
+
     def test_type_checking_block_matches_the_lazy_map(self) -> None:
         """The third parallel list, read the way its only two readers read it.
 
