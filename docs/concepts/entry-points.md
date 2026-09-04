@@ -310,6 +310,49 @@ Without a query param, `GET /workflows/v1/manifest` serves the first candidate w
 
 > **Configmap discovery** also benefits from the subfolder layout: the handler uses `rglob("*.json")` so configmap files can live inside per-entry subfolders alongside the manifests.
 
+### One authority for the generated tree's shape
+
+Three facts about `app/generated/` are needed in more than one place, so they
+live in `application_sdk/app/generated_tree.py` and nowhere else:
+
+| Function | Answers |
+| --- | --- |
+| `generated_layout(dir)` | `multi` (per-entry-point subdirectories), `single` (flat), or `unknown` (nothing generated) |
+| `is_form_configmap(stem)` | Is this sibling `*.json` a setup form, or the DAG `manifest` / a `{atlan,csa}-connectors-*` credential template? |
+| `form_configmap(dir, ep)` | Which file is *this* entry point's setup form, given the layout |
+
+Everything that needs one of those reads it from there: the configmap
+endpoint's default-entrypoint fallback (`application_sdk.handler.service`), the
+artifact-schema registration guard (`_artifact_schema_guard`), and the
+tenant-side setup-route check (`application_sdk.testing.setup_routes`).
+
+The exclusion in `is_form_configmap` is load-bearing rather than cosmetic. For
+a flat app, `atlan-connectors-<source>.json` sorts alphabetically **before**
+`<source>.json`, so any file-discovery that globs `*.json` and takes the first
+match picks the credential template on every single-entry-point connector.
+
+Layout is read from the tree, never from `len(entry_points)`. A
+**route/card-split** app has several `@entrypoint`s behind one marketplace card
+and therefore one *flat* generated tree, so counting Python entry points calls
+it a bundle and sends every consumer looking under a subdirectory the toolkit
+will never write for it.
+
+### The setup page resolves on two independent lookups
+
+`/workflows/setup/<id>` in the UI spends its `id` segment twice: once to find
+the marketplace card (`app.id == id`) and once to fetch the form
+(`GET /api/service/configmaps/<id>`, which Heracles proxies to this SDK's
+`GET /workflows/v1/configmap/{id}`). The route therefore resolves **only when
+the card's `id` is a name the configmap endpoint also answers to**.
+
+Those two names come from different places, and a contract change can move one
+without the other — setting `Entrypoint.packageId` moves the card's identity
+onto the marketplace package while the form stays under the workflow config's
+`id`, which 404s the setup page with every generated artifact still
+self-consistent and every static gate still green. `application_sdk.testing.setup_routes`
+asserts that join against a live tenant; see
+`docs/standards/connector-ci-e2e.md` for where it runs in CI.
+
 ### Per-entry-point handler & core modules
 
 A multi-entry-point app can ship **per-entry-point** lifecycle code next to its hand-written package, discovered by convention:

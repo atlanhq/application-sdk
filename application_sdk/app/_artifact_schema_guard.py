@@ -49,10 +49,11 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin
 
 import orjson
 
+from application_sdk.app.generated_tree import GeneratedLayout, generated_layout
 from application_sdk.constants import CONTRACT_GENERATED_DIR
 from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
@@ -62,6 +63,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ARTIFACT_SCHEMA_REMOVAL_VERSION",
+    # Re-exported from application_sdk.app.generated_tree, which owns the
+    # classification. Kept as a name here because this module's docstrings and
+    # `_declared_artifact_schema_keys`'s signature are written in terms of it.
+    "GeneratedLayout",
     "warn_undeclared_artifact_schemas",
 ]
 
@@ -73,10 +78,6 @@ _logger = get_logger(__name__)
 ARTIFACT_SCHEMA_REMOVAL_VERSION = "4.0"
 
 _ARTIFACT_SCHEMAS_FILENAME = "artifact_schemas.json"
-
-#: Shape of the committed ``app/generated/`` tree — the authority on where an
-#: entry point's declarations live.  Mirrors conformance K016's contract scan.
-GeneratedLayout = Literal["multi", "single", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -114,43 +115,15 @@ class _Declarations:
 
 
 def _generated_layout() -> GeneratedLayout:
-    """Classify the committed ``app/generated/`` tree by the shape it actually has.
+    """Classify this app's committed generated tree.
 
-    Mirrors the contract scan conformance K016 uses, deliberately: the two must
-    agree on where an entry point's declarations live, or the same app gets two
-    different answers about the same file.
-
-    ``multi``
-        One or more immediate subdirectories each holding a ``manifest.json``.
-        Each subdirectory name is an entry point's wire name.
-    ``single``
-        A ``manifest.json`` at the root of the generated dir and no per-entry-point
-        subdirectories.
-    ``unknown``
-        No generated tree, or one carrying no ``manifest.json`` anywhere (a repo
-        that has not generated yet).  Nothing can be inferred about the layout, and
-        the caller says so rather than guessing.
-
-    **Why the tree and not ``len(entry_points)``.**  The layout is a property of
-    what the toolkit emitted, not of how many ``@entrypoint`` methods Python
-    happens to see.  A **route/card-split** app (BLDX-1342) is exactly where those
-    two disagree: it has several ``@entrypoint``\\ s the DAG invokes by
-    ``workflow_type``, but one marketplace card and therefore one *flat*
-    generated tree.  Counting Python entry points calls it a bundle and sends its
-    author to ``app/generated/<wire-name>/artifact_schemas.json`` — a file the
-    toolkit will never write for that app, so following the warning cannot clear
-    it.
+    Thin wrapper over :func:`application_sdk.app.generated_tree.generated_layout`
+    applied to :data:`~application_sdk.constants.CONTRACT_GENERATED_DIR`, which
+    is the authority — ``handler.service``'s configmap fallback and the
+    tenant-side route check read the same classifier, so the same app cannot get
+    two different answers about the same tree.
     """
-    generated = Path(CONTRACT_GENERATED_DIR)
-    try:
-        children = list(generated.iterdir())
-    except OSError:
-        return "unknown"
-    if any((child / "manifest.json").is_file() for child in children if child.is_dir()):
-        return "multi"
-    if (generated / "manifest.json").is_file():
-        return "single"
-    return "unknown"
+    return generated_layout(Path(CONTRACT_GENERATED_DIR))
 
 
 def _declared_artifact_schema_keys(

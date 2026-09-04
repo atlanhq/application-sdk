@@ -1013,6 +1013,48 @@ The shared [`regenerate-contract`](../../.github/actions/regenerate-contract/act
 
 Regeneration is bound to the build, so it runs wherever the build runs: once per leg while each leg builds its own image, and once per run for a caller that builds ahead of the matrix and passes `prebuilt-image` (see [Building the image once](#building-the-image-once)). The binding is the invariant — the fresh `app/generated/` must exist in the workspace at the moment the image is built — not the per-leg cardinality.
 
+## Workflow-setup routes (FND-1667)
+
+A contract change can 404 a connector's setup page while **every** local and CI check stays green. That is what shipped in FND-1593: the generated artifacts were self-consistent, conformance was clean, the generated-artifact freshness gate passed, and both `/workflows/setup/*` pages returned 404 in the UI. Nothing was stale or hand-edited — the break lived only in the join between what the contract generates and what the tenant serves, and no gate looked there.
+
+`sdr-e2e`'s **Verify workflow-setup routes resolve** step closes that. It runs on the install path only (gated on `expected-app-version`, the same gate as the version verify), after the version check and before the suite.
+
+What it asserts, in the direction the UI walks it:
+
+1. locate this app's marketplace cards by app `name` **and** `entrypoint` — facts that are *not* the thing under test. `entrypoint` alone is not app-scoped: every connector's crawler card carries `entrypoint: "crawler"`.
+2. `card.id` equals the `id` in the committed `app/generated/<ep>/<config>.json`. This is the assertion that bites — a check asserting `GET configmaps/<known-good-name> == 200` would have passed straight through FND-1593, because that name never stopped working. What moved was the card pointing at it.
+3. `GET /api/service/configmaps/<card.id>` returns 200 and echoes back the name asked for.
+4. the served form declares every input the committed contract does — a **subset** check, so platform-added fields are not brittle while a stale image still fails.
+5. a negative control runs **first**: an unknown config name must really be rejected, or every 200 above is vacuous.
+
+### Skips, and what they mean
+
+| Situation | Outcome |
+|---|---|
+| No `manifest.json` anywhere under `app/generated/` (nothing generated) | **Skipped**, with a `::notice::` — no setup form exists to serve. Costs zero tenant calls. |
+| Caller did not install to the tenant (`expected-app-version` empty) | Step does not run — the tenant serves some other version, and the subset check would report a stale image as a contract break |
+| A declared entrypoint has no generated config, or a config has no `id` | **Fails** — the committed artifacts are incoherent, which is not "nothing to check" |
+
+Skip-not-fail on the first two is deliberate: without it this would be a fleet-wide false positive on its first run.
+
+### Timing
+
+The catalog read is a **bounded poll** (`--wait-seconds`, default 120s), not a single read. `install()` polling the *deployment* to `SUCCEEDED` is not evidence that LM's catalog snapshot and the pod's configmap endpoint have caught up — nothing sequences those against the deployment verdict — so a single read would be flaky-by-construction on exactly the path CI takes. Progress lines are flushed, so a patient step does not read as a hung one.
+
+### Where the logic lives, and why
+
+The check is `application_sdk/testing/setup_routes.py`; the CI shell around it is [`verify_setup_routes.py`](../../.github/actions/sdr-e2e/verify_setup_routes.py) in the composite. The split is not arbitrary:
+
+- The SDK is on **both** sides of the join being asserted. `/api/service/configmaps/<name>` is Heracles proxying to the app pod's own `GET /workflows/v1/configmap/{id}`, so the response envelope, the form-file selection rule and the generated-tree layout are read from `application_sdk/app/generated_tree.py` — the same authority the server reads. A second copy would let the server serve one file while the check compared against another, and that mismatch would read as a contract regression.
+- It therefore needs the SDK importable, which rules out `prepare-tenant`: that job runs a bare `python3` with no `uv sync`. By this point in `sdr-e2e` the app's environment is synced.
+- The `e2e` job that invokes this composite has `prepare-tenant` in its `needs:`, so every step here is strictly after the install.
+
+One insertion covers both e2e callers (`tests-reusable`'s `e2e` and `e2e-full-reusable`'s `e2e-full`), and no app repo carries any of it. `.github/scripts/tests/test_setup_routes_wiring.py` pins the placement, gate and injection discipline; `tests/unit/testing/test_setup_routes.py` proves the check bites, including a round-trip against the live configmap endpoint.
+
+### Known limitation
+
+The endpoint paths are `atlan-frontend`'s, not ours — `BASE_PATH = 'service'` plus `getAPIPath`, confirmed live. If the frontend changes how it derives the setup route, this check goes stale. The mitigation is that it is in one place rather than in every connector repo.
+
 ## Workspace-wipe defences (local-action mode)
 
 When the SDR composite is invoked via local path (`./.application-sdk/.github/actions/sdr-e2e`) during cross-repo dispatch, `setup-deps`' inner `actions/checkout` wipes the entire workspace — including `${{ github.action_path }}` itself. The composite:
