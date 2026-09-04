@@ -105,6 +105,20 @@ def _workflow_config(config_id: str = "clickhouse-crawler") -> dict[str, Any]:
     }
 
 
+def _eps(*names: str) -> list[Entrypoint]:
+    """Named entrypoints, as a bundle's `atlan.yaml` declares them."""
+    return [Entrypoint(name=name, config_id=f"clickhouse-{name}") for name in names]
+
+
+def _sole(config_id: str) -> list[Entrypoint]:
+    """The single entry point of an app declaring no `entrypoints[]`.
+
+    Labelled by its committed config id — never by an empty string, which is
+    the magic value this module deliberately has no place for.
+    """
+    return [Entrypoint(name=config_id, config_id=config_id, is_sole=True)]
+
+
 def _configmap_response(
     schema: dict[str, Any], name: str = "clickhouse-crawler"
 ) -> dict[str, Any]:
@@ -193,14 +207,20 @@ class TestRouteMismatch:
         assert reason is not None
         assert "Regenerate the contract" in reason
 
-    def test_a_flat_app_is_named_readably(self) -> None:
-        """An empty entrypoint name must not render as an empty quote in prose."""
+    def test_a_sole_entrypoint_is_named_by_its_config_id(self) -> None:
+        """Never an empty quote in prose, because the name is never empty.
+
+        An earlier revision rendered a flat app as `''` and papered over it with
+        a `<flat>` placeholder at every message site. The label is now a
+        committed fact, so there is nothing to paper over.
+        """
         card = Card.from_payload(_card_payload("atlan-mysql", entrypoint=""))
 
-        reason = route_mismatch("", card, "mysql")
+        reason = route_mismatch("mysql", card, "mysql")
 
         assert reason is not None
-        assert "<flat>" in reason
+        assert "'mysql'" in reason
+        assert "<flat>" not in reason
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +291,7 @@ class TestLocateCards:
             )
         ]
 
-        cards, reason = locate_cards("clickhouse", ["crawler"], catalog)
+        cards, reason = locate_cards("clickhouse", _eps("crawler"), catalog)
 
         assert reason is None
         assert set(cards) == {"crawler"}
@@ -280,7 +300,7 @@ class TestLocateCards:
     def test_reports_an_app_absent_from_the_catalog(self) -> None:
         catalog = [_card_payload("mssql-crawler", name="mssql")]
 
-        cards, reason = locate_cards("clickhouse", ["crawler"], catalog)
+        cards, reason = locate_cards("clickhouse", _eps("crawler"), catalog)
 
         assert cards == {}
         assert reason is not None
@@ -293,20 +313,24 @@ class TestLocateCards:
         """An entrypoint with no card has no setup page at all."""
         catalog = [_card_payload("clickhouse-crawler", name="clickhouse")]
 
-        cards, reason = locate_cards("clickhouse", ["crawler", "miner"], catalog)
+        cards, reason = locate_cards("clickhouse", _eps("crawler", "miner"), catalog)
 
         assert set(cards) == {"crawler"}
         assert reason is not None
         assert "miner" in reason
 
-    def test_a_flat_app_card_keys_under_empty_string(self) -> None:
-        """A single-generated-contract app's card carries no ``entrypoint``."""
+    def test_a_sole_contract_card_keys_under_its_config_id(self) -> None:
+        """No empty-string key anywhere, and the card matches by count.
+
+        The card's own `entrypoint` takes no part in the match — there is one
+        card and one form, so there is nothing to choose between.
+        """
         catalog = [_card_payload("mysql", name="mysql", entrypoint="")]
 
-        cards, reason = locate_cards("mysql", [""], catalog)
+        cards, reason = locate_cards("mysql", _sole("mysql"), catalog)
 
         assert reason is None
-        assert cards[""].id == "mysql"
+        assert cards["mysql"].id == "mysql"
 
 
 # ---------------------------------------------------------------------------
@@ -453,8 +477,9 @@ class TestArtifactReaders:
 
         found = read_entrypoints(tmp_path)
 
-        assert [e.name for e in found] == [""]
+        assert [e.name for e in found] == ["mysql"]
         assert found[0].config_id == "mysql"
+        assert found[0].is_sole is True
 
     def test_skips_when_nothing_is_generated(self, tmp_path: Path) -> None:
         """Skip, not fail: no generated tree means no setup page to check."""
@@ -1008,3 +1033,262 @@ class _StubGet:
 
     def get(self, path: str) -> tuple[int, object]:
         return 200, self._body
+
+
+# ---------------------------------------------------------------------------
+# Review findings — three shapes that each reported a healthy app as broken
+# ---------------------------------------------------------------------------
+
+
+class TestCardNameCasing:
+    """`read_app_name` lowercases atlan.yaml; a card's name is the catalog's.
+
+    Comparing them verbatim reports a mixed-case card as "not installed on this
+    tenant" — a false negative wearing the most misleading message this check
+    can emit, since it points the reader at the deploy rather than at the match.
+    """
+
+    def test_a_mixed_case_card_still_matches(self) -> None:
+        catalog = [_card_payload("clickhouse-crawler", name="ClickHouse")]
+
+        cards, reason = locate_cards("clickhouse", _eps("crawler"), catalog)
+
+        assert reason is None
+        assert cards["crawler"].id == "clickhouse-crawler"
+
+    def test_a_padded_card_name_still_matches(self) -> None:
+        """Neither side is a value whose formatting we control."""
+        catalog = [_card_payload("clickhouse-crawler", name="  clickhouse  ")]
+
+        cards, reason = locate_cards("clickhouse", _eps("crawler"), catalog)
+
+        assert reason is None
+        assert cards["crawler"].id == "clickhouse-crawler"
+
+    def test_a_genuinely_different_app_still_does_not_match(self) -> None:
+        """Case-folding must not widen the match to a different app."""
+        catalog = [_card_payload("clickhouse-crawler", name="clickhouse-legacy")]
+
+        cards, reason = locate_cards("clickhouse", _eps("crawler"), catalog)
+
+        assert cards == {}
+        assert reason is not None
+
+
+class TestSoleContractCardMatching:
+    """An app's single card, whatever `entrypoint` the catalog gave it.
+
+    A route/card-split app (BLDX-1342) has several `@entrypoint`s behind ONE
+    card and therefore one flat generated tree. That card is served carrying a
+    real entrypoint name — and an earlier revision keyed such an app under `""`
+    and matched on that key, so a perfectly healthy single-card app reported as
+    having no card at all.
+
+    Two things fix it, and neither is a guess. Entrypoints never carry an empty
+    name: a sole contract is labelled by its committed config id. And a sole
+    contract's card is matched by COUNT — one form, one card, nothing to choose
+    between — so the card's own `entrypoint` takes no part in the match.
+
+    That is also why no default entrypoint is calculated: every case that might
+    have needed one is answered by a fact instead. `@entrypoint(default=True)`
+    is a runtime `AppRegistry` flag absent from both `atlan.yaml` and
+    `manifest.json`, so a default computed here could only ever be a
+    presumption.
+    """
+
+    def test_a_sole_card_with_a_named_entrypoint_matches(self, tmp_path: Path) -> None:
+        catalog = [_card_payload("mysql", name="mysql", entrypoint="crawler")]
+
+        cards, reason = locate_cards("mysql", _sole("mysql"), catalog)
+
+        assert reason is None
+        assert cards["mysql"].id == "mysql"
+
+    def test_a_sole_card_with_no_entrypoint_still_matches(self) -> None:
+        """The case that already worked must keep working."""
+        catalog = [_card_payload("mysql", name="mysql", entrypoint="")]
+
+        cards, reason = locate_cards("mysql", _sole("mysql"), catalog)
+
+        assert reason is None
+        assert cards["mysql"].id == "mysql"
+
+    def test_a_sole_contract_verifies_end_to_end_against_a_named_card(
+        self, tmp_path: Path
+    ) -> None:
+        """The whole check, on the shape that used to report "no card"."""
+        _write_flat(tmp_path)
+        schema = {
+            "properties": {
+                "extraction-method": {},
+                "credential-guid": {},
+                "connection": {},
+            }
+        }
+        routes = _FakeRoutes(
+            [[_card_payload("mysql", name="mysql", entrypoint="crawler")]],
+            {"mysql": (200, _configmap_response(schema, "mysql"))},
+        )
+
+        report = verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+
+        assert len(report) == 1
+
+    def test_two_cards_for_a_sole_contract_is_reported_not_guessed(self) -> None:
+        """One form, two cards: the two disagree about the app's shape.
+
+        Picking either would be a coin toss that reports as a pass or as a
+        contract break depending on which way it landed, so this names the
+        disagreement instead.
+        """
+        catalog = [
+            _card_payload("mysql", name="mysql", entrypoint="crawler"),
+            _card_payload("mysql-miner", name="mysql", entrypoint="miner"),
+        ]
+
+        cards, reason = locate_cards("mysql", _sole("mysql"), catalog)
+
+        assert cards == {}
+        assert reason is not None
+        assert "ambiguous" in reason
+        assert "crawler" in reason and "miner" in reason
+
+    def test_a_bundle_still_matches_on_entrypoint(self) -> None:
+        """The count-match is scoped to a sole contract only.
+
+        A bundle must keep matching card to entrypoint by name, or one entry
+        point's form could be checked against another's card.
+        """
+        catalog = [
+            _card_payload("clickhouse-crawler", entrypoint="crawler"),
+            _card_payload("clickhouse-miner", entrypoint="miner"),
+        ]
+
+        cards, reason = locate_cards("clickhouse", _eps("crawler", "miner"), catalog)
+
+        assert reason is None
+        assert cards["crawler"].id == "clickhouse-crawler"
+        assert cards["miner"].id == "clickhouse-miner"
+
+
+class TestRedirectsAreDeclined:
+    """`urlopen` follows redirects by default, and that default is dangerous.
+
+    A tenant that bounces an unauthenticated request to a login page would hand
+    this check a 200 carrying HTML. A check built on "200 means the form is
+    served" cannot tell that from success, and the negative control — the one
+    assertion that certifies all the others — is exactly what it disarms.
+    """
+
+    @staticmethod
+    def _serve(handler_status: int, location: str = "https://login.invalid/sso"):
+        """Run a one-request HTTP server returning *handler_status*."""
+        import http.server
+        import threading
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name
+                self.send_response(handler_status)
+                if 300 <= handler_status < 400:
+                    self.send_header("Location", location)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok": true}')
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server
+
+    def test_a_302_stays_a_302(self) -> None:
+        """The finding, pinned: following it would report 200 for a login page."""
+        from application_sdk.testing.setup_routes import TenantRoutes
+
+        server = self._serve(302)
+        try:
+            routes = TenantRoutes.__new__(TenantRoutes)
+            routes.base_url = f"http://127.0.0.1:{server.server_port}"
+            routes.bearer = "unused"
+
+            status, _ = routes.get("/anything")
+        finally:
+            server.shutdown()
+
+        assert status == 302, (
+            "the redirect was followed; a 302 to a login page would arrive as a "
+            "200 and the negative control would certify nothing"
+        )
+
+    def test_a_200_is_still_a_200(self) -> None:
+        """Declining redirects must not disturb the ordinary path."""
+        from application_sdk.testing.setup_routes import TenantRoutes
+
+        server = self._serve(200)
+        try:
+            routes = TenantRoutes.__new__(TenantRoutes)
+            routes.base_url = f"http://127.0.0.1:{server.server_port}"
+            routes.bearer = "unused"
+
+            status, body = routes.get("/anything")
+        finally:
+            server.shutdown()
+
+        assert status == 200
+        assert body == {"ok": True}
+
+    def test_a_redirect_is_not_a_valid_rejection(self) -> None:
+        """The negative control must not accept a 3xx as "correctly rejected".
+
+        A tenant redirecting every request would otherwise look like a tenant
+        that discriminates unknown names, which is the vacuous state the
+        control exists to detect.
+        """
+        from application_sdk.testing.setup_routes import _REJECTION_STATUSES
+
+        for redirect in (301, 302, 303, 307, 308):
+            assert redirect not in _REJECTION_STATUSES
+
+
+class TestUnlabelledBundleCard:
+    """A bundle's card carrying no entrypoint is reported, never attributed.
+
+    This is the case a calculated default was considered for and rejected. An
+    unlabelled card cannot be assigned to a named entrypoint without presuming
+    one, and presuming wrong produces "the card points at the wrong form" —
+    which reads exactly like a real contract break, sending the reader after a
+    regression that does not exist.
+
+    Reporting it is also the more useful answer: the usual cause is an installed
+    build that predates the entrypoint split, serving one card where this branch
+    generates several. That is a genuine finding, and naming it beats silently
+    checking one arbitrary entrypoint against it.
+    """
+
+    def test_an_unlabelled_card_is_reported(self) -> None:
+        catalog = [_card_payload("clickhouse", name="clickhouse", entrypoint="")]
+
+        cards, reason = locate_cards("clickhouse", _eps("crawler", "miner"), catalog)
+
+        assert reason is not None
+        assert "cannot be attributed" in reason
+        assert "predates the entrypoint split" in reason
+        # It must not have been silently assigned to either entrypoint.
+        assert cards == {}
+
+    def test_no_default_is_calculated_anywhere(self) -> None:
+        """No alphabetical-first fallback survived the redesign.
+
+        A default computed from committed artifacts is wrong for any app that
+        marks a non-alphabetical `@entrypoint(default=True)` — invisible from
+        `atlan.yaml` and `manifest.json` alike — so the module must contain no
+        such computation to drift back into use.
+        """
+        import application_sdk.testing.setup_routes as module
+
+        source = Path(module.__file__).read_text(encoding="utf-8")
+
+        assert "calculated_default" not in source
+        assert "sorted(names)[0]" not in source

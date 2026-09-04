@@ -75,7 +75,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -136,6 +136,37 @@ DEFAULT_CATALOG_WAIT_SECONDS = 120
 _CATALOG_POLL_SECONDS = 10
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Declines every redirect instead of following it.
+
+    Returning ``None`` from ``redirect_request`` tells urllib the response was
+    not handled, so the 3xx surfaces as an :class:`~urllib.error.HTTPError`
+    carrying its real status rather than being replaced by whatever the
+    redirect target returns.
+
+    This exists because the failure it prevents is invisible: a tenant that
+    bounces an unauthenticated request to a login page would otherwise hand
+    this check a 200, and a check built on "200 means the form is served"
+    cannot tell that from success.
+    """
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+#: Built once: an opener is stateless here and rebuilding it per request would
+#: re-parse the handler chain on every call.
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 class SetupRouteError(RuntimeError):
     """A setup route is broken, or the tenant could not be asked."""
 
@@ -156,15 +187,41 @@ class RouteCheckSkipped(RuntimeError):
 
 @dataclass(frozen=True)
 class Entrypoint:
-    """One entry point, as the committed artifacts describe it."""
+    """One entry point, as the committed artifacts describe it.
+
+    **Never carries an empty name.** An earlier revision keyed a flat app's
+    single contract under ``""``, which quietly became a magic value doing two
+    unrelated jobs — "this app declares no entrypoints" and "match a card whose
+    entrypoint field is blank" — and made a healthy single-card app report as
+    having no card at all. Every entry point here has a real, committed,
+    non-empty label, and every one is validated explicitly.
+    """
 
     name: str
-    """Kebab-case wire name from ``atlan.yaml``. ``""`` for a flat app, whose
-    cards carry no ``entrypoint``."""
+    """The label this entry point is checked and reported under; never empty.
+
+    For an app declaring ``entrypoints[]``, the kebab-case wire name from
+    ``atlan.yaml`` — which is also its directory in the generated tree and the
+    ``entrypoint`` its marketplace card carries.
+
+    For an app declaring none, the generated config's own ``id`` (``mysql``).
+    That is a committed fact rather than a placeholder, and it keeps the label
+    meaningful in a message without inventing a name the app never wrote down.
+    """
 
     config_id: str
     """``id`` from the generated workflow config — the name the form is served
     under, and therefore the name the card must point at."""
+
+    is_sole: bool = False
+    """``True`` when the app declares no ``entrypoints[]``, so this is its one
+    contract and its one card.
+
+    Load-bearing for card matching, and the reason no default has to be
+    calculated: with one card there is nothing to choose between, so the card's
+    own ``entrypoint`` field — whatever the catalog wrote there — takes no part
+    in the match. A bundle's cards are always matched by name.
+    """
 
     declared: frozenset[str] = frozenset()
     """Input names the committed contract declares for this entry point."""
@@ -226,10 +283,13 @@ def read_entrypoint_names(repo_root: Path) -> list[str]:
     if not isinstance(declared, list):
         return []
     return [
-        str(entry["name"])
+        str(entry["name"]).strip()
         for entry in declared
         if isinstance(entry, dict)
-        and entry.get("name")
+        # A blank or whitespace-only name is dropped rather than carried: it
+        # cannot name a directory, cannot match a card, and would reintroduce
+        # the empty-string key this module deliberately has no place for.
+        and str(entry.get("name") or "").strip()
         and entry.get("marketplace_card", True) is not False
     ]
 
@@ -292,7 +352,11 @@ def read_entrypoints(
             "is unexpected."
         )
 
-    names = read_entrypoint_names(repo_root) if layout == "multi" else [""]
+    sole = layout != "multi"
+    # One pass for a sole contract. `form_configmap` ignores the entrypoint
+    # for a non-`multi` layout, and the Entrypoint built below is labelled by
+    # its committed config id — so this value names nothing and is never a key.
+    names = ["<sole>"] if sole else read_entrypoint_names(repo_root)
     if layout == "multi" and not names:
         # Two different situations that must not share an outcome: an app whose
         # entrypoints all declare `marketplace_card: false` has nothing to check
@@ -330,10 +394,14 @@ def read_entrypoints(
                 f"{path} carries no top-level 'id', so there is no name for the "
                 "marketplace card to point at. Regenerate the contract."
             )
+        config_id = str(payload["id"])
         found.append(
             Entrypoint(
-                name=name,
-                config_id=str(payload["id"]),
+                # A sole contract is labelled by its own committed config id, so
+                # no entry point here ever carries an empty name.
+                name=config_id if sole else name,
+                config_id=config_id,
+                is_sole=sole,
                 declared=declared_inputs(payload),
                 source=path,
             )
@@ -378,17 +446,17 @@ def route_mismatch(entrypoint: str, card: Card, config_id: str) -> str | None:
     """
     if not card.id:
         return (
-            f"Entrypoint {entrypoint or '<flat>'!r}: the marketplace card has no "
+            f"Entrypoint {entrypoint!r}: the marketplace card has no "
             "id, so the marketplace cannot build a setup link for it at all."
         )
     if not config_id:
         return (
-            f"Entrypoint {entrypoint or '<flat>'!r}: the generated workflow "
+            f"Entrypoint {entrypoint!r}: the generated workflow "
             "config has no id. Regenerate the contract."
         )
     if card.id != config_id:
         return (
-            f"Entrypoint {entrypoint or '<flat>'!r}: the marketplace card's id "
+            f"Entrypoint {entrypoint!r}: the marketplace card's id "
             f"is {card.id!r}, but this repo generates its workflow config as "
             f"{config_id!r}. The UI builds /workflows/setup/{card.id} from the "
             f"card and the form is only served for {config_id!r}, so that page "
@@ -411,14 +479,14 @@ def input_shortfall(
     """
     if not declared:
         return (
-            f"Entrypoint {entrypoint or '<flat>'!r}: the committed workflow "
+            f"Entrypoint {entrypoint!r}: the committed workflow "
             "config declares no inputs at all, so this check cannot tell a "
             "served form from an empty one. Regenerate the contract."
         )
     missing = declared - served
     if missing:
         return (
-            f"Entrypoint {entrypoint or '<flat>'!r}: the tenant's form schema is "
+            f"Entrypoint {entrypoint!r}: the tenant's form schema is "
             f"missing {sorted(missing)}, which this repo's committed contract "
             "declares. Most likely the tenant runs an older image than this "
             "branch; it can also mean a contract change never reached the "
@@ -428,7 +496,9 @@ def input_shortfall(
 
 
 def locate_cards(
-    app_name: str, entrypoints: list[str], payloads: list[dict[str, Any]]
+    app_name: str,
+    entrypoints: Sequence[Entrypoint],
+    payloads: list[dict[str, Any]],
 ) -> tuple[dict[str, Card], str | None]:
     """Pick this app's cards out of the whole catalog, keyed by entry point.
 
@@ -438,17 +508,34 @@ def locate_cards(
     unrelated apps when the prototype tried it, and the count was plausible
     enough to look like success.
 
+    **A sole contract is matched by count, not by label.** An app declaring no
+    ``entrypoints[]`` has one form and one card, so there is nothing to choose
+    between and the card's ``entrypoint`` field takes no part in the match —
+    which is what lets a route/card-split app, whose single card is served
+    carrying one of its several route names, resolve correctly.
+
+    That is also why no default entry point is calculated anywhere in this
+    module. ``@entrypoint(default=True)`` is a runtime ``AppRegistry`` flag
+    absent from both ``atlan.yaml`` and ``manifest.json``, so any default
+    computed here would be a presumption — and every case that might have
+    needed one is answered by a fact instead: a bundle matches by name, and a
+    sole contract matches because it is the only one.
+
     Returns:
         The cards found, and a reason string when one or more declared entry
         points has no card (``None`` when every one resolved).
     """
+    # Case-folded on both sides. `read_app_name` lowercases atlan.yaml's `name`,
+    # but a card's `name` is whatever the catalog stores, and comparing the two
+    # verbatim reports a mixed-case card as "this app is not installed on this
+    # tenant" — a false negative wearing the most misleading message this check
+    # can emit. Stripped as well, for the same reason: neither side is a value
+    # we control the formatting of.
     ours = [
         card
         for card in (Card.from_payload(p) for p in payloads)
-        if card.name == app_name
+        if card.name.strip().lower() == app_name.strip().lower()
     ]
-    by_entrypoint = {card.entrypoint: card for card in ours}
-
     if not ours:
         return {}, (
             f"no marketplace card has name={app_name!r}. The tenant listed "
@@ -456,10 +543,51 @@ def locate_cards(
             "build is most likely not installed on this tenant."
         )
 
-    missing = [name for name in entrypoints if name not in by_entrypoint]
+    # A flat generated tree means ONE card, and its `entrypoint` is the tenant's
+    # business rather than ours: a route/card-split app has several
+    # `@entrypoint`s behind a single card, and that card is served carrying one
+    # of their names (`entrypoint: "crawler"`), not the empty string this check
+    # keys a flat tree under. Matching on the key would report a perfectly
+    # healthy single-card app as having no card at all.
+    #
+    # So for a flat tree the entrypoint is not part of the match — the app name
+    # already identified the card, and there is only one to identify.
+    if len(entrypoints) == 1 and entrypoints[0].is_sole:
+        sole = entrypoints[0]
+        if len(ours) > 1:
+            return {}, (
+                f"{app_name!r} declares no entrypoints and generates one setup "
+                f"form, but the tenant lists {len(ours)} cards for it "
+                f"(entrypoints: {sorted(card.entrypoint for card in ours)}). "
+                "Which card's id the setup route should match is ambiguous, so "
+                "this reports rather than guessing — most likely the generated "
+                "tree and the installed build disagree about the app's shape."
+            )
+        return {sole.name: ours[0]}, None
+
+    by_entrypoint = {card.entrypoint: card for card in ours if card.entrypoint}
+    names = [entrypoint.name for entrypoint in entrypoints]
+
+    unlabelled = [card for card in ours if not card.entrypoint]
+    if unlabelled:
+        # Reported, never attributed. This app declares its entrypoints by name,
+        # so a card carrying none cannot be assigned to one without a guess —
+        # and a guess here produces a spurious "the card points at the wrong
+        # form" that reads exactly like a real contract break.
+        return by_entrypoint, (
+            f"{app_name!r} declares entrypoints {sorted(names)}, but the tenant "
+            f"serves {len(unlabelled)} card(s) for it carrying no entrypoint "
+            f"(ids: {sorted(card.id for card in unlabelled)}). An unlabelled "
+            "card cannot be attributed to a named entrypoint, so this reports "
+            "it rather than presuming one. The usual cause is an installed "
+            "build that predates the entrypoint split, serving one card where "
+            "this branch generates several."
+        )
+
+    missing = [name for name in names if name not in by_entrypoint]
     if missing:
         return by_entrypoint, (
-            f"{app_name!r} generates entrypoints {sorted(entrypoints)} but the "
+            f"{app_name!r} generates entrypoints {sorted(names)} but the "
             f"tenant lists cards for {sorted(by_entrypoint)}. Missing: "
             f"{sorted(missing)} — an entrypoint with no card has no setup page "
             "at all. Either the installed build predates it, or the catalog "
@@ -532,9 +660,19 @@ class TenantRoutes:
     def get(self, path: str) -> tuple[int, object]:
         """One GET. Returns ``(status, parsed_body)``; non-2xx is returned.
 
-        Redirects are NOT followed, deliberately: a 302 to a login page would
-        otherwise turn an auth failure into a 200 and mask everything
-        downstream.
+        Redirects are declined rather than followed, via :class:`_NoRedirect`.
+        ``urlopen`` follows them by default, and that default is actively
+        dangerous here: a 302 to a login page would arrive as a **200 carrying
+        an HTML login form**, which turns an auth failure into a success. The
+        negative control would then see a "200" for a config name that cannot
+        exist and conclude the endpoint does not discriminate — except it never
+        gets that far, because a 200-shaped login page fails the JSON parse
+        first. Either way the failure is about the redirect and reads as
+        something else entirely.
+
+        A declined redirect surfaces as its real 3xx status, which no caller
+        treats as success and which the catalog read reports as a token
+        problem — the actual cause.
         """
         request = urllib.request.Request(  # noqa: S310 — https base validated in __post_init__
             f"{self.base_url}{path}", method="GET"
@@ -543,11 +681,14 @@ class TenantRoutes:
         request.add_header("Accept", "application/json")
         request.add_header("User-Agent", _USER_AGENT)
         try:
-            with urllib.request.urlopen(  # noqa: S310 — see above
+            with _OPENER.open(  # noqa: S310 — see above
                 request, timeout=_HTTP_TIMEOUT
             ) as response:
                 return response.status, _parse(response.read())
         except urllib.error.HTTPError as exc:
+            # A declined redirect lands here too, carrying its own 3xx status:
+            # `redirect_request` returning None makes urllib treat the response
+            # as unhandled, and the error processor raises it.
             return exc.code, _parse(exc.read())
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise SetupRouteError(
@@ -605,7 +746,7 @@ def _parse(raw: bytes) -> object:
 def _await_cards(
     routes: TenantRoutes,
     app_name: str,
-    entrypoint_names: list[str],
+    entrypoints: Sequence[Entrypoint],
     wait_seconds: int,
     on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Card]:
@@ -618,7 +759,7 @@ def _await_cards(
     deadline = time.monotonic() + max(wait_seconds, 0)
     reason = "the catalog was never read"
     while True:
-        cards, reason_now = locate_cards(app_name, entrypoint_names, routes.catalog())
+        cards, reason_now = locate_cards(app_name, entrypoints, routes.catalog())
         if reason_now is None:
             return cards
         reason = reason_now
@@ -651,9 +792,7 @@ def verify(
     """
     app_name = read_app_name(repo_root)
     entrypoints = read_entrypoints(repo_root, generated_dir)
-    cards = _await_cards(
-        routes, app_name, [e.name for e in entrypoints], wait_seconds, on_progress
-    )
+    cards = _await_cards(routes, app_name, entrypoints, wait_seconds, on_progress)
 
     # Negative control FIRST. Everything below asserts that a name the tenant
     # knows answers 200; if the endpoint answered 200 for names it does not
@@ -673,7 +812,7 @@ def verify(
     failures: list[str] = []
     for entrypoint in entrypoints:
         card = cards[entrypoint.name]
-        label = entrypoint.name or "<flat>"
+        label = entrypoint.name
 
         mismatch = route_mismatch(entrypoint.name, card, entrypoint.config_id)
         if mismatch is not None:
