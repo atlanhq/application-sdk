@@ -13,18 +13,18 @@ A filter field is **safe** if ANY of these holds, and each is pinned here:
 
 * **str union** — the annotation unions with ``str`` (``FilterMap | str``,
   ``dict[str, list[str]] | str``, ``str | dict[...]``, ``Annotated[... | str]``).
-* **coercing base** — the resolved chain reaches the SDK ``ExtractionInput``,
-  which carries the ``_coerce_filter`` ``mode="before"`` validator, so even a
-  redeclared strict ``dict`` is coerced from the string first.
+  A bare ``ExtractionInput`` subclass with no in-repo filter ``AnnAssign`` is
+  this path (inherited ``FilterMap | str``). A redeclared strict ``dict`` is
+  **not** — the live SDK coercer opts out when the type override drops
+  ``json_schema_extra``.
 * **own before-validator** — a ``@field_validator("<field>", mode="before")``
   (or a ``mode="before"`` ``@model_validator``) on the app's own resolved chain
   targets the field (the Sigma/Qlik app-local fix pattern).
 
 A finding is emitted only when the field IS a (possibly ``Annotated``) ``dict``
-with NO str union, the chain does NOT reach ``ExtractionInput``, and NO
-before-validator targets it. Assert on ``finding.discriminator`` (the field
-name), never on message substrings — the message names ``ExtractionInput`` and
-``str`` as remediation advice.
+with NO str union and NO before-validator targeting it. Assert on
+``finding.discriminator`` (the field name), never on message substrings — the
+message names ``ExtractionInput`` and ``str`` as remediation advice.
 """
 
 from __future__ import annotations
@@ -190,7 +190,7 @@ def test_k021_silent_on_annotated_str_union(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GREEN — coercing base (acceptance #2)
+# GREEN — inherited ExtractionInput annotation (acceptance #1, no AnnAssign)
 # ---------------------------------------------------------------------------
 
 
@@ -202,19 +202,20 @@ def test_k021_silent_when_chain_reaches_extraction_input(tmp_path: Path) -> None
     )
 
 
-def test_k021_silent_when_extraction_input_subclass_redeclares_strict_dict(
+def test_k021_fires_when_extraction_input_subclass_redeclares_strict_dict(
     tmp_path: Path,
 ) -> None:
-    """Even a redeclared strict ``dict`` is safe under ExtractionInput: the
-    inherited ``_coerce_filter`` before-validator runs by field name."""
+    """A redeclared strict ``dict`` under ExtractionInput is the CONNECT-1333
+    shape: the type override drops ``json_schema_extra``, so ``_coerce_filter``
+    returns the AE string unchanged and Pydantic rejects it."""
     src = _app_src("    include_filter: dict[str, Any]\n", bases="(ExtractionInput)")
-    assert _only(_run(tmp_path, src), "K021") == []
+    assert _flagged(_run(tmp_path, src), "K021") == {"include_filter"}
 
 
-def test_k021_silent_for_in_repo_base_that_reaches_extraction_input(
+def test_k021_fires_for_in_repo_base_that_reaches_extraction_input(
     tmp_path: Path,
 ) -> None:
-    """The chain may reach ExtractionInput through an in-repo intermediate base."""
+    """An in-repo intermediate base does not exempt a redeclared strict dict."""
     src = (
         "from application_sdk.app import App, entrypoint\n"
         "from application_sdk.contracts.base import Output\n"
@@ -235,11 +236,11 @@ def test_k021_silent_for_in_repo_base_that_reaches_extraction_input(
         "    async def extract(self, input: ExtractInput) -> ExtractOutput:\n"
         "        pass\n"
     )
-    assert _only(_run(tmp_path, src), "K021") == []
+    assert _flagged(_run(tmp_path, src), "K021") == {"include_filter"}
 
 
 # ---------------------------------------------------------------------------
-# GREEN — own before-validator (acceptance #3)
+# GREEN — own before-validator (acceptance #2)
 # ---------------------------------------------------------------------------
 
 

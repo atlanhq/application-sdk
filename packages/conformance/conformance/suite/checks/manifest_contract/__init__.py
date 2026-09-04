@@ -15,8 +15,10 @@
 * ``K021`` FilterFieldRejectsAeString (CONNECT-1333 / CONNECT-1389) — the
   type-aware sibling of K018: an ``include_*`` / ``exclude_*`` field the
   entrypoint's ``Input`` contract types as a strict ``dict`` with no ``str``
-  union, no coercing ``ExtractionInput`` base, and no ``mode="before"``
-  validator rejects the flat JSON *string* the AE sends and crashes the run.
+  union and no ``mode="before"`` validator rejects the flat JSON *string*
+  the AE sends and crashes the run. Mixing in ``ExtractionInput`` without
+  redeclaring the field is silent (inherited ``FilterMap | str``); a
+  redeclared strict ``dict`` is an offender.
 * ``K019`` FormKeyMissingFromManifestArgs (WARE-1323) — a ``uiConfig`` form key
   with no ``{{...}}`` placeholder in any manifest never reaches the run *and*
   never persists, because the args template doubles as the persistence schema.

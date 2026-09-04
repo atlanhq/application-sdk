@@ -1093,15 +1093,17 @@ workflow crashes before it starts. Nothing else catches it statically — pkl co
 manifest with no visibility into the Python model, and the model itself is well-formed;
 the mismatch only surfaces at runtime, on the tenant, as a crash the customer sees. It
 is the class atlan-looker-app and atlan-fabric-app hit (CONNECT-1333 / CONNECT-1389).
-The rule keys on three exact, structural acceptance conditions — a str union, a chain
-that reaches the SDK ExtractionInput coercer, or an app-local mode='before' validator —
-and stays silent whenever the contract chain cannot be fully resolved, so it prefers a
-false negative to a false positive.
+The rule keys on two exact, structural acceptance conditions — a str union (including a
+bare ExtractionInput subclass that inherits FilterMap | str), or an app-local
+mode='before' validator — and stays silent whenever the contract chain cannot be fully
+resolved, so it prefers a false negative to a false positive. Redeclaring a strict dict
+under ExtractionInput is not safe: the live SDK coercer opts out when the type override
+drops json_schema_extra.
 
 An `include_*` / `exclude_*` filter field on the entrypoint's Python `Input` contract is
-typed as a (possibly `Annotated`) strict `dict` — with no `str` union, no coercing
-`ExtractionInput` base, and no `mode="before"` validator — so it cannot accept the value
-the Automation Engine actually sends.
+typed as a (possibly `Annotated`) strict `dict` — with no `str` union and no
+`mode="before"` validator — so it cannot accept the value the Automation Engine actually
+sends.
 
 Since contract-toolkit 0.9.0 the AE renders include/exclude filters as flat top-level
 JSON **strings** (`'{}'`, `'{"^db$": ["^schema$"]}'`), not structured objects. Pydantic
@@ -1112,12 +1114,12 @@ K018's fail-open dropped-key case. This is the CONNECT-1333 / CONNECT-1389 class
 **Fix** — make the field accept the string, any one of:
 
 * **union with `str`** — `include_filter: FilterMap | str` (or `dict[str, list[str]] |
-str`). Pydantic then tries the `str` arm and the JSON string validates; * **base on
-`ExtractionInput`** — mix in
-`application_sdk.templates.contracts.sql_metadata.ExtractionInput`, whose
-`@field_validator("include_filter", "exclude_filter", mode="before")` `_coerce_filter`
-coerces the string first (inherited before-validators run by field name, so even a
-redeclared strict `dict` is safe under it); or * **add your own before-validator** — a
+str`). Pydantic then tries the `str` arm and the JSON string validates; * **mix in
+`ExtractionInput` without redeclaring a strict dict** —
+`application_sdk.templates.contracts.sql_metadata.ExtractionInput` already types the
+fields as `FilterMap | str`. A type override (`include_filter: dict[str, Any]`) drops
+the SDK `json_schema_extra` the live `_coerce_filter` keys on, so the inherited
+validator does **not** coerce the AE string; or * **add your own before-validator** — a
 `@field_validator("<field>", mode="before")` (or a `mode="before"` `@model_validator`)
 on the contract that coerces the string yourself. An `after`-mode validator does **not**
 count: it runs after field validation, so the string is already rejected.

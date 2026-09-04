@@ -20,22 +20,22 @@ failure mode, which is *fail-open*: a dropped key silently defaults. K021's is
 
 1. **str union** — the (possibly ``Annotated``) annotation unions with ``str``:
    ``FilterMap | str``, ``dict[str, list[str]] | str``, ``str | dict[...]``.
-   Pydantic then tries the ``str`` arm and the JSON string validates.
-2. **coercing base** — the resolved chain reaches the SDK ``ExtractionInput``
-   (``application_sdk.templates.contracts.sql_metadata``), which carries the
-   ``@field_validator("include_filter", "exclude_filter", mode="before")``
-   ``_coerce_filter`` validator. Pydantic runs an inherited before-validator by
-   field name, so even a redeclared strict ``dict`` is coerced from the string
-   first. Detected with :func:`_chain_reaches`.
-3. **own before-validator** — a ``@field_validator("<field>", ..., mode="before")``
+   Pydantic then tries the ``str`` arm and the JSON string validates. Mixing in
+   ``ExtractionInput`` *without* redeclaring the field is this path: the inherited
+   ``FilterMap | str`` never appears as an in-repo ``AnnAssign``, so the rule
+   stays silent. Redeclaring a strict ``dict`` is **not** safe — the live SDK
+   coercer (``_is_sdk_sql_filter_field``) only runs when
+   ``json_schema_extra == _FILTER_FIELD_JSON_SCHEMA_EXTRA``, and a type override
+   drops that extra, so ``'{}'`` is rejected.
+2. **own before-validator** — a ``@field_validator("<field>", ..., mode="before")``
    (or any ``mode="before"`` ``@model_validator``) on the app's own resolved
    in-repo class chain targets the field. This is the Sigma/Qlik app-local fix
    pattern: coerce the string yourself before field validation runs.
 
 **A finding is emitted** when an ``include_*`` / ``exclude_*`` field IS declared
-on the resolved entrypoint contract, its annotation is a (possibly ``Annotated``)
-``dict`` with no ``str`` union, the chain does not reach ``ExtractionInput``, and
-no before-validator targets it. One finding per offending field.
+on the resolved entrypoint contract as an in-repo ``AnnAssign``, its annotation
+is a (possibly ``Annotated``) ``dict`` with no ``str`` union, and no
+before-validator targets it. One finding per offending field.
 
 **No-op / stay-silent philosophy (mirrors K018).** Returns ``[]`` when
 ``app/generated/`` is absent, when no manifest binds the repo as a
@@ -79,17 +79,9 @@ from conformance.suite.schema.findings import Finding
 
 # Reuse K018's chain-resolution machinery verbatim — same registries, same
 # "prefer a false negative" resolution semantics.
-from ._input_fields import (
-    _chain_reaches,
-    _sole_extraction_input,
-    _walk_chain,
-)
+from ._input_fields import _sole_extraction_input, _walk_chain
 
 _RULE_ID = "K021"
-
-# The SDK base whose ``_coerce_filter`` before-validator makes any filter field
-# string-safe (acceptance #2). Same anchor K018 uses for its fallback.
-_EXTRACTION_INPUT_BASE = "ExtractionInput"
 
 # The filter fields the AE flattens to top-level JSON strings are named
 # ``include_*`` / ``exclude_*`` across the fleet.
@@ -176,7 +168,7 @@ def _field_validator_targets(call: ast.Call) -> set[str]:
 
 def _has_before_validator(chain_nodes: list[ast.ClassDef], field_name: str) -> bool:
     """True when *field_name* is coerced before field validation by the app's own
-    resolved chain (acceptance #3).
+    resolved chain (acceptance #2).
 
     A ``mode="before"`` ``@model_validator`` covers every field; a
     ``mode="before"`` ``@field_validator`` covers the field only when it names it
@@ -240,10 +232,9 @@ def _resolve_input_contracts(
        contract (``EntrypointContract.input_class_name``); or
     2. the app inherits its entrypoint from an SDK template (no decorator to
        read) — fall back to the app's sole ``ExtractionInput`` descendant, which
-       is single-entrypoint-mode only. That descendant reaches ExtractionInput
-       and is therefore string-safe by acceptance #2, so this path never yields a
-       finding; it is kept only so resolution matches K018 exactly rather than
-       diverging silently.
+       is single-entrypoint-mode only. Kept so resolution matches K018 exactly
+       rather than diverging silently. A bare subclass with no in-repo filter
+       ``AnnAssign`` stays silent; a redeclared strict ``dict`` still fires.
     """
     recs: dict[str, ClassRecord] = {}
     if code.entrypoints:
@@ -318,8 +309,6 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         chain_nodes, fully_resolved = _walk_chain(input_rec, by_name)
         if not fully_resolved:
             continue  # incomplete picture — stay silent rather than guess.
-        if _chain_reaches(input_rec, by_name, _EXTRACTION_INPUT_BASE):
-            continue  # acceptance #2: the SDK before-validator coerces the string.
 
         directives = file_directives.get(input_rec.file, {})
         for name, ann_node, _declaring in _effective_filter_fields(chain_nodes):
@@ -329,7 +318,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             if not _is_dict_typed(annotation):
                 continue  # a non-dict filter-named field cannot reject the string
             if _has_before_validator(chain_nodes, name):
-                continue  # acceptance #3
+                continue  # acceptance #2
             findings.append(_make_finding(input_rec, name, directives))
 
     return findings
@@ -360,10 +349,11 @@ def _make_finding(
                 "(CONNECT-1333 / CONNECT-1389). Make the field accept the string in any "
                 "one of these ways: (1) union the annotation with str — "
                 f"'{field_name}: FilterMap | str' (or 'dict[str, list[str]] | str'); "
-                "(2) base the contract on "
-                "'application_sdk.templates.contracts.sql_metadata.ExtractionInput', "
-                "whose '_coerce_filter' mode='before' validator coerces the string for "
-                "include_filter/exclude_filter; or (3) add a "
+                "(2) mix in "
+                "'application_sdk.templates.contracts.sql_metadata.ExtractionInput' "
+                "*without* redeclaring a strict dict — a type override drops the SDK "
+                "json_schema_extra the coercer keys on, so the inherited "
+                "'_coerce_filter' does not run; or (3) add a "
                 f"@field_validator('{field_name}', mode='before') to this contract that "
                 "coerces the string yourself. Note an 'after'-mode validator runs too "
                 "late — the string is already rejected. Suppress with "
