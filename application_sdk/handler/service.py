@@ -2537,11 +2537,12 @@ def create_app_handler_service(
             Rust-core metrics endpoint. Defaults to the SDK constant.
         workflow_max_timeout_hours: Optional ceiling on workflow execution time in
             hours. When set, passed as ``execution_timeout`` to Temporal on every
-            ``/workflows/v1/start`` and ``/events/v1/{event_id}`` call. ``None``
-            (the default) means no SDK-level ceiling — the Temporal namespace
-            default applies. Reads ``ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS`` env var
-            when constructed via :class:`AppConfig`; non-positive values are
-            treated as ``None`` with a boot-time warning.
+            ``/workflows/v1/start`` and ``/events/v1/{event_id}`` call. Reads
+            ``ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS`` env var when constructed via
+            :class:`AppConfig`, defaulting to 72 hours when unset. ``None``
+            means no SDK-level ceiling — the Temporal namespace default
+            applies; pass ``ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS=0`` to opt out.
+            Negative values are treated as ``None`` with a boot-time warning.
 
     Returns:
         Configured FastAPI application.
