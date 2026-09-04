@@ -74,6 +74,7 @@ failure of the thing under test.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import warnings
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -135,6 +136,7 @@ from application_sdk.testing.e2e.payload import (
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.harness import atlas
 from application_sdk.testing.harness._errors import MissingTenantEnvError
+from application_sdk.testing.harness.atlas import seed as atlas_seed
 from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.bridge import run_sync
 from application_sdk.testing.harness.budgets import Budget
@@ -1004,6 +1006,7 @@ class BaseE2ETest:
         self._active_dag = None
         self.dag_outcomes = []
         self._connection_seeded = False
+        self._seeded_connection_qns: list[str] = []
         self._validate_dag_runs()
 
         # A pinned progress-stall window that is not strictly below the poll
@@ -1420,21 +1423,33 @@ class BaseE2ETest:
             await self._close_clients()
 
     async def _purge_this_run(self) -> None:
-        """Delete the ephemeral connection this run minted, if there is one."""
+        """Delete every ephemeral connection this run minted, if there are any.
+
+        The run's own connection first, then every lineage-parent connection
+        :meth:`seed_assets` registered — in that order because the run's assets
+        hold lineage *references* into the seeded skeletons, and purging the
+        referrer before the referent is the direction that cannot strand an
+        edge. Each purge is independently guarded: one connection that will not
+        purge must not orphan the others, for the same reason the two phases
+        inside :func:`~application_sdk.testing.harness.teardown.purge_connection`
+        are independently guarded.
+        """
         conn_qn = getattr(self, "connection_qualified_name", "")
-        if not conn_qn:
-            return
-        try:
-            async with self._atlas_client() as client:
-                await purge_connection(client, conn_qn)
-        # conformance: ignore[E004] teardown boundary — this runs after the assertions have decided the verdict, so a cleanup failure must never replace a real one; it is logged at WARNING with exc_info
-        except Exception:
-            logger.warning(
-                "e2e cleanup: could not reach the tenant to purge %s — manual "
-                "purge may be needed",
-                conn_qn,
-                exc_info=True,
-            )
+        seeded = tuple(getattr(self, "_seeded_connection_qns", ()))
+        for target in (conn_qn, *seeded):
+            if not target:
+                continue
+            try:
+                async with self._atlas_client() as client:
+                    await purge_connection(client, target)
+            # conformance: ignore[E004] teardown boundary — this runs after the assertions have decided the verdict, so a cleanup failure must never replace a real one; it is logged at WARNING with exc_info
+            except Exception:
+                logger.warning(
+                    "e2e cleanup: could not reach the tenant to purge %s — manual "
+                    "purge may be needed",
+                    target,
+                    exc_info=True,
+                )
 
     async def _close_clients(self) -> None:
         """Release the AE pool this test opened, on the loop that opened it.
@@ -1803,6 +1818,87 @@ class BaseE2ETest:
             actual_state="seed probe reached no verdict",
             cause=cause,
         )
+
+    def seed_assets(self, spec: atlas_seed.SeedSpec) -> atlas_seed.SeededConnection:
+        """Seed a lineage-parent skeleton tree, registered for this run's purge.
+
+        For the ``ATLAS-404-00-00A`` class of failure (FND-402): a lineage-only
+        connector (coalesce, adf, mode) publishes Process / ColumnProcess
+        entities whose refs name *another source's* assets, and on a
+        connector-scoped e2e tenant nothing has ever crawled that source. Call
+        this from :meth:`seed_prerequisites` with the exact tree the connector's
+        refs will name — Atlas ref resolution is exact-match and type-strict, so
+        skeleton entities satisfy it completely (see
+        :mod:`application_sdk.testing.harness.atlas.seed`).
+
+        Unlike :meth:`seed_connection`, which seeds *this run's own* connection,
+        the tree here hangs under a **second** ephemeral connection for the
+        referenced source. When ``spec.qualified_name`` is empty this run's
+        minter names it, exactly as it named the run's own — same uniqueness,
+        same predictability. Either way the QN lands on
+        ``self._seeded_connection_qns``, which :meth:`teardown_method` purges
+        after the run's own connection — closing the gap where a suite that
+        seeded a second connection had nothing that would ever tear it down.
+
+        Args:
+            spec: What to seed. When its ``qualified_name`` is empty, one is
+                minted from ``spec.connector_type`` (the display name follows
+                unless the spec pinned its own). The admin ACL defaults to the
+                one ``setup_method`` resolved when the spec declares none.
+
+        Returns:
+            The :class:`~application_sdk.testing.harness.atlas.seed.SeededConnection`,
+            whose ``qualified_name`` is the prefix to rebase the connector's
+            refs onto.
+
+        Raises:
+            UnknownConnectorTypeError: ``spec.connector_type`` is not a pyatlan
+                ``AtlanConnectorType``.
+            SeedConnectionNotSearchableError: Atlas never returned the seeded
+                connection within ``atlas_poll_timeout_seconds``.
+            SeedTreeNotWritableError: The first skeleton write ran to no verdict.
+            Exception: Whatever the first write last raised when the
+                connection's policies never went live, or whatever pyatlan
+                raises when a later batch is rejected.
+        """
+        return run_sync(self._seed_assets_async(spec))
+
+    async def _seed_assets_async(
+        self, spec: atlas_seed.SeedSpec
+    ) -> atlas_seed.SeededConnection:
+        """Mint the identity if needed, register the QN, then hand off.
+
+        The QN is registered *before* the seed runs, not after: a seed that
+        creates the connection and then fails on the tree must still be torn
+        down, and registering on success would leave exactly that half-set-up
+        connection behind.
+        """
+        if not spec.qualified_name:
+            identity = self._minter.connection_identity(spec.connector_type)
+            spec = dataclasses.replace(
+                spec,
+                qualified_name=identity.qualified_name,
+                display_name=spec.display_name or identity.display_name,
+            )
+        if not (spec.admin_users or spec.admin_groups or spec.admin_roles):
+            spec = dataclasses.replace(
+                spec,
+                admin_users=tuple(
+                    self.connection_admin_users or self._auto_admin_users
+                ),
+                admin_groups=tuple(self.connection_admin_groups),
+                admin_roles=tuple(
+                    self.connection_admin_roles or self._auto_admin_roles
+                ),
+            )
+        self._seeded_connection_qns.append(spec.qualified_name)
+        async with self._atlas_client() as client:
+            return await atlas_seed.seed_assets(
+                client,
+                spec,
+                connection_budget=self._atlas_connection_budget(),
+                probe_budget=self._seed_probe_budget(),
+            )
 
     # ------------------------------------------------------------------
     # Subclass hooks — override these

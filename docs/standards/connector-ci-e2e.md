@@ -1156,6 +1156,76 @@ not count as the crawler's e2e suite, deliberately: it exists to seed, and it is
 graded against the consuming suite's intent. The rule stays *one collectable class
 per entrypoint, which may run prerequisite DAGs for others*.
 
+### Seeding lineage parents another *source* owns
+
+A lineage-only connector — Coalesce, ADF, Mode — publishes Process /
+ColumnProcess entities whose `inputs`/`outputs` reference **another source's**
+assets by qualified name: Snowflake tables under a Coalesce run, warehouse
+tables under an ADF pipeline. On a connector-scoped e2e tenant that source has
+never been crawled, so Atlas rejects every reference (`ATLAS-404-00-00A`) and
+the publish fails wholesale — 72 entities on adf, 9 on mode, 19,210 on coalesce.
+Neither `seed_connection` (the run's *own* connection) nor a prerequisite
+`dag_runs` crawl (there is no warehouse to crawl) covers this shape.
+
+`seed_assets` does. Atlas resolves a lineage ref by **exact-match qualified name
+and exact type** — no fuzzy matching, no case folding, and a `Table` never
+resolves a ref that said `View` — so a *skeleton* entity carrying nothing but
+name, qualifiedName and parent linkage satisfies the resolver completely.
+Declare the tree and call it from `seed_prerequisites()`:
+
+```python
+from application_sdk.testing.harness.atlas import seed as atlas_seed
+
+
+class TestCoalesceE2E(CrawlerGeneratedE2EBase):
+    def seed_prerequisites(self) -> None:
+        seeded = self.seed_assets(
+            atlas_seed.SeedSpec(
+                connector_type="snowflake",   # the REFERENCED source's type
+                qualified_name="",            # empty → minted per run
+                display_name="",
+                databases=(
+                    atlas_seed.DatabaseSpec(
+                        name="ANALYTICS",
+                        schemas=(
+                            atlas_seed.SchemaSpec(
+                                name="PUBLIC",
+                                tables=(
+                                    atlas_seed.TableSpec(
+                                        name="ORDERS", columns=("ID", "AMOUNT")
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+        # Rebase the refs the connector will emit onto seeded.qualified_name
+        # (e.g. via a mustache substitution or the connector's config).
+```
+
+The seeded tree hangs under a **second** ephemeral connection, minted per run
+exactly like the suite's own, and its QN is registered on
+`self._seeded_connection_qns` *before* the seed runs — so `teardown_method`
+purges it (after the run's own connection, referrer before referent) even when
+the seed itself half-fails. Nothing about this touches a long-lived shared
+connection.
+
+Two caveats:
+
+- **QN parity is the whole contract.** Every segment must match what the
+  connector under test emits **byte for byte, case included**. The coalesce
+  pilot (`atlan-coalesce-app`, `tests/e2e/_snowflake_seed.py`) derives its seed
+  set from the connector's own committed transform goldens so parity holds by
+  construction — a connector whose warehouse QNs are not config-pinnable must
+  likewise precompute them from its source fixture, never invent them.
+- **This seeds Atlas only.** A connector that additionally validates refs
+  against a connection-cache artifact in object storage (coalesce with a cache
+  loaded drops unmatched refs instead of emitting them) needs that artifact
+  deposited separately; the pilot writes its own SQLite. A harness-level cache
+  writer is a possible follow-up, not part of `seed_assets`.
+
 ## Onboarding checklist for a new connector
 
 1. **Action manifest**: `app.yaml` at repo root (3 lines).
