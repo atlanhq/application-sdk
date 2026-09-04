@@ -56,8 +56,8 @@ from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
+from application_sdk.app._generated_tree import is_form_configmap
 from application_sdk.app.entrypoint import canonical_workflow_type
-from application_sdk.app.generated_tree import is_form_configmap
 from application_sdk.common.dispatch import resolve_dispatch_workflow_id
 from application_sdk.common.task_queue import (
     resolve_manifest_tokens,
@@ -443,7 +443,7 @@ _storage: ObjectStore | None = None
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
 # The form-discovery exclusion vocabulary lives in
-# `application_sdk.app.generated_tree`, which is the authority: this endpoint is
+# `application_sdk.app._generated_tree`, which is the authority: this endpoint is
 # what a tenant's /api/service/configmaps/<name> proxies to, and the FND-1667
 # route check compares what this serves against the app's committed contract.
 # A second copy of "which sibling JSON is a form" would let the server serve one

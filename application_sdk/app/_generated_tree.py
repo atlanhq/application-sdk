@@ -27,6 +27,11 @@ the same copy the server does.
 Deliberately dependency-light: stdlib only, no logger, no constants import. It
 is imported by the request path in ``handler.service`` and by a CI-time check,
 so it must cost nothing and pull nothing.
+
+Private (leading underscore), like its siblings ``_artifact_schema_guard`` and
+``_ep_registration``: these are the SDK's own rules about its own generated
+tree, not a surface a consumer app should pin against. Nothing here is
+re-exported from ``application_sdk.app``.
 """
 
 from __future__ import annotations

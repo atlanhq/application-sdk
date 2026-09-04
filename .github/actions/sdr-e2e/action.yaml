@@ -758,7 +758,7 @@ runs:
     #     `e2e` job that calls this action has prepare-tenant in its `needs:`,
     #     so everything in this composite is strictly after the install.
     #   * the SDK must be IMPORTABLE. The check reads the same three facts the
-    #     configmap endpoint serves from (`application_sdk.app.generated_tree`),
+    #     configmap endpoint serves from (`application_sdk.app._generated_tree`),
     #     rather than re-deriving them into a second copy that could drift from
     #     the server. prepare-tenant runs a bare `python3` with no `uv sync`, so
     #     the SDK is not importable there; by this point in this action it is.

@@ -14,7 +14,7 @@ tenant serves, and the SDK is on **both** sides of that join: the tenant's
 ``GET /workflows/v1/configmap/{id}`` in ``application_sdk.handler.service``.
 So the envelope the check unwraps, the rule deciding which generated ``*.json``
 is a setup form, and the bundle-vs-flat layout classification are all read from
-``application_sdk.app.generated_tree`` — the same authority the server reads. A
+``application_sdk.app._generated_tree`` — the same authority the server reads. A
 copy of any of those in this directory would let the server serve one file while
 the check compared against another, and that mismatch would read as a contract
 regression rather than as two divergent copies of one rule.

@@ -313,7 +313,7 @@ Without a query param, `GET /workflows/v1/manifest` serves the first candidate w
 ### One authority for the generated tree's shape
 
 Three facts about `app/generated/` are needed in more than one place, so they
-live in `application_sdk/app/generated_tree.py` and nowhere else:
+live in `application_sdk/app/_generated_tree.py` and nowhere else:
 
 | Function | Answers |
 | --- | --- |

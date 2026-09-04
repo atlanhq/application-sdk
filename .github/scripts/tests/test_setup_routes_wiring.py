@@ -80,7 +80,7 @@ def test_the_shell_it_invokes_is_committed(steps: list[dict]) -> None:  # type: 
 def test_it_runs_under_uv_not_bare_python(steps: list[dict]) -> None:  # type: ignore[type-arg]
     """`uv run python`, because the check imports the SDK.
 
-    The shell reads ``application_sdk.app.generated_tree`` — the same authority
+    The shell reads ``application_sdk.app._generated_tree`` — the same authority
     the configmap endpoint serves from — rather than keeping a second copy of
     the layout and form-selection rules. A bare ``python3`` has no SDK on the
     path, so this would die on an ImportError. The action's other scripts use
@@ -210,7 +210,7 @@ def test_the_shell_holds_no_check_logic() -> None:
     for leaked in ("atlan-connectors-", "csa-connectors-", "manifest.json"):
         assert leaked not in source, (
             f"{leaked!r} appears in the CLI shell. That rule belongs to "
-            "application_sdk.app.generated_tree, which the configmap endpoint "
+            "application_sdk.app._generated_tree, which the configmap endpoint "
             "also reads — a second copy here can drift from the server."
         )
 

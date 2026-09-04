@@ -53,7 +53,7 @@ from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin
 
 import orjson
 
-from application_sdk.app.generated_tree import GeneratedLayout, generated_layout
+from application_sdk.app._generated_tree import GeneratedLayout, generated_layout
 from application_sdk.constants import CONTRACT_GENERATED_DIR
 from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
@@ -63,7 +63,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ARTIFACT_SCHEMA_REMOVAL_VERSION",
-    # Re-exported from application_sdk.app.generated_tree, which owns the
+    # Re-exported from application_sdk.app._generated_tree, which owns the
     # classification. Kept as a name here because this module's docstrings and
     # `_declared_artifact_schema_keys`'s signature are written in terms of it.
     "GeneratedLayout",
@@ -117,7 +117,7 @@ class _Declarations:
 def _generated_layout() -> GeneratedLayout:
     """Classify this app's committed generated tree.
 
-    Thin wrapper over :func:`application_sdk.app.generated_tree.generated_layout`
+    Thin wrapper over :func:`application_sdk.app._generated_tree.generated_layout`
     applied to :data:`~application_sdk.constants.CONTRACT_GENERATED_DIR`, which
     is the authority — ``handler.service``'s configmap fallback and the
     tenant-side route check read the same classifier, so the same app cannot get
