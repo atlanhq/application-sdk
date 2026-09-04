@@ -1403,7 +1403,9 @@ class App(ABC):
 
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.workflow_id}/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
-            run_prefix=run_prefix, app_name=self._app_name
+            run_prefix=run_prefix,
+            app_name=self._app_name,
+            quarantined=input.quarantined,
         )
 
         # Derive the FileReference for cross-store dedup / deployment-store fallback.
@@ -1447,6 +1449,7 @@ class App(ABC):
                     _source_store=source_store,
                     _app_prefix=app_prefix,
                     _tier=input.tier,
+                    _quarantined=input.quarantined,
                 )
             except Exception as exc:
                 if fatal:
@@ -1642,9 +1645,12 @@ class App(ABC):
            ``RETAINED`` and ``PERSISTENT`` tier refs are skipped.
         2. **Run-scoped prefix** (opt-in via ``input.include_prefix_cleanup``):
            all objects under ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}/``,
-           which includes any ``RETAINED``-tier refs from this run.
+           which includes any ``RETAINED``-tier refs from this run, **and** the
+           same run prefix under the quarantine root, so quarantined run data
+           does not survive a cleanup its unquarantined equivalent would clear.
 
-        Objects under ``persistent-artifacts/`` are never deleted.
+        Objects under ``persistent-artifacts/`` — quarantined or not — are
+        never deleted.
 
         If no object store is configured (local dev), returns immediately with
         zero counts.  Individual delete errors increment ``error_count`` but
@@ -1652,6 +1658,7 @@ class App(ABC):
         """
         from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             PROTECTED_STORAGE_PREFIXES,
+            QUARANTINE_PREFIX,
             TRACKED_FILE_REFS_KEY,
         )
         from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
@@ -1729,25 +1736,28 @@ class App(ABC):
                         else:
                             errors += 1
 
-        # 2. Delete run-scoped prefix (opt-in).
+        # 2. Delete run-scoped prefix (opt-in), including its quarantined twin.
         if input.include_prefix_cleanup:
-            prefix = build_output_path() + "/"
+            run_prefix = build_output_path() + "/"
             import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
 
-            for batch in obs.list(resolved, prefix=prefix):
-                tasks = []
-                for item in batch:
-                    key = str(item["path"])
-                    if any(key.startswith(p) for p in PROTECTED_STORAGE_PREFIXES):
-                        skipped += 1
-                        continue
-                    tasks.append(_delete_one(key))
-                results = await asyncio.gather(*tasks)
-                for ok in results:
-                    if ok:
-                        deleted += 1
-                    else:
-                        errors += 1
+            # Quarantined RETAINED data lives under a different root, so an
+            # explicit run cleanup would otherwise leave sensitive bytes behind.
+            for prefix in (run_prefix, f"{QUARANTINE_PREFIX}/{run_prefix}"):
+                for batch in obs.list(resolved, prefix=prefix):
+                    tasks = []
+                    for item in batch:
+                        key = str(item["path"])
+                        if any(key.startswith(p) for p in PROTECTED_STORAGE_PREFIXES):
+                            skipped += 1
+                            continue
+                        tasks.append(_delete_one(key))
+                    results = await asyncio.gather(*tasks)
+                    for ok in results:
+                        if ok:
+                            deleted += 1
+                        else:
+                            errors += 1
 
         return StorageCleanupOutput(
             deleted_count=deleted,

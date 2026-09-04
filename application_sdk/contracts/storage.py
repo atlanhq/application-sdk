@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, StorageTier
@@ -49,6 +49,18 @@ class UploadInput(Input):
             ``FileReference`` so cleanup behaves correctly.
             Defaults to ``StorageTier.RETAINED`` (stored under the run-scoped
             ``artifacts/apps/`` prefix, not auto-cleaned).
+        quarantined: Mark the uploaded data as sensitive, **orthogonally to**
+            *tier*, so it lands under the quarantine root
+            (:data:`~application_sdk.constants.QUARANTINE_PREFIX`) with the
+            tier's ordinary prefix as a sub-prefix beneath it.  Set this for
+            raw content pulled straight from a source system.  Defaults to
+            ``False`` (opt-in) — existing storage keys are unchanged.
+
+            Cannot be combined with *storage_path*: an explicit
+            ``storage_path`` is used verbatim and bypasses tier resolution
+            entirely, so the pair would silently produce a *non*-quarantined
+            key.  Use *storage_subdir* to place files within the resolved
+            quarantine prefix instead.
         skip_if_exists: When ``True``, skip uploading files whose SHA-256
             hash already matches the stored value.  Defaults to ``False``.
         raise_on_empty: When ``True``, raise ``StorageEmptyUploadError`` if the upload
@@ -73,6 +85,7 @@ class UploadInput(Input):
     tier: StorageTier = StorageTier.RETAINED
     skip_if_exists: bool = False
     raise_on_empty: bool = False
+    quarantined: bool = False
 
     @field_validator("storage_subdir")
     @classmethod
@@ -84,6 +97,20 @@ class UploadInput(Input):
                     f"storage_subdir must not contain path traversal segments: {v!r}"
                 )
         return v
+
+    @model_validator(mode="after")
+    def _reject_quarantined_with_explicit_path(self) -> UploadInput:
+        # Fail closed: the pair reads as "quarantine this" but writes an
+        # ordinary key, and a silent non-quarantined write is the failure
+        # this flag exists to prevent.
+        if self.quarantined and self.storage_path is not None:
+            raise ValueError(  # stdlib-interop: pydantic model_validator requires ValueError
+                "quarantined=True cannot be combined with an explicit storage_path: "
+                "storage_path is used verbatim and bypasses quarantine routing, so "
+                "the data would not be quarantined. Use storage_subdir to place "
+                "files within the resolved quarantine prefix instead."
+            )
+        return self
 
 
 class UploadOutput(Output):

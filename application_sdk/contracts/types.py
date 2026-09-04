@@ -47,6 +47,11 @@ class StorageTier(StrEnum):
       ``StorageCleanupInput(include_prefix_cleanup=True)``.
     * ``PERSISTENT``: stored under ``persistent-artifacts/`` and never deleted
       by cleanup.  Use this for files that must survive across multiple runs.
+
+    Tier describes *lifecycle* only.  How sensitive the data is, is a separate
+    axis: set ``quarantined=True`` on the ``FileReference`` or ``UploadInput``
+    to route it under the quarantine root at whichever tier it needs.  See
+    :data:`~application_sdk.constants.QUARANTINE_PREFIX`.
     """
 
     TRANSIENT = "transient"
@@ -64,7 +69,32 @@ class StorageTier(StrEnum):
     # payload converter only uses the string value ("transient" etc.).
     # ------------------------------------------------------------------
 
-    def upload_prefix(self, *, run_prefix: str = "", app_name: str = "") -> str:
+    @staticmethod
+    def _quarantine(prefix: str, quarantined: bool) -> str:
+        """Return *prefix* rooted under the quarantine prefix when *quarantined*.
+
+        Sensitivity is orthogonal to lifecycle: quarantined data keeps the tier
+        it was given, and the tier's ordinary prefix simply becomes a sub-prefix
+        beneath the quarantine root.  That gives each tier its own default
+        location under one root, so a single restricted access/retention policy
+        covers every quarantined object while per-tier cleanup still applies.
+
+        Args:
+            prefix: The tier's ordinary object-store prefix.
+            quarantined: When ``False`` (the default everywhere) *prefix* is
+                returned unchanged, so existing keys never move.
+        """
+        if not quarantined:
+            return prefix
+        from application_sdk.constants import (  # noqa: PLC0415 — circular: constants imports contracts transitively
+            QUARANTINE_PREFIX,
+        )
+
+        return f"{QUARANTINE_PREFIX}/{prefix}" if prefix else QUARANTINE_PREFIX
+
+    def upload_prefix(
+        self, *, run_prefix: str = "", app_name: str = "", quarantined: bool = False
+    ) -> str:
         """Return the base object-store prefix for ``App.upload`` at this tier.
 
         This prefix is used as the destination root when no explicit
@@ -73,22 +103,36 @@ class StorageTier(StrEnum):
         * ``TRANSIENT``  → ``file_refs`` (cleaned at end of run)
         * ``RETAINED``   → *run_prefix* — requires *run_prefix*
         * ``PERSISTENT`` → ``persistent-artifacts/apps/{app_name}``
+
+        Args:
+            run_prefix: Run-scoped base prefix.  Required for ``RETAINED``.
+            app_name: Application name.  Used by ``PERSISTENT``.
+            quarantined: When ``True``, the result is rooted under
+                :data:`~application_sdk.constants.QUARANTINE_PREFIX`
+                (e.g. ``quarantine/persistent-artifacts/apps/{app_name}``).
+                Defaults to ``False`` — opt-in, so existing keys are unchanged.
         """
         if self is StorageTier.TRANSIENT:
-            return "file_refs"
+            return self._quarantine("file_refs", quarantined)
         if self is StorageTier.RETAINED:
             if not run_prefix:
                 raise RunPrefixRequiredError()
-            return run_prefix
+            return self._quarantine(run_prefix, quarantined)
         # PERSISTENT
-        return (
+        return self._quarantine(
             f"persistent-artifacts/apps/{app_name}"
             if app_name
-            else "persistent-artifacts"
+            else "persistent-artifacts",
+            quarantined,
         )
 
     def _make_file_ref_path(
-        self, *, suffix: str = "", run_prefix: str = "", app_name: str = ""
+        self,
+        *,
+        suffix: str = "",
+        run_prefix: str = "",
+        app_name: str = "",
+        quarantined: bool = False,
     ) -> str:
         """Return a unique single-file object-store key for auto-persisted ``FileReference`` objects.
 
@@ -107,11 +151,17 @@ class StorageTier(StrEnum):
             suffix: File extension including the leading dot (e.g. ``".parquet"``).
             run_prefix: Run-scoped base prefix.  Required for ``RETAINED``.
             app_name: Application name.  Used by ``PERSISTENT``.
+            quarantined: Root the key under
+                :data:`~application_sdk.constants.QUARANTINE_PREFIX`.
         """
-        base = self._file_ref_base(run_prefix=run_prefix, app_name=app_name)
+        base = self._file_ref_base(
+            run_prefix=run_prefix, app_name=app_name, quarantined=quarantined
+        )
         return f"{base}/{uuid.uuid4().hex}{suffix}"
 
-    def _make_file_ref_prefix(self, *, run_prefix: str = "", app_name: str = "") -> str:
+    def _make_file_ref_prefix(
+        self, *, run_prefix: str = "", app_name: str = "", quarantined: bool = False
+    ) -> str:
         """Return a unique directory prefix for auto-persisted ``FileReference`` directories.
 
         Identical to :meth:`_make_file_ref_path` with a trailing slash and no
@@ -121,10 +171,14 @@ class StorageTier(StrEnum):
             Uses ``uuid.uuid4()`` internally — **activity-context only**.
             See :meth:`_make_file_ref_path` for details.
         """
-        base = self._file_ref_base(run_prefix=run_prefix, app_name=app_name)
+        base = self._file_ref_base(
+            run_prefix=run_prefix, app_name=app_name, quarantined=quarantined
+        )
         return f"{base}/{uuid.uuid4().hex}/"
 
-    def _file_ref_base(self, *, run_prefix: str = "", app_name: str = "") -> str:
+    def _file_ref_base(
+        self, *, run_prefix: str = "", app_name: str = "", quarantined: bool = False
+    ) -> str:
         """Return the base prefix under which ``file_refs/{uid}`` paths are stored.
 
         ``TRANSIENT`` uses *run_prefix* when one is available so that the
@@ -143,20 +197,27 @@ class StorageTier(StrEnum):
         ``RETAINED`` continues to require *run_prefix*: it's a
         contract-level invariant that RETAINED refs must be
         run-scoped because they survive cleanup-at-end-of-run.
+
+        *quarantined* roots the result under
+        :data:`~application_sdk.constants.QUARANTINE_PREFIX`, leaving the
+        tier-specific portion intact as a sub-prefix beneath it.
         """
         if self is StorageTier.TRANSIENT:
             # Use run-scoped prefix when available; fall back to bare
             # ``file_refs`` for ad-hoc callers without a run context.
-            return f"{run_prefix}/file_refs" if run_prefix else "file_refs"
+            return self._quarantine(
+                f"{run_prefix}/file_refs" if run_prefix else "file_refs", quarantined
+            )
         if self is StorageTier.RETAINED:
             if not run_prefix:
                 raise RunPrefixRequiredError()
-            return f"{run_prefix}/file_refs"
+            return self._quarantine(f"{run_prefix}/file_refs", quarantined)
         # PERSISTENT
-        return (
+        return self._quarantine(
             f"persistent-artifacts/apps/{app_name}/file_refs"
             if app_name
-            else "persistent-artifacts/file_refs"
+            else "persistent-artifacts/file_refs",
+            quarantined,
         )
 
 
@@ -234,6 +295,16 @@ class FileReference(BaseModel, frozen=True):
             custom retry/timeout/streaming behavior the interceptor cannot
             provide (e.g. multi-GB files, lazy-streaming reads, or
             deferred materialization).
+        quarantined: Marks the data as sensitive, **orthogonally to** ``tier``.
+            When ``True`` the file is stored under the quarantine root
+            (:data:`~application_sdk.constants.QUARANTINE_PREFIX`) with the
+            tier's ordinary prefix as a sub-prefix beneath it, so one
+            restricted access/retention policy covers every quarantined
+            object while lifecycle still follows ``tier``.  Set this for raw
+            content pulled straight from a source system, which is treated as
+            sensitive by default rather than classified by inspecting it.
+            Defaults to ``False`` (opt-in) — existing storage keys are
+            unchanged.
     """
 
     local_path: str | None = None
@@ -242,12 +313,14 @@ class FileReference(BaseModel, frozen=True):
     file_count: int = 1
     tier: StorageTier = StorageTier.TRANSIENT
     auto_materialize: bool = True
+    quarantined: bool = False
 
     @staticmethod
     def from_local(
         path: str | Path,
         *,
         tier: StorageTier = StorageTier.TRANSIENT,
+        quarantined: bool = False,
     ) -> FileReference:
         """Create an ephemeral FileReference from a local filesystem path.
 
@@ -266,6 +339,8 @@ class FileReference(BaseModel, frozen=True):
                 ``UploadInput`` / ``App.upload`` path uses by default
                 and what the Atlan blob-storage gateway permits in
                 production deployments).
+            quarantined: Mark the data as sensitive so it is stored under
+                the quarantine root.  Orthogonal to *tier*.
 
         Returns:
             An ephemeral ``FileReference`` (``is_durable=False``) with
@@ -285,6 +360,7 @@ class FileReference(BaseModel, frozen=True):
             local_path=str(p),
             file_count=file_count,
             tier=tier,
+            quarantined=quarantined,
         )
 
 

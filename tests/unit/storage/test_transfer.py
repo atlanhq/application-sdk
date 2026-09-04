@@ -1041,3 +1041,58 @@ class TestUploadSameStoreCopy:
         exists_spy.assert_not_called()
         assert out.ref.file_count == 2
         assert out.synced == 0
+
+
+class TestUploadQuarantined:
+    """``_quarantined`` must reach the returned ref on every upload branch —
+    a durable ref that loses the marker looks like ordinary data downstream."""
+
+    _APP_PREFIX = "quarantine/artifacts/apps/myapp/workflows/wf-1/run-1"
+
+    async def test_single_file_branch_marks_the_ref(self, store, tmp_path) -> None:
+        f = tmp_path / "workbook.twb"
+        f.write_bytes(b"<workbook/>")
+        out = await upload(
+            str(f), store=store, _app_prefix=self._APP_PREFIX, _quarantined=True
+        )
+        assert out.ref.quarantined is True
+        assert out.ref.storage_path == f"{self._APP_PREFIX}/workbook.twb"
+
+    async def test_directory_branch_marks_the_ref(self, store, tmp_path) -> None:
+        d = tmp_path / "definitions"
+        d.mkdir()
+        (d / "a.twb").write_bytes(b"a")
+        (d / "b.tds").write_bytes(b"b")
+        out = await upload(
+            str(d), store=store, _app_prefix=self._APP_PREFIX, _quarantined=True
+        )
+        assert out.ref.quarantined is True
+        assert out.ref.storage_path == f"{self._APP_PREFIX}/"
+        assert out.ref.file_count == 2
+
+    async def test_deployment_store_fallback_branch_marks_the_ref(
+        self, store, tmp_path
+    ) -> None:
+        """Cross-pod fallback: the local copy is gone, bytes stream from the
+        source store — the marker must survive that path too."""
+        f = tmp_path / "seed.twb"
+        f.write_bytes(b"seeded")
+        seeded = await upload(str(f), "source/seed.twb", store=store)
+        f.unlink()
+
+        out = await upload(
+            str(f),
+            store=store,
+            _source_ref=seeded.ref,
+            _source_store=store,
+            _app_prefix=self._APP_PREFIX,
+            _quarantined=True,
+        )
+        assert out.ref.quarantined is True
+        assert out.ref.storage_path == f"{self._APP_PREFIX}/seed.twb"
+
+    async def test_defaults_to_not_quarantined(self, store, tmp_path) -> None:
+        f = tmp_path / "data.txt"
+        f.write_bytes(b"hello")
+        out = await upload(str(f), store=store)
+        assert out.ref.quarantined is False
