@@ -2348,6 +2348,207 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_configmap_default_fallback_skips_artifact_schemas(
+        self, tmp_path: Path
+    ) -> None:
+        """App-id request must not serve ``artifact_schemas.json`` as the form.
+
+        Regression, FND-1682. Once an app declares an ``artifactSchemas`` block
+        (conformance K016) the toolkit emits ``artifact_schemas.json`` beside
+        the form. It is neither the manifest nor a credential template, and it
+        sorts before every plausible form stem, so the fallback's sorted scan
+        picked it and the handler returned ``raw.get("config", raw)`` — the
+        whole schema document, which carries no ``properties``. HTTP 200, blank
+        setup wizard, nothing in the logs or the network tab. Latent for every
+        app adopting K016; ``atlan-metabase-app`` was the first confirmed one
+        (FND-1681).
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Flat single-entrypoint layout, in the order `sorted()` sees it:
+        # artifact_schemas < atlan-connectors-* < manifest < the form.
+        (tmp_path / "artifact_schemas.json").write_text(
+            json.dumps({"version": "1.0", "artifacts": {}})
+        )
+        (tmp_path / "atlan-connectors-metabase.json").write_text(
+            json.dumps({"config": {"key": "credential-schema"}})
+        )
+        (tmp_path / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (tmp_path / "metabase.json").write_text(
+            json.dumps({"config": {"key": "form-config"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="metabase", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-metabase")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "form-config"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_prefers_entrypoint_named_form(
+        self, tmp_path: Path
+    ) -> None:
+        """An unrecognised sibling that sorts first does not become the form.
+
+        The exclusion list can only name the siblings the toolkit emits today,
+        so the fallback identifies the form by name first — ``<ep.name>.json``,
+        or the connector convention ``<source>-<ep.name>.json`` — and only then
+        falls back to the sorted scan. ``aaa-unknown-sibling.json`` stands in
+        for whatever the toolkit emits next: on no exclusion list, sorting
+        first. Without the naming step this is FND-1682 again with a different
+        filename.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "aaa-unknown-sibling.json").write_text(
+            json.dumps({"config": {"key": "not-a-form"}})
+        )
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "crawler.json").write_text(
+            json.dumps({"config": {"key": "form-config"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="metabase", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-metabase")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "form-config"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_matches_connector_suffix_form(
+        self, tmp_path: Path
+    ) -> None:
+        """``crawler`` resolves ``snowflake-crawler.json`` over a first-sorting sibling.
+
+        The connector convention names the entry point for the *role* and the
+        file for the source, so exact-name matching alone never fires across the
+        connector fleet — every one of them would ride the alphabetical guess.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "aaa-unknown-sibling.json").write_text(
+            json.dumps({"config": {"key": "not-a-form"}})
+        )
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "form-config"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "form-config"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_alphabetical_last_resort_serves_and_warns(
+        self, tmp_path: Path
+    ) -> None:
+        """Several candidates, none named for the entrypoint → serve + WARN.
+
+        The alphabetical pick is the compatibility path for apps whose form name
+        the SDK cannot recognise, so it still answers rather than 404ing. What
+        it owes an operator is visibility: FND-1682 was invisible precisely
+        because the wrong file came back as an HTTP 200. The warning names the
+        file served and the candidates rejected, so the next unrecognised
+        sibling shows up on the first request instead of in a blank wizard.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _SplitApp(App):
+            @entrypoint
+            async def extract_metadata(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Route/card-split shape: the form is named for the app, not the entry
+        # point, so nothing here identifies itself and both files are eligible.
+        (tmp_path / "aaa-unknown-sibling.json").write_text(
+            json.dumps({"config": {"key": "guessed"}})
+        )
+        (tmp_path / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (tmp_path / "metabase.json").write_text(
+            json.dumps({"config": {"key": "the-real-form"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="metabase", app_class=_SplitApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            with patch("application_sdk.handler.service.logger") as mock_logger:
+                response = client.get("/workflows/v1/configmap/atlan-metabase")
+            assert response.status_code == 200
+            # Still served — the guess is the compatibility path, not an error.
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "guessed"
+
+            warned = [
+                call
+                for call in mock_logger.warning.call_args_list
+                if "chosen alphabetically" in call.args[0]
+            ]
+            assert len(warned) == 1
+            # The rejected candidates are the diagnostic: they are what tells an
+            # operator which file they meant to serve.
+            assert warned[0].args[1:] == (
+                "extract-metadata",
+                2,
+                "aaa-unknown-sibling",
+                ["aaa-unknown-sibling", "metabase"],
+            )
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_configmap_default_fallback_prefers_nested_over_flat_form(
         self, tmp_path: Path
     ) -> None:

@@ -56,7 +56,11 @@ from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.app._generated_tree import is_form_configmap
+from application_sdk.app._generated_tree import (
+    choose_form_configmap,
+    eligible_form_configmaps,
+    names_entrypoint,
+)
 from application_sdk.app.entrypoint import canonical_workflow_type
 from application_sdk.common.dispatch import resolve_dispatch_workflow_id
 from application_sdk.common.task_queue import (
@@ -1940,23 +1944,50 @@ def _register_workflow_routes(
                 # single-entrypoint app 404'd on an app-id request even though its
                 # form file was present — a blank setup wizard in the UI.
                 #
-                # Pick the form file by excluding the well-known non-form
-                # siblings (`manifest.json` and the `{atlan,csa}-connectors-*`
-                # credential templates) via `is_form_configmap`. Sorted for
-                # determinism.
+                # Within each directory `choose_form_configmap` decides: a form
+                # that names the entrypoint (`<ep.name>.json`, or the connector
+                # convention `<source>-<ep.name>.json`), else the only file that
+                # survives the non-form exclusion (`manifest.json`,
+                # `artifact_schemas.json`, the `{atlan,csa}-connectors-*`
+                # credential templates), else the alphabetically first.
+                #
+                # That last step is a guess, and it stays: it is the
+                # compatibility path for apps whose form name the SDK cannot
+                # recognise, and 404ing them to avoid a hypothetical would break
+                # working apps. FND-1682 was not the guess being reachable — it
+                # was `artifact_schemas.json` being eligible at all, which
+                # NON_FORM_STEMS now fixes. What the guess still owes an
+                # operator is *visibility*: it produced an HTTP 200 carrying a
+                # document with no `properties`, so a blank setup wizard looked
+                # identical to a working app from the logs, the network tab and
+                # pod stderr alike. Hence the warning below — the next
+                # unrecognised sibling shows up in the logs on the first
+                # request, before anyone opens the wizard.
                 for search_dir in (
                     CONTRACT_GENERATED_DIR / ep.name,
                     CONTRACT_GENERATED_DIR,
                 ):
-                    if not search_dir.is_dir():
+                    candidates = eligible_form_configmaps(search_dir)
+                    target = choose_form_configmap(candidates, ep.name)
+                    if target is None:
                         continue
-                    for json_file in sorted(search_dir.glob("*.json")):
-                        if not is_form_configmap(json_file.stem):
-                            continue
-                        target = json_file
-                        break
-                    if target is not None:
-                        break
+                    if len(candidates) > 1 and not names_entrypoint(
+                        target.stem, ep.name
+                    ):
+                        # conformance: ignore[L009] logs caller-invisible context (the rejected candidates) that no HTTP response carries.
+                        logger.warning(
+                            "ConfigMap form chosen alphabetically for entrypoint "
+                            "%s: %d generated files are eligible and none is "
+                            "named for it, so %s.json was served as the setup "
+                            "form (candidates=%s). If that is the wrong file, "
+                            "name the form <entrypoint>.json or "
+                            "<source>-<entrypoint>.json in the app's contract.",
+                            ep.name,
+                            len(candidates),
+                            target.stem,
+                            [c.stem for c in candidates],
+                        )
+                    break
 
         if target is not None:
             with open(target, encoding="utf-8") as f:
