@@ -118,6 +118,7 @@ __all__ = [
     "FormStep",
     "ServedForm",
     "declared_inputs",
+    "foreign_form",
     "form_shortfall",
     "locate_cards",
     "read_app_identity",
@@ -1173,8 +1174,59 @@ def _await_cards(
         time.sleep(_CATALOG_POLL_SECONDS)
 
 
+def foreign_form(
+    entrypoint: Entrypoint, siblings: Sequence[Entrypoint], served_name: object
+) -> str | None:
+    """Whether the tenant served a DIFFERENT entry point's form, or ``None``.
+
+    **Only fires on a name this repo can attribute**, which is the whole point.
+    An earlier revision asserted ``served_name == card.id`` and failed all three
+    mysql legs on a healthy app: the check asked for ``atlan-mysql`` and the
+    response carried ``metadata.name: 'mysql'``. Both are correct. Heracles
+    resolves the marketplace app id to the configmap name *before* proxying, so
+    the pod never sees ``atlan-mysql`` and echoes the name it was actually
+    asked for — while for metabase the same endpoint answered
+    ``metadata.name: 'atlan-metabase'``, because there the app id reached the
+    pod unrewritten and fell through to its default-entrypoint fallback.
+
+    So ``metadata.name`` is the output of a rewrite chain spanning two services,
+    and no rule this module can write predicts it without re-implementing
+    Heracles — which would drift the first time Heracles changed. Asserting on
+    it is asserting on someone else's implementation detail.
+
+    What *is* attributable is a name belonging to one of this repo's OWN
+    committed entry points. If we asked for one entry point's form and the
+    response identifies itself as another declared entry point's, that is
+    unambiguous and is the failure the original assertion was reaching for. Any
+    other value — the app id, a rewritten alias, something unrecognised — says
+    nothing, and this stays silent rather than guessing. The *content* check in
+    :func:`form_shortfall` is what covers the rest, and content is immune to
+    every rename in the chain.
+
+    Args:
+        entrypoint: The entry point whose form was requested.
+        siblings: Every entry point this repo declares, including *entrypoint*.
+        served_name: ``metadata.name`` from the response, whatever type it is.
+    """
+    name = str(served_name or "").strip()
+    if not name or name == entrypoint.config_id:
+        return None
+    for other in siblings:
+        if other.config_id == name and other.name != entrypoint.name:
+            return (
+                f"Entrypoint {entrypoint.name!r}: asked for its form and the "
+                f"endpoint identified the response as {name!r}, which is this "
+                f"repo's {other.name!r} entry point. The setup page would "
+                "render another entry point's form."
+            )
+    return None
+
+
 def _check_route(
-    routes: RouteReader, entrypoint: Entrypoint, card: Card
+    routes: RouteReader,
+    entrypoint: Entrypoint,
+    card: Card,
+    siblings: Sequence[Entrypoint],
 ) -> tuple[str | None, ServedForm | None]:
     """Assert one entry point's setup route. Returns ``(failure, form)``.
 
@@ -1195,13 +1247,11 @@ def _check_route(
             "form, so a non-200 here is a 404'd setup page for a user."
         ), None
 
-    served_name = (body.get("metadata") or {}).get("name")
-    if served_name != card.id:
-        return (
-            f"Entrypoint {entrypoint.name!r}: asked the configmap endpoint for "
-            f"{card.id!r} and it served {served_name!r}. The setup page "
-            "would render another entry point's form."
-        ), None
+    foreign = foreign_form(
+        entrypoint, siblings, (body.get("metadata") or {}).get("name")
+    )
+    if foreign is not None:
+        return foreign, None
 
     form = served_form(body)
     shortfall = form_shortfall(entrypoint, form)
@@ -1214,6 +1264,7 @@ def _await_route(
     routes: RouteReader,
     entrypoint: Entrypoint,
     card: Card,
+    siblings: Sequence[Entrypoint],
     wait_seconds: int,
     on_progress: Callable[[str], None] | None = None,
 ) -> tuple[str | None, ServedForm | None]:
@@ -1242,7 +1293,7 @@ def _await_route(
     """
     deadline = time.monotonic() + max(wait_seconds, 0)
     while True:
-        failure, form = _check_route(routes, entrypoint, card)
+        failure, form = _check_route(routes, entrypoint, card, siblings)
         if failure is None:
             return None, form
         if time.monotonic() >= deadline:
@@ -1297,7 +1348,7 @@ def verify(
         label = entrypoint.name
 
         failure, form = _await_route(
-            routes, entrypoint, card, wait_seconds, on_progress
+            routes, entrypoint, card, entrypoints, wait_seconds, on_progress
         )
         if failure is not None or form is None:
             failures.append(failure or f"Entrypoint {label!r}: no form served.")

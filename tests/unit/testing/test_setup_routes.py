@@ -54,6 +54,7 @@ from application_sdk.testing.setup_routes import (
     SetupRouteError,
     TenantRoutes,
     declared_inputs,
+    foreign_form,
     form_shortfall,
     locate_cards,
     read_app_identity,
@@ -453,6 +454,71 @@ class TestFormShortfall:
 
         assert reason is not None
         assert "declares no inputs" in reason
+
+
+class TestForeignForm:
+    """FND-1680: `metadata.name` is a rewrite, not an identity.
+
+    An earlier revision asserted `served_name == card.id` and failed all three
+    mysql legs on a healthy app: it asked for `atlan-mysql` and the response
+    carried `metadata.name: 'mysql'`. Both are right. Heracles resolves the
+    marketplace app id to the configmap name *before* proxying, so the pod
+    never saw `atlan-mysql` — while metabase's response carried
+    `metadata.name: 'atlan-metabase'`, because there the app id reached the pod
+    unrewritten and hit its default-entrypoint fallback.
+
+    Two real payloads, two different rules, one field. So this speaks up only
+    about a name it can attribute to one of THIS repo's committed entry points,
+    and says nothing about a value produced by somebody else's rewrite.
+    """
+
+    @staticmethod
+    def _bundle() -> list[Entrypoint]:
+        return [
+            _ep("crawler", "clickhouse-crawler"),
+            _ep("miner", "clickhouse-miner"),
+        ]
+
+    def test_another_entrypoints_form_is_reported(self) -> None:
+        """The failure the old assertion was actually reaching for."""
+        siblings = self._bundle()
+
+        reason = foreign_form(siblings[0], siblings, "clickhouse-miner")
+
+        assert reason is not None
+        assert "another entry point's form" in reason
+        assert "'miner'" in reason
+
+    def test_the_heracles_rewrite_is_not_a_failure(self) -> None:
+        """The exact mysql shape: asked `atlan-mysql`, served `mysql`."""
+        sole = [_ep("mysql", "mysql", is_sole=True)]
+
+        assert foreign_form(sole[0], sole, "mysql") is None
+
+    def test_an_unrewritten_app_id_is_not_a_failure(self) -> None:
+        """The exact metabase shape: asked `atlan-metabase`, served the same."""
+        sole = [_ep("metabase", "metabase", is_sole=True)]
+
+        assert foreign_form(sole[0], sole, "atlan-metabase") is None
+
+    def test_an_unattributable_name_says_nothing(self) -> None:
+        """Silence, not a guess. Content is what covers this case.
+
+        A name belonging to no declared entry point could be a rewrite, an
+        alias, or a genuine fault, and this module cannot tell which without
+        re-implementing Heracles. `form_shortfall` checks what the payload
+        CONTAINS, which is immune to every rename in the chain.
+        """
+        siblings = self._bundle()
+
+        assert foreign_form(siblings[0], siblings, "something-else") is None
+        assert foreign_form(siblings[0], siblings, "") is None
+        assert foreign_form(siblings[0], siblings, None) is None
+
+    def test_its_own_config_id_is_never_foreign(self) -> None:
+        siblings = self._bundle()
+
+        assert foreign_form(siblings[0], siblings, "clickhouse-crawler") is None
 
 
 class TestBlankFormDetection:
@@ -1407,13 +1473,17 @@ class TestVerify:
         """Asked for one form, served another — the page renders the wrong one."""
         _write_bundle(tmp_path)
         configmaps = _healthy_configmaps()
+        # The crawler's route serves a response identifying itself as the
+        # MINER's form — a name this repo can attribute, which is the only
+        # kind `foreign_form` speaks up about.
+        schema = _form_schema("extraction-method", "credential-guid", "connection")
         configmaps["clickhouse-crawler"] = (
             200,
-            _configmap_response(_form_schema("extraction-method"), "something-else"),
+            _configmap_response(schema, "clickhouse-miner"),
         )
         routes = _FakeRoutes([_both_cards()], configmaps)
 
-        with pytest.raises(SetupRouteError, match="served 'something-else'"):
+        with pytest.raises(SetupRouteError, match="another entry point's form"):
             verify(tmp_path, routes, wait_seconds=0)
 
     def test_polls_until_the_catalog_reconciles(

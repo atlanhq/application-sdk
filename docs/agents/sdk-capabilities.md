@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.32.1
-source-sha:    b0cd1b3e8c90cb5b4c9a4f35a13c917872525d34
-source-date:   2026-09-05T14:22:58Z
+source-sha:    d46dcabd4f14405fb9cbae177d986ce8ec9c4942
+source-date:   2026-09-05T15:43:36+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 346 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 347 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -4676,6 +4676,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `first_outcome_or_none(mock_logger: MagicMock)`
 - **Summary:** The first outcome row, or ``None`` — for paths asserting no row was emitted.
 - **Defined in:** `application_sdk/testing/preflight.py`
+
+#### `foreign_form`
+
+- **Import:** `from application_sdk.testing.setup_routes import foreign_form`
+- **Signature:** `foreign_form(entrypoint: Entrypoint, siblings: Sequence[Entrypoint], served_name: object) -> str | None`
+- **Summary:** Whether the tenant served a DIFFERENT entry point's form, or ``None``.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `form_shortfall`
 
