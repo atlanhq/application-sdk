@@ -20,6 +20,7 @@ from typing import ClassVar
 from application_sdk.errors.leaves import InvalidInputError, PreconditionError
 
 __all__ = [
+    "SeedPublishEmptyError",
     "SeedPublishFailedError",
     "SeedSegmentInvalidError",
     "SeedStoreUnavailableError",
@@ -90,3 +91,25 @@ class SeedPublishFailedError(PreconditionError):
 
     code: ClassVar[str] = "PRECONDITION_SEED_PUBLISH_FAILED"
     expected_state: str | None = "the seed's publish run succeeded on every node"
+
+
+@dataclass(kw_only=True)
+class SeedPublishEmptyError(PreconditionError):
+    """The seed's publish run succeeded and landed nothing in Atlas.
+
+    The failure mode a node-status check cannot see. Publish is handed a
+    ``transformed_data_prefix``; a prefix it cannot read is an *empty batch*, not
+    an error, so the node reports success having published zero entities. That
+    reads as a clean seed and then surfaces minutes later as the connector's own
+    ``ATLAS-404`` cascade — naming the connector, in a different repo, for a
+    problem in the seed's object-store wiring.
+
+    The likely causes, in the order worth checking: the tenant's publish service
+    account cannot read the seed's prefix; the harness wrote to a different
+    bucket than the one publish reads (``seed_object_store`` resolved the
+    connector's deployment store rather than the tenant blobstorage binding); or
+    the spec declared an empty tree.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_SEED_PUBLISH_EMPTY"
+    expected_state: str | None = "at least one seeded asset present in Atlas"

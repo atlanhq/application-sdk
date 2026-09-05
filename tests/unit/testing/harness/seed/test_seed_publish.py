@@ -15,17 +15,21 @@ greens a leg while dropping lineage.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from application_sdk.testing.harness.outcome import Indeterminate, Outcome, Settled
 from application_sdk.testing.harness.seed import (
     SEED_PUBLISH_NODE_ID,
     DatabaseSpec,
     SchemaSpec,
     SeedPrefixes,
+    SeedPublishEmptyError,
     SeedPublishFailedError,
     SeedPublishPlan,
     SeedSpec,
@@ -198,6 +202,30 @@ class _FakeAE:
         )
 
 
+def _verifier(outcome: Outcome[int]) -> Callable[[str], Awaitable[Outcome[int]]]:
+    """A `SeedVerifier` that answers one scripted read-back."""
+
+    async def _verify(_qualified_name: str) -> Outcome[int]:
+        return outcome
+
+    return _verify
+
+
+def _landed(count: int) -> Outcome[int]:
+    return Settled(
+        label="seeded assets", attempts=1, elapsed=timedelta(seconds=1), value=count
+    )
+
+
+def _unreadable() -> Outcome[int]:
+    return Indeterminate(
+        label="seeded assets",
+        attempts=3,
+        elapsed=timedelta(seconds=3),
+        cause=RuntimeError("Atlas search unavailable"),
+    )
+
+
 def _wire(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -236,7 +264,13 @@ class TestSeedAssetsSequence:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         ae, uploaded = _wire(monkeypatch)
-        seeded = await seed_assets(_resolved(), store=object(), ae=ae, plan=_plan())
+        seeded = await seed_assets(
+            _resolved(),
+            store=object(),
+            ae=ae,
+            plan=_plan(),
+            verify=_verifier(_landed(4)),
+        )
         assert seeded.qualified_name == _CONNECTION_QN
         assert seeded.created == {"Database": 1, "Schema": 1, "Table": 1, "Column": 1}
         assert seeded.prefix == _PREFIX_ROOT
@@ -249,7 +283,13 @@ class TestSeedAssetsSequence:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         ae, uploaded = _wire(monkeypatch)
-        await seed_assets(_resolved(), store=object(), ae=ae, plan=_plan())
+        await seed_assets(
+            _resolved(),
+            store=object(),
+            ae=ae,
+            plan=_plan(),
+            verify=_verifier(_landed(4)),
+        )
         assert uploaded == [(f"{_PREFIX_ROOT}/transformed/assets.json", "assets.json")]
 
     @pytest.mark.asyncio
@@ -273,7 +313,13 @@ class TestSeedAssetsSequence:
         )
         ae, uploaded = _wire(monkeypatch, report=failing)
         with pytest.raises(SeedTreeInvalidError) as caught:
-            await seed_assets(_resolved(), store=object(), ae=ae, plan=_plan())
+            await seed_assets(
+                _resolved(),
+                store=object(),
+                ae=ae,
+                plan=_plan(),
+                verify=_verifier(_landed(4)),
+            )
         assert uploaded == []
         assert ae.submitted == []
         assert "PUBLIC" in str(caught.value)
@@ -286,6 +332,68 @@ class TestSeedAssetsSequence:
         cache — a green leg with silently dropped lineage."""
         ae, _uploaded = _wire(monkeypatch, all_succeeded=False)
         with pytest.raises(SeedPublishFailedError) as caught:
-            await seed_assets(_resolved(), store=object(), ae=ae, plan=_plan())
+            await seed_assets(
+                _resolved(),
+                store=object(),
+                ae=ae,
+                plan=_plan(),
+                verify=_verifier(_landed(4)),
+            )
         assert "slug-1" in str(caught.value)
         assert "ae-run-1" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_a_succeeded_publish_that_landed_nothing_is_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The failure a node-status check cannot see. Publish is handed a
+        *prefix*; one it cannot read is an empty batch rather than an error, so
+        the node reports success having published nothing — and that resurfaces
+        minutes later as the connector's own ATLAS-404 cascade, in another repo."""
+        ae, _uploaded = _wire(monkeypatch)
+        with pytest.raises(SeedPublishEmptyError) as caught:
+            await seed_assets(
+                _resolved(),
+                store=object(),
+                ae=ae,
+                plan=_plan(),
+                verify=_verifier(_landed(0)),
+            )
+        assert f"{_PREFIX_ROOT}/transformed" in str(caught.value)
+        assert "ae-run-1" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_count_is_unverified_not_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ungraded is not unmet: a search that could not be read is a harness
+        read failure, and failing the seed on one would report an Atlas outage as
+        a seed defect."""
+        ae, _uploaded = _wire(monkeypatch)
+        seeded = await seed_assets(
+            _resolved(),
+            store=object(),
+            ae=ae,
+            plan=_plan(),
+            verify=_verifier(_unreadable()),
+        )
+        assert seeded.qualified_name == _CONNECTION_QN
+
+    @pytest.mark.asyncio
+    async def test_the_read_back_runs_only_after_the_node_verdict(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed publish must surface as itself, not as an empty seed — the
+        two have different remediations and only one of them is about storage."""
+        ae, _uploaded = _wire(monkeypatch, all_succeeded=False)
+        calls: list[str] = []
+
+        async def _record(qualified_name: str) -> Outcome[int]:
+            calls.append(qualified_name)
+            return _landed(0)
+
+        with pytest.raises(SeedPublishFailedError):
+            await seed_assets(
+                _resolved(), store=object(), ae=ae, plan=_plan(), verify=_record
+            )
+        assert calls == []

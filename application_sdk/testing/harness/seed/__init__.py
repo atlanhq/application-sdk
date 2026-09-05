@@ -60,13 +60,15 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import upload_file
 from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.identity import Minter
+from application_sdk.testing.harness.outcome import Outcome, Settled
 from application_sdk.testing.harness.seed._errors import (
+    SeedPublishEmptyError,
     SeedPublishFailedError,
     SeedSegmentInvalidError,
     SeedStoreUnavailableError,
@@ -114,12 +116,14 @@ __all__ = [
     "ResolvedSeedSpec",
     "SchemaSpec",
     "SeedPrefixes",
+    "SeedPublishEmptyError",
     "SeedPublishFailedError",
     "SeedPublishPlan",
     "SeedSegmentInvalidError",
     "SeedSpec",
     "SeedStoreUnavailableError",
     "SeedTreeInvalidError",
+    "SeedVerifier",
     "SeededConnection",
     "TableSpec",
     "build_seed_publish_dag",
@@ -132,6 +136,34 @@ __all__ = [
     "validate_resolved_spec",
     "write_transformed_dir",
 ]
+
+
+class SeedVerifier(Protocol):
+    """Reads back how many assets a seed actually landed under its connection.
+
+    Injected rather than performed here for the reason the rest of this package
+    takes its collaborators as arguments: an Atlas read needs a pyatlan client,
+    and a module that reaches for one cannot be exercised without a tenant.
+    ``BaseE2ETest`` supplies the real implementation; a unit test supplies a
+    scripted one.
+
+    The return type is an
+    :class:`~application_sdk.testing.harness.outcome.Outcome`, not an ``int``,
+    because "nothing landed" and "the search could not be read" are different
+    findings and the guard grades them differently.
+    """
+
+    async def __call__(self, qualified_name: str) -> Outcome[int]:
+        """Count every asset under *qualified_name*.
+
+        Args:
+            qualified_name: The seeded connection's QN.
+
+        Returns:
+            :class:`~application_sdk.testing.harness.outcome.Settled` carrying
+            the count, or another outcome when it could not be read.
+        """
+        ...
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -179,10 +211,11 @@ async def seed_assets(
     store: ObjectStore,
     ae: AEClient,
     plan: SeedPublishPlan,
+    verify: SeedVerifier,
 ) -> SeededConnection:
     """Serialise *spec*, validate it offline, and publish it as a real run.
 
-    Five steps, in this order for one reason each:
+    Six steps, in this order for one reason each:
 
     1. **Serialise locally.** ``write_transformed_dir`` emits the NDJSON a
        crawler of the referenced source would have emitted.
@@ -198,6 +231,12 @@ async def seed_assets(
     5. **Wait for a verdict**, and refuse anything short of every node
        succeeding — a partially-published seed is exactly the shape that greens a
        leg while dropping lineage.
+    6. **Read back what landed.** A succeeded node is not evidence the seed
+       worked: publish is handed a *prefix*, and a prefix it cannot read is an
+       empty batch rather than an error, so it reports success having published
+       nothing. That is the one failure this whole sequence would otherwise pass
+       through silently, to resurface minutes later as the connector's own
+       ``ATLAS-404`` cascade in a different repo.
 
     Args:
         spec: What to seed, already resolved and validated
@@ -207,6 +246,9 @@ async def seed_assets(
         ae: An open AE client on *this* event loop. Not closed here — the
             transport's lifetime stays with whoever opened it.
         plan: How this seed is addressed, dispatched and waited on.
+        verify: Reads back the asset count under the seeded connection. Required
+            rather than defaulted: a guard a caller can forget to pass is a
+            guard that goes missing on exactly the suite that needed it.
 
     Returns:
         The :class:`SeededConnection`, whose ``qualified_name`` is the prefix to
@@ -217,6 +259,8 @@ async def seed_assets(
         SeedTreeInvalidError: The serialised batch failed per-asset validation or
             referential integrity. Nothing was uploaded and nothing submitted.
         SeedPublishFailedError: The publish run did not succeed on every node.
+        SeedPublishEmptyError: The run succeeded and Atlas holds nothing under
+            the seeded connection.
         AtlanApiHttpError: AE rejected one of the create/seed/publish/submit
             writes.
         AppNotReadyError: The tenant's publish app never accepted the submit
@@ -305,15 +349,46 @@ async def seed_assets(
             actual_state=f"AE status={result.status.value}",
         )
 
+    landed = await verify(spec.qualified_name)
+    if isinstance(landed, Settled) and landed.value == 0:
+        raise SeedPublishEmptyError(
+            message=(
+                f"the lineage-parent seed for {spec.qualified_name} published "
+                f"successfully and Atlas holds nothing under it. {report.total} "
+                f"record(s) were uploaded to {prefixes.transformed}, so the "
+                "likely cause is that the tenant's publish app could not read "
+                "that prefix — check that seed_object_store() resolves the "
+                "tenant blobstorage binding (not the connector's deployment "
+                "store) and that publish's service account can read under it. "
+                f"Seed run: slug={seeded.slug} run_id={ae_run_id}"
+            ),
+            resource=spec.qualified_name,
+            actual_state="0 assets under the seeded connection",
+        )
+    if not isinstance(landed, Settled):
+        # Ungraded is not unmet. A search that could not be read is a harness
+        # read failure, not evidence the seed is empty, and failing the seed on
+        # one would report an Atlas outage as a seed defect. The consuming run's
+        # own ladder still fails loudly a few minutes later if the seed really is
+        # absent — this line is what tells you which of the two happened.
+        logger.warning(
+            "harness seed: could not read back the asset count under %s (%s), so "
+            "whether the seed landed is unverified — a publish that read an "
+            "unreachable prefix would look identical to this",
+            spec.qualified_name,
+            type(landed).__name__,
+        )
+
     logger.info(
         "harness seed: published %d skeleton asset(s) under %s (%s) via slug=%s "
-        "run_id=%s",
+        "run_id=%s; Atlas reports %s",
         report.total,
         spec.qualified_name,
         ", ".join(f"{name}={count}" for name, count in written.created.items())
         or "empty tree",
         seeded.slug,
         ae_run_id,
+        landed.value if isinstance(landed, Settled) else "an unreadable count",
     )
     return SeededConnection(
         qualified_name=spec.qualified_name,

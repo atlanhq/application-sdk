@@ -1328,6 +1328,15 @@ already selects and mounts into the worker. A leg whose layout differs sets
 `E2E_SEED_COMPONENTS_DIR` / `E2E_SEED_STORE_BINDING`; a suite that needs
 something else entirely overrides `seed_object_store()`.
 
+Getting that wiring wrong does **not** fail the publish node. Publish is handed a
+*prefix*, and a prefix it cannot read is an empty batch rather than an error — so
+it reports success having published nothing, which then resurfaces minutes later
+as the connector's own `ATLAS-404` cascade, in a different repo. `seed_assets`
+therefore reads back the asset count under the seeded connection and raises
+`SeedPublishEmptyError` on zero, naming the prefix it uploaded to. A count it
+cannot read is reported as *unverified* (a warning), never as zero: an Atlas
+outage must not be reported as a seed defect.
+
 #### Sequencing a run against a connection the suite did not mint
 
 `DAGSpec.connection_qualified_name` names the connection one run is submitted and

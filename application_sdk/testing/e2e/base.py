@@ -1971,7 +1971,52 @@ class BaseE2ETest:
             store=self.seed_object_store(),
             ae=self._ae,
             plan=plan,
+            verify=self._count_seeded_assets,
         )
+
+    async def _count_seeded_assets(self, qualified_name: str) -> Outcome[int]:
+        """Poll Atlas for the asset count under a seeded connection.
+
+        The read-back that turns "the publish node succeeded" into "the seed
+        landed". Polled rather than read once, on the same short budget the run's
+        own inventory uses: Elasticsearch is eventually consistent, but assets
+        that will appear do so within seconds of publish completing, so a single
+        read straight after the verdict would report zero for a seed that is
+        merely still indexing.
+
+        Args:
+            qualified_name: The seeded connection's QN.
+
+        Returns:
+            :class:`~application_sdk.testing.harness.outcome.Settled` carrying
+            the count, or the outcome that stopped the poll — which the caller
+            grades as *unverified*, never as zero.
+        """
+        label = f"total asset count under {qualified_name}"
+        # The sentinel only survives if ``poll_until`` never ran the probe at
+        # all, which its own budget forbids — but an Indeterminate is the honest
+        # value for "no reading was taken", and it is what the caller grades as
+        # unverified rather than as zero.
+        last: Outcome[int] = Indeterminate(
+            label=label,
+            attempts=0,
+            elapsed=timedelta(0),
+            cause=RuntimeError("the seeded-asset count was never read"),
+        )
+
+        async def _probe() -> Outcome[int]:
+            nonlocal last
+            async with self._atlas_client() as client:
+                last = await atlas.count_total_assets(client, qualified_name)
+            return last
+
+        await poll_until(
+            _probe,
+            settled=lambda reading: isinstance(reading, Settled) and reading.value > 0,
+            budget=self._atlas_counts_budget(),
+            label=f"seeded assets under {qualified_name}",
+        )
+        return last
 
     def _seed_publish_plan(
         self, spec: harness_seed.ResolvedSeedSpec
