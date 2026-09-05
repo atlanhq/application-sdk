@@ -6327,6 +6327,262 @@ class TestConfigEndpointPersistence:
         assert response.json()["data"] == {"hello": "world"}
 
 
+class TestCredentialConfigGuard:
+    """POST /workflows/v1/config/{id}?type=credentials must not destroy a record.
+
+    A request carrying a GUID but an effectively-empty body used to overwrite a
+    complete credential with ``{"credentialSource": "direct"}``, destroying
+    ``authType`` / ``host`` / ``port`` — the three fields with no Vault copy.
+    Unit coverage of the rules lives in ``test_credential_config.py``; these
+    tests pin the endpoint's behaviour in each mode.
+    """
+
+    _SCHEMA = {
+        "config": {
+            "properties": {
+                "auth-type": {"type": "string", "required": True},
+                "host": {"type": "string", "required": True},
+                "basic": {
+                    "type": "object",
+                    "properties": {"password": {"required": True}},
+                },
+            },
+            "anyOf": [
+                {
+                    "properties": {"auth-type": {"const": "basic"}},
+                    "required": ["basic"],
+                }
+            ],
+        }
+    }
+
+    _STORED = {
+        "connectorConfigName": "atlan-connectors-example",
+        "authType": "gcp-wif",
+        "host": "https://example-private.p.googleapis.com",
+        "credentialSource": "direct",
+    }
+
+    def _client(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        import orjson
+
+        generated = tmp_path / "generated"
+        generated.mkdir(parents=True, exist_ok=True)
+        (generated / "atlan-connectors-example.json").write_bytes(
+            orjson.dumps(self._SCHEMA)
+        )
+        monkeypatch.setattr(
+            "application_sdk.handler.service.CONTRACT_GENERATED_DIR", generated
+        )
+        from unittest.mock import MagicMock
+
+        app = create_app_handler_service(
+            _TestHandler(), app_name="cred-guard", storage=MagicMock()
+        )
+        return TestClient(app)
+
+    @staticmethod
+    def _stored_download(stored: dict[str, object] | None):
+        """A ``download_file`` stand-in serving ``stored`` (or a missing key)."""
+        import orjson
+
+        async def fake_download(key, dest, store):
+            if stored is None:
+                raise FileNotFoundError(key)
+            Path(dest).write_bytes(orjson.dumps(stored))
+
+        return fake_download
+
+    def _post(
+        self,
+        client: TestClient,
+        body: dict[str, object],
+        stored: dict[str, object] | None,
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        with (
+            patch(
+                "application_sdk.storage.ops.download_file",
+                new=AsyncMock(side_effect=self._stored_download(stored)),
+            ),
+            patch(
+                "application_sdk.storage.ops.put_json", new=AsyncMock(return_value=None)
+            ) as mock_put,
+        ):
+            response = client.post(
+                "/workflows/v1/config/guid-123",
+                params={"type": "credentials"},
+                json=body,
+            )
+        return response, mock_put
+
+    def test_repair_mode_restores_the_dropped_fields(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default mode: 200, and the persisted object keeps authType + host.
+
+        Returning 200 is deliberate — it cannot break a caller that treats a 4xx
+        from this endpoint as fatal, whatever that caller's error handling does.
+        """
+        monkeypatch.setattr(
+            "application_sdk.constants.CREDENTIAL_CONFIG_GUARD", "repair"
+        )
+        client = self._client(tmp_path, monkeypatch)
+        response, mock_put = self._post(
+            client, {"credentialSource": "direct"}, self._STORED
+        )
+
+        assert response.status_code == 200
+        persisted = mock_put.await_args.args[1]
+        assert persisted["authType"] == "gcp-wif"
+        assert persisted["host"] == "https://example-private.p.googleapis.com"
+
+    def test_reject_mode_returns_422_and_writes_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "application_sdk.constants.CREDENTIAL_CONFIG_GUARD", "reject"
+        )
+        client = self._client(tmp_path, monkeypatch)
+        response, mock_put = self._post(
+            client, {"credentialSource": "direct"}, self._STORED
+        )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "auth-type" in detail and "host" in detail
+        mock_put.assert_not_awaited()
+
+    def test_reject_detail_never_leaks_a_credential_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The 4xx names fields, never values — this object holds credentials."""
+        monkeypatch.setattr(
+            "application_sdk.constants.CREDENTIAL_CONFIG_GUARD", "reject"
+        )
+        client = self._client(tmp_path, monkeypatch)
+        stored = {**self._STORED, "password": "super-secret-key-material"}
+        response, _ = self._post(client, {"credentialSource": "direct"}, stored)
+
+        assert response.status_code == 422
+        assert "super-secret-key-material" not in response.text
+        assert "https://example-private.p.googleapis.com" not in response.text
+
+    def test_off_mode_preserves_legacy_overwrite(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("application_sdk.constants.CREDENTIAL_CONFIG_GUARD", "off")
+        client = self._client(tmp_path, monkeypatch)
+        response, mock_put = self._post(
+            client, {"credentialSource": "direct"}, self._STORED
+        )
+
+        assert response.status_code == 200
+        assert mock_put.await_args.args[1] == {"credentialSource": "direct"}
+
+    def test_complete_body_is_persisted_verbatim(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A well-formed write is untouched — the guard is not a merge."""
+        monkeypatch.setattr(
+            "application_sdk.constants.CREDENTIAL_CONFIG_GUARD", "repair"
+        )
+        client = self._client(tmp_path, monkeypatch)
+        body = {
+            "connectorConfigName": "atlan-connectors-example",
+            "authType": "basic",
+            "host": "https://example.googleapis.com",
+        }
+        response, mock_put = self._post(client, body, self._STORED)
+
+        assert response.status_code == 200
+        assert mock_put.await_args.args[1] == body
+
+    def test_first_ever_create_is_not_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No stored object ⇒ nothing to drop ⇒ the write proceeds."""
+        monkeypatch.setattr(
+            "application_sdk.constants.CREDENTIAL_CONFIG_GUARD", "reject"
+        )
+        client = self._client(tmp_path, monkeypatch)
+        body = {"connectorConfigName": "atlan-connectors-example"}
+        response, mock_put = self._post(client, body, None)
+
+        assert response.status_code == 200
+        assert mock_put.await_args.args[1] == body
+
+    def test_workflow_type_config_is_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard is scoped to credentials; other config types are unchanged."""
+        from unittest.mock import AsyncMock, patch
+
+        monkeypatch.setattr(
+            "application_sdk.constants.CREDENTIAL_CONFIG_GUARD", "reject"
+        )
+        client = self._client(tmp_path, monkeypatch)
+        with patch(
+            "application_sdk.storage.ops.put_json", new=AsyncMock(return_value=None)
+        ) as mock_put:
+            response = client.post(
+                "/workflows/v1/config/guid-123",
+                params={"type": "someothertype"},
+                json={"anything": "goes"},
+            )
+        assert response.status_code == 200
+        assert mock_put.await_args.args[1] == {"anything": "goes"}
+
+    def test_guard_failure_degrades_to_saving_the_body(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A guard defect must never make credentials unsavable."""
+        from unittest.mock import AsyncMock, patch
+
+        monkeypatch.setattr(
+            "application_sdk.constants.CREDENTIAL_CONFIG_GUARD", "reject"
+        )
+        client = self._client(tmp_path, monkeypatch)
+        with (
+            patch(
+                "application_sdk.handler.service._config_load_from_objectstore",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            patch(
+                "application_sdk.storage.ops.put_json", new=AsyncMock(return_value=None)
+            ) as mock_put,
+        ):
+            response = client.post(
+                "/workflows/v1/config/guid-123",
+                params={"type": "credentials"},
+                json={"credentialSource": "direct"},
+            )
+        assert response.status_code == 200
+        assert mock_put.await_args.args[1] == {"credentialSource": "direct"}
+
+    def test_non_dict_body_is_not_guarded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A JSON array body must not crash the guard."""
+        from unittest.mock import AsyncMock, patch
+
+        monkeypatch.setattr(
+            "application_sdk.constants.CREDENTIAL_CONFIG_GUARD", "reject"
+        )
+        client = self._client(tmp_path, monkeypatch)
+        with patch(
+            "application_sdk.storage.ops.put_json", new=AsyncMock(return_value=None)
+        ) as mock_put:
+            response = client.post(
+                "/workflows/v1/config/guid-123",
+                params={"type": "credentials"},
+                json=["not", "a", "dict"],
+            )
+        assert response.status_code == 200
+        assert mock_put.await_args.args[1] == ["not", "a", "dict"]
+
+
 def _install_fake_app_module(
     monkeypatch: pytest.MonkeyPatch, entrypoint: str, leaf: str, **attrs: object
 ) -> None:

@@ -1038,6 +1038,80 @@ async def _config_save_to_objectstore(
     return True
 
 
+async def _guard_credential_config(
+    config_id: str, body: dict[str, Any]
+) -> dict[str, Any]:
+    """Stop a credential write from dropping fields that have no Vault copy.
+
+    ``authType``, ``host`` and ``port`` live only in this object, so a body that
+    omits them destroys them — see
+    :mod:`application_sdk.handler.credential_config` for the full asymmetry and
+    why the check is schema-driven rather than a blind merge.
+
+    Returns the body to persist: unchanged when the write preserves everything
+    required, repaired when ``ATLAN_CREDENTIAL_CONFIG_GUARD=repair`` (default),
+    and raises ``HTTPException(422)`` under ``reject``. Any internal failure
+    degrades to the unmodified body — a guard defect must not make credentials
+    unsavable.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on a credential write
+        CREDENTIAL_CONFIG_GUARD,
+    )
+    from application_sdk.handler import (  # noqa: PLC0415 — circular: handler/__init__.py imports this module
+        credential_config,
+    )
+
+    if CREDENTIAL_CONFIG_GUARD == credential_config.GUARD_MODE_OFF:
+        return body
+
+    try:
+        existing = await _config_load_from_objectstore(
+            config_id, config_type="credentials"
+        )
+        schema = credential_config.load_credential_schema(
+            body, existing, CONTRACT_GENERATED_DIR
+        )
+        dropped = credential_config.dropped_required_fields(body, existing, schema)
+    except Exception:
+        logger.warning(
+            "Credential config guard failed for %s; saving the body unmodified",
+            config_id,
+            exc_info=True,
+        )
+        return body
+
+    if not dropped:
+        return body
+
+    # Field NAMES only — never a value. This object holds credential material.
+    if CREDENTIAL_CONFIG_GUARD == credential_config.GUARD_MODE_REJECT:
+        logger.error(
+            "Rejected credential config write for %s: would drop required "
+            "field(s) %s present in the stored record",
+            config_id,
+            ", ".join(dropped),
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Credential config write would drop required field(s) "
+                f"{', '.join(dropped)} present in the stored record for "
+                f"{config_id}. Send the complete credential body, or omit the "
+                f"credential from this request to leave the stored record "
+                f"untouched."
+            ),
+        )
+
+    logger.warning(
+        "Repaired credential config write for %s: restored required field(s) %s "
+        "that the incoming body dropped. The caller sent an incomplete "
+        "credential body — this is a client defect, not a stored-record defect.",
+        config_id,
+        ", ".join(dropped),
+    )
+    return credential_config.repair_dropped_fields(body, existing or {}, dropped)
+
+
 async def _provision_local_vault(guid: str, body: dict[str, Any]) -> JSONResponse:
     """Split credentials into sensitive/non-sensitive and persist locally.
 
@@ -1613,6 +1687,9 @@ def _register_workflow_routes(
                 DeprecationWarning,
                 stacklevel=2,
             )
+
+        if type == "credentials" and isinstance(body, dict):
+            body = await _guard_credential_config(config_id, body)
 
         saved = await _config_save_to_objectstore(config_id, body, config_type=type)
 
