@@ -57,6 +57,7 @@ from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app._generated_tree import (
+    MANIFEST_STEM,
     choose_form_configmap,
     eligible_form_configmaps,
     names_entrypoint,
@@ -2025,12 +2026,28 @@ def _register_workflow_routes(
 
     @app.get("/workflows/v1/configmaps")
     async def list_configmaps() -> JSONResponse:
+        # Everything this endpoint's sibling will serve by exact stem, minus
+        # the DAG manifest, which `/workflows/v1/manifest` owns.
+        #
+        # Deliberately NOT `is_form_configmap`, and the difference is worth
+        # stating because the two look interchangeable. That predicate answers
+        # "which single file is the setup form", for the fallback that has to
+        # pick exactly one. This answers "which names does this endpoint
+        # respond to", and the credential templates it excludes are ones the
+        # UI genuinely fetches — the setup form's `credential` widget requests
+        # `atlan-connectors-<source>` as its own configmap. Filtering them here
+        # would drop names that work.
+        #
+        # The manifest stem comes from `_generated_tree` rather than a literal:
+        # a hand-spelled `"manifest"` here was the last copy of that vocabulary
+        # left in this module after FND-1682, and one divergent spelling is all
+        # the artifact_schemas bug needed.
         seen: set[str] = set()
         configmap_ids: list[str] = []
         if CONTRACT_GENERATED_DIR.exists():
             for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
                 stem = json_file.stem
-                if stem == "manifest" or stem in seen:
+                if stem == MANIFEST_STEM or stem in seen:
                     continue
                 seen.add(stem)
                 configmap_ids.append(stem)
