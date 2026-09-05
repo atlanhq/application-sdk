@@ -1228,7 +1228,7 @@ jobs:
   # up. Legs on different clouds hit different tenants (and therefore different
   # Temporal servers) besides.
   # ── Build the image ONCE, ahead of the matrix ────────────────────────────
-  # The test-image tag is deterministic (`sdr-test-<short-sha>`), so every cloud
+  # The test-image tag is deterministic (`derive_e2e_image_tag.py`), so every cloud
   # leg used to rebuild the identical image. It has to exist before prepare-tenant
   # can install it, so the build is hoisted here and every leg reuses the
   # reference via sdr-e2e's `prebuilt-image` input.

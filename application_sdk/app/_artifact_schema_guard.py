@@ -53,7 +53,11 @@ from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin
 
 import orjson
 
-from application_sdk.app._generated_tree import GeneratedLayout, generated_layout
+from application_sdk.app._generated_tree import (
+    ARTIFACT_SCHEMAS_STEM,
+    GeneratedLayout,
+    generated_layout,
+)
 from application_sdk.constants import CONTRACT_GENERATED_DIR
 from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
@@ -77,7 +81,10 @@ _logger = get_logger(__name__)
 #: reader never has to go looking for the deadline.
 ARTIFACT_SCHEMA_REMOVAL_VERSION = "4.0"
 
-_ARTIFACT_SCHEMAS_FILENAME = "artifact_schemas.json"
+#: Derived from the stem :mod:`application_sdk.app._generated_tree` owns, so
+#: the file this guard reads and the file form discovery must *skip* can never
+#: be two different names (FND-1682).
+_ARTIFACT_SCHEMAS_FILENAME = f"{ARTIFACT_SCHEMAS_STEM}.json"
 
 
 @dataclass(frozen=True)
