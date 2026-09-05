@@ -2,6 +2,12 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.28.0] - 2026-09-04
+
+### Features
+
+- add K021 filter-string-acceptance rule (CONNECT-1333/1389) (#3653) ([3161bed](https://github.com/atlanhq/application-sdk/commit/3161bed))
+
 ## [0.27.0] - 2026-09-03
 
 ### Features
