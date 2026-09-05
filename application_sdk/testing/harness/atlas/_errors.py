@@ -26,13 +26,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors.leaves import InvalidInputError, PreconditionError
+from application_sdk.errors.leaves import InvalidInputError
 
-__all__ = [
-    "SeedConnectionNotSearchableError",
-    "SeedTreeNotWritableError",
-    "UnknownConnectorTypeError",
-]
+__all__ = ["UnknownConnectorTypeError"]
 
 
 @dataclass(kw_only=True)
@@ -51,38 +47,3 @@ class UnknownConnectorTypeError(InvalidInputError):
 
     code: ClassVar[str] = "INVALID_INPUT_UNKNOWN_CONNECTOR_TYPE"
     field: str | None = "connection_type"
-
-
-@dataclass(kw_only=True)
-class SeedConnectionNotSearchableError(PreconditionError):
-    """A seeded lineage-parent Connection never became searchable in Atlas.
-
-    The harness-level sibling of
-    :class:`~application_sdk.testing.e2e._errors.SeededConnectionNotSearchableError`
-    — a distinct leaf rather than a re-export because the direction of that one
-    is wrong for :func:`~application_sdk.testing.harness.atlas.seed.seed_assets`:
-    a harness module cannot raise a leaf that lives in the package expressed on
-    top of it. Same diagnosis either way: a wedged seed is a harness
-    precondition failure, not a connector defect, and writing a skeleton tree
-    beneath a connection Atlas cannot see would only defer the failure to the
-    first child write.
-    """
-
-    code: ClassVar[str] = "PRECONDITION_SEED_CONNECTION_NOT_SEARCHABLE"
-    expected_state: str | None = "seeded lineage-parent connection searchable in Atlas"
-
-
-@dataclass(kw_only=True)
-class SeedTreeNotWritableError(PreconditionError):
-    """The first skeleton write never ran to a verdict at all.
-
-    Not the 403 case — when the first write is *refused* until the budget runs
-    out, :func:`~application_sdk.testing.harness.atlas.seed.seed_assets`
-    re-raises the write's own last error so the suite sees the 403 itself. This
-    leaf covers the remaining shape: the wait ended with no reading (the loop
-    itself was Indeterminate), so whether the connection's policies ever went
-    live is unknown rather than known-bad.
-    """
-
-    code: ClassVar[str] = "PRECONDITION_SEED_TREE_NOT_WRITABLE"
-    expected_state: str | None = "first skeleton write permitted under the seed"
