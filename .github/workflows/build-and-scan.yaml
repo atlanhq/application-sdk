@@ -32,6 +32,21 @@ on:
         required: false
         type: boolean
         default: true
+      endor_os_reachability:
+        description: >-
+          Run the Endor container scan with OS reachability (--os-reachability).
+          Default false, and that default is measured rather than cautious: basic
+          reachability profiles by actually RUNNING the image, and app images
+          that need their Dapr components and a Temporal endpoint to start will
+          not run unattended on a CI runner. Endor's qualification check then
+          reports "image is not suitable for dynamic profiling", skips profiling
+          and completes the scan without reachability -- roughly a minute of
+          extra runtime for no data. Turn it on per-repo for images that do run
+          standalone. Reachability for service images needs INSTRUMENTED
+          reachability against a real deployment, which is separate work.
+        required: false
+        type: boolean
+        default: false
       lfs:
         description: "Check out git-LFS objects before building the image (default false). Set true for apps that vendor LFS-tracked assets (e.g. large parser jars) into the Docker build context — without it the build copies the LFS pointer, not the real file. Mirrors the same input on build-and-publish-app.yaml; only applied to the image-build checkout."
         required: false
@@ -47,6 +62,19 @@ on:
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
+      ENDOR_API_CREDENTIALS_KEY:
+        required: false
+        description: >-
+          Endor Labs API key (org secret). Optional: when unset the endor-scan job
+          no-ops, so repos and forks without Endor access are unaffected. API-key
+          auth is used rather than Endor's preferred keyless OIDC because keyless
+          needs `id-token: write`, and a reusable workflow's permissions are capped
+          by the CALLER's token -- every app repo would have to add a permissions
+          block, which is exactly the per-repo configuration this workflow exists to
+          avoid. Auto-available here via the callers' `secrets: inherit`.
+      ENDOR_API_CREDENTIALS_SECRET:
+        required: false
+        description: "Endor Labs API secret (org secret). Same availability as ENDOR_API_CREDENTIALS_KEY above."
 
 permissions:
   contents: read
@@ -240,6 +268,118 @@ jobs:
           path: /tmp/trivy_results.json
           retention-days: 7
           overwrite: true
+
+  # ── Endor Labs container scan (report-only) ─────────────────────────────────
+  #
+  # Runs ALONGSIDE Trivy, not instead of it. The two enumerate packages
+  # differently -- Endor reads package-manager manifests per layer, Trivy/Syft
+  # fingerprint the filesystem -- so each sees things the other misses,
+  # measurably so on our images. What Endor adds is OVAL-based distro severity
+  # (fewer false highs on Wolfi), base-image attribution, and OS reachability.
+  # So: collect both, compare, and decide later what gates.
+  #
+  # Deliberately NOT in security-gate's `needs`, and `continue-on-error: true`:
+  # during the rollout an Endor outage, licence issue, or false positive must not
+  # be able to wedge the merge queue for the whole fleet. Promoting this to a gate
+  # is a separate, conscious PR — flip continue-on-error off and add `endor-scan`
+  # to security-gate.needs.
+  endor-scan:
+    name: Endor Container Scan
+    needs: build
+    if: always() && (needs.build.result == 'success' || inputs.image != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      # Endor is opt-in per org secret. Without this guard every fork PR and
+      # every repo not yet licensed would show a red (if ignored) job.
+      - name: Check Endor credentials
+        id: creds
+        env:
+          ENDOR_KEY: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
+        run: |
+          if [ -z "$ENDOR_KEY" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Endor scan skipped::ENDOR_API_CREDENTIALS_KEY is not available to this repo."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Same artifact the Trivy job consumes, so both scanners see byte-identical
+      # image content and a disagreement is always the scanner, never the input.
+      - name: Download image artifact
+        if: steps.creds.outputs.configured == 'true' && inputs.image == ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: Log in to GHCR
+        if: steps.creds.outputs.configured == 'true' && inputs.image != ''
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      # Normalise both paths onto /tmp/image.tar. The tarball is the primary
+      # interface because on the PR path the image is built locally and never
+      # pushed -- there is nothing for endorctl to pull -- and the build job's
+      # buildx `outputs: type=docker,dest=/tmp/image.tar` hands us one for free.
+      #
+      # It is also the more durable choice: endorctl shells out to `docker save`,
+      # which on Docker 29 rejects a multi-arch reference without an explicit
+      # platform ("both OS and Architecture must be provided"). Runners are on
+      # ubuntu-24.04 / Docker API 1.48 today and unaffected, but they will move.
+      - name: Materialise image tarball
+        id: image
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          PREBUILT: ${{ inputs.image }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PREBUILT" ]; then
+            docker pull --platform linux/amd64 "$PREBUILT"
+            docker save --platform linux/amd64 -o /tmp/image.tar "$PREBUILT"
+            echo "ref=$PREBUILT" >> "$GITHUB_OUTPUT"
+          else
+            # The build job tags the local image `scan-target:<sha>`, which is
+            # meaningless in the Endor UI. Report it under the name it will be
+            # published as, so PR scans and published images line up on one
+            # container in the Containers view.
+            echo "ref=ghcr.io/atlanhq/${REPO}:$(echo "${{ inputs.ref || github.sha }}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Reachability has to RUN the image, so the daemon must hold it -- a
+      # tarball alone is not enough. Gated on the input because `docker load` of
+      # a 0.5-2.5 GB image is dead weight for a metadata-only scan.
+      - name: Load image into the daemon (reachability only)
+        if: steps.creds.outputs.configured == 'true' && inputs.endor_os_reachability
+        run: docker load -i /tmp/image.tar
+
+      # `pr: true` keeps PR scans out of the monitored-version history; the merge
+      # path (build-and-publish-app.yaml, fail_on_findings=false) records a
+      # monitored version instead. Without this Endor fragments the project and
+      # the dashboards stop meaning anything.
+      - name: Endor Labs container scan
+        if: steps.creds.outputs.configured == 'true'
+        uses: endorlabs/github-action@f46ffb04c928a9c9c356f9627bd60b710ed0963e # v1.1.13
+        with:
+          namespace: atlan
+          api_key: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
+          api_secret: ${{ secrets.ENDOR_API_CREDENTIALS_SECRET }}
+          enable_github_action_token: false
+          scan_dependencies: false
+          scan_container: true
+          image: ${{ steps.image.outputs.ref }}
+          image_tar: /tmp/image.tar
+          os_reachability: ${{ inputs.endor_os_reachability }}
+          project_name: ${{ github.event.repository.name }}
+          as_ref: ${{ github.event_name != 'pull_request' }}
+          pr: ${{ github.event_name == 'pull_request' }}
+          scan_summary_output_type: table
+          additional_args: --image-type=app --finding-tags=${{ steps.image.outputs.ref }}
 
   # ── Security Gate — check Trivy results against allowlist ───────────────────
   security-gate:

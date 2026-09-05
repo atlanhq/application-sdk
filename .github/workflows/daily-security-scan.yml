@@ -87,6 +87,71 @@ jobs:
           GH_REF: ${{ github.ref_name }}
         run: python3 .github/scripts/dispatch_vuln_triage.py
 
+  # ── Endor Labs scan of the same base image (report-only) ────────────────────
+  #
+  # Second opinion on the exact image the Trivy job above scans. Kept as a
+  # SEPARATE job, not a step in scan-and-ticket, so it cannot delay or fail the
+  # Linear ticketing path that the fleet's allowlist reconciliation depends on.
+  # No ticket filing from here yet: until we've compared a few weeks of Endor
+  # output against Trivy's, findings go to the Endor dashboard only.
+  #
+  # This scan is what gives every app image correct base-vs-app blame: Endor
+  # attributes a base image either from an org.opencontainers.image.base.name
+  # label (our app images carry no labels at all today) or by having scanned the
+  # base first. This job is the "scanned the base first" half.
+  endor-base-scan:
+    name: Endor scan of app-runtime-base
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - name: Check Endor credentials
+        id: creds
+        env:
+          ENDOR_KEY: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
+        run: |
+          if [ -z "$ENDOR_KEY" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Endor scan skipped::ENDOR_API_CREDENTIALS_KEY is not set."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Duplicates the sdk-trivy-scan composite's `target-image` default rather
+      # than reading it: the composite is a docker-pull + trivy recipe and has no
+      # "just tell me the image" mode. Nothing enforces the pairing, so bump both
+      # together — the composite is the source of truth.
+      - name: Materialise image tarball
+        id: image
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          TARGET_IMAGE: registry.atlan.com/public/app-runtime-base:3
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$TARGET_IMAGE"
+          # Explicit --platform: Docker 29 rejects `docker save` on a multi-arch
+          # reference without it, and endorctl shells out to `docker save`.
+          docker save --platform linux/amd64 -o /tmp/base-image.tar "$TARGET_IMAGE"
+          echo "ref=$TARGET_IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Endor Labs container scan
+        if: steps.creds.outputs.configured == 'true'
+        uses: endorlabs/github-action@f46ffb04c928a9c9c356f9627bd60b710ed0963e # v1.1.13
+        with:
+          namespace: atlan
+          api_key: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
+          api_secret: ${{ secrets.ENDOR_API_CREDENTIALS_SECRET }}
+          enable_github_action_token: false
+          scan_dependencies: false
+          scan_container: true
+          image: ${{ steps.image.outputs.ref }}
+          image_tar: /tmp/base-image.tar
+          project_name: app-runtime-base
+          as_ref: true
+          pr: false
+          scan_summary_output_type: table
+          additional_args: --image-type=base --finding-tags=${{ steps.image.outputs.ref }}
+
   # NOTE: reconciliation (allowlist-entry removal + Linear ticket close/update)
   # is intentionally NOT a job here. It runs on `release: released` (not
   # `published` — that fires for `-rc` prereleases too) in
