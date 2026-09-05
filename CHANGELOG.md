@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.33.0 (September 05, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.32.1...v3.33.0
+
+### Features
+
+- verify workflow-setup routes resolve on the tenant (FND-1667) (#3666) (by @cmgrote in [c6689e6](https://github.com/atlanhq/application-sdk/commit/c6689e6))
+
+### Bug Fixes
+
+- stop serving artifact_schemas.json as the setup form (FND-1682) (#3669) (by @cmgrote in [b0cd1b3](https://github.com/atlanhq/application-sdk/commit/b0cd1b3))
+
+
 ## v3.32.1 (September 04, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.32.0...v3.32.1
