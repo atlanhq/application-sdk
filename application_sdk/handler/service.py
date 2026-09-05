@@ -56,7 +56,7 @@ from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.app._generated_tree import is_form_configmap
+from application_sdk.app._generated_tree import pick_form_configmap
 from application_sdk.app.entrypoint import canonical_workflow_type
 from application_sdk.common.dispatch import resolve_dispatch_workflow_id
 from application_sdk.common.task_queue import (
@@ -1940,21 +1940,22 @@ def _register_workflow_routes(
                 # single-entrypoint app 404'd on an app-id request even though its
                 # form file was present — a blank setup wizard in the UI.
                 #
-                # Pick the form file by excluding the well-known non-form
-                # siblings (`manifest.json` and the `{atlan,csa}-connectors-*`
-                # credential templates) via `is_form_configmap`. Sorted for
-                # determinism.
+                # Within each directory `pick_form_configmap` decides: the form
+                # named after the entrypoint (`<ep.name>.json`) when it exists,
+                # otherwise the first stem that survives the non-form exclusion
+                # (`manifest.json`, `artifact_schemas.json`, and the
+                # `{atlan,csa}-connectors-*` credential templates), sorted for
+                # determinism. Name-first matters: the exclusion list can only
+                # name the siblings the toolkit emits today, and FND-1682 is
+                # what the sorted scan alone cost — `artifact_schemas.json`
+                # sorts before every real form stem, so every app that adopted
+                # K016 served the schema document as its form and rendered a
+                # blank setup wizard behind an HTTP 200.
                 for search_dir in (
                     CONTRACT_GENERATED_DIR / ep.name,
                     CONTRACT_GENERATED_DIR,
                 ):
-                    if not search_dir.is_dir():
-                        continue
-                    for json_file in sorted(search_dir.glob("*.json")):
-                        if not is_form_configmap(json_file.stem):
-                            continue
-                        target = json_file
-                        break
+                    target = pick_form_configmap(search_dir, ep.name)
                     if target is not None:
                         break
 

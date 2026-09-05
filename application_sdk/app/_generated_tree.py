@@ -40,16 +40,37 @@ from pathlib import Path
 from typing import Literal
 
 __all__ = [
+    "ARTIFACT_SCHEMAS_STEM",
     "CREDENTIAL_TEMPLATE_PREFIXES",
     "GeneratedLayout",
     "MANIFEST_STEM",
+    "NON_FORM_STEMS",
     "form_configmap",
     "generated_layout",
     "is_form_configmap",
+    "pick_form_configmap",
 ]
 
 #: Stem of the DAG manifest that sits alongside the generated setup forms.
 MANIFEST_STEM = "manifest"
+
+#: Stem of the artifact-schema declarations the toolkit emits for an app with an
+#: ``artifactSchemas`` block (conformance K016). Read by
+#: :mod:`application_sdk.validation.sources` and
+#: :mod:`application_sdk.app._artifact_schema_guard`; named here because it is
+#: also a *non-form* sibling and form discovery must skip it.
+ARTIFACT_SCHEMAS_STEM = "artifact_schemas"
+
+#: Whole stems — as opposed to the family prefixes below — that are never a
+#: setup form.
+#:
+#: ``artifact_schemas`` earns its place the hard way (FND-1682): it sorts before
+#: every real form stem, so once an app declared ``artifactSchemas`` the
+#: alphabetical fallback in ``handler.service.get_configmap`` served the schema
+#: document as the form. It has no ``config`` key and no ``properties``, so the
+#: setup wizard rendered blank behind an HTTP 200 — nothing in the logs, the
+#: network tab or pod stderr.
+NON_FORM_STEMS = frozenset({MANIFEST_STEM, ARTIFACT_SCHEMAS_STEM})
 
 #: Non-form JSON siblings that live in the generated dir next to the setup-form
 #: configmaps. Credential templates are emitted per object-store family
@@ -73,12 +94,55 @@ GeneratedLayout = Literal["multi", "single", "unknown"]
 def is_form_configmap(stem: str) -> bool:
     """Whether a generated JSON stem is a setup-form configmap.
 
-    True when *stem* is neither the DAG ``manifest`` nor a credential template.
+    True when *stem* is neither one of the well-known non-form documents
+    (:data:`NON_FORM_STEMS`) nor a credential template.
+
+    **An exclusion list is the backstop, not the primary answer.** It can only
+    ever name the siblings the toolkit emits *today*, so a caller that has an
+    entry-point name to go on should ask :func:`pick_form_configmap`, which
+    matches the form by name first and falls back to this filter. FND-1682 is
+    what the filter alone costs: a new sibling that sorted first was served as
+    the form, and every adopting app lost its setup UI at the next release.
 
     Args:
         stem: A generated file's name without its ``.json`` suffix.
     """
-    return stem != MANIFEST_STEM and not stem.startswith(CREDENTIAL_TEMPLATE_PREFIXES)
+    return stem not in NON_FORM_STEMS and not stem.startswith(
+        CREDENTIAL_TEMPLATE_PREFIXES
+    )
+
+
+def pick_form_configmap(directory: Path, entrypoint: str) -> Path | None:
+    """Return *directory*'s setup form for *entrypoint*, or ``None``.
+
+    Two steps, in this order:
+
+    1. ``<directory>/<entrypoint>.json`` when it exists. The toolkit names an
+       entry point's form after the entry point, so this is an identification
+       rather than a guess.
+    2. Otherwise the first stem :func:`is_form_configmap` accepts, in sorted
+       order for determinism.
+
+    Step 2 alone is what broke in FND-1682, and step 1 is why the same class of
+    break does not return with the *next* sibling the toolkit learns to emit.
+    Step 2 remains because the form is not always named after the entry point —
+    a connector's ``crawler`` entry point emits ``snowflake-crawler.json`` — so
+    dropping it would 404 the apps the fallback exists for.
+
+    Args:
+        directory: A directory in the generated tree. Missing or not a
+            directory yields ``None``.
+        entrypoint: The entry point's kebab-case wire name.
+    """
+    if not directory.is_dir():
+        return None
+    named = directory / f"{entrypoint}.json"
+    if is_form_configmap(entrypoint) and named.is_file():
+        return named
+    for candidate in sorted(directory.glob("*.json")):
+        if is_form_configmap(candidate.stem):
+            return candidate
+    return None
 
 
 def generated_layout(generated: Path) -> GeneratedLayout:
@@ -137,12 +201,13 @@ def form_configmap(
         The nested directory, then the flat one — best effort, since a repo
         that has not generated has nothing to be right about.
 
-    Within the chosen directory the first stem that :func:`is_form_configmap`
-    accepts wins, in sorted order for determinism. That exclusion is what keeps
-    a flat app's ``atlan-connectors-<source>.json`` from being mistaken for its
-    form: sorted alphabetically the credential template comes *first*, so a
-    glob without the exclusion picks the wrong file on every single-entrypoint
-    connector.
+    Within the chosen directory :func:`pick_form_configmap` decides, so a form
+    named after the entry point is identified by name and anything else falls
+    back to the sorted :func:`is_form_configmap` scan. That exclusion is what
+    keeps a flat app's ``atlan-connectors-<source>.json`` from being mistaken
+    for its form: sorted alphabetically the credential template comes *first*,
+    so a glob without the exclusion picks the wrong file on every
+    single-entrypoint connector.
 
     Args:
         generated: The generated directory, usually ``app/generated``.
@@ -163,9 +228,7 @@ def form_configmap(
         search = (generated / entrypoint, generated)
 
     for directory in search:
-        if not directory.is_dir():
-            continue
-        for candidate in sorted(directory.glob("*.json")):
-            if is_form_configmap(candidate.stem):
-                return candidate
+        found = pick_form_configmap(directory, entrypoint)
+        if found is not None:
+            return found
     return None

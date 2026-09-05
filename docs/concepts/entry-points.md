@@ -318,7 +318,8 @@ live in `application_sdk/app/_generated_tree.py` and nowhere else:
 | Function | Answers |
 | --- | --- |
 | `generated_layout(dir)` | `multi` (per-entry-point subdirectories), `single` (flat), or `unknown` (nothing generated) |
-| `is_form_configmap(stem)` | Is this sibling `*.json` a setup form, or the DAG `manifest` / a `{atlan,csa}-connectors-*` credential template? |
+| `is_form_configmap(stem)` | Is this sibling `*.json` a setup form, or one of the non-form documents — the DAG `manifest`, `artifact_schemas`, a `{atlan,csa}-connectors-*` credential template? |
+| `pick_form_configmap(dir, ep)` | Which file in *this* directory is the form: `<ep>.json` by name, else the first stem `is_form_configmap` accepts |
 | `form_configmap(dir, ep)` | Which file is *this* entry point's setup form, given the layout |
 
 Everything that needs one of those reads it from there: the configmap
@@ -330,6 +331,19 @@ The exclusion in `is_form_configmap` is load-bearing rather than cosmetic. For
 a flat app, `atlan-connectors-<source>.json` sorts alphabetically **before**
 `<source>.json`, so any file-discovery that globs `*.json` and takes the first
 match picks the credential template on every single-entry-point connector.
+
+But an exclusion list can only ever name the siblings the toolkit emits
+*today*, which is why `pick_form_configmap` identifies the form **by name
+first** and treats the sorted scan as the fallback. FND-1682 is what the scan
+alone cost: adopting conformance K016 makes the toolkit emit
+`artifact_schemas.json`, which is neither the manifest nor a credential
+template and sorts before every real form stem. Every adopting app served the
+schema document as its form — no `config` key, no `properties`, so the setup
+wizard rendered blank behind an HTTP 200 with nothing in the logs, the network
+tab, or pod stderr. The name-first step is what stops the *next* new sibling
+from repeating it; the exclusion stays because a form is not always named after
+its entry point (a connector's `crawler` entry point emits
+`<source>-crawler.json`).
 
 Layout is read from the tree, never from `len(entry_points)`. A
 **route/card-split** app has several `@entrypoint`s behind one marketplace card
