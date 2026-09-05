@@ -21,7 +21,7 @@ this file.
 
 :class:`TestServedFormRoundTrip` is the other load-bearing part, and it tests
 something no amount of shape-fixture assertion can: that
-:func:`~application_sdk.testing.setup_routes.served_inputs` really inverts the
+:func:`~application_sdk.testing.setup_routes.served_form` really inverts the
 envelope the SDK's own configmap endpoint builds. It drives the live FastAPI
 route rather than a hand-written dict, so the two sides of the join are pinned
 against each other in-repo — the committed generated file and the response a
@@ -35,6 +35,7 @@ from __future__ import annotations
 import email.message
 import io
 import json
+import urllib.error
 import urllib.request
 import urllib.response
 from pathlib import Path
@@ -42,19 +43,24 @@ from typing import Any
 
 import pytest
 
+from application_sdk.testing import setup_routes
 from application_sdk.testing.setup_routes import (
+    AppIdentity,
     Card,
     Entrypoint,
+    FormStep,
     RouteCheckSkipped,
+    ServedForm,
     SetupRouteError,
+    TenantRoutes,
     declared_inputs,
-    input_shortfall,
+    form_shortfall,
     locate_cards,
-    read_app_name,
+    read_app_identity,
     read_entrypoint_names,
     read_entrypoints,
     route_mismatch,
-    served_inputs,
+    served_form,
     verify,
 )
 
@@ -90,8 +96,21 @@ def _workflow_config(config_id: str = "clickhouse-crawler") -> dict[str, Any]:
     """A generated workflow config, trimmed to the read fields.
 
     ``config`` carries ``steps`` and ``anyOf`` alongside ``properties`` on a
-    real one; both are included here precisely so a test proves they are NOT
-    read as inputs.
+    real one. ``anyOf`` is here precisely so a test proves it is NOT read as an
+    input set.
+
+    ``steps`` is different, and the difference is load-bearing: it *is* read,
+    because the UI draws the wizard from it and a field no step names never
+    reaches a user (FND-1680). So the panels here name their fields the way
+    every canonical connector's do — verified against ``atlan-metabase-app``,
+    ``atlan-openapi-app`` and ``atlan-mysql-app``, where the set of step-named
+    properties equals the set of declared properties exactly, in both
+    directions, with no exceptions.
+
+    An earlier revision stubbed this as ``[{"id": "credentials"}]``, naming no
+    fields at all. That was harmless while only ``properties`` was read and
+    became a fixture asserting the opposite of reality the moment rendering
+    was checked.
     """
     return {
         "id": config_id,
@@ -103,10 +122,33 @@ def _workflow_config(config_id: str = "clickhouse-crawler") -> dict[str, Any]:
                 "credential-guid": {"type": "string"},
                 "connection": {"type": "string"},
             },
-            "steps": [{"id": "credentials"}],
+            "steps": [
+                {
+                    "title": "Credential",
+                    "description": "Credential Details",
+                    "id": "credential",
+                    "properties": ["extraction-method", "credential-guid"],
+                },
+                {
+                    "title": "Connection",
+                    "description": "Connection Details",
+                    "id": "connection",
+                    "properties": ["connection"],
+                },
+            ],
             "anyOf": [{"properties": {}}],
         },
     }
+
+
+def _id(name: str, display_name: str = "") -> AppIdentity:
+    """The committed identity `read_app_identity` builds from `atlan.yaml`."""
+    return AppIdentity(name=name, display_name=display_name)
+
+
+def _ep(name: str, config_id: str, *, is_sole: bool = False) -> Entrypoint:
+    """One entrypoint, for the pure checks that take it whole."""
+    return Entrypoint(name=name, config_id=config_id, is_sole=is_sole)
 
 
 def _eps(*names: str) -> list[Entrypoint]:
@@ -135,6 +177,36 @@ def _configmap_response(
     }
 
 
+def _form_schema(*names: str, extra: tuple[str, ...] = ()) -> dict[str, Any]:
+    """A served form carrying *names*, laid out across real wizard steps.
+
+    Steps are not decoration in this fixture and must not be dropped from it.
+    The UI draws the form from ``steps``, so a fixture with ``properties``
+    alone is a payload that renders blank — and a suite built on those cannot
+    tell a rendered form from an invisible one, which is exactly the gap
+    FND-1680's metabase page fell through.
+
+    The layout mirrors the shape every canonical connector commits: a
+    ``credential`` panel and a ``connection`` panel, each naming the fields it
+    puts on screen.
+
+    Args:
+        names: Fields that are both defined and drawn.
+        extra: Fields defined by the platform and named by no step, so the
+            subset tolerance is exercised without pretending they render.
+    """
+    first, rest = names[:2], names[2:]
+    steps = [{"title": "Credential", "id": "credential", "properties": list(first)}]
+    if rest:
+        steps.append(
+            {"title": "Connection", "id": "connection", "properties": list(rest)}
+        )
+    return {
+        "properties": {name: {} for name in (*names, *extra)},
+        "steps": steps,
+    }
+
+
 # ---------------------------------------------------------------------------
 # route_mismatch — the load-bearing check
 # ---------------------------------------------------------------------------
@@ -144,7 +216,7 @@ class TestRouteMismatch:
     def test_passes_on_the_shipped_card_shape(self) -> None:
         """The real card and the real generated config agree, so nothing fires."""
         card = Card.from_payload(_card_payload("clickhouse-crawler"))
-        assert route_mismatch("crawler", card, "clickhouse-crawler") is None
+        assert route_mismatch(_ep("crawler", "clickhouse-crawler"), card) is None
 
     def test_bites_on_the_packageid_regression(self) -> None:
         """The FND-1593 shape must be reported, or the check is decoration.
@@ -156,7 +228,7 @@ class TestRouteMismatch:
         """
         card = Card.from_payload(_card_payload("atlan-clickhouse"))
 
-        reason = route_mismatch("crawler", card, "clickhouse-crawler")
+        reason = route_mismatch(_ep("crawler", "clickhouse-crawler"), card)
 
         assert reason is not None, (
             "route_mismatch accepted a card whose id does not match the "
@@ -175,7 +247,7 @@ class TestRouteMismatch:
             _card_payload("atlan-clickhouse-miner", entrypoint="miner")
         )
 
-        reason = route_mismatch("miner", card, "clickhouse-miner")
+        reason = route_mismatch(_ep("miner", "clickhouse-miner"), card)
 
         assert reason is not None
         assert "atlan-clickhouse-miner" in reason
@@ -185,7 +257,7 @@ class TestRouteMismatch:
         """The message must point at packageId, the known cause (FND-1659)."""
         card = Card.from_payload(_card_payload("atlan-clickhouse"))
 
-        reason = route_mismatch("crawler", card, "clickhouse-crawler")
+        reason = route_mismatch(_ep("crawler", "clickhouse-crawler"), card)
 
         assert reason is not None
         assert "packageId" in reason
@@ -196,7 +268,7 @@ class TestRouteMismatch:
         del payload["id"]
 
         reason = route_mismatch(
-            "crawler", Card.from_payload(payload), "clickhouse-crawler"
+            _ep("crawler", "clickhouse-crawler"), Card.from_payload(payload)
         )
 
         assert reason is not None
@@ -206,7 +278,7 @@ class TestRouteMismatch:
         """An id-less config means the artifacts were never generated."""
         card = Card.from_payload(_card_payload("clickhouse-crawler"))
 
-        reason = route_mismatch("crawler", card, "")
+        reason = route_mismatch(_ep("crawler", ""), card)
 
         assert reason is not None
         assert "Regenerate the contract" in reason
@@ -217,39 +289,157 @@ class TestRouteMismatch:
         An earlier revision rendered a flat app as `''` and papered over it with
         a `<flat>` placeholder at every message site. The label is now a
         committed fact, so there is nothing to paper over.
-        """
-        card = Card.from_payload(_card_payload("atlan-mysql", entrypoint=""))
 
-        reason = route_mismatch("mysql", card, "mysql")
+        Driven through the id-less card rather than an id mismatch, because a
+        sole contract no longer fails on a mismatch — see
+        :class:`TestAppIdFallbackTolerance`.
+        """
+        payload = _card_payload("atlan-mysql", entrypoint="")
+        del payload["id"]
+
+        reason = route_mismatch(
+            _ep("mysql", "mysql", is_sole=True), Card.from_payload(payload)
+        )
 
         assert reason is not None
         assert "'mysql'" in reason
         assert "<flat>" not in reason
 
 
+class TestAppIdFallbackTolerance:
+    """FND-1680: a card id differing from the config id is not itself a break.
+
+    The fleet's first live run failed openapi, metabase and mysql on exactly
+    this — every one serves a card id of ``atlan-<name>`` against a generated
+    config id of ``<name>``, and every one of those setup pages renders. The
+    reason is in this repo: ``handler.service.get_configmap`` resolves an
+    unmatched id through a documented default-entrypoint fallback, added
+    because ``atlan-openapi`` really did 404 in production
+    (``test_configmap_default_fallback_serves_flat_single_entrypoint_form``).
+
+    The tolerance is gated on ``is_sole`` because that is where the fallback is
+    safe by construction: it resolves to the app's *default* entry point, which
+    for a sole contract is the only one. A bundle gets no tolerance — there the
+    same fallback would hand every card the default entry point's form.
+    """
+
+    def test_a_sole_contract_tolerates_the_app_id_card(self) -> None:
+        """The exact openapi / metabase / mysql shape, which is healthy."""
+        card = Card.from_payload(_card_payload("atlan-openapi", entrypoint=""))
+
+        assert route_mismatch(_ep("openapi", "openapi", is_sole=True), card) is None
+
+    def test_a_bundle_still_bites_on_the_same_shape(self) -> None:
+        """Same divergence, bundle layout: still a real, reportable break."""
+        card = Card.from_payload(_card_payload("atlan-clickhouse"))
+
+        reason = route_mismatch(_ep("crawler", "clickhouse-crawler"), card)
+
+        assert reason is not None
+        assert "atlan-clickhouse" in reason
+        assert "clickhouse-crawler" in reason
+        # It must say WHY a bundle is different, or the next reader "fixes" the
+        # asymmetry by deleting it.
+        assert "DEFAULT entry point" in reason
+
+    def test_the_tolerance_is_not_a_free_pass(self, tmp_path: Path) -> None:
+        """A tolerated id still has to actually serve this contract's form.
+
+        Equality was only ever a proxy for "the card's id resolves to this
+        entry point's form". Dropping it for a sole contract must not drop the
+        assertion — `verify` still fetches the card id and still requires the
+        served schema to carry every declared input.
+        """
+        _write_flat(tmp_path)
+        catalog = [_card_payload("atlan-mysql", name="mysql", entrypoint="")]
+        # Served under the card id, but one input short of the contract.
+        stale = _form_schema("extraction-method", "credential-guid")
+        routes = _FakeRoutes(
+            [catalog],
+            {"atlan-mysql": (200, _configmap_response(stale, "atlan-mysql"))},
+        )
+
+        with pytest.raises(SetupRouteError, match="connection"):
+            verify(tmp_path, routes, wait_seconds=0)
+
+    def test_a_tolerated_id_is_reported_not_silently_passed(
+        self, tmp_path: Path
+    ) -> None:
+        """A green run must still say the fallback answered, not just "resolves".
+
+        A tolerance nobody can see in the log is indistinguishable from a check
+        that stopped looking.
+        """
+        _write_flat(tmp_path)
+        catalog = [_card_payload("atlan-mysql", name="mysql", entrypoint="")]
+        served = _form_schema("extraction-method", "credential-guid", "connection")
+        routes = _FakeRoutes(
+            [catalog],
+            {"atlan-mysql": (200, _configmap_response(served, "atlan-mysql"))},
+        )
+
+        report = verify(tmp_path, routes, wait_seconds=0)
+
+        assert len(report) == 1
+        assert "/workflows/setup/atlan-mysql resolves" in report[0]
+        assert "app-id fallback" in report[0]
+
+
 # ---------------------------------------------------------------------------
-# input_shortfall — the subset check
+# form_shortfall — does the contract's field actually reach a user
 # ---------------------------------------------------------------------------
 
 
-class TestInputShortfall:
+def _served(
+    properties: set[str] | None = None,
+    steps: dict[str, list[str]] | None = None,
+) -> ServedForm:
+    """A parsed served form, from field names and step-id -> field-names."""
+    return ServedForm(
+        properties=frozenset(properties or set()),
+        steps=tuple(
+            FormStep(id=step_id, properties=frozenset(names))
+            for step_id, names in (steps or {}).items()
+        ),
+    )
+
+
+def _declaring(*names: str) -> Entrypoint:
+    """A sole entrypoint declaring exactly *names*."""
+    return Entrypoint(
+        name="crawler",
+        config_id="clickhouse-crawler",
+        is_sole=True,
+        declared=frozenset(names),
+    )
+
+
+class TestFormShortfall:
     def test_extra_served_fields_are_not_a_failure(self) -> None:
         """A subset check: the platform may decorate the schema.
 
         Failing on platform-added fields buys no safety and would red the fleet
         the first time the platform grew one.
         """
-        declared = frozenset({"credential-guid", "connection"})
-        served = declared | {"labFlag", "platform-injected"}
+        served = _served(
+            {"credential-guid", "connection", "labFlag", "platform-injected"},
+            {"credential": ["credential-guid"], "connection": ["connection"]},
+        )
 
-        assert input_shortfall("crawler", declared, served) is None
+        assert (
+            form_shortfall(_declaring("credential-guid", "connection"), served) is None
+        )
 
     def test_bites_on_a_missing_declared_input(self) -> None:
         """A missing input is the signal — a stale image, or a change that never landed."""
-        declared = frozenset({"credential-guid", "connection", "include-filter"})
-        served = frozenset({"credential-guid", "connection"})
+        served = _served(
+            {"credential-guid", "connection"},
+            {"credential": ["credential-guid"], "connection": ["connection"]},
+        )
 
-        reason = input_shortfall("crawler", declared, served)
+        reason = form_shortfall(
+            _declaring("credential-guid", "connection", "include-filter"), served
+        )
 
         assert reason is not None
         assert "include-filter" in reason
@@ -259,10 +449,109 @@ class TestInputShortfall:
 
     def test_a_contract_declaring_nothing_is_reported(self) -> None:
         """Zero declared inputs makes the check vacuous, so it must not pass."""
-        reason = input_shortfall("crawler", frozenset(), frozenset({"anything"}))
+        reason = form_shortfall(_declaring(), _served({"anything"}))
 
         assert reason is not None
         assert "declares no inputs" in reason
+
+
+class TestBlankFormDetection:
+    """FND-1680: a 200 does not mean a user sees a form.
+
+    The metabase setup page answered 200 for ``atlan-metabase`` and rendered
+    blank. Its ``data.config`` was the app's ``artifact_schemas.json`` —
+    ``{"version": 1, "schemas": {...}}`` — because the pod ran an SDK without
+    the artifact-schemas exclusion and served the declaration file as the form.
+    Every status-code assertion in the check passed.
+
+    These pin the four ways a served payload fails to become a rendered form,
+    each with its own diagnosis, because "the page is blank" has more than one
+    cause and a single message for all of them sends the reader the wrong way.
+    """
+
+    def test_the_metabase_payload_is_reported_as_not_a_form(self) -> None:
+        """The exact live payload, verbatim from the tenant."""
+        body = _configmap_response(
+            {
+                "version": 1,
+                "schemas": {"residual_failures": {"format": "ndjson", "fields": []}},
+            },
+            "atlan-metabase",
+        )
+
+        reason = form_shortfall(
+            _declaring("credential-guid", "connection"), served_form(body)
+        )
+
+        assert reason is not None
+        assert "is not a setup form" in reason
+        assert "renders blank" in reason
+        # Name the cause, or the reader chases a stale image that is not the problem.
+        assert "artifact_schemas.json" in reason
+
+    def test_fields_without_steps_are_reported(self) -> None:
+        """A schema with fields and no panels draws nothing at all."""
+        served = _served({"credential-guid", "connection"})
+
+        reason = form_shortfall(_declaring("credential-guid", "connection"), served)
+
+        assert reason is not None
+        assert "no 'steps'" in reason
+        assert "renders blank" in reason
+
+    def test_a_field_no_step_names_is_reported(self) -> None:
+        """Served but never drawn — invisible to the user filling the form in.
+
+        This is the gap a properties-only check cannot see: every declared
+        input is present in the schema, and one of them still never appears
+        on screen.
+        """
+        served = _served(
+            {"credential-guid", "connection", "include-filter"},
+            {"credential": ["credential-guid"], "connection": ["connection"]},
+        )
+
+        reason = form_shortfall(
+            _declaring("credential-guid", "connection", "include-filter"), served
+        )
+
+        assert reason is not None
+        assert "include-filter" in reason
+        assert "named by no step" in reason
+        # The panels that DO exist, so the reader can see where it should have been.
+        assert "credential" in reason
+
+    def test_a_fully_rendered_form_passes(self) -> None:
+        """Every declared field defined AND drawn is the only passing shape."""
+        served = _served(
+            {"extraction-method", "credential-guid", "connection"},
+            {
+                "credential": ["extraction-method", "credential-guid"],
+                "connection": ["connection"],
+            },
+        )
+
+        assert (
+            form_shortfall(
+                _declaring("extraction-method", "credential-guid", "connection"), served
+            )
+            is None
+        )
+
+    def test_the_causes_are_reported_in_cause_order(self) -> None:
+        """A payload that is not a form must not be reported as a stale image.
+
+        Both faults are true of the metabase payload — it is not a form, AND
+        every declared field is missing from it. Reporting the second sends the
+        reader to look for an image bump that would never have fixed it.
+        """
+        body = _configmap_response({"version": 1, "schemas": {}}, "atlan-metabase")
+
+        reason = form_shortfall(_declaring("connection"), served_form(body))
+
+        assert reason is not None
+        assert "is not a setup form" in reason
+        assert "older image" not in reason
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +584,7 @@ class TestLocateCards:
             )
         ]
 
-        cards, reason = locate_cards("clickhouse", _eps("crawler"), catalog)
+        cards, reason = locate_cards(_id("clickhouse"), _eps("crawler"), catalog)
 
         assert reason is None
         assert set(cards) == {"crawler"}
@@ -304,7 +593,7 @@ class TestLocateCards:
     def test_reports_an_app_absent_from_the_catalog(self) -> None:
         catalog = [_card_payload("mssql-crawler", name="mssql")]
 
-        cards, reason = locate_cards("clickhouse", _eps("crawler"), catalog)
+        cards, reason = locate_cards(_id("clickhouse"), _eps("crawler"), catalog)
 
         assert cards == {}
         assert reason is not None
@@ -312,12 +601,17 @@ class TestLocateCards:
         # The catalog size proves the read worked, which distinguishes "not
         # installed" from "token cannot read the catalog".
         assert "1 apps" in reason
+        # And the names it DID carry, so a reader can confirm the absence from
+        # the failure instead of from a follow-up investigation.
+        assert "'mssql'" in reason
 
     def test_reports_an_entrypoint_with_no_card(self) -> None:
         """An entrypoint with no card has no setup page at all."""
         catalog = [_card_payload("clickhouse-crawler", name="clickhouse")]
 
-        cards, reason = locate_cards("clickhouse", _eps("crawler", "miner"), catalog)
+        cards, reason = locate_cards(
+            _id("clickhouse"), _eps("crawler", "miner"), catalog
+        )
 
         assert set(cards) == {"crawler"}
         assert reason is not None
@@ -331,24 +625,293 @@ class TestLocateCards:
         """
         catalog = [_card_payload("mysql", name="mysql", entrypoint="")]
 
-        cards, reason = locate_cards("mysql", _sole("mysql"), catalog)
+        cards, reason = locate_cards(_id("mysql"), _sole("mysql"), catalog)
 
         assert reason is None
         assert cards["mysql"].id == "mysql"
 
 
+class TestAppIdentity:
+    """FND-1680: the catalog is not consistent about which name a card carries.
+
+    One live tenant, one run: openapi and metabase were listed under their wire
+    ``name``, mysql under its ``display_name`` (``MySQL Assets``). A locator
+    keyed on either field alone reports a healthy, installed app as absent —
+    the most misleading message this check can emit — so it accepts both.
+    """
+
+    def test_locates_the_card_the_live_run_could_not(self, tmp_path: Path) -> None:
+        """The exact mysql shape the fleet's first run failed on."""
+        (tmp_path / "atlan.yaml").write_text(
+            "name: mysql\ndisplay_name: MySQL Assets\n"
+        )
+        identity = read_app_identity(tmp_path)
+        catalog = [_card_payload("atlan-mysql", name="MySQL Assets", entrypoint="")]
+
+        cards, reason = locate_cards(identity, _sole("mysql"), catalog)
+
+        assert reason is None
+        assert cards["mysql"].id == "atlan-mysql"
+
+    def test_the_wire_name_still_locates_it(self) -> None:
+        """openapi and metabase matched on `name`, and must keep doing so."""
+        catalog = [_card_payload("atlan-openapi", name="openapi", entrypoint="")]
+
+        cards, reason = locate_cards(
+            _id("openapi", "openapi spec loader"), _sole("openapi"), catalog
+        )
+
+        assert reason is None
+        assert cards["openapi"].id == "atlan-openapi"
+
+    def test_an_undeclared_display_name_yields_one_label(self, tmp_path: Path) -> None:
+        (tmp_path / "atlan.yaml").write_text("name: openapi\n")
+
+        assert read_app_identity(tmp_path).labels == ("openapi",)
+
+    def test_a_display_name_equal_to_the_name_is_not_doubled(self) -> None:
+        """Deduplicated, so a message never reads `['mysql', 'mysql']`."""
+        assert _id("mysql", "mysql").labels == ("mysql",)
+
+    def test_the_display_name_is_case_folded_too(self, tmp_path: Path) -> None:
+        """Both sides normalised, or `MySQL Assets` never matches itself."""
+        (tmp_path / "atlan.yaml").write_text(
+            "name: mysql\ndisplay_name: MySQL Assets\n"
+        )
+        identity = read_app_identity(tmp_path)
+
+        assert identity.labels == ("mysql", "mysql assets")
+        assert identity.matches(Card(id="x", name="  MySQL Assets  "))
+
+    def test_a_genuinely_different_app_is_still_not_matched(self) -> None:
+        """Widening the locator must not make it match neighbours."""
+        identity = _id("mysql", "mysql assets")
+
+        assert not identity.matches(Card(id="x", name="mssql"))
+        assert not identity.matches(Card(id="x", name="mysql assets extra"))
+
+
+class TestCatalogEvidence:
+    """FND-1680: a card lookup that finds nothing has to say what it DID find.
+
+    The first fleet-wide run reported ``no marketplace card has name='mysql'.
+    The tenant listed 139 apps`` and then waited out the full reconcile poll —
+    on a tenant the preceding step had already proven was running the app at
+    the version under test. Two very different faults produce that line: the
+    app really is absent, or ``name`` is not the field carrying it. The message
+    named neither a single card nor a single field, so the log could not
+    distinguish them and the next step was a manual catalog read.
+
+    Nothing here changes what is matched. Deciding to match a different field
+    needs the evidence these tests make the failure carry, and inventing a
+    fallback field before seeing it would be the soften-the-check move this
+    issue explicitly rules out.
+    """
+
+    def test_names_the_field_that_actually_carries_the_app_name(self) -> None:
+        """A card matching on `id` says so, and contradicts "not installed"."""
+        catalog = [
+            _card_payload("mysql", name="MySQL Assets", entrypoint="crawler"),
+            _card_payload("mssql-crawler", name="mssql"),
+        ]
+
+        _, reason = locate_cards(_id("mysql"), _sole("mysql"), catalog)
+
+        assert reason is not None
+        assert "reading the wrong field" in reason
+        assert "id='mysql'" in reason
+        assert "name='MySQL Assets'" in reason
+        assert "entrypoint='crawler'" in reason
+        # The wrong conclusion must NOT also be offered alongside the right one.
+        assert "not installed on this tenant" not in reason
+
+    def test_an_entrypoint_field_match_is_reported_too(self) -> None:
+        catalog = [
+            _card_payload("atlan-mysql", name="MySQL Assets", entrypoint="mysql")
+        ]
+
+        _, reason = locate_cards(_id("mysql"), _sole("mysql"), catalog)
+
+        assert reason is not None
+        assert "reading the wrong field" in reason
+        assert "entrypoint='mysql'" in reason
+
+    def test_a_decorated_identity_is_shown_rather_than_hidden_in_a_slice(
+        self,
+    ) -> None:
+        """A near-miss card beats an alphabetical sample that may not reach it.
+
+        The catalog runs to ~140 cards, so a bounded sorted sample has roughly
+        a one-in-seven chance of containing the card that explains the miss.
+        A substring hit is reported directly instead.
+        """
+        catalog = [
+            _card_payload(f"app-{index:03d}-crawler", name=f"app-{index:03d}")
+            for index in range(139)
+        ]
+        catalog.append(
+            _card_payload(
+                "atlan-mysql-crawler", name="Atlan MySQL", entrypoint="crawler"
+            )
+        )
+
+        _, reason = locate_cards(_id("mysql"), _sole("mysql"), catalog)
+
+        assert reason is not None
+        assert "as a substring" in reason
+        assert "id='atlan-mysql-crawler'" in reason
+        assert "name='Atlan MySQL'" in reason
+        # The weaker conclusions must not be offered alongside it.
+        assert "not installed on this tenant" not in reason
+        assert "reading the wrong field" not in reason
+
+    def test_a_genuine_absence_still_reads_as_not_installed(self) -> None:
+        catalog = [
+            _card_payload(f"app-{index}-crawler", name=f"app-{index}")
+            for index in range(3)
+        ]
+
+        _, reason = locate_cards(_id("mysql"), _sole("mysql"), catalog)
+
+        assert reason is not None
+        assert "not installed on this tenant" in reason
+        assert "'app-0'" in reason
+
+    def test_the_name_sample_is_bounded(self) -> None:
+        """~140 cards is the live scale; the whole list would bury the finding.
+
+        Bounded and *sorted*, so the sample is the same slice on every run
+        rather than whatever order the catalog happened to serve.
+        """
+        catalog = [
+            _card_payload(f"app-{index:03d}-crawler", name=f"app-{index:03d}")
+            for index in range(139)
+        ]
+
+        _, reason = locate_cards(_id("mysql"), _sole("mysql"), catalog)
+
+        assert reason is not None
+        assert "139 apps" in reason
+        assert "20 of 139" in reason
+        assert "'app-000'" in reason
+        assert "'app-019'" in reason
+        assert "'app-020'" not in reason
+
+    def test_the_evidence_survives_the_catalog_poll(self, tmp_path: Path) -> None:
+        """`_await_cards` re-reads the catalog, and the sample must not vanish.
+
+        The lookup consumed the payload list twice — once to filter, once to
+        describe — so a streamed generator would leave the diagnostic with an
+        exhausted iterator and an empty sample on exactly the failing path.
+        """
+        _write_flat(tmp_path)
+        routes = _FakeRoutes([[_card_payload("mysql", name="MySQL Assets")]], {})
+
+        with pytest.raises(SetupRouteError) as excinfo:
+            verify(tmp_path, routes, wait_seconds=0)
+
+        message = str(excinfo.value)
+        assert "id='mysql'" in message
+        assert "reading the wrong field" in message
+        assert "Waited 0s" in message
+
+
 # ---------------------------------------------------------------------------
-# served_inputs — the one-level nesting difference
+# served_form — the one-level nesting difference, and both rendered parts
 # ---------------------------------------------------------------------------
 
 
-class TestServedInputs:
+class TestServedForm:
     def test_unwraps_the_json_string_config(self) -> None:
         response = _configmap_response(
             {"properties": {"credential-guid": {}, "connection": {}}}
         )
 
-        assert served_inputs(response) == frozenset({"credential-guid", "connection"})
+        assert served_form(response).properties == frozenset(
+            {"credential-guid", "connection"}
+        )
+
+    def test_reads_the_steps_the_wizard_draws_from(self) -> None:
+        """The real mysql shape: step ids and the fields each panel carries."""
+        response = _configmap_response(
+            {
+                "properties": {
+                    "extraction-method": {},
+                    "credential-guid": {},
+                    "connection": {},
+                },
+                "steps": [
+                    {
+                        "title": "Credential",
+                        "id": "credential",
+                        "properties": ["extraction-method", "credential-guid"],
+                    },
+                    {
+                        "title": "Connection",
+                        "id": "connection",
+                        "properties": ["connection"],
+                    },
+                ],
+            }
+        )
+
+        form = served_form(response)
+
+        assert [step.id for step in form.steps] == ["credential", "connection"]
+        assert form.rendered == frozenset(
+            {"extraction-method", "credential-guid", "connection"}
+        )
+
+    def test_rendered_is_the_union_over_steps_not_over_properties(self) -> None:
+        """The whole point: a defined-but-undrawn field is not rendered."""
+        response = _configmap_response(
+            {
+                "properties": {"connection": {}, "orphan": {}},
+                "steps": [{"id": "connection", "properties": ["connection"]}],
+            }
+        )
+
+        form = served_form(response)
+
+        assert form.properties == frozenset({"connection", "orphan"})
+        assert form.rendered == frozenset({"connection"})
+
+    def test_a_form_with_no_steps_renders_nothing(self) -> None:
+        """`rendered` must be empty, not raise, when there are no panels."""
+        form = served_form(_configmap_response({"properties": {"connection": {}}}))
+
+        assert form.steps == ()
+        assert form.rendered == frozenset()
+
+    def test_malformed_steps_are_skipped_not_fatal(self) -> None:
+        """A junk entry is dropped; the good panels still report.
+
+        Degrading here rather than raising is what lets `form_shortfall` report
+        the shortfall WITH the evidence instead of the parser crashing on it.
+        """
+        response = _configmap_response(
+            {
+                "properties": {"connection": {}},
+                "steps": [
+                    "not-a-step",
+                    {"id": "connection", "properties": ["connection"]},
+                    {"id": "broken", "properties": "not-a-list"},
+                ],
+            }
+        )
+
+        form = served_form(response)
+
+        assert [step.id for step in form.steps] == ["connection", "broken"]
+        assert form.rendered == frozenset({"connection"})
+
+    def test_a_step_with_no_id_gets_a_positional_label(self) -> None:
+        """Messages name the panel, so an id-less step still needs a label."""
+        response = _configmap_response(
+            {"properties": {"a": {}}, "steps": [{"properties": ["a"]}]}
+        )
+
+        assert served_form(response).steps[0].id == "<step 0>"
 
     def test_rejects_a_non_string_config(self) -> None:
         """A nested object instead of a string means the shape changed.
@@ -360,22 +923,22 @@ class TestServedInputs:
         response["data"] = {"config": {"properties": {}}}
 
         with pytest.raises(SetupRouteError, match="no string data.config"):
-            served_inputs(response)
+            served_form(response)
 
     def test_rejects_a_response_with_no_data(self) -> None:
         with pytest.raises(SetupRouteError, match="no 'data' object"):
-            served_inputs({"metadata": {"name": "x"}})
+            served_form({"metadata": {"name": "x"}})
 
     def test_rejects_unparseable_config(self) -> None:
         response = _configmap_response({"properties": {}})
         response["data"] = {"config": "{not json"}
 
         with pytest.raises(SetupRouteError, match="not valid JSON"):
-            served_inputs(response)
+            served_form(response)
 
     def test_a_schema_with_no_properties_serves_nothing(self) -> None:
-        """Empty, not an error — ``input_shortfall`` is what reports the gap."""
-        assert served_inputs(_configmap_response({"steps": []})) == frozenset()
+        """Empty, not an error — ``form_shortfall`` is what reports the gap."""
+        assert served_form(_configmap_response({"steps": []})).properties == frozenset()
 
 
 class TestDeclaredInputs:
@@ -422,6 +985,11 @@ def _write_bundle(root: Path) -> None:
         directory = generated / entrypoint
         directory.mkdir()
         (directory / "manifest.json").write_text("{}")
+        # A bundle emits one per entrypoint. It sorts FIRST of the three —
+        # see `_write_flat` and TestNonFormSiblings for why that matters.
+        (directory / "artifact_schemas.json").write_text(
+            json.dumps({"version": 1, "artifacts": {}})
+        )
         (directory / f"{config_id}.json").write_text(
             json.dumps(_workflow_config(config_id))
         )
@@ -435,7 +1003,13 @@ def _write_flat(root: Path) -> None:
     generated = root / "app" / "generated"
     generated.mkdir(parents=True)
     (generated / "manifest.json").write_text("{}")
-    # Sorts BEFORE `mysql.json`, which is the whole point — see the test.
+    # The full sibling set a generated tree really carries, in the order it
+    # sorts: `artifact_schemas` first, then the credential template, then the
+    # manifest, then the form. Both of the first two sort BEFORE `mysql.json`,
+    # which is the whole point — see TestNonFormSiblings.
+    (generated / "artifact_schemas.json").write_text(
+        json.dumps({"version": 1, "artifacts": {}})
+    )
     # Real shape: a `config`, no top-level `id`.
     (generated / "atlan-connectors-mysql.json").write_text(
         json.dumps({"connector": "mysql", "config": {"properties": {"host": {}}}})
@@ -458,14 +1032,12 @@ class TestArtifactReaders:
             {"extraction-method", "credential-guid", "connection"}
         )
 
-    def test_a_flat_app_does_not_pick_the_credential_template(
-        self, tmp_path: Path
-    ) -> None:
-        """Exclusion by stem, not by hoping the template lacks a key.
+    def test_a_flat_app_does_not_pick_a_non_form_sibling(self, tmp_path: Path) -> None:
+        """Exclusion by stem, not by hoping the sibling lacks a key.
 
-        ``atlan-connectors-mysql.json`` sorts alphabetically BEFORE
-        ``mysql.json``, so file selection in a flat tree has to reject it
-        explicitly rather than relying on ordering.
+        Both ``artifact_schemas.json`` and ``atlan-connectors-mysql.json``
+        sort alphabetically BEFORE ``mysql.json``, so file selection in a flat
+        tree has to reject them explicitly rather than relying on ordering.
 
         Today's credential templates carry a ``config`` and no top-level
         ``id``, so a selector keyed on "has both ``id`` and ``config``" also
@@ -484,6 +1056,27 @@ class TestArtifactReaders:
         assert [e.name for e in found] == ["mysql"]
         assert found[0].config_id == "mysql"
         assert found[0].is_sole is True
+
+    def test_a_flat_app_with_artifact_schemas_reads_its_real_config_id(
+        self, tmp_path: Path
+    ) -> None:
+        """FND-1680, from this module's side of the join.
+
+        ``_generated_tree`` owns the rule that ``artifact_schemas`` is not a
+        form, and ``tests/unit/app/test_generated_tree.py`` pins it there. What
+        this pins is that ``read_entrypoints`` inherits it: the openapi leg
+        died on ``artifact_schemas.json carries no top-level 'id'`` — a
+        SetupRouteError about the wrong file, raised right here — so the check
+        reading the same authority as the server is the thing under test, not
+        the rule itself.
+        """
+        _write_flat(tmp_path)
+
+        found = read_entrypoints(tmp_path)
+
+        assert [(e.name, e.config_id) for e in found] == [("mysql", "mysql")]
+        assert found[0].source is not None
+        assert found[0].source.name == "mysql.json"
 
     def test_skips_when_nothing_is_generated(self, tmp_path: Path) -> None:
         """Skip, not fail: no generated tree means no setup page to check."""
@@ -528,17 +1121,17 @@ class TestArtifactReaders:
     def test_reads_the_app_name_lowercased(self, tmp_path: Path) -> None:
         (tmp_path / "atlan.yaml").write_text("name: ClickHouse\n")
 
-        assert read_app_name(tmp_path) == "clickhouse"
+        assert read_app_identity(tmp_path).name == "clickhouse"
 
     def test_a_missing_atlan_yaml_is_a_clear_error(self, tmp_path: Path) -> None:
         with pytest.raises(SetupRouteError, match="cannot read"):
-            read_app_name(tmp_path)
+            read_app_identity(tmp_path)
 
     def test_a_nameless_atlan_yaml_is_rejected(self, tmp_path: Path) -> None:
         (tmp_path / "atlan.yaml").write_text("app_id: x\n")
 
         with pytest.raises(SetupRouteError, match='no top-level "name"'):
-            read_app_name(tmp_path)
+            read_app_identity(tmp_path)
 
     def test_entrypoint_names_are_empty_for_a_flat_app(self, tmp_path: Path) -> None:
         _write_flat(tmp_path)
@@ -552,7 +1145,7 @@ class TestArtifactReaders:
 
 
 class TestServedFormRoundTrip:
-    """Does ``served_inputs`` really invert what the SDK's endpoint serves?
+    """Does ``served_form`` really invert what the SDK's endpoint serves?
 
     Every other test here feeds hand-written shapes. These drive the live
     ``GET /workflows/v1/configmap/{id}`` route — the endpoint a tenant's
@@ -586,7 +1179,7 @@ class TestServedFormRoundTrip:
     ) -> None:
         """The whole check, end to end, through the real endpoint.
 
-        If ``served_inputs`` read one nesting level too deep or too shallow,
+        If ``served_form`` read one nesting level too deep or too shallow,
         this fails — which is exactly the mistake the differing depths invite.
         """
         _write_bundle(tmp_path)
@@ -600,7 +1193,14 @@ class TestServedFormRoundTrip:
 
         assert body["metadata"]["name"] == "clickhouse-crawler"
         assert (
-            input_shortfall("crawler", declared_inputs(committed), served_inputs(body))
+            form_shortfall(
+                Entrypoint(
+                    name="crawler",
+                    config_id="clickhouse-crawler",
+                    declared=declared_inputs(committed),
+                ),
+                served_form(body),
+            )
             is None
         )
 
@@ -624,7 +1224,12 @@ class TestServedFormRoundTrip:
         path.write_text(json.dumps(stale))
 
         body = self._serve(tmp_path, "clickhouse-crawler")
-        reason = input_shortfall("crawler", declared, served_inputs(body))
+        reason = form_shortfall(
+            Entrypoint(
+                name="crawler", config_id="clickhouse-crawler", declared=declared
+            ),
+            served_form(body),
+        )
 
         assert reason is not None
         assert "connection" in reason
@@ -704,16 +1309,14 @@ class _FakeRoutes:
 
 
 def _healthy_configmaps() -> dict[str, tuple[int, dict[str, Any]]]:
-    schema = {
-        "properties": {
-            "extraction-method": {},
-            "credential-guid": {},
-            "connection": {},
-            # A platform-added field the contract never named, so the subset
-            # check's tolerance is exercised on the happy path too.
-            "labFlag": {},
-        }
-    }
+    schema = _form_schema(
+        "extraction-method",
+        "credential-guid",
+        "connection",
+        # A platform-added field the contract never named and no step draws, so
+        # the subset tolerance is exercised on the happy path too.
+        extra=("labFlag",),
+    )
     return {
         "clickhouse-crawler": (200, _configmap_response(schema, "clickhouse-crawler")),
         "clickhouse-miner": (200, _configmap_response(schema, "clickhouse-miner")),
@@ -806,9 +1409,7 @@ class TestVerify:
         configmaps = _healthy_configmaps()
         configmaps["clickhouse-crawler"] = (
             200,
-            _configmap_response(
-                {"properties": {"extraction-method": {}}}, "something-else"
-            ),
+            _configmap_response(_form_schema("extraction-method"), "something-else"),
         )
         routes = _FakeRoutes([_both_cards()], configmaps)
 
@@ -1047,7 +1648,7 @@ class _StubGet:
 
 
 class TestCardNameCasing:
-    """`read_app_name` lowercases atlan.yaml; a card's name is the catalog's.
+    """`read_app_identity` lowercases atlan.yaml; a card's name is the catalog's.
 
     Comparing them verbatim reports a mixed-case card as "not installed on this
     tenant" — a false negative wearing the most misleading message this check
@@ -1057,7 +1658,7 @@ class TestCardNameCasing:
     def test_a_mixed_case_card_still_matches(self) -> None:
         catalog = [_card_payload("clickhouse-crawler", name="ClickHouse")]
 
-        cards, reason = locate_cards("clickhouse", _eps("crawler"), catalog)
+        cards, reason = locate_cards(_id("clickhouse"), _eps("crawler"), catalog)
 
         assert reason is None
         assert cards["crawler"].id == "clickhouse-crawler"
@@ -1066,7 +1667,7 @@ class TestCardNameCasing:
         """Neither side is a value whose formatting we control."""
         catalog = [_card_payload("clickhouse-crawler", name="  clickhouse  ")]
 
-        cards, reason = locate_cards("clickhouse", _eps("crawler"), catalog)
+        cards, reason = locate_cards(_id("clickhouse"), _eps("crawler"), catalog)
 
         assert reason is None
         assert cards["crawler"].id == "clickhouse-crawler"
@@ -1075,7 +1676,7 @@ class TestCardNameCasing:
         """Case-folding must not widen the match to a different app."""
         catalog = [_card_payload("clickhouse-crawler", name="clickhouse-legacy")]
 
-        cards, reason = locate_cards("clickhouse", _eps("crawler"), catalog)
+        cards, reason = locate_cards(_id("clickhouse"), _eps("crawler"), catalog)
 
         assert cards == {}
         assert reason is not None
@@ -1105,7 +1706,7 @@ class TestSoleContractCardMatching:
     def test_a_sole_card_with_a_named_entrypoint_matches(self, tmp_path: Path) -> None:
         catalog = [_card_payload("mysql", name="mysql", entrypoint="crawler")]
 
-        cards, reason = locate_cards("mysql", _sole("mysql"), catalog)
+        cards, reason = locate_cards(_id("mysql"), _sole("mysql"), catalog)
 
         assert reason is None
         assert cards["mysql"].id == "mysql"
@@ -1114,7 +1715,7 @@ class TestSoleContractCardMatching:
         """The case that already worked must keep working."""
         catalog = [_card_payload("mysql", name="mysql", entrypoint="")]
 
-        cards, reason = locate_cards("mysql", _sole("mysql"), catalog)
+        cards, reason = locate_cards(_id("mysql"), _sole("mysql"), catalog)
 
         assert reason is None
         assert cards["mysql"].id == "mysql"
@@ -1124,13 +1725,7 @@ class TestSoleContractCardMatching:
     ) -> None:
         """The whole check, on the shape that used to report "no card"."""
         _write_flat(tmp_path)
-        schema = {
-            "properties": {
-                "extraction-method": {},
-                "credential-guid": {},
-                "connection": {},
-            }
-        }
+        schema = _form_schema("extraction-method", "credential-guid", "connection")
         routes = _FakeRoutes(
             [[_card_payload("mysql", name="mysql", entrypoint="crawler")]],
             {"mysql": (200, _configmap_response(schema, "mysql"))},
@@ -1152,7 +1747,7 @@ class TestSoleContractCardMatching:
             _card_payload("mysql-miner", name="mysql", entrypoint="miner"),
         ]
 
-        cards, reason = locate_cards("mysql", _sole("mysql"), catalog)
+        cards, reason = locate_cards(_id("mysql"), _sole("mysql"), catalog)
 
         assert cards == {}
         assert reason is not None
@@ -1170,11 +1765,345 @@ class TestSoleContractCardMatching:
             _card_payload("clickhouse-miner", entrypoint="miner"),
         ]
 
-        cards, reason = locate_cards("clickhouse", _eps("crawler", "miner"), catalog)
+        cards, reason = locate_cards(
+            _id("clickhouse"), _eps("crawler", "miner"), catalog
+        )
 
         assert reason is None
         assert cards["crawler"].id == "clickhouse-crawler"
         assert cards["miner"].id == "clickhouse-miner"
+
+
+class _FakeClock:
+    """A monotonic clock that advances only when the code under test sleeps.
+
+    Installed with ``monkeypatch.setattr(setup_routes, "time", clock)``, which
+    swaps the name *inside that module's namespace* rather than mutating the
+    stdlib ``time`` module. That distinction matters twice over: patching
+    ``time.monotonic`` globally is shared with the asyncio event loop and has
+    made this suite flaky before, and patching only ``sleep`` while the
+    deadline still reads the real clock turns every bounded wait into a busy
+    spin — 62 seconds at 98% CPU for three tests, which is how this helper
+    came to exist.
+
+    Advancing on ``sleep`` also makes the elapsed time assertable, so a test
+    can pin how long a wait actually lasted instead of only that it happened.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+class TestRolloutLag:
+    """FND-1680: the install verdict is not the pod's verdict.
+
+    ``prepare-tenant`` resolves "the tenant runs the version under test" from
+    LM's *catalog record*, which flips when the install lands — while the
+    HelmRelease rollout that replaces the pod lags it. The aws leg measured the
+    gap: ``verified: tenant runs sdr-test-634b735e`` at 12:50:02, and six
+    seconds later the pod served ``extraction_method``, the spelling that
+    connector had renamed to ``extraction-method`` two days before. Azure ran
+    the identical assertions against the identical build and passed, because
+    its pod had already rolled.
+
+    So the form gets the same bounded wait the card lookup already had. Both
+    halves are pinned here: that a lagging rollout is waited out, and that a
+    shortfall which survives the window is still reported — and says it waited,
+    so nobody reads a real contract break as flake.
+    """
+
+    @staticmethod
+    def _sequenced(catalog: list[dict[str, Any]], bodies: list[dict[str, Any]]) -> Any:
+        """Routes whose configmap answer changes between reads, as a rollout does."""
+
+        class _Rolling:
+            def __init__(self) -> None:
+                self.reads = 0
+
+            def catalog(self) -> list[dict[str, Any]]:
+                return catalog
+
+            def configmap(self, name: str) -> tuple[int, dict[str, Any]]:
+                if name not in {"atlan-mysql", "mysql"}:
+                    return 404, {}
+                body = bodies[min(self.reads, len(bodies) - 1)]
+                self.reads += 1
+                return 200, body
+
+        return _Rolling()
+
+    def test_a_lagging_rollout_is_waited_out(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stale form first, current form second: the leg passes, not flakes."""
+        monkeypatch.setattr(setup_routes, "time", _FakeClock())
+        _write_flat(tmp_path)
+        stale = _configmap_response(
+            # The previous image's spelling, exactly as aws served it.
+            _form_schema("extraction_method", "credential-guid", "connection"),
+            "atlan-mysql",
+        )
+        current = _configmap_response(
+            _form_schema("extraction-method", "credential-guid", "connection"),
+            "atlan-mysql",
+        )
+        routes = self._sequenced(
+            [_card_payload("atlan-mysql", name="mysql", entrypoint="")],
+            [stale, current],
+        )
+
+        report = verify(tmp_path, routes, wait_seconds=60)
+
+        assert len(report) == 1
+        assert "resolves" in report[0]
+        assert routes.reads == 2
+
+    def test_a_real_shortfall_still_fails_and_says_it_waited(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A contract that never reaches the tenant must not become a pass.
+
+        The whole risk of adding a wait is that it converts a finding into
+        patience. The message has to rule the lag out explicitly, or the next
+        reader discounts a genuine break as one.
+        """
+        clock = _FakeClock()
+        monkeypatch.setattr(setup_routes, "time", clock)
+        _write_flat(tmp_path)
+        stale = _configmap_response(
+            _form_schema("extraction_method", "credential-guid", "connection"),
+            "atlan-mysql",
+        )
+        routes = self._sequenced(
+            [_card_payload("atlan-mysql", name="mysql", entrypoint="")], [stale]
+        )
+
+        with pytest.raises(SetupRouteError) as excinfo:
+            verify(tmp_path, routes, wait_seconds=30)
+
+        message = str(excinfo.value)
+        assert "extraction-method" in message
+        assert "Still true after 30s" in message
+        assert "rollout lagging its catalog record" in message
+        # It really polled rather than reporting the first read, and it really
+        # spent the budget it says it spent.
+        assert routes.reads > 1
+        assert sum(clock.slept) >= 30
+
+    def test_progress_names_the_entrypoint_it_is_waiting_on(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A silent wait is indistinguishable from a hang, per the CLI's own rule."""
+        monkeypatch.setattr(setup_routes, "time", _FakeClock())
+        _write_flat(tmp_path)
+        stale = _configmap_response(_form_schema("nothing-declared"), "atlan-mysql")
+        routes = self._sequenced(
+            [_card_payload("atlan-mysql", name="mysql", entrypoint="")], [stale]
+        )
+        notes: list[str] = []
+
+        with pytest.raises(SetupRouteError):
+            verify(tmp_path, routes, wait_seconds=30, on_progress=notes.append)
+
+        assert notes
+        assert any("setup route not ready yet" in note for note in notes)
+        assert all("mysql" in note for note in notes)
+
+
+class TestTransientRetries:
+    """FND-1680: one dropped packet must not decide the leg's verdict.
+
+    The gcp leg died on ``GET /api/service/configmaps/atlan-openapi ... The
+    read operation timed out`` while azure passed the identical assertions
+    against the identical build minutes apart. That is network weather, not a
+    broken setup route, and a check whose verdict tracks the weather gets
+    ignored.
+
+    These drive ``TenantRoutes.get`` over a fake opener and count attempts, so
+    both halves are pinned: that a transient fault IS retried, and that an
+    endpoint's genuine answer is NOT — retrying a 404 would make the negative
+    control three times slower for the same verdict, and could dress a real
+    rejection up as a flake.
+    """
+
+    @staticmethod
+    def _routes() -> TenantRoutes:
+        return TenantRoutes(base_url="https://tenant.example.invalid", bearer="t")
+
+    @staticmethod
+    def _install(monkeypatch: pytest.MonkeyPatch, responses: list[object]) -> list[int]:
+        """Answer each successive open from *responses*; count the calls.
+
+        A response entry that is an exception instance is raised; anything else
+        is returned as the opened response.
+        """
+        calls: list[int] = []
+        # Backoff is real time, and these exercise the retry path several times
+        # over. `_FakeClock` swaps the module's own `time` reference, so the
+        # stdlib clock the asyncio loop shares is left alone.
+        monkeypatch.setattr(setup_routes, "time", _FakeClock())
+
+        class _Opener:
+            def open(self, request: object, timeout: object = None) -> object:
+                calls.append(len(calls))
+                answer = responses[min(len(calls) - 1, len(responses) - 1)]
+                if isinstance(answer, BaseException):
+                    raise answer
+                return answer
+
+        monkeypatch.setattr(setup_routes, "_OPENER", _Opener())
+        return calls
+
+    @staticmethod
+    def _ok(payload: bytes = b'{"ok": true}') -> object:
+        class _Response:
+            status = 200
+
+            def read(self) -> bytes:
+                return payload
+
+            def __enter__(self) -> "_Response":
+                return self
+
+            def __exit__(self, *exc: object) -> bool:
+                return False
+
+        return _Response()
+
+    def test_a_read_timeout_is_retried_and_can_succeed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gcp shape exactly: one timeout, then the tenant answers."""
+        calls = self._install(
+            monkeypatch,
+            [TimeoutError("The read operation timed out"), self._ok()],
+        )
+
+        status, body = self._routes().get("/api/service/configmaps/atlan-openapi")
+
+        assert (status, body) == (200, {"ok": True})
+        assert len(calls) == 2
+
+    def test_it_gives_up_after_the_bound_and_says_what_it_saw(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A genuine outage still fails — with the history, not just the last error."""
+        calls = self._install(
+            monkeypatch, [TimeoutError("The read operation timed out")]
+        )
+
+        with pytest.raises(SetupRouteError) as excinfo:
+            self._routes().get("/api/service/configmaps/atlan-openapi")
+
+        assert len(calls) == setup_routes._RETRY_ATTEMPTS
+        message = str(excinfo.value)
+        assert "after 3 attempts" in message
+        assert "Earlier attempts" in message
+        assert "TimeoutError" in message
+
+    def test_a_404_is_answered_not_retried(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The negative control's premise: a rejection is an answer.
+
+        Retrying it would triple the control's cost for an identical verdict
+        and could present a real rejection as a transient fault.
+        """
+        calls = self._install(
+            monkeypatch,
+            [
+                urllib.error.HTTPError(
+                    "https://tenant.example.invalid/x", 404, "Not Found", None, None
+                )
+            ],
+        )
+
+        status, _ = self._routes().get("/api/service/configmaps/bogus")
+
+        assert status == 404
+        assert len(calls) == 1
+
+    @pytest.mark.parametrize("status", (400, 403, 404))
+    def test_no_rejection_status_is_retried(
+        self, monkeypatch: pytest.MonkeyPatch, status: int
+    ) -> None:
+        """Every status the negative control accepts must cost exactly one call."""
+        calls = self._install(
+            monkeypatch,
+            [
+                urllib.error.HTTPError(
+                    "https://tenant.example.invalid/x", status, "no", None, None
+                )
+            ],
+        )
+
+        assert self._routes().get("/x")[0] == status
+        assert len(calls) == 1
+
+    def test_a_502_is_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A gateway blip in front of the tenant is weather, not a verdict."""
+        calls = self._install(
+            monkeypatch,
+            [
+                urllib.error.HTTPError(
+                    "https://tenant.example.invalid/x", 502, "Bad Gateway", None, None
+                ),
+                self._ok(),
+            ],
+        )
+
+        assert self._routes().get("/x")[0] == 200
+        assert len(calls) == 2
+
+    def test_a_persistent_502_is_returned_not_raised(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After the bound it is the endpoint's answer, and callers report it.
+
+        `catalog()` turns a non-200 into "check the token has marketplace read
+        access", which is a better message than a transport error for a tenant
+        that is answering, just badly.
+        """
+        calls = self._install(
+            monkeypatch,
+            [
+                urllib.error.HTTPError(
+                    "https://tenant.example.invalid/x", 503, "nope", None, None
+                )
+            ],
+        )
+
+        assert self._routes().get("/x")[0] == 503
+        assert len(calls) == setup_routes._RETRY_ATTEMPTS
+
+    def test_backoff_grows_between_attempts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Doubling, not a fixed pause — a tenant mid-restart needs the later gap."""
+        clock = _FakeClock()
+        monkeypatch.setattr(setup_routes, "time", clock)
+        slept = clock.slept
+
+        class _Opener:
+            def open(self, request: object, timeout: object = None) -> object:
+                raise TimeoutError("still out")
+
+        monkeypatch.setattr(setup_routes, "_OPENER", _Opener())
+
+        with pytest.raises(SetupRouteError):
+            self._routes().get("/x")
+
+        # Two waits for three attempts, and the second is longer than the first.
+        assert len(slept) == setup_routes._RETRY_ATTEMPTS - 1
+        assert slept[1] > slept[0]
 
 
 class TestRedirectsAreDeclined:
@@ -1336,7 +2265,9 @@ class TestUnlabelledBundleCard:
     def test_an_unlabelled_card_is_reported(self) -> None:
         catalog = [_card_payload("clickhouse", name="clickhouse", entrypoint="")]
 
-        cards, reason = locate_cards("clickhouse", _eps("crawler", "miner"), catalog)
+        cards, reason = locate_cards(
+            _id("clickhouse"), _eps("crawler", "miner"), catalog
+        )
 
         assert reason is not None
         assert "cannot be attributed" in reason

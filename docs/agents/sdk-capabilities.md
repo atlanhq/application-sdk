@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.32.1
-source-sha:    6f91b14cea9a0be7db64fc4061b3e836fc0729b9
-source-date:   2026-09-05T00:27:17+01:00
+source-sha:    b0cd1b3e8c90cb5b4c9a4f35a13c917872525d34
+source-date:   2026-09-05T14:22:58Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 343 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 346 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3239,6 +3239,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
+#### `AppIdentity`
+
+- **Import:** `from application_sdk.testing.setup_routes import AppIdentity`
+- **Signature:** `class AppIdentity(name: str, display_name: str = '') -> None`
+- **Summary:** The committed names a marketplace card may be listed under.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `AppNotReadyError`
 
 - **Import:** `from application_sdk.testing.harness.automation_engine import AppNotReadyError`
@@ -3619,6 +3626,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class FixtureNotConfiguredError(*, ...)`
 - **Summary:** A composer requested a harness fixture without declaring what it needs.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `FormStep`
+
+- **Import:** `from application_sdk.testing.setup_routes import FormStep`
+- **Signature:** `class FormStep(id: str, properties: frozenset[str] = frozenset()) -> None`
+- **Summary:** One panel of the setup wizard, as the served schema describes it.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `FullDAGOutcome`
 
@@ -4059,6 +4073,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class SeededWorkflow(*, slug: str, seed_version: int | None = None)`
 - **Summary:** An AE workflow with a published version, ready to be submitted against.
 - **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `ServedForm`
+
+- **Import:** `from application_sdk.testing.setup_routes import ServedForm`
+- **Signature:** `class ServedForm(properties: frozenset[str] = frozenset(), steps: tuple[FormStep, ...] = ()) -> None`
+- **Summary:** The setup form a tenant serves, in the two parts the UI renders from.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `ServiceTarget`
 
@@ -4656,6 +4677,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The first outcome row, or ``None`` — for paths asserting no row was emitted.
 - **Defined in:** `application_sdk/testing/preflight.py`
 
+#### `form_shortfall`
+
+- **Import:** `from application_sdk.testing.setup_routes import form_shortfall`
+- **Signature:** `form_shortfall(entrypoint: Entrypoint, served: ServedForm) -> str | None`
+- **Summary:** Why this entry point's setup form will not render, or ``None``.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `format_validation_report`
 
 - **Import:** `from application_sdk.testing.integration import format_validation_report`
@@ -4897,13 +4925,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Wire mocked infrastructure for the session, after the source is up.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
-#### `input_shortfall`
-
-- **Import:** `from application_sdk.testing.setup_routes import input_shortfall`
-- **Signature:** `input_shortfall(entrypoint: str, declared: frozenset[str], served: frozenset[str]) -> str | None`
-- **Summary:** Which declared inputs the tenant is not serving, or ``None``.
-- **Defined in:** `application_sdk/testing/setup_routes.py`
-
 #### `integration_app_cls`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import integration_app_cls`
@@ -5070,7 +5091,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `locate_cards`
 
 - **Import:** `from application_sdk.testing.setup_routes import locate_cards`
-- **Signature:** `locate_cards(app_name: str, ...)`
+- **Signature:** `locate_cards(identity: AppIdentity, ...)`
 - **Summary:** Pick this app's cards out of the whole catalog, keyed by entry point.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
 
@@ -5224,11 +5245,11 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
 - **Defined in:** `application_sdk/testing/harness/teardown.py`
 
-#### `read_app_name`
+#### `read_app_identity`
 
-- **Import:** `from application_sdk.testing.setup_routes import read_app_name`
-- **Signature:** `read_app_name(repo_root: Path) -> str`
-- **Summary:** Return the app ``name`` from ``atlan.yaml``, as cards report it.
+- **Import:** `from application_sdk.testing.setup_routes import read_app_identity`
+- **Signature:** `read_app_identity(repo_root: Path) -> AppIdentity`
+- **Summary:** Return the names ``atlan.yaml`` commits, as cards may report them.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `read_entrypoint_names`
@@ -5299,7 +5320,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `route_mismatch`
 
 - **Import:** `from application_sdk.testing.setup_routes import route_mismatch`
-- **Signature:** `route_mismatch(entrypoint: str, card: Card, config_id: str) -> str | None`
+- **Signature:** `route_mismatch(entrypoint: Entrypoint, card: Card) -> str | None`
 - **Summary:** Why this entry point's setup page will 404, or ``None`` if it resolves.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
 
@@ -5347,11 +5368,11 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Collect the literal values a run is holding, for :func:`redact`'s ``secrets``.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
-#### `served_inputs`
+#### `served_form`
 
-- **Import:** `from application_sdk.testing.setup_routes import served_inputs`
-- **Signature:** `served_inputs(body: dict[str, Any]) -> frozenset[str]`
-- **Summary:** Unwrap a ConfigMap response and return the input names it serves.
+- **Import:** `from application_sdk.testing.setup_routes import served_form`
+- **Signature:** `served_form(body: dict[str, Any]) -> ServedForm`
+- **Summary:** Unwrap a ConfigMap response into the form the tenant serves.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `single_outcome`
