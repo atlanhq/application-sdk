@@ -9,7 +9,7 @@ description: |
   installs it onto the target tenant so the tenant serves the app under test
   rather than whatever was last hand-deployed there.
 
-  The image reference is deterministic (`sdr-test-<short-sha>`), so a caller
+  The image reference is deterministic (see derive_e2e_image_tag.py), so a caller
   that builds here and a caller that reads `image` back later agree without
   passing anything around.
 
@@ -39,7 +39,8 @@ inputs:
   app-image-name:
     description: |
       GHCR image name (e.g. "atlan-mysql-app"). The image is tagged
-      ghcr.io/atlanhq/<app-image-name>:sdr-test-<short-sha>.
+      ghcr.io/atlanhq/<app-image-name>:sdr-test-<short-sha>, plus a digest of the
+      SDK ref and base image when either is pinned — see derive_e2e_image_tag.py.
     required: true
   application-sdk-ref:
     description: |
@@ -226,9 +227,22 @@ runs:
         # command line and out of any tmpfile on the runner — buildx
         # streams it directly into the build context.
         GIT_TOKEN: ${{ inputs.git-token }}
+        # The tag must move whenever the built image's CONTENT moves, which
+        # `github.sha` alone does not capture: an application-sdk PR dispatches
+        # an e2e run that builds this connector at its unchanged HEAD with the
+        # SDK repinned, so successive SDK commits produced byte-different images
+        # under one tag. prepare-tenant then saw the version name it expected
+        # already installed and skipped ("tenant already runs … — nothing to
+        # do"), leaving each tenant on whatever content it happened to hold.
+        # See derive_e2e_image_tag.py; the rule is tested, not inlined here,
+        # per docs/standards/ci.md.
+        DERIVE_TAG: ${{ github.action_path }}/../../scripts/derive_e2e_image_tag.py
       run: |
-        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
-        IMAGE_BASE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
+        TAG=$(python3 "${DERIVE_TAG}" \
+          --commit "${{ github.sha }}" \
+          --sdk-ref "${{ inputs.application-sdk-ref }}" \
+          --base-image-ref "${BASE_IMAGE_REF}")
+        IMAGE_BASE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:${TAG}"
         # Suffix is empty for every caller that does not build per-architecture,
         # so IMAGE is unchanged for them.
         IMAGE="${IMAGE_BASE}${{ inputs.tag-suffix }}"
