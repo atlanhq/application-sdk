@@ -78,7 +78,7 @@ import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from application_sdk.app._generated_tree import form_configmap, generated_layout
 
@@ -87,6 +87,7 @@ __all__ = [
     "Card",
     "Entrypoint",
     "RouteCheckSkipped",
+    "RouteReader",
     "SetupRouteError",
     "TenantRoutes",
     "declared_inputs",
@@ -165,6 +166,30 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 #: Built once: an opener is stateless here and rebuilding it per request would
 #: re-parse the handler chain on every call.
 _OPENER = urllib.request.build_opener(_NoRedirect())
+
+
+class RouteReader(Protocol):
+    """The two reads :func:`verify` needs from a tenant.
+
+    Declared as a Protocol rather than typed against :class:`TenantRoutes`
+    because ``verify`` genuinely needs only these two methods — the transport,
+    the credential and the redirect policy are all `TenantRoutes`' business and
+    none of them reaches this far.
+
+    It is also what keeps the test suite free of suppressions. Annotating the
+    parameter with the concrete class meant every test passing a fake needed a
+    ``# type: ignore[arg-type]``, and fourteen identical suppressions are worse
+    than one honest signature: each one is a place where a genuine type error
+    would be silenced too.
+    """
+
+    def catalog(self) -> list[dict[str, Any]]:
+        """Every marketplace card the tenant lists."""
+        ...
+
+    def configmap(self, name: str) -> tuple[int, dict[str, Any]]:
+        """Fetch one configmap by name, as the setup page does."""
+        ...
 
 
 class SetupRouteError(RuntimeError):
@@ -744,7 +769,7 @@ def _parse(raw: bytes) -> object:
 
 
 def _await_cards(
-    routes: TenantRoutes,
+    routes: RouteReader,
     app_name: str,
     entrypoints: Sequence[Entrypoint],
     wait_seconds: int,
@@ -778,7 +803,7 @@ def _await_cards(
 
 def verify(
     repo_root: Path,
-    routes: TenantRoutes,
+    routes: RouteReader,
     *,
     generated_dir: str = "app/generated",
     wait_seconds: int = DEFAULT_CATALOG_WAIT_SECONDS,

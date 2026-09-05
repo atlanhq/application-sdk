@@ -732,7 +732,7 @@ class TestVerify:
         _write_bundle(tmp_path)
         routes = _FakeRoutes([_both_cards()], _healthy_configmaps())
 
-        report = verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+        report = verify(tmp_path, routes, wait_seconds=0)
 
         assert len(report) == 2
         assert all("resolves" in line for line in report)
@@ -749,7 +749,7 @@ class TestVerify:
         _write_bundle(tmp_path)
         routes = _FakeRoutes([_both_cards()], _healthy_configmaps())
 
-        verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+        verify(tmp_path, routes, wait_seconds=0)
 
         assert routes.asked[0] == "clickhouse-nonexistent-setup-route-check"
 
@@ -759,7 +759,7 @@ class TestVerify:
         routes = _FakeRoutes([_both_cards()], _healthy_configmaps(), unknown_status=200)
 
         with pytest.raises(SetupRouteError, match="proves anything"):
-            verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+            verify(tmp_path, routes, wait_seconds=0)
 
     def test_reports_the_packageid_regression_against_a_tenant(
         self, tmp_path: Path
@@ -779,7 +779,7 @@ class TestVerify:
         routes = _FakeRoutes([catalog], _healthy_configmaps())
 
         with pytest.raises(SetupRouteError) as caught:
-            verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+            verify(tmp_path, routes, wait_seconds=0)
 
         message = str(caught.value)
         # Both entrypoints broke, so both must be reported — not just the first.
@@ -796,7 +796,7 @@ class TestVerify:
         routes = _FakeRoutes([_both_cards()], configmaps)
 
         with pytest.raises(SetupRouteError, match="404'd setup page"):
-            verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+            verify(tmp_path, routes, wait_seconds=0)
 
     def test_fails_when_the_endpoint_serves_a_different_name(
         self, tmp_path: Path
@@ -813,7 +813,7 @@ class TestVerify:
         routes = _FakeRoutes([_both_cards()], configmaps)
 
         with pytest.raises(SetupRouteError, match="served 'something-else'"):
-            verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+            verify(tmp_path, routes, wait_seconds=0)
 
     def test_polls_until_the_catalog_reconciles(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -839,7 +839,7 @@ class TestVerify:
 
         report = module.verify(
             tmp_path,
-            routes,  # type: ignore[arg-type]
+            routes,
             wait_seconds=60,
             on_progress=progress.append,
         )
@@ -867,7 +867,7 @@ class TestVerify:
         monkeypatch.setattr(module, "_CATALOG_POLL_SECONDS", 0)
 
         with pytest.raises(SetupRouteError) as caught:
-            module.verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+            module.verify(tmp_path, routes, wait_seconds=0)
 
         message = str(caught.value)
         assert "miner" in message
@@ -879,7 +879,7 @@ class TestVerify:
         routes = _FakeRoutes([[]], {})
 
         with pytest.raises(RouteCheckSkipped):
-            verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+            verify(tmp_path, routes, wait_seconds=0)
 
         # And it must skip BEFORE touching the tenant: an app with no setup page
         # should cost no tenant calls at all.
@@ -925,7 +925,7 @@ class TestCardlessEntrypoints:
         catalog = [_card_payload("clickhouse-crawler", entrypoint="crawler")]
         routes = _FakeRoutes([catalog], _healthy_configmaps())
 
-        report = verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+        report = verify(tmp_path, routes, wait_seconds=0)
 
         assert len(report) == 1
 
@@ -1003,7 +1003,9 @@ class TestCatalogTruncation:
 
             self.catalog_reads += 1
             body = {"total": self._total, "apps": self._catalogs[0]}
-            return TenantRoutes.catalog(_StubGet(body))  # type: ignore[arg-type]
+            # Calling the real guard as an unbound method with a stub self:
+            # `_StubGet` supplies only `get`, which is all `catalog` touches.
+            return TenantRoutes.catalog(_StubGet(body))  # type: ignore[arg-type] — stub supplies the only attribute `catalog` reads
 
     def test_a_short_page_fails_loudly(self, tmp_path: Path) -> None:
         _write_bundle(tmp_path)
@@ -1012,7 +1014,7 @@ class TestCatalogTruncation:
         )
 
         with pytest.raises(SetupRouteError, match="paginated"):
-            verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+            verify(tmp_path, routes, wait_seconds=0)
 
     def test_a_complete_page_is_accepted(self, tmp_path: Path) -> None:
         """`total` equal to the page length is the normal, unpaginated case."""
@@ -1020,7 +1022,7 @@ class TestCatalogTruncation:
         both = _both_cards()
         routes = self._TruncatingRoutes(both, total=len(both))
 
-        report = verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+        report = verify(tmp_path, routes, wait_seconds=0)
 
         assert len(report) == 2
 
@@ -1134,7 +1136,7 @@ class TestSoleContractCardMatching:
             {"mysql": (200, _configmap_response(schema, "mysql"))},
         )
 
-        report = verify(tmp_path, routes, wait_seconds=0)  # type: ignore[arg-type]
+        report = verify(tmp_path, routes, wait_seconds=0)
 
         assert len(report) == 1
 
@@ -1235,7 +1237,9 @@ class TestRedirectsAreDeclined:
                 response = urllib.response.addinfourl(
                     _Body(b'{"ok": true}'), headers, req.full_url, first_status
                 )
-                response.msg = "Found"  # type: ignore[attr-defined]
+                # addinfourl has no declared `msg`, but HTTPErrorProcessor
+                # reads one off the response when it dispatches a non-2xx.
+                response.msg = "Found"  # type: ignore[attr-defined] — addinfourl has no declared `msg`; HTTPErrorProcessor reads it on a non-2xx
                 return response
 
         return _Fake
