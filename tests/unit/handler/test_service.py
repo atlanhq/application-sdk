@@ -2691,6 +2691,62 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_configmaps_lists_the_names_the_endpoint_answers_to(
+        self, tmp_path: Path
+    ) -> None:
+        """The listing is "what can be fetched", not "which file is the form".
+
+        Those two rules look interchangeable and are not, so both halves are
+        pinned here. A credential template must stay LISTED — the setup form's
+        `credential` widget fetches `atlan-connectors-<source>` as a configmap
+        in its own right, so filtering it out would advertise fewer names than
+        the endpoint actually serves. The manifest must stay OUT, because
+        `/workflows/v1/manifest` owns it.
+
+        `artifact_schemas` is listed too, and deliberately: this endpoint does
+        serve it by exact stem. What FND-1682 fixed was the *fallback* picking
+        it when asked for something else, which is a different question from
+        which names resolve.
+        """
+        from application_sdk.handler import service as svc_module
+
+        for name in (
+            "artifact_schemas.json",
+            "atlan-connectors-snowflake.json",
+            "manifest.json",
+            "snowflake.json",
+        ):
+            (tmp_path / name).write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            response = _make_client().get("/workflows/v1/configmaps")
+            assert response.status_code == 200
+            configmaps = response.json()["data"]["configmaps"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+        assert sorted(configmaps) == [
+            "artifact_schemas",
+            "atlan-connectors-snowflake",
+            "snowflake",
+        ]
+
+    def test_the_excluded_stem_is_the_shared_one(self) -> None:
+        """One vocabulary, not a literal re-spelled at each site.
+
+        A hand-written `"manifest"` here was the last copy of that vocabulary
+        left in this module after FND-1682, and one divergent spelling is all
+        the artifact_schemas bug needed. If `_generated_tree` renames the stem,
+        this endpoint has to move with it rather than quietly keep listing a
+        file the rest of the SDK stopped calling a manifest.
+        """
+        from application_sdk.app._generated_tree import MANIFEST_STEM
+        from application_sdk.handler import service as svc_module
+
+        assert svc_module.MANIFEST_STEM is MANIFEST_STEM
+
     def test_configmaps_empty_when_dir_missing(self, tmp_path: Path) -> None:
         from application_sdk.handler import service as svc_module
 
