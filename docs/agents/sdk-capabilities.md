@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.32.1
-source-sha:    3a637eac13e4d51b892841ce6f89b24de8dbce08
-source-date:   2026-09-05T11:32:49+01:00
+source-sha:    41dfbf0dfbf00f914676a0b7f98818da0c6031a4
+source-date:   2026-09-05T12:11:44+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 366 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 368 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -4095,6 +4095,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The three object-store prefixes one seed publish reads and writes.
 - **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
 
+#### `SeedPublishEmptyError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedPublishEmptyError`
+- **Signature:** `class SeedPublishEmptyError(*, ...)`
+- **Summary:** The seed's publish run succeeded and landed nothing in Atlas.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
 #### `SeedPublishFailedError`
 
 - **Import:** `from application_sdk.testing.harness.seed import SeedPublishFailedError`
@@ -4136,6 +4143,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class SeedTreeInvalidError(*, ...)`
 - **Summary:** The seed's own NDJSON would not survive publish, so it is not submitted.
 - **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
+#### `SeedVerifier`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedVerifier`
+- **Signature:** `class SeedVerifier`
+- **Summary:** Reads back how many assets a seed actually landed under its connection.
+- **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
 
 #### `ServiceTarget`
 
@@ -5462,7 +5476,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `seed_assets`
 
 - **Import:** `from application_sdk.testing.harness.seed import seed_assets`
-- **Signature:** `seed_assets(spec: ResolvedSeedSpec, *, store: ObjectStore, ae: AEClient, plan: SeedPublishPlan) -> SeededConnection`
+- **Signature:** `seed_assets(spec: ResolvedSeedSpec, *, ...)`
 - **Summary:** Serialise *spec*, validate it offline, and publish it as a real run.
 - **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
 
