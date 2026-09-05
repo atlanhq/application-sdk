@@ -4,6 +4,7 @@
 - New code should target 85% coverage per `docs/standards/review-checklist.md` (the tooling threshold in `pyproject.toml` is 85% — CI fails below it).
 - Current tests live in `tests/unit/`; follow existing structure when adding new tests.
 - For how a *consumer app's* tests should be laid out, read `docs/agents/canonical-apps.md` and then the app itself — not an arbitrary `atlan-*-app`, which may be mid-migration or carry deprecated patterns.
+- When a fixture stands in for a **generated artifact** (`app/generated/**`, `atlan.yaml`, a served API envelope), build it from a real one and say in a comment which repo it was read from. A fixture with the shape inverted still passes — for a reason unrelated to its claim — and it flatters the code under test, which is APP-TESTS-001's self-certifying PR arriving through the fixture rather than the assertion. FND-1667 shipped one: a credential template written as `{"id": ...}` with no `config`, where the toolkit emits `config` and no `id`. Nothing caught it until someone ran the selector against a real tree.
 - For consumer apps built on this SDK, the conformance suite's T-series (`packages/conformance/conformance/docs/rules/tests.md`) enforces the agreed per-connector testing-tier architecture (unit + integration required, e2e recommended, UI optional except for top connectors) plus test-quality checks — assertion-free tests, uncollectable test files, disabled coverage gates, and more. Run it with `/remediate` or `uv run atlan-application-sdk-conformance detect --series T`.
 
 ## Asserting a Preflight Gate Verdict

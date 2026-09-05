@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.31.0
-source-sha:    f3045c7ac582ccbdd1064752739cacaca68eecd6
-source-date:   2026-09-02T13:38:19+00:00
+sdk-version:   3.32.1
+source-sha:    6f91b14cea9a0be7db64fc4061b3e836fc0729b9
+source-date:   2026-09-05T00:27:17+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 327 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 343 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3385,6 +3385,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The outbound call shapes a run makes, as profile keys.
 - **Defined in:** `application_sdk/testing/harness/budgets.py`
 
+#### `Card`
+
+- **Import:** `from application_sdk.testing.setup_routes import Card`
+- **Signature:** `class Card(id: str = '', name: str = '', entrypoint: str = '') -> None`
+- **Summary:** One marketplace card, trimmed to the fields the check reads.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `CategoryResult`
 
 - **Import:** `from application_sdk.testing.parity import CategoryResult`
@@ -3531,6 +3538,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class DuplicateKeyPolicy`
 - **Summary:** What a non-unique join key on either side does to the comparison.
 - **Defined in:** `application_sdk/testing/golden.py`
+
+#### `Entrypoint`
+
+- **Import:** `from application_sdk.testing.setup_routes import Entrypoint`
+- **Signature:** `class Entrypoint(name: str, ...)`
+- **Summary:** One entry point, as the committed artifacts describe it.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `EvidenceBundle`
 
@@ -3995,6 +4009,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Identifies a custom-resource kind by its API coordinates.
 - **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
+#### `RouteCheckSkipped`
+
+- **Import:** `from application_sdk.testing.setup_routes import RouteCheckSkipped`
+- **Signature:** `class RouteCheckSkipped`
+- **Summary:** There is no setup route to check, and that is not a failure.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `RouteReader`
+
+- **Import:** `from application_sdk.testing.setup_routes import RouteReader`
+- **Signature:** `class RouteReader`
+- **Summary:** The two reads :func:`verify` needs from a tenant.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `RunLookup`
 
 - **Import:** `from application_sdk.testing.e2e.client import RunLookup`
@@ -4046,6 +4074,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class Settled(*, label: str, attempts: int, elapsed: timedelta, value: T)`
 - **Summary:** The probe reached the settled state inside its budget.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `SetupRouteError`
+
+- **Import:** `from application_sdk.testing.setup_routes import SetupRouteError`
+- **Signature:** `class SetupRouteError`
+- **Summary:** A setup route is broken, or the tenant could not be asked.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `SQLAppE2EFullTest`
 
@@ -4155,6 +4190,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class TenantAuth(base_url: str, ...)`
 - **Summary:** How a run authenticates against the tenant under test.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `TenantRoutes`
+
+- **Import:** `from application_sdk.testing.setup_routes import TenantRoutes`
+- **Signature:** `class TenantRoutes(base_url: str, bearer: str) -> None`
+- **Summary:** Reads the two routes the setup page walks, with one bearer credential.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `TypenameDiff`
 
@@ -4529,6 +4571,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Create a custom assertion from a user-provided function.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `declared_inputs`
+
+- **Import:** `from application_sdk.testing.setup_routes import declared_inputs`
+- **Signature:** `declared_inputs(workflow_config: dict[str, Any]) -> frozenset[str]`
+- **Summary:** Return the input names a generated workflow config declares.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `diff_golden`
 
 - **Import:** `from application_sdk.testing import diff_golden`
@@ -4848,6 +4897,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Wire mocked infrastructure for the session, after the source is up.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
+#### `input_shortfall`
+
+- **Import:** `from application_sdk.testing.setup_routes import input_shortfall`
+- **Signature:** `input_shortfall(entrypoint: str, declared: frozenset[str], served: frozenset[str]) -> str | None`
+- **Summary:** Which declared inputs the tenant is not serving, or ``None``.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `integration_app_cls`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import integration_app_cls`
@@ -5011,6 +5067,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Load expected metadata from a JSON file.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `locate_cards`
+
+- **Import:** `from application_sdk.testing.setup_routes import locate_cards`
+- **Signature:** `locate_cards(app_name: str, ...)`
+- **Summary:** Pick this app's cards out of the whole catalog, keyed by entry point.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `matches`
 
 - **Import:** `from application_sdk.testing.integration import matches`
@@ -5161,6 +5224,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
 - **Defined in:** `application_sdk/testing/harness/teardown.py`
 
+#### `read_app_name`
+
+- **Import:** `from application_sdk.testing.setup_routes import read_app_name`
+- **Signature:** `read_app_name(repo_root: Path) -> str`
+- **Summary:** Return the app ``name`` from ``atlan.yaml``, as cards report it.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `read_entrypoint_names`
+
+- **Import:** `from application_sdk.testing.setup_routes import read_entrypoint_names`
+- **Signature:** `read_entrypoint_names(repo_root: Path) -> list[str]`
+- **Summary:** Return the ``entrypoints[].name`` values that should have a setup page.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `read_entrypoints`
+
+- **Import:** `from application_sdk.testing.setup_routes import read_entrypoints`
+- **Signature:** `read_entrypoints(repo_root: Path, generated_dir: str = 'app/generated') -> list[Entrypoint]`
+- **Summary:** Read every entry point's committed workflow config.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `read_records`
 
 - **Import:** `from application_sdk.testing.integration import read_records`
@@ -5212,6 +5296,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Stop a test that reset the logger's init state from leaking it forward.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
+#### `route_mismatch`
+
+- **Import:** `from application_sdk.testing.setup_routes import route_mismatch`
+- **Signature:** `route_mismatch(entrypoint: str, card: Card, config_id: str) -> str | None`
+- **Summary:** Why this entry point's setup page will 404, or ``None`` if it resolves.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `run_comparison`
 
 - **Import:** `from application_sdk.testing.parity import run_comparison`
@@ -5255,6 +5346,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `secrets_from_environment(environ: Mapping[str, str], *, also: Sequence[str] = ()) -> tuple[str, ...]`
 - **Summary:** Collect the literal values a run is holding, for :func:`redact`'s ``secrets``.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `served_inputs`
+
+- **Import:** `from application_sdk.testing.setup_routes import served_inputs`
+- **Signature:** `served_inputs(body: dict[str, Any]) -> frozenset[str]`
+- **Summary:** Unwrap a ConfigMap response and return the input names it serves.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `single_outcome`
 
@@ -5340,6 +5438,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Validate extracted output against pandera YAML schemas.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
 
+#### `verify`
+
+- **Import:** `from application_sdk.testing.setup_routes import verify`
+- **Signature:** `verify(repo_root: Path, *, ...)`
+- **Summary:** Check every entry point's setup route. Returns the lines to report.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `wait_for_workflow`
 
 - **Import:** `from application_sdk.testing.e2e import wait_for_workflow`
@@ -5414,6 +5519,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `CountRead: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `DEFAULT_CATALOG_WAIT_SECONDS`
+
+- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_CATALOG_WAIT_SECONDS`
+- **Signature:** `DEFAULT_CATALOG_WAIT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `DEFAULT_TYPE_NAMES`
 
