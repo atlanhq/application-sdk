@@ -32,7 +32,11 @@ thing in this whole check to get quietly wrong.
 
 from __future__ import annotations
 
+import email.message
+import io
 import json
+import urllib.request
+import urllib.response
 from pathlib import Path
 from typing import Any
 
@@ -1178,66 +1182,124 @@ class TestRedirectsAreDeclined:
     this check a 200 carrying HTML. A check built on "200 means the form is
     served" cannot tell that from success, and the negative control — the one
     assertion that certifies all the others — is exactly what it disarms.
+
+    These drive urllib's REAL redirect dispatch over a fake transport rather
+    than over a socket. `OpenerDirector` routes a 3xx through
+    `HTTPErrorProcessor` to the redirect handler exactly as it would on the
+    wire, so swapping only the transport leaves the behaviour under test
+    untouched — and the unit tier bans sockets (`--disable-socket` on
+    Linux/macOS; the guard is skipped on Windows only because
+    ProactorEventLoop needs AF_INET internally, which is why a socket-based
+    version of this passed there and failed everywhere else).
+
+    `test_the_default_handler_would_have_followed_it` is the control that makes
+    the rest mean something: it shows the redirect really was there to be
+    followed, so a passing "stays a 302" cannot be a fake transport that simply
+    never redirected.
     """
 
-    @staticmethod
-    def _serve(handler_status: int, location: str = "https://login.invalid/sso"):
-        """Run a one-request HTTP server returning *handler_status*."""
-        import http.server
-        import threading
+    _LOGIN = "http://127.0.0.1:1/sso"
 
-        class _Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name
-                self.send_response(handler_status)
-                if 300 <= handler_status < 400:
-                    self.send_header("Location", location)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"ok": true}')
+    @classmethod
+    def _transport(cls, first_status: int) -> type[urllib.request.HTTPHandler]:
+        """A transport returning *first_status*, then a 200 at the login URL.
 
-            def log_message(self, *args: object) -> None:
-                pass
+        Both hops are answered locally, so following the redirect is fully
+        observable without a network.
+        """
+        login = cls._LOGIN
 
-        server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        return server
+        class _Body(io.BytesIO):
+            """A response body carrying `msg`.
 
-    def test_a_302_stays_a_302(self) -> None:
+            `HTTPRedirectHandler.http_error_302` reads `fp.msg` when it builds
+            the follow-up request, and a bare `BytesIO` cannot carry attributes
+            — so without this the control below fails inside urllib rather than
+            demonstrating the redirect it exists to demonstrate.
+            """
+
+            msg = "Found"
+
+        class _Fake(urllib.request.HTTPHandler):
+            def http_open(self, req: urllib.request.Request) -> object:
+                if req.full_url == login:
+                    headers = email.message.Message()
+                    headers["Content-Type"] = "text/html"
+                    return urllib.response.addinfourl(
+                        _Body(b"<html>sign in</html>"), headers, req.full_url, 200
+                    )
+                headers = email.message.Message()
+                headers["Content-Type"] = "application/json"
+                if 300 <= first_status < 400:
+                    headers["Location"] = login
+                response = urllib.response.addinfourl(
+                    _Body(b'{"ok": true}'), headers, req.full_url, first_status
+                )
+                response.msg = "Found"  # type: ignore[attr-defined]
+                return response
+
+        return _Fake
+
+    def _get(
+        self, monkeypatch: pytest.MonkeyPatch, opener: object
+    ) -> tuple[int, object]:
+        from application_sdk.testing import setup_routes as module
+
+        monkeypatch.setattr(module, "_OPENER", opener)
+        routes = module.TenantRoutes.__new__(module.TenantRoutes)
+        routes.base_url = "http://127.0.0.1:1"
+        routes.bearer = "unused"
+        return routes.get("/anything")
+
+    def test_a_302_stays_a_302(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The finding, pinned: following it would report 200 for a login page."""
-        from application_sdk.testing.setup_routes import TenantRoutes
+        from application_sdk.testing.setup_routes import _NoRedirect
 
-        server = self._serve(302)
-        try:
-            routes = TenantRoutes.__new__(TenantRoutes)
-            routes.base_url = f"http://127.0.0.1:{server.server_port}"
-            routes.bearer = "unused"
+        opener = urllib.request.build_opener(self._transport(302), _NoRedirect)
 
-            status, _ = routes.get("/anything")
-        finally:
-            server.shutdown()
+        status, _ = self._get(monkeypatch, opener)
 
         assert status == 302, (
             "the redirect was followed; a 302 to a login page would arrive as a "
             "200 and the negative control would certify nothing"
         )
 
-    def test_a_200_is_still_a_200(self) -> None:
+    def test_the_default_handler_would_have_followed_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control: without the override, the login page arrives as a 200.
+
+        This is what makes the test above meaningful rather than vacuous — the
+        redirect was genuinely there to be followed, and declining it is what
+        changes the outcome.
+        """
+        opener = urllib.request.build_opener(self._transport(302))
+
+        status, body = self._get(monkeypatch, opener)
+
+        assert status == 200
+        assert "sign in" in str(body)
+
+    def test_a_200_is_still_a_200(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Declining redirects must not disturb the ordinary path."""
-        from application_sdk.testing.setup_routes import TenantRoutes
+        from application_sdk.testing.setup_routes import _NoRedirect
 
-        server = self._serve(200)
-        try:
-            routes = TenantRoutes.__new__(TenantRoutes)
-            routes.base_url = f"http://127.0.0.1:{server.server_port}"
-            routes.bearer = "unused"
+        opener = urllib.request.build_opener(self._transport(200), _NoRedirect)
 
-            status, body = routes.get("/anything")
-        finally:
-            server.shutdown()
+        status, body = self._get(monkeypatch, opener)
 
         assert status == 200
         assert body == {"ok": True}
+
+    def test_the_shipped_opener_carries_the_handler(self) -> None:
+        """The tests above build their own opener; this pins the real one.
+
+        Without it they would prove `_NoRedirect` works while `TenantRoutes`
+        quietly used a default opener.
+        """
+        from application_sdk.testing.setup_routes import _OPENER, _NoRedirect
+
+        assert any(isinstance(h, _NoRedirect) for h in _OPENER.handlers)
 
     def test_a_redirect_is_not_a_valid_rejection(self) -> None:
         """The negative control must not accept a 3xx as "correctly rejected".
