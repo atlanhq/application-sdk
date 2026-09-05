@@ -1198,6 +1198,157 @@ not count as the crawler's e2e suite, deliberately: it exists to seed, and it is
 graded against the consuming suite's intent. The rule stays *one collectable class
 per entrypoint, which may run prerequisite DAGs for others*.
 
+### Seeding lineage parents another *source* owns
+
+A lineage-only connector — Coalesce, ADF, Mode — publishes Process /
+ColumnProcess entities whose `inputs`/`outputs` reference **another source's**
+assets by qualified name: Snowflake tables under a Coalesce run, warehouse
+tables under an ADF pipeline. On a connector-scoped e2e tenant that source has
+never been crawled, so the publish fails wholesale (`ATLAS-404-00-00A`) — 72
+entities on adf, 9 on mode, 19,210 on coalesce. Neither `seed_connection` (the
+run's *own* connection) nor a prerequisite `dag_runs` crawl covers this shape.
+
+#### Choose the approach first: crawl if you can reach it, seed if you cannot
+
+There are now two ways to put a referenced source in place, and picking wrongly
+is the expensive mistake. The rule:
+
+> **Run a real crawl when the referenced source is reachable inside the leg. Use
+> synthetic-publish seeding only when it is not.**
+
+| Case | Reachable? | Approach |
+| --- | --- | --- |
+| postgres miner | Same app, two entrypoints; the hermetic container is already in the job | Real crawl via `dag_runs` |
+| coalesce → Snowflake | Different app, external warehouse, no tenant credentials | `seed_assets` |
+| adf → ADLS / Cosmos / Salesforce | Three external sources, none reachable | `seed_assets` |
+
+A real crawl seeds from the producer that owns the data, so its QN parity holds
+by construction and its assertions are calibrated against real crawl behaviour.
+Seeding does neither — which is why every segment of a `SeedSpec` is validated
+and the whole batch is checked offline before it is submitted. Reach for it only
+when there is nothing to crawl.
+
+#### What `seed_assets` does
+
+**Two failure modes stack here, and only one of them is an Atlas entity.**
+
+1. *Ref emission* is connector-side and needs the **connection cache**: with no
+   cache loaded, coalesce sets `cache_unavailable` and emits every ref
+   unvalidated, and mode falls back to PartialObjects. All three connectors
+   above declare `connection_cache_enabled` + `connection_cache_via_app_enabled`.
+2. *Ref resolution* is Atlas-side and needs the **entity**: the emitted ref must
+   bind to something, by exact-match qualified name and exact type — no fuzzy
+   matching, no case folding, and a `Table` never resolves a ref that said
+   `View`.
+
+Writing skeleton entities straight into Atlas with pyatlan addresses (2) and
+nothing else. `build_connection_cache` in `atlan-publish-app` builds the cache
+from a connection's *own transformed JSONL*; it does not snapshot arbitrary
+connections out of Atlas, so a direct write produces no cache — and a
+harness-authored cache blob would mean reimplementing a producer we do not own.
+(This is [FND-1147](https://linear.app/atlan-epd/issue/FND-1147) one connection
+over: *"it read 'prior crawl' as 'prior ASSETS' and seeded them with pyatlan,
+which the lineage app cannot see."*)
+
+So `seed_assets` seeds **through publish**: it serialises the transformed NDJSON
+a crawler of that source would have emitted, uploads it, and submits one
+`PublishWorkflow` node. Publish then owns the entities *and* the cache, from the
+producer that owns them. No new app is needed — `publish` is a platform service
+already on every tenant.
+
+Declare the tree and call it from `seed_prerequisites()`:
+
+```python
+from application_sdk.testing.harness import seed as harness_seed
+
+
+class TestCoalesceE2E(CrawlerGeneratedE2EBase):
+    def seed_prerequisites(self) -> None:
+        seeded = self.seed_assets(
+            harness_seed.SeedSpec(
+                connector_type="snowflake",   # the REFERENCED source's type
+                # qualified_name / display_name omitted → minted per run
+                databases=(
+                    harness_seed.DatabaseSpec(
+                        name="ANALYTICS",
+                        schemas=(
+                            harness_seed.SchemaSpec(
+                                name="PUBLIC",
+                                tables=(
+                                    harness_seed.TableSpec(
+                                        name="ORDERS", columns=("ID", "AMOUNT")
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+        # Rebase the refs the connector will emit onto seeded.qualified_name
+        # (e.g. via a mustache substitution or the connector's config), and point
+        # its own publish node's `ars_lookup_connection_qns` at the same QN.
+```
+
+The seeded tree hangs under a **second** ephemeral connection, minted per run
+exactly like the suite's own. Its QN *and* its object-store prefix are registered
+before the seed runs, so `teardown_method` reclaims both (connections first, the
+run's own before the seeded ones) even when the seed half-fails. Nothing here
+touches a long-lived shared connection.
+
+#### Three things to get right
+
+- **QN parity is the whole contract.** Every segment must match what the
+  connector under test emits **byte for byte, case included** — Snowflake refs
+  are `.upper()`-d, so seed them upper-cased. Derive the spec from the
+  connector's own committed transform goldens where you can; that is parity by
+  construction rather than by hope. A connector whose warehouse QNs are not
+  config-pinnable must precompute them from its source fixture, never invent
+  them. Segments that cannot compose cleanly (empty, padded, or carrying a `/`)
+  are rejected at declaration.
+- **The pre-submit check needs the `[storage]` extra.** `seed_assets` runs
+  `validate_transformed_dir(..., check_referential_integrity=True)` offline
+  before it uploads anything, which is what turns "every parent is present" from
+  hoped-for into asserted. The referential pass is backed by `rocksdict`; without
+  it the walk degrades to per-asset validation and logs a warning. A leg that
+  relies on this check should install the extra.
+- **Cross-batch parity is still on you.** The check validates integrity *within*
+  the seed. It cannot tell you the seed covers every ref the connector will
+  emit — the coalesce pilot published 82 ColumnProcesses against a golden of
+  110, silently dropping 28. Diff the seed's QN set against the connector's
+  golden refs if the count matters.
+
+#### CI wiring
+
+`seed_assets` writes to a store the **tenant's** publish app reads, not the
+connector's deployment store. `BaseE2ETest.seed_object_store()` resolves the
+configurator-emitted `atlan-objectstore` Dapr component out of
+`ci-deploy/components` — the tenant blobstorage binding the `sdr-e2e` action
+already selects and mounts into the worker. A leg whose layout differs sets
+`E2E_SEED_COMPONENTS_DIR` / `E2E_SEED_STORE_BINDING`; a suite that needs
+something else entirely overrides `seed_object_store()`.
+
+Getting that wiring wrong does **not** fail the publish node. Publish is handed a
+*prefix*, and a prefix it cannot read is an empty batch rather than an error — so
+it reports success having published nothing, which then resurfaces minutes later
+as the connector's own `ATLAS-404` cascade, in a different repo. `seed_assets`
+therefore reads back the asset count under the seeded connection and raises
+`SeedPublishEmptyError` on zero, naming the prefix it uploaded to. A count it
+cannot read is reported as *unverified* (a warning), never as zero: an Atlas
+outage must not be reported as a seed defect.
+
+#### Sequencing a run against a connection the suite did not mint
+
+`DAGSpec.connection_qualified_name` names the connection one run is submitted and
+graded against. Left unset — the default, and what every run did before — it is
+the suite's own minted connection, which is still right whenever the runs are
+sequenced *because they share state on one connection* (the miner-after-crawl
+case above). Set it for the opposite case: a run that prepares a **different**
+connection for a later one to reference. The QN joins the same teardown registry
+`seed_assets` writes to, so it is purged even if the run that was to consume it
+never got that far.
+
+
 ## Onboarding checklist for a new connector
 
 1. **Action manifest**: `app.yaml` at repo root (3 lines).

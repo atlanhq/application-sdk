@@ -97,6 +97,8 @@ from application_sdk.common.task_queue import (
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.errors.base import safe_traceback
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage.batch import delete_prefix
+from application_sdk.storage.binding import create_store_from_binding_optional
 from application_sdk.testing.e2e._errors import (
     AmbiguousDAGRunError,
     AtlasReadIndeterminateError,
@@ -134,6 +136,7 @@ from application_sdk.testing.e2e.payload import (
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.harness import atlas
+from application_sdk.testing.harness import seed as harness_seed
 from application_sdk.testing.harness._errors import MissingTenantEnvError
 from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.bridge import run_sync
@@ -180,9 +183,19 @@ from application_sdk.testing.harness.teardown import purge_connection
 from application_sdk.testing.harness.waiting import poll_until
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; pyatlan is a lazy import
+    from obstore.store import ObjectStore
     from pyatlan.client.aio.client import AsyncAtlanClient
 
 logger = get_logger(__name__)
+
+# Where the sdr-e2e composite action selects the CI Dapr components, and the
+# name the atlan-configurator emits the tenant blobstorage binding under. Both
+# are the CI convention rather than a rule, which is why each has an env
+# override (``E2E_SEED_COMPONENTS_DIR`` / ``E2E_SEED_STORE_BINDING``) and the
+# whole resolution sits behind an overridable method — a leg whose layout
+# differs is a per-leg env var, not an edit here.
+_DEFAULT_SEED_COMPONENTS_DIR = "ci-deploy/components"
+_DEFAULT_SEED_STORE_BINDING = "atlan-objectstore"
 
 # Version that drops the deprecated ``DatabaseSpec.connector_config_name``
 # fallback in :meth:`BaseE2ETest.resolved_connector_config_name`. Every
@@ -490,6 +503,16 @@ class DAGSpec:
         expected_exact_counts: Per-type exact-count parity.
         expected_asset_qn_depth: Per-type qualifiedName depth below the
             connection.
+        connection_qualified_name: The connection this run is submitted and
+            graded against. ``None`` — the default, and what every run did
+            before FND-1648 — means the suite's own minted connection, which is
+            still the right answer whenever the runs are sequenced *because they
+            share state on one connection*. Set it when they are sequenced for
+            the opposite reason: a run that prepares a **different** connection
+            for a later one to reference (a lineage parent another source owns).
+            The QN is registered for teardown when this run activates, so a
+            connection named here is purged with the rest even if the run that
+            was to consume it never got that far.
         label: Short name for this run, used in logs, in the failure evidence
             bundle and — for any run that is not the suite's own default — in
             the AE workflow name, so N runs in one leg stay N distinguishable
@@ -506,6 +529,7 @@ class DAGSpec:
     expected_min_asset_counts: Mapping[str, int] | None = None
     expected_exact_counts: Mapping[str, int] | None = None
     expected_asset_qn_depth: Mapping[str, int] | None = None
+    connection_qualified_name: str | None = None
     label: str = ""
 
 
@@ -531,6 +555,7 @@ class ResolvedDAG:
     expected_min_asset_counts: Mapping[str, int]
     expected_exact_counts: Mapping[str, int]
     expected_asset_qn_depth: Mapping[str, int]
+    connection_qualified_name: str = ""
 
 
 class BaseE2ETest:
@@ -772,12 +797,18 @@ class BaseE2ETest:
     # assert different things, and a single "did the suite pass" boolean is
     # exactly the shape that lets one of them stop meaning anything.
     #
-    # All runs share this suite's minted ``connection_qualified_name`` — that
-    # sharing is the point, and it is why this is a list on one suite rather
-    # than two ordered CI legs, which would have to move teardown out of
-    # ``teardown_method`` (guaranteed on pass, fail AND error) into an
-    # ``if: always()`` job a cancelled workflow can still skip, on a leased
-    # shared tenant. Teardown stays one purge here however many runs there are.
+    # By default all runs share this suite's minted
+    # ``connection_qualified_name`` — that sharing is the point, and it is why
+    # this is a list on one suite rather than two ordered CI legs, which would
+    # have to move teardown out of ``teardown_method`` (guaranteed on pass, fail
+    # AND error) into an ``if: always()`` job a cancelled workflow can still
+    # skip, on a leased shared tenant.
+    #
+    # A run that prepares a *different* connection for a later one to reference
+    # — a lineage parent another source owns — names it on
+    # ``DAGSpec.connection_qualified_name``. That QN joins the same teardown
+    # registry ``seed_assets`` writes to, so however many connections the suite
+    # touches, ``teardown_method`` still reclaims all of them.
     #
     # Cost: the runs are serial by nature, so each one adds its own wall clock
     # to the leg (a crawl is minutes, a miner plus its lineage poll is minutes
@@ -1004,6 +1035,8 @@ class BaseE2ETest:
         self._active_dag = None
         self.dag_outcomes = []
         self._connection_seeded = False
+        self._seeded_connection_qns: list[str] = []
+        self._seeded_prefixes: list[str] = []
         self._validate_dag_runs()
 
         # A pinned progress-stall window that is not strictly below the poll
@@ -1416,25 +1449,66 @@ class BaseE2ETest:
         """
         try:
             await self._purge_this_run()
+            await self._purge_seeded_prefixes()
         finally:
             await self._close_clients()
 
     async def _purge_this_run(self) -> None:
-        """Delete the ephemeral connection this run minted, if there is one."""
+        """Delete every ephemeral connection this run minted, if there are any.
+
+        The run's own connection first, then every lineage-parent connection
+        :meth:`seed_assets` registered — in that order because the run's assets
+        hold lineage *references* into the seeded skeletons, and purging the
+        referrer before the referent is the direction that cannot strand an
+        edge. Each purge is independently guarded: one connection that will not
+        purge must not orphan the others, for the same reason the two phases
+        inside :func:`~application_sdk.testing.harness.teardown.purge_connection`
+        are independently guarded.
+        """
         conn_qn = getattr(self, "connection_qualified_name", "")
-        if not conn_qn:
+        seeded = tuple(getattr(self, "_seeded_connection_qns", ()))
+        for target in (conn_qn, *seeded):
+            if not target:
+                continue
+            try:
+                async with self._atlas_client() as client:
+                    await purge_connection(client, target)
+            # conformance: ignore[E004] teardown boundary — this runs after the assertions have decided the verdict, so a cleanup failure must never replace a real one; it is logged at WARNING with exc_info
+            except Exception:
+                logger.warning(
+                    "e2e cleanup: could not reach the tenant to purge %s — manual "
+                    "purge may be needed",
+                    target,
+                    exc_info=True,
+                )
+
+    async def _purge_seeded_prefixes(self) -> None:
+        """Delete the object-store prefix each :meth:`seed_assets` call wrote.
+
+        Separate from the connection purge and run *after* it: the entities are
+        what a stranded run trips over, the NDJSON is only bytes, and a store the
+        harness cannot reach must not stop the connections from being purged.
+        Guarded per prefix and report-not-raise, on the same teardown-boundary
+        rule as :meth:`_purge_this_run` — cleanup runs after the assertions have
+        decided the verdict and must never replace a real one.
+        """
+        prefixes = tuple(getattr(self, "_seeded_prefixes", ()))
+        if not prefixes:
             return
-        try:
-            async with self._atlas_client() as client:
-                await purge_connection(client, conn_qn)
-        # conformance: ignore[E004] teardown boundary — this runs after the assertions have decided the verdict, so a cleanup failure must never replace a real one; it is logged at WARNING with exc_info
-        except Exception:
-            logger.warning(
-                "e2e cleanup: could not reach the tenant to purge %s — manual "
-                "purge may be needed",
-                conn_qn,
-                exc_info=True,
-            )
+        for prefix in prefixes:
+            try:
+                deleted = await delete_prefix(prefix, self.seed_object_store())
+                logger.info(
+                    "e2e cleanup: deleted %d seed object(s) under %s", deleted, prefix
+                )
+            # conformance: ignore[E004] teardown boundary — see _purge_this_run; a store the harness cannot reach leaves bytes behind, which is strictly less harmful than replacing the run's verdict
+            except Exception:
+                logger.warning(
+                    "e2e cleanup: could not delete the seed prefix %s — manual "
+                    "cleanup may be needed",
+                    prefix,
+                    exc_info=True,
+                )
 
     async def _close_clients(self) -> None:
         """Release the AE pool this test opened, on the loop that opened it.
@@ -1804,6 +1878,239 @@ class BaseE2ETest:
             cause=cause,
         )
 
+    def seed_assets(self, spec: harness_seed.SeedSpec) -> harness_seed.SeededConnection:
+        """Seed a lineage parent another *source* owns, through a real publish run.
+
+        For the ``ATLAS-404-00-00A`` class of failure (FND-402 / FND-1648): a
+        lineage-only connector (coalesce, adf, mode) publishes Process /
+        ColumnProcess entities whose refs name *another source's* assets, and on
+        a connector-scoped e2e tenant nothing has ever crawled that source. Call
+        this from :meth:`seed_prerequisites` with the exact tree the connector's
+        refs will name.
+
+        **Use it only when that source is not reachable inside the leg.** When it
+        is — the postgres miner's warehouse is the same app's other entrypoint,
+        with a hermetic container already in the job — declare a real crawl in
+        :attr:`dag_runs` instead. A crawl seeds from the real producer and its QN
+        parity holds by construction; this does not.
+
+        The seed writes transformed NDJSON and submits one ``PublishWorkflow``
+        node, so publish owns both the entities *and* the connection cache the
+        consuming connector resolves its refs against — see
+        :mod:`application_sdk.testing.harness.seed` for why seeding Atlas
+        directly cannot produce the second half.
+
+        Unlike :meth:`seed_connection`, which seeds *this run's own* connection,
+        the tree here hangs under a **second** ephemeral connection for the
+        referenced source. When ``spec.qualified_name`` is ``None`` this run's
+        minter names it, exactly as it named the run's own — same uniqueness,
+        same predictability. Either way the QN lands on
+        ``self._seeded_connection_qns`` and the object-store prefix on
+        ``self._seeded_prefixes``, both of which :meth:`teardown_method` cleans
+        up after the run's own connection — closing the gap where a suite that
+        seeded a second connection had nothing that would ever tear it down.
+
+        Args:
+            spec: What to seed. When its ``qualified_name`` is ``None``, one is
+                minted from ``spec.connector_type`` (the display name follows
+                unless the spec pinned its own). The admin ACL defaults to the
+                one ``setup_method`` resolved when the spec declares none.
+
+        Returns:
+            The :class:`~application_sdk.testing.harness.seed.SeededConnection`,
+            whose ``qualified_name`` is the prefix to rebase the connector's refs
+            onto.
+
+        Raises:
+            UnknownConnectorTypeError: ``spec.connector_type`` is not a pyatlan
+                ``AtlanConnectorType``.
+            SeedSegmentInvalidError: A segment cannot compose the qualified name
+                the spec declares.
+            SeedStoreUnavailableError: No object-store binding the tenant's
+                publish app reads — see :meth:`seed_object_store`.
+            SeedTreeInvalidError: The serialised batch would not survive publish.
+            SeedPublishFailedError: The seed's publish run did not succeed.
+        """
+        return run_sync(self._seed_assets_async(spec))
+
+    async def _seed_assets_async(
+        self, spec: harness_seed.SeedSpec
+    ) -> harness_seed.SeededConnection:
+        """Resolve the identity, register what teardown must reclaim, then hand off.
+
+        Both registrations happen *before* the seed runs, not after: a seed that
+        uploads its NDJSON and then fails in publish has left a prefix and
+        (possibly) a connection behind, and registering on success would leave
+        exactly those half-set-up artifacts on a shared tenant.
+        """
+        identity = self._minter.connection_identity(spec.connector_type)
+        resolved = spec.resolve(
+            qualified_name=spec.qualified_name or identity.qualified_name,
+            display_name=spec.display_name or identity.display_name,
+        )
+        if not (resolved.admin_users or resolved.admin_groups or resolved.admin_roles):
+            resolved = resolved.with_admins(
+                admin_users=tuple(
+                    self.connection_admin_users or self._auto_admin_users
+                ),
+                admin_groups=tuple(self.connection_admin_groups),
+                admin_roles=tuple(
+                    self.connection_admin_roles or self._auto_admin_roles
+                ),
+            )
+
+        plan = self._seed_publish_plan(resolved)
+        self._seeded_connection_qns.append(resolved.qualified_name)
+        self._seeded_prefixes.append(
+            harness_seed.seed_prefix_root(
+                app_name=plan.app_name, qualified_name=resolved.qualified_name
+            )
+        )
+        return await harness_seed.seed_assets(
+            resolved,
+            store=self.seed_object_store(),
+            ae=self._ae,
+            plan=plan,
+            verify=self._count_seeded_assets,
+        )
+
+    async def _count_seeded_assets(self, qualified_name: str) -> Outcome[int]:
+        """Poll Atlas for the asset count under a seeded connection.
+
+        The read-back that turns "the publish node succeeded" into "the seed
+        landed". Polled rather than read once, on the same short budget the run's
+        own inventory uses: Elasticsearch is eventually consistent, but assets
+        that will appear do so within seconds of publish completing, so a single
+        read straight after the verdict would report zero for a seed that is
+        merely still indexing.
+
+        Args:
+            qualified_name: The seeded connection's QN.
+
+        Returns:
+            :class:`~application_sdk.testing.harness.outcome.Settled` carrying
+            the count, or the outcome that stopped the poll — which the caller
+            grades as *unverified*, never as zero.
+        """
+        label = f"total asset count under {qualified_name}"
+        # The sentinel only survives if ``poll_until`` never ran the probe at
+        # all, which its own budget forbids — but an Indeterminate is the honest
+        # value for "no reading was taken", and it is what the caller grades as
+        # unverified rather than as zero.
+        last: Outcome[int] = Indeterminate(
+            label=label,
+            attempts=0,
+            elapsed=timedelta(0),
+            cause=RuntimeError("the seeded-asset count was never read"),
+        )
+
+        async def _probe() -> Outcome[int]:
+            nonlocal last
+            async with self._atlas_client() as client:
+                last = await atlas.count_total_assets(client, qualified_name)
+            return last
+
+        await poll_until(
+            _probe,
+            settled=lambda reading: isinstance(reading, Settled) and reading.value > 0,
+            budget=self._atlas_counts_budget(),
+            label=f"seeded assets under {qualified_name}",
+        )
+        return last
+
+    def _seed_publish_plan(
+        self, spec: harness_seed.ResolvedSeedSpec
+    ) -> harness_seed.SeedPublishPlan:
+        """Resolve how this leg dispatches and waits on a seed's publish run.
+
+        Every value is the one this suite's own run uses, so a seed cannot be
+        polled on a different budget or dispatched to a different tenant than the
+        run it exists to unblock. The AE workflow name is the exception and is
+        deliberately suffixed: ``create_workflow`` is idempotent on the name, so
+        sharing one with the suite's own run would publish the seed's graph over
+        the connector's.
+
+        Args:
+            spec: The resolved spec, whose connection QN names the workflow.
+
+        Returns:
+            The plan.
+        """
+        return harness_seed.SeedPublishPlan(
+            app_name=self.connector_short_name,
+            publish_task_queue=self._publish_task_queue(),
+            ae_workflow_name=(
+                f"{self.connector_short_name}-{self.connection_name_prefix}-"
+                f"{self.run_id}-seed-{spec.connector_type}"
+            ),
+            app_service_url=self.app_service_url,
+            run_id=self.run_id,
+            submit_retry=self._submit_retry(),
+            poll_interval_seconds=self.ae_poll_interval_seconds,
+            poll_timeout_seconds=self.ae_poll_timeout_seconds,
+            progress_stall_seconds=self._resolved_progress_stall_seconds(),
+            minter=self._minter,
+        )
+
+    def _publish_task_queue(self) -> str:
+        """Task queue the tenant's ``publish`` app polls.
+
+        Derived from :meth:`resolved_tenant_deployment_name` rather than pinned,
+        for the reason that method exists: which deployment the system apps are
+        registered under is a property of the tenant, and one suite runs against
+        several tenants in one CI run.
+        """
+        return f"atlan-publish-{self.resolved_tenant_deployment_name()}"
+
+    def seed_object_store(self) -> ObjectStore:
+        """The object store a seed writes its transformed NDJSON into.
+
+        Must be a store the **tenant's** ``publish`` app reads, not the
+        connector's deployment store: publish is handed a prefix, and a prefix in
+        a bucket it cannot see fails as an empty batch rather than as a missing
+        file. In CI that store is the configurator-emitted ``atlan-objectstore``
+        Dapr component — the tenant blobstorage binding the sdr-e2e action
+        selects into ``ci-deploy/components`` and mounts into the worker — so the
+        default resolves exactly that, from the runner's own copy.
+
+        Override on a suite whose leg names the binding differently or has to
+        supply secrets explicitly; :envvar:`E2E_SEED_COMPONENTS_DIR` and
+        :envvar:`E2E_SEED_STORE_BINDING` cover the common cases without a code
+        change.
+
+        Returns:
+            An obstore-compatible store.
+
+        Raises:
+            SeedStoreUnavailableError: The named component is absent or
+                unusable, so there is nowhere to point publish at.
+        """
+        components_dir = (
+            os.environ.get("E2E_SEED_COMPONENTS_DIR", "").strip()
+            or _DEFAULT_SEED_COMPONENTS_DIR
+        )
+        binding = (
+            os.environ.get("E2E_SEED_STORE_BINDING", "").strip()
+            or _DEFAULT_SEED_STORE_BINDING
+        )
+        store = create_store_from_binding_optional(
+            binding, components_dir=components_dir
+        )
+        if store is None:
+            raise harness_seed.SeedStoreUnavailableError(
+                message=(
+                    f"no usable Dapr component {binding!r} under {components_dir!r}, "
+                    "so a lineage-parent seed has nowhere to write the transformed "
+                    "NDJSON the tenant's publish app reads. On the CI path this is "
+                    "the configurator-emitted tenant blobstorage binding; point "
+                    "E2E_SEED_COMPONENTS_DIR / E2E_SEED_STORE_BINDING at it, or "
+                    "override seed_object_store() on this suite"
+                ),
+                resource=f"{components_dir}/{binding}",
+                actual_state="component absent or unusable",
+            )
+        return store
+
     # ------------------------------------------------------------------
     # Subclass hooks — override these
     # ------------------------------------------------------------------
@@ -2072,6 +2379,17 @@ class BaseE2ETest:
                 if spec.expected_asset_qn_depth is None
                 else spec.expected_asset_qn_depth
             ),
+            # ``getattr`` rather than the attribute: ``_validate_dag_runs``
+            # resolves every declared run inside ``setup_method``, *before* the
+            # minter has named this run's connection. Both sides of the
+            # comparisons it makes see the same empty string, so the check is
+            # unaffected — and by the time a run is submitted the attribute is
+            # set.
+            connection_qualified_name=(
+                getattr(self, "connection_qualified_name", "")
+                if spec.connection_qualified_name is None
+                else spec.connection_qualified_name
+            ),
         )
 
     @property
@@ -2093,6 +2411,16 @@ class BaseE2ETest:
         ``run_full_dag()`` called with no spec from inside an outer block runs
         that block's DAG rather than resetting to the class's.
 
+        A run that names its own ``connection_qualified_name`` also *rebinds*
+        ``self.connection_qualified_name`` for the block, and restores it after.
+        Rebinding the attribute rather than threading the resolved value through
+        every reader is deliberate: the connection is read at two dozen sites
+        (the submit payload, every Atlas probe, the outcome, the evidence
+        bundle), they all mean "the connection this run is about", and a
+        parameter added to each is a parameter the next site can forget to
+        forward. The QN is registered for teardown on the way in, so a run that
+        prepares a different connection cannot leave one behind.
+
         Args:
             spec: The run to activate, or ``None`` to leave the active one
                 alone.
@@ -2104,11 +2432,18 @@ class BaseE2ETest:
             yield self._dag
             return
         previous = getattr(self, "_active_dag", None)
+        previous_qn = getattr(self, "connection_qualified_name", "")
         self._active_dag = self.resolve_dag(spec)
+        run_qn = self._active_dag.connection_qualified_name
+        if run_qn and run_qn != previous_qn:
+            self.connection_qualified_name = run_qn
+            if run_qn not in self._seeded_connection_qns:
+                self._seeded_connection_qns.append(run_qn)
         try:
             yield self._active_dag
         finally:
             self._active_dag = previous
+            self.connection_qualified_name = previous_qn
 
     def _resolved_entrypoint(self) -> str:
         """App-entrypoint for AE's manifest fetch: explicit ``entrypoint`` if set,
