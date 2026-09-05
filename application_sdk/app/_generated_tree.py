@@ -36,6 +36,7 @@ re-exported from ``application_sdk.app``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -45,9 +46,12 @@ __all__ = [
     "GeneratedLayout",
     "MANIFEST_STEM",
     "NON_FORM_STEMS",
+    "choose_form_configmap",
+    "eligible_form_configmaps",
     "form_configmap",
     "generated_layout",
     "is_form_configmap",
+    "names_entrypoint",
     "pick_form_configmap",
 ]
 
@@ -97,12 +101,12 @@ def is_form_configmap(stem: str) -> bool:
     True when *stem* is neither one of the well-known non-form documents
     (:data:`NON_FORM_STEMS`) nor a credential template.
 
-    **An exclusion list is the backstop, not the primary answer.** It can only
-    ever name the siblings the toolkit emits *today*, so a caller that has an
-    entry-point name to go on should ask :func:`pick_form_configmap`, which
-    matches the form by name first and falls back to this filter. FND-1682 is
-    what the filter alone costs: a new sibling that sorted first was served as
-    the form, and every adopting app lost its setup UI at the next release.
+    **This list can only ever name the siblings the toolkit emits today.**
+    FND-1682 is what a stale one costs: ``artifact_schemas.json`` was not on it,
+    sorted before every real form stem, and so was served as the form by every
+    app that adopted conformance K016. A caller with an entry-point name to go
+    on should ask :func:`pick_form_configmap`, which prefers a form that
+    :func:`names_entrypoint` over anything this filter merely fails to reject.
 
     Args:
         stem: A generated file's name without its ``.json`` suffix.
@@ -112,37 +116,97 @@ def is_form_configmap(stem: str) -> bool:
     )
 
 
+def names_entrypoint(stem: str, entrypoint: str) -> bool:
+    """Whether a form's *stem* identifies itself as *entrypoint*'s.
+
+    Two spellings are in the field, and both are identifications rather than
+    guesses:
+
+    * ``<entrypoint>`` — a flat app whose form is named for its entry point
+      (``bridge.json`` for ``bridge``).
+    * ``<source>-<entrypoint>`` — the connector convention, where the entry
+      point is the *role* and the file carries the source (``crawler`` →
+      ``snowflake-crawler.json``, ``miner`` → ``postgres-miner.json``).
+
+    The suffix spelling is not a nicety: across the connector fleet the exact
+    spelling matches almost nothing, because the entry points are called
+    ``crawler`` and ``miner`` while the files are named for the source. Matching
+    only the exact form leaves every connector on the last-resort scan.
+
+    Args:
+        stem: A generated file's name without its ``.json`` suffix.
+        entrypoint: The entry point's kebab-case wire name.
+    """
+    return stem == entrypoint or stem.endswith(f"-{entrypoint}")
+
+
+def eligible_form_configmaps(directory: Path) -> list[Path]:
+    """Every ``*.json`` in *directory* that could be a setup form, sorted.
+
+    The non-form siblings (:func:`is_form_configmap`) are already gone. What
+    remains is what any pick has to choose between, and a caller that wants to
+    *report* on the choice — the configmap endpoint warns when it had to fall
+    back to alphabetical order among several — needs the list, not just the
+    winner.
+
+    Args:
+        directory: A directory in the generated tree. Missing or not a
+            directory yields ``[]``.
+    """
+    if not directory.is_dir():
+        return []
+    return [
+        candidate
+        for candidate in sorted(directory.glob("*.json"))
+        if is_form_configmap(candidate.stem)
+    ]
+
+
+def choose_form_configmap(candidates: Sequence[Path], entrypoint: str) -> Path | None:
+    """Pick *entrypoint*'s form out of *candidates*, or ``None`` if empty.
+
+    Three steps, in this order:
+
+    1. The candidate whose stem :func:`names_entrypoint` — an identification.
+    2. The only candidate, when there is exactly one. Nothing else it could be.
+    3. Otherwise the alphabetically first, which **is** a guess.
+
+    **Step 3 stays, deliberately.** It is the compatibility path for every app
+    that has not adopted a name the SDK can recognise, and dropping it (or
+    turning ambiguity into a 404) would break apps that work today in order to
+    protect against a sibling the toolkit does not yet emit. FND-1682 was not
+    caused by the guess being *reachable*; it was caused by
+    ``artifact_schemas.json`` being eligible at all, which
+    :data:`NON_FORM_STEMS` now fixes. Steps 1 and 2 shrink how often step 3 has
+    to run — across the connector fleet they answer every generated directory —
+    but the endpoint that calls this logs a warning when step 3 does run with
+    more than one candidate, so a future sibling shows up in the logs instead of
+    only in a blank wizard.
+
+    Args:
+        candidates: Eligible forms, from :func:`eligible_form_configmaps`.
+        entrypoint: The entry point's kebab-case wire name.
+    """
+    if not candidates:
+        return None
+    named = [c for c in candidates if names_entrypoint(c.stem, entrypoint)]
+    if len(named) == 1:
+        return named[0]
+    return candidates[0]
+
+
 def pick_form_configmap(directory: Path, entrypoint: str) -> Path | None:
     """Return *directory*'s setup form for *entrypoint*, or ``None``.
 
-    Two steps, in this order:
-
-    1. ``<directory>/<entrypoint>.json`` when it exists. The toolkit names an
-       entry point's form after the entry point, so this is an identification
-       rather than a guess.
-    2. Otherwise the first stem :func:`is_form_configmap` accepts, in sorted
-       order for determinism.
-
-    Step 2 alone is what broke in FND-1682, and step 1 is why the same class of
-    break does not return with the *next* sibling the toolkit learns to emit.
-    Step 2 remains because the form is not always named after the entry point —
-    a connector's ``crawler`` entry point emits ``snowflake-crawler.json`` — so
-    dropping it would 404 the apps the fallback exists for.
+    :func:`eligible_form_configmaps` then :func:`choose_form_configmap` — the
+    convenience spelling for callers that do not need the candidate list.
 
     Args:
         directory: A directory in the generated tree. Missing or not a
             directory yields ``None``.
         entrypoint: The entry point's kebab-case wire name.
     """
-    if not directory.is_dir():
-        return None
-    named = directory / f"{entrypoint}.json"
-    if is_form_configmap(entrypoint) and named.is_file():
-        return named
-    for candidate in sorted(directory.glob("*.json")):
-        if is_form_configmap(candidate.stem):
-            return candidate
-    return None
+    return choose_form_configmap(eligible_form_configmaps(directory), entrypoint)
 
 
 def generated_layout(generated: Path) -> GeneratedLayout:

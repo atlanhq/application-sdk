@@ -23,6 +23,7 @@ from application_sdk.app._generated_tree import (
     form_configmap,
     generated_layout,
     is_form_configmap,
+    names_entrypoint,
     pick_form_configmap,
 )
 
@@ -103,16 +104,17 @@ class TestPickFormConfigMap:
         _write(tmp_path, "aaa-unknown-sibling.json", "manifest.json", "metabase.json")
         assert pick_form_configmap(tmp_path, "metabase") == tmp_path / "metabase.json"
 
-    def test_falls_back_to_scan_when_form_is_not_named_for_the_entrypoint(
-        self, tmp_path: Path
-    ) -> None:
-        """A connector's ``crawler`` entry point emits ``<source>-crawler.json``.
+    def test_connector_suffix_names_the_entrypoint(self, tmp_path: Path) -> None:
+        """``crawler`` is identified by ``snowflake-crawler.json``.
 
-        The named file does not exist, so the filtered scan answers — dropping
-        it would 404 exactly the apps the fallback exists for.
+        The connector convention makes the entry point the *role* and the file
+        carry the source, so exact-name matching alone would leave the entire
+        connector fleet on the last-resort guess. Here the unrecognised sibling
+        sorts first and must still lose.
         """
         _write(
             tmp_path,
+            "aaa-unknown-sibling.json",
             "atlan-connectors-snowflake.json",
             "manifest.json",
             "snowflake-crawler.json",
@@ -120,6 +122,48 @@ class TestPickFormConfigMap:
         assert (
             pick_form_configmap(tmp_path, "crawler")
             == tmp_path / "snowflake-crawler.json"
+        )
+
+    def test_sole_candidate_wins_without_naming_the_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """One eligible file is an identification: nothing else it could be.
+
+        A route/card-split app is this shape — ``metabase.json`` serves an
+        ``extract_metadata`` entry point, and no naming rule relates the two.
+        """
+        _write(
+            tmp_path,
+            "artifact_schemas.json",
+            "atlan-connectors-metabase.json",
+            "manifest.json",
+            "metabase.json",
+        )
+        assert (
+            pick_form_configmap(tmp_path, "extract-metadata")
+            == tmp_path / "metabase.json"
+        )
+
+    def test_alphabetical_guess_survives_as_the_compatibility_path(
+        self, tmp_path: Path
+    ) -> None:
+        """Several candidates, none named for the entry point → first by name.
+
+        This step *is* a guess, and it is kept on purpose: it is what serves an
+        app whose form name the SDK cannot recognise. Turning this case into a
+        ``None`` (a 404) would break apps that work today to defend against a
+        sibling the toolkit does not yet emit — a census of the fleet's
+        committed ``app/generated`` trees found no directory with two eligible
+        files, so the trade buys nothing and costs the un-adopted.
+
+        FND-1682 was never the guess being *reachable*; it was
+        ``artifact_schemas.json`` being eligible at all. The endpoint logs a
+        warning when it lands here, which is the part that was missing.
+        """
+        _write(tmp_path, "aaa-unknown-sibling.json", "manifest.json", "metabase.json")
+        assert (
+            pick_form_configmap(tmp_path, "extract-metadata")
+            == tmp_path / "aaa-unknown-sibling.json"
         )
 
     def test_returns_none_when_every_sibling_is_excluded(self, tmp_path: Path) -> None:
@@ -137,13 +181,43 @@ class TestPickFormConfigMap:
     def test_entrypoint_named_after_a_non_form_sibling_falls_back(
         self, tmp_path: Path
     ) -> None:
-        """The name-first step never re-admits an excluded file.
+        """The naming step never re-admits an excluded file.
 
         An entry point called ``manifest`` would otherwise name its way past the
-        exclusion and serve the DAG as the form.
+        exclusion and serve the DAG as the form. It cannot: the name match runs
+        over the *eligible* candidates, never over the directory.
         """
         _write(tmp_path, "manifest.json", "metabase.json")
         assert pick_form_configmap(tmp_path, "manifest") == tmp_path / "metabase.json"
+
+
+class TestNamesEntrypoint:
+    """Which stems count as identifying an entry point."""
+
+    @pytest.mark.parametrize(
+        ("stem", "entrypoint"),
+        [
+            ("bridge", "bridge"),
+            ("snowflake-crawler", "crawler"),
+            ("postgres-miner", "miner"),
+        ],
+    )
+    def test_recognised_spellings(self, stem: str, entrypoint: str) -> None:
+        assert names_entrypoint(stem, entrypoint) is True
+
+    @pytest.mark.parametrize(
+        ("stem", "entrypoint"),
+        [
+            # Substring, not a suffix on a hyphen boundary: a form for some
+            # other role must not answer for this one.
+            ("crawler-legacy", "crawler"),
+            # The hyphen is required — "recrawler" is a different word.
+            ("recrawler", "crawler"),
+            ("metabase", "extract-metadata"),
+        ],
+    )
+    def test_unrecognised_spellings(self, stem: str, entrypoint: str) -> None:
+        assert names_entrypoint(stem, entrypoint) is False
 
 
 class TestFormConfigMapWithArtifactSchemas:
