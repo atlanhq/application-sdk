@@ -143,7 +143,73 @@ def _resolve_transformed_target(local_path: str) -> "Path | None":
     return None
 
 
-async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) -> None:
+def _current_activity_attempt() -> int:
+    """This activity attempt, or 1 outside an activity context."""
+    try:
+        return activity.info().attempt
+    except RuntimeError:  # conformance: ignore[E007] "not in activity context" is temporalio's signal for a direct call (tests, run_dev), an expected state rather than an error worth a log line
+        return 1
+
+
+def _transformed_asset_validation_budget() -> float:
+    """Wall-clock bound for one upload's warn-only validation scan.
+
+    ``VALIDATE_ASSETS_TIMEOUT_SECONDS``, capped at half the activity's
+    start-to-close timeout when one is set. The two used to share a 600s
+    default, so a scan over a large transformed layer could spend the whole
+    activity budget before the first byte moved (FND-1339). Half leaves the
+    transfer at least as much time as the scan even when an app keeps the SDK
+    default bound; outside an activity context the configured value stands.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
+        VALIDATE_ASSETS_TIMEOUT_SECONDS,
+    )
+
+    budget = VALIDATE_ASSETS_TIMEOUT_SECONDS
+    try:
+        bound = activity.info().start_to_close_timeout
+    except RuntimeError:  # conformance: ignore[E007] "not in activity context" is temporalio's signal for a direct call (tests, run_dev), an expected state rather than an error worth a log line
+        return budget
+    if bound is not None:
+        budget = min(budget, bound.total_seconds() / 2)
+    return budget
+
+
+def _start_transformed_asset_validation(
+    local_path: str, app_name: str
+) -> "asyncio.Task[None] | None":
+    """Kick off the warn-only asset validation *alongside* the transfer.
+
+    Returns the task, or ``None`` on a retry attempt. The scan is deterministic
+    over the same local tree and attempt 1 already emitted its outcome row, so
+    re-running it would spend the retry's budget on work that cannot change
+    the result; the retry's time goes to the transfer (FND-1339).
+    """
+    attempt = _current_activity_attempt()
+    if attempt > 1:
+        _task_logger.info(
+            "Skipping transformed-asset validation on retry attempt %d: attempt 1 "
+            "emitted its outcome and the scan is deterministic over the same "
+            "tree; this attempt's budget goes to the transfer",
+            attempt,
+        )
+        return None
+    return asyncio.create_task(
+        _warn_on_invalid_transformed_assets(
+            local_path, app_name, timeout=_transformed_asset_validation_budget()
+        )
+    )
+
+
+def _cancel_transformed_asset_validation(task: "asyncio.Task[None] | None") -> None:
+    """Drop a still-running scan when the hand-off it accompanied has failed."""
+    if task is not None and not task.done():
+        task.cancel()
+
+
+async def _warn_on_invalid_transformed_assets(
+    local_path: str, app_name: str, *, timeout: "float | None" = None
+) -> None:
     """Best-effort, warn-only validation of transformed asset NDJSON before upload.
 
     BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
@@ -230,7 +296,7 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
         ModelSource(model=Asset),
         label="Transformed-asset validation",
         logger=_task_logger,
-        timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+        timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS if timeout is None else timeout,
     )
 
     if report is None:
@@ -1375,12 +1441,6 @@ class App(ABC):
         if ENABLE_ATLAN_UPLOAD and upstream is None:
             raise UpstreamObjectStoreNotConfiguredError()
 
-        # BLDX-1555 defense-in-depth: validate transformed assets against the
-        # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
-        # run in an isolated child process (CNCT-85) so a native decode fault
-        # kills only the child and never blocks or crashes the event loop.
-        await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
-
         # Build the ordered list of (store, label, fatal) upload targets.
         # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.
         if (
@@ -1416,72 +1476,100 @@ class App(ABC):
             else None
         )
 
+        # BLDX-1555 defense-in-depth: validate transformed assets against the
+        # pyatlan_v9 backbone. Warn-only, best-effort, and run in an isolated
+        # child process (CNCT-85) so a native decode fault kills only the child
+        # and never blocks or crashes the event loop. It runs *alongside* the
+        # transfer rather than ahead of it (FND-1339): a scan over millions of
+        # records used to hold every byte back for up to its whole budget —
+        # the same 600s this activity defaults to — so a large hand-off could
+        # time out before its first PUT. Started here, after every check that
+        # can raise before the transfer, so a refused hand-off never leaves an
+        # orphaned scan behind.
+        validation = _start_transformed_asset_validation(
+            input.local_path, self._app_name
+        )
+
         # Fan-out: iterate targets in order. Fatal failures are deferred until all
         # remaining targets complete so the upstream write always runs and a copy
         # lands somewhere. If both writes fail the deployment error is chained as
         # __cause__ of the upstream error so neither traceback is lost.
         result: UploadOutput | None = None
         deferred_required_error: Exception | None = None
-        for target_store, label, fatal in targets:
-            # FND-536: every leg — including the deployment leg — gets the
-            # deployment store as its fallback source. Withholding it there made
-            # a deployment→deployment copy inexpressible: with ``local_path``
-            # absent (cross-pod / ref-only, the shape the P042 bridges use)
-            # ``transfer.upload`` could not take its deployment-store fallback
-            # branch and raised "local_path does not exist", which is a spurious
-            # WARNING under ``best_effort`` and fails the run under ``required``.
-            # Passing it costs nothing on the local-present paths: the directory
-            # reconcile is gated on a *distinct* source store, the single-file
-            # path never reads it, and ``_upload_from_store`` short-circuits a
-            # same-store copy of an identical key without any sidecar GET.
-            source_store = self.context.storage
-            try:
-                out = await _upload(
-                    input.local_path,
-                    input.storage_path,
-                    storage_subdir=input.storage_subdir,
-                    skip_if_exists=input.skip_if_exists,
-                    raise_on_empty=input.raise_on_empty,
-                    store=target_store,
-                    _source_ref=source_ref,
-                    _source_store=source_store,
-                    _app_prefix=app_prefix,
-                    _tier=input.tier,
-                )
-            except Exception as exc:
-                if fatal:
-                    _task_logger.error(
-                        "Object-store upload to %s store failed for prefix %s; "
-                        "will fail run after remaining targets complete",
-                        label,
-                        app_prefix,
-                        exc_info=True,
+        try:
+            for target_store, label, fatal in targets:
+                # FND-536: every leg — including the deployment leg — gets the
+                # deployment store as its fallback source. Withholding it there
+                # made a deployment→deployment copy inexpressible: with
+                # ``local_path`` absent (cross-pod / ref-only, the shape the P042
+                # bridges use) ``transfer.upload`` could not take its
+                # deployment-store fallback branch and raised "local_path does
+                # not exist", which is a spurious WARNING under ``best_effort``
+                # and fails the run under ``required``. Passing it costs nothing
+                # on the local-present paths: the directory reconcile is gated
+                # on a *distinct* source store, the single-file path never reads
+                # it, and ``_upload_from_store`` short-circuits a same-store copy
+                # of an identical key without any sidecar GET.
+                source_store = self.context.storage
+                try:
+                    out = await _upload(
+                        input.local_path,
+                        input.storage_path,
+                        storage_subdir=input.storage_subdir,
+                        skip_if_exists=input.skip_if_exists,
+                        raise_on_empty=input.raise_on_empty,
+                        store=target_store,
+                        _source_ref=source_ref,
+                        _source_store=source_store,
+                        _app_prefix=app_prefix,
+                        _tier=input.tier,
                     )
-                    if deferred_required_error is not None:
-                        # Both writes failed: chain the earlier error as __cause__ so
-                        # neither traceback is lost when the exception is surfaced.
-                        exc.__cause__ = deferred_required_error
-                    deferred_required_error = exc
-                else:
-                    _task_logger.warning(
-                        "Object-store upload to %s store failed for prefix %s "
-                        "(non-fatal); continuing to next target",
-                        label,
-                        app_prefix,
-                        exc_info=True,
-                    )
-                continue
-            result = out  # last successful write is authoritative (upstream in SDR)
+                except Exception as exc:
+                    if fatal:
+                        _task_logger.error(
+                            "Object-store upload to %s store failed for prefix %s; "
+                            "will fail run after remaining targets complete",
+                            label,
+                            app_prefix,
+                            exc_info=True,
+                        )
+                        if deferred_required_error is not None:
+                            # Both writes failed: chain the earlier error as
+                            # __cause__ so neither traceback is lost when the
+                            # exception is surfaced.
+                            exc.__cause__ = deferred_required_error
+                        deferred_required_error = exc
+                    else:
+                        _task_logger.warning(
+                            "Object-store upload to %s store failed for prefix %s "
+                            "(non-fatal); continuing to next target",
+                            label,
+                            app_prefix,
+                            exc_info=True,
+                        )
+                    continue
+                result = out  # last successful write is authoritative (upstream in SDR)
 
-        if deferred_required_error is not None:
-            raise deferred_required_error
-        if result is None:
-            # Unreachable under current target-construction logic (the single-target
-            # branch is always fatal=True), but guards against future changes.
-            raise _InternalError(
-                message="App.upload fan-out captured no result — this is a programming error",
-                invariant="upload fan-out must produce at least one result",
-            )
+            if deferred_required_error is not None:
+                raise deferred_required_error
+            if result is None:
+                # Unreachable under current target-construction logic (the
+                # single-target branch is always fatal=True), but guards against
+                # future changes.
+                raise _InternalError(
+                    message="App.upload fan-out captured no result — this is a programming error",
+                    invariant="upload fan-out must produce at least one result",
+                )
+        except BaseException:
+            # The hand-off is failing (or was cancelled); a warn-only scan
+            # accompanying it has nothing left to inform and must not outlive it.
+            _cancel_transformed_asset_validation(validation)
+            raise
+
+        if validation is not None:
+            # The transfer is done; give the scan the rest of its own bound so
+            # its outcome row still lands. It never raises (see its docstring).
+            await validation
         return result
 
     @task(timeout_seconds=600, retry_max_attempts=3)
