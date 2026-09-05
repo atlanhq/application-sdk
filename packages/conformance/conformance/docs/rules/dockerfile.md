@@ -25,7 +25,7 @@ Suppress a finding on the violating line or the line directly above it:
 
 ## I001 — `DockerfileWrongBaseImage` {#i001}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-base` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-base` · **Autofixable:** yes · **Since:** 0.5.0
 
 > Final-stage FROM does not use the approved base image registry.atlan.com/public/app-runtime-base:3
 
@@ -37,6 +37,13 @@ passes local CI but fails in prod (missing graceful drain, missing Dapr sidecar,
 user, or broken env).  Customer impact: without the daprd sidecar the app cannot reach
 its state, secret, or queue components, so the connector bricks on first run in the
 customer's tenant — a day-one install failure discovered by the customer, not by CI.
+
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app Dockerfile — `FROM registry.atlan.com/public/app-runtime-base:3`.
+  atlan-mysql-app Dockerfile reaches the same ref through an overridable `ARG
+  BASE_IMAGE`, which is the shape to copy when SDK PRs need to rebuild the connector on
+  a PR-scoped base.
 
 The final-stage `FROM` instruction must be exactly
 `registry.atlan.com/public/app-runtime-base:3`.  The v3 major tag is the only accepted
@@ -54,7 +61,7 @@ line before the FROM instruction.
 
 ## I002 — `DockerfileEntrypointOverride` {#i002}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-entrypoint` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-entrypoint` · **Autofixable:** yes · **Since:** 0.5.0
 
 > CMD or ENTRYPOINT is overridden; the base image entrypoint manages daprd and graceful drain and must not be replaced
 
@@ -66,6 +73,12 @@ drain in prod, causing in-flight requests to be dropped during rolling restarts 
 scale-down events.  Customer impact: every routine tenant operation — a rolling restart,
 a node upgrade, a scale-down — becomes a window where the customer's in-flight crawls
 and requests are dropped mid-run with no handoff.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app Dockerfile — the file ends at its ENV block; no CMD and no ENTRYPOINT
+  anywhere. The base image's entrypoint is what supervises daprd and the graceful drain,
+  so replacing it silently removes both.
 
 Neither `CMD` nor `ENTRYPOINT` may appear in the app Dockerfile.  The base image
 (`app-runtime-base`) ships an entrypoint script that co-launches `daprd` alongside the
@@ -79,7 +92,7 @@ environment where daprd is required.  Inline suppression: `# conformance: ignore
 
 ## I003 — `DockerfileAppModuleMissing` {#i003}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-env` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-env` · **Autofixable:** — · **Since:** 0.5.0
 
 > ENV ATLAN_APP_MODULE is not set; the runtime needs this to locate and instantiate the application class
 
@@ -89,6 +102,14 @@ start.  An image that omits this variable will fail to start with a cryptic impo
 deployed.  Enforcing the variable at lint time closes that gap.  Customer impact: the
 image ships, deploys into the tenant, and crash-loops with an import error — an outage
 the customer sees first, on a release every pre-deploy gate passed.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app — ENV ATLAN_APP_MODULE is declared in the Dockerfile as well as
+  atlan.yaml, so the image runs on its own.
+- **Interacts with:** The value must match atlan.yaml's deploy.env exactly; read it from there rather than
+  inferring it from the App subclass, or the two drift and the container starts the
+  wrong class.
 
 The Dockerfile must contain `ENV ATLAN_APP_MODULE=<module>:<AppClass>` with a non-empty
 value.  The platform runtime imports this module path and instantiates the named class
@@ -102,7 +123,7 @@ the Dockerfile.
 
 ## I004 — `DockerfileAppModeHardcoded` {#i004}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-env` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-env` · **Autofixable:** yes · **Since:** 0.5.0
 
 > ENV ATLAN_APP_MODE is hardcoded in the Dockerfile; runtime mode must be supplied at deploy time, not baked into the image
 
@@ -114,6 +135,12 @@ manifest.  Customer impact: a worker image baked to server mode never polls the 
 queue — the customer's workflows sit queued forever while every health check reports the
 pod as running and healthy.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app Dockerfile — ATLAN_APP_MODULE and ATLAN_CONTRACT_GENERATED_DIR are
+  baked because they describe the image; ATLAN_APP_MODE is not, because it describes the
+  deployment and arrives from atlan.yaml at schedule time.
+
 `ENV ATLAN_APP_MODE` must not appear in the Dockerfile.  Runtime mode (`worker` /
 `server`) is deployment-specific: the same image may be deployed in different modes in
 different environments.  Set `ATLAN_APP_MODE` in the deployment manifest (Kubernetes
@@ -124,7 +151,7 @@ different environments.  Set `ATLAN_APP_MODE` in the deployment manifest (Kubern
 
 ## I005 — `DockerfileRootUser` {#i005}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-security` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-security` · **Autofixable:** yes · **Since:** 0.5.0
 
 > USER root or USER 0 in the final stage sets the container user to root, violating the non-root execution policy
 
@@ -135,6 +162,12 @@ that turns a container escape into a host root compromise.  Customer impact: the
 container processes the customer's credentials and source data inside their tenant —
 running it as root converts any exploitable app bug into potential host-level access to
 that customer's environment, a direct security exposure for them.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app Dockerfile — no USER directive at all. Ownership is handled by `COPY
+  --chown=appuser:appuser` and the base image's non-root appuser stands, which is what
+  the non-root execution policy requires.
 
 The effective `USER` of the final stage must not be root (`root` or `0`).  A temporary
 `USER root` is allowed when a later `USER` restores a non-root user.  The base image

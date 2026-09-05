@@ -26,6 +26,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -33,6 +34,19 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P016",
+        canonical_reference=(
+            "atlan-openapi-app app/connector.py — the @entrypoint set matches the "
+            "contract's entrypoints exactly; none carries a bespoke one-off entrypoint. "
+            "atlan-metabase-app app/connector.py shows the two-entrypoint form, with a "
+            "comment naming the DAG nodes in contract/app.pkl they correspond to."
+        ),
+        terminal_state=(
+            "A temporary migration entrypoint is not a reason to widen the contract. "
+            "Remove it once its job is done — and check the DAG node, the module, the "
+            "ledger (sunset, never delete) and the docs together, since the "
+            "entrypoint is only the visible end of it."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="EntryPointContractCodeDrift",
         tier=EnforcementTier.BLOCK,

@@ -44,6 +44,11 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P008",
+        canonical_reference=(
+            "atlan-mysql-app app/mysql.py — `App.upload()` is called from `run()`, after "
+            "the tasks return. A @task hands its output back as a FileReference and lets "
+            "the framework move it; the transfer is the App's business, not the task's."
+        ),
         scope=RuleScope.APP,
         name="FrameworkTransferInsideTask",
         tier=EnforcementTier.WARN,
@@ -87,6 +92,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P009",
+        canonical_reference=(
+            "atlan-openapi-app app/connector.py — object-store access goes through the "
+            "SDK's `CloudStore` over `self.context.storage`. No reference app constructs a "
+            "boto3/gcs/adls client of its own."
+        ),
         scope=RuleScope.APP,
         name="ManualObjectStoreConstruction",
         tier=EnforcementTier.WARN,
@@ -125,6 +135,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P010",
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — "
+            "`FileReference(local_path=str(out_path), tier=StorageTier.RETAINED)`. The app "
+            "supplies the local path and the tier; storage_path, is_durable and file_count "
+            "are stamped by the SDK when it moves the file."
+        ),
         scope=RuleScope.APP,
         name="ManualFileReferenceConstruction",
         tier=EnforcementTier.WARN,
@@ -163,6 +179,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P011",
+        canonical_reference=(
+            "atlan-openapi-app app/contracts.py — payloads that could be large travel as "
+            "`FileReference` fields, never as bytes. A bytes field puts the whole artefact "
+            "inside Temporal's 2MB envelope."
+        ),
         scope=RuleScope.APP,
         name="RawBytesInContract",
         tier=EnforcementTier.WARN,
@@ -198,6 +219,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P012",
+        canonical_reference=(
+            "atlan-hello-world-app app/contracts.py — `greetings_file` and `output_file` "
+            "are typed `FileReference | None`, so a hand-off survives being scheduled on "
+            "another pod. atlan-metabase-app app/contracts.py shows the legitimate "
+            "exception: `output_path` carries an inline ignore[P012] saying it is a "
+            "task-local scratch base, not a cross-worker reference."
+        ),
         scope=RuleScope.APP,
         name="FilePathStringInContract",
         tier=EnforcementTier.WARN,
@@ -236,6 +264,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P044",
+        canonical_reference=(
+            "atlan-mysql-app app/mysql.py — the whole-directory hand-off is one "
+            "`App.upload()` with an UploadInput naming local_path and storage_path. "
+            "storage.upload_prefix / download_prefix move bytes without producing a "
+            "FileReference the next task can resolve."
+        ),
         scope=RuleScope.APP,
         name="DirectStoragePrefixTransfer",
         tier=EnforcementTier.WARN,

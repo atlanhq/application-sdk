@@ -386,14 +386,24 @@ def _render_rule_block(rule: RuleDefinition) -> list[str]:
     lines.append(f"## {rule.id} — `{rule.name}` {{#{anchor}}}")
     lines.append("")
 
-    # Metadata row
-    lines.append(
-        f"**Tier:** {_tier_badge(rule.tier)} · "
-        f"**Scope:** `{rule.scope.value}` · "
-        f"**Category:** `{rule.category}` · "
-        f"**Autofixable:** {autofixable} · "
-        f"**Since:** {since}"
+    # Metadata row.  ``fix_locus`` is exception-only — unset means "the source
+    # of the repo under scan", which ``Scope`` already said — so the segment is
+    # omitted rather than printed as a default.  Printing it every time is what
+    # made it stop being read.
+    metadata = [
+        f"**Tier:** {_tier_badge(rule.tier)}",
+        f"**Scope:** `{rule.scope.value}`",
+    ]
+    if rule.fix_locus is not None:
+        metadata.append(f"**Fix belongs in:** `{rule.fix_locus.value}`")
+    metadata.extend(
+        [
+            f"**Category:** `{rule.category}`",
+            f"**Autofixable:** {autofixable}",
+            f"**Since:** {since}",
+        ]
     )
+    lines.append(" · ".join(metadata))
     lines.append("")
 
     # Short description as a blockquote
@@ -408,6 +418,31 @@ def _render_rule_block(rule: RuleDefinition) -> list[str]:
             rationale_text, width=88, break_long_words=False, break_on_hyphens=False
         )
         lines.append(f"**Rationale:** {wrapped}")
+        lines.append("")
+
+    # Canonical reference / interactions / terminal state — the "what do I
+    # actually do about this" block.  Deliberately ABOVE the full description:
+    # it answers where the fix belongs and what "already correct" looks like,
+    # which is what a reader needs before the mechanics of the check.
+    if rule.canonical_reference or rule.rule_interactions or rule.terminal_state:
+        lines.append("### What correct looks like")
+        lines.append("")
+        for label, value in (
+            ("Compliant example", rule.canonical_reference),
+            ("Interacts with", rule.rule_interactions),
+            ("Already correct when", rule.terminal_state),
+        ):
+            if not value:
+                continue
+            wrapped = textwrap.fill(
+                _rst_to_md(value),
+                width=88,
+                break_long_words=False,
+                break_on_hyphens=False,
+                initial_indent="",
+                subsequent_indent="  ",
+            )
+            lines.append(f"- **{label}:** {wrapped}")
         lines.append("")
 
     # Full description — convert RST backticks, preserve paragraph breaks,

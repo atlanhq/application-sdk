@@ -39,6 +39,12 @@ _HELP_BASE = (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P020",
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — `run()` only sequences @task calls; "
+            "the clock, the filesystem and the RNG are all touched inside tasks. Workflow "
+            "code is replayed, so a non-deterministic call there produces a different "
+            "history on every replay."
+        ),
         scope=RuleScope.BOTH,
         name="NonDeterministicPrimitiveInWorkflow",
         tier=EnforcementTier.WARN,
@@ -85,6 +91,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P021",
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — `generate_greetings` does the "
+            "tempfile and the write, and `run()` does neither. The comment on run() states "
+            "the rule in the app's own words: network, disk and clock live inside a @task."
+        ),
         scope=RuleScope.BOTH,
         name="SideEffectIoInWorkflow",
         tier=EnforcementTier.WARN,
@@ -120,6 +131,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P022",
+        canonical_reference=(
+            "atlan-metabase-app app/connector.py — every same-class async call in `run()` "
+            "is awaited. A dropped coroutine does not run and does not raise; the workflow "
+            "simply proceeds as if the step had succeeded."
+        ),
         scope=RuleScope.BOTH,
         name="UnawaitedCoroutine",
         tier=EnforcementTier.BLOCK,
@@ -162,6 +178,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P023",
+        canonical_reference=(
+            "atlan-openapi-app app/connector.py — the blocking JSONL writes go through "
+            "`self.run_in_thread(write_jsonl, ...)` rather than being called inline in an "
+            "async def. The comment there records why the generator has to be materialised "
+            "first."
+        ),
         scope=RuleScope.BOTH,
         name="BlockingCallInAsyncDef",
         tier=EnforcementTier.WARN,
@@ -241,6 +263,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P024",
+        canonical_reference=(
+            "atlan-openapi-app app/connector.py — connector code uses the async client "
+            "surface; the only synchronous pyatlan AtlanClient in the repo is in "
+            "tests/e2e/test_connection_reuse.py, where there is no event loop to block."
+        ),
         scope=RuleScope.BOTH,
         name="SyncAtlanClientInApp",
         tier=EnforcementTier.WARN,
@@ -281,6 +308,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P031",
+        canonical_reference=(
+            "atlan-openapi-app app/connector.py — blocking work is offloaded with "
+            "`self.run_in_thread`, the App's own bounded pool. asyncio's shared default "
+            "executor is process-wide, so one app's blocking work starves every other "
+            "coroutine on the worker."
+        ),
         scope=RuleScope.BOTH,
         name="SharedDefaultExecutorOffload",
         tier=EnforcementTier.WARN,
@@ -329,6 +362,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P036",
+        canonical_reference=(
+            "No reference app builds a ProcessPoolExecutor or a multiprocessing child. The "
+            "seam is application_sdk/execution/heartbeat.py — `run_fault_isolated` and "
+            "`run_best_effort`, re-exported there as the documented app-facing path, which "
+            "own the pool lifecycle, the timeout and what a crashed child means for the "
+            "activity."
+        ),
         scope=RuleScope.BOTH,
         name="HandRolledProcessIsolation",
         tier=EnforcementTier.WARN,

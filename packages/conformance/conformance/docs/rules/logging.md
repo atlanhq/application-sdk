@@ -57,6 +57,12 @@ explodes one failure signature into thousands of unique strings, so the signal t
 would localise the customer's outage cannot be found or trended, extending
 time-to-resolution.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — `summarize` logs "summarize completed
+  record_count=%d message=%s" with the values passed positionally. One template, so
+  every run of that line groups together in ClickHouse.
+
 Using an f-string creates a unique message string per call, breaking log grouping and
 aggregation in Grafana/ClickHouse.  It also always evaluates eagerly — __str__ /
 __format__ is called on every interpolated value even when the level is filtered and the
@@ -84,6 +90,12 @@ unfindable on the tenant UI. Customer impact: when a customer's workflow fails, 
 Workflow Center shows 'No error logs available' for the step even though the app logged
 everything — the customer waits while support hunts for records that were never indexed
 under the run.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — `get_logger(__name__)` at module scope, imported from
+  application_sdk.observability.logger_adaptor. No reference app calls
+  logging.getLogger, structlog.get_logger, or loguru's logger.
 
 Every module must obtain its logger via the SDK adapter:
 
@@ -119,6 +131,12 @@ records unfindable on the tenant UI.
 the framework. The wrong form routes context where aggregation queries can't reach —
 present in the record but invisible to GROUP BY/filter.
 
+### What correct looks like
+
+- **Compliant example:** No reference app passes `extra={}`. Context travels positionally in the %-style body —
+  atlan-metabase-app app/utils.py, `to_epoch_ms`: "Datetime %r did not match format %r",
+  dt_str, fmt.
+
 Whether `extra={}` is correct depends on the logging framework.  For structlog and
 loguru, `extra={}` is usually wrong — the data lands in an unindexed nested dict
 invisible to aggregation queries.  Framework-dependent classification; the checker must
@@ -137,6 +155,12 @@ stack trace is absent, so every postmortem hitting this pattern must reproduce t
 failure to find root cause. Customer impact: root-causing a customer-reported failure
 now requires reproducing it against their source system — often impossible without their
 data — so the incident stays open for days instead of being read off the trace.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/handler.py — every log call inside an except block carries
+  exc_info=True, in `test_auth` and in each of the preflight check helpers. The rule is
+  about the except block, not about the level.
 
 Logging an exception without `exc_info=True` produces a message with no stack trace —
 the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
@@ -159,6 +183,12 @@ sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodi
 structured fields, no OTel forwarding. In containers, stdout may route to a different
 sink or interleave with structured lines, invisible to observability.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app pyproject.toml — T201 sits in the repo-wide lint select and is ignored
+  only for `.github/**/*.py`, where a CI script's stdout is the point. No print() exists
+  under app/.
+
 `print()` produces no level, no structured fields, no correlation IDs. In production
 services, output may go to stdout unformatted, be lost, or interleave with structured
 log lines.  Acceptable in CLI scripts, test/debug scripts, and `if __name__ ==
@@ -179,6 +209,12 @@ guard. For those, stdout is the user interface, not a logging bypass.
 drowning lifecycle signals in noise and inflating storage cost. INFO is for milestones;
 per-item progress belongs at DEBUG.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/extracts/process.py — the per-dashboard skip inside
+  `process_assets` logs at DEBUG. INFO belongs to the run's lifecycle, not to one
+  iteration of it.
+
 Per-item INFO logging in a large loop drowns meaningful signals and degrades
 performance.  INFO is for lifecycle milestones, not per-item events.  Use DEBUG per-item
 and INFO for the loop summary.  The checker should inspect whether the loop is clearly
@@ -196,6 +232,12 @@ bounded (≤10 items) before flagging.
 Fatal conditions are communicated through process exit codes and Temporal workflow
 failure, not a log level, so a CRITICAL record adds a fifth level nothing in the stack
 is built to consume. Use ERROR (with exc_info=True) and let the failure propagate.
+
+### What correct looks like
+
+- **Compliant example:** No reference app calls logger.critical(). The top severity in use is ERROR at a boundary
+  — atlan-mysql-app app/handler.py, `test_auth`. There is no CRITICAL sink behind the
+  adaptor, so the level only costs a reader their filter.
 
 CRITICAL is not a meaningful level in distributed systems — every service failure is
 "critical" from some perspective.  Use ERROR and handle severity through alerting rules
@@ -215,6 +257,12 @@ unconditionally even when the level is filtered. The SDK adapter's _is_enabled g
 short-circuits %-style __str__ interpolation for simple object args, but it fires inside
 the method, after Python has already evaluated every argument expression. Calls with
 expensive argument expressions still need an explicit guard.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/client.py — `provide_token` logs "IAM token refreshed for connection
+  (length: %d)", len(token). The argument is cheap, and %-style defers interpolation
+  until the level is known to be enabled.
 
 Python evaluates all arguments before calling the log method, so expensive expressions
 in log arguments run on every call regardless of level:
@@ -244,6 +292,12 @@ if logger.isEnabledFor(logging.DEBUG):
 handler), inflating error counts and making 'how many times did this fail?' unanswerable
 without dedup logic.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — `generate_greetings` raises
+  InvalidRepeatCountError with no log line before it. The raise is the record; whichever
+  handler catches it logs it once.
+
 Logging an error immediately before re-raising creates duplicate records in the log
 stream, inflating error counts in dashboards.  Acceptable only when adding context not
 available to the caller.  Otherwise: just re-raise.
@@ -262,6 +316,12 @@ rotation and is indexed for search. Customer impact: the value leaked is the cus
 own source-system credential — one occurrence in a tenant is a reportable security
 incident and can obligate the customer to rotate production database access, regardless
 of whether it was ever exploited.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/client.py — `get_iam_role_token` logs that AWS credentials were
+  staged into the environment and names none of them. Log that a credential was used,
+  never the credential.
 
 Credentials in log output are a security vulnerability — logs are often stored in
 plaintext in log aggregation systems, accessible to more people than the credential
@@ -287,6 +347,12 @@ as L001 — concatenated values fragment the message template, so the log signat
 on-call needs to find and count a customer-affecting failure never groups in the
 aggregation store.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/extracts/databases.py — `fetch_databases_summaries` logs "Failed
+  to fetch databases: %s" with the status as an argument, so the template stays constant
+  across every failure.
+
 Like f-strings (L001), string concatenation embeds values into the message string in a
 way that breaks log grouping.  Rewrite as %-style message body.
 
@@ -304,6 +370,13 @@ LogRecord attribute, propagating to the caller's logger.info() site and crashing
 Customer impact: the crash detonates on the first code path that logs with the colliding
 key — typically an error path exercised only in production — so a customer run dies with
 a KeyError raised by its own logging call instead of reporting the original problem.
+
+### What correct looks like
+
+- **Compliant example:** No app builds an `extra={}` dict at all —
+  application_sdk/observability/logger_adaptor.py takes %-style arguments positionally
+  and injects the Temporal context itself, so there is no caller-supplied key that can
+  collide with a stdlib LogRecord attribute.
 
 stdlib's `Logger.makeRecord()` raises `KeyError` if any key in `extra={}` matches a
 `LogRecord` attribute.  This crash propagates directly to the caller — NOT caught by
@@ -325,6 +398,12 @@ customer run that reaches the miswritten call site crashes with a TypeError from
 logging layer — a latent landmine on every code path tests did not execute, detonating
 first in the tenant.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/api_client.py — the logger comes from `get_logger`, which accepts
+  the SDK adaptor's kwargs. A stdlib logging.Logger appears nowhere in the four
+  reference apps, and it is the stdlib one that raises TypeError on arbitrary kwargs.
+
 stdlib `logger.info()` only accepts `exc_info`, `extra`, `stack_info`, and `stacklevel`.
 Any other kwarg raises `TypeError` and crashes the caller.  Very common when migrating
 from structlog/loguru. Applies to stdlib only.
@@ -340,6 +419,12 @@ from structlog/loguru. Applies to stdlib only.
 **Rationale:** In structlog the first positional arg is the message (stored as 'event'). Passing event=
 as a keyword silently replaces the message with the domain value, corrupting both
 message and field in one call.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/api_types.py — one factory, `get_logger`, in every module.
+  structlog is not a dependency of any reference app, so no call site can shadow the
+  message with an `event=` kwarg.
 
 In structlog, the first positional argument is stored as the `event` key — it IS the log
 message.  Passing `event=` as a keyword argument silently overwrites the message with
@@ -358,6 +443,12 @@ only.
 created before the call. SDK components create loggers at import — before any app
 dictConfig() — so a misconfigured call makes all library logging vanish with no error.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/run_dev.py — the app awaits `run_dev_combined` and configures
+  no logging of its own. Handler configuration belongs to the SDK runtime; an app
+  calling dictConfig is reaching past it.
+
 `logging.config.dictConfig()`'s `disable_existing_loggers` defaults to `True`, which
 silently disables all loggers created before the call.  This is the most common source
 of "why is my logging not working?".  Always set `"disable_existing_loggers": False`.
@@ -373,6 +464,12 @@ Applies to stdlib only.
 
 **Rationale:** basicConfig() is silently ignored if the root logger already has handlers. Multiple
 calls rely on import order to decide which wins; the rest are silently dropped.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/run_dev.py — the dev entrypoint boots the SDK runtime and never
+  calls logging.basicConfig(). The first caller wins and every later call is a silent
+  no-op, which is why the SDK owns this exactly once.
 
 `logging.basicConfig()` is silently ignored if the root logger already has handlers.
 Multiple calls across the codebase mean whichever runs first wins; the rest are dropped
@@ -392,6 +489,12 @@ exc_info=True as the sanctioned way to attach a traceback; logger.exception() im
 distinct level, reads sys.exc_info() implicitly (empty/stale outside an active except
 block), and overlaps the explicit exc_info rules. Use logger.error(..., exc_info=True)
 instead.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/handler.py — `test_auth` logs warning(..., exc_info=True). The
+  level is chosen for the site and exc_info is explicit; logger.exception() would have
+  pinned it to ERROR regardless.
 
 `logger.exception()` is not a sanctioned logging method in this project. ADR-0011
 restricts app logging to four levels (DEBUG/INFO/WARNING/ERROR) and `exc_info=True` is
@@ -416,6 +519,12 @@ only to satisfy third-party Temporal callers and immediately delegates to
 top-level indexed columns in ClickHouse/Grafana. App kwargs land in an unindexed JSON
 blob aggregation can't reach — context belongs in the message body via %-style.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — `generate_greetings` passes its values as
+  positional arguments to a %-style template, not as kwargs. Kwargs on an application
+  log call do not reach the message a reader greps.
+
 Arbitrary kwargs in log calls are an anti-pattern in this project. Framework context
 (Temporal fields, correlation IDs) is auto-injected by the logging adapter; all other
 kwargs land in an unindexed JSON blob invisible in the log stream.  Embed context
@@ -432,6 +541,12 @@ directly in the message body using %-style formatting.
 **Rationale:** structlog and loguru bind() returns a *new* logger with the bound context — the original
 is unchanged. A bare call (result not assigned) constructs the context and immediately
 discards it; the log call that follows has no extra context attached.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/handler.py — the module-level logger is used directly and no
+  reference app calls logger.bind(). Workflow/run correlation is injected by the
+  adaptor, so there is no bound logger to discard by accident.
 
 `structlog` and `loguru` `bind()` returns a *new* bound logger; the original is
 unchanged.  A bare `logger.bind(key=value)` expression discards the result, so the
@@ -450,6 +565,11 @@ logger.bind(key=value)`.
 DeprecationWarning at import time in newer Python versions and will be removed. The fix
 is a trivial rename.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app pyproject.toml — LOG009 sits in the lint select list with the comment
+  that names the replacement, so logger.warn() cannot reach main in that repo.
+
 `logger.warn()` / `logging.warn()` is a deprecated alias for `logger.warning()` that
 will be removed in a future Python version. Rename every call site to
 `logger.warning(...)`.
@@ -466,6 +586,12 @@ will be removed in a future Python version. Rename every call site to
 same issues at edit time and in pre-commit. The two are complementary — ruff gives
 faster feedback in the IDE, conformance gives auditable SARIF output. Without the ruff
 rules enabled, engineers get no in-editor signal for L001/L005/L011/L020 equivalents.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `extend-select = ["G001", "G003", "G004", "T201",
+  "LOG009"]`, which is the exact set this rule looks for. atlan-metabase-app spells the
+  same list one rule per line, with a comment on why G002 is deliberately absent.
 
 The project's `[tool.ruff.lint]` `select` / `extend-select` must cover the following
 rules (or their category prefixes, or `ALL`):

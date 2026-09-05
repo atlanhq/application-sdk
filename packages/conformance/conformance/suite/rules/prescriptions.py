@@ -28,6 +28,25 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P001",
+        canonical_reference=(
+            "atlan-mysql-app — its generated contract/_input.py subclasses "
+            "ExtractionInput with no allow_unbounded_fields at all, because every "
+            "filter is a bounded concrete type."
+        ),
+        rule_interactions=(
+            "B005 + ledger-guard box this in. Narrowing an @entrypoint field's value "
+            "type trips B005, and `conformance ledger-guard` is append-only (status "
+            "changes and additions allowed; retypes and deletions refused), so the "
+            "retype cannot land. Wrapping Any in MaxItems clears P001 AND B005 but "
+            "the class then raises PayloadSafetyError at import: Any is refused "
+            "unconditionally."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[P001] <reason>` at the "
+            "declaration site IS the fix for an @entrypoint contract field whose type "
+            "is recorded in the ledger — every alternative is blocked. Treat such a "
+            "site as compliant, not as unremediated."
+        ),
         scope=RuleScope.BOTH,
         name="UnboundedContractFields",
         tier=EnforcementTier.BLOCK,
@@ -89,6 +108,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P002",
+        canonical_reference=(
+            "atlan-metabase-app app/errors.py — every subclass overrides `code` and never "
+            "`category`. The category comes from the SDK leaf you chose to extend; "
+            "redeclaring it detaches the class from the taxonomy the dashboards group by."
+        ),
         scope=RuleScope.BOTH,
         name="CategoryFieldOverride",
         tier=EnforcementTier.BLOCK,
@@ -135,6 +159,17 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P003",
+        canonical_reference=(
+            "application_sdk/errors/leaves.py — the 15 categorical leaves and the "
+            "prefix each one owns."
+        ),
+        terminal_state=(
+            "A class whose MRO overrides to_failure_details() builds the wire "
+            "envelope itself, so `code` is not what a dashboard reads and adding a "
+            "prefixed one would be dead code beside the real one. Those are exempt. "
+            "Overriding qualified_code alone is NOT exempt — that is the log surface "
+            "only."
+        ),
         scope=RuleScope.BOTH,
         name="ErrorCodePrefixMismatch",
         tier=EnforcementTier.BLOCK,
@@ -182,6 +217,17 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P013",
+        canonical_reference=(
+            "atlan-metabase-app app/connector.py — `@entrypoint async def "
+            "extract_metadata(self, input: MetabaseInput) -> MetabaseOutput`. Both sides "
+            "of the boundary are SDK Input/Output subclasses, which is what makes the "
+            "payload validatable and the schema evolvable."
+        ),
+        rule_interactions=(
+            "Resolution is by bare class name. Two files declaring the same name, or "
+            "a class shadowing its own generated base (`class X(_X)` over `from "
+            "generated import X as _X`), used to read as violations on correct code."
+        ),
         scope=RuleScope.APP,
         name="UntypedEntrypointBoundary",
         tier=EnforcementTier.BLOCK,
@@ -240,6 +286,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P014",
+        canonical_reference=(
+            "atlan-hello-world-app app/contracts.py — each @task has its own Input/Output "
+            "pair (GenerateGreetingsInput/Output, SummarizeInput/Output) subclassing the "
+            "SDK bases. A dict or a bare str across a task boundary has no schema to "
+            "evolve."
+        ),
         scope=RuleScope.APP,
         name="UntypedTaskBoundary",
         tier=EnforcementTier.BLOCK,
@@ -292,6 +344,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P015",
+        canonical_reference=(
+            "atlan-metabase-app app/contracts.py — collection fields are bounded with "
+            "`MaxItems` rather than left as an open list of primitives, which is what "
+            "keeps the payload inside Temporal's limit as the source grows."
+        ),
         scope=RuleScope.APP,
         name="UnmodeledBoundedContractField",
         tier=EnforcementTier.WARN,
@@ -343,6 +400,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P026",
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — `self.require(input.greetings_file, "
+            '"greetings_file")`. The field is typed, so the right move is to assert it '
+            "is present, not to getattr past the type with a default that silently changes "
+            "behaviour."
+        ),
         scope=RuleScope.APP,
         name="GetattrOnTypedContractField",
         tier=EnforcementTier.WARN,
@@ -381,6 +444,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P027",
+        canonical_reference=(
+            "No reference app uses app state as a cross-task channel; atlan-metabase-app "
+            "app/connector.py mentions `get_app_state` only in a comment about the error "
+            "it raises outside app context. Data between tasks travels as typed Output → "
+            "Input."
+        ),
         scope=RuleScope.APP,
         name="AppStateAsCrossTaskChannel",
         tier=EnforcementTier.WARN,
@@ -422,6 +491,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P028",
+        canonical_reference=(
+            "atlan-openapi-app app/asset_mapper.py — qualifiedName comes from "
+            "`APISpec.creator()` / `APIPath.creator()`, so the grammar is pyatlan's. Where "
+            "a caller genuinely needs the string and not the asset, atlan-metabase-app "
+            "app/qualified_names.py carries a per-function ignore[P028] naming the creator "
+            "whose grammar it mirrors."
+        ),
         scope=RuleScope.APP,
         name="ManualQualifiedNameFString",
         tier=EnforcementTier.WARN,

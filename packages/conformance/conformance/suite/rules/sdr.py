@@ -72,6 +72,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -79,6 +80,25 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P029",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/manifest.json — `agent_json` and "
+            "`extraction_method` are top-level keys of $.dag.extract.inputs.args. Both are "
+            "emitted by the toolkit renderer, so no app-side edit produces them; an app "
+            "missing them needs a toolkit bump and a regenerate."
+        ),
+        rule_interactions=(
+            "Not a toolkit-version gap: bumping an affected app to the newest toolkit "
+            "and regenerating does NOT add the field. It comes from the renderer's "
+            "per-widget emission."
+        ),
+        terminal_state=(
+            "The toolkit emits agent_json defensively but historically not "
+            "extraction_method, so an SDR app with no extraction-method widget is "
+            "half-wired through no fault of its own. Fix the renderer; adding the "
+            "widget app-side also switches the Self-Deployed Runtime option on in the "
+            "form, which is a product decision rather than a conformance fix."
+        ),
+        fix_locus=FixLocus.TOOLKIT,
         scope=RuleScope.APP,
         name="SdrManifestMissingAgentJson",
         tier=EnforcementTier.BLOCK,
@@ -161,6 +181,22 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P030",
+        canonical_reference=(
+            "atlan-metabase-app app/connector.py — `run()` uploads each transformed "
+            "typename with `raise_on_empty=True`, and uploads residual/ separately. An SDR "
+            "app with no self.upload() call leaves the ENABLE_ATLAN_UPLOAD path "
+            "unreachable, so the e2e leg greens without moving a byte to the tenant "
+            "bucket."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrUploadNotCalled",
         tier=EnforcementTier.BLOCK,
@@ -293,6 +329,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P037",
+        canonical_reference=(
+            "atlan-metabase-app app/credentials.py — `build_credential_ref` routes through "
+            "`CredentialRef.resolve`, which covers direct (credential_guid) and agent "
+            "(agent_json) modes from one call. Resolving by credential_guid alone works in "
+            "direct mode and silently ignores agent_json in SDR mode."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrAgentJsonNotConsumed",
         tier=EnforcementTier.WARN,
@@ -360,6 +403,21 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P038",
+        canonical_reference=(
+            "atlan-mysql-app app/mysql.py — the upload's storage_path comes from "
+            "`base_result.transformed_data_prefix`, which the SDK roots from "
+            "APPLICATION_NAME. An input field named application_name defaults to empty, so "
+            "rooting the prefix from it silently writes to the bucket root."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrArtifactMisrooted",
         tier=EnforcementTier.BLOCK,
@@ -443,6 +501,22 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P039",
+        canonical_reference=(
+            "atlan-metabase-app app/contracts.py — `MetabaseInput` declares `agent_json` "
+            "as a typed field, and atlan-metabase-app app/generated/_input.py extends the "
+            "SDK's `ExtractionInput` rather than a bare `Input`. Either route keeps the "
+            "forwarded value; a bare Input subclass with no agent_json field drops it "
+            "before the credential resolver sees it."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrAgentJsonDroppedByInputContract",
         tier=EnforcementTier.BLOCK,
@@ -527,6 +601,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P042",
+        canonical_reference=(
+            "atlan-metabase-app app/connector.py — the tenant-bucket hand-off is `await "
+            "self.upload(UploadInput(...))`. A hand-rolled upload_to_atlan bridge "
+            "re-implements the routing to upstream_storage and then has to track it as the "
+            "SDK changes."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrHandRolledUploadBridge",
         tier=EnforcementTier.WARN,
@@ -616,6 +697,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P051",
+        canonical_reference=(
+            "atlan-mysql-app uv.lock — the SDK resolves to 3.32.0, above the 3.30.0 floor "
+            "that carries interactive setup (test auth, preflight, metadata browsing). The "
+            "declared range in pyproject.toml is what lets the lock reach it."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrPreflightUnavailable",
         tier=EnforcementTier.WARN,

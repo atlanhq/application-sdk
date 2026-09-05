@@ -102,6 +102,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -109,6 +110,14 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K001",
+        canonical_reference=(
+            "atlan-metabase-app contract/app.pkl — `amends "
+            '"@app-contract-toolkit/App.pkl"`, with a header comment recording that '
+            "toolkit 0.10.0 consolidated NativeApp.pkl into App.pkl. All four reference "
+            "apps amend App.pkl; NativeApp.pkl and NativeAppBundle.pkl appear in none of "
+            "them."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ContractAmendsLegacyModule",
         tier=EnforcementTier.WARN,
@@ -182,6 +191,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K002",
+        canonical_reference=(
+            "atlan-mysql-app contract/app.pkl — the one legacy-looking import it keeps, "
+            "`Connectors.pkl`, carries an inline ignore[K002] recording the pkl eval that "
+            "proved App.pkl does not re-export Connectors.* to amending contracts. "
+            "flatManifestArgs and workflowTypeOverride appear nowhere."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="LegacyContractApi",
         tier=EnforcementTier.WARN,
@@ -275,6 +291,21 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K003",
+        canonical_reference=(
+            "atlan-hello-world-app contract/PklProject — one pinned dependency, "
+            "`app-contract-toolkit@0.24.0`, and contract/PklProject.deps.json resolved "
+            "from it. The pin and the resolved lock are regenerated together; editing one "
+            "alone is what produces the drift."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ContractLockDrift",
         tier=EnforcementTier.BLOCK,
@@ -345,6 +376,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K004",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/ — atlan.yaml at the repo root plus "
+            "_input.py, manifest.json and artifact_schemas.json in the generated tree. A "
+            "contract/app.pkl with any of those missing means the repo's own generate task "
+            "has not run since the contract last changed."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="MissingGeneratedArtifact",
         tier=EnforcementTier.WARN,
@@ -396,6 +434,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K005",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/_input.py — the first two lines are the "
+            "AUTO-GENERATED banner naming contract/app.pkl and the command that rebuilds "
+            "it. The repo-root atlan.yaml carries the same banner. A stripped banner is "
+            "the fingerprint of a hand edit that the next regeneration will erase."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="GeneratedArtifactBannerStripped",
         tier=EnforcementTier.WARN,
@@ -457,6 +502,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K006",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/manifest.json — the $.extract.outputs fields "
+            "correspond to what the entrypoint's Output contract in app/contracts.py "
+            "declares. The manifest is what the platform reads to wire the DAG, so a field "
+            "only one side knows about is a hand-off that never happens."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ManifestContractFieldMismatch",
         tier=EnforcementTier.WARN,
@@ -529,6 +581,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K007",
+        canonical_reference=(
+            "atlan-metabase-app contract/PklProject — `app-contract-toolkit@0.24.0`. "
+            "Renovate opens the bump; the fix is to take it and re-run the repo's generate "
+            "task, not to edit the pin alone."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ToolkitVersionOutdated",
         tier=EnforcementTier.WARN,
@@ -577,6 +635,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K008",
+        canonical_reference=(
+            "atlan-hello-world-app contract/PklProject — the toolkit URI is "
+            "`package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<version>`. "
+            "A fork, a local path, or a different host resolves a renderer nobody else in "
+            "the fleet is using."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ToolkitSourceNonCanonical",
         tier=EnforcementTier.WARN,
@@ -624,6 +689,22 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K009",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/manifest.json — the only brace token that "
+            "survives generation is `{deployment_name}` in the task queue, which the "
+            "platform substitutes at deploy time. Anything else ({app_name}, {name}) is a "
+            "placeholder the toolkit was meant to fill and did not, usually because the "
+            "pin predates the template."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="UnresolvedScaffoldPlaceholder",
         tier=EnforcementTier.BLOCK,
@@ -692,6 +773,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K010",
+        canonical_reference=(
+            "atlan-openapi-app app/generated/ — _e2e_base.py alongside _input.py, both "
+            "emitted from contract/app.pkl. tests/e2e/test_connection_create.py imports "
+            "that generated base, which is why the scaffold has to exist before the suite "
+            "can be written."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="E2EScaffoldingMissing",
         tier=EnforcementTier.WARN,
@@ -737,6 +825,21 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K011",
+        canonical_reference=(
+            "atlan-metabase-app atlan.yaml — a top-level `app_id`, generated from the "
+            "`appId` assignment in atlan-metabase-app contract/app.pkl. It is the "
+            "marketplace's identity for the app, so publishing without it 404s rather than "
+            "creating something."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="AppIdMissingFromContract",
         tier=EnforcementTier.BLOCK,
@@ -806,6 +909,22 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K012",
+        canonical_reference=(
+            "atlan-metabase-app pyproject.toml — `[tool.poe.tasks] generate` evaluates "
+            "contract/app.pkl into a temporary tree and copies it back. atlan-mysql-app "
+            "pyproject.toml shows the narrower variant that copies only "
+            "app/generated/*.json. The SDK Certify step invokes this task by name, so its "
+            "absence aborts the publish."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="GeneratePoeTaskMissing",
         tier=EnforcementTier.BLOCK,
@@ -867,6 +986,14 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K013",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/manifest.json — the extract node declares "
+            "`app_name: metabase`, matching its own workflow type and task queue "
+            "(atlan-metabase-{deployment_name}). The publish node declares `app_name: "
+            "publish`, because that node runs in the publish app. app_name names the app "
+            "that owns the queue, never the app doing the routing."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ManifestNodeAppNameMisattributed",
         tier=EnforcementTier.WARN,
@@ -957,6 +1084,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K014",
+        canonical_reference=(
+            "atlan-metabase-app atlan.yaml — `release_model: semver`, declared rather than "
+            "inherited. Leaving it out silently takes the 'cd' default, which "
+            "auto-publishes on merge."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ReleaseModelUndeclared",
         tier=EnforcementTier.WARN,
@@ -1047,6 +1180,21 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K015",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/manifest.json — no legacy_workflow_types "
+            "block, and app/connector.py declares none either. Agreement between the two "
+            "is the invariant; absence on both sides is the ordinary compliant state, and "
+            "an app that needs the block has to declare it in both places."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="LegacyWorkflowTypeContractDrift",
         tier=EnforcementTier.BLOCK,
@@ -1157,6 +1305,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K016",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/artifact_schemas.json — one entry per "
+            "FileReference field the entrypoint contracts declare. An undescribed "
+            "FileReference is an artefact the platform cannot validate or render."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="EntrypointArtifactSchemaMissing",
         tier=EnforcementTier.WARN,
@@ -1255,6 +1409,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K017",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/artifact_schemas.json — the declared schemas "
+            "describe what app/extracts/ actually writes under raw/, processed/ and "
+            "transformed/. The Python and the schema are two statements about one file, "
+            "and only one of them is checked at runtime."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ArtifactSchemaWriterMismatch",
         tier=EnforcementTier.WARN,
@@ -1360,6 +1521,14 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K018",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/manifest.json — every key under "
+            "$.dag.extract.inputs.args (credential, connection, extraction_method, "
+            "agent_json, include_collections, exclude_collections) is a field the "
+            "entrypoint's Input contract declares. An arg the contract cannot receive is "
+            "dropped on the way in, silently."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ManifestArgNotDeclaredOnInputContract",
         tier=EnforcementTier.WARN,
@@ -1478,6 +1647,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K019",
+        canonical_reference=(
+            "atlan-metabase-app contract/app.pkl — each uiConfig form key has a matching "
+            "`{{...}}` placeholder in app/generated/manifest.json (include-collections, "
+            "exclude-collections). A form key with no placeholder collects a value from "
+            "the customer that never reaches the workflow."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="FormKeyMissingFromManifestArgs",
         tier=EnforcementTier.WARN,
@@ -1549,6 +1725,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="K020",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/manifest.json — the extract node's args are "
+            "flat top-level keys, not wrapped in the legacy `args.metadata{}` envelope. "
+            "Toolkit 0.9.0 flattened them, and an app still emitting the envelope loses "
+            "every key the SDK's input model does not name."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="ManifestArgsLegacyNestedEnvelope",
         tier=EnforcementTier.WARN,

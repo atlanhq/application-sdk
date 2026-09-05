@@ -18,6 +18,11 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O001",
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — JSONL is written and read with "
+            "`orjson.dumps` / `orjson.loads`. orjson is a core SDK dependency, so there is "
+            "no install cost to paying for the speed."
+        ),
         scope=RuleScope.BOTH,
         name="OrjsonOverStdlibJson",
         tier=EnforcementTier.WARN,
@@ -58,6 +63,10 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="O002",
+        canonical_reference=(
+            "atlan-mysql-app app/mysql.py — assets are serialised through "
+            "`asset.to_nested_bytes()`, the v9 wire shape, rather than through `.dict()`."
+        ),
         scope=RuleScope.APP,
         name="LegacyAssetSerialization",
         tier=EnforcementTier.WARN,
@@ -95,6 +104,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="O003",
+        canonical_reference=(
+            "atlan-openapi-app app/asset_mapper.py — `map_connection` is annotated `-> "
+            "Connection`, the pyatlan type it actually builds, so a wrong asset type is a "
+            "type error rather than a runtime surprise in the payload."
+        ),
         scope=RuleScope.APP,
         name="UntypedAssetMapperReturn",
         tier=EnforcementTier.WARN,
@@ -134,6 +148,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="O004",
+        canonical_reference=(
+            "atlan-mysql-app app/mysql.py — `from pyatlan_v9.model.assets import Column, "
+            "Database, Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets "
+            "path appears in none of the four reference apps."
+        ),
         scope=RuleScope.APP,
         name="LegacyPyatlanAssetImport",
         tier=EnforcementTier.WARN,
@@ -182,6 +201,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="O006",
+        canonical_reference=(
+            "No reference app imports rocksdict. The SDK seam is "
+            "application_sdk/common/spillable_dict.py — `SpillableDict`, which pickles "
+            "values so a caller needs no hand-rolled serialize/deserialize step around the "
+            "store."
+        ),
         scope=RuleScope.APP,
         name="DirectRocksdictImport",
         tier=EnforcementTier.WARN,
@@ -243,6 +268,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="O005",
+        canonical_reference=(
+            "atlan-hello-world-app app/connector.py — the App declares `name = "
+            '"hello-world"` and atlan.yaml carries the same literal. The name is '
+            "resolved once, at declaration; a `{app_name}` left in a plain string is a "
+            "substitution nothing will ever perform."
+        ),
         scope=RuleScope.BOTH,
         name="UnresolvedAppNamePlaceholder",
         tier=EnforcementTier.WARN,

@@ -105,6 +105,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P048",
+        canonical_reference=(
+            "atlan-mysql-app app/mysql.py — `run()` reads `transformed_data_prefix`, "
+            "`publish_state_prefix` and `current_state_prefix` off the SDK's own result "
+            "rather than composing the connection-scoped layout by hand. The layout is the "
+            "SDK's to change."
+        ),
         scope=RuleScope.APP,
         name="AppDerivedPersistentArtifactPrefix",
         tier=EnforcementTier.WARN,
@@ -178,6 +184,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P049",
+        canonical_reference=(
+            "atlan-openapi-app app/asset_mapper.py — connection_qualified_name is passed "
+            "through to the pyatlan creators, never split and validated by the app. The "
+            "SDK warns and proceeds on a malformed value; an app that parses and raises "
+            "turns a recoverable run into a failed one."
+        ),
         scope=RuleScope.APP,
         name="StrictConnectionQualifiedNameParse",
         tier=EnforcementTier.BLOCK,

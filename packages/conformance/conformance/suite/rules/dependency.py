@@ -36,6 +36,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -43,6 +44,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D001",
+        canonical_reference=(
+            "atlan-openapi-app pyproject.toml — `atlan-application-sdk>=3.24.1,<4.0.0`. "
+            "Bounded at both ends: a floor for the features the app uses, a ceiling at the "
+            "next major so a breaking release cannot arrive through a lockfile refresh."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="UnpinnedSdkDependency",
         tier=EnforcementTier.BLOCK,
@@ -81,6 +88,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D002",
+        canonical_reference=(
+            "atlan-hello-world-app pyproject.toml — [project.dependencies] holds exactly "
+            "one entry, the SDK. Everything the SDK already resolves (orjson, pydantic, "
+            "temporalio) is imported without being redeclared, so there is one place a "
+            "version can move."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="RedeclaredSdkManagedDependency",
         tier=EnforcementTier.WARN,
@@ -117,6 +131,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D004",
+        canonical_reference=(
+            "atlan-metabase-app pyproject.toml — the dev and test groups hold only what "
+            "the SDK does not ship (pre-commit, pyright, ruff, poethepoet, testcontainers, "
+            "httpx, docker), several with a comment on why. Nothing the SDK already pins "
+            "is repeated there."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="RedeclaredSdkManagedDependencyInGroups",
         tier=EnforcementTier.WARN,
@@ -152,6 +173,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D005",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — "
+            "`atlan-application-sdk[iam-auth,sql,workflows,pandas]`. All four are extras "
+            "the SDK publishes; a typo here resolves to nothing and fails at import, not "
+            "at install."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="UnknownSdkExtra",
         tier=EnforcementTier.BLOCK,
@@ -189,6 +217,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D006",
+        canonical_reference=(
+            'atlan-openapi-app pyproject.toml — `requires-python = ">=3.11"`, the SDK\'s '
+            "own floor. A lower bound than the SDK's promises an interpreter the "
+            "dependency tree cannot actually satisfy."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="IncompatibleRequiresPython",
         tier=EnforcementTier.WARN,
@@ -224,6 +258,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D007",
+        canonical_reference=(
+            'atlan-openapi-app pyproject.toml — `build-backend = "hatchling.build"`, '
+            "which is what the app-runtime base image and the publish pipeline expect."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="NonStandardBuildBackend",
         tier=EnforcementTier.WARN,
@@ -252,6 +291,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D008",
+        canonical_reference=(
+            'atlan-openapi-app pyproject.toml — `typeCheckingMode = "standard"` under '
+            "[tool.pyright], the SDK baseline. Weakening it locally hides exactly the "
+            "boundary errors the typed contracts exist to catch."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="WeakenedTypeChecking",
         tier=EnforcementTier.WARN,
@@ -283,6 +328,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D003",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — aiomysql is declared with no import to "
+            "justify it, and carries an inline ignore[D003] saying SQLAlchemy loads it "
+            'dynamically from the "mysql+aiomysql" dialect string. A dynamically-loaded '
+            "dependency is real; it just has to say so."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
         name="UnusedDependency",
         tier=EnforcementTier.WARN,
@@ -334,6 +386,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D009",
+        canonical_reference=(
+            "atlan-hello-world-app pyproject.toml — [tool.poe.tasks.download-components] "
+            "copies the Dapr component YAMLs out of the installed application_sdk wheel. "
+            "Components then match whatever SDK version uv.lock resolved, instead of "
+            "whatever main happened to hold."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="RemoteDaprComponentFetch",
         tier=EnforcementTier.BLOCK,
@@ -382,6 +441,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D010",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — the SDK is installed with the `sql` extra, "
+            "which is what resolves duckdb. An app importing the SDK query transformer "
+            "without one of [sql]/[incremental], or a direct duckdb pin, imports a module "
+            "whose engine is absent."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="QueryTransformerWithoutDuckdb",
         tier=EnforcementTier.BLOCK,
@@ -485,6 +551,20 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D011",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — "
+            "`atlan-application-sdk-conformance>=0.17.0,<1.0.0` in a dependency group, "
+            "with a comment recording that the D-series CI leg resolves the suite from "
+            "this repo's own environment. A hard pin freezes that one leg while every "
+            "other leg runs the latest; a declaration in [project.dependencies] ships the "
+            "linter to production."
+        ),
+        terminal_state=(
+            "The specifier must be able to float. Pinning is what freezes one repo's "
+            "D-series leg to a single suite version while every other leg runs the "
+            "latest."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="ConformanceDependencyContract",
         tier=EnforcementTier.BLOCK,
