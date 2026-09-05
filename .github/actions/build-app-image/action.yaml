@@ -237,10 +237,20 @@ runs:
         # See derive_e2e_image_tag.py; the rule is tested, not inlined here,
         # per docs/standards/ci.md.
         DERIVE_TAG: ${{ github.action_path }}/../../scripts/derive_e2e_image_tag.py
+        # Both through env:, never `${{ }}` inside run:. GitHub expands a `${{ }}`
+        # expression into the script text BEFORE bash parses it, so the
+        # surrounding quotes protect nothing — a ref carrying a quote or `$(...)`
+        # would be executed. `application-sdk-ref` is caller-controlled and can
+        # be a branch name; the repin step above already routes it through env
+        # for exactly this reason. `github.sha` is hex and was interpolated by
+        # the `cut` this replaced, but there is no reason for the safe form to
+        # stop at one of the two.
+        COMMIT: ${{ github.sha }}
+        SDK_REF: ${{ inputs.application-sdk-ref }}
       run: |
         TAG=$(python3 "${DERIVE_TAG}" \
-          --commit "${{ github.sha }}" \
-          --sdk-ref "${{ inputs.application-sdk-ref }}" \
+          --commit "${COMMIT}" \
+          --sdk-ref "${SDK_REF}" \
           --base-image-ref "${BASE_IMAGE_REF}")
         IMAGE_BASE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:${TAG}"
         # Suffix is empty for every caller that does not build per-architecture,
