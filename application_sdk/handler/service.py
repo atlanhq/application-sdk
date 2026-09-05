@@ -56,6 +56,7 @@ from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
+from application_sdk.app._generated_tree import is_form_configmap
 from application_sdk.app.entrypoint import canonical_workflow_type
 from application_sdk.common.dispatch import resolve_dispatch_workflow_id
 from application_sdk.common.task_queue import (
@@ -441,21 +442,15 @@ _storage: ObjectStore | None = None
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
-# Non-form JSON siblings that live in CONTRACT_GENERATED_DIR next to the
-# generated setup-form configmaps. Credential templates are emitted per
-# object-store family (`atlan-connectors-*.json`, `csa-connectors-*.json`).
-# Centralised so the form-discovery exclusion vocabulary is named in one place
-# instead of re-spelled inline; `_is_form_configmap` applies it in the
-# get_configmap default-entrypoint fallback, so adding the next connector-family
-# prefix here updates that site without re-spelling the list. `list_configmaps`
-# still uses its own `manifest`-only exclusion (a separate, deliberate decision).
-_CREDENTIAL_TEMPLATE_PREFIXES = ("atlan-connectors-", "csa-connectors-")
-
-
-def _is_form_configmap(stem: str) -> bool:
-    """True when a generated JSON stem is a setup-form configmap, i.e. neither
-    the DAG ``manifest`` nor a credential template."""
-    return stem != "manifest" and not stem.startswith(_CREDENTIAL_TEMPLATE_PREFIXES)
+# The form-discovery exclusion vocabulary lives in
+# `application_sdk.app._generated_tree`, which is the authority: this endpoint is
+# what a tenant's /api/service/configmaps/<name> proxies to, and the FND-1667
+# route check compares what this serves against the app's committed contract.
+# A second copy of "which sibling JSON is a form" would let the server serve one
+# file while the check compared against another — and that mismatch would read
+# as a contract regression rather than as two divergent exclusion lists.
+# `list_configmaps` below still uses its own `manifest`-only exclusion (a
+# separate, deliberate decision).
 
 
 # Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
@@ -1947,7 +1942,7 @@ def _register_workflow_routes(
                 #
                 # Pick the form file by excluding the well-known non-form
                 # siblings (`manifest.json` and the `{atlan,csa}-connectors-*`
-                # credential templates) via `_is_form_configmap`. Sorted for
+                # credential templates) via `is_form_configmap`. Sorted for
                 # determinism.
                 for search_dir in (
                     CONTRACT_GENERATED_DIR / ep.name,
@@ -1956,7 +1951,7 @@ def _register_workflow_routes(
                     if not search_dir.is_dir():
                         continue
                     for json_file in sorted(search_dir.glob("*.json")):
-                        if not _is_form_configmap(json_file.stem):
+                        if not is_form_configmap(json_file.stem):
                             continue
                         target = json_file
                         break
