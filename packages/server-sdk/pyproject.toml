@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "atlan-server-sdk"
+version = "0.1.0"
+description = "Atlan Server SDK — the lean, serving-only runtime for Atlan app servers: the auth / preflight / metadata handler surface plus FastAPI assembly, with no worker or data-processing dependencies."
+license = "Apache-2.0"
+authors = [
+    {name = "Atlan App Team", email = "connect@atlan.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["atlan", "sdk", "server", "serving", "fastapi"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Development Status :: 4 - Beta",
+]
+dependencies = [
+    # Serving surface only. Deliberately NO temporalio, dapr, daft, duckdb,
+    # pandas, pyarrow, boto3, pyatlan, opentelemetry — those are worker-side.
+    "fastapi>=0.115.0,<1.0.0",
+    "pydantic>=2.10.0,<3.0.0",
+    "starlette>=0.40.0",
+    # Fast, stable JSON serialization for stored-config / configmap output.
+    "orjson>=3.10.0,<4.0.0",
+]
+
+# Generic capability extras only — each backs code that lives IN this SDK. The
+# SDK knows nothing about specific connectors; a connector declares its own
+# driver dependencies (sqlalchemy-redshift, snowflake-sqlalchemy, ...) in its
+# own package and pulls the capability extras it needs from here.
+[project.optional-dependencies]
+# SQL auth/metadata path: SQLAlchemy + the psycopg tolerant-text decoder.
+sql = ["sqlalchemy>=2.0.0,<3.0.0"]
+# AWS-IAM helpers for AWS-hosted SQL sources (server_sdk.aws): region
+# resolution, assume-role, boto3 session/client creation.
+aws = ["boto3>=1.34.0"]
+# Convenience for running a server standalone (the common-api-server brings its own).
+serve = ["uvicorn>=0.30.0"]
+# Enables POST /workflows/v1/start by pulling in temporalio. Installed by an
+# app running standalone (its server starts workflows on its own worker); never
+# installed in the consolidated serving image — the /start route is not even
+# registered when this extra is absent (see server_sdk.workflow).
+workflow = ["temporalio>=1.25.0,<2.0.0"]
+test = [
+    "pytest>=8.3.3,<10.0.0",
+    "pytest-asyncio>=1.4.0,<2.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/atlanhq/application-sdk"
+Documentation = "https://github.com/atlanhq/application-sdk/blob/main/packages/server-sdk/README.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server_sdk"]
+
+[tool.hatch.build.targets.sdist]
+include = ["server_sdk", "README.md"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["G004", "PLC0415", "F841", "T201"]

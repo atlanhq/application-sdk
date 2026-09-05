@@ -436,6 +436,14 @@ constraint-dependencies = [
 # immediately, with no separate release-then-bump-the-pin cycle.
 atlan-application-sdk-conformance = { path = "packages/conformance" }
 
+# NOTE: packages/server-sdk is deliberately NOT source-pinned here and is not a
+# dependency of application-sdk. Its source lives in this repo and it is
+# published from it (see .github/workflows/server-sdk-publish.yml), but nothing
+# in application_sdk/ imports server_sdk today, so a dependency edge would be
+# inert. It gets added when application-sdk's own serving code delegates to
+# server-sdk. Consumers — app server packages — depend on the published
+# atlan-server-sdk from PyPI, exactly as they depend on atlan-application-sdk.
+
 # Uncomment the following section in case you want to publish to testpypi
 # [[tool.uv.index]]
 # name = "testpypi"
