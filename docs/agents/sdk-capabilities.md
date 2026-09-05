@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.32.1
-source-sha:    6f91b14cea9a0be7db64fc4061b3e836fc0729b9
-source-date:   2026-09-05T00:27:17+01:00
+source-sha:    3a637eac13e4d51b892841ce6f89b24de8dbce08
+source-date:   2026-09-05T11:32:49+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 343 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 366 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3509,6 +3509,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** One entrypoint DAG run, as a suite *declares* it.
 - **Defined in:** `application_sdk/testing/e2e/base.py`
 
+#### `DatabaseSpec`
+
+- **Import:** `from application_sdk.testing.harness.seed import DatabaseSpec`
+- **Signature:** `class DatabaseSpec(*, name: str, schemas: tuple[SchemaSpec, ...] = ())`
+- **Summary:** One database and the schemas under it.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
 #### `DataForgeSource`
 
 - **Import:** `from application_sdk.testing.integration import DataForgeSource`
@@ -4002,6 +4009,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A :class:`DAGSpec` with every field settled against the class attributes.
 - **Defined in:** `application_sdk/testing/e2e/base.py`
 
+#### `ResolvedSeedSpec`
+
+- **Import:** `from application_sdk.testing.harness.seed import ResolvedSeedSpec`
+- **Signature:** `class ResolvedSeedSpec(*, ...)`
+- **Summary:** A :class:`SeedSpec` whose identity is settled and whose segments passed.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
 #### `ResourceRef`
 
 - **Import:** `from application_sdk.testing.harness.cluster import ResourceRef`
@@ -4053,12 +4067,75 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Result of executing a single scenario.
 - **Defined in:** `application_sdk/testing/integration/models.py`
 
+#### `SchemaSpec`
+
+- **Import:** `from application_sdk.testing.harness.seed import SchemaSpec`
+- **Signature:** `class SchemaSpec(*, name: str, tables: tuple[TableSpec, ...] = ())`
+- **Summary:** One schema and the tables/views under it.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
+#### `SeededConnection`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeededConnection`
+- **Signature:** `class SeededConnection(*, ...)`
+- **Summary:** What one seeding pass created, for the report and the teardown registry.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
 #### `SeededWorkflow`
 
 - **Import:** `from application_sdk.testing.harness.starters import SeededWorkflow`
 - **Signature:** `class SeededWorkflow(*, slug: str, seed_version: int | None = None)`
 - **Summary:** An AE workflow with a published version, ready to be submitted against.
 - **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `SeedPrefixes`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedPrefixes`
+- **Signature:** `class SeedPrefixes(*, root: str)`
+- **Summary:** The three object-store prefixes one seed publish reads and writes.
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
+#### `SeedPublishFailedError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedPublishFailedError`
+- **Signature:** `class SeedPublishFailedError(*, ...)`
+- **Summary:** The seed's ``PublishWorkflow`` run did not succeed on every node.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
+#### `SeedPublishPlan`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedPublishPlan`
+- **Signature:** `class SeedPublishPlan(*, ...)`
+- **Summary:** How one seed's publish run is addressed, dispatched and waited on.
+- **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
+
+#### `SeedSegmentInvalidError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedSegmentInvalidError`
+- **Signature:** `class SeedSegmentInvalidError(*, ...)`
+- **Summary:** A spec segment cannot compose the qualified name it claims to.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
+#### `SeedSpec`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedSpec`
+- **Signature:** `class SeedSpec(*, ...)`
+- **Summary:** Everything the seed needs, as a suite *declares* it.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
+#### `SeedStoreUnavailableError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedStoreUnavailableError`
+- **Signature:** `class SeedStoreUnavailableError(*, ...)`
+- **Summary:** No object store to write the seed's transformed NDJSON into.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
+#### `SeedTreeInvalidError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedTreeInvalidError`
+- **Signature:** `class SeedTreeInvalidError(*, ...)`
+- **Summary:** The seed's own NDJSON would not survive publish, so it is not submitted.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
 
 #### `ServiceTarget`
 
@@ -4132,6 +4209,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class SyncBridgeInAsyncContextError(*, ...)`
 - **Summary:** :func:`~application_sdk.testing.harness.run_sync` was called from a running loop.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `TableSpec`
+
+- **Import:** `from application_sdk.testing.harness.seed import TableSpec`
+- **Signature:** `class TableSpec(*, name: str, type_name: Literal['Table', 'View'] = 'Table', columns: tuple[str, ...] = ())`
+- **Summary:** One table-level asset, typed strictly as ``Table`` or ``View``.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
 
 #### `TaskQueueType`
 
@@ -4432,6 +4516,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
+#### `build_seed_publish_dag`
+
+- **Import:** `from application_sdk.testing.harness.seed import build_seed_publish_dag`
+- **Signature:** `build_seed_publish_dag(*, spec: ResolvedSeedSpec, prefixes: SeedPrefixes, publish_task_queue: str)`
+- **Summary:** Build the single-node DAG that publishes the seed.
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
+#### `build_seed_submit_payload`
+
+- **Import:** `from application_sdk.testing.harness.seed import build_seed_submit_payload`
+- **Signature:** `build_seed_submit_payload(*, spec: ResolvedSeedSpec, run_id: int, ae_workflow_slug: str, app_service_url: str)`
+- **Summary:** Build the AE submit body for a seed's publish run.
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
 #### `capture_preflight_outcomes`
 
 - **Import:** `from application_sdk.testing import capture_preflight_outcomes`
@@ -4513,6 +4611,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `compare_metadata(expected: dict[str, ...)`
 - **Summary:** Compare actual extracted metadata against an expected baseline.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
+
+#### `connection_entity`
+
+- **Import:** `from application_sdk.testing.harness.seed import connection_entity`
+- **Signature:** `connection_entity(spec: ResolvedSeedSpec)`
+- **Summary:** Build the Connection entity publish creates the seeded connection from.
+- **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
 
 #### `connection_exists`
 
@@ -5123,6 +5228,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Fresh MockStateStore instance.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
+#### `ndjson_bytes`
+
+- **Import:** `from application_sdk.testing.harness.seed import ndjson_bytes`
+- **Signature:** `ndjson_bytes(assets: Sequence[Asset])`
+- **Summary:** Serialise *assets* as one NDJSON payload in transformed-output shape.
+- **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
+
 #### `none_of`
 
 - **Import:** `from application_sdk.testing.integration import none_of`
@@ -5347,6 +5459,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Collect the literal values a run is holding, for :func:`redact`'s ``secrets``.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
+#### `seed_assets`
+
+- **Import:** `from application_sdk.testing.harness.seed import seed_assets`
+- **Signature:** `seed_assets(spec: ResolvedSeedSpec, *, store: ObjectStore, ae: AEClient, plan: SeedPublishPlan) -> SeededConnection`
+- **Summary:** Serialise *spec*, validate it offline, and publish it as a real run.
+- **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
+
+#### `seed_prefix_root`
+
+- **Import:** `from application_sdk.testing.harness.seed import seed_prefix_root`
+- **Signature:** `seed_prefix_root(*, app_name: str, qualified_name: str)`
+- **Summary:** Compose the object-store root for one seeded connection.
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
 #### `served_inputs`
 
 - **Import:** `from application_sdk.testing.setup_routes import served_inputs`
@@ -5360,6 +5486,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `single_outcome(mock_logger: MagicMock)`
 - **Summary:** The single outcome row from a ``MagicMock`` gate logger, asserting exactly one.
 - **Defined in:** `application_sdk/testing/preflight.py`
+
+#### `skeleton_assets`
+
+- **Import:** `from application_sdk.testing.harness.seed import skeleton_assets`
+- **Signature:** `skeleton_assets(spec: ResolvedSeedSpec)`
+- **Summary:** Build the skeleton entities for *spec*, parents strictly before children.
+- **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
 
 #### `stale_version_pollers`
 
@@ -5424,6 +5557,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `validate_resolved_spec`
+
+- **Import:** `from application_sdk.testing.harness.seed import validate_resolved_spec`
+- **Signature:** `validate_resolved_spec(spec: ResolvedSeedSpec)`
+- **Summary:** Reject a spec that cannot compose the qualified names it declares.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
 #### `validate_transformed_dir`
 
 - **Import:** `from application_sdk.testing.integration import validate_transformed_dir`
@@ -5465,6 +5605,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `write_bundle(bundle: EvidenceBundle, output_dir: Path, *, secrets: Sequence[str] = ()) -> Sequence[Path]`
 - **Summary:** Redact *bundle* and write it under *output_dir*.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `write_transformed_dir`
+
+- **Import:** `from application_sdk.testing.harness.seed import write_transformed_dir`
+- **Signature:** `write_transformed_dir(spec: ResolvedSeedSpec, root: Path)`
+- **Summary:** Write *spec*'s NDJSON under ``root/transformed`` and count what landed.
+- **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
 
 ### Constants and Enums
 
@@ -5655,6 +5802,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
+#### `SEED_PUBLISH_NODE_ID`
+
+- **Import:** `from application_sdk.testing.harness.seed import SEED_PUBLISH_NODE_ID`
+- **Signature:** `SEED_PUBLISH_NODE_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
 #### `SUPPORTED_SUFFIXES`
 
 - **Import:** `from application_sdk.testing.integration import SUPPORTED_SUFFIXES`
@@ -5662,6 +5816,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `SUPPORTED_SUFFIXES`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/integration/corpus.py`
+
+#### `TRANSFORMED_FILE_NAME`
+
+- **Import:** `from application_sdk.testing.harness.seed import TRANSFORMED_FILE_NAME`
+- **Signature:** `TRANSFORMED_FILE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
 
 #### `UNREADABLE`
 
