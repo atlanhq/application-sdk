@@ -1,0 +1,371 @@
+// Tests for streaming dispatch config on event triggers.
+//
+// AE grew a second dispatch shell for event triggers: instead of firing a fresh
+// top-level run per ingest batch, a `streaming_enabled` trigger signals each event
+// into a persistent shard that runs the DAG inline. The knobs live on AE's
+// `TriggerConfig`, so the toolkit has to be able to render them — without them an
+// app has no way to opt in from its contract.
+//
+// The feature lives in BOTH schemas (App.pkl and NativeApp.pkl) while the toolkit
+// migrates from NativeApp.pkl to App.pkl, so every fact below is asserted twice.
+//
+// The load-bearing invariant is the last group: a trigger that does NOT opt in must
+// render byte-identically to before this feature existed, so no deployed manifest
+// changes shape on a toolkit bump.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../src/App.pkl" as App
+import "../src/NativeApp.pkl" as NativeApp
+import "../src/Connectors.pkl"
+
+local parser = new json.Parser { useMapping = true }
+
+// Every assertion below reads the same place: the first (only) event trigger's
+// rendered trigger_config. Factored out so the schema pairs stay readable.
+// App.pkl emits the manifest under app/generated/; NativeApp.pkl emits it at the
+// root — hence the path argument rather than one hard-coded key.
+local function triggerCfgAt(app, path: String) =
+  parser.parse(app.output.files!![path].text)["triggers"]["events"][0]["trigger_config"]
+
+local function appCfg(app) = triggerCfgAt(app, "app/generated/manifest.json")
+
+local function nativeCfg(app) = triggerCfgAt(app, "manifest.json")
+
+// The DAG's extract node — where the streaming/batch workflow-type split shows up.
+local function dagAt(app, path: String) =
+  parser.parse(app.output.files!![path].text)["dag"]
+
+local function appDag(app) = dagAt(app, "app/generated/manifest.json")
+
+local appUiConfig = new App.UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new App.TextInput {
+          title = "Target"
+          placeholderText = "my-target"
+        }
+      }
+    }
+  }
+}
+
+// ── App.pkl ───────────────────────────────────────────────────────────────
+
+// Real-time streaming: opted in, batching left at the default (one event per DAG run).
+local appStreamingRealtime = (App) {
+  streamingWorkflowTypeOverride = "example-app:cdc-stream"
+  name = "app-streaming-realtime"
+  displayName = "App Streaming Realtime"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = appUiConfig
+  pipeline { publish = null }
+
+  events {
+    new App.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new App.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.user_entity"
+      }
+      triggerConfig = new App.EventTriggerConfig {
+        streaming { enabled = true }
+      }
+    }
+  }
+}
+
+// Batched streaming: trades per-event latency for fewer, cheaper DAG walks.
+local appStreamingBatched = (App) {
+  streamingWorkflowTypeOverride = "example-app:cdc-stream"
+  name = "app-streaming-batched"
+  displayName = "App Streaming Batched"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = appUiConfig
+  pipeline { publish = null }
+
+  events {
+    new App.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new App.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.user_entity"
+      }
+      triggerConfig = new App.EventTriggerConfig {
+        streaming {
+          enabled = true
+          batchSize = 200
+          batchWaitSeconds = 2.5
+        }
+      }
+    }
+  }
+}
+
+// Control: no streaming declared. Must render exactly as it did before the feature.
+local appNoStreaming = (App) {
+  name = "app-no-streaming"
+  displayName = "App No Streaming"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = appUiConfig
+  pipeline { publish = null }
+
+  events {
+    new App.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new App.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.user_entity"
+      }
+      triggerConfig = new App.EventTriggerConfig {
+        ackPaths { "$.extract.outputs.ack_path" }
+      }
+    }
+  }
+}
+
+local appRealtimeCfg = appCfg(appStreamingRealtime)
+
+local appBatchedCfg = appCfg(appStreamingBatched)
+
+local appNoStreamCfg = appCfg(appNoStreaming)
+
+// ── NativeApp.pkl ─────────────────────────────────────────────────────────
+
+local nativeStreamingRealtime = (NativeApp) {
+  streamingWorkflowTypeOverride = "native-app:cdc-stream"
+  name = "native-streaming-realtime"
+  displayName = "Native Streaming Realtime"
+  connector = Connectors.API
+  workflowTypeOverride = "native-test:extract"
+  icon = "https://example.com/icon.svg"
+  hasPublishStep = false
+  hasPublishInputFields = false
+  uiConfig { tasks {} }
+
+  events {
+    new NativeApp.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new NativeApp.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.user_entity"
+      }
+      triggerConfig = new NativeApp.EventTriggerConfig {
+        streaming { enabled = true }
+      }
+    }
+  }
+}
+
+local nativeStreamingBatched = (NativeApp) {
+  streamingWorkflowTypeOverride = "native-app:cdc-stream"
+  name = "native-streaming-batched"
+  displayName = "Native Streaming Batched"
+  connector = Connectors.API
+  workflowTypeOverride = "native-test:extract"
+  icon = "https://example.com/icon.svg"
+  hasPublishStep = false
+  hasPublishInputFields = false
+  uiConfig { tasks {} }
+
+  events {
+    new NativeApp.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new NativeApp.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.user_entity"
+      }
+      triggerConfig = new NativeApp.EventTriggerConfig {
+        streaming {
+          enabled = true
+          batchSize = 200
+          batchWaitSeconds = 2.5
+        }
+      }
+    }
+  }
+}
+
+local nativeNoStreaming = (NativeApp) {
+  name = "native-no-streaming"
+  displayName = "Native No Streaming"
+  connector = Connectors.API
+  workflowTypeOverride = "native-test:extract"
+  icon = "https://example.com/icon.svg"
+  hasPublishStep = false
+  hasPublishInputFields = false
+  uiConfig { tasks {} }
+
+  events {
+    new NativeApp.EventTriggerSpec {
+      name = "cdc-user-entity"
+      source = new NativeApp.EventSource {
+        name = "atlan-kafka"
+        topic = "app.cdc.user_entity"
+      }
+      triggerConfig = new NativeApp.EventTriggerConfig {
+        ackPaths { "$.extract.outputs.ack_path" }
+      }
+    }
+  }
+}
+
+local nativeRealtimeCfg = nativeCfg(nativeStreamingRealtime)
+
+local nativeBatchedCfg = nativeCfg(nativeStreamingBatched)
+
+local nativeNoStreamCfg = nativeCfg(nativeNoStreaming)
+
+facts {
+  ["App.pkl: streaming.enabled renders streaming_enabled = true"] {
+    appRealtimeCfg["streaming_enabled"] == true
+  }
+
+  ["App.pkl: real-time default renders batch_size 1 and no wait"] {
+    appRealtimeCfg["streaming_batch_size"] == 1
+    appRealtimeCfg["streaming_batch_wait_seconds"] == 0
+  }
+
+  ["App.pkl: batch knobs render verbatim when streaming is on"] {
+    appBatchedCfg["streaming_batch_size"] == 200
+    appBatchedCfg["streaming_batch_wait_seconds"] == 2.5
+  }
+
+  // How many events ride in ONE signal — distinct from how many the shard takes
+  // per DAG run. Temporal charges per signal, not per event, and its guidance is
+  // ~5 signals/second into a single workflow; one-per-event breaches that at 5
+  // events/second. A trigger that never sets it still gets the batched default,
+  // because the failure mode of forgetting is silent and expensive.
+  ["App.pkl: events-per-signal renders, and defaults to batched"] {
+    appRealtimeCfg["streaming_events_per_signal"] == 500
+    appBatchedCfg["streaming_events_per_signal"] == 500
+  }
+
+  ["App.pkl: streaming suppresses max_retries, keeps ack_paths well-formed"] {
+    // max_retries is inert on the streaming path — AE's streaming_dispatch.py reads
+    // neither it nor ack_paths — so it is not rendered at all. Shipping a key AE will
+    // not act on leaves a contract author no way to tell which keys are live. AE
+    // defaults it to 3 when absent.
+    !appRealtimeCfg.containsKey("max_retries")
+    // ackPaths left empty — AE rejects [], so the toolkit renders fire-and-forget [""].
+    // Non-empty ackPaths WITH streaming is refused at eval time, so this is the only
+    // shape the streaming path can produce.
+    appRealtimeCfg["ack_paths"].length == 1
+    appRealtimeCfg["ack_paths"][0] == ""
+  }
+
+  ["App.pkl: a non-streaming trigger emits NO streaming keys at all"] {
+    appNoStreamCfg.toMap().keys == Set("max_retries", "ack_paths")
+  }
+
+  ["NativeApp.pkl: streaming.enabled renders streaming_enabled = true"] {
+    nativeRealtimeCfg["streaming_enabled"] == true
+  }
+
+  ["NativeApp.pkl: real-time default renders batch_size 1 and no wait"] {
+    nativeRealtimeCfg["streaming_batch_size"] == 1
+    nativeRealtimeCfg["streaming_batch_wait_seconds"] == 0
+  }
+
+  ["NativeApp.pkl: events-per-signal renders, and defaults to batched"] {
+    nativeRealtimeCfg["streaming_events_per_signal"] == 500
+    nativeBatchedCfg["streaming_events_per_signal"] == 500
+  }
+
+  ["NativeApp.pkl: batch knobs render verbatim when streaming is on"] {
+    nativeBatchedCfg["streaming_batch_size"] == 200
+    nativeBatchedCfg["streaming_batch_wait_seconds"] == 2.5
+  }
+
+  ["NativeApp.pkl: streaming suppresses max_retries, keeps ack_paths well-formed"] {
+    !nativeRealtimeCfg.containsKey("max_retries")
+    nativeRealtimeCfg["ack_paths"].length == 1
+    nativeRealtimeCfg["ack_paths"][0] == ""
+  }
+
+  ["NativeApp.pkl: a non-streaming trigger emits NO streaming keys at all"] {
+    nativeNoStreamCfg.toMap().keys == Set("max_retries", "ack_paths")
+  }
+
+  // The ceiling is a measured cliff, not a style preference: past it the shard
+  // builds a batch inside one workflow activation and risks Temporal's
+  // non-configurable two-second deadlock budget, which fails the task
+  // deterministically and therefore permanently. Caught at eval time so an
+  // author cannot ship it.
+  ["batch size above the measured ceiling is rejected at eval time"] {
+    module.catch(() -> new App.EventTriggerConfig {
+      streaming {
+        enabled = true
+        batchSize = 1000
+      }
+    }.streaming.batchSize) != null
+  }
+
+  ["events-per-signal above one Dapr delivery is rejected at eval time"] {
+    module.catch(() -> new App.EventTriggerConfig {
+      streaming {
+        enabled = true
+        eventsPerSignal = 5000
+      }
+    }.streaming.eventsPerSignal) != null
+  }
+
+  // Review finding: ackPaths is an explicit at-least-once assertion, and the
+  // streaming path writes no acks and has no watchdog backstop. Silently voiding
+  // it is the one outcome that must not be reachable.
+  ["ackPaths declared alongside streaming is refused at eval time"] {
+    module.catch(() -> new App.EventTriggerConfig {
+      ackPaths { "$.extract.outputs.ack_path" }
+      streaming { enabled = true }
+    }._ackShapeCheck) != null
+  }
+
+  ["ackPaths alone (no streaming) is still allowed"] {
+    (new App.EventTriggerConfig {
+      ackPaths { "$.extract.outputs.ack_path" }
+    })._ackShapeCheck == null
+  }
+
+  // max_retries is inert on the streaming path (AE's streaming_dispatch.py reads
+  // neither max_retries nor ack_paths), so it must not be rendered — a contract
+  // author has no other way to tell which manifest keys are live.
+  ["max_retries is suppressed under streaming"] {
+    !appRealtimeCfg.containsKey("max_retries")
+  }
+
+  ["max_retries is still rendered without streaming"] {
+    appNoStreamCfg.containsKey("max_retries")
+  }
+
+  // The gap this closes, found end-to-end on a tenant: streaming was on, the DAG
+  // still dispatched the batch workflow type with no events in its arguments, and
+  // nothing errored — the shard ran and applied nothing.
+  ["streaming DAG dispatches the streaming workflow type"] {
+    appDag(appStreamingRealtime)["extract"]["inputs"]["workflow_type"] == "example-app:cdc-stream"
+  }
+
+  ["streaming DAG passes the event batch to the child"] {
+    appDag(appStreamingRealtime)["extract"]["inputs"]["args"]["batch"] == "$.event.batch"
+  }
+
+  ["a non-streaming DAG keeps the batch workflow type and no batch arg"] {
+    appDag(appNoStreaming)["extract"]["inputs"]["workflow_type"] != "example-app:cdc-stream"
+    !appDag(appNoStreaming)["extract"]["inputs"]["args"].containsKey("batch")
+  }
+
+  ["streaming without a streaming workflow type is refused"] {
+    module.catch(() -> appDag((appStreamingRealtime) {
+      streamingWorkflowTypeOverride = null
+    })) != null
+  }
+
+  ["both schemas render the same streaming shape"] {
+    appRealtimeCfg == nativeRealtimeCfg
+    appBatchedCfg == nativeBatchedCfg
+  }
+}

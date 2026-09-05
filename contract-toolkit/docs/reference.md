@@ -164,6 +164,125 @@ entrypoint renders its own manifest.
 See [`examples/scheduled/`](../examples/scheduled/) for a full worked example.
 (Same field/behaviour exists on the legacy `NativeApp.pkl`.)
 
+### Streaming Dispatch on Event Triggers
+
+By default an event trigger fires a **fresh top-level workflow run** per ingest batch,
+and that run reads its events back out of the workflow's Iceberg events table. For a
+genuinely continuous, high-volume, seconds-level-latency workload that round trip is the
+cost — so AE offers a second dispatch shell: signal each matching event into a
+**persistent shard** (one Temporal execution per workflow slug) that already holds the
+DAG and runs it inline.
+
+Opt in per trigger via `EventTriggerConfig`:
+
+**`EventTriggerConfig`:**
+
+`EventTriggerConfig` separates two categories. **Contract** — what this app consumes
+and what it asserts about delivery (`maxRetries`, `ackPaths`) — survives any change to
+how AE dispatches. **Dispatch mechanics** — which AE execution shell to use — lives
+under `streaming` and is meaningless outside AE's current implementation.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `maxRetries` | `Int` (≥ 0) | `3` | Redelivery bound for the batch path. **Inert under `streaming.enabled`, and suppressed from the rendered manifest** — AE's streaming shard reads neither it nor `ack_paths`. |
+| `ackPaths` | `Listing<String>` | `new Listing {}` | JSONPaths to the ack parquet. Empty renders AE's fire-and-forget `[""]`, never `[]`. **Refused at eval time alongside `streaming.enabled`** — see Caveats. |
+| `streaming.enabled` | `Boolean` | `false` | Route this trigger to the streaming shard instead of a per-batch top-level run. |
+| `streaming.batchSize` | `Int` (1–500) | `1` | Events per DAG run on the shard. `1` is real-time. |
+| `streaming.batchWaitSeconds` | `Number` (≥ 0) | `0` | Max wait for a batch to fill before running with whatever accumulated. |
+| `streaming.eventsPerSignal` | `Int` (1–1000) | `500` | How many events the consumer packs into one signal to the shard. |
+
+The entrypoint also needs **`streamingWorkflowTypeOverride`** — the workflow type the
+DAG dispatches when any of its triggers stream:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `streamingWorkflowTypeOverride` | `String?` | `null` | Workflow type dispatched under streaming. **Required** when any trigger sets `streaming.enabled`. |
+
+Streaming is a different execution, not a faster one: the batch shell's workflow reads
+the entrypoint's Iceberg events table, while the streaming shard hands the DAG its
+events inline and never writes that table. Those are two different workflow types in
+the app, so one `workflowTypeOverride` cannot serve both. When streaming is on, the
+extract node renders this type and gains `args.batch = "$.event.batch"`.
+
+Omitting it is refused at eval time. Without that refusal the failure is silent and
+was observed end to end on a tenant: AE signals the shard, the shard runs the DAG, the
+**batch** workflow starts with no events in its arguments, and nothing reports an
+error — streaming is on in name only.
+
+```pkl
+// Required whenever any trigger below streams.
+streamingWorkflowTypeOverride = "example-app:cdc-stream"
+
+events {
+  // Real-time: one event, one DAG walk.
+  new EventTriggerSpec {
+    name = "cdc-user-realtime"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.user_realtime" }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+  // Batched: up to 200 events, or 2s, whichever comes first.
+  new EventTriggerSpec {
+    name = "cdc-audit-batched"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.audit" }
+    triggerConfig = new EventTriggerConfig {
+      streaming {
+        enabled = true
+        batchSize = 200
+        batchWaitSeconds = 2
+      }
+    }
+  }
+}
+```
+
+Renders into each trigger's `trigger_config`:
+
+```json
+{
+  "ack_paths": [""],
+  "streaming_enabled": true,
+  "streaming_batch_size": 200,
+  "streaming_batch_wait_seconds": 2,
+  "streaming_events_per_signal": 500
+}
+```
+
+Note the absence of `max_retries`: it is inert on this path, so it is not rendered
+rather than shipped as a key AE will not act on. AE defaults it to `3` when absent.
+
+**Writing the DAG.** A streaming DAG does not read the Iceberg events table — it reads
+its events inline from the `$.event.*` jsonpath namespace:
+
+| Path | Shape |
+|---|---|
+| `$.event.batch` | Always a list of `{id, topic, data}` envelopes, whatever the batch size. |
+| `$.event.event_ids` | The batch's event ids. |
+| `$.event.data` | Convenience alias for the single event's payload — set only when the batch holds exactly one event. |
+
+**Caveats.**
+
+- The streaming keys are emitted **only** when `streaming.enabled` is true, so a trigger
+  that does not opt in renders byte-identically to before this feature existed.
+- Batch knobs without `streaming.enabled`, or a wait at `batchSize = 1`, are silent
+  no-ops in AE — so the toolkit refuses both at eval time rather than generating a
+  contract that reads as tuned and behaves as default.
+- **`ackPaths` together with `streaming.enabled` is refused at eval time.** Declaring an
+  ack path is an explicit at-least-once durability assertion, and the streaming path
+  writes no acks and has no watchdog backstop — so the contract would read as "acked once
+  the DAG produced its output" and behave as fire-and-forget. The batch-knob case above
+  costs latency; this one costs events, so it is refused rather than silently voided.
+  Drop `ackPaths`, or drop `streaming`.
+- Sharding is **one shard per workflow slug**, so every trigger on the same entrypoint
+  shares one shard and is processed sequentially. Several high-volume topics on one
+  entrypoint therefore queue behind each other.
+- There is no watchdog backstop on this path. A dropped signal is not retried.
+- The streaming DAG receives its events at `args.batch` (`$.event.batch`) and must not
+  expect to read the Iceberg events table — the streaming path never writes it.
+
+(Same field/behaviour exists on the legacy `NativeApp.pkl`.)
+
 ### Legacy Workflow Type Aliases
 
 A migration renames an app's Temporal workflow type, but external callers keep

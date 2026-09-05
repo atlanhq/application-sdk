@@ -241,6 +241,32 @@ emitGeneratedArtifacts: Boolean = true
 /// can omit this property entirely.
 workflowType: String?
 
+/// Workflow type the DAG dispatches when this entrypoint's event triggers use AE's
+/// streaming shell (`EventTriggerConfig.streaming.enabled`).
+///
+/// Streaming is a genuinely different execution: the batch shell's workflow reads the
+/// entrypoint's Iceberg events table, while the streaming shard hands the DAG its
+/// events inline and never writes that table. Those are two different workflow types
+/// in the app, so one `workflowTypeOverride` cannot serve both — and an entrypoint
+/// whose triggers stream while its DAG still dispatches the batch type is the worst
+/// available outcome: AE signals the shard, the shard runs the DAG, the batch
+/// workflow starts with no events in its arguments, and nothing reports an error.
+/// Observed end-to-end on a tenant before this field existed.
+///
+/// When set, and when at least one event trigger has `streaming.enabled`, the extract
+/// node renders this workflow type and gains `args.batch = "$.event.batch"` — the
+/// list of `{id, topic, data}` envelopes the shard delivers.
+streamingWorkflowTypeOverride: String?
+
+/// Refuses the silent mismatch described above: triggers that stream, with no
+/// streaming workflow type for the DAG to dispatch.
+hidden _streamingEntrypointCheck: Any =
+  if (events.toList().any((e) -> e.triggerConfig.streaming.enabled)
+      && (streamingWorkflowTypeOverride == null || streamingWorkflowTypeOverride!! == ""))
+    throw("This entrypoint has event trigger(s) with streaming.enabled = true but no streamingWorkflowTypeOverride. AE would signal the streaming shard, which would then dispatch the batch workflow type with no events in its arguments — silently applying nothing. Set streamingWorkflowTypeOverride to the app's streaming workflow type (e.g. \"my-app:my-entrypoint-stream\").")
+  else null
+
+
 /// Task queue prefix for the extract node in the AE manifest.
 taskQueuePrefix: String = "atlan-\(name)"
 
@@ -2388,9 +2414,87 @@ class EventSource {
 /// `"$.extract.outputs.ack_path"`) so events are acked only after your DAG produces the
 /// ack parquet. Leave it empty to opt into fire-and-forget — the toolkit then renders
 /// `[""]` (AE's fire-and-forget form: auto-ack without reading a parquet), never `[]`.
+/// AE's streaming dispatch shell. Mechanics of *how* AE delivers, not part of the
+/// app's event contract — see `EventTriggerConfig.ackPaths` for what a trigger
+/// asserts about delivery. Kept as its own class so the boundary is visible in the
+/// syntax: a future AE dispatch capability has to be classified as contract or
+/// mechanics rather than defaulting into the contract by being appended to a flat
+/// class.
+class StreamingDispatch {
+  /// Opt this trigger into AE's streaming dispatch shell: instead of firing a fresh
+  /// top-level run per batch, AE signals each matching event into a persistent,
+  /// signal-driven shard (one per workflow slug) that runs the DAG inline. Reserved
+  /// for genuinely continuous, high-volume, seconds-level-latency workloads — not a
+  /// general speed setting.
+  ///
+  /// The streaming path does NOT read the workflow's Iceberg events table and does
+  /// NOT write acks. A streaming DAG reads its events inline from `$.event.batch`
+  /// (a list of `{id, topic, data}`).
+  enabled: Boolean = false
+
+  /// Max events per DAG run on the streaming shard. `1` (the default) is real-time:
+  /// one event, one full DAG walk, lowest latency. `>1` accumulates up to this many
+  /// events — or `batchWaitSeconds`, whichever comes first — into a single run,
+  /// amortising one node-walk's activity round-trips across many events.
+  /// Capped at 500: above it the shard builds and serializes the whole batch inside
+  /// one workflow activation, and Temporal kills any activation exceeding its
+  /// two-second deadlock budget — a failure that repeats forever, because the task
+  /// fails deterministically and replays the same divergence. Measured on a canary:
+  /// 500 drained a 6,000-event backlog cleanly, 1,000 never dispatched a single batch.
+  batchSize: Int(this >= 1 && this <= 500) = 1
+
+  /// Max time the shard waits for a batch to fill before running the DAG with
+  /// whatever accumulated (always at least one event). `0` (the default) means take
+  /// whatever is already queued without waiting for stragglers. A latency ceiling
+  /// for the batch, not a guarantee every batch reaches full size.
+  /// Only meaningful when `batchSize` > 1.
+  batchWaitSeconds: Number(this >= 0) = 0
+
+  /// How many events the consumer packs into ONE signal to the shard. Distinct from
+  /// `batchSize`, which is how many the shard takes off its queue per DAG run: this
+  /// is about how events *arrive*, that one about how they are *processed*.
+  ///
+  /// Temporal charges per signal, not per event — each takes the shard's single lock,
+  /// appends to its history, wakes a workflow task, and spends one of the 10,000 an
+  /// execution may ever receive. Temporal's guidance is ~5 signals/second sustained,
+  /// which one-signal-per-event breaches at 5 events/second. Lower this only to
+  /// shrink per-signal payloads; there is no latency benefit to sending events singly,
+  /// because the shard batches on arrival either way.
+  eventsPerSignal: Int(this >= 1 && this <= 1000) = 500
+
+  /// Batch knobs are silently inert unless streaming is on — that failure mode is a
+  /// trigger that looks tuned and behaves default, which is invisible until someone
+  /// reads a latency graph. Fail at eval time instead. Lazy (hidden), so the
+  /// renderer must reference it for the throw to fire.
+  hidden _shapeCheck: Any =
+    if (!enabled && (batchSize > 1 || batchWaitSeconds > 0 || eventsPerSignal != 500))
+      throw("StreamingDispatch: batchSize/batchWaitSeconds/eventsPerSignal require enabled = true; without it AE ignores all three.")
+    else if (batchSize == 1 && batchWaitSeconds > 0)
+      throw("StreamingDispatch: batchWaitSeconds is meaningless at batchSize = 1 (the shard never waits); raise the batch size or drop the wait.")
+    else null
+}
+
 class EventTriggerConfig {
+  /// Redelivery bound for the batch path. Inert when `streaming.enabled` — the
+  /// streaming shard never reads it (verified against AE: `streaming_dispatch.py`
+  /// references neither `max_retries` nor `ack_paths`), so it is suppressed from the
+  /// rendered manifest rather than shipped as a key AE will not act on.
   maxRetries: Int(this >= 0) = 3
+
   ackPaths: Listing<String> = new Listing {}
+
+  streaming: StreamingDispatch = new StreamingDispatch {}
+
+  /// `ackPaths` is an explicit at-least-once durability assertion by the author, and
+  /// the streaming path writes no acks and has no watchdog backstop — so declaring
+  /// both reads as "acked once the DAG produced its output" and behaves as
+  /// fire-and-forget. Refused rather than silently voided: the batch-knob case costs
+  /// latency, this one costs events. Spans both levels, so it lives here rather than
+  /// on `StreamingDispatch`.
+  hidden _ackShapeCheck: Any =
+    if (streaming.enabled && !ackPaths.isEmpty)
+      throw("EventTriggerConfig: ackPaths is inert when streaming.enabled = true (the streaming path writes no acks and has no watchdog backstop); drop ackPaths or drop streaming.")
+    else null
 }
 
 /// One ingest-time filter rule. Mirrors AE's `FilterRule`: AE applies these when the
@@ -2513,13 +2617,32 @@ local manifestData: Mapping<String, Any> = new Mapping {
               when (e.filterRules.length > 0) {
                 ["filter_rules"] = e.filterRules.toList().map((r) -> renderFilterRule(r))
               }
-              ["trigger_config"] = new Mapping {
-                ["max_retries"] = e.triggerConfig.maxRetries
-                // AE rejects an empty ack_paths; render the fire-and-forget [""] when
-                // none is declared, never [].
-                ["ack_paths"] = if (e.triggerConfig.ackPaths.isEmpty) new Listing { "" }
-                                else e.triggerConfig.ackPaths
-              }
+              ["trigger_config"] =
+                // Hidden properties are lazy — reference the validator so its `throw`
+                // fires at eval time rather than silently rendering an inert config.
+                // Both throws must be referenced or Pkl never evaluates them.
+                let (_streamCheck = e.triggerConfig.streaming._shapeCheck)
+                let (_ackCheck = e.triggerConfig._ackShapeCheck)
+                new Mapping {
+                  // Suppressed under streaming: the shard never reads it, and a
+                  // contract author reading a generated manifest has no other way to
+                  // tell which keys are live. AE defaults it to 3 when absent.
+                  when (!e.triggerConfig.streaming.enabled) {
+                    ["max_retries"] = e.triggerConfig.maxRetries
+                  }
+                  // AE rejects an empty ack_paths; render the fire-and-forget [""] when
+                  // none is declared, never [].
+                  ["ack_paths"] = if (e.triggerConfig.ackPaths.isEmpty) new Listing { "" }
+                                  else e.triggerConfig.ackPaths
+                  // Emitted only when streaming is on, so every existing (non-streaming)
+                  // manifest stays byte-identical and AE keeps applying its own defaults.
+                  when (e.triggerConfig.streaming.enabled) {
+                    ["streaming_enabled"] = true
+                    ["streaming_batch_size"] = e.triggerConfig.streaming.batchSize
+                    ["streaming_batch_wait_seconds"] = e.triggerConfig.streaming.batchWaitSeconds
+                    ["streaming_events_per_signal"] = e.triggerConfig.streaming.eventsPerSignal
+                  }
+                }
               ["status"] = e.status
             }
           }
@@ -2823,6 +2946,8 @@ local function generateExtractNode(): Mapping<String, Any> =
   let (step = pipeline.extract!!)
   let (_extractEhCheck = validateWorkflowNodeErrorHandling(step.errorHandling, "pipeline.extract.errorHandling"))
   let (topLevelFormFields = manifestTopLevelArgs.toMap().values.toList())
+    let (_streamingEpCheck = _streamingEntrypointCheck)
+  let (_isStreaming = events.toList().any((e) -> e.triggerConfig.streaming.enabled))
   new Mapping {
     ["activity_name"] = "execute_workflow"
     ["activity_display_name"] = step.displayName ?? "Extract \(displayName) Metadata"
@@ -2832,12 +2957,17 @@ local function generateExtractNode(): Mapping<String, Any> =
     // the runtime app class name) or failure logs won't surface (HYP-1678).
     ["app_name"] = name
     ["inputs"] = new Mapping {
-      ["workflow_type"] = workflowTypeResolved
+      ["workflow_type"] = if (_isStreaming) streamingWorkflowTypeOverride!! else workflowTypeResolved
       ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
+        // The streaming shard hands the DAG its events inline; nothing else does.
+        // Without this the streaming workflow starts with no events to apply.
+        when (_isStreaming) {
+          ["batch"] = "$.event.batch"
+        }
         // CNCT-93: extract-node app_name is the contract identity (`name`, the
         // same value baked at `app_name` above and into ATLAN_APPLICATION_NAME),
         // and it is authoritative — a tenant-typed form value must not replace it

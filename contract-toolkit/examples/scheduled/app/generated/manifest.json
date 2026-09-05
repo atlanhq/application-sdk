@@ -6,12 +6,13 @@
       "activity_display_name": "Extract Scheduled Background Job Example Metadata",
       "app_name": "scheduled",
       "inputs": {
-        "workflow_type": "scheduled",
+        "workflow_type": "example-app:cdc-stream",
         "app_name": "scheduled",
         "app_id": "",
         "argo_workflow_slug": "",
         "task_queue": "atlan-scheduled-{deployment_name}",
         "args": {
+          "batch": "$.event.batch",
           "app_name": "scheduled",
           "credential": "{{credential}}",
           "agent_json": "{{agent-json}}",
@@ -73,6 +74,40 @@
           ]
         },
         "status": "PAUSED"
+      },
+      {
+        "name": "cdc-user-streaming",
+        "source": {
+          "name": "atlan-kafka",
+          "topic": "example.cdc.user_realtime"
+        },
+        "trigger_config": {
+          "ack_paths": [
+            ""
+          ],
+          "streaming_enabled": true,
+          "streaming_batch_size": 1,
+          "streaming_batch_wait_seconds": 0,
+          "streaming_events_per_signal": 500
+        },
+        "status": "ACTIVE"
+      },
+      {
+        "name": "cdc-audit-streaming-batched",
+        "source": {
+          "name": "atlan-kafka",
+          "topic": "example.cdc.audit"
+        },
+        "trigger_config": {
+          "ack_paths": [
+            ""
+          ],
+          "streaming_enabled": true,
+          "streaming_batch_size": 200,
+          "streaming_batch_wait_seconds": 2,
+          "streaming_events_per_signal": 500
+        },
+        "status": "ACTIVE"
       }
     ]
   }

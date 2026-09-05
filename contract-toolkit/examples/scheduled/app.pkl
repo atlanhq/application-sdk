@@ -56,6 +56,10 @@ schedules {
 }
 
 // Event triggers on the same entrypoint → one AE workflow carrying both `schedules`
+// Streaming dispatches a different workflow than the batch shell: the shard hands
+// the DAG its events inline, so the app runs its stream variant.
+streamingWorkflowTypeOverride = "example-app:cdc-stream"
+
 // and `events` in a single `triggers` block. Each renders to AE's EventTrigger shape;
 // `name` must be unique within the entrypoint (enforced at eval time). `ackPaths` are
 // JSONPaths against the run's node outputs; AE requires them non-empty — the default
@@ -80,5 +84,37 @@ events {
     }
     // triggerConfig defaults: maxRetries=3, ackPaths=[""] (fire-and-forget)
     status = "PAUSED"
+  }
+  // Streaming dispatch: AE signals each matching event into a persistent shard that
+  // runs the DAG inline, instead of firing a fresh top-level run per ingest batch.
+  // The shard reads its events from `$.event.batch` — a list of `{id, topic, data}` —
+  // so this DAG never reads the workflow's Iceberg events table, and `ackPaths` is
+  // inert (nothing writes an ack). Real-time: one event, one DAG walk.
+  new EventTriggerSpec {
+    name = "cdc-user-streaming"
+    source = new EventSource {
+      name = "atlan-kafka"
+      topic = "example.cdc.user_realtime"
+    }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+  // The same shell, trading per-event latency for throughput: accumulate up to 200
+  // events — or 2s, whichever comes first — into one DAG run, so a node walk's
+  // activity round-trips are amortised across the batch instead of paid per event.
+  new EventTriggerSpec {
+    name = "cdc-audit-streaming-batched"
+    source = new EventSource {
+      name = "atlan-kafka"
+      topic = "example.cdc.audit"
+    }
+    triggerConfig = new EventTriggerConfig {
+      streaming {
+        enabled = true
+        batchSize = 200
+        batchWaitSeconds = 2
+      }
+    }
   }
 }

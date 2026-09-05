@@ -761,6 +761,148 @@ if ! echo "$ERR_MSG" | grep -q "isDistinct"; then
 fi
 
 # --------------------------------------------------------------------------
+# 12. Streaming batch knobs are inert unless streaming.enabled is on, the wait
+#     is inert at batch size 1 (the shard never waits for a batch of one). Both
+#     are silent no-ops in AE, which is the worst failure mode for a latency knob:
+#     the contract reads as tuned and behaves as default, discoverable only from a
+#     latency graph. The hidden _streamingShapeCheck must fire at eval time.
+#     Asserted here rather than in pkl test because facts cannot express "eval fails".
+# --------------------------------------------------------------------------
+echo ":: Checking streaming batch-config invariants..."
+
+check_streaming_throw() {
+  # $1 = human label, $2 = triggerConfig body, $3 = expected substring
+  local label="$1" cfg_body="$2" expect="$3"
+  local BAD_CONTRACT OUT_DIR ERR_MSG
+  BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-stream-XXXXXX.pkl")"
+  OUT_DIR="$(mktemp -d "$REPO_ROOT/test-stream-out-XXXXXX")"
+  cat > "$BAD_CONTRACT" << PKLEOF
+amends "src/App.pkl"
+
+name = "stream-cfg-app"
+displayName = "Stream Cfg App"
+streamingWorkflowTypeOverride = "stream-cfg-app:cdc-stream"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+// A uiConfig makes the toolkit emit manifest.json, whose triggers.events render
+// references the hidden validator — pkl is lazy, so the throw only fires once the
+// trigger_config is actually rendered (which every real app does).
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+events {
+  new EventTriggerSpec {
+    name = "cdc-user-entity"
+    source = new EventSource { name = "atlan-kafka"; topic = "app.cdc.user_entity" }
+    triggerConfig = new EventTriggerConfig {
+${cfg_body}
+    }
+  }
+}
+PKLEOF
+  ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+  rm -f "$BAD_CONTRACT"
+  rm -rf "$OUT_DIR"
+  if ! echo "$ERR_MSG" | grep -q "$expect"; then
+    echo "FAIL: $label"
+    echo "  Got: $ERR_MSG"
+    fail=1
+  fi
+}
+
+check_streaming_throw \
+  "batchSize without streaming.enabled should throw" \
+  "      streaming { batchSize = 200 }" \
+  "require enabled = true"
+
+check_streaming_throw \
+  "batchWaitSeconds without streaming.enabled should throw" \
+  "      streaming { batchWaitSeconds = 2.5 }" \
+  "require enabled = true"
+
+check_streaming_throw \
+  "eventsPerSignal without streaming.enabled should throw" \
+  "      streaming { eventsPerSignal = 100 }" \
+  "require enabled = true"
+
+check_streaming_throw \
+  "batchWaitSeconds at batch size 1 should throw" \
+  "      streaming {
+        enabled = true
+        batchWaitSeconds = 2.5
+      }" \
+  "meaningless at batchSize = 1"
+
+# Streaming triggers whose DAG has no streaming workflow type: AE would signal the
+# shard, the shard would dispatch the BATCH workflow with no events in its arguments,
+# and nothing would error. Observed end-to-end on a tenant before this check existed.
+check_streaming_throw_nowftype() {
+  local label="$1" expect="$2"
+  local BAD_CONTRACT OUT_DIR ERR_MSG
+  BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-stream-XXXXXX.pkl")"
+  OUT_DIR="$(mktemp -d "$REPO_ROOT/test-stream-out-XXXXXX")"
+  sed -e 's|^streamingWorkflowTypeOverride.*$||' /dev/null > /dev/null 2>&1 || true
+  cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "stream-nowftype-app"
+displayName = "Stream NoWfType App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new TextInput { title = "Target" }
+      }
+    }
+  }
+}
+
+events {
+  new EventTriggerSpec {
+    name = "cdc"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc" }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+}
+PKLEOF
+  ERR_MSG="$(cd "$REPO_ROOT" && pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+  if echo "$ERR_MSG" | grep -q "$expect"; then
+    echo "  ok: $label"
+  else
+    echo "FAIL: $label"
+    echo "$ERR_MSG" | head -5
+    fail=1
+  fi
+  rm -f "$BAD_CONTRACT"; rm -rf "$OUT_DIR"
+}
+
+check_streaming_throw_nowftype \
+  "streaming without streamingWorkflowTypeOverride should throw" \
+  "no streamingWorkflowTypeOverride"
+
+# ackPaths is an at-least-once durability assertion; the streaming path writes no
+# acks and has no watchdog backstop, so declaring both must be refused rather than
+# silently voided. The batch-knob cases above cost latency; this one costs events.
+check_streaming_throw \
+  "ackPaths declared with streaming.enabled should throw" \
+  "      ackPaths { \"\$.extract.outputs.ack_path\" }
+      streaming { enabled = true }" \
+  "ackPaths is inert when streaming.enabled"
+
+# --------------------------------------------------------------------------
 # Done
 # --------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then
