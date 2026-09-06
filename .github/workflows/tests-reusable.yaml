@@ -1838,6 +1838,13 @@ jobs:
           SKIPPED: ${{ steps.install.outputs.skipped }}
           RELEASE_STATUS: ${{ steps.install.outputs.release_status }}
           INSTALLED: ${{ steps.install.outputs.installed_version }}
+          # FND-1684: which layer actually established the installed version —
+          # `pod` (the running pod reported the build identity stamped into the
+          # image), `deployment` (LM's deployment verdict), or `install-record`
+          # (LM's install record alone, which is the record the install itself
+          # writes and so establishes nothing about any pod).
+          LAYER: ${{ steps.install.outputs.verified_layer }}
+          POD_BUILD_ID: ${{ steps.install.outputs.pod_build_id }}
           CLOUD: ${{ matrix.cloud || 'default' }}
         run: |
           {
@@ -1849,6 +1856,8 @@ jobs:
             echo "| Already current (no-op) | \`${SKIPPED:-unknown}\` |"
             echo "| Release status at install | \`${RELEASE_STATUS:-unreadable}\` |"
             echo "| Tenant reports installed | \`${INSTALLED:-unreported}\` |"
+            echo "| Established at layer | \`${LAYER:-unknown}\` |"
+            echo "| Pod reports build | \`${POD_BUILD_ID:-not reported}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   e2e:

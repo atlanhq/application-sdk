@@ -62,6 +62,10 @@ from application_sdk.app._generated_tree import (
     eligible_form_configmaps,
     names_entrypoint,
 )
+from application_sdk.app.build_identity import (
+    BUILD_IDENTITY_CONFIGMAP_ID,
+    build_identity,
+)
 from application_sdk.app.entrypoint import canonical_workflow_type
 from application_sdk.common.dispatch import resolve_dispatch_workflow_id
 from application_sdk.common.task_queue import (
@@ -1893,6 +1897,50 @@ def _register_workflow_routes(
 
     @app.get("/workflows/v1/configmap/{config_map_id}")
     async def get_configmap(config_map_id: str) -> JSONResponse:
+        # 0. The reserved build-identity id (FND-1684).
+        #
+        # Answered BEFORE the generated-file scan, deliberately: an app that
+        # happens to ship `atlan-build-identity.json` would otherwise shadow the
+        # one fact only a running pod can report — and it would shadow it with a
+        # committed file, which is exactly the class of answer that cannot tell
+        # this build apart from one shipped months ago.
+        #
+        # Served on THIS route rather than a new one because
+        # `/api/service/configmaps/{name}` is already proxied by Heracles. A new
+        # route would need a new proxy rule, in a repo the e2e fix does not
+        # otherwise touch, before CI could read any of this.
+        #
+        # `build_id` is "" for an image that carries no stamp. That is a valid
+        # answer, not an error: the reader has to distinguish "this pod reports a
+        # different build" from "this pod cannot report one", and a 404 here
+        # would collapse the second into "no such route".
+        if config_map_id == BUILD_IDENTITY_CONFIGMAP_ID:
+            identity: dict[str, Any] = {
+                "build_id": build_identity(),
+                "app_name": _workflow_config.app_name,
+            }
+            return JSONResponse(
+                content=_wrap_response(
+                    cast(
+                        "dict[str, Any]",
+                        {
+                            "kind": "ConfigMap",
+                            "apiVersion": "v1",
+                            "metadata": {"name": config_map_id},
+                            # Same envelope as a real configmap — `data.config`
+                            # is a JSON string — so a generic client needs no
+                            # special case here, with the parsed keys repeated
+                            # alongside it for one that does.
+                            "data": {
+                                "config": orjson.dumps(identity).decode(),
+                                **identity,
+                            },
+                        },
+                    ),
+                    message="Build identity fetched successfully",
+                )
+            )
+
         # 1. Direct match against any generated configmap file stem.
         #    The setup form normally requests the form file by its stem
         #    (e.g. "snowflake-crawler"), which lands here.

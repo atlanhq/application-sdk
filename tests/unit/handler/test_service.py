@@ -2114,6 +2114,103 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    # ── Build identity (FND-1684) ────────────────────────────────────────
+    #
+    # The e2e version check used to read LM's marketplace install record — the
+    # same record the install writes and then skips on — so a tenant whose pods
+    # had not moved in weeks passed the check that exists to catch exactly that.
+    # This route is the fix: it is the one answer only a RUNNING POD can give,
+    # and it rides the already-proxied configmap route so no new Heracles rule
+    # is needed.
+
+    def test_build_identity_is_served_from_the_image_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.app.build_identity import (
+            BUILD_ID_ENV,
+            BUILD_IDENTITY_CONFIGMAP_ID,
+        )
+        from application_sdk.handler import service as svc_module
+
+        monkeypatch.setenv(BUILD_ID_ENV, "sdr-test-abc12345")
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get(
+                f"/workflows/v1/configmap/{BUILD_IDENTITY_CONFIGMAP_ID}"
+            )
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["metadata"]["name"] == BUILD_IDENTITY_CONFIGMAP_ID
+            # Both halves, because the CI reader accepts either: `data.config`
+            # is the envelope every other configmap uses, and the flattened
+            # keys spare a client that does not unwrap it.
+            assert data["data"]["build_id"] == "sdr-test-abc12345"
+            assert json.loads(data["data"]["config"])["build_id"] == (
+                "sdr-test-abc12345"
+            )
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_build_identity_is_empty_not_404_for_an_unstamped_image(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ "No stamp" and "no such route" need opposite next steps.
+
+        A 404 would collapse an image built without the stamp into the same
+        answer as an SDK too old to serve the route, and the CI check decides
+        differently on each.
+        """
+        from application_sdk.app.build_identity import (
+            BUILD_ID_ENV,
+            BUILD_IDENTITY_CONFIGMAP_ID,
+        )
+        from application_sdk.handler import service as svc_module
+
+        monkeypatch.delenv(BUILD_ID_ENV, raising=False)
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get(
+                f"/workflows/v1/configmap/{BUILD_IDENTITY_CONFIGMAP_ID}"
+            )
+            assert response.status_code == 200
+            assert response.json()["data"]["data"]["build_id"] == ""
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_a_generated_file_cannot_shadow_the_build_identity(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reserved id is answered before the generated-file scan.
+
+        A committed file cannot distinguish this build from one shipped months
+        ago, which is the whole reason this route exists — so an app that ships
+        a file of this name must not be able to answer in the pod's place.
+        """
+        from application_sdk.app.build_identity import (
+            BUILD_ID_ENV,
+            BUILD_IDENTITY_CONFIGMAP_ID,
+        )
+        from application_sdk.handler import service as svc_module
+
+        (tmp_path / f"{BUILD_IDENTITY_CONFIGMAP_ID}.json").write_text(
+            json.dumps({"config": {"build_id": "committed-lie"}})
+        )
+        monkeypatch.setenv(BUILD_ID_ENV, "sdr-test-abc12345")
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get(
+                f"/workflows/v1/configmap/{BUILD_IDENTITY_CONFIGMAP_ID}"
+            )
+            assert response.json()["data"]["data"]["build_id"] == "sdr-test-abc12345"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_configmap_returns_wrapped_k8s_shape(self, tmp_path: Path) -> None:
         from application_sdk.handler import service as svc_module
 
