@@ -897,6 +897,12 @@ class App(ABC):
     # Set by registration
     _app_name: str
     _app_version: str
+    #: The image's build identity (FND-1684), or "" when the image carries no
+    #: stamp. A ClassVar with a default, unlike its two neighbours: those are
+    #: always written by registration, while this must read as "" on any App
+    #: subclass constructed without going through it (test doubles, and every
+    #: app registered by an SDK older than this attribute).
+    _app_build_id: ClassVar[str] = ""
     _app_metadata: AppMetadata
     _original_run: Callable[..., Any]
     _input_type: type[Input]
@@ -1166,6 +1172,16 @@ class App(ABC):
     def get_version(self) -> str:
         """Get the app version."""
         return self._app_version
+
+    def get_build_id(self) -> str:
+        """Get the build identity of the image this process runs from.
+
+        ``""`` when the image carries no stamp. NOT a substitute for
+        :meth:`get_version`: that is the app's declared semver and is the same
+        for every build of the same source, while this changes whenever the
+        image content does. See :mod:`application_sdk.app.build_identity`.
+        """
+        return self._app_build_id
 
     def now(self) -> datetime:
         """Get current time (safe for workflow replay).
@@ -2272,6 +2288,10 @@ def generate_workflow_class(
     output_type = ep.output_type
     app_name = app_cls._app_name
     app_version = app_cls._app_version
+    # Read once here, outside the workflow body: it is an image ENV, constant for
+    # the life of the process, and reading it inside _run would be a non-
+    # deterministic os.environ touch in the Temporal sandbox.
+    app_build_id = app_cls._app_build_id
 
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — boot-time (not in workflow sandbox); avoids a module-load cycle
         input_type_supports_gate,
@@ -2354,6 +2374,7 @@ def generate_workflow_class(
         context = AppContext(
             app_name=app_name,
             app_version=app_version,
+            build_id=app_build_id,
             run_id=run_id,
             workflow_id=workflow_id,
             correlation_id=correlation_id,

@@ -20,6 +20,7 @@ from uuid import uuid4
 from temporalio import activity
 
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
+from application_sdk.app.build_identity import build_identity
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
@@ -319,6 +320,9 @@ def create_activity_from_task(
         app_context = AppContext(
             app_name=context.app_name,
             app_version=app_metadata.version,
+            # Activities run outside the workflow sandbox, so the image ENV is
+            # readable directly here (FND-1684).
+            build_id=build_identity(),
             run_id=run_id,
             workflow_id=context.workflow_id,
             correlation_id=correlation_id,

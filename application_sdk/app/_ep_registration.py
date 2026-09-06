@@ -11,6 +11,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, get_type_hints
 
 from application_sdk.app._artifact_schema_guard import warn_undeclared_artifact_schemas
+from application_sdk.app.build_identity import build_identity
 from application_sdk.app.entrypoint import (
     EntryPointContractError,
     EntryPointMetadata,
@@ -287,6 +288,13 @@ def _apply_app_registration(
     cls._app_registered = True
     cls._app_name = name
     cls._app_version = version
+    # The base-level hook every app inherits with no per-app change (FND-1684).
+    # `version` above is the app's own declared semver, which is identical across
+    # every build of the same source; this is the identity of the IMAGE, stamped
+    # at build time, and it is the only thing a running pod can report that
+    # distinguishes the build under test from one shipped months ago. "" when the
+    # image carries no stamp — see application_sdk.app.build_identity.
+    cls._app_build_id = build_identity()
     cls._input_type = input_type
     cls._output_type = output_type
 

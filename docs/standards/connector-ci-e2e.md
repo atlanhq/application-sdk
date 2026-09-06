@@ -731,6 +731,72 @@ side benefit.
 > tenant. With `install-app-to-tenant: false`, that is whatever was last
 > hand-deployed there.
 
+### Where the version check gets its answer from (FND-1684)
+
+`Verify the tenant runs the version under test` used to read exactly one thing:
+LM's marketplace install record, via `/apps/{id}/info`. That is the same record
+`install` writes — and the same record it *skips* on:
+
+```python
+if current and current == args.version:
+    return InstallOutcome(..., skipped=True)      # install
+...
+installed = _installed_version(read_client, app_id)  # verify: the same record
+```
+
+So the check was reading its own input. The expected version is stable per
+connector SHA (`sdr-test-<commit8>[-<digest8>]`, `derive_e2e_image_tag.py`), so
+once that record existed, every later run on that SHA skipped the install *and*
+passed the verify — permanently, whatever the cluster was running. Two openapi
+runs 24 minutes apart did exactly that; neither run's image ever reached the
+tenant, and the tenant was serving a 44-day-old app fleet at the time.
+
+**Three layers, strongest first.** `verify` now reads them in order and the step
+log names which one decided:
+
+| Layer | Read | What it establishes |
+|---|---|---|
+| `pod` | `GET /api/service/configmaps/atlan-build-identity` | The build the **running pod** reports. Decides on its own, both ways. |
+| `deployment` | `GET .../marketplace/apps/deployments/{id}` → `deployment_status` | LM reconciled *something*. Consulted only when the pod cannot answer, and never on its own: LM reporting SUCCEEDED while nothing moves is a known shape (DISTR-921). |
+| `install-record` | `GET .../marketplace/apps/{id}/info` | The weakest, and the one that was being printed as `verified:`. Still checked, but a pass here now says so. |
+
+The install reports the same field: `verified_layer` in `$GITHUB_OUTPUT` and in
+prepare-tenant's step summary, so a skipped install that rested on the record
+alone is visible without reading the log.
+
+**Where the pod's answer comes from.** Nothing an app already exposes could
+answer this. `App._app_version` / `AppContext.app_version` is a semver declared
+in the app's own source, identical across every build of it; the served manifest
+is `{dag, execution_mode}`; `/api/service/configmaps/{name}` serves committed
+files verbatim — and the identity CI compares against is the **image tag**,
+minted after every committed artifact exists. So it enters at image build time:
+
+1. `.github/actions/build-app-image` passes `--build-arg ATLAN_BUILD_ID=<tag>`,
+   the un-suffixed tag (`tag-suffix` is per-architecture and the tenant pulls the
+   merged manifest, so a suffixed value would make each arch report a different
+   identity).
+2. `.github/scripts/stamp_build_identity.py` appends `ARG` + `ENV` to the
+   connector's Dockerfile **in the runner's checkout only** — a build-arg is not
+   an ENV, and an ARG is not inherited across `FROM`, so the two lines have to be
+   in the connector's own file. Nothing is written back to any repo, and a
+   connector that adopts the lines itself is left alone.
+3. `application_sdk.app.build_identity` reads the ENV at app registration, so
+   every app inherits it with no per-app change (`App._app_build_id`,
+   `AppContext.build_id`).
+4. The handler answers the reserved id `atlan-build-identity` on the
+   already-proxied configmap route, *ahead* of the generated-file scan, so a
+   committed file cannot answer in the pod's place.
+
+**During the transition.** The stamp arrives fleet-wide with the action
+(`@main`), but the route is served by the **connector's own pinned SDK**. Until
+an app bumps, its pod 404s and `verify` falls back to the record layers with a
+warning naming what was and was not checked. That is deliberate: hard-failing on
+a 404 would red every connector still on an older pin, for a skew with nothing
+wrong in any app. The warning distinguishes the two causes as far as it honestly
+can — it says whether the SDK on the runner carries the route, while noting that
+`harness-sdk-ref` can pin the harness ahead of the runtime, so that is a lean,
+not proof.
+
 ### Asserting the executed DAG, not just the installed version (FND-129)
 
 The install path verifies the **version** on the tenant (`expected-app-version`,
