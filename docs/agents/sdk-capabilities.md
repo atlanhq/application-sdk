@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.32.1
-source-sha:    d46dcabd4f14405fb9cbae177d986ce8ec9c4942
-source-date:   2026-09-05T15:43:36+01:00
+source-sha:    69577e76bdfcbcb33208f2ca6368679ecf805d3d
+source-date:   2026-09-05T23:24:30Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 43 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 46 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 27 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
@@ -257,6 +257,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Wrap @task methods on an instance to execute as Temporal activities.
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `build_identity`
+
+- **Import:** `from application_sdk.app.build_identity import build_identity`
+- **Signature:** `build_identity() -> str`
+- **Summary:** Return this image's build identity, or ``""`` when it carries none.
+- **Defined in:** `application_sdk/app/build_identity.py`
+
 #### `canonical_workflow_type`
 
 - **Import:** `from application_sdk.app import canonical_workflow_type`
@@ -300,6 +307,20 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `_app_state_lock`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/app/base.py`
+
+#### `BUILD_ID_ENV`
+
+- **Import:** `from application_sdk.app.build_identity import BUILD_ID_ENV`
+- **Signature:** `BUILD_ID_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/build_identity.py`
+
+#### `BUILD_IDENTITY_CONFIGMAP_ID`
+
+- **Import:** `from application_sdk.app.build_identity import BUILD_IDENTITY_CONFIGMAP_ID`
+- **Signature:** `BUILD_IDENTITY_CONFIGMAP_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/build_identity.py`
 
 #### `InteractionUnfinishedPolicy`
 
