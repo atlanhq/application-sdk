@@ -448,6 +448,67 @@ class TestFormShortfall:
         # stale image from a renamed field.
         assert "credential-guid" in reason
 
+    def test_a_respelled_field_is_not_reported_as_a_stale_image(self) -> None:
+        """FND-1683: the field is present, spelled the way it was before a rename.
+
+        The tenant serves a form frozen at install time by an unmanaged
+        ConfigMap, and its pod is never asked — so "the tenant runs an older
+        image" points the reader at a rollout that is entirely current. This
+        is the exact shape that cost days: `extraction_method` served where
+        `extraction-method` is declared, surviving the full wait window.
+        """
+        served = _served(
+            {"extraction_method", "connection"},
+            {"credential": ["extraction_method"], "connection": ["connection"]},
+        )
+
+        reason = form_shortfall(_declaring("extraction-method", "connection"), served)
+
+        assert reason is not None
+        # Both spellings, so the reader sees a rename rather than an absence.
+        assert (
+            "'extraction-method' is declared while 'extraction_method' is served"
+            in reason
+        )
+        assert "spelled the way this contract spelled it BEFORE a rename" in reason
+        assert "not missing at all" in reason
+        # Name the real cause and the one-line way to confirm it.
+        assert "FND-1683" in reason
+        assert "GET /workflows/v1/configmap/" in reason
+        # And do NOT send the reader to the image.
+        assert "older image" not in reason
+
+    def test_a_genuinely_absent_field_still_names_both_causes(self) -> None:
+        """No respelling twin: the old wording stands, plus the frozen-copy pointer."""
+        served = _served(
+            {"connection"},
+            {"connection": ["connection"]},
+        )
+
+        reason = form_shortfall(_declaring("include-filter", "connection"), served)
+
+        assert reason is not None
+        assert "include-filter" in reason
+        assert "older image" in reason
+        # The frozen-copy case is still worth naming — it is invisible otherwise.
+        assert "FND-1683" in reason
+
+    def test_respelling_detection_ignores_a_field_served_under_its_own_name(
+        self,
+    ) -> None:
+        """A twin must actually differ, or every match would report itself."""
+        served = _served(
+            {"extraction-method"},
+            {"credential": ["extraction-method"]},
+        )
+
+        # 'connection' is absent outright; 'extraction-method' is served as-is.
+        reason = form_shortfall(_declaring("extraction-method", "connection"), served)
+
+        assert reason is not None
+        assert "is declared while" not in reason
+        assert "older image" in reason
+
     def test_a_contract_declaring_nothing_is_reported(self) -> None:
         """Zero declared inputs makes the check vacuous, so it must not pass."""
         reason = form_shortfall(_declaring(), _served({"anything"}))
