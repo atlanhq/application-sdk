@@ -2117,8 +2117,9 @@ class TestConfigMapEndpoints:
     # ── Build identity (FND-1684) ────────────────────────────────────────
     #
     # The e2e version check used to read LM's marketplace install record — the
-    # same record the install writes and then skips on — so a tenant whose pods
-    # had not moved in weeks passed the check that exists to catch exactly that.
+    # same record the install writes and then skips on — so once that record
+    # existed for a build the check could only agree with it, whatever the
+    # cluster was actually serving.
     # This route is the fix: it is the one answer only a RUNNING POD can give,
     # and it rides the already-proxied configmap route so no new Heracles rule
     # is needed.

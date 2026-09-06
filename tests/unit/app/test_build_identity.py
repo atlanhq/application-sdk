@@ -8,7 +8,8 @@ across every build of that source.
 
 The e2e version check used to have no such source to read, and read the
 marketplace install record instead: the same record the install writes and then
-skips on. A tenant whose pods had not moved in 44 days passed it.
+skips on. Once that record existed for a build, the check could only agree with
+it.
 """
 
 from __future__ import annotations
