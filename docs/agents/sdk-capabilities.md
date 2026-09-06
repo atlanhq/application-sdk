@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.32.1
-source-sha:    e7c45656e3915d4f070914b5fd2933ba18b3e964
-source-date:   2026-09-06T11:21:19+01:00
+source-sha:    750c913eab936ef886d56f4ca5046b37f39b06f3
+source-date:   2026-09-06T21:39:22Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 372 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 383 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3441,6 +3441,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A cluster read reached the API server and did not come back with data.
 - **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
 
+#### `ConnectionDeletePlan`
+
+- **Import:** `from application_sdk.testing.harness.teardown import ConnectionDeletePlan`
+- **Signature:** `class ConnectionDeletePlan(*, ...)`
+- **Summary:** How one connection's delete run is addressed, dispatched and waited on.
+- **Defined in:** `application_sdk/testing/harness/teardown/__init__.py`
+
+#### `ConnectionDeleteReport`
+
+- **Import:** `from application_sdk.testing.harness.teardown import ConnectionDeleteReport`
+- **Signature:** `class ConnectionDeleteReport(*, ...)`
+- **Summary:** What one ``connection-delete`` run managed to do, and what it did not.
+- **Defined in:** `application_sdk/testing/harness/teardown/__init__.py`
+
 #### `ConnectionIdentity`
 
 - **Import:** `from application_sdk.testing.harness.identity import ConnectionIdentity`
@@ -3550,6 +3564,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class DataForgeSource(datasource: str, fields: Mapping[str, str])`
 - **Summary:** The integration source's credential fields, read uniformly from env.
 - **Defined in:** `application_sdk/testing/integration/source.py`
+
+#### `DeleteType`
+
+- **Import:** `from application_sdk.testing.harness.teardown import DeleteType`
+- **Signature:** `class DeleteType`
+- **Summary:** How thoroughly ``connection-delete`` removes the assets it finds.
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
 
 #### `DeploymentState`
 
@@ -4004,9 +4025,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `PurgeReport`
 
 - **Import:** `from application_sdk.testing.harness.teardown import PurgeReport`
-- **Signature:** `class PurgeReport(*, purged: int = 0, orphaned: Sequence[str] = tuple(), errors: Sequence[str] = tuple()) -> None`
+- **Signature:** `class PurgeReport(*, purged: int = 0, orphaned: Sequence[str] = tuple(), errors: Sequence[str] = tuple())`
 - **Summary:** What a purge managed to delete, and what it did not.
-- **Defined in:** `application_sdk/testing/harness/teardown.py`
+- **Defined in:** `application_sdk/testing/harness/teardown/_purge.py`
 
 #### `QueueWorkflowSpec`
 
@@ -4565,6 +4586,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Deprecated (v4.0) — AE submit body; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
+#### `build_connection_delete_dag`
+
+- **Import:** `from application_sdk.testing.harness.teardown import build_connection_delete_dag`
+- **Signature:** `build_connection_delete_dag(*, *, ...)`
+- **Summary:** Build the single-node DAG that deletes one connection and its artifacts.
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
+#### `build_connection_delete_submit_payload`
+
+- **Import:** `from application_sdk.testing.harness.teardown import build_connection_delete_submit_payload`
+- **Signature:** `build_connection_delete_submit_payload(*, *, ...)`
+- **Summary:** Build the AE submit body for one connection's delete run.
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
 #### `build_seed_dag`
 
 - **Import:** `from application_sdk.testing.full_dag import build_seed_dag`
@@ -4668,6 +4703,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Compare actual extracted metadata against an expected baseline.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `connection_delete_task_queue`
+
+- **Import:** `from application_sdk.testing.harness.teardown import connection_delete_task_queue`
+- **Signature:** `connection_delete_task_queue(deployment_name: str)`
+- **Summary:** Compose the task queue the tenant's ``connection-delete`` app polls.
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
 #### `connection_entity`
 
 - **Import:** `from application_sdk.testing.harness.seed import connection_entity`
@@ -4738,6 +4780,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `declared_inputs(workflow_config: dict[str, Any]) -> frozenset[str]`
 - **Summary:** Return the input names a generated workflow config declares.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `delete_connection`
+
+- **Import:** `from application_sdk.testing.harness.teardown import delete_connection`
+- **Signature:** `delete_connection(qualified_name: str, *, ae: AEClient, plan: ConnectionDeletePlan) -> ConnectionDeleteReport`
+- **Summary:** Delete one connection, its assets and its byte-stores, via the app.
+- **Defined in:** `application_sdk/testing/harness/teardown/__init__.py`
 
 #### `diff_golden`
 
@@ -5395,9 +5444,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `purge_connection`
 
 - **Import:** `from application_sdk.testing.harness.teardown import purge_connection`
-- **Signature:** `purge_connection(client: AsyncAtlanClient, connection_qualified_name: str) -> PurgeReport`
+- **Signature:** `purge_connection(client: AsyncAtlanClient, connection_qualified_name: str)`
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
-- **Defined in:** `application_sdk/testing/harness/teardown.py`
+- **Defined in:** `application_sdk/testing/harness/teardown/_purge.py`
 
 #### `read_app_identity`
 
@@ -5528,6 +5577,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `seed_assets(spec: ResolvedSeedSpec, *, ...)`
 - **Summary:** Serialise *spec*, validate it offline, and publish it as a real run.
 - **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
+
+#### `seed_object_keys`
+
+- **Import:** `from application_sdk.testing.harness.seed import seed_object_keys`
+- **Signature:** `seed_object_keys(*, root: str)`
+- **Summary:** Every object-store key the *harness* wrote under one seed root.
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
 
 #### `seed_prefix_root`
 
@@ -5715,6 +5771,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Env var gating ``App.on_complete()``'s file and object-store cleanup.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
+#### `CONNECTION_DELETE_APP_NAME`
+
+- **Import:** `from application_sdk.testing.harness.teardown import CONNECTION_DELETE_APP_NAME`
+- **Signature:** `CONNECTION_DELETE_APP_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
+#### `CONNECTION_DELETE_NODE_ID`
+
+- **Import:** `from application_sdk.testing.harness.teardown import CONNECTION_DELETE_NODE_ID`
+- **Signature:** `CONNECTION_DELETE_NODE_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
+#### `CONNECTION_DELETE_WORKFLOW_TYPE`
+
+- **Import:** `from application_sdk.testing.harness.teardown import CONNECTION_DELETE_WORKFLOW_TYPE`
+- **Signature:** `CONNECTION_DELETE_WORKFLOW_TYPE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
 #### `CONNECTOR_CI`
 
 - **Import:** `from application_sdk.testing.harness import CONNECTOR_CI`
@@ -5834,7 +5911,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.teardown import PURGE_BATCH_SIZE`
 - **Signature:** `PURGE_BATCH_SIZE`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/harness/teardown.py`
+- **Defined in:** `application_sdk/testing/harness/teardown/_purge.py`
 
 #### `Reading`
 

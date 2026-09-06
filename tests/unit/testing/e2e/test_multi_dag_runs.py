@@ -575,9 +575,17 @@ class TestDeclaredRuns:
             "default/bundle/1"
         }
 
-    def test_teardown_is_still_one_purge(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_teardown_is_still_one_delete(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """N runs, one cleanup — and it stays in ``teardown_method``, which
-        pytest runs on pass, fail and error alike."""
+        pytest runs on pass, fail and error alike.
+
+        One ``connection-delete`` run since FND-1724, not one ``pyatlan`` purge:
+        the shared connection is registered once however many DAGs touched it,
+        and the runner-side purge fires only when the app's run did not
+        complete — which is what ``calls.purged`` being empty says here.
+        """
         harness = _CrawlThenMine()
         ae = _FakeAE(_succeeded("extract", "publish"), _succeeded("extract"))
         calls = _wire(harness, ae, monkeypatch, total=4)
@@ -585,7 +593,9 @@ class TestDeclaredRuns:
         harness.test_full_dag_runs_end_to_end()
         harness.teardown_method(None)
 
-        assert calls.purged == ["default/bundle/1"]
+        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        assert len(teardowns) == 1
+        assert calls.purged == []
 
     def test_a_failing_run_stops_the_sequence(
         self, monkeypatch: pytest.MonkeyPatch

@@ -1243,8 +1243,8 @@ Four things to know:
   it. A crawl declared inside a miner suite (`expect_connection = False`) would
   otherwise never observe the connection it just landed.
 - **One connection, one teardown.** All runs share the suite's minted
-  `connection_qualified_name`, and cleanup stays a single purge in
-  `teardown_method` — which pytest runs on pass, fail **and** error. That
+  `connection_qualified_name`, and cleanup stays a single `connection-delete`
+  run in `teardown_method` — which pytest runs on pass, fail **and** error. That
   guarantee is the reason this lives inside one pytest process instead of two
   ordered CI legs sharing a connection, where teardown would have to move to an
   `if: always()` job a cancelled workflow can still skip, on a leased shared tenant.
@@ -1359,8 +1359,9 @@ class TestCoalesceE2E(CrawlerGeneratedE2EBase):
 The seeded tree hangs under a **second** ephemeral connection, minted per run
 exactly like the suite's own. Its QN *and* its object-store prefix are registered
 before the seed runs, so `teardown_method` reclaims both (connections first, the
-run's own before the seeded ones) even when the seed half-fails. Nothing here
-touches a long-lived shared connection.
+run's own before the seeded ones) even when the seed half-fails — see
+[Teardown](#teardown-goes-through-the-app-that-owns-the-artifacts) for what
+"reclaims" covers. Nothing here touches a long-lived shared connection.
 
 #### Three things to get right
 
@@ -1425,8 +1426,79 @@ the suite's own minted connection, which is still right whenever the runs are
 sequenced *because they share state on one connection* (the miner-after-crawl
 case above). Set it for the opposite case: a run that prepares a **different**
 connection for a later one to reference. The QN joins the same teardown registry
-`seed_assets` writes to, so it is purged even if the run that was to consume it
+`seed_assets` writes to, so it is deleted even if the run that was to consume it
 never got that far.
+
+
+### Teardown goes through the app that owns the artifacts
+
+`seed_assets` seeds **through publish**, because publish owns the entities and
+the cache. Teardown follows the same rule for the same reason: `teardown_method`
+submits one `connection-delete` DAG node per connection the run touched, through
+the same `AEClient`, in the same one-node shape, with `delete_type: PURGE`.
+
+**Why the harness cannot do this itself.** A connection leaves four kinds of
+artifact behind, and only one of them is reachable from a CI runner:
+
+| Artifact | Owner | Reachable from the runner? |
+| -- | -- | -- |
+| Connection + entities in Atlas | harness | yes — `pyatlan` |
+| `persistent-artifacts/apps/atlan-publish-app/state/<cqn>/` — publish-cache-v2, WAL, drift, statistics | publish | no |
+| `connection-cache/<cqn>.sqlite` | publish | no — not on the s3proxy allowlist at all |
+| Seed NDJSON under `artifacts/apps/<app>/e2e-seed/<encoded qn>/` | harness | by **key** only |
+
+`delete_prefix` is a LIST plus a bulk `POST ?delete`, and both are *bucket-level*
+URLs. The tenant's Kong s3proxy path-matches every request against an allowlist
+(`/persistent-artifacts/`, `/artifacts/apps/`, `/workflow_file_upload/`) that it
+cannot apply to a URL whose keys live in the request body, so the call comes back
+`403 code 1009 "Invalid Path"` **even when the prefix being deleted is itself
+allowlisted**. The shape of the call is what fails, not the permission. A
+single-object `DELETE` puts the key in the path, where the allowlist can read it
+— which is why the seed NDJSON is deleted by key and nothing else can be.
+
+`connection-delete` has no such problem: it runs on the tenant, where its object
+store is the tenant bucket accessed directly with no proxy in front of it.
+
+**Publish never cleans up its own cache**, which is easy to get backwards. It
+only writes `persistent-artifacts/apps/atlan-publish-app/state/<cqn>/`; nothing
+in publish reacts to the assets being deleted. That matters beyond tidiness:
+publish's Step-0 resolve auto-discovers caches by **connectorType**, not by QN,
+so with `ars_lookup_connection_qns` unset it globs every connection of the
+referenced type — meaning run N+1 materialises every orphan every prior run left,
+inside the resolver's memory ladder. Pin `ars_lookup_connection_qns` on the
+consuming connector's publish node to the seeded QN and the leak is scoped
+regardless.
+
+**An unpolled queue still gets its connections back.** `connection-delete` is a
+marketplace utility (Global Marketplace `app_id
+019ef7f4-de9a-77c3-bad1-7f201fc97052`, `type: utility`) rather than a platform
+service like publish, and it runs at `keda.minReplicaCount: 0`, so it costs
+nothing between runs and its queue is *legitimately* unpolled while nothing is
+using it. It is installed on all three e2e tenants (FND-1724, 2026-09-07). When
+nothing picks the node up off `atlan-connection-delete-<deployment>` within
+`connection_delete_stall_grace_seconds` — a worker that did not wake, or a tenant
+that does not have the app — teardown says so by name, naming the queue and the
+byte-stores being left behind, and falls back to the runner-side `pyatlan`
+purge, which reclaims the Atlas half and nothing else.
+
+That fallback is transitional. Two silences keep it alive: the worker-up-only
+tier (`source_available=false`) wires no AE client to submit a delete through at
+all, and a scale-to-zero worker that fails to wake is indistinguishable from a
+missing install. Drop it once neither is true.
+
+**None of this can red a leg.** Teardown runs after the assertions have decided
+the verdict, so every step reports rather than raises — a missing app, an
+unreachable tenant and a store with no binding are all `WARNING` lines. Tenant
+cleanliness is not what the test is asserting, and a cleanup failure that
+replaced a real verdict would cost more than the bytes it saved.
+
+Three `ClassVar`s tune it, and the defaults suit every connector:
+
+| ClassVar | Default | What it bounds |
+| -- | -- | -- |
+| `connection_delete_poll_timeout_seconds` | `900` | One connection's whole delete. The DAG-progress watchdog is *not* armed — a single node draining a connection legitimately sits `Running` — so this is the only bound. |
+| `connection_delete_stall_grace_seconds` | `120` | How long to wait for the node to be picked up before concluding nothing is polling the queue. Short on purpose — otherwise every connection burns the full ceiling first — but wide enough to clear a `minReplicaCount: 0` cold start. `0` disables the latch. |
+| `connection_delete_type` | `DeleteType.PURGE` | How thoroughly. The app's own default is `SOFT`, which would leave every run's assets recoverable and still indexed on a shared tenant. |
 
 
 ## Onboarding checklist for a new connector
