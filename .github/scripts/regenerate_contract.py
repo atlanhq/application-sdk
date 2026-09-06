@@ -76,6 +76,14 @@ from pkl_contract_layout import (  # noqa: E402
 # renovate_pkl_sync.py.
 OUTPUT_PATHS = [GENERATED_DIR, *ROOT_FILES]
 
+# Toolkit properties that switch a root file's emission off. Setting one to
+# ``false`` is documented toolkit surface — ``contract-toolkit/src/App.pkl``
+# (``emitAtlanYaml``:217, ``emitAppYaml``:228), ``NativeAppBundle.pkl`` for
+# ``emitAtlanYaml``, and ``contract-toolkit/docs/reference.md`` — so a committed
+# copy of an opted-out file is hand-maintained, never an artifact the toolkit
+# lost. See ``opted_out_root_files``.
+ROOT_FILE_EMIT_FLAGS = {"atlan.yaml": "emitAtlanYaml", "app.yaml": "emitAppYaml"}
+
 # Matches the ``["app-contract-toolkit"]`` dependency entry in a consumer's
 # contract/PklProject, in either the block form
 #   ["app-contract-toolkit"] { uri = "package://...@x.y.z" }
@@ -90,6 +98,13 @@ def run(cmd: list[str], *, check: bool = False) -> subprocess.CompletedProcess:
     """Run a subprocess. Single seam so tests can stub pkl/uvx and let git run
     for real against a throwaway repo."""
     return subprocess.run(cmd, check=check, text=True)
+
+
+def run_capture(cmd: list[str]) -> subprocess.CompletedProcess:
+    """Run a subprocess and capture stdout. A second seam rather than a flag on
+    ``run`` because the emit-flag probe is the only caller that reads output —
+    ``run`` deliberately streams pkl's diagnostics straight into the job log."""
+    return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
 def override_toolkit(contract_dir: str, toolkit_src: str) -> None:
@@ -140,16 +155,49 @@ def root_files_not_emitted(out_dir: Path) -> list[str]:
     """Root YAMLs the working tree carries that this eval did not emit.
 
     Not a broken tree — ``swap_outputs`` only ever copies root files, so the
-    committed one is still in place — but it does mean the contract (or the
+    committed one is still in place — but it *may* mean the contract (or the
     toolkit under test) stopped producing an artifact the app ships. Worth
     failing on in SDK-level mode: a later sdr-e2e step hard-errors on a missing
     root ``app.yaml``, resolves it *after* this step, and runs with check-drift
-    off, so nothing else would explain it. Informational in app-level mode."""
+    off, so nothing else would explain it. Informational in app-level mode.
+
+    "May", because a contract can also *ask* the toolkit not to emit the file.
+    That is a sanctioned configuration, not a regression, so callers split this
+    list with ``opted_out_root_files`` before reporting — see FND-1723."""
     return [
         name
         for name in ROOT_FILES
         if Path(name).exists() and not (out_dir / name).exists()
     ]
+
+
+def opted_out_root_files(contract_dir: str, names: list[str]) -> set[str]:
+    """Of ``names``, the root files this contract told the toolkit not to emit.
+
+    Answers "would this toolkit emit the file?" rather than "did it". Probed
+    with ``pkl eval -x <flag>`` against the same ``--project-dir`` the main eval
+    uses, so an SDK-level run reads the flag off the *overridden* toolkit — the
+    one whose output we are judging.
+
+    Anything other than a clean ``false`` means "not opted out", which is the
+    conservative answer: it leaves the finding in place. That covers a contract
+    family without the property (``NativeApp.pkl`` has neither flag,
+    ``NativeAppBundle.pkl`` only ``emitAtlanYaml``), where the probe exits
+    non-zero, as well as a toolkit that removed the flag entirely. A probe can
+    therefore never manufacture a green; it can only withdraw a finding the app
+    explicitly asked for."""
+    opted_out = set()
+    app_pkl = str(Path(contract_dir) / "app.pkl")
+    for name in names:
+        flag = ROOT_FILE_EMIT_FLAGS.get(name)
+        if flag is None:
+            continue
+        proc = run_capture(
+            ["pkl", "eval", "--project-dir", contract_dir, "-x", flag, app_pkl]
+        )
+        if proc.returncode == 0 and (proc.stdout or "").strip() == "false":
+            opted_out.add(name)
+    return opted_out
 
 
 def _format_generated(root: Path) -> None:
@@ -276,7 +324,24 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
-        stale_roots = root_files_not_emitted(tmp)
+        # Committed-but-not-emitted splits two ways: the toolkit stopped
+        # producing a file the app ships (the regression this check exists for)
+        # and the app told the toolkit not to produce it (a sanctioned config).
+        # The probe only runs when there is something to explain.
+        missing_roots = root_files_not_emitted(tmp)
+        opted_out = opted_out_root_files(contract_dir, missing_roots)
+        if opted_out:
+            print(
+                "::notice::"
+                + ", ".join(
+                    f"{name} not emitted because this contract sets "
+                    f"{ROOT_FILE_EMIT_FLAGS[name]} = false"
+                    for name in sorted(opted_out)
+                )
+                + " — the committed file(s) are hand-maintained and left in "
+                "place, not a lost artifact."
+            )
+        stale_roots = [name for name in missing_roots if name not in opted_out]
         if stale_roots:
             if sdk_mode:
                 print(
