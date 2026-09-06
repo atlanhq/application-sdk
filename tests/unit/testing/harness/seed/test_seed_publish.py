@@ -41,7 +41,7 @@ from application_sdk.testing.harness.seed import (
 from application_sdk.validation.assets import AssetValidationReport, ReferentialFailure
 
 _CONNECTION_QN = "default/snowflake/1787587123106596"
-_PREFIX_ROOT = "artifacts/apps/coalesce/e2e-seed/1787587123106596"
+_PREFIX_ROOT = "artifacts/apps/coalesce/e2e-seed/default%2Fsnowflake%2F1787587123106596"
 
 
 def _resolved():
@@ -79,11 +79,51 @@ def _plan() -> SeedPublishPlan:
 class TestPrefixes:
     """One root, three siblings — never three aliases of one path."""
 
-    def test_the_root_is_keyed_on_the_seeded_connections_suffix(self) -> None:
+    def test_the_root_is_keyed_on_the_whole_qualified_name(self) -> None:
         assert (
             seed_prefix_root(app_name="coalesce", qualified_name=_CONNECTION_QN)
             == _PREFIX_ROOT
         )
+
+    def test_two_connections_sharing_a_suffix_do_not_share_a_prefix(self) -> None:
+        """``SeedSpec.qualified_name`` is caller-supplied, so the per-instance
+        uniqueness the minter guarantees is a property of the default, not of
+        the input. Keyed on the last segment, these two would write over each
+        other's NDJSON and either one's teardown would delete both."""
+        snowflake = seed_prefix_root(
+            app_name="coalesce", qualified_name="default/snowflake/123"
+        )
+        postgres = seed_prefix_root(
+            app_name="coalesce", qualified_name="default/postgres/123"
+        )
+        assert snowflake != postgres
+
+    def test_no_root_can_be_a_path_prefix_of_another(self) -> None:
+        """Encoded into one segment rather than nested, so a longer QN's root
+        never sits *inside* a shorter one's — which is what would let one
+        ``delete_prefix`` reach into a sibling seed."""
+        short = seed_prefix_root(
+            app_name="coalesce", qualified_name="default/snowflake/123"
+        )
+        longer = seed_prefix_root(
+            app_name="coalesce", qualified_name="default/snowflake/123/extra"
+        )
+        assert not longer.startswith(f"{short}/")
+        assert "/" not in longer.rsplit("/", 1)[-1]
+
+    def test_the_encoding_is_injective(self) -> None:
+        """``quote(safe="")`` encodes ``%`` too, so the mapping holds for any
+        input rather than only for the QN shapes we expect."""
+        literal = seed_prefix_root(app_name="c", qualified_name="a%2Fb")
+        slashed = seed_prefix_root(app_name="c", qualified_name="a/b")
+        assert literal != slashed
+
+    def test_the_root_still_reads_as_the_qualified_name(self) -> None:
+        """A stray prefix has to stay attributable in a bucket listing."""
+        root = seed_prefix_root(app_name="coalesce", qualified_name=_CONNECTION_QN)
+        assert root.endswith("default%2Fsnowflake%2F1787587123106596")
+        assert "/e2e-seed/" in root
+        assert "/coalesce/" in root
 
     def test_current_state_never_equals_transformed(self) -> None:
         """``atlan-publish-app`` fails its own config validation when they are

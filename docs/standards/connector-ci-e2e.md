@@ -1320,13 +1320,27 @@ touches a long-lived shared connection.
 
 #### CI wiring
 
-`seed_assets` writes to a store the **tenant's** publish app reads, not the
-connector's deployment store. `BaseE2ETest.seed_object_store()` resolves the
-configurator-emitted `atlan-objectstore` Dapr component out of
-`ci-deploy/components` — the tenant blobstorage binding the `sdr-e2e` action
-already selects and mounts into the worker. A leg whose layout differs sets
-`E2E_SEED_COMPONENTS_DIR` / `E2E_SEED_STORE_BINDING`; a suite that needs
-something else entirely overrides `seed_object_store()`.
+**Anything two apps both touch goes through the tenant store.** It is the only
+one they share: the deployment store (`objectstore`) is a local, ephemeral
+container filesystem, so an artifact written there is invisible to every other
+app and gone when the pod is. That applies to the seed's NDJSON, and equally to
+any artifact a connector expects a platform app to have produced — a connection
+cache included. A connector that reads such an artifact from its *deployment*
+store is reading a bucket the producer could never have written to.
+
+`BaseE2ETest.seed_object_store()` therefore resolves the configurator-emitted
+`atlan-objectstore` Dapr component out of `ci-deploy/components` — the tenant
+blobstorage binding the `sdr-e2e` action already selects and mounts into the
+worker. A leg whose layout differs sets `E2E_SEED_COMPONENTS_DIR` /
+`E2E_SEED_STORE_BINDING`; a suite that needs something else entirely overrides
+`seed_object_store()`.
+
+Each seed gets its own prefix under `artifacts/apps/<app>/e2e-seed/`, keyed on
+the **whole** connection qualified name percent-encoded into one path segment.
+Whole, because `SeedSpec.qualified_name` is caller-supplied and two connections
+can share a trailing segment (`default/snowflake/123`, `default/postgres/123`);
+encoded rather than nested, so no seed's prefix can ever sit inside another's
+and be swept by its teardown.
 
 Getting that wiring wrong does **not** fail the publish node. Publish is handed a
 *prefix*, and a prefix it cannot read is an empty batch rather than an error — so

@@ -22,6 +22,7 @@ on every tenant, addressed exactly as the connector's own DAG addresses it (see
 
 from __future__ import annotations
 
+import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
@@ -77,20 +78,40 @@ def seed_prefix_root(*, app_name: str, qualified_name: str) -> str:
     """Compose the object-store root for one seeded connection.
 
     Under ``artifacts/apps/`` because that is where every run-scoped artifact in
-    the fleet lives, and keyed on the seeded connection's unique suffix rather
-    than on a workflow id: the seed exists before any run does, and the suffix is
-    the one value that is already unique per test *instance* (see
-    :meth:`~application_sdk.testing.harness.identity.Minter.connection_identity`).
+    the fleet lives, and keyed on the connection's **whole** qualified name — not
+    on its last segment, and not on a workflow id (the seed exists before any run
+    does).
+
+    The whole QN, percent-encoded into a single path segment, is doing two jobs
+    that the trailing segment alone did neither of:
+
+    * **No collisions.** ``SeedSpec.qualified_name`` is caller-supplied, so the
+      per-instance uniqueness
+      :meth:`~application_sdk.testing.harness.identity.Minter.connection_identity`
+      guarantees is a property of the *default*, not of the input. Keyed on the
+      suffix, ``default/snowflake/123`` and ``default/postgres/123`` share one
+      prefix — two seeds writing over each other's NDJSON, and either one's
+      teardown deleting both.
+    * **No nesting.** Encoding rather than nesting the QN keeps each root exactly
+      one segment deep, so no seed's root can ever be a path prefix of another's
+      — which is what would let one ``delete_prefix`` reach into a sibling seed.
+
+    ``quote(..., safe="")`` encodes ``%`` as ``%25``, so the mapping is injective
+    for any input rather than only for the shapes we expect. The result still
+    reads as the QN in a bucket listing, which is what keeps a stray prefix
+    attributable.
 
     Args:
         app_name: Short name of the connector under test — the leg that owns
-            this seed, so a stray prefix is attributable.
+            this seed, so a stray prefix is attributable to a leg as well as to
+            a connection.
         qualified_name: The seeded connection's qualified name.
 
     Returns:
         The prefix root.
     """
-    return f"artifacts/apps/{app_name}/e2e-seed/{qualified_name.rsplit('/', 1)[-1]}"
+    encoded = urllib.parse.quote(qualified_name, safe="")
+    return f"artifacts/apps/{app_name}/e2e-seed/{encoded}"
 
 
 def build_seed_publish_dag(

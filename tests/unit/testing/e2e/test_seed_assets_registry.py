@@ -30,7 +30,7 @@ from application_sdk.testing.harness import seed as harness_seed
 
 _RUN_QN = "default/openapi/1787587123106596"
 _SEED_QN = "default/snowflake/1787587123106596"
-_SEED_PREFIX = "artifacts/apps/openapi/e2e-seed/1787587123106596"
+_SEED_PREFIX = "artifacts/apps/openapi/e2e-seed/default%2Fsnowflake%2F1787587123106596"
 
 
 @asynccontextmanager
