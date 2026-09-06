@@ -478,6 +478,37 @@ class TestFormShortfall:
         # And do NOT send the reader to the image.
         assert "older image" not in reason
 
+    def test_a_mix_of_respelled_and_absent_names_both_shapes(self) -> None:
+        """One respelled field must not launder a genuinely undelivered one.
+
+        A form can carry both at once, and they have opposite causes. Saying
+        "not missing at all" because one name had a separator twin would deny
+        the field that really never arrived, and send nobody to look for it.
+        """
+        served = _served(
+            {"extraction_method", "connection"},
+            {"credential": ["extraction_method"], "connection": ["connection"]},
+        )
+
+        reason = form_shortfall(
+            _declaring("extraction-method", "connection", "include-filter"), served
+        )
+
+        assert reason is not None
+        # The respelled one is named as respelled...
+        assert (
+            "'extraction-method' is declared while 'extraction_method' is served"
+            in reason
+        )
+        assert "not missing but respelled" in reason
+        # ...and the absent one is still called absent, with its own cause.
+        assert "'include-filter', though, is absent outright" in reason
+        assert "older image" in reason
+        # The blanket claim must NOT appear when something really is missing.
+        assert "not missing at all" not in reason
+        # The frozen-copy pointer is still worth carrying in the mixed case.
+        assert "FND-1683" in reason
+
     def test_a_genuinely_absent_field_still_names_both_causes(self) -> None:
         """No respelling twin: the old wording stands, plus the frozen-copy pointer."""
         served = _served(

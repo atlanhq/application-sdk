@@ -633,6 +633,19 @@ def route_mismatch(entrypoint: Entrypoint, card: Card) -> str | None:
     return None
 
 
+def _names(names: Sequence[str]) -> str:
+    """Quoted names as English, so a message can read as a sentence."""
+    quoted = [repr(name) for name in names]
+    if len(quoted) == 1:
+        return quoted[0]
+    return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
+
+
+def _is_are(names: Sequence[str]) -> str:
+    """Verb agreeing with :func:`_names` over the same sequence."""
+    return "is" if len(names) == 1 else "are"
+
+
 def _respellings(
     missing: frozenset[str] | set[str], served: frozenset[str] | set[str]
 ) -> list[tuple[str, str]]:
@@ -708,28 +721,53 @@ def form_shortfall(entrypoint: Entrypoint, served: ServedForm) -> str | None:
     missing = declared - served.properties
     if missing:
         respelled = _respellings(missing, served.properties)
+        absent = sorted(missing - {declared_name for declared_name, _ in respelled})
+
+        # Two shapes with opposite causes, and a form can carry both at once.
+        # Reporting the whole set as "not missing at all" because *one* name had
+        # a separator twin would deny a genuinely undelivered field, so each
+        # shape is named for exactly the names it covers.
+        frozen_copy = (
+            "The known cause is FND-1683: on a tenant provisioned before the "
+            "platform stopped writing them, /api/service/configmaps/<id> is "
+            "answered from an unmanaged k8s ConfigMap captured once at install "
+            "time instead of being proxied to the app pod, so the served form "
+            "is frozen at that day's contract and no later change reaches it. "
+            "Check whether the app pod logged a GET /workflows/v1/configmap/ "
+            "request at all: if it did not, the pod is innocent and the image "
+            "is a red herring."
+        )
+
         if respelled:
             pairs = ", ".join(
                 f"{declared_name!r} is declared while {served_name!r} is served"
                 for declared_name, served_name in respelled
             )
-            return (
-                f"Entrypoint {label!r}: the tenant's form schema is "
-                f"missing {sorted(missing)}, which this repo's committed "
-                "contract declares — except it is not missing at all: "
-                f"{pairs}. It is spelled the way this contract spelled it "
-                "BEFORE a rename, so the tenant is serving a form older than "
-                "that rename while its pod may be entirely current. The known "
-                "cause is FND-1683: on a tenant provisioned before the "
-                "platform stopped writing them, /api/service/configmaps/<id> "
-                "is answered from an unmanaged k8s ConfigMap captured once at "
-                "install time instead of being proxied to the app pod, so the "
-                "served form is frozen at that day's contract and no later "
-                "change reaches it. Check whether the app pod logged a "
-                "GET /workflows/v1/configmap/ request at all: if it did not, "
-                "the pod is innocent and the image is a red herring. "
-                f"Served: {sorted(served.properties)}."
-            )
+            renamed_names = [declared_name for declared_name, _ in respelled]
+            if absent:
+                head = (
+                    f"Entrypoint {label!r}: the tenant's form schema is "
+                    f"missing {sorted(missing)}, which this repo's committed "
+                    f"contract declares. {_names(renamed_names)} "
+                    f"{_is_are(renamed_names)} not missing but respelled — "
+                    f"{pairs} — so the tenant is serving a form older than "
+                    "that rename while its pod may be entirely current. "
+                    f"{_names(absent)}, though, {_is_are(absent)} absent "
+                    "outright: no served name matches under any spelling, so "
+                    "that part is either an older image or a contract change "
+                    "that never reached the deployed app."
+                )
+            else:
+                head = (
+                    f"Entrypoint {label!r}: the tenant's form schema is "
+                    f"missing {sorted(missing)}, which this repo's committed "
+                    "contract declares — except it is not missing at all: "
+                    f"{pairs}. It is spelled the way this contract spelled it "
+                    "BEFORE a rename, so the tenant is serving a form older "
+                    "than that rename while its pod may be entirely current."
+                )
+            return f"{head} {frozen_copy} Served: {sorted(served.properties)}."
+
         return (
             f"Entrypoint {label!r}: the tenant's form schema is "
             f"missing {sorted(missing)}, which this repo's committed contract "
