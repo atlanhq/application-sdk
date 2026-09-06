@@ -205,6 +205,31 @@ runs:
         application-sdk-ref: ${{ inputs.application-sdk-ref }}
         check-drift: "false"
 
+    # Make the image able to say which build it is (FND-1684).
+    #
+    # `verify` in e2e_tenant_app.py used to read the marketplace install record —
+    # the same record `install` writes and then skips on — so a tenant whose pods
+    # had not moved in weeks passed the check that exists to catch exactly that.
+    # The only fully-truthful answer comes from the pod, and the identity CI
+    # compares against (the image tag) is minted after every committed artifact
+    # exists, so it has to enter at build time.
+    #
+    # A --build-arg alone is not enough: BuildKit ignores a build-arg the
+    # Dockerfile does not ARG, and an ARG is not inherited across FROM, so
+    # declaring it in the SDK base image would do nothing for the connector built
+    # on top of it. This appends the two lines that promote it to an image ENV,
+    # to the runner's ephemeral checkout only — nothing is written back to the
+    # connector repo, and a connector that adopts the lines itself is left alone.
+    #
+    # BEFORE the buildx build, and after the contract regeneration so it cannot
+    # disturb it. The logic is in a tested script rather than inlined shell, per
+    # docs/standards/ci.md.
+    - name: Stamp the build identity into the Dockerfile
+      shell: bash
+      env:
+        STAMP: ${{ github.action_path }}/../../scripts/stamp_build_identity.py
+      run: python3 "${STAMP}"
+
     # Buildx is required for the GHA cache backend below.
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
@@ -262,6 +287,14 @@ runs:
         # ONLY when non-empty — passing `BASE_IMAGE=` empty would clobber the
         # Dockerfile's default FROM and break the non-e2e / merge-queue path.
         BUILD_ARGS=()
+        # The build identity the pod will report (FND-1684). TAG, not IMAGE:
+        # `tag-suffix` is per-ARCHITECTURE, and the tenant pulls the merged
+        # manifest, so a suffixed value would make each arch report a different
+        # identity and neither would match what `verify --expected` compares
+        # against — which is this un-suffixed tag, via merge-e2e-image's
+        # `version` output. The Dockerfile stamp above is what turns this
+        # build-arg into an image ENV.
+        BUILD_ARGS+=(--build-arg "ATLAN_BUILD_ID=${TAG}")
         if [ -n "${BASE_IMAGE_REF}" ]; then
           echo "Building connector on dispatched base image: ${BASE_IMAGE_REF}"
           BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE_REF}")
