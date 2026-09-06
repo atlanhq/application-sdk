@@ -157,18 +157,46 @@ class TestSeedPublishNode:
 
     def test_both_ownership_flags_are_set(self) -> None:
         """``connection_creation_enabled`` is what makes publish create the
-        connection and wait out its own policy sync; ``connection_cache_via_app
-        _enabled`` is the half a direct pyatlan write could never produce."""
+        connection and wait out its own policy sync; the three cache flags are
+        the half a direct pyatlan write could never produce.
+
+        All four default to **false** in atlan-publish-app, and the cache needs
+        all three of its own: ``connection_cache_enabled`` gates construction
+        outright, ``executor_enabled`` (with the via-app flag) decides
+        ``connection_cache_dry_run``, and ``connection_cache_via_app_enabled``
+        makes publish the owner. Set only the last and the seed publishes
+        entities and no usable cache — which the Atlas read-back cannot see,
+        because entities are exactly what it checks.
+        """
         args = build_seed_publish_dag(
             spec=_resolved(),
             prefixes=SeedPrefixes(root=_PREFIX_ROOT),
             publish_task_queue="q",
         )[SEED_PUBLISH_NODE_ID]["inputs"]["args"]
         assert args["connection_creation_enabled"] is True
+        assert args["connection_cache_enabled"] is True
         assert args["connection_cache_via_app_enabled"] is True
+        assert args["executor_enabled"] is True
         assert args["connection_entity"]["attributes"]["qualifiedName"] == (
             _CONNECTION_QN
         )
+
+    def test_no_cache_flag_is_left_to_the_tenants_default(self) -> None:
+        """Each is named explicitly rather than inherited: a seed whose
+        behaviour depends on a deployment default means something different on
+        each tenant, and the difference is invisible until a connector finds no
+        cache."""
+        args = build_seed_publish_dag(
+            spec=_resolved(),
+            prefixes=SeedPrefixes(root=_PREFIX_ROOT),
+            publish_task_queue="q",
+        )[SEED_PUBLISH_NODE_ID]["inputs"]["args"]
+        for flag in (
+            "connection_cache_enabled",
+            "connection_cache_via_app_enabled",
+            "executor_enabled",
+        ):
+            assert flag in args, f"{flag} would fall back to the tenant's default"
 
     def test_every_argument_is_a_literal(self) -> None:
         """A seed has no producing node, so a ``$.``-reference would be an input

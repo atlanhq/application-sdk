@@ -161,7 +161,30 @@ def build_seed_publish_dag(
                     # consuming connector resolves its refs against. Without it a
                     # cache-consuming connector emits unvalidated refs (coalesce)
                     # or PartialObjects (mode), and the seeded entities go unused.
+                    #
+                    # THREE flags, not one, and every one of them defaults to
+                    # false in atlan-publish-app (`constants.py`, from env). A
+                    # seed that sets only the via-app flag publishes entities and
+                    # no usable cache — and the entities are what the read-back
+                    # checks, so it greens while delivering half the fix:
+                    #
+                    #   connection_cache_enabled — gates cache construction
+                    #     outright (`_try_build_connection_cache`, publish_app.py
+                    #     :4213). Unset, nothing is built at all.
+                    #   executor_enabled — with the via-app flag, decides
+                    #     `connection_cache_dry_run` (publish_app_config.py:398).
+                    #     Unset, a built cache is uploaded under
+                    #     `connection-cache-dry-run/`, which no connector reads.
+                    #   connection_cache_via_app_enabled — publish owns the
+                    #     artifact rather than the connector.
+                    #
+                    # Stated here rather than left to the tenant's env for the
+                    # reason every other arg on this node is a literal: a seed
+                    # whose behaviour depends on a deployment default is a seed
+                    # that means something different on each tenant.
+                    "connection_cache_enabled": True,
                     "connection_cache_via_app_enabled": True,
+                    "executor_enabled": True,
                 },
             },
         }

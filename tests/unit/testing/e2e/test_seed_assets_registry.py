@@ -70,13 +70,15 @@ def _harness(
 ) -> tuple[_SeedingE2ETest, list[str], list[str], list[str]]:
     """A harness whose seed, purge and prefix delete are recorded, not performed.
 
-    ``plans`` is exposed on the harness rather than returned: only the AE-name
-    tests read it, and widening the tuple for them would touch every call site.
+    ``plans`` and ``specs`` are exposed on the harness rather than returned:
+    only a few tests read them, and widening the tuple would touch every call
+    site.
     """
     seeded: list[str] = []
     purged: list[str] = []
     deleted: list[str] = []
     plans: list[harness_seed.SeedPublishPlan] = []
+    specs: list[harness_seed.ResolvedSeedSpec] = []
 
     async def _record_seed(
         spec: harness_seed.ResolvedSeedSpec, **wiring: Any
@@ -84,6 +86,7 @@ def _harness(
         if seed_error is not None:
             raise seed_error
         seeded.append(spec.qualified_name)
+        specs.append(spec)
         plans.append(wiring["plan"])
         return harness_seed.SeededConnection(qualified_name=spec.qualified_name)
 
@@ -121,6 +124,7 @@ def _harness(
     )
     monkeypatch.setattr(_SeedingE2ETest, "seed_object_store", lambda self: object())
     harness.recorded_plans = plans
+    harness.recorded_specs = specs
     return harness, seeded, purged, deleted
 
 
@@ -204,7 +208,9 @@ class TestSeedAssetsRegistry:
     ) -> None:
         """Same rule on the other field. An empty display name is not a
         validation failure, so the only way to see it was honoured is to read
-        it back — silently minting over it would hide the mistake entirely."""
+        the resolved spec back — asserting on anything derived from
+        ``connector_type`` (the workflow name, say) would stay green through a
+        regression that minted over it."""
         harness, _seeded, _purged, _deleted = _harness(monkeypatch)
         spec = harness_seed.SeedSpec(
             connector_type="snowflake",
@@ -214,7 +220,23 @@ class TestSeedAssetsRegistry:
             databases=(harness_seed.DatabaseSpec(name="ANALYTICS"),),
         )
         harness.seed_assets(spec)
-        assert harness.recorded_plans[0].ae_workflow_name.endswith("-snowflake")
+        assert harness.recorded_specs[0].display_name == ""
+
+    def test_a_none_display_name_is_minted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other side of the same assertion — without it, "not replaced"
+        could pass on a resolver that never mints at all."""
+        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        spec = harness_seed.SeedSpec(
+            connector_type="snowflake",
+            qualified_name=_SEED_QN,
+            display_name=None,
+            admin_roles=("role-guid",),
+            databases=(harness_seed.DatabaseSpec(name="ANALYTICS"),),
+        )
+        harness.seed_assets(spec)
+        assert harness.recorded_specs[0].display_name == "snowflake-minted"
 
 
 class TestSeedWorkflowNames:
