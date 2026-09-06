@@ -1980,49 +1980,82 @@ class BaseE2ETest:
             verify=self._count_seeded_assets,
         )
 
-    async def _count_seeded_assets(self, qualified_name: str) -> Outcome[int]:
-        """Poll Atlas for the asset count under a seeded connection.
+    async def _count_seeded_assets(
+        self, qualified_name: str, expected: int
+    ) -> int | None:
+        """Poll Atlas until *expected* assets are visible under the seeded connection.
 
         The read-back that turns "the publish node succeeded" into "the seed
-        landed". Polled rather than read once, on the same short budget the run's
-        own inventory uses: Elasticsearch is eventually consistent, but assets
-        that will appear do so within seconds of publish completing, so a single
-        read straight after the verdict would report zero for a seed that is
-        merely still indexing.
+        landed". Two things it must not do, and both were wrong when this waited
+        on the run's own short inventory budget:
+
+        * **Give up in seconds.** The trees this exists for run to thousands of
+          entities (the coalesce seed is ~130), and Elasticsearch does not index
+          them instantly. ``atlas_asset_poll_timeout_seconds`` is 15s because a
+          *crawl's* assets are already indexed by the time the DAG reports
+          success; a seed's are not. This uses
+          :meth:`_seed_readback_budget` instead.
+        * **Report "ran out of time" as "found zero".** The wait's verdict and
+          the last reading are different facts. Returning the reading alone let
+          an expired poll whose last count was 0 raise ``SeedPublishEmptyError``
+          — failing a large seed for being slow, as the unreadable-prefix
+          failure it is not.
+
+        Waiting for the full count rather than for "more than zero" is what
+        makes the returned number worth grading: a partial answer is reported as
+        partial rather than rounded up to success.
 
         Args:
             qualified_name: The seeded connection's QN.
+            expected: How many assets the seed published; the poll exits as soon
+                as the count reaches it.
 
         Returns:
-            :class:`~application_sdk.testing.harness.outcome.Settled` carrying
-            the count, or the outcome that stopped the poll — which the caller
-            grades as *unverified*, never as zero.
+            The last count read, or ``None`` when no probe ever produced a
+            readable one — which the caller grades as unverified, never as zero.
         """
-        label = f"total asset count under {qualified_name}"
-        # The sentinel only survives if ``poll_until`` never ran the probe at
-        # all, which its own budget forbids — but an Indeterminate is the honest
-        # value for "no reading was taken", and it is what the caller grades as
-        # unverified rather than as zero.
-        last: Outcome[int] = Indeterminate(
-            label=label,
-            attempts=0,
-            elapsed=timedelta(0),
-            cause=RuntimeError("the seeded-asset count was never read"),
-        )
+        last: int | None = None
 
-        async def _probe() -> Outcome[int]:
+        async def _probe() -> int | None:
             nonlocal last
             async with self._atlas_client() as client:
-                last = await atlas.count_total_assets(client, qualified_name)
+                reading = await atlas.count_total_assets(client, qualified_name)
+            # An unreadable search leaves ``last`` at its previous value rather
+            # than overwriting it with None: one blip late in the wait must not
+            # erase a count the earlier probes did read.
+            if isinstance(reading, Settled):
+                last = reading.value
             return last
 
         await poll_until(
             _probe,
-            settled=lambda reading: isinstance(reading, Settled) and reading.value > 0,
-            budget=self._atlas_counts_budget(),
-            label=f"seeded assets under {qualified_name}",
+            settled=lambda count: count is not None and count >= expected,
+            budget=self._seed_readback_budget(),
+            label=f"{expected} seeded asset(s) under {qualified_name}",
         )
         return last
+
+    def _seed_readback_budget(self) -> Budget:
+        """Allowance for a seed's published assets to become countable.
+
+        The connection poll's timings rather than the inventory poll's: this
+        waits for Elasticsearch to index a batch that was written moments ago,
+        which is minutes-scale for a large tree, not the seconds the run's own
+        inventory needs. The wait exits as soon as the expected count is
+        reached, so a small seed pays nothing for the wider ceiling.
+
+        Returns:
+            The budget.
+        """
+        return Budget(
+            timeout=timedelta(seconds=self.atlas_poll_timeout_seconds),
+            poll_interval=timedelta(seconds=self.atlas_asset_poll_interval_seconds),
+            # The probe returns a reading rather than raising, and a count that
+            # is still climbing is the expected answer here — spending a
+            # transient streak on it would end the wait early on exactly the
+            # large seed the wider ceiling exists for.
+            heartbeat=None,
+        )
 
     def _seed_publish_plan(
         self, spec: harness_seed.ResolvedSeedSpec

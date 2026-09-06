@@ -53,11 +53,13 @@ class _SeedingE2ETest(BaseE2ETest):
 
 
 def _spec(qualified_name: str | None = _SEED_QN) -> harness_seed.SeedSpec:
+    """A minimal but non-empty spec — an empty tree is rejected at resolve."""
     return harness_seed.SeedSpec(
         connector_type="snowflake",
         qualified_name=qualified_name,
         display_name="snowflake-seed",
         admin_roles=("role-guid",),
+        databases=(harness_seed.DatabaseSpec(name="ANALYTICS"),),
     )
 
 

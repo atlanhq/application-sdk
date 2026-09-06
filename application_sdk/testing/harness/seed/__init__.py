@@ -66,7 +66,6 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import upload_file
 from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.identity import Minter
-from application_sdk.testing.harness.outcome import Outcome, Settled
 from application_sdk.testing.harness.seed._errors import (
     SeedPublishEmptyError,
     SeedPublishFailedError,
@@ -147,21 +146,25 @@ class SeedVerifier(Protocol):
     ``BaseE2ETest`` supplies the real implementation; a unit test supplies a
     scripted one.
 
-    The return type is an
-    :class:`~application_sdk.testing.harness.outcome.Outcome`, not an ``int``,
-    because "nothing landed" and "the search could not be read" are different
-    findings and the guard grades them differently.
+    **The implementation owns the waiting.** It is handed *expected* and must
+    poll until the count reaches it or its budget runs out, so the number it
+    returns is a settled reading rather than a first glance. That placement is
+    what lets the caller read ``0`` as "still nothing after the full budget"
+    instead of "not indexed yet" — the seed trees this exists for run to
+    thousands of entities, and Elasticsearch does not index them instantly.
     """
 
-    async def __call__(self, qualified_name: str) -> Outcome[int]:
-        """Count every asset under *qualified_name*.
+    async def __call__(self, qualified_name: str, expected: int) -> int | None:
+        """Count every asset under *qualified_name*, waiting for *expected*.
 
         Args:
             qualified_name: The seeded connection's QN.
+            expected: How many assets the seed published. The implementation
+                stops waiting once the count reaches this.
 
         Returns:
-            :class:`~application_sdk.testing.harness.outcome.Settled` carrying
-            the count, or another outcome when it could not be read.
+            The final count, or ``None`` when the search could not be read at
+            all — a distinct answer from ``0``, and graded differently.
         """
         ...
 
@@ -349,8 +352,11 @@ async def seed_assets(
             actual_state=f"AE status={result.status.value}",
         )
 
-    landed = await verify(spec.qualified_name)
-    if isinstance(landed, Settled) and landed.value == 0:
+    landed = await verify(spec.qualified_name, report.total)
+    if landed == 0:
+        # Zero AFTER the verifier's own budget, not at first glance — the
+        # protocol puts the waiting on the implementation precisely so this
+        # branch cannot fire on a large tree that is merely still indexing.
         raise SeedPublishEmptyError(
             message=(
                 f"the lineage-parent seed for {spec.qualified_name} published "
@@ -365,18 +371,33 @@ async def seed_assets(
             resource=spec.qualified_name,
             actual_state="0 assets under the seeded connection",
         )
-    if not isinstance(landed, Settled):
+    if landed is None:
         # Ungraded is not unmet. A search that could not be read is a harness
         # read failure, not evidence the seed is empty, and failing the seed on
         # one would report an Atlas outage as a seed defect. The consuming run's
         # own ladder still fails loudly a few minutes later if the seed really is
         # absent — this line is what tells you which of the two happened.
         logger.warning(
-            "harness seed: could not read back the asset count under %s (%s), so "
+            "harness seed: could not read back the asset count under %s, so "
             "whether the seed landed is unverified — a publish that read an "
             "unreachable prefix would look identical to this",
             spec.qualified_name,
-            type(landed).__name__,
+        )
+    elif landed < report.total:
+        # Short, but not nothing: the prefix was readable and publish wrote from
+        # it, so this is indexing lag or a partial publish rather than the
+        # wiring failure the zero case names. Not fatal here — the consuming
+        # run's own expectations are what decide whether a short seed is
+        # survivable, and failing on a count that is still climbing would red a
+        # leg for being slow.
+        logger.warning(
+            "harness seed: Atlas reports %d of %d seeded asset(s) under %s — the "
+            "prefix was readable, so this is indexing lag or a partial publish, "
+            "not the unreadable-prefix failure. Refs naming the missing assets "
+            "will not resolve",
+            landed,
+            report.total,
+            spec.qualified_name,
         )
 
     logger.info(
@@ -384,11 +405,10 @@ async def seed_assets(
         "run_id=%s; Atlas reports %s",
         report.total,
         spec.qualified_name,
-        ", ".join(f"{name}={count}" for name, count in written.created.items())
-        or "empty tree",
+        ", ".join(f"{name}={count}" for name, count in written.created.items()),
         seeded.slug,
         ae_run_id,
-        landed.value if isinstance(landed, Settled) else "an unreadable count",
+        "an unreadable count" if landed is None else landed,
     )
     return SeededConnection(
         qualified_name=spec.qualified_name,

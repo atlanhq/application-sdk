@@ -214,8 +214,8 @@ def validate_resolved_spec(spec: ResolvedSeedSpec) -> None:
             ``AtlanConnectorType`` — publish would create a Connection with a
             ``connectorName`` no consumer recognises.
         SeedSegmentInvalidError: The connection QN is not a slash-delimited path
-            of at least three non-empty segments, or any tree segment is empty,
-            padded with whitespace, or carries a ``/``.
+            of at least three composable segments, any tree segment is empty,
+            padded with whitespace, or carries a ``/``, or the tree is empty.
     """
     from pyatlan_v9.model.enums import AtlanConnectorType  # noqa: PLC0415
 
@@ -233,16 +233,41 @@ def validate_resolved_spec(spec: ResolvedSeedSpec) -> None:
         ) from error
 
     segments = spec.qualified_name.split("/")
-    if len(segments) < _CONNECTION_QN_SEGMENTS or not all(segments):
+    if len(segments) < _CONNECTION_QN_SEGMENTS:
         raise SeedSegmentInvalidError(
             message=(
                 f"the seeded connection qualified name {spec.qualified_name!r} is "
                 f"not a slash-delimited path of at least {_CONNECTION_QN_SEGMENTS} "
-                "non-empty segments (shape: 'default/<connector>/<suffix>'). "
+                "segments (shape: 'default/<connector>/<suffix>'). "
                 "atlan-publish-app refuses connection creation on anything else"
             ),
             field="qualified_name",
             value_summary=spec.qualified_name,
+        )
+    # Every segment of the connection QN gets the same treatment as a tree
+    # segment. Checking only that none is *empty* let a padded one through —
+    # 'default/snowflake/ x' is a well-formed three-segment path that composes a
+    # prefix no ref will ever match, and it is the harder failure to spot
+    # because the QN prints almost right.
+    for segment in segments:
+        _check_segment(segment, field="qualified_name")
+
+    # An empty tree is legal to *declare* and impossible to *verify*: it
+    # serialises zero records, so the seed's read-back count is zero — the exact
+    # reading a prefix publish could not read produces. Rejecting it here is
+    # what keeps that zero unambiguous, and a seed that means to create nothing
+    # has nothing to seed.
+    if not spec.databases:
+        raise SeedSegmentInvalidError(
+            message=(
+                f"the seed for {spec.qualified_name} declares no databases, so it "
+                "would publish nothing. A zero asset count is then indistinguishable "
+                "from a publish that could not read its prefix, which is the one "
+                "failure the seed's read-back exists to catch. Declare the tree the "
+                "connector's refs name, or do not seed"
+            ),
+            field="databases",
+            value_summary="()",
         )
 
     for database in spec.databases:

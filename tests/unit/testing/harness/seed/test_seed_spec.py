@@ -236,13 +236,33 @@ class TestSpecValidation:
             ).resolve(qualified_name=_CONNECTION_QN, display_name="x")
 
     @pytest.mark.parametrize(
-        "qualified_name", ["snowflake/123", "default//123", "default/snowflake/"]
+        "qualified_name",
+        [
+            "snowflake/123",
+            "default//123",
+            "default/snowflake/",
+            # Padded. A well-formed three-segment path whose prefix no ref will
+            # ever match, and the hardest of these to spot by eye because the QN
+            # prints almost right — an empties-only check let it through.
+            "default/snowflake/ 123",
+            "default/snowflake/123 ",
+            "default/ snowflake/123",
+        ],
     )
     def test_a_malformed_connection_qn_is_rejected(self, qualified_name: str) -> None:
         """``atlan-publish-app`` refuses connection creation on anything that is
-        not a slash-delimited path, minutes into the run."""
+        not a slash-delimited path, minutes into the run — and a padded segment
+        composes a prefix Atlas resolves nothing against."""
         with pytest.raises(SeedSegmentInvalidError):
             _spec().resolve(qualified_name=qualified_name, display_name="x")
+
+    def test_an_empty_tree_is_rejected(self) -> None:
+        """A spec that declares nothing publishes nothing, and its read-back
+        count of 0 is then indistinguishable from a publish that could not read
+        its prefix — the one failure the read-back exists to catch."""
+        with pytest.raises(SeedSegmentInvalidError) as caught:
+            _spec(databases=()).resolve(qualified_name=_CONNECTION_QN, display_name="x")
+        assert caught.value.field == "databases"
 
     def test_a_resolved_spec_keeps_the_identity_it_was_given(self) -> None:
         resolved = _spec(qualified_name=None, display_name=None).resolve(

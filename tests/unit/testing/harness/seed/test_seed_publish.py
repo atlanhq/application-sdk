@@ -16,14 +16,12 @@ greens a leg while dropping lineage.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from application_sdk.testing.harness.outcome import Indeterminate, Outcome, Settled
 from application_sdk.testing.harness.seed import (
     SEED_PUBLISH_NODE_ID,
     DatabaseSpec,
@@ -202,28 +200,18 @@ class _FakeAE:
         )
 
 
-def _verifier(outcome: Outcome[int]) -> Callable[[str], Awaitable[Outcome[int]]]:
-    """A `SeedVerifier` that answers one scripted read-back."""
+def _verifier(count: int | None) -> Callable[[str, int], Awaitable[int | None]]:
+    """A `SeedVerifier` that answers one scripted read-back.
 
-    async def _verify(_qualified_name: str) -> Outcome[int]:
-        return outcome
+    ``None`` means the search could not be read; an int is a count the verifier
+    has already waited out on its own budget, which is what lets ``0`` be graded
+    as "still nothing" rather than "not indexed yet" (see the protocol).
+    """
+
+    async def _verify(_qualified_name: str, _expected: int) -> int | None:
+        return count
 
     return _verify
-
-
-def _landed(count: int) -> Outcome[int]:
-    return Settled(
-        label="seeded assets", attempts=1, elapsed=timedelta(seconds=1), value=count
-    )
-
-
-def _unreadable() -> Outcome[int]:
-    return Indeterminate(
-        label="seeded assets",
-        attempts=3,
-        elapsed=timedelta(seconds=3),
-        cause=RuntimeError("Atlas search unavailable"),
-    )
 
 
 def _wire(
@@ -269,7 +257,7 @@ class TestSeedAssetsSequence:
             store=object(),
             ae=ae,
             plan=_plan(),
-            verify=_verifier(_landed(4)),
+            verify=_verifier(4),
         )
         assert seeded.qualified_name == _CONNECTION_QN
         assert seeded.created == {"Database": 1, "Schema": 1, "Table": 1, "Column": 1}
@@ -288,7 +276,7 @@ class TestSeedAssetsSequence:
             store=object(),
             ae=ae,
             plan=_plan(),
-            verify=_verifier(_landed(4)),
+            verify=_verifier(4),
         )
         assert uploaded == [(f"{_PREFIX_ROOT}/transformed/assets.json", "assets.json")]
 
@@ -318,7 +306,7 @@ class TestSeedAssetsSequence:
                 store=object(),
                 ae=ae,
                 plan=_plan(),
-                verify=_verifier(_landed(4)),
+                verify=_verifier(4),
             )
         assert uploaded == []
         assert ae.submitted == []
@@ -337,7 +325,7 @@ class TestSeedAssetsSequence:
                 store=object(),
                 ae=ae,
                 plan=_plan(),
-                verify=_verifier(_landed(4)),
+                verify=_verifier(4),
             )
         assert "slug-1" in str(caught.value)
         assert "ae-run-1" in str(caught.value)
@@ -357,10 +345,29 @@ class TestSeedAssetsSequence:
                 store=object(),
                 ae=ae,
                 plan=_plan(),
-                verify=_verifier(_landed(0)),
+                verify=_verifier(0),
             )
         assert f"{_PREFIX_ROOT}/transformed" in str(caught.value)
         assert "ae-run-1" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_a_short_count_is_reported_but_not_fatal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Short is not the same failure as zero. The prefix was readable and
+        publish wrote from it, so this is indexing lag or a partial publish —
+        and whether a short seed is survivable is the consuming run's call, not
+        the seed's. Failing on a count that is still climbing would red a leg
+        for being slow, which is exactly what the old 15s budget did."""
+        ae, _uploaded = _wire(monkeypatch)
+        seeded = await seed_assets(
+            _resolved(),
+            store=object(),
+            ae=ae,
+            plan=_plan(),
+            verify=_verifier(2),
+        )
+        assert seeded.qualified_name == _CONNECTION_QN
 
     @pytest.mark.asyncio
     async def test_an_unreadable_count_is_unverified_not_empty(
@@ -375,7 +382,7 @@ class TestSeedAssetsSequence:
             store=object(),
             ae=ae,
             plan=_plan(),
-            verify=_verifier(_unreadable()),
+            verify=_verifier(None),
         )
         assert seeded.qualified_name == _CONNECTION_QN
 
@@ -388,9 +395,9 @@ class TestSeedAssetsSequence:
         ae, _uploaded = _wire(monkeypatch, all_succeeded=False)
         calls: list[str] = []
 
-        async def _record(qualified_name: str) -> Outcome[int]:
+        async def _record(qualified_name: str, _expected: int) -> int | None:
             calls.append(qualified_name)
-            return _landed(0)
+            return 0
 
         with pytest.raises(SeedPublishFailedError):
             await seed_assets(
