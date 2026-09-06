@@ -1950,9 +1950,24 @@ class BaseE2ETest:
         exactly those half-set-up artifacts on a shared tenant.
         """
         identity = self._minter.connection_identity(spec.connector_type)
+        # ``is None``, not ``or``. ``SeedSpec`` documents ``None`` as the one
+        # omission sentinel, so ``""`` is a *supplied* value — and one
+        # ``validate_resolved_spec`` rejects. Falling back on it would mint a
+        # valid QN over the caller's mistake, and the seed would then publish
+        # under a connection nobody asked for while the refs still named the
+        # empty one. The empty-as-omitted collapse is the shape this spec
+        # dropped its ``""`` sentinels to avoid.
         resolved = spec.resolve(
-            qualified_name=spec.qualified_name or identity.qualified_name,
-            display_name=spec.display_name or identity.display_name,
+            qualified_name=(
+                identity.qualified_name
+                if spec.qualified_name is None
+                else spec.qualified_name
+            ),
+            display_name=(
+                identity.display_name
+                if spec.display_name is None
+                else spec.display_name
+            ),
         )
         if not (resolved.admin_users or resolved.admin_groups or resolved.admin_roles):
             resolved = resolved.with_admins(
@@ -1965,7 +1980,15 @@ class BaseE2ETest:
                 ),
             )
 
-        plan = self._seed_publish_plan(resolved)
+        # What keeps two seeds' AE workflow names apart — see
+        # :meth:`_seed_publish_plan`. It is the teardown registry's length, so
+        # it counts every connection this run touched (a ``DAGSpec``-named one
+        # included), not only the seeds. That is deliberate and sufficient: the
+        # registry is append-only within a run, so the value is strictly
+        # increasing and no two seeds can ever read the same one.
+        plan = self._seed_publish_plan(
+            resolved, ordinal=len(self._seeded_connection_qns) + 1
+        )
         self._seeded_connection_qns.append(resolved.qualified_name)
         self._seeded_prefixes.append(
             harness_seed.seed_prefix_root(
@@ -2058,19 +2081,39 @@ class BaseE2ETest:
         )
 
     def _seed_publish_plan(
-        self, spec: harness_seed.ResolvedSeedSpec
+        self, spec: harness_seed.ResolvedSeedSpec, *, ordinal: int
     ) -> harness_seed.SeedPublishPlan:
         """Resolve how this leg dispatches and waits on a seed's publish run.
 
         Every value is the one this suite's own run uses, so a seed cannot be
         polled on a different budget or dispatched to a different tenant than the
-        run it exists to unblock. The AE workflow name is the exception and is
-        deliberately suffixed: ``create_workflow`` is idempotent on the name, so
-        sharing one with the suite's own run would publish the seed's graph over
-        the connector's.
+        run it exists to unblock. The AE workflow name is the exception, and it
+        has to be unique twice over, because ``create_workflow`` is idempotent on
+        the name:
+
+        * against **the suite's own run** — sharing that name would publish the
+          seed's one-node graph over the connector's DAG. Hence ``-seed-``.
+        * against **another seed in the same run** — a suite that seeds two
+          connections of the same type (two warehouses, two accounts) would
+          otherwise reuse one slug, publish each graph over the other, and leave
+          an AE run list in which the two are indistinguishable. This is the
+          collision :meth:`_ae_workflow_name_suffix` already had to solve for
+          multi-``DAGSpec`` runs.
+
+        *ordinal* rather than a rendering of the QN: AE's own constraints on
+        workflow names are not ours to guess, and a QN's segments are
+        caller-supplied, so any flattening of them into a name is a second
+        encoding that can collide (``a/b`` and ``a-b`` both read as ``a-b``).
+        The position in the run is unique by construction and needs no escaping.
+        The QN is not lost — it is on the workflow's description, and on the
+        ``SeededConnection`` the call returns.
 
         Args:
-            spec: The resolved spec, whose connection QN names the workflow.
+            spec: The resolved spec, whose connector type names the workflow.
+            ordinal: A number unique to this seed within the run. The caller
+                takes it from the teardown registry's length, which counts every
+                connection the run touched rather than only its seeds — the
+                values are not contiguous, and do not need to be.
 
         Returns:
             The plan.
@@ -2080,7 +2123,7 @@ class BaseE2ETest:
             publish_task_queue=self._publish_task_queue(),
             ae_workflow_name=(
                 f"{self.connector_short_name}-{self.connection_name_prefix}-"
-                f"{self.run_id}-seed-{spec.connector_type}"
+                f"{self.run_id}-seed-{ordinal}-{spec.connector_type}"
             ),
             app_service_url=self.app_service_url,
             run_id=self.run_id,

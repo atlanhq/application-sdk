@@ -306,7 +306,14 @@ async def seed_assets(
     seeded = await publish_seed_version(
         AEWorkflowSpec(
             name=plan.ae_workflow_name,
-            description=f"Full-DAG e2e harness — lineage-parent seed for {plan.app_name}",
+            # The QN goes here rather than into the workflow *name*: the name has
+            # to be unique and escaping-free (see BaseE2ETest._seed_publish_plan),
+            # while the description is free text — so this is where a reader of
+            # an AE run list finds which connection a seed was for.
+            description=(
+                f"Full-DAG e2e harness — lineage-parent seed for {plan.app_name}: "
+                f"{spec.qualified_name}"
+            ),
             seed_dag=build_seed_publish_dag(
                 spec=spec,
                 prefixes=prefixes,

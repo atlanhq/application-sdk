@@ -68,17 +68,23 @@ def _harness(
     *,
     seed_error: BaseException | None = None,
 ) -> tuple[_SeedingE2ETest, list[str], list[str], list[str]]:
-    """A harness whose seed, purge and prefix delete are recorded, not performed."""
+    """A harness whose seed, purge and prefix delete are recorded, not performed.
+
+    ``plans`` is exposed on the harness rather than returned: only the AE-name
+    tests read it, and widening the tuple for them would touch every call site.
+    """
     seeded: list[str] = []
     purged: list[str] = []
     deleted: list[str] = []
+    plans: list[harness_seed.SeedPublishPlan] = []
 
     async def _record_seed(
-        spec: harness_seed.ResolvedSeedSpec, **_wiring: Any
+        spec: harness_seed.ResolvedSeedSpec, **wiring: Any
     ) -> harness_seed.SeededConnection:
         if seed_error is not None:
             raise seed_error
         seeded.append(spec.qualified_name)
+        plans.append(wiring["plan"])
         return harness_seed.SeededConnection(qualified_name=spec.qualified_name)
 
     async def _record_purge(client: object, connection_qualified_name: str) -> object:
@@ -114,6 +120,7 @@ def _harness(
         _SeedingE2ETest, "_atlas_client", lambda self: _null_atlas_client()
     )
     monkeypatch.setattr(_SeedingE2ETest, "seed_object_store", lambda self: object())
+    harness.recorded_plans = plans
     return harness, seeded, purged, deleted
 
 
@@ -176,6 +183,87 @@ class TestSeedAssetsRegistry:
         assert seeded == []
         assert harness._seeded_connection_qns == []
         assert harness._seeded_prefixes == []
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_an_empty_qn_is_rejected_rather_than_minted(
+        self, monkeypatch: pytest.MonkeyPatch, blank: str
+    ) -> None:
+        """``None`` is the one omission sentinel. An empty or blank string is a
+        *supplied* value, and one the spec rejects — falling back to the minter
+        on it would paper over the caller's mistake with a valid QN, and the
+        seed would publish under a connection nobody asked for while the
+        connector's refs still named the empty one."""
+        harness, seeded, _purged, _deleted = _harness(monkeypatch)
+        with pytest.raises(harness_seed.SeedSegmentInvalidError):
+            harness.seed_assets(_spec(qualified_name=blank))
+        assert seeded == []
+        assert harness._seeded_connection_qns == []
+
+    def test_an_empty_display_name_is_not_replaced_by_the_minted_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same rule on the other field. An empty display name is not a
+        validation failure, so the only way to see it was honoured is to read
+        it back — silently minting over it would hide the mistake entirely."""
+        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        spec = harness_seed.SeedSpec(
+            connector_type="snowflake",
+            qualified_name=_SEED_QN,
+            display_name="",
+            admin_roles=("role-guid",),
+            databases=(harness_seed.DatabaseSpec(name="ANALYTICS"),),
+        )
+        harness.seed_assets(spec)
+        assert harness.recorded_plans[0].ae_workflow_name.endswith("-snowflake")
+
+
+class TestSeedWorkflowNames:
+    """``create_workflow`` is idempotent on the name, so names must be unique."""
+
+    def test_two_seeds_of_one_type_get_distinct_workflow_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A suite seeding two connections of the same type — two warehouses,
+        two accounts — would otherwise reuse one slug, publish each graph over
+        the other, and leave an AE run list that cannot tell them apart. Same
+        collision ``_ae_workflow_name_suffix`` solves for multi-DAGSpec runs."""
+        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness.seed_assets(_spec(qualified_name="default/snowflake/111"))
+        harness.seed_assets(_spec(qualified_name="default/snowflake/222"))
+        first, second = (plan.ae_workflow_name for plan in harness.recorded_plans)
+        assert first != second
+
+    def test_the_name_separates_a_seed_from_the_suites_own_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other half of the same rule: sharing the suite's own workflow
+        name would publish the seed's one-node graph over the connector's DAG."""
+        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness.seed_assets(_spec())
+        name = harness.recorded_plans[0].ae_workflow_name
+        assert "-seed-" in name
+        assert name.endswith("-snowflake")
+
+    def test_a_dag_run_between_two_seeds_cannot_collide_them(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ordinal is the length of the teardown registry, which a
+        ``DAGSpec``-named connection also appends to — so it counts registry
+        entries, not seeds, and the second seed here is ordinal 3 rather than 2.
+        That is fine and is what this pins: the registry only ever grows within
+        a run, so the ordinals cannot repeat whatever else lands in it. Reading
+        the count off a shared structure is only safe while that holds."""
+        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness.seed_assets(_spec(qualified_name="default/snowflake/111"))
+        with harness._dag_run(
+            DAGSpec(connection_qualified_name="default/snowflake/999")
+        ):
+            pass
+        harness.seed_assets(_spec(qualified_name="default/snowflake/222"))
+        names = [plan.ae_workflow_name for plan in harness.recorded_plans]
+        assert len(set(names)) == 2
+        assert names[0].endswith("-seed-1-snowflake")
+        assert names[1].endswith("-seed-3-snowflake")
 
 
 class TestPurgeIncludesSeededConnections:
