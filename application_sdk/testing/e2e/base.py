@@ -1930,6 +1930,12 @@ class BaseE2ETest:
                 publish app reads — see :meth:`seed_object_store`.
             SeedTreeInvalidError: The serialised batch would not survive publish.
             SeedPublishFailedError: The seed's publish run did not succeed.
+            SeedPublishEmptyError: The publish run succeeded and Atlas holds
+                nothing under the seeded connection. Publish is handed a
+                *prefix*, and one it cannot read is an empty batch rather than
+                an error — so this is the shape a node-status check cannot see,
+                and the read-back is what turns it into a failure here instead
+                of the connector's ``ATLAS-404`` cascade minutes later.
         """
         return run_sync(self._seed_assets_async(spec))
 
