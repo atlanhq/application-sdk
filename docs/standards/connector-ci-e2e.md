@@ -747,9 +747,9 @@ installed = _installed_version(read_client, app_id)  # verify: the same record
 So the check was reading its own input. The expected version is stable per
 connector SHA (`sdr-test-<commit8>[-<digest8>]`, `derive_e2e_image_tag.py`), so
 once that record existed, every later run on that SHA skipped the install *and*
-passed the verify — permanently, whatever the cluster was running. Two openapi
-runs 24 minutes apart did exactly that; neither run's image ever reached the
-tenant, and the tenant was serving a 44-day-old app fleet at the time.
+passed the verify — permanently, whatever the cluster was running. One connector
+SHA can also resolve to more than one image, since the tag carries an optional
+digest suffix, so the record can go on naming a build the tenant no longer runs.
 
 **Three layers, strongest first.** `verify` now reads them in order and the step
 log names which one decided:

@@ -15,8 +15,9 @@ run* from an image built months ago:
 
 That gap is what let the e2e version check read its own input: ``install``
 skipped when the marketplace install record already named the expected version,
-and ``verify`` then read the same record. A tenant whose pods had not moved in
-weeks passed the check that exists to catch exactly that.
+and ``verify`` then read the same record. Once that record existed for a build,
+the check could only agree with it — it established nothing about what the
+cluster was actually serving, which is the one thing it exists to establish.
 
 So the build identity is stamped into the image at build time and read back out
 here. It is the one fact only a *running pod* can report, which is what makes it

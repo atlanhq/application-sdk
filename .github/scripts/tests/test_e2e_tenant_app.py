@@ -715,9 +715,10 @@ def test_verify_fails_when_nothing_is_installed(
 # `install` skips when LM's install record already names the expected version,
 # and `verify` used to read the SAME record. Since the expected version is stable
 # per connector SHA, once that record existed every later run on that SHA skipped
-# the install AND passed the verify — permanently, whatever the cluster ran. Two
-# openapi runs 24 minutes apart did exactly that and neither image reached the
-# tenant.
+# the install AND passed the verify — permanently, whatever the cluster ran. One
+# connector SHA can also resolve to more than one image — the tag carries an
+# optional digest suffix — so the record can go on naming a build the tenant no
+# longer runs.
 #
 # The tests below pin the three things that had to become true: the pod is asked
 # first and decides both ways, a skipped install is not reported as a verified
@@ -729,8 +730,8 @@ def test_verify_fails_when_the_pod_reports_a_different_build(
 ) -> None:
     """The install record can agree while the pod disagrees. The pod wins.
 
-    This is the FND-1683 tenant: LM's record named the version under test, and
-    the pods had not moved in 44 days. Under the old check that was a pass.
+    LM's record names the version under test while the pod reports a different
+    build. Under the old check that was a pass.
     """
     transport = _wire(
         monkeypatch,

@@ -758,7 +758,7 @@ def read_pod_build_identity(client: TenantClient) -> PodIdentity:
     a 200 here comes from the POD rather than from a marketplace record. That is
     the whole point: the install record and the deployment record are both
     written by the install and never revisited, so a check that reads them can
-    pass on a tenant whose pods have not moved in weeks.
+    pass on a tenant the deployment never actually reached.
 
     Never raises. Every failure mode collapses to ``reachable=False`` carrying
     the reason, because the caller's decision is the same for all of them — fall
@@ -2261,8 +2261,9 @@ def _converged_outcome(
     the version check read its own input — ``verify`` read the same record
     ``install`` had just skipped on — so once the record existed for a connector
     SHA, every later run on that SHA skipped the install AND passed the verify,
-    whatever the cluster was actually running. Two openapi runs 24 minutes apart
-    did exactly that, and neither run's image ever reached the tenant.
+    whatever the cluster was actually running. One connector SHA can also resolve
+    to more than one image — the tag carries an optional digest suffix — so the
+    record can go on naming a build the tenant no longer runs.
 
     It still skips. Re-publishing and re-installing would land in LM's "App
     already installed" branch, which starts no deployment, so forcing it through
@@ -2582,8 +2583,8 @@ def verify(args: argparse.Namespace) -> str:
     Reads three layers, strongest first, and says which one decided (FND-1684).
     It used to read exactly one — LM's install record — which is the record
     ``install`` writes and then skips on, so the check was reading its own
-    input: a tenant whose pods had not moved in weeks passed it, minutes before
-    a pod-derived check failed on the same tenant.
+    input: once that record existed for a build it could only agree with itself,
+    whatever the cluster was serving.
 
     ``pod``
         ``/api/service/configmaps/atlan-build-identity``, which Heracles proxies
