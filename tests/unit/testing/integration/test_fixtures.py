@@ -8,6 +8,7 @@ import inspect
 import os
 import subprocess
 import sys
+import types
 import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -636,6 +637,59 @@ class TestLazyPackage:
         from application_sdk.testing import integration
 
         assert set(integration._LAZY_EXPORTS) == set(integration.__all__)
+
+    def test_names_shared_with_a_submodule_are_bound_eagerly(self) -> None:
+        """A function named like its own submodule must not be left to ``__getattr__``.
+
+        Python binds a submodule onto its package the first time the submodule
+        loads. If a colliding export is resolved lazily, whoever triggers that
+        first load — a direct submodule import, or ``__getattr__`` fetching a
+        sibling name from the same module — leaves the module bound under the
+        function's name, and ``__getattr__`` is never consulted again for it.
+        The only order-independent defence is an eager binding in the package
+        body, so every collision must already be in the module namespace.
+        """
+        from application_sdk.testing import integration
+
+        colliding = set(integration._LAZY_EXPORTS) & integration._LAZY_SUBMODULES
+        assert "lazy" in colliding  # the case that motivated this test
+        for name in colliding:
+            assert name in vars(integration), f"{name!r} is resolved lazily"
+            assert not isinstance(vars(integration)[name], types.ModuleType), name
+
+    def test_lazy_is_the_function_whatever_loads_first(self) -> None:
+        """``from ... import lazy`` is callable regardless of import order.
+
+        Two orders broke before the eager binding: resolving a sibling name
+        (``Lazy``) first, and importing the submodule directly first. Both
+        left ``integration.lazy`` as the module and callers saw
+        ``TypeError: 'module' object is not callable``.
+        """
+        sibling_first = """
+from application_sdk.testing.integration import Lazy
+from application_sdk.testing.integration import lazy
+assert callable(lazy), type(lazy)
+assert isinstance(lazy(lambda: 1), Lazy)
+print("OK")
+"""
+        # ``import a.b.lazy as m`` is deliberately not used here: that form
+        # walks attributes and, with the function bound on the package, would
+        # hand back the function — the same behaviour the pre-lazy eager
+        # ``from .lazy import lazy`` always had. ``from a.b.lazy import ...``
+        # goes through ``sys.modules`` and is the form consumers write.
+        submodule_first = """
+import sys
+from application_sdk.testing.integration.lazy import lazy as from_module
+from application_sdk.testing.integration import lazy
+assert callable(lazy), type(lazy)
+assert lazy is from_module
+assert lazy is sys.modules["application_sdk.testing.integration.lazy"].lazy
+print("OK")
+"""
+        for script in (sibling_first, submodule_first):
+            result = _run_python(script)
+            assert result.returncode == 0, result.stderr
+            assert "OK" in result.stdout
 
     def test_submodules_are_still_reachable_as_attributes(self) -> None:
         """``integration.models.Scenario`` — an access the eager form gave free.
