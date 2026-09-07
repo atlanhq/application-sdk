@@ -33,6 +33,7 @@ from application_sdk.testing.harness.automation_engine.wire import (
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
+    PublishedVersion,
 )
 from application_sdk.testing.harness.teardown import (
     CONNECTION_DELETE_NODE_ID,
@@ -47,6 +48,19 @@ from application_sdk.testing.harness.teardown import (
 _QN = "default/snowflake/1787587123106596"
 _QUEUE = "atlan-connection-delete-production"
 
+#: What AE serves when nothing was published over the teardown's own DAG.
+_OUR_PUBLISHED = PublishedVersion(
+    version=1787587123, dag={CONNECTION_DELETE_NODE_ID: {"node_type": "workflow"}}
+)
+
+#: What AE served on the openapi leg of FND-1724: the app under test's own
+#: two-node graph, published over the seed by Heracles' submit-time manifest
+#: fetch. Pinned as data because it is the shape the guard exists for.
+_SUPERSEDED_BY_THE_APP = PublishedVersion(
+    version=1787587199,
+    dag={"extract": {"node_type": "workflow"}, "publish": {"node_type": "workflow"}},
+)
+
 
 def _plan(**overrides: Any) -> ConnectionDeletePlan:
     """A plan with everything a real leg supplies, overridable per test."""
@@ -54,29 +68,35 @@ def _plan(**overrides: Any) -> ConnectionDeletePlan:
         "connector_short_name": "coalesce",
         "task_queue": _QUEUE,
         "ae_workflow_name": "coalesce-e2e-1787587123-teardown-1",
-        "app_service_url": "http://coalesce.svc",
         "run_id": 1787587123,
     }
     return ConnectionDeletePlan(**{**defaults, **overrides})
 
 
 def _result(
-    *statuses: DAGNodeStatus, run: DAGRunStatus = DAGRunStatus.SUCCEEDED
+    *statuses: DAGNodeStatus,
+    run: DAGRunStatus = DAGRunStatus.SUCCEEDED,
+    names: tuple[str, ...] = (),
 ) -> DAGRunResult:
-    """A ``native-status`` reading with one node per supplied status."""
+    """A ``native-status`` reading with one node per supplied status.
+
+    ``names`` overrides the node names one for one, so a test can express the
+    run AE actually executed rather than the one the harness asked for.
+    """
+    resolved = names or tuple(CONNECTION_DELETE_NODE_ID for _ in statuses)
     return DAGRunResult(
         run_id="run-1",
         workflow_slug="slug-1",
         status=run,
         nodes=[
             DAGNodeResult(
-                name=CONNECTION_DELETE_NODE_ID,
+                name=name,
                 status=status,
                 started_at_ms=None,
                 completed_at_ms=None,
                 error_message=None,
             )
-            for status in statuses
+            for name, status in zip(resolved, statuses, strict=True)
         ],
     )
 
@@ -91,11 +111,15 @@ class _FakeAE:
         poll_error: BaseException | None = None,
         submit_error: BaseException | None = None,
         create_error: BaseException | None = None,
+        published: PublishedVersion | None = _OUR_PUBLISHED,
+        published_error: BaseException | None = None,
     ) -> None:
         self._result = result or _result(DAGNodeStatus.SUCCEEDED)
         self._poll_error = poll_error
         self._submit_error = submit_error
         self._create_error = create_error
+        self._published = published
+        self._published_error = published_error
         self.created: list[tuple[str, str]] = []
         self.versions: list[dict[str, Any]] = []
         self.submits: list[dict[str, Any]] = []
@@ -122,6 +146,11 @@ class _FakeAE:
             raise self._submit_error
         self.submits.append(payload)
         return "run-1"
+
+    async def get_published_version(self, slug: str) -> PublishedVersion | None:
+        if self._published_error is not None:
+            raise self._published_error
+        return self._published
 
     async def poll_native_status(self, run_id: str, **kwargs: Any) -> DAGRunResult:
         self.poll_kwargs.append(kwargs)
@@ -150,10 +179,12 @@ class TestTheNodeMatchesTheAppsManifest:
         assert node["app_task_queue"] == _QUEUE
         assert node["inputs"]["task_queue"] == _QUEUE
 
-    def test_the_args_are_the_three_the_apps_input_reads(self) -> None:
-        """No more and no fewer. The storage params and search tuning live on
-        the app's per-task contracts with their own defaults, and a teardown
-        that pinned them would drift the moment the app retuned them."""
+    def test_the_args_are_the_ones_the_apps_manifest_declares(self) -> None:
+        """No more and no fewer, and the values the app's own manifest carries
+        as mustache tokens resolved to literals. The storage params and search
+        tuning live on the app's per-task contracts with their own defaults, and
+        a teardown that pinned them would drift the moment the app retuned
+        them."""
         args = build_connection_delete_dag(
             connection_qualified_name=_QN, task_queue=_QUEUE
         )[CONNECTION_DELETE_NODE_ID]["inputs"]["args"]
@@ -161,7 +192,24 @@ class TestTheNodeMatchesTheAppsManifest:
             "connection_qualified_name": _QN,
             "delete_type": "PURGE",
             "delete_assets": True,
+            "app_name": "automation-engine",
         }
+
+    def test_the_node_id_is_the_manifests_own(self) -> None:
+        """Not a teardown-flavoured name. Heracles republishes *a* manifest over
+        the seed at submit and the harness cannot stop it, so the delete app's
+        republished node and this one have to be the same node — otherwise the
+        harness's own guard would read the correct outcome as a foreign graph."""
+        assert CONNECTION_DELETE_NODE_ID == "delete"
+
+    def test_the_node_carries_the_apps_own_three_day_timeout(self) -> None:
+        """From the manifest's ``error_handling``. Draining a large connection is
+        what that number is sized for; the bound that actually stops an e2e leg
+        waiting is the harness's poll ceiling."""
+        node = build_connection_delete_dag(
+            connection_qualified_name=_QN, task_queue=_QUEUE
+        )[CONNECTION_DELETE_NODE_ID]
+        assert node["error_handling"]["start_to_close_timeout_seconds"] == 259200
 
     def test_purge_is_the_default_rather_than_the_apps_own_soft(self) -> None:
         """The app defaults to SOFT, which leaves every run's assets recoverable
@@ -205,11 +253,53 @@ class TestTheSubmitBody:
             display_name="snowflake-seed",
             run_id=1787587123,
             ae_workflow_slug="slug-1",
-            app_service_url="http://coalesce.svc",
         )
 
     def test_it_carries_the_slug_ae_minted(self) -> None:
         assert self._payload()["metadata"]["ae_workflow_slug"] == "slug-1"
+
+    def _rows(self) -> dict[str, Any]:
+        task = self._payload()["spec"]["templates"][0]["dag"]["tasks"][0]
+        return {p["name"]: p["value"] for p in task["arguments"]["parameters"]}
+
+    def test_the_envelope_names_the_delete_app_not_the_suite(self) -> None:
+        """The envelope's identity is what decides which manifest Heracles
+        fetches and publishes over the seed. Carrying the suite's identity is
+        what made a teardown re-run the suite's crawl, on the legs where the
+        republish beat the run."""
+        payload = self._payload()
+        assert (
+            payload["metadata"]["annotations"]["package.argoproj.io/name"]
+            == "@atlan/connection-delete"
+        )
+        template_ref = payload["spec"]["templates"][0]["dag"]["tasks"][0]["templateRef"]
+        assert template_ref["name"] == "atlan-connection-delete"
+        assert "coalesce" not in payload["metadata"]["name"]
+
+    def test_it_carries_the_apps_three_mustache_rows(self) -> None:
+        """The other half of defusing the race: when Heracles' republished
+        manifest is what runs, these rows are what its
+        ``{{connection-qualified-name}}`` / ``{{delete-type}}`` /
+        ``{{delete-assets}}`` tokens resolve to. Without them the app falls back
+        to its own default of SOFT, and every run's assets would be archived
+        rather than removed."""
+        rows = self._rows()
+        assert rows["connection-qualified-name"] == _QN
+        assert rows["delete-type"] == "PURGE"
+        assert rows["delete-assets"] is True
+
+    def test_the_connection_rows_still_name_the_leg(self) -> None:
+        """Attribution does not go away with the package name: which leg's
+        connection is being deleted stays readable off the submit."""
+        assert self._rows()["connection.connectorName"] == "coalesce"
+
+    def test_it_names_no_app(self) -> None:
+        """Omitting ``metadata.app_service_url`` was the first attempt and did
+        not stop the republish — Heracles keys the fetch on the envelope
+        identity, which is what now names the delete app. The key still stays
+        absent (not empty: an empty string is still a URL AE can try) because
+        a teardown has no service URL to name."""
+        assert "app_service_url" not in self._payload()["metadata"]
 
     def test_no_credential_block_rides_a_teardown(self) -> None:
         """A delete names a connection, not a source — there is nothing to
@@ -283,6 +373,59 @@ class TestDeleteConnectionReportsRatherThanRaises:
         ae = _FakeAE()
         await delete_connection(_QN, ae=ae, plan=_plan(stall_grace_seconds=0))
         assert ae.poll_kwargs[0]["stall_grace_seconds"] is None
+
+    async def test_a_published_dag_that_is_not_ours_is_reported_before_polling(
+        self,
+    ) -> None:
+        """The graph AE serves is the graph that runs, so a supersede is knowable
+        as soon as the submit is in — and polling it would spend the whole
+        ceiling on some other app's DAG while the connection sits undeleted."""
+        ae = _FakeAE(published=_SUPERSEDED_BY_THE_APP)
+        report = await delete_connection(_QN, ae=ae, plan=_plan())
+        assert report.dag_superseded
+        assert not report.complete
+        assert not report.app_absent
+        assert ae.poll_kwargs == []
+        assert "extract, publish" in report.errors[0]
+
+    async def test_a_run_that_executed_another_apps_nodes_is_never_a_delete(
+        self,
+    ) -> None:
+        """The dangerous case, and why the run's own node names are checked
+        before success rather than only on failure: a superseded run is a
+        different app's DAG, so it can go green. Read as a success it would skip
+        the fallback and report a connection deleted that is still there."""
+        ae = _FakeAE(
+            result=_result(
+                DAGNodeStatus.SUCCEEDED,
+                DAGNodeStatus.SUCCEEDED,
+                names=("extract", "publish"),
+            ),
+        )
+        report = await delete_connection(_QN, ae=ae, plan=_plan())
+        assert report.dag_superseded
+        assert not report.succeeded
+        assert not report.complete
+        assert CONNECTION_DELETE_NODE_ID in report.errors[0]
+
+    async def test_an_unreadable_published_version_claims_no_supersede(self) -> None:
+        """``None`` is "the read did not get through", which is not "AE published
+        something else". Claiming a supersede on it would send every leg to the
+        fallback the first time a tenant blipped."""
+        ae = _FakeAE(published=None)
+        report = await delete_connection(_QN, ae=ae, plan=_plan())
+        assert report.complete
+        assert not report.dag_superseded
+        assert ae.poll_kwargs
+
+    async def test_a_read_that_raises_leaves_the_delete_running(self) -> None:
+        """The guard is a guard, not a step: teardown runs post-verdict, so a
+        read that raises must degrade to "unanswered" rather than turn a working
+        delete into a cleanup error."""
+        ae = _FakeAE(published_error=RuntimeError("AE refused the read"))
+        report = await delete_connection(_QN, ae=ae, plan=_plan())
+        assert report.complete
+        assert not report.dag_superseded
 
     async def test_a_failed_node_is_reported_without_raising(self) -> None:
         ae = _FakeAE(

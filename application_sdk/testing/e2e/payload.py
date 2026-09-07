@@ -468,7 +468,7 @@ def build_ae_payload(
     connector_short_name: str,
     argo_package_name: str,
     argo_template_name: str,
-    app_service_url: str,
+    app_service_url: str | None,
     connection: ConnectionSpec,
     mustache_subs: MustacheSubstitutions,
     credential_body: CredentialBody | None,
@@ -487,7 +487,18 @@ def build_ae_payload(
         connector_short_name: ``mysql``, ``mssql``, ``saperp``, etc.
         argo_package_name: The ``@atlan/<connector>`` Argo package name.
         argo_template_name: Cluster-scoped WorkflowTemplate name.
-        app_service_url: HTTP URL the AE workflow can reach the connector at.
+        app_service_url: HTTP URL the AE workflow can reach the connector at, or
+            ``None`` to name no app at all. ``None`` is load-bearing rather than
+            tidy: **at submit, Heracles fetches the manifest served at this URL
+            and publishes it over the harness's seed version** — the mechanism
+            :meth:`~application_sdk.testing.e2e.base.BaseE2ETest._assert_deployed_manifest_matches`
+            exists to assert on. A submit that names the app under test
+            therefore runs *that app's* DAG whatever the caller published, so a
+            caller whose own published graph is the one that must run
+            (teardown's ``connection-delete`` node) has to omit the field. An
+            empty string still emits the key, because that is what every
+            connector suite whose ``app_service_url`` ClassVar is unset has
+            always sent.
         connection: Where the Atlas Connection will be created (drives
             the flat ``connection.*`` parameter rows and metadata).
         mustache_subs: Typed substitution object carrying all
@@ -671,6 +682,15 @@ def build_ae_payload(
         },
         "execution_mode": "native",
     }
+
+    # Naming no app is what stops Heracles' submit-time manifest fetch from
+    # publishing some *other* graph over the one the caller published — see the
+    # ``app_service_url`` arg. Popped after the literal rather than threaded
+    # through it so the envelope stays one readable object, and so the two
+    # states are "the key is absent" vs. "the key is whatever was passed",
+    # with no third reading of an empty string.
+    if app_service_url is None:
+        del result["metadata"]["app_service_url"]
 
     # App-entrypoint selector for AE's server-side manifest fetch. Multi-entrypoint
     # connectors (crawler/miner, extract/lineage, per-flavor) serve a distinct
