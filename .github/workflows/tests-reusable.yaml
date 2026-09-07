@@ -688,13 +688,16 @@ jobs:
     name: Detect integration suite
     needs: detect-merge-queue
     # `always()` because detect-merge-queue is *skipped* on every non-PR event
-    # and a skipped `need` would otherwise block this job. On a PR it runs only
-    # when no queue was detected — the same condition as the integration job
-    # below, so detection never runs for a tier that won't.
+    # and a skipped `need` would otherwise block this job. On a PR it runs when
+    # no queue was detected, OR when the PR carries the `e2e` label — the same
+    # condition as the integration job below, so detection never runs for a
+    # tier that won't.
     if: >-
       always() &&
       ( github.event_name != 'pull_request' ||
-        needs.detect-merge-queue.outputs.enabled == 'false' )
+        needs.detect-merge-queue.outputs.enabled == 'false' ||
+        ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -721,13 +724,23 @@ jobs:
     # detection to have actually succeeded (else count is empty and would read
     # as "present"). `always()` is needed because detect-merge-queue is skipped
     # on non-PR events; the queue check then keeps this tier off PRs whose merge
-    # will be batched through a queue that already runs it.
+    # will be batched through a queue that already runs it — EXCEPT a PR that
+    # carries the `e2e` label. That label buys three tenant leases to grade the
+    # connector end to end; the e2e legs check count floors and qualifiedName
+    # depth, and only the integration tier proves extraction is byte-identical
+    # to the golden corpus. A labelled PR without that tier reads as full
+    # evidence while missing the one guard that catches a dropped field, so the
+    # label runs both. Same label expression as the e2e legs: on a `labeled`
+    # event only the `e2e` label itself counts, so adding any other label does
+    # not re-run the tier.
     if: >-
       always() &&
       needs.detect-integration.result == 'success' &&
       needs.detect-integration.outputs.count != '0' &&
       ( github.event_name != 'pull_request' ||
-        needs.detect-merge-queue.outputs.enabled == 'false' )
+        needs.detect-merge-queue.outputs.enabled == 'false' ||
+        ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) )
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
