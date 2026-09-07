@@ -855,19 +855,35 @@ class ParquetFileWriter(Writer):
             # Offloaded: a consolidation folder holds a full buffer's worth of
             # chunks, so reading them all back and concatenating is seconds of
             # blocking disk I/O plus CPU. Inline it starves the auto-heartbeat
-            # for that span (ADR-0010).
-            def _read_and_concat() -> "pd.DataFrame":
-                return pd.concat(
+            # for that span (ADR-0010). The in-memory size estimate rides the
+            # same hop: it walks every column once.
+            def _read_and_concat() -> "tuple[pd.DataFrame, int]":
+                frame = pd.concat(
                     [pd.read_parquet(f) for f in temp_files], ignore_index=True
                 )
+                return frame, int(frame.memory_usage(deep=True).sum())
 
-            combined_df = await run_in_thread(_read_and_concat)
+            combined_df, estimated_bytes = await run_in_thread(_read_and_concat)
 
-            # Write consolidated chunks respecting max_file_size_bytes
+            # One consolidated file per folder is the point of consolidating:
+            # the folder *is* the chunk (``consolidation_threshold`` ==
+            # ``chunk_size`` rows). Only ``max_file_size_bytes`` splits it, and
+            # against the in-memory estimate — larger than the snappy parquet
+            # that lands, so a split errs towards fewer rows, never a file over
+            # the cap. This loop used to slice by ``buffer_size`` instead, so
+            # every chunk became ``chunk_size / buffer_size`` files — twenty at
+            # the defaults. A 93M-row run staged ~18,700 objects that way, and
+            # its hand-off then paid one set of round trips per object
+            # (FND-1339).
+            total_rows = len(combined_df)
+            bytes_per_row = max(1, estimated_bytes // max(1, total_rows))
+            rows_per_file = max(
+                1, min(total_rows, self.max_file_size_bytes // bytes_per_row)
+            )
             partitions = 0
             chunk_part_start = 0
-            for i in range(0, len(combined_df), self.buffer_size):
-                chunk = combined_df.iloc[i : i + self.buffer_size]
+            for i in range(0, total_rows, rows_per_file):
+                chunk = combined_df.iloc[i : i + rows_per_file]
                 consolidated_file_path = self._get_consolidated_file_path(
                     folder_index=self.chunk_count,
                     chunk_part=chunk_part_start + partitions,
