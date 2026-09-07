@@ -2398,12 +2398,12 @@ class BaseE2ETest:
         """Resolve how this leg dispatches and waits on one connection's delete.
 
         Every value is the one this suite's own run uses, so teardown cannot be
-        dispatched to a different tenant than the run it is cleaning up after —
-        with one value deliberately *absent*: :attr:`app_service_url` is not
-        carried, because a teardown submit that names an app has that app's
-        manifest published over its DAG at submit
-        (:mod:`application_sdk.testing.harness.teardown._dag`). Of what it does
-        carry, two values are deliberately not the run's:
+        dispatched to a different tenant than the run it is cleaning up after.
+        The envelope names the delete app
+        (:mod:`application_sdk.testing.harness.teardown._dag`), so whichever
+        graph wins Heracles' submit-time republish is a delete; ``app_service_url``
+        stays omitted because a teardown submit has no service URL to name. Of
+        what the plan does carry, two values are deliberately not the run's:
 
         * **The budgets** are teardown's own
           (:attr:`connection_delete_poll_timeout_seconds`,

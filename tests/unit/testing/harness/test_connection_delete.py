@@ -294,15 +294,11 @@ class TestTheSubmitBody:
         assert self._rows()["connection.connectorName"] == "coalesce"
 
     def test_it_names_no_app(self) -> None:
-        """The one field this body must not carry, and the reason FND-1724
-        needed a second pass: at submit Heracles fetches the manifest served at
-        ``metadata.app_service_url`` and publishes it *over* the DAG this
-        teardown published. Carrying the app under test's URL made "our DAG
-        runs" a property of that app's manifest routing — true for a bundle,
-        whose bare-manifest fetch 404s, and false for a single-entrypoint app,
-        where the teardown re-ran ``extract`` → ``publish`` against the
-        connection it was supposed to delete. Absent, not empty: an empty string
-        is still a URL AE can try."""
+        """Omitting ``metadata.app_service_url`` was the first attempt and did
+        not stop the republish — Heracles keys the fetch on the envelope
+        identity, which is what now names the delete app. The key still stays
+        absent (not empty: an empty string is still a URL AE can try) because
+        a teardown has no service URL to name."""
         assert "app_service_url" not in self._payload()["metadata"]
 
     def test_no_credential_block_rides_a_teardown(self) -> None:
