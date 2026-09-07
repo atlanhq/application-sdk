@@ -381,6 +381,8 @@ class Decision:
     digest: str = ""
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    """Informational: printed plainly, never as annotations, never fatal."""
 
     @property
     def ok(self) -> bool:
@@ -414,6 +416,20 @@ def decide(
     matched = [ref for ref in refs if split_ref(ref.resolved) in supported_refs]
 
     if not matched:
+        # A Dockerfile that already names the GHCR mirror has nothing to
+        # redirect: BuildKit pulls the base from GHCR on its own. That is the
+        # state the redirect exists to reach, not a misconfiguration -- and now
+        # that conformance I001 accepts the mirror, Dockerfiles will land here
+        # legitimately. A Harbor match, if any, still wins above: a multi-stage
+        # file naming both is redirected on its Harbor stage.
+        on_ghcr = [ref for ref in refs if split_ref(ref.resolved)[0] == ghcr_repo]
+        if on_ghcr:
+            named = ", ".join(f"{r.raw} (line {r.line})" for r in on_ghcr)
+            decision.notes.append(
+                f"Base already resolves from {ghcr_repo} ({named}); the redirect "
+                "is not needed and no build-context is emitted."
+            )
+            return decision
         listed = ", ".join(f"{r.raw} (line {r.line})" for r in refs) or "none"
         unresolved = [r for r in refs if r.unresolved]
         supported = ", ".join(f"{harbor_repo}:{t}" for t in supported_tags)
@@ -549,6 +565,8 @@ def main(argv: list[str] | None = None) -> int:
         resolve_digest=resolve_digest,
     )
 
+    for note in decision.notes:
+        print(note)
     for warning in decision.warnings:
         print(f"::warning::{warning}")
     for error in decision.errors:
@@ -561,6 +579,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if decision.build_contexts:
         print(f"Redirect active: {decision.build_contexts}")
+    elif decision.notes:
+        print("Redirect not needed: the Dockerfile already builds from GHCR.")
     else:
         print("Redirect inactive: building from Harbor as before.")
     return 0

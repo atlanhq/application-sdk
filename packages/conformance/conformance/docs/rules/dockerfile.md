@@ -27,7 +27,7 @@ Suppress a finding on the violating line or the line directly above it:
 
 **Tier:** `block` · **Scope:** `app` · **Category:** `dockerfile-base` · **Autofixable:** yes · **Since:** 0.5.0
 
-> Final-stage FROM does not use the approved base image registry.atlan.com/public/app-runtime-base:3
+> Final-stage FROM does not use the approved base image registry.atlan.com/public/app-runtime-base:3 (or its GHCR mirror ghcr.io/atlanhq/app-runtime-base:3)
 
 **Rationale:** Only registry.atlan.com/public/app-runtime-base:3 carries the daprd sidecar, the
 entrypoint script, the appuser setup, and the standard env vars the platform expects.
@@ -39,16 +39,19 @@ its state, secret, or queue components, so the connector bricks on first run in 
 customer's tenant — a day-one install failure discovered by the customer, not by CI.
 
 The final-stage `FROM` instruction must be exactly
-`registry.atlan.com/public/app-runtime-base:3`.  The v3 major tag is the only accepted
-form: `*-latest`, dev-branch tags (e.g. `:main`), pinned patch versions (e.g. `:3.2.1`),
-raw upstream Python images, and any other registry or image name are rejected.
-Intermediate builder-stage FROMs in multi-stage builds are not checked — only the last
-`FROM` in the file determines the runtime base.  A build-arg base (`ARG
-BASE_IMAGE=<approved>` + `FROM ${BASE_IMAGE}`) is accepted when the ARG default resolves
-to the approved image — this lets CI rebuild on a PR-scoped base via `--build-arg` while
-keeping the committed default approved; a build-arg with no default, or a non-approved
-default, is rejected.  Inline suppression: `# conformance: ignore[I001] <reason>` on the
-line before the FROM instruction.
+`registry.atlan.com/public/app-runtime-base:3` or its GHCR mirror
+`ghcr.io/atlanhq/app-runtime-base:3` — the same image, published to both registries at
+one digest by harbor-release.yaml, so either registry may be named directly (this is
+what lets a Dockerfile move to GHCR without the fix being reverted).  The v3 major tag
+is the only accepted form: `*-latest`, dev-branch tags (e.g. `:main`), pinned patch
+versions (e.g. `:3.2.1`), raw upstream Python images, and any other registry or image
+name are rejected.  Intermediate builder-stage FROMs in multi-stage builds are not
+checked — only the last `FROM` in the file determines the runtime base.  A build-arg
+base (`ARG BASE_IMAGE=<approved>` + `FROM ${BASE_IMAGE}`) is accepted when the ARG
+default resolves to the approved image — this lets CI rebuild on a PR-scoped base via
+`--build-arg` while keeping the committed default approved; a build-arg with no default,
+or a non-approved default, is rejected.  Inline suppression: `# conformance:
+ignore[I001] <reason>` on the line before the FROM instruction.
 
 ---
 

@@ -115,7 +115,14 @@ instruction may interact with others.
 
 **Mechanical rules** (`autofixable = true`, `classification = "mechanical"`):
 
-- **I001 DockerfileWrongBaseImage** — depends on the shape of the `FROM` line:
+- **I001 DockerfileWrongBaseImage** — depends on the shape of the `FROM` line.
+  Two spellings are approved and equivalent — the same image, published to both
+  registries at one digest: `registry.atlan.com/public/app-runtime-base:3`
+  (Harbor, the canonical spelling and the one to write) and its GHCR mirror
+  `ghcr.io/atlanhq/app-runtime-base:3`.  A `FROM` that already names **either**
+  is not a defect: do not "correct" a GHCR reference back to Harbor.  I001 does
+  not fire on it, and a proposal to rewrite it would re-create the revert loop
+  this acceptance exists to break.
 
   - **Literal base** (`FROM <wrong-image>`) — replace the final `FROM` line
     with the exact approved image:

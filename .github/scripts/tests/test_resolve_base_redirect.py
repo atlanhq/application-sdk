@@ -132,6 +132,39 @@ def test_digest_pinned_base_fails_closed():
     assert not decision.ok
 
 
+def test_already_on_ghcr_is_a_noop_not_an_error():
+    # Once I001 accepts the mirror, a Dockerfile may name GHCR directly. There is
+    # nothing to redirect and nothing wrong: the build already pulls from GHCR.
+    refs = rbr.parse_base_refs(f"FROM {GHCR}:3\n")
+    decision = rbr.decide(refs, resolve_digest=digests(DIGEST_A, DIGEST_A))
+    assert decision.ok
+    assert decision.errors == []
+    assert decision.build_contexts == ""
+    assert any("already resolves" in n for n in decision.notes)
+
+
+def test_already_on_ghcr_digest_pinned_is_a_noop():
+    refs = rbr.parse_base_refs(f"FROM {GHCR}@{DIGEST_A}\n")
+    decision = rbr.decide(refs, resolve_digest=digests(DIGEST_A, DIGEST_A))
+    assert decision.ok and decision.build_contexts == "" and not decision.errors
+
+
+def test_already_on_ghcr_with_another_tag_is_still_a_noop():
+    # Whether the tag is one I001 accepts is I001's business; the redirect only
+    # asks "is there a Harbor reference to rewrite" -- and there is not.
+    refs = rbr.parse_base_refs(f"FROM {GHCR}:3.26.1\n")
+    decision = rbr.decide(refs, resolve_digest=digests(DIGEST_A, DIGEST_A))
+    assert decision.ok and not decision.errors
+
+
+def test_harbor_stage_is_redirected_even_when_another_stage_names_ghcr():
+    text = f"FROM {GHCR}:3 AS tools\nFROM {HARBOR}:3 AS app\n"
+    refs = rbr.parse_base_refs(text)
+    decision = rbr.decide(refs, resolve_digest=digests(DIGEST_A, DIGEST_A))
+    assert decision.ok
+    assert decision.build_contexts == f"{HARBOR}:3=docker-image://{GHCR}@{DIGEST_A}"
+
+
 def test_unresolvable_reference_warns_and_skips_redirect():
     refs = rbr.parse_base_refs(f"ARG T\nFROM {HARBOR}:${{T}}\n")
     decision = rbr.decide(refs, resolve_digest=digests(DIGEST_A, DIGEST_A))

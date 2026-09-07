@@ -74,7 +74,9 @@ than a green build on the wrong base.
 ### Redirecting app CI to the GHCR mirror
 
 App Dockerfiles keep `FROM registry.atlan.com/public/app-runtime-base:3` — that
-reference is the public interface, and it stays put. Callers of
+reference is the public interface, and it stays put. (Conformance I001 accepts the
+GHCR mirror `ghcr.io/atlanhq/app-runtime-base:3` as an equal spelling, so a Dockerfile
+that names GHCR directly is not reverted; the redirect then has nothing to do and says so.) Callers of
 `build-and-publish-app.yaml` opt in with `use_ghcr_base: true`, and a BuildKit named
 context rewrites *where the layers come from* without changing what is built.
 
@@ -92,6 +94,7 @@ build rather than let the redirect fail quietly:
 | Situation | Outcome |
 |---|---|
 | Dockerfile's base reference matches, digests agree | Redirect applied, **pinned to the immutable digest** |
+| Dockerfile already names the GHCR mirror (`ghcr.io/atlanhq/app-runtime-base`) | Redirect not needed — builds from GHCR directly, nothing emitted |
 | No `FROM` matches the supported reference | **Build fails** — the opt-in would be a silent no-op |
 | Harbor and GHCR serve different digests for the tag | **Build fails** — see the recovery above |
 | Base reference only resolves inside BuildKit (`ARG` with no default) | Warns, builds from Harbor |
