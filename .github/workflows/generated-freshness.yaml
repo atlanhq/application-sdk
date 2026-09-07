@@ -82,6 +82,17 @@ jobs:
           # in FND-395. A PklProject module-URI allowlist, if ever added, should
           # still be written to cover every such workflow rather than this one.
           ref: ${{ github.event.pull_request.head.sha }}
+          # Override detection needs ONE parent commit. `baseline_contract_ref`
+          # has two paths: an uncommitted pin change (Renovate's
+          # postUpgradeTasks --no-commit) diffs the worktree against HEAD and
+          # needs no history, but a COMMITTED bump — every human PR — resolves
+          # the parent of the last commit touching contract/PklProject. At the
+          # default depth of 1 that parent does not exist, so the function
+          # returns None, no baseline eval runs, and files the app maintains by
+          # hand inside app/generated/ are reported as stale instead of being
+          # preserved. Full history rather than depth: 2, because the last
+          # commit touching PklProject can be arbitrarily far back.
+          fetch-depth: 0
 
       # Provides `uvx ruff`, used by the driver to format generated Python so the
       # diff compares against ruff-formatted output (matching how the artifacts
