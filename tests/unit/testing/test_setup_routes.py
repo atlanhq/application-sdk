@@ -2268,6 +2268,50 @@ class TestTransientRetries:
         assert slept[1] > slept[0]
 
 
+class TestConfigmapAsksPastTheCache:
+    """FND-1725: the served form must come from the app pod, not LM's cache.
+
+    ``TenantRoutes.configmap`` is the only path this check reads a served form
+    through, so pinning the query string here is pinning the whole check's
+    guarantee that it asserts against the build actually under test rather
+    than whatever Local Marketplace cached at the last publish — see the
+    module docstring.
+    """
+
+    def test_configmap_requests_source_app(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        requested: list[str] = []
+
+        class _Response:
+            status = 200
+
+            def read(self) -> bytes:
+                return b'{"ok": true}'
+
+            def __enter__(self) -> "_Response":
+                return self
+
+            def __exit__(self, *exc: object) -> bool:
+                return False
+
+        class _Opener:
+            def open(
+                self, request: urllib.request.Request, timeout: object = None
+            ) -> object:
+                requested.append(request.full_url)
+                return _Response()
+
+        monkeypatch.setattr(setup_routes, "_OPENER", _Opener())
+
+        routes = TenantRoutes(base_url="https://tenant.example.invalid", bearer="t")
+        routes.configmap("atlan-openapi")
+
+        assert requested == [
+            "https://tenant.example.invalid/api/service/configmaps/atlan-openapi?source=app"
+        ]
+
+
 class TestRedirectsAreDeclined:
     """`urlopen` follows redirects by default, and that default is dangerous.
 
