@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
-"""Resolve the GHCR base-image redirect for an opted-in app build.
+"""Resolve the GHCR base-image redirect for an app build.
 
 Emits the ``build-contexts`` mapping that redirects the SDK base image from
 Harbor to GHCR, after proving the redirect is both *applicable* and *safe*:
 
 1. **Match coverage.** BuildKit's named-context substitution is reference
    specific: it only fires when the Dockerfile's ``FROM`` reference is exactly
-   the mapping's left-hand side. A caller that opts in but pins another tag
-   would silently keep pulling from Harbor and still go green. This script
-   parses the Dockerfile (expanding global ``ARG`` defaults the way BuildKit
-   does) and **fails closed** when it can prove no ``FROM`` matches the
-   supported reference. When a base reference cannot be resolved statically
-   (an ``ARG`` with no default), it warns and emits no mapping rather than
-   blocking a build it cannot reason about.
+   the mapping's left-hand side. This script parses the Dockerfile (expanding
+   global ``ARG`` defaults the way BuildKit does) and, when no ``FROM`` matches
+   the supported reference, **warns and emits no mapping** — the build pulls
+   from Harbor exactly as it did before the redirect existed.
+
+   That used to fail closed, on the reasoning that a caller who opted in and
+   still pulled from Harbor had a silent no-op to fix. The reasoning does not
+   survive the default flipping to true: nobody opts in per app any more, so
+   failing a build the redirect merely cannot *rewrite* punishes an app for a
+   fleet-wide default. A digest-pinned base is the case that made this
+   concrete — conformance I001 accepts it, and it does not match a tag
+   mapping, so a fail-closed preflight would have broken those builds the
+   moment the default turned on. Parity (below) is a different question and
+   still fails closed: that one is about whether the image is *right*, not
+   about whether the redirect applies.
 
 2. **Cross-registry parity.** ``harbor-release.yaml`` pushes both registries
    from one buildx invocation, but the push is not transactional: a GHCR-leg
@@ -435,18 +443,21 @@ def decide(
         supported = ", ".join(f"{harbor_repo}:{t}" for t in supported_tags)
         if unresolved:
             decision.warnings.append(
-                f"use_ghcr_base is set, but no FROM statically matches {supported}, "
+                f"No FROM statically matches {supported}, "
                 f"and {len(unresolved)} reference(s) resolve only inside BuildKit "
                 f"({', '.join(r.raw for r in unresolved)}). Building from Harbor "
                 "unchanged. Confirm the base tag or pass it as a Dockerfile ARG "
                 "default so this check can see it."
             )
             return decision
-        decision.errors.append(
-            f"use_ghcr_base is set, but no FROM in this Dockerfile references "
-            f"{supported}, so the redirect would be a silent no-op and the build "
-            f"would still pull from Harbor. Found: {listed}. Either repin the base "
-            "to a supported reference or unset use_ghcr_base."
+        # Not an error: see the module docstring. With the redirect on by
+        # default, a base this script cannot rewrite is an app spelling its
+        # base differently -- not a misconfiguration to fail the build over.
+        decision.warnings.append(
+            f"No FROM in this Dockerfile references {supported}, so the base "
+            f"cannot be redirected and this build pulls it from Harbor as "
+            f"before. Found: {listed}. Repin the base to a supported reference "
+            "to move this app's base pulls to GHCR."
         )
         return decision
 

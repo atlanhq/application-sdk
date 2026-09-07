@@ -118,18 +118,44 @@ def test_split_ref(ref, expected):
 # ── Finding 1: match coverage ─────────────────────────────────────────────────
 
 
-def test_non_matching_tag_fails_closed():
+def test_non_matching_tag_degrades_to_harbor():
+    # Was fail-closed while the redirect was opt-in. With it on by default, a
+    # base this script cannot rewrite is not the app's fault: warn, build from
+    # Harbor, do not fail. (I001 rejects this tag on its own account.)
     refs = rbr.parse_base_refs(f"FROM {HARBOR}:3.26.1\n")
     decision = rbr.decide(refs, resolve_digest=digests(DIGEST_A, DIGEST_A))
-    assert not decision.ok
+    assert decision.ok
+    assert decision.errors == []
     assert decision.build_contexts == ""
-    assert "silent no-op" in decision.errors[0]
+    assert "cannot be redirected" in decision.warnings[0]
 
 
-def test_digest_pinned_base_fails_closed():
-    refs = rbr.parse_base_refs(f"FROM {HARBOR}@{DIGEST_A}\n")
+def test_digest_pinned_base_degrades_to_harbor():
+    # The case that forced this change: I001 *approves* a digest-pinned base,
+    # and it cannot match a tag mapping. Fail-closed here would have broken
+    # every such app's build the moment the default turned on.
+    refs = rbr.parse_base_refs(f"FROM {HARBOR}:3@{DIGEST_A}\n")
     decision = rbr.decide(refs, resolve_digest=digests(DIGEST_A, DIGEST_A))
+    assert decision.ok
+    assert decision.errors == []
+    assert decision.build_contexts == ""
+
+
+def test_parity_still_fails_closed_now_that_match_coverage_does_not():
+    # The two gates are not the same question. Match coverage asks "can the
+    # redirect apply"; parity asks "is the image we would ride correct". Only
+    # the second is worth failing a build over, and it still does.
+    refs = rbr.parse_base_refs(f"FROM {HARBOR}:3\n")
+    decision = rbr.decide(refs, resolve_digest=digests(DIGEST_A, DIGEST_B))
     assert not decision.ok
+    assert "skew" in decision.errors[0]
+
+
+def test_harbor_unreachable_still_fails_closed():
+    refs = rbr.parse_base_refs(f"FROM {HARBOR}:3\n")
+    decision = rbr.decide(refs, resolve_digest=digests(None, DIGEST_A))
+    assert not decision.ok
+    assert "parity cannot be verified" in decision.errors[0]
 
 
 def test_already_on_ghcr_is_a_noop_not_an_error():

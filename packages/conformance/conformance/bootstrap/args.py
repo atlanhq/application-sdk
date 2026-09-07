@@ -305,13 +305,15 @@ options:
                               to ever fail a run is T014's question, not C002's.)
   --use-ghcr-base true|false  resolve the SDK base image from GHCR instead of Harbor,
                               rendered into build-and-publish.yaml as the reusable
-                              workflow's use_ghcr_base input. Apps self-select this while
-                              the SDK-side default is still false; C002 does not read an
-                              opt-in as drift. Omit to auto-detect from an existing
-                              build-and-publish.yaml, so a bare re-run preserves the
-                              opt-in instead of reverting it to Harbor — that file is
-                              always-overwrite. Pass false explicitly to REMOVE the
-                              opt-in.
+                              workflow's use_ghcr_base input. NOTE: the SDK-side default
+                              is now true, so a rendered `use_ghcr_base: true` line is
+                              redundant (it restates the default) and `false` here only
+                              REMOVES that line — it does not pin the app to Harbor. To
+                              do that, set `use_ghcr_base: false` on the caller by hand;
+                              this scaffold does not render an opt-OUT. The line and this
+                              flag are both slated for removal now that the default has
+                              flipped. C002 does not read either state as drift. Omit to
+                              auto-detect from an existing build-and-publish.yaml.
   --enforce true|false        0-touch shorthand: sets BOTH granular levers below at
                               once. Omit to auto-detect from an existing
                               conformance.yaml (else hard-gate). Pass explicitly (either
