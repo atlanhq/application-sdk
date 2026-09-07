@@ -1693,20 +1693,31 @@ class BaseE2ETest:
         state root), and the seed NDJSON under ``artifacts/apps/<app>/e2e-seed/``
         is harness-specific — nothing on the tenant knows it exists.
 
-        **By key, never by prefix**, and that is the whole reason this method
-        changed shape. ``delete_prefix`` is a LIST plus a bulk ``POST ?delete``,
-        both *bucket-level* URLs, and the tenant's Kong s3proxy path-matches
-        against an allowlist it cannot apply to a URL whose keys live in the
-        request body — so the call came back ``403 code 1009`` even though
-        ``/artifacts/apps/`` is on that allowlist. A single-object DELETE puts
-        the key in the path, where the allowlist can see it. The harness knows
-        exactly which keys it wrote, so it never needs the listing.
+        **By key, never by prefix** — though on current evidence neither
+        reaches the store. ``delete_prefix`` is a LIST plus a bulk
+        ``POST ?delete``, both *bucket-level* URLs, and the tenant's Kong
+        s3proxy path-matches against an allowlist it cannot apply to a URL
+        whose keys live in the request body, so it came back
+        ``403 code 1009``. The per-key DELETE was the fix for that — the
+        allowlist can read a path — and a live e2e run on 2026-09-07
+        (FND-1766's three-cloud A/B) came back ``403`` on it too. The
+        allowlist does not grant DELETE under ``/artifacts/apps/`` to a runner
+        in any request shape.
 
-        What that leaves behind is publish's own state under the seed root
-        (``.../publish-state/`` and ``.../current-state/``): the harness did not
-        write those keys and cannot enumerate them from here. They are bounded
-        per seed and outside ``archive_storage``'s prefixes; extending the app
-        to cover them is the fix, not a second listing attempt from the runner.
+        This method therefore expects to fail, and is written to fail
+        harmlessly: each key is attempted, a refusal is logged with the key
+        named, and the run's verdict is untouched. Keeping it is still worth
+        more than deleting it — it will start working the moment the allowlist
+        or the store binding changes, and its log line is what names the
+        leftover.
+
+        **The actual fix is on the tenant, not here.** ``connection-delete``'s
+        ``archive_storage`` already clears the app-owned per-connection stores
+        from inside the cluster, where no proxy sits in front of the bucket;
+        bringing the seed root into its scope deletes these keys and publish's
+        own state under the same root (``.../publish-state/``,
+        ``.../current-state/``) in one go. Both are bounded per seed. A third
+        URL shape from the runner is not the answer.
 
         Run after the connections, on the same ordering rule as before: the
         entities are what a stranded run trips over, the NDJSON is only bytes,
