@@ -90,10 +90,8 @@ class TestInjectionStillGetsTheSecurityVerdict:
     @pytest.mark.parametrize(
         "value",
         [
-            '{"^prod--$": []}',
             '{"a"; DROP TABLE x": []}',
             r'{"^a\_b$": []} ; DROP TABLE x --}',
-            r'{"^a\_b--c$": []}',
             r"{\"^a\_b$\": ['x'] }",
             '{"^a\\_b\x00$": []}',
             r'{"^a\_b/*c$": []}',
@@ -120,6 +118,9 @@ class TestUnchangedPaths:
         "value",
         [
             '{"^d\\\\_edw$": []}',
+            # Consecutive hyphens are legal in a source object name (a GCP
+            # project id may carry them) and no longer deny-listed.
+            '{"^prod--$": []}',
             # Brace-wrapped but quote-free: never a JSON attempt, so it keeps
             # raw-regex handling. ``_prepare_sql``'s no-cascade tests rely on
             # exactly this shape.

@@ -39,7 +39,6 @@ class TestValidateFilterNoSqlInjection:
             "prefix'injection",  # single quote
             'prefix"injection',  # double quote
             "name; DROP TABLE x",  # statement separator
-            "name-- comment",  # SQL line comment
             "name/* block",  # block comment open
             "name */",  # block comment close
             "name\x00trailing",  # null byte
@@ -56,6 +55,7 @@ class TestValidateFilterNoSqlInjection:
             r"^(prod|stage)_db\.[a-z]+(\.bak)?$",  # full meta-char set
             "",  # empty
             "schema_name",  # plain identifier
+            "my--project",  # consecutive hyphens — legal in a GCP project id
         ],
     )
     def test_clean_string_passes(self, value: str) -> None:
@@ -235,7 +235,7 @@ class TestNormalizeLegacyFilterValue:
             # is still SQL-unsafe and must fail loudly rather than
             # silently round-trip through the helper.
             '"name;drop"',
-            '"a--b","c"',
+            '"a;b","c"',
             '"a","b/*c"',
             '"a","b\x00c"',
         ],

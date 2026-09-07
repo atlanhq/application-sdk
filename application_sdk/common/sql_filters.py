@@ -63,22 +63,27 @@ def safe_substitute_placeholders(template: str, mapping: dict[str, str]) -> str:
 #   * ``'`` — string-literal delimiter (would close the surrounding quote)
 #   * ``"`` — identifier delimiter in dialects that allow it
 #   * ``;`` — statement separator (stacked-query injection)
-#   * ``--`` — SQL line comment (eats the rest of the line)
 #   * ``/*`` / ``*/`` — block comment
 #   * ``\x00`` — null byte; some drivers truncate on it
 #
 # Regex meta-characters that legitimately appear in filter values
 # (``^``, ``$``, ``.``, ``*``, ``+``, ``?``, ``|``, ``()``, ``[]``, ``\``,
-# ``{}``, single ``-``) remain allowed. This is a deny-list, not an
-# allow-list — a strict allow-list would break virtually every existing
-# filter pattern.
+# ``{}``, ``-``) remain allowed. This is a deny-list, not an allow-list — a
+# strict allow-list would break virtually every existing filter pattern.
+#
+# ``--`` is deliberately NOT on the list. It opens a SQL line comment only
+# outside a string literal, and templates are required to wrap every
+# substitution in single quotes (see the Warning on ``_prepare_sql``) — so a
+# filter value lands inside a literal, and ``'``, the one sequence that could
+# end that literal, stays forbidden. Meanwhile ``--`` is legal in a source
+# object name: a GCP project id may carry one, and forbidding it rejected
+# valid filters at contract admission, before any activity ran.
 # ---------------------------------------------------------------------------
 
 _FORBIDDEN_FILTER_SEQUENCES: tuple[str, ...] = (
     "'",
     '"',
     ";",
-    "--",
     "/*",
     "*/",
     "\x00",
@@ -86,8 +91,8 @@ _FORBIDDEN_FILTER_SEQUENCES: tuple[str, ...] = (
 
 # Used by Pydantic ``Field(pattern=...)`` on filter-shaped fields. Forbids
 # the single-character members of ``_FORBIDDEN_FILTER_SEQUENCES``;
-# multi-character sequences (``--``, ``/*``, ``*/``) are caught by the
-# dedicated ``validate_filter_no_sql_injection`` validator below.
+# multi-character sequences (``/*``, ``*/``) are caught by the dedicated
+# ``validate_filter_no_sql_injection`` validator below.
 SAFE_FILTER_PATTERN: str = r"^[^'\";\x00]*$"
 _SAFE_FILTER_PATTERN = SAFE_FILTER_PATTERN  # backward-compat alias
 

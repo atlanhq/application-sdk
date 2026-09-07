@@ -210,11 +210,13 @@ class TestFilterSQLInjectionGuard:
         with pytest.raises(ValueError, match=r"SQL-unsafe sequence ';'"):
             ExtractionInput.model_validate(payload)
 
-    def test_line_comment_rejected(self):
-        # SQL line comment eats the rest of the line.
-        payload = {"include_filter": "name-- comment"}
-        with pytest.raises(ValueError, match=r"SQL-unsafe sequence '--'"):
-            ExtractionInput.model_validate(payload)
+    def test_consecutive_hyphens_accepted(self):
+        # A doubled hyphen only opens a SQL comment outside a string literal,
+        # and every substitution site quotes the value. It is legal in a
+        # source object name (a GCP project id may carry one), so admitting it
+        # is required, not merely safe.
+        payload = {"include_filter": "my--project"}
+        assert ExtractionInput.model_validate(payload).include_filter == "my--project"
 
     def test_block_comment_open_rejected(self):
         payload = {"include_filter": "name/* injected */"}
@@ -259,7 +261,6 @@ class TestTempTableRegexInjectionGuard:
     @pytest.mark.parametrize(
         "value",
         [
-            "evil--comment",
             "evil/* block",
             "evil */",
         ],
@@ -285,7 +286,7 @@ class TestTempTableRegexInjectionGuard:
 
     def test_task_input_multichar_rejected(self) -> None:
         with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
-            ExtractionTaskInput.model_validate({"temp_table_regex": "evil--"})
+            ExtractionTaskInput.model_validate({"temp_table_regex": "evil/*"})
 
 
 class TestExtractionTaskInputFilters:
@@ -361,10 +362,10 @@ class TestLegacyQuotedCsvNormalisation:
 
     def test_temp_table_regex_legacy_with_forbidden_item_still_rejected(self):
         # Defence in depth: if a legacy item smuggles a forbidden
-        # sequence (e.g. ``--``), the normaliser's post-unwrap check
+        # sequence (e.g. ``/*``), the normaliser's post-unwrap check
         # raises — the bypass route cannot launder injection through
         # the legacy shape.
-        payload = {"temp_table_regex": '"prefix","name--bad"'}
+        payload = {"temp_table_regex": '"prefix","name/*bad"'}
         with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             ExtractionInput.model_validate(payload)
 

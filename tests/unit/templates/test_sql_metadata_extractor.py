@@ -319,6 +319,21 @@ class TestSqlMetadataExtractorPrepareSql:
         )
         assert result == "^tmp_|^prod_"
 
+    def test_consecutive_hyphens_land_inside_the_quotes(self) -> None:
+        """Why ``--`` is not deny-listed: the template quotes the substitution.
+
+        Both filter encodings compile to one regex, so a key-only exemption
+        would give the same filter two different verdicts.
+        """
+        sql = "WHERE name ~ '{normalized_include_regex}'"
+        nested = self._extractor()._prepare_sql(
+            sql, ExtractionTaskInput(include_filter={"^p$": {"^d--y$": {}}})
+        )
+        listed = self._extractor()._prepare_sql(
+            sql, ExtractionTaskInput(include_filter={"^p$": ["^d--y$"]})
+        )
+        assert nested == listed == "WHERE name ~ '^p\\.d--y$'"
+
     def test_temp_table_fragment_injected_in_table_mode(self) -> None:
         class _E(SqlMetadataExtractor):
             _app_registered = True

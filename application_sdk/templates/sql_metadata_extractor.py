@@ -217,7 +217,9 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             in single quotes, e.g. ``WHERE name !~ '{normalized_exclude_regex}'``.
             Single quotes in filter values are blocked by the SQL injection guard
             in ``_validate_no_sql_injection``. Templates that omit the surrounding
-            quotes are not protected.
+            quotes are not protected. This requirement is also what lets ``--``
+            stay off the filter deny-list — inside a literal it cannot open a
+            comment (see ``sql_filters._FORBIDDEN_FILTER_SEQUENCES``).
 
             Connectors that perform additional placeholder substitution on the
             returned SQL (e.g. ``{schema_list}``) must use ``str.replace()``
