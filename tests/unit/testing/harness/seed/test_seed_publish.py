@@ -24,6 +24,7 @@ import pytest
 
 from application_sdk.testing.harness.seed import (
     SEED_PUBLISH_NODE_ID,
+    TRANSFORMED_FILE_NAME,
     DatabaseSpec,
     SchemaSpec,
     SeedPrefixes,
@@ -36,6 +37,7 @@ from application_sdk.testing.harness.seed import (
     build_seed_publish_dag,
     build_seed_submit_payload,
     seed_assets,
+    seed_object_keys,
     seed_prefix_root,
 )
 from application_sdk.validation.assets import AssetValidationReport, ReferentialFailure
@@ -100,8 +102,9 @@ class TestPrefixes:
 
     def test_no_root_can_be_a_path_prefix_of_another(self) -> None:
         """Encoded into one segment rather than nested, so a longer QN's root
-        never sits *inside* a shorter one's — which is what would let one
-        ``delete_prefix`` reach into a sibling seed."""
+        never sits *inside* a shorter one's — which is what would put one seed's
+        keys in another seed's tree, and one seed's teardown on a sibling's
+        bytes."""
         short = seed_prefix_root(
             app_name="coalesce", qualified_name="default/snowflake/123"
         )
@@ -138,6 +141,42 @@ class TestPrefixes:
                 prefixes.publish_state,
                 prefixes.current_state,
             )
+        )
+
+
+class TestSeedObjectKeys:
+    """What teardown deletes by key, because it cannot delete by prefix.
+
+    ``delete_prefix`` is a LIST plus a bulk ``POST ?delete`` — both bucket-level
+    URLs, which the tenant's s3proxy answers ``403 code 1009`` however
+    allowlisted the prefix is. Deleting by key works only while the set is
+    knowable without a listing, and this is the one place that states it.
+    """
+
+    def test_the_key_is_the_one_the_seed_uploads(self) -> None:
+        """``seed_assets`` unpacks this same tuple for its upload, so a drift
+        between what is written and what is deleted cannot happen silently."""
+        assert seed_object_keys(root=_PREFIX_ROOT) == (
+            f"{SeedPrefixes(root=_PREFIX_ROOT).transformed}/{TRANSFORMED_FILE_NAME}",
+        )
+
+    def test_every_key_sits_under_the_seeds_own_root(self) -> None:
+        """The keys are handed to a single-object DELETE with no listing behind
+        it, so nothing downstream would notice one pointing outside the seed."""
+        assert all(
+            key.startswith(f"{_PREFIX_ROOT}/")
+            for key in seed_object_keys(root=_PREFIX_ROOT)
+        )
+
+    def test_publishs_own_state_is_not_claimed(self) -> None:
+        """The harness did not write ``publish-state/`` or ``current-state/``
+        and cannot enumerate them from a runner. Listing them here would be a
+        claim to delete keys whose names nobody knows."""
+        keys = seed_object_keys(root=_PREFIX_ROOT)
+        prefixes = SeedPrefixes(root=_PREFIX_ROOT)
+        assert not any(
+            key.startswith((prefixes.publish_state, prefixes.current_state))
+            for key in keys
         )
 
 

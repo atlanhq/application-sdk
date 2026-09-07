@@ -27,7 +27,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
-from application_sdk.testing.harness.seed._ndjson import connection_entity
+from application_sdk.testing.harness.seed._ndjson import (
+    TRANSFORMED_FILE_NAME,
+    connection_entity,
+)
 from application_sdk.testing.harness.seed._spec import ResolvedSeedSpec
 
 __all__ = [
@@ -35,6 +38,7 @@ __all__ = [
     "SeedPrefixes",
     "build_seed_publish_dag",
     "build_seed_submit_payload",
+    "seed_object_keys",
 ]
 
 #: The DAG's single node id. Named for what it is rather than "publish" so a
@@ -50,7 +54,9 @@ class SeedPrefixes:
     ``atlan-publish-app`` fails its own config validation when
     ``current_state_prefix`` equals ``transformed_data_prefix`` (DBBI-566), so
     the three are siblings under one root rather than aliases of it. Deriving
-    them from a single root is what keeps teardown a single ``delete_prefix``.
+    them from a single root is what lets a caller name any of them from the one
+    value teardown carries — see :func:`seed_object_keys`, which composes the
+    key it deletes out of exactly this.
 
     Attributes:
         root: The prefix everything for this seed hangs under.
@@ -94,7 +100,8 @@ def seed_prefix_root(*, app_name: str, qualified_name: str) -> str:
       teardown deleting both.
     * **No nesting.** Encoding rather than nesting the QN keeps each root exactly
       one segment deep, so no seed's root can ever be a path prefix of another's
-      — which is what would let one ``delete_prefix`` reach into a sibling seed.
+      — which is what would put one seed's keys inside another seed's tree, and
+      one seed's teardown on top of a sibling's bytes.
 
     ``quote(..., safe="")`` encodes ``%`` as ``%25``, so the mapping is injective
     for any input rather than only for the shapes we expect. The result still
@@ -112,6 +119,37 @@ def seed_prefix_root(*, app_name: str, qualified_name: str) -> str:
     """
     encoded = urllib.parse.quote(qualified_name, safe="")
     return f"artifacts/apps/{app_name}/e2e-seed/{encoded}"
+
+
+def seed_object_keys(*, root: str) -> tuple[str, ...]:
+    """Every object-store key the *harness* wrote under one seed root.
+
+    Teardown deletes these one key at a time rather than deleting the root as a
+    prefix, and that is a correctness requirement rather than a style choice:
+    ``delete_prefix`` is a LIST plus a bulk ``POST ?delete``, both *bucket-level*
+    URLs, and the tenant's Kong s3proxy path-matches against an allowlist it
+    cannot apply to a URL whose keys live in the request body. The call comes
+    back ``403 code 1009 "Invalid Path"`` even though ``/artifacts/apps/`` — the
+    prefix these keys sit under — is on that allowlist. A single-object DELETE
+    puts the key in the path, where the allowlist can read it.
+
+    That works only because the set is knowable without a listing, which is why
+    this function exists at all: it is the one place that states what a seed
+    writes, and :func:`~application_sdk.testing.harness.seed.seed_assets`
+    composes the same key from :class:`SeedPrefixes`.
+
+    What is deliberately absent is everything *publish* writes under the same
+    root (``publish-state/``, ``current-state/``). The harness did not write
+    those keys and cannot enumerate them from a runner; clearing them belongs to
+    an app running on the tenant.
+
+    Args:
+        root: The seed's prefix root, from :func:`seed_prefix_root`.
+
+    Returns:
+        The keys, in the order they were written.
+    """
+    return (f"{SeedPrefixes(root=root).transformed}/{TRANSFORMED_FILE_NAME}",)
 
 
 def build_seed_publish_dag(
