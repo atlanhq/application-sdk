@@ -1585,7 +1585,11 @@ class BaseE2ETest:
         folded into a generic cleanup warning, because it is the failure mode
         that otherwise reads exactly like a passing run: the leg is green, the
         assets are gone (the fallback took them), and the byte-stores quietly
-        accumulate on a shared tenant forever. It stays a warning all the same —
+        accumulate on a shared tenant forever. A *superseded* DAG
+        (:attr:`~application_sdk.testing.harness.teardown.ConnectionDeleteReport.dag_superseded`)
+        gets the same treatment for a sharper reason: it reads like a tenant
+        problem while being an SDK one, and it is what FND-1724 shipped and had
+        to fix. It stays a warning all the same —
         tenant cleanliness is not what the test is asserting, and a cleanup
         failure must never become the run's verdict.
 
@@ -1620,6 +1624,28 @@ class BaseE2ETest:
                 "bound on a shared tenant. Details: %s",
                 self._connection_delete_task_queue(),
                 qualified_name,
+                qualified_name,
+                qualified_name,
+                "; ".join(report.errors),
+            )
+            return
+        if report.dag_superseded:
+            logger.warning(
+                "e2e cleanup: %s was not deleted through the connection-delete "
+                "app because AE did not run this teardown's DAG — at submit, "
+                "Heracles fetches a manifest and publishes it over the seed "
+                "version, and the graph it published is %s's own, not the "
+                "connection-delete node (slug=%s run_id=%s). The teardown "
+                "submit names no app precisely so that cannot happen, so this "
+                "is a regression in how Heracles resolves the app to fetch, not "
+                "a tenant problem — and until it is fixed every leg falls back "
+                "to the runner-side purge and leaks connection-cache/%s.sqlite "
+                "and persistent-artifacts/apps/atlan-publish-app/state/%s/. "
+                "Details: %s",
+                qualified_name,
+                self.connector_short_name,
+                report.ae_workflow_slug or "<none>",
+                report.ae_run_id or "<none>",
                 qualified_name,
                 qualified_name,
                 "; ".join(report.errors),
@@ -2372,8 +2398,12 @@ class BaseE2ETest:
         """Resolve how this leg dispatches and waits on one connection's delete.
 
         Every value is the one this suite's own run uses, so teardown cannot be
-        dispatched to a different tenant than the run it is cleaning up after.
-        The two exceptions are deliberate:
+        dispatched to a different tenant than the run it is cleaning up after —
+        with one value deliberately *absent*: :attr:`app_service_url` is not
+        carried, because a teardown submit that names an app has that app's
+        manifest published over its DAG at submit
+        (:mod:`application_sdk.testing.harness.teardown._dag`). Of what it does
+        carry, two values are deliberately not the run's:
 
         * **The budgets** are teardown's own
           (:attr:`connection_delete_poll_timeout_seconds`,
@@ -2405,7 +2435,6 @@ class BaseE2ETest:
                 f"{self.connector_short_name}-{self.connection_name_prefix}-"
                 f"{self.run_id}-teardown-{ordinal}"
             ),
-            app_service_url=self.app_service_url,
             run_id=self.run_id,
             delete_type=self.connection_delete_type,
             submit_retry=self._submit_retry(),

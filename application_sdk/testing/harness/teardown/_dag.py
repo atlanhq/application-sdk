@@ -39,6 +39,55 @@ Every argument on the node is a literal, exactly as in
 producing node to thread ``$.<node>.outputs.*`` references from, and a teardown
 whose target came from a reference would be a teardown the harness could not
 state.
+
+**The submit that carries this DAG must name no app.** At submit, Heracles
+fetches the manifest served at ``metadata.app_service_url`` and publishes it
+*over* the workflow's published version — the mechanism
+:meth:`~application_sdk.testing.e2e.base.BaseE2ETest._assert_deployed_manifest_matches`
+exists to assert on, and the reason the connector's own seed DAG is described as
+a placeholder. A teardown is the opposite case: the DAG it publishes **is** the
+graph that has to run, so anything published over it replaces the delete with
+the app under test's own crawl.
+
+That is not hypothetical. FND-1724 shipped this submit carrying the app under
+test's ``app_service_url``, and the two e2e legs of one SDK commit split on the
+shape of the app:
+
+* A **bundle** app (metabase) serves no *bare* manifest — only per-entrypoint
+  ones — so Heracles' fetch 404'd, nothing superseded the seed, and the
+  ``connection-delete`` node ran and purged the connection in 30s.
+* A **single-entrypoint** app (openapi) serves one, so Heracles published
+  openapi's own two-node graph over the seed and the "teardown" re-ran
+  ``extract`` → ``publish`` against a connection it was supposed to delete. It
+  failed on the absent credential, and the runner-side purge picked up the
+  Atlas half.
+
+**Why not name the delete app's own URL instead**, which does exist — its
+namespace carries ``service/connection-delete`` on :8000, the usual
+``http://<app>.<app>-app.svc.cluster.local`` shape. Two reasons, and the second
+is the disqualifying one:
+
+* Its ``connection-delete-server`` deployment sits at ``0/0`` between runs (the
+  same scale-to-zero that makes an unpolled queue normal here), so whether the
+  fetch resolves at all depends on whether it wakes in time — which would make
+  *which DAG runs* a race rather than a property of the submit.
+* A fetch that did resolve would replace this node with the app's manifest
+  graph, whose ``delete_type`` default is ``SOFT``. Teardown needs ``PURGE``
+  (see :class:`DeleteType`), and nothing in the submit parameters overrides a
+  manifest default. Winning that race would archive every run's assets instead
+  of removing them, and leave them answering searches on a shared tenant.
+
+Handing the app its own manifest is still the better end state — no
+hand-authored graph to drift — but it needs that app's mustache tokens read off
+its manifest first, so ``delete_type=PURGE`` can ride the submit. That is
+follow-up work, not a swap.
+
+So the node was never wrong; the envelope was, and it worked on exactly the apps
+whose manifest endpoint happened to fail. Omitting ``app_service_url`` is what
+makes "our DAG runs" a property of the submit rather than of the app under
+test's manifest routing. :func:`application_sdk.testing.harness.teardown.delete_connection`
+does not take that on trust either — it reads back what AE serves, and reports
+a supersede instead of polling a run that is not its own.
 """
 
 from __future__ import annotations
@@ -182,7 +231,6 @@ def build_connection_delete_submit_payload(
     display_name: str,
     run_id: int,
     ae_workflow_slug: str,
-    app_service_url: str,
 ) -> dict[str, Any]:
     """Build the AE submit body for one connection's delete run.
 
@@ -192,6 +240,11 @@ def build_connection_delete_submit_payload(
     but a second builder would be a second place for AE's submit shape to drift,
     on a path exercised far less often than the connector's.
 
+    **It names no app**, which is the one place this body must *differ* from the
+    connector's: ``app_service_url=None``. See the module docstring — a submit
+    that names the app under test has that app's manifest published over this
+    DAG, and the ``connection-delete`` node never runs.
+
     Args:
         connection_qualified_name: The connection being deleted.
         connector_short_name: The suite under test — names the AE workflow and
@@ -200,7 +253,6 @@ def build_connection_delete_submit_payload(
         display_name: Human-readable name for the connection rows.
         run_id: This leg's run identifier.
         ae_workflow_slug: The slug AE minted on the create.
-        app_service_url: HTTP URL AE can reach the app at.
 
     Returns:
         The dict to POST to ``/api/service/package-workflows?submit=true``.
@@ -230,7 +282,9 @@ def build_connection_delete_submit_payload(
         connector_short_name=connector_short_name,
         argo_package_name=f"@atlan/{connector_short_name}",
         argo_template_name=f"atlan-{connector_short_name}",
-        app_service_url=app_service_url,
+        # Not the app under test's URL, and not "" — no key at all. The
+        # module docstring has the mechanism.
+        app_service_url=None,
         connection=connection,
         mustache_subs=MustacheSubstitutions.model_validate(
             {
