@@ -434,22 +434,45 @@ a platform blip must not fail a healthy run. The gate stamps which of the two ha
 | Verdict `READY` / `PARTIAL` | — | proceed | proceed |
 | Verdict `NOT_READY` | — | report `would_block` | **block** |
 | Probe overran the budget | `source_unverifiable` | report `would_block` | **block** |
-| Handler crashed | `source_unverifiable` | report `would_block` | **block** |
+| Handler raised any error, typed or not | `source_unverifiable` | report `would_block` | **block** |
+| Temporal killed a running attempt (`START_TO_CLOSE`, `HEARTBEAT`) | `source_unverifiable` | report `would_block` | **block** |
 | Credential provably absent | `source_unverifiable` | report `would_block` | **block** |
 | Credential lookup failed for another reason | `gate_broken` | fail open | fail open |
-| Rate limited (429) | `gate_broken` | fail open | fail open |
-| Secret-store / dependency outage | `gate_broken` | fail open | fail open |
-| Worker unavailable | `gate_broken` | fail open | fail open |
-| Gate skipped (replay, source-less app) | — | `skipped` | `skipped` |
+| Secret-store outage in the gate's own resolution | `gate_broken` | fail open | fail open |
+| No worker ever ran the attempt (`SCHEDULE_TO_START`) | `gate_broken` | fail open | fail open |
+| Gate skipped (replay, source-less app) | `not_run` | `skipped` | `skipped` |
 
-A handler signals "I could not determine readiness" — as opposed to "the source is not ready" — by
-raising a typed error whose category is plumbing-side (`RateLimitedError`,
-`DependencyUnavailableError`, `ResourceExhaustedError`). Returning `NOT_READY` for a transient
-makes hard mode fail *closed* on a blip, which is the mirror-image bug.
+The line is drawn by **who raised**, not by the error's category. Anything that escapes
+`preflight_check` is the handler's statement about the source if typed, or an app fault if not,
+and the mode applies to both — a handler cannot declare its source to be plumbing by raising a
+`RateLimitedError` or a `DependencyUnavailableError`. A verdict is reached on the attempt the fault
+happens on; the gate's retry attempts exist for its own plumbing, not to give a source a second try.
+
+A handler signals "I could not verify, and extraction can cope" — a 429, a database still
+resuming — by **returning** `PARTIAL` with the failed check carrying the typed retryable error, never
+by raising. The run proceeds in both modes, the row carries the check's code as `reason`, and the
+check list is preserved. Returning `NOT_READY` for a transient makes hard mode fail *closed* on a
+blip; raising it makes hard mode block with the right code but loses every other check.
+
+A running attempt that Temporal has to kill is one the gate's own cancel could not end — a probe
+holding the event loop, an uncancellable thread — so the workflow applies the mode from the failure
+chain: the previous attempt's typed evidence when it left any, else a `TIMEOUT` attributed to the
+app owner. Only a gate that never ran at all fails open.
+
+Every error that leaves the gate activity carries one `FailureDetails` as `details[0]` and the
+check list as `details[1]`, whichever attempt and whichever exit produced it: the `PreflightFailed`
+block, the `PreflightNoVerdict` retry marker a non-final attempt raises, and a plumbing failure
+re-raised under its own class name as the wire `type`. A consumer reading the Temporal failure
+therefore always finds category, code, audience and suggested action, and a later attempt that
+Temporal kills still leaves the earlier attempt's typed evidence in the failure chain.
 
 Two queryable events come out of the gate. The per-run **outcome** event carries `outcome`,
-`gate_mode`, `gate_classification` and the per-check `check_matrix`. On a `gate_broken` fail-open
-its `reason` names the *underlying* fault — the SDK unwraps Temporal's `ActivityError`/`ApplicationError`
+`gate_mode`, `gate_classification`, `gate_duration_ms`, `gate_timeout_seconds`, `gate_attempt` and
+the per-check `check_matrix` on **every** row, including the `skipped` and `no_verdict` rows the
+workflow emits itself (those carry `gate_attempt=0`, since no activity attempt measured them). On a
+proceeded row `reason` is the verdict status, or the error code of the first failed check when the
+run proceeded past one — a `PARTIAL` that hides a throttled probe behind the word `partial` cannot be
+ranked. On a `gate_broken` fail-open its `reason` names the *underlying* fault — the SDK unwraps Temporal's `ActivityError`/`ApplicationError`
 to the real error type (e.g. `DaprSidecarUnreachableError`), not the wrapper — so a persistent
 platform fault is separable from a transient blip on the dashboard. A deadline overrun carries no
 error type to unwrap, so it reports which deadline fired instead: `Timeout:START_TO_CLOSE` (one
@@ -557,19 +580,13 @@ sizing probes to that field is sizing to the real deadline. Three rules follow:
   event loop cannot be interrupted, so it escapes the budget and also stalls the worker's other
   activities. Run blocking drivers in a thread.
 
-Note the ops override below now carries more weight than it used to: setting it to `hard`
-fleet-wide makes every app block on a handler crash or an absent credential, including apps that
-never opted in and whose checks have not been validated against real runs. Prefer the per-app
-attribute.
-
-Ops can override the posture without an app release via `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
-worker deployment. The env var wins over the attribute; any set value other than the literal `hard`
-resolves to soft, so malformed config never blocks a run by accident. An empty or unset value is
-not an override — resolution falls through to the declared `preflight_gate_mode` attribute. The
-worker logs an INFO line
-per hard app at boot. Start soft, then flip to `hard` once connector-pulse `would_block` rows show
-the checks track real workflow failures. See the `adopt-preflight-gate` skill for the full adoption
-flow.
+The posture is read from `preflight_gate_mode` alone. There is no deploy-time override: the worker
+bakes the attribute into the gate activity and the workflow reads the same attribute for its own
+rows, so the two can never disagree about whether a run should have been blocked. Any value other
+than the literal `hard` resolves to soft, so a typo never blocks a run by accident. The worker logs
+an INFO line per hard app at boot. Start soft, then flip to `hard` once connector-pulse
+`would_block` rows show the checks track real workflow failures. See the `adopt-preflight-gate`
+skill for the full adoption flow.
 
 ### Asset-Validation Outcome
 

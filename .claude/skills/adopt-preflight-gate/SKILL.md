@@ -7,9 +7,12 @@ description: >
   verdict; by default it is soft (every outcome is reported but the run
   proceeds), and blocking real runs is a per-app opt-in (preflight_gate_mode =
   "hard"). Hard mode blocks on everything the gate can attribute to the source —
-  a NOT_READY verdict, a probe overrunning the enforced budget, a handler crash,
-  a provably absent credential — while failures of the gate's own plumbing always
-  fail open. Classifies the app's rollout bucket, sizes the check budget
+  a NOT_READY verdict, anything the handler raises, a probe overrunning the
+  enforced budget, a running attempt Temporal had to kill, a provably absent
+  credential — while failures of the gate's own plumbing (its credential
+  resolution, no worker) always fail open; a transient is returned as PARTIAL
+  with a typed retryable check error, never raised. Classifies the app's
+  rollout bucket, sizes the check budget
   (preflight_gate_timeout_seconds, default 150s, ceiling 300s) and retry attempts
   (preflight_gate_max_attempts) against what the handler actually costs, sizing
   from SDK-measured gate_duration_ms rather than handler-authored check durations,
@@ -73,13 +76,17 @@ status. Read its `app/handler.py` before proposing changes.
   checks run and only influence `PARTIAL`.
 - **Return the verdict; don't raise it.** The returned status is what both
   surfaces render, so a block belongs there. But raising is *not* a no-op, and
-  what it does depends on the error's type: a typed plumbing error
-  (`RateLimitedError`, `DependencyUnavailableError`, `ResourceExhaustedError`)
-  means "I could not determine readiness" and fails open in both postures;
-  anything else — an untyped crash, a typed source error, overrunning the budget
-  — is treated as an unverifiable source and **blocks in hard mode**. So an
-  uncaught probe exception is a run-aborting bug for a hard app, not a harmless
-  fail-open.
+  the gate classifies by **who raised**, never by the error's type: anything
+  that escapes `preflight_check` is the handler's statement about the source if
+  typed, or an app fault if untyped, and **blocks in hard mode** on the attempt
+  it happens. A handler cannot fail the gate open by raising `RateLimitedError`
+  or `DependencyUnavailableError`; only the gate's own frames (credential
+  resolution, the store probes) fail open. So an uncaught probe exception is a
+  run-aborting bug for a hard app, and a raised transient is a fail-closed on a
+  blip. A transient the extraction can cope with — a 429, a database still
+  resuming — is a failed check on a `PARTIAL` output carrying the typed
+  retryable leaf: the run proceeds in both modes, the row names the check's
+  code as `reason`, and the other checks survive.
 - A failed check should carry `error=<SDK leaf>(...).to_failure_details()` —
   category/code/audience/suggested_action flow to the Automation Engine and
   dashboards. Untyped failures fall back to the `PREFLIGHT_CHECK_FAILED`
@@ -118,21 +125,26 @@ class MyApp(App):
     preflight_gate_mode = "hard"   # git-blamed: checks are trusted to block runs
 ```
 
-or, ops-side without an app release: `ATLAN_PREFLIGHT_GATE_MODE=hard` on the
-worker deployment (env wins over the attribute; any value other than the
-literal `hard` resolves to soft — malformed config never blocks a run by
-accident). The worker logs an INFO line per hard app at boot, and emits a
+The attribute is the only source of the posture; there is no deploy-time env
+override (the former `ATLAN_PREFLIGHT_GATE_MODE` is in the removed-env-var
+registry and warns at boot if still set). Any value other than the literal
+`hard` resolves to soft, so malformed config never blocks a run by accident. The
+worker and the workflow both read the attribute, so the two frames cannot
+disagree. The worker logs an INFO line per hard app at boot, and emits a
 queryable `Preflight gate posture` event per app carrying the resolved mode and
-budget. Prefer the per-app attribute: the env lever applies to every app on that
-worker, including ones whose checks have never been validated against real runs.
+budget.
 
 Hard mode covers every outcome the gate attributes to the **source** — a
-`NOT_READY` verdict, a probe overrunning the budget, a handler crash, a provably
-absent credential. Failures of the gate's own **plumbing** (rate limit,
-secret-store outage, a credential lookup that failed for any other reason, worker
-unavailable) always fail open, in both postures. The outcome event
-carries `gate_classification` (`source_unverifiable` vs `gate_broken`) so the two
-are separable in pulse.
+`NOT_READY` verdict, anything the handler raises (typed or not), a probe
+overrunning the budget, a running attempt Temporal had to kill, a provably
+absent credential. Failures of the gate's own **plumbing** (the gate's
+credential resolution failing, a collapsed not-found wrapping a transport error,
+no worker ever running the attempt) always fail open, in both postures. When
+Temporal kills a running attempt the workflow applies the mode from the failure
+chain — the previous attempt's typed evidence, else a `TIMEOUT` attributed to
+the app owner — so a dead frame is never a silent proceed. The outcome event
+carries `gate_classification` (`verdict` / `source_unverifiable` / `gate_broken`
+/ `not_run`) so the cases are separable in pulse.
 
 ## The check budget — size it before flipping to hard
 
@@ -147,11 +159,12 @@ a generous budget costs nothing on a healthy run; it only changes the run that
 would otherwise have been cut short.
 
 `App.preflight_gate_max_attempts` (default 2, clamped 1-3) sets the retries. A
-retry rescues a *transient* — a cold pool, a cluster resuming — by trying **again**;
-it cannot rescue a systematically slow check, which needs a bigger budget instead.
-Both timeouts derive from these two numbers, so an app declaring a large budget
-usually wants `1`: at the 300s ceiling, two attempts reserve a ~10 minute
-`schedule_to_close`.
+retry exists for the gate's own plumbing — a secret-store blip, a worker that died
+mid-attempt — not for the source: a handler fault is a verdict on the attempt it
+happens, so a second attempt never rescues a slow probe or a transient. Both
+timeouts derive from these two numbers, so an app declaring a large budget usually
+wants `1`: at the 300s ceiling, two attempts reserve a ~10 minute
+`schedule_to_close` for a retry that can only help if the gate itself broke.
 
 ```python
 class MyApp(App):
@@ -194,8 +207,12 @@ Rules the skill enforces during adoption:
   belongs on the App class, verdicts belong in the handler.
 - **Never return `NOT_READY` for a transient.** A 429 or a dependency outage is
   "ask me later", not "the source is not ready" — collapsing them makes hard mode
-  fail *closed* on a blip. Raise a typed `RateLimitedError` /
-  `DependencyUnavailableError` instead; the gate routes those to fail-open.
+  fail *closed* on a blip. Never raise them either: a raised transient blocks a
+  hard gate just the same and discards the other checks. Return `PARTIAL` with
+  the failed check carrying `RateLimitedError(...).to_failure_details()`
+  (retryable); wait for a `Retry-After` only when it fits inside
+  `input.timeout_seconds` with margin, and leave the checks that could not run
+  out of the list rather than seeding them as failures.
 - Soft is the default landing state with two exit conditions, both required
   before adding `preflight_gate_mode = "hard"`:
   1. the app's `would_block` rows track real workflow failures (the checks are
@@ -216,16 +233,18 @@ and `LogAttributes` is a `Map`, so `LogAttributes['outcome']` works directly whi
 | attribute | meaning |
 | --- | --- |
 | `outcome` | `proceeded` / `would_block` / `blocked` / `no_verdict` / `skipped` |
-| `gate_mode` | resolved posture; absent on the workflow-emitted rows |
-| `gate_classification` | `verdict` / `source_unverifiable` / `gate_broken` |
+| `reason` | the verdict status on a clean proceed; the first failed check's error code on a proceed past a failed check (a `PARTIAL` from a 429 reads `RATE_LIMITED_API`, not `partial`); the primary code on a block; the underlying fault on a `no_verdict` |
+| `gate_mode` | resolved posture, on every row including the workflow-emitted ones |
+| `gate_classification` | `verdict` / `source_unverifiable` / `gate_broken` / `not_run` (skipped) |
 | `gate_duration_ms` | **SDK-measured** elapsed; the only number that can size a budget |
 | `gate_timeout_seconds` | the budget in force, so headroom needs no join |
-| `gate_attempt` | distinguishes a first-try pass from a retry rescue |
+| `gate_attempt` | which activity attempt produced the row; `0` on the workflow-emitted `skipped` / `no_verdict` / dead-frame rows |
 | `check_matrix` | per-check name/passed/error_code/duration_ms; `[]` where no check ran |
 
-`check_matrix` is present on **every** outcome, so parse it unconditionally rather
-than branching on field presence — a branch mishandled in the dropping direction
-is how a gate that never reached a verdict vanishes from the numerator.
+Every key is present on **every** outcome, the workflow-emitted rows included, so
+parse unconditionally rather than branching on field presence — a branch
+mishandled in the dropping direction is how a gate that never reached a verdict
+vanishes from the numerator.
 
 **The orphaned-attempt caveat, for anything sized on historical data.** Before SDK
 3.25 the gate had no timeout of its own. Temporal's `start_to_close` is enforced
@@ -865,11 +884,17 @@ embedded Dapr locally) — not a real verdict, re-run. `source_unverifiable` on 
 
 - `all(c.passed)` status logic → advisory checks silently promoted to
   run-blocking.
-- Raise-to-block → the verdict belongs in the returned status; a raise is
-  classified by error type instead, so it either fails open (typed plumbing
-  error) or blocks with the wrong attribution (anything else).
+- Raise-to-block → the verdict belongs in the returned status; anything the
+  handler raises blocks a hard gate on that attempt, typed or not, and the
+  checks already recorded are replaced by one synthetic row. Raising cannot
+  fail the gate open.
 - Returning `NOT_READY` for a transient (429, dependency outage) → makes a hard
-  gate fail *closed* on a blip. Raise a typed plumbing error instead.
+  gate fail *closed* on a blip. Raising the transient blocks it too. Return
+  `PARTIAL` with the failed check carrying the typed retryable leaf.
+- Keeping the old `_FAIL_OPEN_ERRORS: raise` idiom from pre-3.33 exemplar apps
+  → reads as fail-open in the code and aborts every throttled run once the app
+  bumps. Convert the raise to the `PARTIAL` return; keep the tuple as the list
+  of transients.
 - Sizing checks to a budget the handler can't meet, or reading
   `input.timeout_seconds` and then overriding it (`max(input.timeout_seconds,
   <bigger constant>)`, or a deadline whose per-probe floor never forces an early

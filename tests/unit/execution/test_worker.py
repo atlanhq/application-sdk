@@ -13,6 +13,7 @@ from temporalio.exceptions import ActivityError
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
+from application_sdk.common.env_warnings import _REMOVED_ENV_VARS
 from application_sdk.constants import SHUTDOWN_DRAIN_DELAY_SECONDS
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import (
@@ -25,11 +26,14 @@ from application_sdk.execution._temporal._activity_errors import (
     WorkerActivityNameCollisionError,
     WorkerInterceptorDuplicateError,
 )
+from application_sdk.execution._temporal.preflight_gate import (
+    gate_mode_is_hard,
+    resolve_gate_enforcement,
+)
 from application_sdk.execution._temporal.worker import (
     _MAX_FATAL_CHAIN_DEPTH,
     AppWorker,
     _log_worker_fatal_error,
-    _resolve_gate_enforcement,
     _resolve_verify_storage,
     create_worker,
     describe_exception_chain,
@@ -300,10 +304,6 @@ class TestCreateWorker:
         ``create_worker`` glue end to end: the ``name -> app_cls`` map resolves
         ``enforce=True``, the gate activity registers under ``{app}:preflight``,
         and the boot INFO line fires so the hard posture is visible in logs."""
-        # _resolve_gate_enforcement reads env first, so a non-"hard" ambient
-        # value would resolve this app to soft and suppress the boot line —
-        # clear it to isolate the test from the environment (sibling pattern).
-        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
 
         class _HardGateApp(App):
             preflight_gate_mode = "hard"
@@ -1173,10 +1173,12 @@ class TestWorkerPoolQueueResolution:
 
 
 class TestResolveGateEnforcement:
-    """Gate posture resolution: env > App.preflight_gate_mode > soft default.
+    """Gate posture comes from ``App.preflight_gate_mode`` alone.
 
     Only the literal "hard" enforces; anything unknown falls back to soft so
     a run is never blocked by a typo — blocking is always a deliberate opt-in.
+    There is no deploy-time override: the worker and the workflow both read the
+    class attribute, so the two can never disagree about the posture.
     """
 
     def setup_method(self) -> None:
@@ -1187,52 +1189,46 @@ class TestResolveGateEnforcement:
         AppRegistry.reset()
         TaskRegistry.reset()
 
-    def test_default_soft_when_nothing_declared(self, monkeypatch) -> None:
-        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
-
+    def test_default_soft_when_nothing_declared(self) -> None:
         class _Plain(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
-        assert _resolve_gate_enforcement(_Plain) is False
-        assert _resolve_gate_enforcement(None) is False
+        assert resolve_gate_enforcement(_Plain) is False
+        assert resolve_gate_enforcement(None) is False
 
-    def test_declared_hard_enforces(self, monkeypatch) -> None:
-        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
-
+    def test_declared_hard_enforces(self) -> None:
         class _Hard(App):
             preflight_gate_mode = "hard"
 
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
-        assert _resolve_gate_enforcement(_Hard) is True
+        assert resolve_gate_enforcement(_Hard) is True
 
-    def test_declared_value_case_and_whitespace_insensitive(self, monkeypatch) -> None:
-        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
-
+    def test_declared_value_case_and_whitespace_insensitive(self) -> None:
         class _Loud(App):
             preflight_gate_mode = "  HARD  "
 
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
-        assert _resolve_gate_enforcement(_Loud) is True
+        assert resolve_gate_enforcement(_Loud) is True
 
-    def test_malformed_declared_falls_back_to_soft(self, monkeypatch) -> None:
-        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
-
+    def test_malformed_declared_falls_back_to_soft(self) -> None:
         class _Typo(App):
-            preflight_gate_mode = "on"  # not "hard" -> soft
+            preflight_gate_mode = "on"
 
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
-        assert _resolve_gate_enforcement(_Typo) is False
+        assert resolve_gate_enforcement(_Typo) is False
 
-    def test_env_hard_wins_over_declared_soft(self, monkeypatch) -> None:
-        # ops can force the net up without waiting on an app release
-        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "hard")
+    @pytest.mark.parametrize("stale_value", ["hard", "soft", "enabled", ""])
+    def test_the_removed_env_var_no_longer_changes_the_posture(
+        self, monkeypatch, stale_value: str
+    ) -> None:
+        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", stale_value)
 
         class _Soft(App):
             preflight_gate_mode = "soft"
@@ -1240,46 +1236,24 @@ class TestResolveGateEnforcement:
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
-        assert _resolve_gate_enforcement(_Soft) is True
-
-    def test_env_soft_wins_over_declared_hard(self, monkeypatch) -> None:
-        # ops can drop the net without waiting on an app release
-        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "soft")
-
         class _Hard(App):
             preflight_gate_mode = "hard"
 
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
-        assert _resolve_gate_enforcement(_Hard) is False
+        assert resolve_gate_enforcement(_Soft) is False
+        assert resolve_gate_enforcement(_Hard) is True
 
-    def test_malformed_env_falls_back_to_soft(self, monkeypatch) -> None:
-        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "enabled")
+    def test_the_removed_env_var_warns_at_startup(self) -> None:
+        assert "ATLAN_PREFLIGHT_GATE_MODE" in _REMOVED_ENV_VARS
 
-        class _Hard(App):
-            preflight_gate_mode = "hard"
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        # a set-but-unknown env value decides (falls back to soft), it does not
-        # fall through to the declared attribute
-        assert _resolve_gate_enforcement(_Hard) is False
-
-    def test_empty_env_defers_to_declared(self, monkeypatch) -> None:
-        # An empty env value (a blank ConfigMap entry) is falsy under `if val:`,
-        # so it is not treated as an override — resolution falls through to the
-        # declared attribute rather than forcing soft.
-        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", "")
-
-        class _Hard(App):
-            preflight_gate_mode = "hard"
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert _resolve_gate_enforcement(_Hard) is True
+    def test_gate_mode_is_hard_reads_a_raw_declared_value(self) -> None:
+        assert gate_mode_is_hard("hard") is True
+        assert gate_mode_is_hard(" Hard ") is True
+        assert gate_mode_is_hard("soft") is False
+        assert gate_mode_is_hard(None) is False
+        assert gate_mode_is_hard(True) is False
 
 
 class TestWorkflowFailureExceptionTypes:
@@ -1703,7 +1677,6 @@ class TestPreflightVerifyStorageWiring:
     @staticmethod
     def _captured_verify_storage(monkeypatch) -> list[bool]:
         """Build a worker, returning the ``verify_storage`` of every gate built."""
-        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
         seen: list[bool] = []
         real = _preflight_gate_module.build_preflight_gate_activity
 

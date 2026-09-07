@@ -75,6 +75,8 @@ class PreflightOutput(BaseModel):
 
 `PreflightOutput.error` is additive (`None` by default). Handlers that only set `message` keep working. When `error` is set, `resolved_message` prefers it over `message` — the same precedence `PreflightCheck.error` already uses. Pass a `FailureDetails` (or a bare `AppError`, which is coerced).
 
+**Return the verdict; do not raise it.** On the gate path, anything that escapes `preflight_check` is treated as a statement about the source (typed) or an app fault (untyped), and a hard-mode app blocks on it. A transient the extraction can cope with — a 429, a database still resuming — is a failed check on a `PARTIAL` output, with `error=RateLimitedError(...).to_failure_details()` (retryable): the run proceeds in both modes, the outcome row names the check's code, and the other checks survive. Bound every probe to `input.timeout_seconds` so the handler returns its own typed verdict before the gate's cancel; a probe the gate has to end leaves no check evidence.
+
 #### Multi-credential preflight
 
 Most apps use one credential and read `input.credentials`. Apps that need

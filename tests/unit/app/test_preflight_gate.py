@@ -13,13 +13,27 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import _run_preflight_gate
+from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.leaves import SourceUnavailableError
 from application_sdk.execution._temporal.preflight_gate import (
     CLASSIFICATION_GATE_BROKEN,
+    CLASSIFICATION_NOT_RUN,
+    CLASSIFICATION_SOURCE_UNVERIFIABLE,
     FAILURE_AUDIENCE_KEY,
+    GATE_TIMEOUT_DEFAULT_SECONDS,
+    PREFLIGHT_FAILED_ERROR_TYPE,
+    PREFLIGHT_NO_VERDICT_ERROR_TYPE,
 )
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.contracts import PreflightOutput, PreflightStatus
-from application_sdk.observability.logger_adaptor import CHECK_MATRIX_KEY
+from application_sdk.observability.logger_adaptor import (
+    CHECK_MATRIX_KEY,
+    GATE_ATTEMPTS_KEY,
+    GATE_CLASSIFICATION_KEY,
+    GATE_DURATION_KEY,
+    GATE_MODE_KEY,
+    GATE_TIMEOUT_KEY,
+)
 
 
 class _ResolvableInput:
@@ -107,6 +121,17 @@ def _outcomes(safe_log) -> list[str]:
 def safe_log():
     with mock.patch("application_sdk.app.base._safe_log") as m:
         yield m
+
+
+@pytest.fixture(autouse=True)
+def _workflow_now():
+    from datetime import datetime, timezone
+
+    with mock.patch(
+        "application_sdk.app.base.workflow.now",
+        return_value=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    ):
+        yield
 
 
 class TestRunPreflightGate:
@@ -430,3 +455,291 @@ class TestGateActivityHeartbeat:
         heartbeat = exec_mock.call_args.kwargs.get("heartbeat_timeout")
         assert heartbeat is not None
         assert heartbeat.total_seconds() > 0
+
+
+_FULL_ROW_KEYS = (
+    CHECK_MATRIX_KEY,
+    GATE_MODE_KEY,
+    GATE_CLASSIFICATION_KEY,
+    GATE_DURATION_KEY,
+    GATE_TIMEOUT_KEY,
+    GATE_ATTEMPTS_KEY,
+)
+
+
+def _workflow_clock(*seconds: float):
+    from datetime import datetime, timedelta, timezone
+
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ticks = [base + timedelta(seconds=s) for s in seconds]
+    return mock.patch("application_sdk.app.base.workflow.now", side_effect=ticks)
+
+
+class TestEveryWorkflowRowCarriesTheFullShape:
+    """The rows the workflow emits carry the same keys the activity's rows do.
+
+    A consumer that filters on ``gate_mode`` or ``gate_duration_ms`` must not
+    drop exactly the rows that prove a gate never ran or never returned. Every
+    outcome is parsed the same way, so every outcome carries every key.
+    """
+
+    @staticmethod
+    def _row(safe_log) -> dict:
+        rows = [c.kwargs for c in safe_log.call_args_list if "outcome" in c.kwargs]
+        assert len(rows) == 1
+        return rows[0]
+
+    async def test_skipped_on_replay_carries_every_key(self, safe_log) -> None:
+        with _patched(False):
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        row = self._row(safe_log)
+        assert row["outcome"] == "skipped"
+        assert all(key in row for key in _FULL_ROW_KEYS)
+        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_NOT_RUN
+        assert row[GATE_DURATION_KEY] == 0.0
+        assert row[GATE_ATTEMPTS_KEY] == 0
+
+    async def test_skipped_on_non_resolvable_input_carries_every_key(
+        self, safe_log
+    ) -> None:
+        with _patched(True):
+            await _run_preflight_gate(_NonResolvableInput(), "myapp", "crawl")
+        row = self._row(safe_log)
+        assert row["outcome"] == "skipped"
+        assert all(key in row for key in _FULL_ROW_KEYS)
+        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_NOT_RUN
+
+    async def test_no_verdict_carries_every_key_and_a_measured_duration(
+        self, safe_log
+    ) -> None:
+        from temporalio.exceptions import ApplicationError as TemporalApplicationError
+
+        _, exec_patch = _exec(side_effect=TemporalApplicationError("secret store down"))
+        with _patched(True), exec_patch, _workflow_clock(0, 7.5):
+            await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", budget_seconds=200
+            )
+        row = self._row(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert all(key in row for key in _FULL_ROW_KEYS)
+        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_GATE_BROKEN
+        assert row[GATE_DURATION_KEY] == 7500.0
+        assert row[GATE_TIMEOUT_KEY] == 200
+        assert row[GATE_ATTEMPTS_KEY] == 0
+
+    async def test_rows_report_the_declared_mode(self, safe_log) -> None:
+        with _patched(False):
+            await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", gate_mode="hard"
+            )
+        assert self._row(safe_log)[GATE_MODE_KEY] == "hard"
+
+    async def test_rows_default_to_soft_when_no_mode_is_declared(
+        self, safe_log
+    ) -> None:
+        with _patched(False):
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert self._row(safe_log)[GATE_MODE_KEY] == "soft"
+
+    async def test_rows_report_the_default_budget_when_none_is_declared(
+        self, safe_log
+    ) -> None:
+        with _patched(False):
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert self._row(safe_log)[GATE_TIMEOUT_KEY] == GATE_TIMEOUT_DEFAULT_SECONDS
+
+    async def test_malformed_declared_mode_reads_as_soft(self, safe_log) -> None:
+        with _patched(False):
+            await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", gate_mode="on"
+            )
+        assert self._row(safe_log)[GATE_MODE_KEY] == "soft"
+
+
+def _temporal_timeout(timeout_type):
+    from temporalio.exceptions import TimeoutError as TemporalTimeoutError
+
+    return TemporalTimeoutError(
+        "deadline exceeded", type=timeout_type, last_heartbeat_details=[]
+    )
+
+
+def _no_verdict_marker(*, as_dict: bool = False) -> ApplicationError:
+    """The retry marker a non-final attempt raises, with a source fault as evidence."""
+    details = SourceUnavailableError(
+        message="The SQL Server did not answer in time"
+    ).to_failure_details()
+    checks = [
+        {
+            "name": "preflightVerdict",
+            "passed": False,
+            "error": details.model_dump(mode="json"),
+        }
+    ]
+    payload = details.model_dump(mode="json") if as_dict else details
+    return ApplicationError(
+        "Preflight could not reach a verdict",
+        payload,
+        {"checks": checks},
+        type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+    )
+
+
+def _killed_attempt_after_marker(as_dict: bool = False):
+    """Event shape from production: START_TO_CLOSE wrapping the previous attempt's marker."""
+    from temporalio.exceptions import TimeoutType
+
+    timeout = _temporal_timeout(TimeoutType.START_TO_CLOSE)
+    timeout.__cause__ = _no_verdict_marker(as_dict=as_dict)
+    return _real_activity_error(timeout)
+
+
+class TestWorkflowAppliesTheModeToADeadFrame:
+    """A gate attempt Temporal killed is not a silent proceed.
+
+    The activity holds the mode, but a probe that stalls the loop outlives the
+    activity's own cancel and Temporal ends the frame. The workflow then reads
+    the chain: the previous attempt's typed evidence, or the bare fact that a
+    running attempt was killed, are both statements about the source or the
+    handler, and the mode applies. Only the gate's own plumbing still proceeds.
+    """
+
+    @staticmethod
+    def _rows(safe_log) -> list[dict]:
+        return [c.kwargs for c in safe_log.call_args_list if "outcome" in c.kwargs]
+
+    async def test_hard_mode_blocks_from_the_previous_attempts_evidence(
+        self, safe_log
+    ) -> None:
+        _, exec_patch = _exec(side_effect=_killed_attempt_after_marker())
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(
+                    _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
+                )
+        err = excinfo.value
+        assert err.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert err.non_retryable is True
+        assert err.details[0].category is FailureCategory.SOURCE_UNAVAILABLE
+        assert err.details[0].audience is Audience.USER
+        assert err.details[0].app_name == "mssql"
+        assert err.details[1]["checks"][0]["passed"] is False
+        (row,) = self._rows(safe_log)
+        assert row["outcome"] == "blocked"
+        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
+        assert row[FAILURE_AUDIENCE_KEY] == "USER"
+        assert row["reason"] == err.details[0].code
+        assert "preflightVerdict" in row[CHECK_MATRIX_KEY]
+
+    async def test_soft_mode_reports_would_block_and_proceeds(self, safe_log) -> None:
+        _, exec_patch = _exec(side_effect=_killed_attempt_after_marker())
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "mssql", "crawler", gate_mode="soft"
+            )
+        assert result is None
+        (row,) = self._rows(safe_log)
+        assert row["outcome"] == "would_block"
+        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
+
+    async def test_evidence_that_crossed_the_converter_as_a_dict_is_accepted(
+        self, safe_log
+    ) -> None:
+        _, exec_patch = _exec(side_effect=_killed_attempt_after_marker(as_dict=True))
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(
+                    _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
+                )
+        assert excinfo.value.details[0].category is FailureCategory.SOURCE_UNAVAILABLE
+
+    async def test_marker_as_the_final_failure_is_also_a_verdict(
+        self, safe_log
+    ) -> None:
+        _, exec_patch = _exec(side_effect=_real_activity_error(_no_verdict_marker()))
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(
+                    _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
+                )
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+
+    @pytest.mark.parametrize("timeout_name", ["START_TO_CLOSE", "HEARTBEAT"])
+    async def test_killed_frame_without_evidence_blocks_as_a_handler_timeout(
+        self, safe_log, timeout_name: str
+    ) -> None:
+        from temporalio.exceptions import TimeoutType
+
+        killed = _real_activity_error(_temporal_timeout(TimeoutType[timeout_name]))
+        _, exec_patch = _exec(side_effect=killed)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(
+                    _ResolvableInput(),
+                    "mssql",
+                    "crawler",
+                    budget_seconds=300,
+                    gate_mode="hard",
+                )
+        details = excinfo.value.details[0]
+        assert details.category is FailureCategory.TIMEOUT
+        assert details.audience is Audience.APP_OWNER
+        assert details.app_name == "mssql"
+        assert "300" in details.message
+        (row,) = self._rows(safe_log)
+        assert row["outcome"] == "blocked"
+        assert row[FAILURE_AUDIENCE_KEY] == "APP_OWNER"
+        assert row[CHECK_MATRIX_KEY] == "[]"
+
+    async def test_no_worker_ever_ran_the_attempt_still_fails_open(
+        self, safe_log
+    ) -> None:
+        from temporalio.exceptions import TimeoutType
+
+        never_started = _real_activity_error(
+            _temporal_timeout(TimeoutType.SCHEDULE_TO_START)
+        )
+        _, exec_patch = _exec(side_effect=never_started)
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
+            )
+        assert result is None
+        (row,) = self._rows(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_GATE_BROKEN
+        assert row["reason"] == "Timeout:SCHEDULE_TO_START"
+
+    async def test_plumbing_failure_with_details_still_fails_open(
+        self, safe_log
+    ) -> None:
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        plumbing = ApplicationError(
+            "vault down",
+            DependencyUnavailableError(
+                message="vault down", service="secret_store"
+            ).to_failure_details(),
+            type="DependencyUnavailableError",
+        )
+        _, exec_patch = _exec(side_effect=_real_activity_error(plumbing))
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
+            )
+        assert result is None
+        (row,) = self._rows(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_GATE_BROKEN
+        assert row["reason"] == "DependencyUnavailableError"
+
+    async def test_the_block_is_still_reraised_unchanged(self, safe_log) -> None:
+        block = _preflight_failed_error()
+        _, exec_patch = _exec(side_effect=_real_activity_error(block))
+        with _patched(True), exec_patch:
+            with pytest.raises(Exception) as excinfo:
+                await _run_preflight_gate(
+                    _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
+                )
+        assert excinfo.value.__cause__ is block
+        assert self._rows(safe_log) == []

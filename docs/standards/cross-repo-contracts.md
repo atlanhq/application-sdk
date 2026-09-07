@@ -132,6 +132,20 @@ Two consequences for changes here:
   segment, which is not a name and would collapse every such connection onto a
   single shared directory.
 
+## The preflight gate's Temporal failure payload
+
+| | |
+|---|---|
+| **Produced by** | `_gate_error()` and `_plumbing_error()` in `application_sdk/execution/_temporal/preflight_gate.py`, on every error that leaves the `{app}:preflight` activity |
+| **Shape** | An `ApplicationError` whose `details[0]` is one `FailureDetails` (category, code, audience, retryable, message, suggested_action, evidence) and whose `details[1]` is `{"checks": [...]}`, every check in wire form. The wire `type` is `PreflightFailed` for the block, `PreflightNoVerdict` for a non-final attempt's retry marker, and the raising class name (e.g. `DependencyUnavailableError`) for a gate-plumbing failure |
+| **Read by** | The Automation Engine, which attributes a failed run from `details[0]` of the terminal failure and of the gate activity's failure; the Temporal UI's activity pane, which renders `details[1]` |
+| **Pinned by** | `TestEveryExitCarriesFailureDetails` in `tests/unit/execution/test_preflight_gate_classification.py` |
+
+The three exits share one builder on purpose. A consumer must be able to read a killed
+attempt's chain and find the previous attempt's typed evidence, so the retry marker cannot
+carry less than the block does; and a plumbing failure that left the activity as a bare class
+name gave the reader nothing to attribute at all.
+
 ## The preflight-results write route
 
 The one entry here that runs the other way: the SDK is the **caller**, not the

@@ -19,10 +19,12 @@ from unittest import mock
 import pytest
 
 from application_sdk.credentials.errors import CredentialNotFoundError
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     AuthError,
     DependencyUnavailableError,
     RateLimitedError,
+    SourceUnavailableError,
 )
 from application_sdk.execution._temporal.preflight_gate import (
     CLASSIFICATION_SOURCE_UNVERIFIABLE,
@@ -30,11 +32,11 @@ from application_sdk.execution._temporal.preflight_gate import (
     GATE_ATTEMPTS_DEFAULT,
     GATE_ATTEMPTS_MAX,
     GATE_ATTEMPTS_MIN,
-    GATE_RETRY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     GATE_TIMEOUT_MAX_SECONDS,
     GATE_TIMEOUT_MIN_SECONDS,
     PREFLIGHT_FAILED_ERROR_TYPE,
+    PREFLIGHT_FALLBACK_CODE,
     PREFLIGHT_NO_VERDICT_ERROR_TYPE,
     PREFLIGHT_POSTURE_EVENT,
     PreflightGateInput,
@@ -44,6 +46,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     resolve_gate_attempts,
     resolve_gate_budget_seconds,
 )
+from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.base import DefaultHandler
 from application_sdk.handler.contracts import (
     PreflightCheck,
@@ -163,12 +166,12 @@ class TestTimeoutDerivation:
         assert start_to_close.total_seconds() > 25
 
     def test_schedule_to_close_fits_two_attempts(self) -> None:
-        # Otherwise GATE_RETRY is cosmetic: the second attempt cannot start
+        # Otherwise the retry policy is cosmetic: the second attempt cannot start
         # before the schedule cap fires.
         for budget in (GATE_TIMEOUT_MIN_SECONDS, 25, GATE_TIMEOUT_MAX_SECONDS):
             start_to_close, schedule_to_close = gate_timeouts(budget)
             assert schedule_to_close.total_seconds() >= (
-                GATE_RETRY.maximum_attempts * start_to_close.total_seconds()
+                GATE_ATTEMPTS_DEFAULT * start_to_close.total_seconds()
             )
 
     def test_scales_with_budget(self) -> None:
@@ -236,9 +239,10 @@ class TestRemainingBudget:
             mock.patch(f"{_GATE}._resolve_gate_credentials", _slow_resolve),
             mock.patch(f"{_GATE}.logger") as mock_logger,
         ):
-            with pytest.raises(DependencyUnavailableError):
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(PreflightGateInput())
 
+        assert excinfo.value.type == "DependencyUnavailableError"
         assert handler.preflight_input is None
         assert _no_outcome(mock_logger)
 
@@ -404,8 +408,10 @@ class TestCollapsedPlumbingIsNotACredentialProblem:
             mock.patch(f"{_GATE}._resolve_gate_credentials", _raise),
             mock.patch(f"{_GATE}.logger") as mock_logger,
         ):
-            with pytest.raises(CredentialNotFoundError):
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(PreflightGateInput())
+        assert excinfo.value.type == "CredentialNotFoundError"
+        assert excinfo.value.__cause__ is collapsed
         assert _no_outcome(mock_logger)
 
     async def test_definitive_absence_still_applies_mode(self) -> None:
@@ -448,56 +454,157 @@ class TestHandlerRaisedBlockPassesThrough:
         assert _outcome_rows(mock_logger) == []
 
 
-class TestGateBrokenAlwaysFailsOpen:
-    """Plumbing failures propagate to the workflow's fail-open, in both modes."""
+class TestHandlerRaisedPlumbingIsSourceSide:
+    """Plumbing is decided by who raised it, not by the error's category.
+
+    A handler cannot declare its source to be gate plumbing. Whatever escapes
+    ``preflight_check`` is the handler's statement about the source if typed, or
+    an app fault if not, and the mode applies to both. The only fail-open left
+    is the gate's own frames: credential resolution and the store probes.
+    """
+
+    @pytest.mark.parametrize(
+        ("exc", "category", "audience"),
+        [
+            (
+                DependencyUnavailableError(message="db paused", service="source"),
+                FailureCategory.DEPENDENCY_UNAVAILABLE,
+                Audience.PLATFORM,
+            ),
+            (
+                RateLimitedError(message="429"),
+                FailureCategory.RATE_LIMITED,
+                Audience.USER,
+            ),
+        ],
+    )
+    async def test_hard_mode_blocks_with_the_handlers_own_details(
+        self, exc: Exception, category: FailureCategory, audience: Audience
+    ) -> None:
+        gate = _gate(_RaisingHandler(exc), enforce=True)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        err = excinfo.value
+        assert err.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert _primary_details(err).category is category
+        assert _primary_details(err).audience is audience
+        row = _outcome(mock_logger)
+        assert row["outcome"] == "blocked"
+        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
+        assert row[FAILURE_AUDIENCE_KEY] == audience.value
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            DependencyUnavailableError(message="db paused", service="source"),
+            RateLimitedError(message="429"),
+        ],
+    )
+    async def test_soft_mode_reports_and_proceeds(self, exc: Exception) -> None:
+        gate = _gate(_RaisingHandler(exc), enforce=False)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        row = _outcome(mock_logger)
+        assert row["outcome"] == "would_block"
+        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
 
     @pytest.mark.parametrize("enforce", [True, False])
-    async def test_dependency_outage_propagates(self, enforce: bool) -> None:
-        exc = DependencyUnavailableError(message="dapr down", service="secret_store")
-        gate = _gate(_RaisingHandler(exc), enforce=enforce)
-        with mock.patch(f"{_GATE}.logger") as mock_logger:
-            with pytest.raises(DependencyUnavailableError):
-                await gate(PreflightGateInput())
-        # The workflow owns the no_verdict row for this path, not the activity.
-        assert _no_outcome(mock_logger)
+    async def test_resolution_frame_plumbing_still_fails_open(
+        self, enforce: bool
+    ) -> None:
+        exc = DependencyUnavailableError(message="vault down", service="secret_store")
 
-    @pytest.mark.parametrize("enforce", [True, False])
-    async def test_rate_limit_is_not_a_verdict(self, enforce: bool) -> None:
-        # A 429 says "ask me later", not "the source is not ready". Collapsing
-        # it into NOT_READY makes hard mode fail *closed* on a transient.
-        gate = _gate(_RaisingHandler(RateLimitedError(message="429")), enforce=enforce)
-        with mock.patch(f"{_GATE}.logger") as mock_logger:
-            with pytest.raises(RateLimitedError):
-                await gate(PreflightGateInput())
-        assert _no_outcome(mock_logger)
+        async def _failing_resolve(_input):
+            raise exc
 
-
-class TestRetryAwareness:
-    """A non-final attempt retries; only the last one becomes a verdict."""
-
-    async def test_non_final_attempt_retries_without_emitting(self) -> None:
-        gate = _gate(_SlowHandler(), enforce=True)
-        info = mock.MagicMock()
-        info.attempt = 1
-        info.start_to_close_timeout = timedelta(seconds=30)
+        gate = _gate(_RecordingHandler(), enforce=enforce)
         with (
-            mock.patch(f"{_GATE}.activity.info", return_value=info),
+            mock.patch(f"{_GATE}._resolve_gate_credentials", _failing_resolve),
             mock.patch(f"{_GATE}.logger") as mock_logger,
         ):
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(PreflightGateInput())
+        assert excinfo.value.type == "DependencyUnavailableError"
+        assert excinfo.value.__cause__ is exc
+        assert _no_outcome(mock_logger)
 
-        # Pin the positive type: "not the block type" would pass for any error
-        # at all. The workflow must see a retryable no-verdict, so that it does
-        # not abort on the first slow attempt and the retry actually happens.
-        assert getattr(excinfo.value, "type", None) == PREFLIGHT_NO_VERDICT_ERROR_TYPE
-        assert excinfo.value.non_retryable is False
+
+class TestVerdictOnAnyAttempt:
+    """A source fault is a verdict on the attempt it happens; nothing waits for a retry."""
+
+    async def test_first_attempt_overrun_blocks_in_hard_mode(self) -> None:
+        gate = _gate(_SlowHandler(), enforce=True)
+        with _non_final_attempt(), mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert excinfo.value.non_retryable is True
+        row = _outcome(mock_logger)
+        assert row["outcome"] == "blocked"
+        assert row[GATE_ATTEMPTS_KEY] == 1
+
+    async def test_first_attempt_typed_source_fault_blocks_in_hard_mode(self) -> None:
+        exc = SourceUnavailableError(message="The source did not answer")
+        gate = _gate(_RaisingHandler(exc), enforce=True)
+        with _non_final_attempt(), mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert (
+            _primary_details(excinfo.value).category
+            is FailureCategory.SOURCE_UNAVAILABLE
+        )
+        assert _outcome(mock_logger)["outcome"] == "blocked"
+
+    async def test_first_attempt_source_fault_reports_in_soft_mode(self) -> None:
+        exc = SourceUnavailableError(message="The source did not answer")
+        gate = _gate(_RaisingHandler(exc), enforce=False)
+        with _non_final_attempt(), mock.patch(f"{_GATE}.logger") as mock_logger:
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        assert _outcome(mock_logger)["outcome"] == "would_block"
+
+    async def test_store_probe_failure_on_a_non_final_attempt_still_retries(
+        self,
+    ) -> None:
+        async def _fail_store(result: PreflightOutput, budget, started) -> bool:
+            result.checks.append(
+                PreflightCheck(
+                    name="objectStoreAccess:deployment",
+                    passed=False,
+                    error=DependencyUnavailableError(
+                        message="store relocated", service="objectstore"
+                    ).to_failure_details(),
+                )
+            )
+            return True
+
+        gate = build_preflight_gate_activity(
+            _ReturningHandler(PreflightOutput(status=PreflightStatus.READY, checks=[])),
+            app_name="myapp",
+            enforce=True,
+            budget_seconds=5,
+            verify_storage=True,
+        )
+        with (
+            _non_final_attempt(),
+            mock.patch(f"{_GATE}._append_storage_checks", _fail_store),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        err = excinfo.value
+        assert err.type == PREFLIGHT_NO_VERDICT_ERROR_TYPE
+        assert err.non_retryable is False
+        assert _primary_details(err).category is FailureCategory.DEPENDENCY_UNAVAILABLE
         assert _no_outcome(mock_logger)
 
     async def test_final_attempt_applies_mode(self) -> None:
         gate = _gate(_SlowHandler(), enforce=True)
         info = mock.MagicMock()
-        info.attempt = GATE_RETRY.maximum_attempts
+        info.attempt = GATE_ATTEMPTS_DEFAULT
         info.start_to_close_timeout = timedelta(seconds=30)
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=info),
@@ -691,3 +798,228 @@ class TestNewKeysReachTheWire:
     )
     def test_key_is_registered(self, key: str) -> None:
         assert key in _KNOWN_EXTRA_KEYS
+
+
+class _ReturningHandler(DefaultHandler):
+    """Returns a caller-supplied verdict."""
+
+    def __init__(self, output: PreflightOutput) -> None:
+        self._output = output
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return self._output
+
+
+def _non_final_attempt():
+    info = mock.MagicMock()
+    info.attempt = 1
+    info.start_to_close_timeout = timedelta(seconds=30)
+    return mock.patch(f"{_GATE}.activity.info", return_value=info)
+
+
+def _primary_details(err: BaseException):
+    details = getattr(err, "details", ())
+    assert details, f"{type(err).__name__} left the gate without FailureDetails"
+    return details[0]
+
+
+class TestEveryExitCarriesFailureDetails:
+    """Every error that leaves the gate carries one FailureDetails.
+
+    The automation engine and the dashboards read ``details[0]`` off the Temporal
+    failure. A retry marker or a plumbing re-raise that carries only a class name
+    and a message leaves them with nothing to attribute, on exactly the runs
+    where attribution matters most.
+    """
+
+    async def test_first_attempt_block_carries_the_typed_source_fault(self) -> None:
+        exc = SourceUnavailableError(message="The source did not answer")
+        gate = _gate(_RaisingHandler(exc), enforce=True)
+        with _non_final_attempt(), mock.patch(f"{_GATE}.logger"):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        err = excinfo.value
+        assert err.type == PREFLIGHT_FAILED_ERROR_TYPE
+        details = _primary_details(err)
+        assert details.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert details.audience is Audience.USER
+        assert details.app_name == "myapp"
+        checks = err.details[1]["checks"]
+        assert len(checks) == 1
+        assert checks[0]["passed"] is False
+
+    async def test_budget_overrun_carries_a_timeout_failure(self) -> None:
+        gate = _gate(_SlowHandler(), enforce=True, budget=0.3)
+        with mock.patch(f"{_GATE}.logger"):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        details = _primary_details(excinfo.value)
+        assert details.category is FailureCategory.TIMEOUT
+        assert details.app_name == "myapp"
+
+    async def test_untyped_crash_carries_an_internal_failure(self) -> None:
+        gate = _gate(_RaisingHandler(RuntimeError("boom")), enforce=True)
+        with mock.patch(f"{_GATE}.logger"):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        details = _primary_details(excinfo.value)
+        assert details.category is FailureCategory.INTERNAL
+        assert details.audience is Audience.APP_OWNER
+
+    async def test_resolution_failure_is_wrapped_with_details(self) -> None:
+        exc = DependencyUnavailableError(message="vault down", service="secret_store")
+
+        async def _failing_resolve(_input):
+            raise exc
+
+        gate = _gate(_RecordingHandler(), enforce=True)
+        with (
+            mock.patch(f"{_GATE}._resolve_gate_credentials", _failing_resolve),
+            mock.patch(f"{_GATE}.logger"),
+        ):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        err = excinfo.value
+        assert err.type == "DependencyUnavailableError"
+        assert err.__cause__ is exc
+        assert _primary_details(err).category is FailureCategory.DEPENDENCY_UNAVAILABLE
+
+    async def test_resolution_eating_the_budget_is_wrapped_with_details(self) -> None:
+        async def _slow_resolve(_input):
+            await asyncio.sleep(0.4)
+            return [], {}
+
+        gate = _gate(_RecordingHandler(), enforce=True, budget=0.2)
+        with (
+            mock.patch(f"{_GATE}._resolve_gate_credentials", _slow_resolve),
+            mock.patch(f"{_GATE}.logger"),
+        ):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        err = excinfo.value
+        assert err.type == "DependencyUnavailableError"
+        assert _primary_details(err).category is FailureCategory.DEPENDENCY_UNAVAILABLE
+
+    async def test_block_still_carries_details_and_every_check(self) -> None:
+        exc = AuthError(message="bad creds")
+        gate = _gate(_RaisingHandler(exc), enforce=True)
+        with mock.patch(f"{_GATE}.logger"):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        err = excinfo.value
+        assert err.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert err.non_retryable is True
+        assert _primary_details(err).category is FailureCategory.AUTH
+        assert err.details[1]["checks"][0]["passed"] is False
+
+
+class TestResolutionRunsUnderTheBudget:
+    """Credential resolution shares the gate's deadline instead of having none."""
+
+    async def test_hung_resolution_ends_at_the_budget_as_plumbing(self) -> None:
+        async def _hung_resolve(_input):
+            await asyncio.sleep(60)
+            return [], {}
+
+        handler = _RecordingHandler()
+        gate = _gate(handler, enforce=True, budget=0.4)
+        with (
+            mock.patch(f"{_GATE}._resolve_gate_credentials", _hung_resolve),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            started = asyncio.get_running_loop().time()
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+            elapsed = asyncio.get_running_loop().time() - started
+
+        assert elapsed < 2.0, "the gate waited on resolution past its own budget"
+        assert excinfo.value.type == "DependencyUnavailableError"
+        assert handler.preflight_input is None
+        assert _no_outcome(mock_logger)
+
+    async def test_resolution_inside_the_budget_still_reaches_the_handler(self) -> None:
+        async def _quick_resolve(_input):
+            await asyncio.sleep(0.05)
+            return [], {}
+
+        handler = _RecordingHandler()
+        gate = _gate(handler, enforce=True, budget=5)
+        with (
+            mock.patch(f"{_GATE}._resolve_gate_credentials", _quick_resolve),
+            mock.patch(f"{_GATE}.logger"),
+        ):
+            await gate(PreflightGateInput())
+        assert handler.preflight_input is not None
+
+
+class TestBlockIsNotLostToPersistence:
+    """A results-store failure can never swallow or delay the verdict."""
+
+    async def test_persist_raising_does_not_swallow_the_block(self) -> None:
+        gate = _gate(_RaisingHandler(AuthError(message="bad creds")), enforce=True)
+        with (
+            mock.patch(
+                f"{_GATE}.persist_check_result", side_effect=RuntimeError("store down")
+            ),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert _outcome(mock_logger)["outcome"] == "blocked"
+
+
+class TestProceededRowNamesTheFailedCheck:
+    """A proceeded row with a failed check carries that check's code as reason.
+
+    A throttled or otherwise unverified preflight that proceeds is invisible if
+    the row only says PARTIAL; the code is what lets a dashboard rank it.
+    """
+
+    @staticmethod
+    def _typed_failure(code_source: Exception) -> PreflightCheck:
+        return PreflightCheck(
+            name="workspaceAccess",
+            passed=False,
+            error=code_source.to_failure_details(),
+        )
+
+    async def test_partial_with_typed_failure_uses_the_error_code(self) -> None:
+        failed = self._typed_failure(RateLimitedError(message="429"))
+        output = PreflightOutput(status=PreflightStatus.PARTIAL, checks=[failed])
+        gate = _gate(_ReturningHandler(output), enforce=True)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            result = await gate(PreflightGateInput())
+        row = _outcome(mock_logger)
+        assert result.status is PreflightStatus.PARTIAL
+        assert row["outcome"] == "proceeded"
+        assert row["reason"] == failed.error.code
+
+    async def test_ready_with_failed_advisory_uses_the_error_code(self) -> None:
+        failed = self._typed_failure(AuthError(message="advisory scope missing"))
+        output = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[PreflightCheck(name="auth", passed=True), failed],
+        )
+        gate = _gate(_ReturningHandler(output), enforce=False)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            await gate(PreflightGateInput())
+        assert _outcome(mock_logger)["reason"] == failed.error.code
+
+    async def test_partial_with_untyped_failure_uses_the_fallback_code(self) -> None:
+        failed = PreflightCheck(name="scanner", passed=False, message="no scanner")
+        output = PreflightOutput(status=PreflightStatus.PARTIAL, checks=[failed])
+        gate = _gate(_ReturningHandler(output), enforce=True)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            await gate(PreflightGateInput())
+        assert _outcome(mock_logger)["reason"] == PREFLIGHT_FALLBACK_CODE
+
+    async def test_clean_ready_keeps_the_status_as_reason(self) -> None:
+        output = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[PreflightCheck(name="auth", passed=True)],
+        )
+        gate = _gate(_ReturningHandler(output), enforce=True)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            await gate(PreflightGateInput())
+        assert _outcome(mock_logger)["reason"] == PreflightStatus.READY.value

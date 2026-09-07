@@ -144,13 +144,6 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
-# Preflight gate posture override (deploy-time ops lever). Read at worker build;
-# only the literal "hard" enforces, any other set value falls back to soft. An
-# empty or unset value is not an override — resolution falls through to the
-# declared App.preflight_gate_mode attribute. See
-# application_sdk.execution._temporal.worker._resolve_gate_enforcement.
-PREFLIGHT_GATE_MODE_ENV = "ATLAN_PREFLIGHT_GATE_MODE"
-
 # Artifact-validation posture override (deploy-time ops lever). Read at worker
 # build; only the literal "hard" enforces, any other set value falls back to
 # soft. An empty or unset value is not an override - resolution falls through to

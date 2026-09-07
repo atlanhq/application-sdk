@@ -27,7 +27,6 @@ from application_sdk.app.registry import (
 from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
-    PREFLIGHT_GATE_MODE_ENV,
     SHUTDOWN_DRAIN_DELAY_SECONDS,
 )
 from application_sdk.execution._temporal.activities import get_all_task_activities
@@ -230,24 +229,6 @@ async def _log_worker_fatal_error(exc: BaseException) -> None:
         " <- ".join(describe_exception_chain(exc)),
         exc_info=exc,
     )
-
-
-def _resolve_gate_enforcement(app_cls: type | None) -> bool:
-    """Resolve the preflight gate's posture for one app.
-
-    ``True`` = hard (block on ``NOT_READY``); ``False`` = soft (emit
-    ``would_block``, proceed). Precedence: ``ATLAN_PREFLIGHT_GATE_MODE`` env
-    (deploy-time ops lever, no app release needed) > the app's declared
-    ``App.preflight_gate_mode`` (git-blamed opt-in) > soft default. Only the
-    literal ``"hard"`` enforces; an unknown or malformed value falls back to
-    soft — a run is never blocked by accident, blocking is always a deliberate
-    opt-in.
-    """
-    val = os.environ.get(PREFLIGHT_GATE_MODE_ENV)
-    if val:
-        return val.strip().lower() == "hard"
-    declared = getattr(app_cls, "preflight_gate_mode", "soft")
-    return str(declared).strip().lower() == "hard"
 
 
 def _resolve_verify_storage(app_cls: type | None) -> bool:
@@ -624,6 +605,7 @@ def create_worker(
         preflight_gate_activity_name,
         resolve_gate_attempts,
         resolve_gate_budget_seconds,
+        resolve_gate_enforcement,
     )
     from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
 
@@ -716,7 +698,7 @@ def create_worker(
                 name,
             )
 
-        enforce = _resolve_gate_enforcement(app_cls)
+        enforce = resolve_gate_enforcement(app_cls)
         budget_seconds = resolve_gate_budget_seconds(
             getattr(app_cls, "preflight_gate_timeout_seconds", None)
         )

@@ -275,8 +275,7 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
             )
     except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
         _task_logger.warning(
-            "Transformed-asset validation outcome emission failed "
-            "(handoff continues)",
+            "Transformed-asset validation outcome emission failed (handoff continues)",
             exc_info=True,
         )
 
@@ -786,10 +785,10 @@ class App(ABC):
     ``outcome="would_block"`` on the gate outcome event so it is always
     reported. ``"hard"`` is the opt-in that blocks the run when the handler's
     verdict is ``NOT_READY`` (the worker logs at boot). Set ``"hard"`` once the
-    app's checks are trusted to gate real runs. The ``ATLAN_PREFLIGHT_GATE_MODE``
-    env var overrides this at deploy time; any set value other than ``"hard"``
-    resolves to soft. An empty or unset value is not an override — resolution
-    falls through to this declared attribute. See the adopt-preflight-gate skill.
+    app's checks are trusted to gate real runs. Any value other than ``"hard"``
+    resolves to soft. This attribute is the only source of the posture: the
+    worker and the workflow both read it, so they cannot disagree. See the
+    adopt-preflight-gate skill.
 
     Note this posture applies to *every* outcome the gate can attribute to the
     source, not only a ``NOT_READY`` verdict: a probe that overruns
@@ -2064,6 +2063,7 @@ async def _run_preflight_gate(
     entrypoint: str,
     budget_seconds: int | None = None,
     max_attempts: int | None = None,
+    gate_mode: Any = None,
 ) -> None:
     """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
 
@@ -2092,11 +2092,16 @@ async def _run_preflight_gate(
     visible rather than silent. Credential resolution happens inside the activity
     — the deterministic workflow forwards only secret-free references.
 
-    ``budget_seconds`` comes from the app's declared
-    ``App.preflight_gate_timeout_seconds`` (a ``ClassVar``, so reading it here is
-    replay-deterministic) and sizes both activity timeouts. ``None`` means "use
-    the SDK default" — ``gate_timeouts`` owns the clamp, so this never needs to
-    know the default value.
+    ``budget_seconds``, ``max_attempts`` and ``gate_mode`` come from the app's
+    declared ``App.preflight_gate_*`` attributes (``ClassVar``s, so reading them
+    here is replay-deterministic). The budget sizes both activity timeouts;
+    ``None`` means "use the SDK default" — the clamp lives in the gate module, so
+    this never needs to know the default value. The mode is only stamped on the
+    rows this frame emits; enforcement lives in the activity.
+
+    Every row this frame emits carries the same keys the activity's rows do, so
+    a consumer parsing ``gate_mode`` or ``gate_duration_ms`` never drops exactly
+    the rows that prove a gate never ran or never returned.
     """
     with workflow.unsafe.imports_passed_through():
         from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
@@ -2108,12 +2113,25 @@ async def _run_preflight_gate(
         from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             CHECK_MATRIX_KEY,
             CLASSIFICATION_GATE_BROKEN,
+            CLASSIFICATION_NOT_RUN,
+            CLASSIFICATION_SOURCE_UNVERIFIABLE,
             EMPTY_CHECK_MATRIX,
             FAILURE_AUDIENCE_KEY,
+            GATE_ATTEMPTS_KEY,
+            GATE_CLASSIFICATION_KEY,
+            GATE_DURATION_KEY,
+            GATE_MODE_KEY,
+            GATE_TIMEOUT_KEY,
             PREFLIGHT_OUTCOME_EVENT,
             PreflightGateInput,
             PreflightRowOutcome,
+            build_workflow_block,
+            check_matrix_from_wire,
+            classify_gate_failure,
+            frame_death_details,
+            gate_budget_seconds,
             gate_heartbeat_timings,
+            gate_mode_is_hard,
             gate_retry_policy,
             gate_timeouts,
             is_preflight_block,
@@ -2122,16 +2140,43 @@ async def _run_preflight_gate(
         )
 
     entry = entrypoint or "<implicit>"
+    mode = "hard" if gate_mode_is_hard(gate_mode) else "soft"
+    budget = gate_budget_seconds(budget_seconds)
 
-    def _emit_skipped(reason: str) -> None:
+    def _emit_row(
+        level: str,
+        outcome: str,
+        reason: str,
+        classification: str,
+        duration_ms: float,
+        check_matrix: str = EMPTY_CHECK_MATRIX,
+        **extra: Any,
+    ) -> None:
         _safe_log(
-            "info",
+            level,
             PREFLIGHT_OUTCOME_EVENT,
             app_name=app_name,
             entrypoint=entry,
-            outcome=PreflightRowOutcome.SKIPPED.value,
+            outcome=outcome,
             reason=reason,
-            **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
+            **{
+                CHECK_MATRIX_KEY: check_matrix,
+                GATE_MODE_KEY: mode,
+                GATE_CLASSIFICATION_KEY: classification,
+                GATE_DURATION_KEY: duration_ms,
+                GATE_TIMEOUT_KEY: budget,
+                GATE_ATTEMPTS_KEY: 0,
+            },
+            **extra,
+        )
+
+    def _emit_skipped(reason: str) -> None:
+        _emit_row(
+            "info",
+            PreflightRowOutcome.SKIPPED.value,
+            reason,
+            CLASSIFICATION_NOT_RUN,
+            0.0,
         )
 
     if not workflow.patched("preflight-gate"):
@@ -2142,11 +2187,12 @@ async def _run_preflight_gate(
         _emit_skipped("input_not_credential_resolvable")
         return
 
+    dispatched_at = workflow.now()
     try:
         # Inside the guard: an exception escaping here would become a workflow
         # *task* failure, which Temporal retries indefinitely (see
         # _validate_workflow_input). Nothing on the gate's own path may do that.
-        start_to_close, schedule_to_close = gate_timeouts(budget_seconds, max_attempts)
+        start_to_close, schedule_to_close = gate_timeouts(budget, max_attempts)
         heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
         await workflow.execute_activity(
@@ -2159,27 +2205,46 @@ async def _run_preflight_gate(
         )
     except Exception as e:
         # The activity emits the blocked outcome event before it raises; the
-        # workflow only re-raises the deliberate block here.
+        # workflow re-raises the deliberate block unchanged.
         if is_preflight_block(e):
             raise
-        # Fail-open: only the workflow knows a no-verdict failure happened, so it
-        # owns the no_verdict row — one record, at ERROR (FND-901): the gate's
-        # own plumbing broke and the run proceeded unverified, which is the app
-        # team's fault to fix, hence the APP_OWNER audience.
-        _safe_log(
+        elapsed_ms = round((workflow.now() - dispatched_at).total_seconds() * 1000, 1)
+        classification, evidence, checks = classify_gate_failure(e)
+        if classification == CLASSIFICATION_GATE_BROKEN:
+            # Fail-open: the gate's own plumbing broke and the run proceeds
+            # unverified. One record, at ERROR (FND-901), attributed to the app
+            # team because a gate that cannot run is theirs to fix.
+            _emit_row(
+                "error",
+                PreflightRowOutcome.NO_VERDICT.value,
+                underlying_error_type(e),
+                CLASSIFICATION_GATE_BROKEN,
+                elapsed_ms,
+                exc_info=True,
+                **{FAILURE_AUDIENCE_KEY: Audience.APP_OWNER.value},
+            )
+            return
+        # The activity never returned a verdict, but the chain says why: the
+        # source fault an earlier attempt classified, or a probe that held the
+        # frame past the gate's cancel. Either is subject to the mode — a dead
+        # frame must not be the one way past a hard gate.
+        if evidence is None:
+            evidence = frame_death_details(e, app_name, budget)
+        enforce = mode == "hard"
+        _emit_row(
             "error",
-            PREFLIGHT_OUTCOME_EVENT,
-            app_name=app_name,
-            entrypoint=entry,
-            outcome=PreflightRowOutcome.NO_VERDICT.value,
-            reason=underlying_error_type(e),
-            gate_classification=CLASSIFICATION_GATE_BROKEN,
+            PreflightRowOutcome.BLOCKED.value
+            if enforce
+            else PreflightRowOutcome.WOULD_BLOCK.value,
+            evidence.code,
+            CLASSIFICATION_SOURCE_UNVERIFIABLE,
+            elapsed_ms,
+            check_matrix=check_matrix_from_wire(checks),
             exc_info=True,
-            **{
-                CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX,
-                FAILURE_AUDIENCE_KEY: Audience.APP_OWNER.value,
-            },
+            **{FAILURE_AUDIENCE_KEY: evidence.audience.value},
         )
+        if enforce:
+            raise build_workflow_block(evidence, checks, app_name) from e
         return
 
     # Success: the activity already emitted the proceeded outcome event.
@@ -2434,6 +2499,7 @@ def generate_workflow_class(
                 entrypoint_name,
                 getattr(app_cls, "preflight_gate_timeout_seconds", None),
                 getattr(app_cls, "preflight_gate_max_attempts", None),
+                getattr(app_cls, "preflight_gate_mode", None),
             )
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)

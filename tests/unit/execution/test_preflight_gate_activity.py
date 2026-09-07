@@ -34,6 +34,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     GATE_TIMEOUT_DEFAULT_SECONDS,
     INTERACTIVE_RAISE_OUTCOMES,
     PREFLIGHT_CHECK_EVENT,
+    PREFLIGHT_FALLBACK_CODE,
     PreflightGateInput,
     PreflightSurface,
     _config_from_snapshot,
@@ -236,8 +237,12 @@ class TestPreflightGateActivity:
         handler = _StubHandler()
         gate = _gate(handler)
         with _infra_patches(None, secret_store=None):
-            with pytest.raises(DependencyUnavailableError):
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(PreflightGateInput(credential_guid="guid-123"))
+        assert excinfo.value.type == "DependencyUnavailableError"
+        assert (
+            excinfo.value.details[0].category is FailureCategory.DEPENDENCY_UNAVAILABLE
+        )
         assert handler.preflight_input is None  # bailed before calling the handler
 
     async def test_gate_clears_context_after_call(self) -> None:
@@ -756,7 +761,10 @@ class TestPreflightGateOutcomeEvent:
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out)(PreflightGateInput())
         ev = _outcome_event(ml)
-        assert ev["outcome"] == "proceeded" and ev["reason"] == "partial"
+        # The failed check has no typed error, so the reason is the same sentinel
+        # an untyped block carries; a typed failure would carry its own code.
+        assert ev["outcome"] == "proceeded"
+        assert ev["reason"] == PREFLIGHT_FALLBACK_CODE
         assert ev["entrypoint"] == "<implicit>"
         # Advisory failure: WARNING is the one level semantically for it, and
         # P047 bans the handler from emitting it — so the gate must.
@@ -1121,8 +1129,9 @@ class TestPreflightGateMultiCredential:
             {"guid-a": DependencyUnavailableError(message="down", service="vault")}
         )
         with _infra_patches(resolver):
-            with pytest.raises(DependencyUnavailableError):
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(self._input())
+        assert excinfo.value.type == "DependencyUnavailableError"
         assert handler.preflight_input is None
 
     async def test_credential_vault_outage_propagates(self) -> None:
@@ -1139,8 +1148,10 @@ class TestPreflightGateMultiCredential:
         gate = _gate(handler)
         resolver = _resolver_by_guid({"guid-a": outage, "guid-o": {"bucket": "b"}})
         with _infra_patches(resolver):
-            with pytest.raises(CredentialVaultError):
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(self._input())
+        assert excinfo.value.type == "CredentialVaultError"
+        assert excinfo.value.__cause__ is outage
         assert handler.preflight_input is None
 
     async def test_named_path_redacts_every_group_secret(self) -> None:
@@ -1163,8 +1174,9 @@ class TestPreflightGateMultiCredential:
         handler = _StubHandler()
         gate = _gate(handler)
         with _infra_patches(None, secret_store=None):
-            with pytest.raises(DependencyUnavailableError):
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(self._input())
+        assert excinfo.value.type == "DependencyUnavailableError"
         assert handler.preflight_input is None
 
     async def test_absent_guids_skip_resolution_with_empty_groups(self) -> None:

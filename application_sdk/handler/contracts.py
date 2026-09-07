@@ -480,11 +480,12 @@ class PreflightInput(BaseModel):
     timeout_seconds: int = 60
     """Maximum seconds the handler has to run all checks.
 
-    On the injected gate path this carries the *enforced* per-attempt budget
-    (the gate activity's ``start_to_close``), so a handler that sizes its checks
-    to this value stays inside the real deadline — design them to finish within
-    it, with headroom. Advisory on the HTTP ``/check`` and SDR paths, which are
-    not bounded by the gate activity timeout."""
+    On the injected gate path this is what remains of the app's gate budget
+    after credential resolution, and the gate cancels the handler when it
+    elapses. A handler that bounds every probe to this value returns its own
+    typed verdict before the cancel; one that does not is ended by the gate with
+    no check evidence. Advisory on the HTTP ``/check`` and SDR paths, which are
+    not bounded by the gate."""
 
     agent_json: AgentCredentialSpec | None = Field(
         default=None,

@@ -239,8 +239,7 @@ def entrypoint_index(app_name: str) -> Mapping[str, str]:
 def resolve_artifact_enforcement(app_cls: type | None) -> bool:
     """Resolve one app's artifact-validation posture. ``True`` = hard.
 
-    Precedence, mirroring :func:`~application_sdk.execution._temporal.worker._resolve_gate_enforcement`
-    exactly because an operator should not have to learn two rules:
+    Precedence:
 
     1. ``ATLAN_ARTIFACT_VALIDATION_MODE`` — the deploy-time ops lever, so a fleet
        that starts flagging can be stood down without an app release;
