@@ -244,6 +244,46 @@ extraNodes {
 }
 ```
 
+### Zero-Out Instead of Delete (Cross-Connection Enrichers)
+
+If your app enriches assets another connector owns — writing its own namespaced
+attributes onto them rather than creating them — publish's default handling of an
+asset that falls out of a run is wrong for you. It issues a hard Atlas DELETE,
+destroying a still-live asset along with its downstream lineage and its
+user-curated tags and descriptions.
+
+Declare a `ZeroOutSpec` so publish clears just your attributes instead:
+
+```pkl
+pipeline {
+  publish {
+    zeroOutConfig = new ZeroOutSpec {
+      // Types your app owns outright — these keep being hard-deleted.
+      exclude { "Process"; "ColumnProcess" }
+      // attribute -> zero value, written as-is inside entity.attributes.
+      attrs {
+        ["myConnectorNodeStatus"] = null
+        ["myConnectorProjectId"] = null
+      }
+      // Same shape, for entity-root fields.
+      rootAttrs { ["classifications"] = new Listing {} }
+    }
+  }
+}
+```
+
+Also settable directly on `PublishNode` when you override the node via
+`extraNodes["publish"]`. Leave it unset and the arg is omitted, which is how
+zero-out stays off — do not build an empty spec to disable it.
+
+Do **not** hand-write this as a raw JSON string in Pkl: a string is spliced
+unparsed, so a typo yields a broken manifest with no error at generation time,
+and it needs a post-generate merge script that CI's single hook may not run. The
+typed spec type-checks and needs no post-processing. See
+[the toolkit reference](https://github.com/atlanhq/application-sdk/blob/main/contract-toolkit/docs/reference.md)
+for the full semantics, including why `attrs` is a value map rather than a list
+of names.
+
 ## Widget Reference
 
 | Widget | When to Use |

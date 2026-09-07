@@ -64,9 +64,11 @@ rather than written to the wrong base; see ``_native_target_is_plausible``.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tempfile
+import tomllib
 from pathlib import Path
 
 # Repo-root files both families emit at the top level of the eval output. They
@@ -100,6 +102,167 @@ RESERVED_GENERATED_SUBDIRS = ("frontend",)
 # pre-test regeneration, and any mismatch shows up as a gate reporting drift the
 # sync would never produce.
 POST_GENERATE_SCRIPT = "post-generate.sh"
+
+# Where apps put generation helpers their own `poe generate` task calls (e.g.
+# `contract/templates/merge.py`). A file here with no sibling
+# post-generate.sh is the signature of post-processing that works locally and
+# is dropped by every CI regeneration — see ``warn_unwired_post_generate``.
+POST_GENERATE_HELPER_GLOB = "templates/**/*.py"
+
+# Task names in ``[tool.poe.tasks]`` that regenerate the contract. An app's
+# generate task is the other place post-processing hides, and it is the one a
+# human naturally reaches for.
+GENERATE_TASK_RE = re.compile(r"^generate([-_].*)?$")
+
+# A command after the eval only counts as post-processing when it runs a
+# *program* over the output — the merge/patch step whose loss changes what the
+# artifacts say. An allowlist, not a denylist, because a sweep of 20 connectors
+# found 15 with *something* after the eval and only 6 of those transforming
+# anything: the rest move files (``mv``/``cp``/``mkdir``/``rm -rf generated``),
+# which regeneration's own layout-aware placement already does, or install the
+# playground into the gitignored ``frontend/`` (a RESERVED_GENERATED_SUBDIR,
+# preserved across a swap). Warning on those trains authors to ignore the
+# annotation, which costs more than the recall it buys.
+POST_GENERATE_INTERPRETERS = (
+    "python",
+    "python3",
+    "uv",
+    "poetry",
+    "node",
+    "sh",
+    "bash",
+    "make",
+    "poe",
+)
+
+# Checked before POST_GENERATE_INTERPRETERS: CI formats the generated Python
+# itself (``regenerate_contract._format_generated``, ``renovate_pkl_sync``), so
+# `uvx ruff format` is not a transformation regeneration drops.
+POST_GENERATE_FORMATTERS = ("ruff", "black", "prettier", "pre-commit")
+
+# Shell operators that chain commands. A generate task is as likely to be one
+# `&&`-joined line as it is one command per line — ``atlan-dbt-app`` puts its
+# post-eval merge after an `&&` — so splitting on newlines alone misses the
+# live shape this detection exists for.
+SHELL_CHAIN_RE = re.compile(r"&&|\|\||;|\n")
+
+
+def _generate_task_commands(pyproject: Path) -> list[str]:
+    """Individual shell commands of the app's ``poe`` generate task(s), in order.
+
+    Best-effort and never raises: an unparseable/absent ``pyproject.toml``, or a
+    poe task shape this does not model, yields ``[]`` — which only withholds a
+    warning, never manufactures one.
+
+    All of poe's string-valued shapes are read (a bare string, ``cmd``,
+    ``shell``, ``script``) plus ``sequence``, because which one an app used says
+    nothing about whether it post-processes.
+    """
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    tasks = (
+        data.get("tool", {}).get("poe", {}).get("tasks", {})
+        if isinstance(data, dict)
+        else {}
+    )
+    if not isinstance(tasks, dict):
+        return []
+    commands: list[str] = []
+    for name, body in tasks.items():
+        if not GENERATE_TASK_RE.match(str(name)):
+            continue
+        for raw in _task_strings(body):
+            commands.extend(SHELL_CHAIN_RE.split(raw))
+    return [c.strip() for c in commands if c.strip() and not c.strip().startswith("#")]
+
+
+def _task_strings(body: object) -> list[str]:
+    """Every shell-command string in one poe task body."""
+    if isinstance(body, str):
+        return [body]
+    if isinstance(body, list):
+        return [item for item in body if isinstance(item, str)]
+    if isinstance(body, dict):
+        out: list[str] = []
+        for key in ("cmd", "shell", "script", "sequence"):
+            out.extend(_task_strings(body.get(key)))
+        return out
+    return []
+
+
+def unwired_post_generate(
+    contract_dir: str = "contract", pyproject: str = "pyproject.toml"
+) -> list[str]:
+    """Signs that this app post-processes its generated output through something
+    other than ``POST_GENERATE_SCRIPT``. Each item is a human-readable signal.
+
+    Two signals, both cheap and mode-independent — neither needs the generated
+    output, let alone a second eval to compare against:
+
+      * a ``contract/templates/**/*.py`` helper, the conventional home for a
+        merge/patch step an app's own generate task calls;
+      * a command after the ``pkl eval`` in a ``[tool.poe.tasks]`` ``generate``
+        task that runs a program over the output (``POST_GENERATE_INTERPRETERS``),
+        whether chained with a newline or an ``&&``.
+
+    Only meaningful when there is no ``post-generate.sh``: with one, the app is
+    wired in and whatever it calls runs. Callers check that first.
+    """
+    signals = []
+    for helper in sorted(Path(contract_dir).glob(POST_GENERATE_HELPER_GLOB)):
+        if helper.is_file():
+            signals.append(str(helper))
+    commands = _generate_task_commands(Path(pyproject))
+    # After the LAST `pkl eval`: a multi-root contract evals once per root, and
+    # only what follows the final one can be post-processing.
+    evals = [i for i, c in enumerate(commands) if "pkl eval" in c]
+    if evals:
+        for command in commands[evals[-1] + 1 :]:
+            words = command.split()[:2]
+            if any(word in POST_GENERATE_FORMATTERS for word in words):
+                continue
+            if any(word in POST_GENERATE_INTERPRETERS for word in words):
+                signals.append(f"`{command}` (in the {pyproject} generate task)")
+    return signals
+
+
+def warn_unwired_post_generate(
+    contract_dir: str = "contract", pyproject: str = "pyproject.toml"
+) -> bool:
+    """Warn when the app post-processes its generated output but has not wired
+    that step into ``POST_GENERATE_SCRIPT``. Returns True when it warned.
+
+    This is the signal FND-1777 was missing. Regeneration *destroys*
+    ``app/generated/`` and replaces it with raw ``pkl eval`` output; a
+    transformation the SDK does not know about is dropped, and the image that
+    ships to a tenant carries the untransformed artifact. The app author gets no
+    hint, because the same step works perfectly under their local
+    ``poe generate``. In the live case (``contract/templates/merge.py``, called
+    only from a ``poe`` task) the dropped step was promoting a deliberately
+    raw-string manifest field to an object, and the failure surfaced as a
+    validation error in a *different* repo minutes into an e2e run.
+
+    Warn-only, and deliberately so: the app may have retired the helper, and a
+    heuristic that can be wrong must not fail a build. It is emitted on every
+    regeneration path — including SDK-level runs, where the drift check is off —
+    because ``run_post_generate`` is the one hook they all share.
+    """
+    signals = unwired_post_generate(contract_dir, pyproject)
+    if not signals:
+        return False
+    print(
+        f"::warning::No {contract_dir}/{POST_GENERATE_SCRIPT}, but this app looks "
+        "like it post-processes its generated contract artifacts: "
+        + ", ".join(signals)
+        + f". Regeneration replaces {GENERATED_DIR}/ with raw `pkl eval` output "
+        f"and runs ONLY {contract_dir}/{POST_GENERATE_SCRIPT}, so any such step "
+        "is silently dropped from the artifacts CI tests and the image bakes. "
+        f"Add {contract_dir}/{POST_GENERATE_SCRIPT} invoking it (and have the "
+        "generate task call that script too, so local and CI agree)."
+    )
+    return True
 
 
 def detect_layout(out_dir: Path) -> str:
@@ -483,7 +646,9 @@ def export_contract_at(ref: str, contract_dir: str, dest: Path) -> bool:
 
 def run_post_generate(contract_dir: str = "contract") -> None:
     """Run ``<contract_dir>/post-generate.sh`` if the app ships one, after
-    ``swap_outputs``. No-op otherwise, which is almost every app.
+    ``swap_outputs``. Otherwise — almost every app — a no-op, except that it
+    warns when the app looks like it post-processes through some other path
+    (``warn_unwired_post_generate``).
 
     Placement is layout-aware but content is not app-aware: some apps install a
     hand-maintained artifact over the toolkit's output for a construct the
@@ -512,6 +677,10 @@ def run_post_generate(contract_dir: str = "contract") -> None:
     untrusted-code-execution path."""
     script = Path(contract_dir) / POST_GENERATE_SCRIPT
     if not script.is_file():
+        # Absent is the norm, but for an app that post-processes elsewhere it is
+        # the FND-1777 silent drop. Every regeneration path reaches this line,
+        # which is why the detection lives here and not in one caller.
+        warn_unwired_post_generate(contract_dir)
         return
     print(f"Running post-generate step: {script}")
     if subprocess.run(["sh", str(script)], text=True).returncode != 0:

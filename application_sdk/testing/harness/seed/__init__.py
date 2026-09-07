@@ -67,6 +67,7 @@ from application_sdk.storage.batch import upload_file
 from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.identity import Minter
 from application_sdk.testing.harness.seed._errors import (
+    SeedDagSupersededError,
     SeedPublishEmptyError,
     SeedPublishFailedError,
     SeedSegmentInvalidError,
@@ -84,7 +85,6 @@ from application_sdk.testing.harness.seed._publish import (
     SEED_PUBLISH_NODE_ID,
     SeedPrefixes,
     build_seed_publish_dag,
-    build_seed_submit_payload,
     seed_object_keys,
     seed_prefix_root,
 )
@@ -115,6 +115,7 @@ __all__ = [
     "DatabaseSpec",
     "ResolvedSeedSpec",
     "SchemaSpec",
+    "SeedDagSupersededError",
     "SeedPrefixes",
     "SeedPublishEmptyError",
     "SeedPublishFailedError",
@@ -127,7 +128,6 @@ __all__ = [
     "SeededConnection",
     "TableSpec",
     "build_seed_publish_dag",
-    "build_seed_submit_payload",
     "connection_entity",
     "ndjson_bytes",
     "seed_assets",
@@ -188,21 +188,36 @@ class SeedPublishPlan:
         ae_workflow_name: Name for the AE workflow this seed runs under. Must not
             collide with the suite's own, or AE would carry two graphs on one
             workflow and the run list would not say which ran.
-        app_service_url: HTTP URL AE can reach the app at.
-        run_id: This leg's run identifier, for the AE workflow name and labels.
-        submit_retry: Cold-start sizing for the submit, or ``None`` to leave
-            ``submit_workflow``'s own default budget in place.
+        run_id: Ignored.
+
+            .. deprecated:: 3.34.0
+               It was the submit envelope's run label; the AE workflow's name
+               comes from :attr:`ae_workflow_name`. Since FND-1766 the seed
+               builds no envelope, so nothing reads this. Removed in v4.0.
+        submit_retry: How long to let AE keep answering 404 while the seed's
+            freshly published version replicates, or ``None`` for
+            :meth:`~application_sdk.testing.harness.automation_engine.AEClient.submit_published_version`'s
+            own budget. **Not** a cold-start budget: since FND-1766 the seed's
+            submit goes straight to AE and calls no app pod, so there is no
+            pod to wait for — a cold-start-sized value here only delays the
+            report of a slug that has nothing published under it.
         poll_interval_seconds: Gap between ``native-status`` reads.
         poll_timeout_seconds: Ceiling on the whole publish wait.
         progress_stall_seconds: Progress-watchdog window, or ``None`` to disable.
         minter: Supplies the AE seed version. ``None`` mints from the real clock.
+        app_service_url: Ignored.
+
+            .. deprecated:: 3.34.0
+               The seed no longer submits through Heracles, so no address is
+               named and nothing reads this. Removed in v4.0. See FND-1766 and
+               :mod:`application_sdk.testing.harness.seed._publish`.
     """
 
     app_name: str
     publish_task_queue: str
     ae_workflow_name: str
-    app_service_url: str
     run_id: int
+    app_service_url: str = ""
     submit_retry: SubmitRetry | None = None
     poll_interval_seconds: int = 10
     poll_timeout_seconds: int = 1800
@@ -328,21 +343,39 @@ async def seed_assets(
         client=ae,
         minter=plan.minter,
     )
-    payload = build_seed_submit_payload(
-        spec=spec,
-        run_id=plan.run_id,
-        ae_workflow_slug=seeded.slug,
-        app_service_url=plan.app_service_url,
-    )
+    # Straight to AE, not through Heracles' package-workflows. The graph AE has
+    # to run is the one published two lines up, and Heracles' native path
+    # re-derives the graph from the app under test's manifest and publishes it
+    # over exactly that — see FND-1766 and ``_publish``'s module docstring.
     retry = plan.submit_retry
     if retry is None:
-        ae_run_id = await ae.submit_workflow(payload, slug=seeded.slug)
+        ae_run_id = await ae.submit_published_version(seeded.slug)
     else:
-        ae_run_id = await ae.submit_workflow(
-            payload,
-            slug=seeded.slug,
+        ae_run_id = await ae.submit_published_version(
+            seeded.slug,
             retries=retry.retries,
             retry_sleep_seconds=retry.sleep_seconds,
+        )
+
+    if foreign := await ae.foreign_published_dag(
+        seeded.slug, expected=(SEED_PUBLISH_NODE_ID,)
+    ):
+        # Before the poll, because the poll is the expensive half: a graph that
+        # is not the seed's is some app's crawl, which spends minutes failing
+        # (or, worse, succeeding against the connection under test) while
+        # nothing seeds.
+        raise SeedDagSupersededError(
+            message=(
+                f"the DAG AE will run for the {spec.qualified_name} seed is "
+                f"not the {SEED_PUBLISH_NODE_ID!r} node this seed published, "
+                "so nothing would be seeded and the graph that ran would be "
+                "some other app's. Not polling it. This should be impossible "
+                "on the AE-native submit — if it fired, something republished "
+                f"over the seed's version. {foreign}. Seed run: "
+                f"slug={seeded.slug} run_id={ae_run_id}"
+            ),
+            resource=spec.qualified_name,
+            actual_state=foreign,
         )
 
     result = await ae.poll_native_status(
@@ -351,6 +384,25 @@ async def seed_assets(
         timeout_seconds=plan.poll_timeout_seconds,
         progress_stall_seconds=plan.progress_stall_seconds,
     )
+    ran = {node.name for node in result.nodes}
+    if ran and ran != {SEED_PUBLISH_NODE_ID}:
+        # The pre-poll read can be too early — a substitution lands around the
+        # submit, and an unreadable or not-yet-updated version answers
+        # "unanswered" by design. The names on the run itself cannot be early,
+        # and they are checked *before* success: a superseded run that happens
+        # to go green is the shape that greens a leg while seeding nothing.
+        raise SeedDagSupersededError(
+            message=(
+                f"the run AE executed for the {spec.qualified_name} seed ran "
+                f"node(s) {', '.join(sorted(ran))} rather than this seed's "
+                f"{SEED_PUBLISH_NODE_ID!r} node (AE status="
+                f"{result.status.value}), so that run is some other app's DAG "
+                "and nothing was seeded. Nothing under test has run yet. Seed "
+                f"run: slug={seeded.slug} run_id={ae_run_id}"
+            ),
+            resource=spec.qualified_name,
+            actual_state=f"nodes={', '.join(sorted(ran))}",
+        )
     if not result.all_nodes_succeeded:
         raise SeedPublishFailedError(
             message=(

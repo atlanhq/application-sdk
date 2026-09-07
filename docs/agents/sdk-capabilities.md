@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.32.1
-source-sha:    750c913eab936ef886d56f4ca5046b37f39b06f3
-source-date:   2026-09-06T21:39:22Z
+sdk-version:   3.33.0
+source-sha:    3c3a651a421692823eb320baff6bdb78542db197
+source-date:   2026-09-07T15:10:25+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 383 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 382 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -4130,6 +4130,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** One schema and the tables/views under it.
 - **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
 
+#### `SeedDagSupersededError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedDagSupersededError`
+- **Signature:** `class SeedDagSupersededError(*, ...)`
+- **Summary:** AE ran some other app's graph in place of the seed's one node.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
 #### `SeededConnection`
 
 - **Import:** `from application_sdk.testing.harness.seed import SeededConnection`
@@ -4593,13 +4600,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Build the single-node DAG that deletes one connection and its artifacts.
 - **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
 
-#### `build_connection_delete_submit_payload`
-
-- **Import:** `from application_sdk.testing.harness.teardown import build_connection_delete_submit_payload`
-- **Signature:** `build_connection_delete_submit_payload(*, *, ...)`
-- **Summary:** Build the AE submit body for one connection's delete run.
-- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
-
 #### `build_seed_dag`
 
 - **Import:** `from application_sdk.testing.full_dag import build_seed_dag`
@@ -4612,13 +4612,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.seed import build_seed_publish_dag`
 - **Signature:** `build_seed_publish_dag(*, spec: ResolvedSeedSpec, prefixes: SeedPrefixes, publish_task_queue: str)`
 - **Summary:** Build the single-node DAG that publishes the seed.
-- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
-
-#### `build_seed_submit_payload`
-
-- **Import:** `from application_sdk.testing.harness.seed import build_seed_submit_payload`
-- **Signature:** `build_seed_submit_payload(*, spec: ResolvedSeedSpec, run_id: int, ae_workflow_slug: str, app_service_url: str)`
-- **Summary:** Build the AE submit body for a seed's publish run.
 - **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
 
 #### `capture_preflight_outcomes`

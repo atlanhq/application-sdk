@@ -61,7 +61,7 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
 - `deploy`: single-pool migration example — KEDA, resources, env, pool-level `overrides`; shows v0.16.x → v0.17.0 migration path.
 - `pools`: `pools` map (preferred) — named hot/cold worker pools with per-pool `cooldownPeriod` and resources.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
-- `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`.
+- `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`, `zeroOutConfig`.
 - `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
 - `artifact-schemas`: `artifactSchemas` data hand-off declarations — parquet + NDJSON, nested paths, arrays of structs (`[]` element step), an input artifact.
 
