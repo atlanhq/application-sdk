@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.33.1 (September 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.33.0...v3.33.1
+
+### Bug Fixes
+
+- FND-1766 submit the seed's DAG to AE, not through Heracles (#3684) (by @cmgrote in [08e1155](https://github.com/atlanhq/application-sdk/commit/08e1155))
+
+
 ## v3.33.0 (September 07, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.32.1...v3.33.0
