@@ -368,4 +368,75 @@ facts {
     appRealtimeCfg == nativeRealtimeCfg
     appBatchedCfg == nativeBatchedCfg
   }
+
+  // ── The batch knobs are inert without `enabled`, and refused rather than
+  // ignored. Previously asserted by a shell harness in check-invariants.sh §12,
+  // which spawned a `pkl eval` per case on the reasoning that facts cannot express
+  // "eval fails" — they can, via `module.catch`, as every refusal above already
+  // does. `_shapeCheck` is hidden and lazy, so each case has to reference it for
+  // the throw to fire; that is exactly what the renderer does.
+
+  ["batchSize without streaming.enabled is refused"] {
+    module.catch(() -> new App.EventTriggerConfig {
+      streaming { batchSize = 200 }
+    }.streaming._shapeCheck).contains("require enabled = true")
+  }
+
+  ["batchWaitSeconds without streaming.enabled is refused"] {
+    module.catch(() -> new App.EventTriggerConfig {
+      streaming { batchWaitSeconds = 2.5 }
+    }.streaming._shapeCheck).contains("require enabled = true")
+  }
+
+  ["eventsPerSignal without streaming.enabled is refused"] {
+    module.catch(() -> new App.EventTriggerConfig {
+      streaming { eventsPerSignal = 100 }
+    }.streaming._shapeCheck).contains("require enabled = true")
+  }
+
+  ["batchWaitSeconds at batchSize 1 is refused"] {
+    module.catch(() -> new App.EventTriggerConfig {
+      streaming {
+        enabled = true
+        batchWaitSeconds = 2.5
+      }
+    }.streaming._shapeCheck).contains("meaningless at batchSize = 1")
+  }
+
+  ["the knobs at their defaults are fine without streaming.enabled"] {
+    (new App.EventTriggerConfig {}).streaming._shapeCheck == null
+  }
+
+  // ── An entrypoint renders ONE extract node, shared by every trigger on it, so
+  // `workflow_type` is a property of the entrypoint. A streaming entrypoint's node
+  // dispatches the streaming type and gains `args.batch`; anything else on it starts
+  // that same node with nothing to apply, silently. Caught `examples/scheduled`,
+  // which had three schedules and two batch triggers sharing a node with two
+  // streaming triggers.
+
+  ["a streaming entrypoint carrying a batch event trigger is refused"] {
+    module.catch(() -> appDag((appStreamingRealtime) {
+      events {
+        new App.EventTriggerSpec {
+          name = "cdc-batch-alongside"
+          source = new App.EventSource {
+            name = "atlan-kafka"
+            topic = "app.cdc.batch"
+          }
+          triggerConfig = new App.EventTriggerConfig {}
+        }
+      }
+    })).contains("mixes streaming and non-streaming event triggers")
+  }
+
+  ["a streaming entrypoint carrying a schedule is refused"] {
+    module.catch(() -> appDag((appStreamingRealtime) {
+      schedules {
+        new App.ScheduleSpec {
+          name = "nightly"
+          cronExpression = "0 0 * * *"
+        }
+      }
+    })).contains("schedule(s)")
+  }
 }
