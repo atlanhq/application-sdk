@@ -250,7 +250,7 @@ application_sdk/
 │   ├── base.py             # Input, Output, HeartbeatDetails base classes
 │   ├── cleanup.py          # CleanupInput, CleanupOutput
 │   ├── events.py           # Lifecycle event models
-│   ├── storage.py          # UploadInput, UploadOutput, DownloadInput, DownloadOutput
+│   ├── storage.py          # UploadInput/Output, DownloadInput/Output, VerifyRefsInput/Output
 │   └── types.py            # MaxItems, FileReference, GitReference, SerializableEnum, StorageTier
 │
 ├── handler/                # HTTP handler framework

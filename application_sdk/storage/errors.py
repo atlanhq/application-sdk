@@ -16,6 +16,7 @@ from typing import ClassVar
 from application_sdk.errors import (
     STORAGE_CONFIG,
     STORAGE_EMPTY_UPLOAD,
+    STORAGE_HANDOFF_INCOMPLETE,
     STORAGE_INTEGRITY,
     STORAGE_NOT_FOUND,
     STORAGE_OPERATION,
@@ -614,4 +615,158 @@ class ObjectStorePreflightError(StorageError):
     def __str__(self) -> str:
         # The message already contains the full per-store report with newlines;
         # prepend the error code prefix for structured-log searchability.
+        return f"[{self.error_code.code}] {self.message}"
+
+
+@dataclass(kw_only=True)
+class StorageHandoffIncompleteError(DataIntegrityError, StorageError):
+    """A producer's declared outputs are not all present in the store (FND-1790).
+
+    Raised by :meth:`~application_sdk.app.base.App.verify_refs` when the
+    ``FileReference`` list a step declared does not check out against the
+    store: an object is missing, or it resolves outside the prefix the
+    step is about to hand downstream.
+
+    Why this is fatal rather than a warning: the prefix is what the next
+    stage walks, and a walk cannot tell a short tree from a small one.
+    Publishing a short ``transformed/`` tree does not fail — it diffs the
+    tenant against a subset and archives everything the walk missed. The
+    only place the shortfall is still visible is here, against the
+    producer's own declaration, so this is where the run has to stop.
+
+    Non-retryable: the objects were either written or they were not, and
+    a re-check finds the same store state. Re-running the *producing*
+    step is the remediation.
+
+    Categorical parent is ``DataIntegrityError`` (category=DATA_INTEGRITY,
+    audience=APP_OWNER, retryable=False); domain parent is ``StorageError``
+    so ``except StorageError:`` catch blocks still fire.
+
+    Attributes:
+        missing_keys: Declared keys with no object behind them in the
+            store.  A ref that carried no ``storage_path`` at all appears
+            here as ``"<no storage_path>"``.
+        outside_prefix_keys: Declared keys that exist but sit outside
+            *prefix*, so a consumer walking *prefix* would never reach
+            them.
+        prefix: The prefix the refs were checked against.
+        declared_count: How many refs the producer declared.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_HANDOFF_INCOMPLETE
+    code: ClassVar[str] = "DATA_INTEGRITY_STORAGE_HANDOFF_INCOMPLETE"
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+    missing_keys: list[str] | None = None
+    outside_prefix_keys: list[str] | None = None
+    declared_count: int = 0
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        missing_keys: list[str] | None = None,
+        outside_prefix_keys: list[str] | None = None,
+        prefix: str | None = None,
+        declared_count: int = 0,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        DataIntegrityError.__init__(
+            self,
+            message=message,
+            cause=cause,
+            expectation=f"{declared_count} declared object(s) present under {prefix or '<any prefix>'}",
+            observed=(
+                f"{len(missing_keys or [])} missing, "
+                f"{len(outside_prefix_keys or [])} outside prefix"
+            ),
+            location=prefix,
+        )
+        self.missing_keys = missing_keys or []
+        self.outside_prefix_keys = outside_prefix_keys or []
+        self.declared_count = declared_count
+        _init_storage_evidence(self, key=prefix, error_code=error_code)
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return (
+            self._error_code
+            if self._error_code is not None
+            else self.DEFAULT_ERROR_CODE
+        )
+
+    def __str__(self) -> str:
+        parts = [f"[{self.error_code.code}] {self.message}"]
+        if self.missing_keys:
+            parts.append(f"missing={self.missing_keys}")
+        if self.outside_prefix_keys:
+            parts.append(f"outside_prefix={self.outside_prefix_keys}")
+        if self.cause:
+            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+        return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
+class UnplaceableDeclaredFileError(InvalidInputError, StorageError):
+    """``upload_refs`` cannot work out where a declared file belongs (FND-1790).
+
+    The entry carries no ``label`` and its ``storage_path`` does not sit under
+    the ``source_prefix`` given, so there is nothing to name it by at the
+    destination.
+
+    ``InvalidInputError`` defaults to ``USER`` because bad input usually comes
+    from whoever supplied it. Here it does not: the declaration is assembled by
+    connector code, never by an end user, so this leaf picks ``APP_OWNER`` as
+    the base class docstring instructs. Nothing a customer can change fixes it.
+
+    Deliberately an error rather than a fallback. A rule that recovers the
+    entity segment from a four-ref declaration and drops it from a one-ref one
+    would deliver a differently-shaped tree on exactly the small runs nobody
+    inspects — the same class of silent reshaping ``upload_refs`` exists to
+    stop.
+
+    Attributes:
+        storage_path: The declared ref's key.
+        source_prefix: The prefix it was checked against.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
+    code: ClassVar[str] = "INVALID_INPUT_UNPLACEABLE_DECLARED_FILE"
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+    storage_path: str | None = None
+    source_prefix: str | None = None
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        storage_path: str | None = None,
+        source_prefix: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        InvalidInputError.__init__(
+            self,
+            message=message,
+            cause=cause,
+            field="files",
+            constraint="DeclaredFile.label or a matching UploadRefsInput.source_prefix",
+        )
+        self.storage_path = storage_path
+        self.source_prefix = source_prefix
+        _init_storage_evidence(self, key=storage_path, error_code=error_code)
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return (
+            self._error_code
+            if self._error_code is not None
+            else self.DEFAULT_ERROR_CODE
+        )
+
+    def __str__(self) -> str:
         return f"[{self.error_code.code}] {self.message}"

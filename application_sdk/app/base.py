@@ -73,8 +73,12 @@ from application_sdk.contracts.storage import (
     DownloadOutput,
     UploadInput,
     UploadOutput,
+    UploadRefsInput,
+    UploadRefsOutput,
+    VerifyRefsInput,
+    VerifyRefsOutput,
 )
-from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
 from application_sdk.errors import (
     APP_CONTEXT_ERROR,
     APP_ERROR,
@@ -1368,7 +1372,16 @@ class App(ABC):
             up = await self.upload(UploadInput(local_path="/tmp/output/"))
             # up.ref.file_count == number of files in the directory
         """
+        return await self._upload_impl(input)
 
+    async def _upload_impl(self, input: UploadInput) -> UploadOutput:
+        """Body of :meth:`upload`, callable from inside another ``@task``.
+
+        ``upload`` is a ``@task``, and a ``@task`` cannot call another one — so
+        every framework task that needs the same store routing, dual-write
+        fan-out and pre-handoff validation calls this instead of duplicating
+        them. :meth:`upload_refs` is the other caller.
+        """
         from application_sdk.constants import (  # noqa: PLC0415 — import here to avoid module-level circular import (same pattern as normalize_key)
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED,
@@ -1560,6 +1573,279 @@ class App(ABC):
             skip_if_exists=input.skip_if_exists,
             store=store,
         )
+
+    @task(timeout_seconds=300, retry_max_attempts=3)
+    async def verify_refs(self, input: VerifyRefsInput) -> VerifyRefsOutput:
+        """Framework task: assert every declared ``FileReference`` is really there.
+
+        Call this from ``run()`` at the point a step stops passing typed refs
+        and starts passing a prefix — the moment the producer's declaration
+        would otherwise be thrown away.
+
+        A prefix is not a declaration.  Once a step hands one downstream, the
+        consumer walks it and takes whatever the listing returns; a tree that
+        is short by two entities is indistinguishable from a run that produced
+        two fewer.  ``APP-CORRECTNESS-001`` is the rule this task implements:
+        *verify cross-activity handoffs against a producer-written declaration,
+        never by listing a storage prefix*.  The refs the producing tasks
+        returned **are** that declaration — this task is what turns them from a
+        value nobody read into an assertion.
+
+        Each ref is checked by its ``storage_path`` (used verbatim, matching
+        how ``persist_file_reference`` wrote it).  Single-file refs are checked
+        with a HEAD; a ref whose ``file_count`` exceeds 1 is a directory ref and
+        is checked by listing its prefix and requiring at least ``file_count``
+        objects.  When ``input.prefix`` is set, every ref must also resolve
+        underneath it — a ref outside the prefix is data the downstream walk
+        will never reach, which is the same hole by a different route.
+
+        Args:
+            input: ``VerifyRefsInput`` with the declared refs, the prefix they
+                are expected to live under, and which store to check.
+
+        Returns:
+            ``VerifyRefsOutput`` with the verified counts.  Success is the only
+            thing this task returns.
+
+        Raises:
+            StorageHandoffIncompleteError: If any declared ref is missing from
+                the store or resolves outside ``input.prefix``.
+            ObjectStoreNotConfiguredError: If the requested store is not bound.
+
+        Example — SQL extraction asserting its transform outputs before
+        handing the prefix to publish::
+
+            results = await asyncio.gather(*transforms)
+            refs = [r.transformed_file for r in results if r.transformed_file]
+            await self.verify_refs(
+                VerifyRefsInput(refs=refs, prefix=transformed_data_prefix)
+            )
+        """
+        return await self._verify_refs_impl(input)
+
+    async def _verify_refs_impl(self, input: VerifyRefsInput) -> VerifyRefsOutput:
+        """Body of :meth:`verify_refs`, callable from inside another ``@task``.
+
+        :meth:`upload_refs` uses it to check its own delivery without calling a
+        ``@task`` from inside a ``@task``.
+        """
+        from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
+            list_keys,
+        )
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
+            StorageHandoffIncompleteError,
+        )
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
+            exists,
+        )
+
+        if input.store is StoreTarget.UPSTREAM:
+            store = self.context.upstream_storage or self.context.storage
+        else:
+            store = self.context.storage
+        if store is None:
+            raise ObjectStoreNotConfiguredError()
+
+        prefix = input.prefix.strip("/")
+        missing: list[str] = []
+        outside: list[str] = []
+        verified_file_count = 0
+
+        for ref in input.refs:
+            key = (ref.storage_path or "").strip("/")
+            if not key:
+                # A producer that cannot say where it wrote has declared
+                # nothing — that is the hole, not a reason to skip the check.
+                missing.append("<no storage_path>")
+                continue
+            if prefix and not (key == prefix or key.startswith(prefix + "/")):
+                outside.append(key)
+                continue
+            if ref.file_count > 1:
+                found = await list_keys(key, store=store, normalize=False)
+                if len(found) < ref.file_count:
+                    missing.append(f"{key} ({len(found)}/{ref.file_count} objects)")
+                    continue
+            elif not await exists(key, store=store, normalize=False):
+                missing.append(key)
+                continue
+            verified_file_count += ref.file_count
+
+        if missing or outside:
+            raise StorageHandoffIncompleteError(
+                "Declared outputs are not all present in the object store: "
+                f"{len(missing)} missing, {len(outside)} outside the handoff "
+                f"prefix, out of {len(input.refs)} declared",
+                missing_keys=missing,
+                outside_prefix_keys=outside,
+                prefix=prefix or None,
+                declared_count=len(input.refs),
+            )
+
+        _task_logger.info(
+            "Verified %d declared file reference(s) (%d object(s)) under prefix %s",
+            len(input.refs),
+            verified_file_count,
+            prefix or "<any>",
+        )
+        return VerifyRefsOutput(
+            verified_count=len(input.refs),
+            verified_file_count=verified_file_count,
+            prefix=prefix,
+        )
+
+    @task(timeout_seconds=600, retry_max_attempts=3)
+    async def upload_refs(self, input: UploadRefsInput) -> UploadRefsOutput:
+        """Framework task: deliver a declaration as one outbound tree.
+
+        The fan-in counterpart to :meth:`verify_refs`.  Where ``verify_refs``
+        *asserts* a declaration, this one *delivers* it: it takes the
+        ``FileReference`` list a fanned-out step produced and lands every one
+        of them under a single destination prefix — by reference, never by
+        scanning a directory.
+
+        This is the shape every connector that crosses the SDR store boundary
+        needs and has so far hand-rolled.  The hand-rolled version that scans
+        ``os.path.join(output_path, "transformed")`` is wrong on any run where
+        the transforms fanned out: that directory was written by the activities,
+        so the calling pod sees only the subset that happened to run locally —
+        and on a fully distributed run, nothing at all.  Passing each ref lets
+        the SDK stream from the deployment store for the files this pod never
+        held, which is the normal case once activities are distributed.
+
+        Three behaviours the hand-rolled loop has to remember and this does not
+        make optional:
+
+        * **Every ref is uploaded with** ``raise_on_empty=True``.  A declared
+          file that contributes zero objects is a bug, not a quiet day.
+        * **An empty declaration returns an empty prefix.**  ``prefix`` comes
+          back as ``""`` when there was nothing to deliver, so the caller hands
+          ``""`` downstream rather than a prefix naming an empty tree — an
+          empty tree is not a no-op to a consumer that diffs against it, it is
+          "delete everything".
+        * **The delivery is verified against the declaration** before it is
+          returned (unless ``verify=False``), in the store it was written to.
+
+        Destination keys: ``{prefix}/{label}`` when a
+        :class:`~application_sdk.contracts.storage.DeclaredFile` carries a
+        ``label``, otherwise ``{prefix}/{leaf}`` where *leaf* is the ref's own
+        key with ``input.source_prefix`` removed — so a set of refs at
+        ``<run>/transformed/<entity>/entities.json`` keeps its
+        ``<entity>/entities.json`` shape under the new prefix.  A declared file
+        that yields neither is an error rather than a guess: a rule that
+        recovers the entity segment from four refs and drops it from one turns
+        a small run into a differently-shaped tree, which is the failure this
+        task exists to stop.
+
+        Store routing matches :meth:`upload`: the upstream store when one is
+        configured (SDR), the deployment store otherwise.
+
+        Args:
+            input: ``UploadRefsInput`` with the declaration, the destination
+                prefix, the tier, and whether to verify the delivery.
+
+        Returns:
+            ``UploadRefsOutput`` with the prefix actually delivered to (``""``
+            for an empty declaration), the durable destination refs, and the
+            total object count.
+
+        Raises:
+            StorageEmptyUploadError: If a declared file uploaded zero objects.
+            StorageHandoffIncompleteError: If the delivered tree does not check
+                out against the declaration.
+
+        Example — a fanned-out connector handing its transformed tree to
+        publish::
+
+            delivered = await self.upload_refs(
+                UploadRefsInput(
+                    files=[DeclaredFile(ref=r, label=t) for t, r in transformed],
+                    prefix=f"artifacts/apps/{app}/workflows/{wf_id}/{run_id}/transformed",
+                )
+            )
+            return MyOutput(transformed_data_prefix=delivered.prefix)
+
+        Example — a ``SqlApp`` connector bridging its own declaration across
+        the SDR store boundary, keeping the key shape publish expects::
+
+            delivered = await self.upload_refs(
+                UploadRefsInput(
+                    files=[DeclaredFile(ref=r) for r in out.transformed_files],
+                    source_prefix=out.transformed_data_prefix,
+                    prefix=out.transformed_data_prefix,
+                )
+            )
+        """
+        prefix = input.prefix.strip("/")
+        if not input.files:
+            _task_logger.warning(
+                "upload_refs called with an empty declaration; returning an empty "
+                "prefix instead of %s, which names an empty tree",
+                prefix or "<run prefix>",
+            )
+            return UploadRefsOutput()
+
+        source_prefix = input.source_prefix.strip("/")
+
+        delivered: list[FileReference] = []
+        file_count = 0
+        for declared in input.files:
+            source_key = (declared.ref.storage_path or "").strip("/")
+            leaf = declared.label
+            if (
+                not leaf
+                and source_prefix
+                and source_key.startswith(source_prefix + "/")
+            ):
+                leaf = source_key[len(source_prefix) + 1 :].strip("/")
+            if not leaf:
+                from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
+                    UnplaceableDeclaredFileError,
+                )
+
+                raise UnplaceableDeclaredFileError(
+                    "upload_refs cannot place a declared file: it carries no "
+                    f"label and its storage_path {source_key!r} does not sit "
+                    f"under source_prefix {source_prefix!r}. Set one or the "
+                    "other — the SDK does not guess a leaf, because a guess "
+                    "that works for four entities and flattens one is worse "
+                    "than an error",
+                    storage_path=source_key,
+                    source_prefix=source_prefix,
+                )
+            out = await self._upload_impl(
+                UploadInput(
+                    ref=declared.ref,
+                    local_path=declared.ref.local_path or "",
+                    storage_path=f"{prefix}/{leaf}" if prefix else leaf,
+                    tier=input.tier,
+                    # A declared file that contributes zero objects is a hole in
+                    # the tree the consumer will walk — fail here, loudly.
+                    raise_on_empty=True,
+                )
+            )
+            delivered.append(out.ref)
+            file_count += out.ref.file_count
+
+        if input.verify:
+            await self._verify_refs_impl(
+                VerifyRefsInput(
+                    refs=[
+                        r.model_copy(update={"auto_materialize": False})
+                        for r in delivered
+                    ],
+                    prefix=prefix,
+                    store=StoreTarget.UPSTREAM,
+                )
+            )
+
+        _task_logger.info(
+            "Delivered %d declared file(s) (%d object(s)) to prefix %s",
+            len(delivered),
+            file_count,
+            prefix or "<store root>",
+        )
+        return UploadRefsOutput(prefix=prefix, refs=delivered, file_count=file_count)
 
     @task(timeout_seconds=300, retry_max_attempts=3, heartbeat_timeout_seconds=60)
     async def cleanup_files(self, input: CleanupInput) -> CleanupOutput:

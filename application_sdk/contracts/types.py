@@ -30,6 +30,31 @@ K = TypeVar("K")
 V = TypeVar("V")
 
 
+class StoreTarget(StrEnum):
+    """Which object store an operation addresses.
+
+    Atlan deployments come in two shapes and the SDK talks to a different
+    store in each:
+
+    * ``DEPLOYMENT`` — the store bound to this deployment
+      (``context.storage``).  This is where the activity interceptor
+      persists and materialises every ``FileReference`` on the
+      task-to-task path, in **both** deployment shapes.
+    * ``UPSTREAM`` — Atlan's own bucket (``context.upstream_storage``),
+      configured only in SDR deployments and the destination
+      ``App.upload`` / ``App.download`` route to when it is present.
+      Falls back to the deployment store when no upstream binding
+      exists, mirroring ``App.upload``'s routing.
+
+    Pick ``DEPLOYMENT`` to assert something about what the interceptor
+    wrote; pick ``UPSTREAM`` to assert something about what the publish
+    app will read.
+    """
+
+    DEPLOYMENT = "deployment"
+    UPSTREAM = "upstream"
+
+
 class StorageTier(StrEnum):
     """Storage lifecycle tier for a ``FileReference``.
 

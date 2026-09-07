@@ -76,7 +76,7 @@ import asyncio
 import dataclasses
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
@@ -96,6 +96,7 @@ from application_sdk.common.sql_filters import (
 )
 from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.contracts.base import OutputStatus
+from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
@@ -127,7 +128,10 @@ from application_sdk.templates.contracts.sql_metadata import (
     TransformInput,
     TransformOutput,
 )
-from application_sdk.templates.sql_app_errors import SqlProbeTimeoutError
+from application_sdk.templates.sql_app_errors import (
+    SqlProbeTimeoutError,
+    TransformedFileMissingError,
+)
 
 if TYPE_CHECKING:
     from pyatlan_v9.model.assets import Asset
@@ -1235,7 +1239,14 @@ class SqlApp(App):
         #      a different pod than extract).
         # This is the BLDX-1281 cross-worker fix: no manual download_file
         # plumbing inside the transform, the framework does it.
-        await asyncio.gather(
+        #
+        # The gather's results are kept, not discarded (FND-1790). Each
+        # ``TransformOutput`` carries the ``transformed_file``
+        # ``FileReference`` its task wrote — together they are the only
+        # record this run has of what the transform step produced, and
+        # therefore the only thing ``transformed_data_prefix`` can be
+        # checked against before it is handed on.
+        transform_results = await asyncio.gather(
             self.transform_databases(
                 self._build_transform_input(task_input, db_result.raw_file)
             ),
@@ -1290,15 +1301,56 @@ class SqlApp(App):
                 ),
             )
 
+        transformed_data_prefix = get_object_store_prefix(
+            os.path.join(resolved_base, "transformed")
+        )
+
+        # -- Phase 4: Verify the handoff against the producer's declaration --
+        # ``transformed_data_prefix`` is publish's contract and stays exactly
+        # as it is - publish walking it is correct behaviour. What was missing
+        # is any way for *this* method to know the prefix it names is whole.
+        # A walk cannot tell "absent" from "lost": a transformed/ tree short by
+        # one entity looks identical to a run that only had three, and publish
+        # then diffs the tenant against the subset and archives the rest
+        # (APP-CORRECTNESS-001).
+        #
+        # ``transformed_files`` is the expected set. ``verify_refs`` asserts
+        # every declared object is present in the store and sits under the
+        # prefix about to be returned, so a hole fails the run here instead of
+        # surfacing as a short publish two stages downstream.
+        transformed_files = self._collect_transformed_files(transform_results)
+
+        if transformed_files:
+            await self.verify_refs(
+                VerifyRefsInput(
+                    # auto_materialize=False: verification is a HEAD against
+                    # the store, so the interceptor must not download all four
+                    # transformed files onto whichever pod runs the check.
+                    refs=[
+                        ref.model_copy(update={"auto_materialize": False})
+                        for ref in transformed_files
+                    ],
+                    prefix=transformed_data_prefix,
+                )
+            )
+        else:
+            logger.warning(
+                "No entity produced transformed output; transformed_data_prefix "
+                "%s names an empty tree",
+                transformed_data_prefix,
+            )
+
         return ExtractionOutput(
             databases_extracted=db_result.total_record_count,
             schemas_extracted=schema_result.total_record_count,
             tables_extracted=table_result.total_record_count,
             columns_extracted=column_result.total_record_count,
             connection_qualified_name=connection_qn,
-            transformed_data_prefix=get_object_store_prefix(
-                os.path.join(resolved_base, "transformed")
-            ),
+            transformed_data_prefix=transformed_data_prefix,
+            # The producer's declaration of what it wrote, surfaced so a
+            # connector's Atlan bridge can upload each ref by reference
+            # instead of scanning a directory it may not share (FND-1790).
+            transformed_files=transformed_files,
             # Expose the resolved local base path so subclasses can derive
             # additional prefixes (e.g. lineage-specific dirs) without calling
             # workflow.info() a second time.
@@ -1308,6 +1360,52 @@ class SqlApp(App):
     # =====================================================================
     # Internal helpers
     # =====================================================================
+
+    @staticmethod
+    def _collect_transformed_files(
+        results: Sequence[TransformOutput],
+    ) -> list[FileReference]:
+        """Return the ``transformed_file`` refs the transform tasks declared.
+
+        This is the producer's declaration of what the transform step wrote —
+        the expected set ``transformed_data_prefix`` gets checked against
+        before it is handed downstream (FND-1790).
+
+        A transform that mapped zero records legitimately contributes no ref;
+        that is the "genuine zero-row entity" signal publish already relies on
+        and it is skipped silently. A transform that mapped records and still
+        returned no ref is a hole, not a quiet day: its assets exist but
+        nothing can point at them, so they will be missing from the tree
+        publish walks and archived as removed-from-source. That case raises.
+
+        Args:
+            results: The ``TransformOutput`` values returned by the
+                ``transform_*`` tasks, in any order.
+
+        Returns:
+            One ``FileReference`` per entity that produced output.
+
+        Raises:
+            TransformedFileMissingError: If any result reports records but
+                carries no ``transformed_file``.
+        """
+        refs: list[FileReference] = []
+        for result in results:
+            if result.transformed_file is not None:
+                refs.append(result.transformed_file)
+            elif result.total_record_count > 0:
+                raise TransformedFileMissingError(
+                    message=(
+                        f"transform_{result.typename or '<unknown>'} reported "
+                        f"{result.total_record_count} records but returned no "
+                        "transformed_file reference"
+                    ),
+                    typename=result.typename or None,
+                    record_count=result.total_record_count,
+                    expectation="a FileReference for the transformed output",
+                    observed="transformed_file=None",
+                )
+        return refs
 
     @staticmethod
     def _build_transform_input(

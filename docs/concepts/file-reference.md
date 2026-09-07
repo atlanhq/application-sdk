@@ -39,6 +39,8 @@ failures.
 | Push a completed artifact so it appears in the Atlan UI after the run | `await self.upload(UploadInput(local_path=...))` | `RETAINED` is the default tier — writes to a stable run-scoped prefix that the platform indexes. |
 | Write a file that must persist across multiple runs (e.g. incremental bookmark) | `await self.upload(UploadInput(..., tier=StorageTier.PERSISTENT))` | Writes to a fixed path not cleaned up between runs. |
 | Directory of output files (e.g. partitioned Parquet) from task A to task B | `FileReference(local_path=str(dir_path))` — same API, directory-aware | SDK uploads all files in the directory and re-creates the structure on download. |
+| Assert that everything a step wrote is really in the store before handing a prefix downstream | `await self.verify_refs(VerifyRefsInput(refs=..., prefix=...))` | The refs are the producer's declaration; a prefix walk cannot tell "absent" from "lost". |
+| Land a fanned-out step's output as one outbound tree for publish / QI / lineage | `await self.upload_refs(UploadRefsInput(files=..., prefix=...))` | Uploads each declared ref by reference, so it works when the producing activities ran on other pods. |
 | Pass intermediate data between tasks using `App.upload()` | **Don't — use `FileReference`** | `App.upload()` routes to Atlan's `atlan-objectstore` in SDR, polluting it with internal artifacts; bypasses SHA-256 dedup; and doesn't wire into cross-worker auto-materialization. |
 
 **Key rule:** `FileReference` is for *within-run* transfer. `App.upload()` is
@@ -580,6 +582,105 @@ result = await self.upload(
 )
 # result.ref.storage_path is stable and survives workflow completion
 ```
+
+### Handing a declaration on — verify_refs() and upload_refs()
+
+A `FileReference` names one object. A **prefix** names whatever a listing
+happens to return — and a listing cannot tell "absent" from "lost". A
+`transformed/` tree short by one entity looks exactly like a run that only
+produced three, so a consumer that walks the prefix (the publish app does)
+diffs the tenant against the subset and archives everything the walk missed.
+
+`APP-CORRECTNESS-001` is the rule: **verify cross-activity handoffs against a
+producer-written declaration, never by listing a storage prefix.** The refs the
+producing tasks returned *are* that declaration — `App.verify_refs()` is what
+turns them from a value nobody read into an assertion.
+
+Call it from `run()` at the point a step stops passing typed refs and starts
+passing a prefix:
+
+```python
+from application_sdk.contracts.storage import VerifyRefsInput
+
+results = await asyncio.gather(*transform_tasks)
+refs = [r.transformed_file for r in results if r.transformed_file is not None]
+
+await self.verify_refs(
+    VerifyRefsInput(
+        refs=[r.model_copy(update={"auto_materialize": False}) for r in refs],
+        prefix=transformed_data_prefix,
+    )
+)
+```
+
+Each ref is checked by its `storage_path` — a HEAD for a single-file ref, a
+prefix listing for a directory ref (`file_count > 1`). With `prefix` set, a ref
+that resolves *outside* it fails too: that is data the downstream walk will
+never reach, which is the same hole by a different route. Anything missing
+raises `StorageHandoffIncompleteError` (`DATA_INTEGRITY`, non-retryable) naming
+the keys, so the run fails at the producer instead of surfacing as a short
+publish two stages later.
+
+Set `auto_materialize=False` on the copies you pass in. Verification is a
+metadata lookup; without it the interceptor would download every declared file
+onto whichever pod runs the check.
+
+`store` selects which store to assert against and defaults to
+`StoreTarget.DEPLOYMENT` — the store the interceptor persists refs to. Pass
+`StoreTarget.UPSTREAM` after an `App.upload()` fan-out to assert what the
+publish app will actually read.
+
+`SqlApp.run()` does all of this for you and surfaces the refs it verified on
+`ExtractionOutput.transformed_files`, so a connector's own Atlan bridge can
+hand each one to `App.upload(ref=...)` instead of scanning a directory that,
+on a fanned-out run, was written by pods it never shared a filesystem with.
+
+#### Delivering the declaration — `App.upload_refs()`
+
+`verify_refs()` asserts a declaration. `upload_refs()` **delivers** one: it
+takes the same list and lands every ref under a single destination prefix, then
+verifies what it delivered. This is the fan-in half of the same handoff, and it
+is the loop connectors that cross the SDR store boundary have been hand-rolling.
+
+The hand-rolled version usually scans `os.path.join(output_path, "transformed")`
+and uploads whatever it finds. That is wrong on any run where the transforms
+fanned out: the directory is written by the *activities*, so the calling pod
+sees only the subset that happened to run locally — and on a fully distributed
+run, nothing at all. `upload_refs()` passes each ref instead, so the SDK streams
+from the deployment store for the files this pod never held.
+
+```python
+from application_sdk.contracts.storage import DeclaredFile, UploadRefsInput
+
+delivered = await self.upload_refs(
+    UploadRefsInput(
+        files=[DeclaredFile(ref=r) for r in extraction.transformed_files],
+        source_prefix=extraction.transformed_data_prefix,
+        prefix=f"artifacts/apps/{app}/workflows/{wf_id}/{run_id}/transformed",
+    )
+)
+return MyOutput(transformed_data_prefix=delivered.prefix)
+```
+
+Three things it does not leave optional:
+
+- **Every upload opts into `raise_on_empty=True`.** A declared file that
+  contributes zero objects is a hole in the tree the consumer will walk.
+- **An empty declaration returns an empty prefix.** `delivered.prefix` is `""`
+  when there was nothing to deliver, so you hand `""` downstream rather than a
+  prefix naming an empty tree. An empty tree is not a quiet no-op to a consumer
+  that diffs against it — PublishNode reads it as "delete everything".
+- **The delivery is verified against the declaration** in the store it landed
+  in, before the task returns.
+
+Destination keys come from one of two explicit knobs, never a guess:
+`DeclaredFile(label=...)` names the leaf directly (use this when the refs'
+own keys carry no structure, e.g. `file_refs/<uuid>.json`), or
+`source_prefix` is stripped from each ref's key to give the leaf (use this when
+the keys already have the shape the destination should keep). A declared file
+that yields neither raises `UnplaceableDeclaredFileError` — a rule that
+recovers the entity segment from four refs and drops it from one would reshape
+the tree on exactly the small runs nobody inspects.
 
 ---
 
