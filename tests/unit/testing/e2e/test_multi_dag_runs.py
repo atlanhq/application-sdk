@@ -57,6 +57,7 @@ from application_sdk.testing.e2e.client import (
     PublishedVersion,
 )
 from application_sdk.testing.harness import atlas as atlas_api
+from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.identity import Minter
 from application_sdk.testing.harness.outcome import Settled
 from application_sdk.testing.harness.teardown import CONNECTION_DELETE_NODE_ID
@@ -168,6 +169,10 @@ class _FakeAE:
 
     async def get_published_version(self, slug: str) -> None:
         return None
+
+    # The real guard, over this fake's scripted read — see
+    # ``_PublishingAE``, which is the subclass that makes it answer something.
+    foreign_published_dag = AEClient.foreign_published_dag
 
     async def probe_run_is_listed(self, slug: str, run_id: str) -> None:
         return None

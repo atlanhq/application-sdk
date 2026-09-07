@@ -27,7 +27,10 @@ from typing import Any
 
 import pytest
 
-from application_sdk.testing.harness.automation_engine import NoWorkerOnTaskQueueError
+from application_sdk.testing.harness.automation_engine import (
+    AEClient,
+    NoWorkerOnTaskQueueError,
+)
 from application_sdk.testing.harness.automation_engine.wire import (
     DAGNodeResult,
     DAGNodeStatus,
@@ -151,6 +154,12 @@ class _FakeAE:
         if self._published_error is not None:
             raise self._published_error
         return self._published
+
+    # The real guard, over this fake's scripted read. Borrowed rather than
+    # re-scripted: the decision it makes (which node names are foreign, and
+    # what "unanswered" degrades to) is the thing under test here, and a
+    # second copy of it in a fake would only ever agree with itself.
+    foreign_published_dag = AEClient.foreign_published_dag
 
     async def poll_native_status(self, run_id: str, **kwargs: Any) -> DAGRunResult:
         self.poll_kwargs.append(kwargs)
