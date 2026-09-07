@@ -1,9 +1,11 @@
 """Unit tests for the injected pre-extraction preflight gate (HYP-1883).
 
 Exercises ``_run_preflight_gate`` directly with ``workflow.patched`` and
-``workflow.execute_activity`` mocked. The block decision lives in the activity
-(it raises); the workflow only re-raises the deliberate ``PreflightFailed``
-block and fails open on every other activity failure.
+``workflow.execute_activity`` mocked. The activity holds the verdict and raises
+the deliberate ``PreflightFailed`` block, which the workflow re-raises unchanged.
+When the activity returns no verdict the workflow classifies the failure chain:
+surviving evidence or a lost frame is subject to the mode, and only the gate's
+own plumbing fails open.
 """
 
 from __future__ import annotations
@@ -16,16 +18,19 @@ from application_sdk.app.base import _run_preflight_gate
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import SourceUnavailableError
 from application_sdk.execution._temporal.preflight_gate import (
-    CLASSIFICATION_GATE_BROKEN,
-    CLASSIFICATION_NOT_RUN,
-    CLASSIFICATION_SOURCE_UNVERIFIABLE,
     FAILURE_AUDIENCE_KEY,
+    GATE_OUTCOME_ROW_KEYS,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     PREFLIGHT_FAILED_ERROR_TYPE,
     PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+    PreflightClassification,
 )
 from application_sdk.execution.errors import ApplicationError
-from application_sdk.handler.contracts import PreflightOutput, PreflightStatus
+from application_sdk.handler.contracts import (
+    PreflightGateMode,
+    PreflightOutput,
+    PreflightStatus,
+)
 from application_sdk.observability.logger_adaptor import (
     CHECK_MATRIX_KEY,
     GATE_ATTEMPTS_KEY,
@@ -109,12 +114,17 @@ def _exec(return_value=None, side_effect=None):
     return m, mock.patch("application_sdk.app.base.workflow.execute_activity", m)
 
 
+def _rows(safe_log) -> list[dict]:
+    return [c.kwargs for c in safe_log.call_args_list if "outcome" in c.kwargs]
+
+
+def _row(safe_log) -> dict:
+    (row,) = _rows(safe_log)
+    return row
+
+
 def _outcomes(safe_log) -> list[str]:
-    return [
-        c.kwargs.get("outcome")
-        for c in safe_log.call_args_list
-        if "outcome" in c.kwargs
-    ]
+    return [row["outcome"] for row in _rows(safe_log)]
 
 
 @pytest.fixture
@@ -220,7 +230,7 @@ class TestRunPreflightGate:
         assert no_verdict_call.kwargs.get("reason") == "ApplicationError"
         assert (
             no_verdict_call.kwargs.get("gate_classification")
-            == CLASSIFICATION_GATE_BROKEN
+            == PreflightClassification.GATE_BROKEN
         )
         assert _outcomes(safe_log) == ["no_verdict"]
 
@@ -249,7 +259,7 @@ class TestRunPreflightGate:
         assert no_verdict_call.kwargs.get("reason") == "DaprSidecarUnreachableError"
         assert (
             no_verdict_call.kwargs.get("gate_classification")
-            == CLASSIFICATION_GATE_BROKEN
+            == PreflightClassification.GATE_BROKEN
         )
 
     async def test_activity_timeouts_derive_from_the_app_budget(self, safe_log) -> None:
@@ -293,10 +303,6 @@ class TestRunPreflightGate:
         assert gate_input.entrypoint == "asset-export"
 
 
-def _outcome_kwargs(safe_log) -> list[dict]:
-    return [c.kwargs for c in safe_log.call_args_list if "outcome" in c.kwargs]
-
-
 class TestEveryOutcomeCarriesTheCheckMatrix:
     """``check_matrix`` is present on all outcomes, empty where nothing ran.
 
@@ -311,7 +317,7 @@ class TestEveryOutcomeCarriesTheCheckMatrix:
         _, exec_patch = _exec()
         with _patched(False), exec_patch:
             await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
-        row = _outcome_kwargs(safe_log)[0]
+        row = _rows(safe_log)[0]
         assert row["outcome"] == "skipped"
         assert row[CHECK_MATRIX_KEY] == "[]"
 
@@ -319,7 +325,7 @@ class TestEveryOutcomeCarriesTheCheckMatrix:
         _, exec_patch = _exec()
         with _patched(True), exec_patch:
             await _run_preflight_gate(_NonResolvableInput(), "myapp", "crawl")
-        row = _outcome_kwargs(safe_log)[0]
+        row = _rows(safe_log)[0]
         assert row["outcome"] == "skipped"
         assert row[CHECK_MATRIX_KEY] == "[]"
 
@@ -327,12 +333,12 @@ class TestEveryOutcomeCarriesTheCheckMatrix:
         _, exec_patch = _exec(side_effect=RuntimeError("worker gone"))
         with _patched(True), exec_patch:
             await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
-        row = _outcome_kwargs(safe_log)[0]
+        row = _rows(safe_log)[0]
         assert row["outcome"] == "no_verdict"
         # Empty, not synthetic: the activity never returned, so the workflow has
         # no checks to report and must not invent one.
         assert row[CHECK_MATRIX_KEY] == "[]"
-        assert row["gate_classification"] == CLASSIFICATION_GATE_BROKEN
+        assert row["gate_classification"] == PreflightClassification.GATE_BROKEN
 
 
 class TestUnderlyingErrorType:
@@ -457,16 +463,6 @@ class TestGateActivityHeartbeat:
         assert heartbeat.total_seconds() > 0
 
 
-_FULL_ROW_KEYS = (
-    CHECK_MATRIX_KEY,
-    GATE_MODE_KEY,
-    GATE_CLASSIFICATION_KEY,
-    GATE_DURATION_KEY,
-    GATE_TIMEOUT_KEY,
-    GATE_ATTEMPTS_KEY,
-)
-
-
 def _workflow_clock(*seconds: float):
     from datetime import datetime, timedelta, timezone
 
@@ -483,19 +479,13 @@ class TestEveryWorkflowRowCarriesTheFullShape:
     outcome is parsed the same way, so every outcome carries every key.
     """
 
-    @staticmethod
-    def _row(safe_log) -> dict:
-        rows = [c.kwargs for c in safe_log.call_args_list if "outcome" in c.kwargs]
-        assert len(rows) == 1
-        return rows[0]
-
     async def test_skipped_on_replay_carries_every_key(self, safe_log) -> None:
         with _patched(False):
             await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
-        row = self._row(safe_log)
+        row = _row(safe_log)
         assert row["outcome"] == "skipped"
-        assert all(key in row for key in _FULL_ROW_KEYS)
-        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_NOT_RUN
+        assert set(GATE_OUTCOME_ROW_KEYS) <= row.keys()
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.NOT_RUN
         assert row[GATE_DURATION_KEY] == 0.0
         assert row[GATE_ATTEMPTS_KEY] == 0
 
@@ -504,10 +494,10 @@ class TestEveryWorkflowRowCarriesTheFullShape:
     ) -> None:
         with _patched(True):
             await _run_preflight_gate(_NonResolvableInput(), "myapp", "crawl")
-        row = self._row(safe_log)
+        row = _row(safe_log)
         assert row["outcome"] == "skipped"
-        assert all(key in row for key in _FULL_ROW_KEYS)
-        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_NOT_RUN
+        assert set(GATE_OUTCOME_ROW_KEYS) <= row.keys()
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.NOT_RUN
 
     async def test_no_verdict_carries_every_key_and_a_measured_duration(
         self, safe_log
@@ -519,10 +509,10 @@ class TestEveryWorkflowRowCarriesTheFullShape:
             await _run_preflight_gate(
                 _ResolvableInput(), "myapp", "crawl", budget_seconds=200
             )
-        row = self._row(safe_log)
+        row = _row(safe_log)
         assert row["outcome"] == "no_verdict"
-        assert all(key in row for key in _FULL_ROW_KEYS)
-        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_GATE_BROKEN
+        assert set(GATE_OUTCOME_ROW_KEYS) <= row.keys()
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
         assert row[GATE_DURATION_KEY] == 7500.0
         assert row[GATE_TIMEOUT_KEY] == 200
         assert row[GATE_ATTEMPTS_KEY] == 0
@@ -532,28 +522,28 @@ class TestEveryWorkflowRowCarriesTheFullShape:
             await _run_preflight_gate(
                 _ResolvableInput(), "myapp", "crawl", gate_mode="hard"
             )
-        assert self._row(safe_log)[GATE_MODE_KEY] == "hard"
+        assert _row(safe_log)[GATE_MODE_KEY] == "hard"
 
     async def test_rows_default_to_soft_when_no_mode_is_declared(
         self, safe_log
     ) -> None:
         with _patched(False):
             await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
-        assert self._row(safe_log)[GATE_MODE_KEY] == "soft"
+        assert _row(safe_log)[GATE_MODE_KEY] == "soft"
 
     async def test_rows_report_the_default_budget_when_none_is_declared(
         self, safe_log
     ) -> None:
         with _patched(False):
             await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
-        assert self._row(safe_log)[GATE_TIMEOUT_KEY] == GATE_TIMEOUT_DEFAULT_SECONDS
+        assert _row(safe_log)[GATE_TIMEOUT_KEY] == GATE_TIMEOUT_DEFAULT_SECONDS
 
     async def test_malformed_declared_mode_reads_as_soft(self, safe_log) -> None:
         with _patched(False):
             await _run_preflight_gate(
                 _ResolvableInput(), "myapp", "crawl", gate_mode="on"
             )
-        assert self._row(safe_log)[GATE_MODE_KEY] == "soft"
+        assert _row(safe_log)[GATE_MODE_KEY] == "soft"
 
 
 def _temporal_timeout(timeout_type):
@@ -604,10 +594,6 @@ class TestWorkflowAppliesTheModeToADeadFrame:
     handler, and the mode applies. Only the gate's own plumbing still proceeds.
     """
 
-    @staticmethod
-    def _rows(safe_log) -> list[dict]:
-        return [c.kwargs for c in safe_log.call_args_list if "outcome" in c.kwargs]
-
     async def test_hard_mode_blocks_from_the_previous_attempts_evidence(
         self, safe_log
     ) -> None:
@@ -625,9 +611,11 @@ class TestWorkflowAppliesTheModeToADeadFrame:
         assert err.details[0].app_name == "mssql"
         assert err.details[1]["status"] == "not_ready"
         assert err.details[1]["checks"][0]["passed"] is False
-        (row,) = self._rows(safe_log)
+        (row,) = _rows(safe_log)
         assert row["outcome"] == "blocked"
-        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
         assert row[FAILURE_AUDIENCE_KEY] == "USER"
         assert row["reason"] == err.details[0].code
         assert "preflightVerdict" in row[CHECK_MATRIX_KEY]
@@ -639,9 +627,11 @@ class TestWorkflowAppliesTheModeToADeadFrame:
                 _ResolvableInput(), "mssql", "crawler", gate_mode="soft"
             )
         assert result is None
-        (row,) = self._rows(safe_log)
+        (row,) = _rows(safe_log)
         assert row["outcome"] == "would_block"
-        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
 
     async def test_evidence_that_crossed_the_converter_as_a_dict_is_accepted(
         self, safe_log
@@ -666,7 +656,7 @@ class TestWorkflowAppliesTheModeToADeadFrame:
         assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
 
     @pytest.mark.parametrize("timeout_name", ["START_TO_CLOSE", "HEARTBEAT"])
-    async def test_killed_frame_without_evidence_blocks_as_a_handler_timeout(
+    async def test_killed_frame_without_evidence_is_frame_lost_and_hard_blocks(
         self, safe_log, timeout_name: str
     ) -> None:
         from temporalio.exceptions import TimeoutType
@@ -687,10 +677,41 @@ class TestWorkflowAppliesTheModeToADeadFrame:
         assert details.audience is Audience.APP_OWNER
         assert details.app_name == "mssql"
         assert "300" in details.message
-        (row,) = self._rows(safe_log)
+        assert "lost worker" in details.message
+        assert excinfo.value.details[1]["status"] == "not_ready"
+        (row,) = _rows(safe_log)
         assert row["outcome"] == "blocked"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.FRAME_LOST
         assert row[FAILURE_AUDIENCE_KEY] == "APP_OWNER"
         assert row[CHECK_MATRIX_KEY] == "[]"
+
+    async def test_killed_frame_without_evidence_is_frame_lost_and_soft_proceeds(
+        self, safe_log
+    ) -> None:
+        from temporalio.exceptions import TimeoutType
+
+        killed = _real_activity_error(_temporal_timeout(TimeoutType.HEARTBEAT))
+        _, exec_patch = _exec(side_effect=killed)
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "mssql", "crawler", gate_mode="soft"
+            )
+        assert result is None
+        (row,) = _rows(safe_log)
+        assert row["outcome"] == "would_block"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.FRAME_LOST
+
+    async def test_the_mode_may_be_declared_as_the_enum(self, safe_log) -> None:
+        _, exec_patch = _exec(side_effect=_killed_attempt_after_marker())
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError):
+                await _run_preflight_gate(
+                    _ResolvableInput(),
+                    "mssql",
+                    "crawler",
+                    gate_mode=PreflightGateMode.HARD,
+                )
+        assert _rows(safe_log)[0][GATE_MODE_KEY] == "hard"
 
     async def test_no_worker_ever_ran_the_attempt_still_fails_open(
         self, safe_log
@@ -706,9 +727,9 @@ class TestWorkflowAppliesTheModeToADeadFrame:
                 _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
             )
         assert result is None
-        (row,) = self._rows(safe_log)
+        (row,) = _rows(safe_log)
         assert row["outcome"] == "no_verdict"
-        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_GATE_BROKEN
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
         assert row["reason"] == "Timeout:SCHEDULE_TO_START"
 
     async def test_plumbing_failure_with_details_still_fails_open(
@@ -729,9 +750,9 @@ class TestWorkflowAppliesTheModeToADeadFrame:
                 _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
             )
         assert result is None
-        (row,) = self._rows(safe_log)
+        (row,) = _rows(safe_log)
         assert row["outcome"] == "no_verdict"
-        assert row[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_GATE_BROKEN
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
         assert row["reason"] == "DependencyUnavailableError"
 
     async def test_the_block_is_still_reraised_unchanged(self, safe_log) -> None:
@@ -743,4 +764,150 @@ class TestWorkflowAppliesTheModeToADeadFrame:
                     _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
                 )
         assert excinfo.value.__cause__ is block
-        assert self._rows(safe_log) == []
+        assert _rows(safe_log) == []
+
+
+def _marker_with_payload(*details) -> ApplicationError:
+    return ApplicationError(
+        "Preflight could not reach a verdict",
+        *details,
+        type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+    )
+
+
+class TestAMalformedMarkerPayloadFailsOpen:
+    """A payload this frame cannot read is the gate's problem, never the run's.
+
+    The workflow parses the marker inside its own ``except``; anything escaping
+    there is a workflow task failure Temporal retries forever, and a newer pod's
+    ``FailureDetails`` reaching an older pod during a rollout is exactly how
+    that happens. An unreadable payload therefore reads as ``gate_broken`` and
+    the run proceeds, in hard mode too.
+    """
+
+    _good = SourceUnavailableError(message="no answer").to_failure_details()
+
+    @pytest.fixture(
+        params=[
+            "extra_field_on_details",
+            "envelope_is_a_list",
+            "check_is_not_a_dict",
+            "details_is_a_string",
+        ]
+    )
+    def malformed(self, request) -> ApplicationError:
+        good = self._good.model_dump(mode="json")
+        return {
+            "extra_field_on_details": _marker_with_payload(
+                {**good, "added_in_a_newer_sdk": 1}, {"checks": []}
+            ),
+            "envelope_is_a_list": _marker_with_payload(good, ["not", "a", "dict"]),
+            "check_is_not_a_dict": _marker_with_payload(good, {"checks": ["x"]}),
+            "details_is_a_string": _marker_with_payload("just text", {"checks": []}),
+        }[request.param]
+
+    @pytest.mark.parametrize("mode", ["hard", "soft"])
+    async def test_unreadable_evidence_fails_open_as_gate_broken(
+        self, safe_log, malformed, mode: str
+    ) -> None:
+        _, exec_patch = _exec(side_effect=_real_activity_error(malformed))
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", gate_mode=mode
+            )
+        assert result is None
+        row = _row(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
+
+
+class TestWorkflowRowsCarryTheRealAttempt:
+    """``gate_attempt`` is the attempt that ran, and ``0`` only when none did."""
+
+    async def test_skipped_rows_report_zero(self, safe_log) -> None:
+        with _patched(False):
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert _row(safe_log)[GATE_ATTEMPTS_KEY] == 0
+
+    async def test_an_attempt_no_worker_started_reports_zero(self, safe_log) -> None:
+        from temporalio.exceptions import TimeoutType
+
+        never = _real_activity_error(_temporal_timeout(TimeoutType.SCHEDULE_TO_START))
+        _, exec_patch = _exec(side_effect=never)
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert _row(safe_log)[GATE_ATTEMPTS_KEY] == 0
+
+    async def test_a_markers_attempt_is_carried(self, safe_log) -> None:
+        details = self._good = SourceUnavailableError(
+            message="no answer"
+        ).to_failure_details()
+        marker = _marker_with_payload(details, {"checks": [], "attempt": 2})
+        _, exec_patch = _exec(side_effect=_real_activity_error(marker))
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert _row(safe_log)[GATE_ATTEMPTS_KEY] == 2
+
+    async def test_a_killed_frames_last_heartbeat_names_the_attempt(
+        self, safe_log
+    ) -> None:
+        from temporalio.exceptions import TimeoutError as TemporalTimeoutError
+        from temporalio.exceptions import TimeoutType
+
+        killed = _real_activity_error(
+            TemporalTimeoutError(
+                "deadline exceeded",
+                type=TimeoutType.HEARTBEAT,
+                last_heartbeat_details=[2],
+            )
+        )
+        _, exec_patch = _exec(side_effect=killed)
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert _row(safe_log)[GATE_ATTEMPTS_KEY] == 2
+
+    async def test_a_plumbing_errors_attempt_is_carried(self, safe_log) -> None:
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        plumbing = ApplicationError(
+            "vault down",
+            DependencyUnavailableError(
+                message="vault down", service="secret_store"
+            ).to_failure_details(),
+            {"status": None, "checks": [], "attempt": 1},
+            type="DependencyUnavailableError",
+        )
+        _, exec_patch = _exec(side_effect=_real_activity_error(plumbing))
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert _row(safe_log)[GATE_ATTEMPTS_KEY] == 1
+
+
+class TestWorkflowRowsAreLevelledLikeTheActivitys:
+    """Same level policy as the activity: blocks and lost gates are ERROR records."""
+
+    @staticmethod
+    def _level(safe_log) -> str:
+        (call,) = [c for c in safe_log.call_args_list if "outcome" in c.kwargs]
+        return call.args[0]
+
+    async def test_skipped_is_info(self, safe_log) -> None:
+        with _patched(False):
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert self._level(safe_log) == "info"
+
+    async def test_no_verdict_is_error(self, safe_log) -> None:
+        from temporalio.exceptions import ApplicationError as TemporalApplicationError
+
+        _, exec_patch = _exec(side_effect=TemporalApplicationError("secret store down"))
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert self._level(safe_log) == "error"
+
+    async def test_would_block_from_a_dead_frame_is_error(self, safe_log) -> None:
+        _, exec_patch = _exec(side_effect=_killed_attempt_after_marker())
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", gate_mode="soft"
+            )
+        assert self._level(safe_log) == "error"

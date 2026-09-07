@@ -144,6 +144,13 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
+PREFLIGHT_GATE_MODE_ENV = "ATLAN_PREFLIGHT_GATE_MODE"
+"""Removed lever, kept one release as an import shim.
+
+The gate posture is read from ``App.preflight_gate_mode`` only. A deployment
+that still sets this variable gets a startup warning from the removed-env-var
+registry (``application_sdk.common.env_warnings``); nothing reads it."""
+
 # Artifact-validation posture override (deploy-time ops lever). Read at worker
 # build; only the literal "hard" enforces, any other set value falls back to
 # soft. An empty or unset value is not an override - resolution falls through to

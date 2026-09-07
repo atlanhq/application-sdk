@@ -435,7 +435,8 @@ a platform blip must not fail a healthy run. The gate stamps which of the two ha
 | Verdict `NOT_READY` | — | report `would_block` | **block** |
 | Probe overran the budget | `source_unverifiable` | report `would_block` | **block** |
 | Handler raised any error, typed or not | `source_unverifiable` | report `would_block` | **block** |
-| Temporal killed a running attempt (`START_TO_CLOSE`, `HEARTBEAT`) | `source_unverifiable` | report `would_block` | **block** |
+| Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** |
+| Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`) | `frame_lost` | report `would_block` | **block** |
 | Credential provably absent | `source_unverifiable` | report `would_block` | **block** |
 | Credential lookup failed for another reason | `gate_broken` | fail open | fail open |
 | Secret-store outage in the gate's own resolution | `gate_broken` | fail open | fail open |
@@ -470,7 +471,8 @@ Temporal kills still leaves the earlier attempt's typed evidence in the failure 
 Two queryable events come out of the gate. The per-run **outcome** event carries `outcome`,
 `gate_mode`, `gate_classification`, `gate_duration_ms`, `gate_timeout_seconds`, `gate_attempt` and
 the per-check `check_matrix` on **every** row, including the `skipped` and `no_verdict` rows the
-workflow emits itself (those carry `gate_attempt=0`, since no activity attempt measured them). On a
+workflow emits itself. `gate_attempt` is the attempt that ran, read off the failure chain for the
+workflow's rows, and `0` only when none did (`skipped`, or no worker ever started one). On a
 proceeded row `reason` is the verdict status, or the error code of the first failed check when the
 run proceeded past one — a `PARTIAL` that hides a throttled probe behind the word `partial` cannot be
 ranked. On a `gate_broken` fail-open its `reason` names the *underlying* fault — the SDK unwraps Temporal's `ActivityError`/`ApplicationError`
@@ -484,9 +486,14 @@ like), `Timeout:SCHEDULE_TO_CLOSE` (the retry window closed), or `Timeout:HEARTB
 events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which
 apps believe they are gated" is only answerable from posture rows.
 
-**Upgrading an app that is already on hard mode:** the three `source_unverifiable` rows above
-previously fell through to fail-open, so hard mode enforced only the `NOT_READY` verdict. They now
-block. Before taking this SDK version, confirm the handler finishes inside
+`frame_lost` is its own value because the failure chain cannot separate a probe that stalled
+the event loop past the gate's cancel from a worker that died under it. The mode still applies:
+a stalled probe is the common cause and the one its owner can fix, a lost worker is rare and
+retried, and the classification keeps the two separable in the dashboards.
+
+**Upgrading an app that is already on hard mode:** the `source_unverifiable` and `frame_lost`
+rows above previously fell through to fail-open, so hard mode enforced only the `NOT_READY`
+verdict. They now block. Before taking this SDK version, confirm the handler finishes inside
 `preflight_gate_timeout_seconds` — an app whose preflight has been quietly overrunning the budget
 was proceeding on every run and will now abort on every run. The worker logs the budget alongside
 the hard-mode line at boot.
@@ -495,8 +502,9 @@ the hard-mode line at boot.
 
 The handler gets `preflight_gate_timeout_seconds` (default 150, clamped 5-300) to run all its
 checks, and the SDK **enforces** it — the gate cancels `preflight_check` when it elapses.
-`preflight_gate_max_attempts` (default 2, clamped 1-3) sets the retries, and both Temporal
-timeouts derive from the pair:
+`preflight_gate_max_attempts` (default 2, clamped 1-3) sets the retries for the gate's own
+retryable plumbing, a store probe or a credential lookup; a handler fault is a verdict on the
+attempt it happens and is never retried. Both Temporal timeouts derive from the pair:
 
 ```python
 class MyConnector(App):
@@ -575,8 +583,8 @@ sizing probes to that field is sizing to the real deadline. Three rules follow:
   blocks 5% of runs. Per-check `duration_ms` inside `check_matrix` is handler-authored and is not
   a substitute — and a handler that never sets it publishes `-1.0`, the "not measured" sentinel,
   never a plausible elapsed time.
-- **Pair a large budget with one attempt.** A retry rescues a transient by trying *again*, not by
-  trying *longer*; at the 300s ceiling two attempts reserve a ~10 minute `schedule_to_close`.
+- **Pair a large budget with one attempt.** A retry only re-runs the gate's own plumbing, never
+  the handler; at the 300s ceiling two attempts reserve a ~10 minute `schedule_to_close`.
 - **Keep probes awaitable.** Cancellation lands at an `await`; blocking synchronous I/O on the
   event loop cannot be interrupted, so it escapes the budget and also stalls the worker's other
   activities. Run blocking drivers in a thread.

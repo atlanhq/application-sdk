@@ -601,11 +601,11 @@ def create_worker(
 
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
         build_preflight_gate_activity,
+        gate_attempts,
+        gate_budget_seconds,
         log_gate_posture,
         preflight_gate_activity_name,
-        resolve_gate_attempts,
-        resolve_gate_budget_seconds,
-        resolve_gate_enforcement,
+        resolve_gate_mode,
     )
     from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
 
@@ -698,18 +698,30 @@ def create_worker(
                 name,
             )
 
-        enforce = resolve_gate_enforcement(app_cls)
-        budget_seconds = resolve_gate_budget_seconds(
+        mode = resolve_gate_mode(app_cls)
+        budget_seconds, budget_complaint = gate_budget_seconds(
             getattr(app_cls, "preflight_gate_timeout_seconds", None)
         )
-        attempts = resolve_gate_attempts(
+        if budget_complaint:
+            logger.warning(
+                "preflight_gate_timeout_seconds: %s; using %ds",
+                budget_complaint,
+                budget_seconds,
+            )
+        attempts, attempts_complaint = gate_attempts(
             getattr(app_cls, "preflight_gate_max_attempts", None)
         )
+        if attempts_complaint:
+            logger.warning(
+                "preflight_gate_max_attempts: %s; using %d",
+                attempts_complaint,
+                attempts,
+            )
         # Every app, soft included: this row is the denominator for ranking
         # hard-mode apps that never reach a verdict (such an app emits no outcome
         # row carrying gate_mode, so it is invisible from outcomes alone).
-        log_gate_posture(name, enforce=enforce, budget_seconds=budget_seconds)
-        if enforce:
+        log_gate_posture(name, mode=mode, budget_seconds=budget_seconds)
+        if mode.enforces:
             # conformance: ignore[L006] same as the artifact-validation notice above: once per hard-mode app at boot, over a single-digit loop, and it is the one line saying a worker will start aborting runs.
             logger.info(
                 "Preflight gate is HARD for app %r — the run WILL abort before "
@@ -725,7 +737,7 @@ def create_worker(
             build_preflight_gate_activity(
                 gate_handler,
                 name,
-                enforce=enforce,
+                mode=mode,
                 budget_seconds=budget_seconds,
                 attempts=attempts,
                 verify_storage=_resolve_verify_storage(app_cls),

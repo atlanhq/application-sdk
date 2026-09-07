@@ -387,11 +387,13 @@ class AtlanObservability(Generic[T], ABC):
 
         Two frames must leave the buffer alone. Workflow code runs on Temporal's
         deterministic loop, which cannot do the file and network work, so
-        :meth:`_flush_records` refuses it. A thread with no running loop cannot
-        schedule the flush task at all. Handing the buffer off from either frame
-        lost the whole batch: the swap had already happened when the refusal
-        came, and the records the worker's activities had appended went with
-        it. Deferring leaves them for the worker loop's periodic flush.
+        :meth:`_flush_records` refuses it; that half guards both callers. A
+        thread with no running loop cannot schedule the flush task at all; that
+        half matters only in the synchronous :meth:`add_record`, since the
+        awaited :meth:`_flush_buffer` always has a loop. Handing the buffer off
+        from either frame lost the whole batch: the swap had already happened
+        when the refusal came, and the records the worker's activities had
+        appended went with it. Deferring leaves them for the periodic flush.
         """
         if in_temporal_workflow():
             return False

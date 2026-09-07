@@ -93,6 +93,7 @@ from application_sdk.handler.contracts import (
 from application_sdk.handler.contracts import (
     flatten_credentials_to_pairs as _flatten_to_pairs,
 )
+from application_sdk.handler.contracts import unverifiable_preflight_result
 from application_sdk.handler.manifest import AppManifest
 from application_sdk.handler.service_errors import (
     InvalidConfigIdError,
@@ -324,17 +325,19 @@ def _preflight_failure_response(
     typed raise, ``InternalError`` with ``classification_pending`` for a crash.
     So the status says the source was not verified while the check says who
     must act. The HTTP status and ``detail`` keep their previous values, so a
-    client that read only those sees no change.
+    client that read only those sees no change. The raw exception text never
+    does: ``cause_repr`` is dropped before the verdict is rendered, because after
+    secret redaction it still names the caller's hosts and accounts.
     """
-    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
-        _unverifiable_result,
-    )
-
-    output = _unverifiable_result(exc, app_name)
+    output = unverifiable_preflight_result(exc, app_name, include_cause=False)
     body = _preflight_response(output, success=False)
     body["detail"] = detail
     failure = output.checks[0].error
-    body["error"] = failure.model_dump(mode="json") if failure is not None else None
+    body["error"] = (
+        failure.model_dump(mode="json", exclude_none=True)
+        if failure is not None
+        else None
+    )
     return JSONResponse(status_code=status_code, content=body)
 
 

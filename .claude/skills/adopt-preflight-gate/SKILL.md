@@ -141,10 +141,12 @@ absent credential. Failures of the gate's own **plumbing** (the gate's
 credential resolution failing, a collapsed not-found wrapping a transport error,
 no worker ever running the attempt) always fail open, in both postures. When
 Temporal kills a running attempt the workflow applies the mode from the failure
-chain — the previous attempt's typed evidence, else a `TIMEOUT` attributed to
-the app owner — so a dead frame is never a silent proceed. The outcome event
-carries `gate_classification` (`verdict` / `source_unverifiable` / `gate_broken`
-/ `not_run`) so the cases are separable in pulse.
+chain — the previous attempt's typed evidence (`source_unverifiable`), else a
+`TIMEOUT` attributed to the app owner under its own `frame_lost` classification,
+because the chain cannot separate a stalled probe from a lost worker — so a dead
+frame is never a silent proceed. The outcome event carries `gate_classification`
+(`verdict` / `source_unverifiable` / `frame_lost` / `gate_broken` / `not_run`) so
+the cases are separable in pulse.
 
 ## The check budget — size it before flipping to hard
 
@@ -235,10 +237,10 @@ and `LogAttributes` is a `Map`, so `LogAttributes['outcome']` works directly whi
 | `outcome` | `proceeded` / `would_block` / `blocked` / `no_verdict` / `skipped` |
 | `reason` | the verdict status on a clean proceed; the first failed check's error code on a proceed past a failed check (a `PARTIAL` from a 429 reads `RATE_LIMITED_API`, not `partial`); the primary code on a block; the underlying fault on a `no_verdict` |
 | `gate_mode` | resolved posture, on every row including the workflow-emitted ones |
-| `gate_classification` | `verdict` / `source_unverifiable` / `gate_broken` / `not_run` (skipped) |
+| `gate_classification` | `verdict` / `source_unverifiable` / `frame_lost` / `gate_broken` / `not_run` (skipped) |
+| `gate_attempt` | the attempt that ran, on every row; `0` only when none did (skipped, or no worker ever started it) |
 | `gate_duration_ms` | **SDK-measured** elapsed; the only number that can size a budget |
 | `gate_timeout_seconds` | the budget in force, so headroom needs no join |
-| `gate_attempt` | which activity attempt produced the row; `0` on the workflow-emitted `skipped` / `no_verdict` / dead-frame rows |
 | `check_matrix` | per-check name/passed/error_code/duration_ms; `[]` where no check ran |
 
 Every key is present on **every** outcome, the workflow-emitted rows included, so

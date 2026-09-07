@@ -13,7 +13,6 @@ from temporalio.exceptions import ActivityError
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
-from application_sdk.common.env_warnings import _REMOVED_ENV_VARS
 from application_sdk.constants import SHUTDOWN_DRAIN_DELAY_SECONDS
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import (
@@ -25,10 +24,6 @@ from application_sdk.execution._temporal import preflight_gate as _preflight_gat
 from application_sdk.execution._temporal._activity_errors import (
     WorkerActivityNameCollisionError,
     WorkerInterceptorDuplicateError,
-)
-from application_sdk.execution._temporal.preflight_gate import (
-    gate_mode_is_hard,
-    resolve_gate_enforcement,
 )
 from application_sdk.execution._temporal.worker import (
     _MAX_FATAL_CHAIN_DEPTH,
@@ -1170,90 +1165,6 @@ class TestWorkerPoolQueueResolution:
         )
         assert pool_warn is not None
         assert pool_warn.args[1] == "heavy"
-
-
-class TestResolveGateEnforcement:
-    """Gate posture comes from ``App.preflight_gate_mode`` alone.
-
-    Only the literal "hard" enforces; anything unknown falls back to soft so
-    a run is never blocked by a typo — blocking is always a deliberate opt-in.
-    There is no deploy-time override: the worker and the workflow both read the
-    class attribute, so the two can never disagree about the posture.
-    """
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def test_default_soft_when_nothing_declared(self) -> None:
-        class _Plain(App):
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert resolve_gate_enforcement(_Plain) is False
-        assert resolve_gate_enforcement(None) is False
-
-    def test_declared_hard_enforces(self) -> None:
-        class _Hard(App):
-            preflight_gate_mode = "hard"
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert resolve_gate_enforcement(_Hard) is True
-
-    def test_declared_value_case_and_whitespace_insensitive(self) -> None:
-        class _Loud(App):
-            preflight_gate_mode = "  HARD  "
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert resolve_gate_enforcement(_Loud) is True
-
-    def test_malformed_declared_falls_back_to_soft(self) -> None:
-        class _Typo(App):
-            preflight_gate_mode = "on"
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert resolve_gate_enforcement(_Typo) is False
-
-    @pytest.mark.parametrize("stale_value", ["hard", "soft", "enabled", ""])
-    def test_the_removed_env_var_no_longer_changes_the_posture(
-        self, monkeypatch, stale_value: str
-    ) -> None:
-        monkeypatch.setenv("ATLAN_PREFLIGHT_GATE_MODE", stale_value)
-
-        class _Soft(App):
-            preflight_gate_mode = "soft"
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        class _Hard(App):
-            preflight_gate_mode = "hard"
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert resolve_gate_enforcement(_Soft) is False
-        assert resolve_gate_enforcement(_Hard) is True
-
-    def test_the_removed_env_var_warns_at_startup(self) -> None:
-        assert "ATLAN_PREFLIGHT_GATE_MODE" in _REMOVED_ENV_VARS
-
-    def test_gate_mode_is_hard_reads_a_raw_declared_value(self) -> None:
-        assert gate_mode_is_hard("hard") is True
-        assert gate_mode_is_hard(" Hard ") is True
-        assert gate_mode_is_hard("soft") is False
-        assert gate_mode_is_hard(None) is False
-        assert gate_mode_is_hard(True) is False
 
 
 class TestWorkflowFailureExceptionTypes:

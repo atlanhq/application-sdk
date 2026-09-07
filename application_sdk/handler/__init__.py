@@ -19,6 +19,7 @@ from application_sdk.handler.contracts import (
     MetadataInput,
     MetadataOutput,
     PreflightCheck,
+    PreflightGateMode,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
@@ -46,6 +47,7 @@ __all__ = [
     "MetadataInput",
     "MetadataOutput",
     "PreflightCheck",
+    "PreflightGateMode",
     "PreflightInput",
     "PreflightOutput",
     "PreflightStatus",
@@ -53,4 +55,5 @@ __all__ = [
     "SqlMetadataOutput",
     "create_app_handler_service",
     "run_app_handler_service",
+    "PreflightGateMode",
 ]

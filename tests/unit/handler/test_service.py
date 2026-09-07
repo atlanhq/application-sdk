@@ -549,6 +549,28 @@ class TestPreflightEndpoint:
         assert body["data"]["preflightVerdict"]["failureMessage"]
         assert "hunter2" not in response.text
 
+    def test_crash_body_never_carries_the_exception_text(self) -> None:
+        # Secret redaction is not enough: a driver message names the caller's
+        # own hosts and accounts, and those must not reach the HTTP caller
+        # either. The cause stays in the server-side log only.
+        class _Crashing(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise ConnectionError(
+                    "could not connect to db-prod-7.internal.example.net:5432 "
+                    "database=finance_warehouse user=svc_ro"
+                )
+
+        client = _make_client(handler=_Crashing())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        body = response.json()
+        assert response.status_code == 500
+        assert "cause_repr" not in response.text
+        assert "db-prod-7" not in response.text
+        assert "finance_warehouse" not in response.text
+        assert body["error"]["code"]
+        (check,) = body["preflight"]["checks"]
+        assert "cause_repr" not in check["error"]
+
     def test_typed_raise_keeps_its_leaf_and_http_status(self) -> None:
         from application_sdk.errors.leaves import AuthError
 
