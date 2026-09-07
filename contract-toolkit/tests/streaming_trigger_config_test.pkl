@@ -38,6 +38,11 @@ local function dagAt(app, path: String) =
   parser.parse(app.output.files!![path].text)["dag"]
 
 local function appDag(app) = dagAt(app, "app/generated/manifest.json")
+local function nativeDag(app) = dagAt(app, "manifest.json")
+
+// Forces the `output` block without reading ["dag"] — an extract-less contract has
+// no extract node, which is the case that slipped past the in-node check.
+local function forceOutput(app) = app.output.files!!.length
 
 local appUiConfig = new App.UIConfig {
   tasks {
@@ -438,5 +443,38 @@ facts {
         }
       }
     })).contains("schedule(s)")
+  }
+
+  // `pipeline { extract = null }` is a supported opt-out, and the refusals were
+  // forced only inside generateExtractNode — so an extract-less contract rendered
+  // streaming_enabled: true and threw nothing. Both schemas now force the check in
+  // the output block as well. Reported by mothership-ai.
+  ["App.pkl: streaming on an extract-less entrypoint is still refused"] {
+    module.catch(() -> forceOutput((appStreamingRealtime) {
+      pipeline { extract = null }
+      streamingWorkflowTypeOverride = null
+    })).contains("streamingWorkflowTypeOverride")
+  }
+
+  // No NativeApp equivalent: it has no `pipeline`, so the extract node is not
+  // optional there and the in-node reference always fires. The output-block force is
+  // still applied to both schemas to keep them in lockstep.
+
+  // The parity group above compares trigger_config only, never the extract node —
+  // which is where the workflow-type split actually lands. Each schema renders its
+  // OWN declared override, so the assertion is structural, not string equality.
+  ["both schemas retarget the extract node the same way under streaming"] {
+    appDag(appStreamingRealtime)["extract"]["inputs"]["workflow_type"]
+      == "example-app:cdc-stream"
+    nativeDag(nativeStreamingRealtime)["extract"]["inputs"]["workflow_type"]
+      == "native-app:cdc-stream"
+    appDag(appStreamingRealtime)["extract"]["inputs"]["args"]["batch"]
+      == nativeDag(nativeStreamingRealtime)["extract"]["inputs"]["args"]["batch"]
+  }
+
+  ["neither schema retargets the extract node without streaming"] {
+    appDag(appNoStreaming)["extract"]["inputs"]["workflow_type"] != "example-app:cdc-stream"
+    nativeDag(nativeNoStreaming)["extract"]["inputs"]["workflow_type"] != "native-app:cdc-stream"
+    !nativeDag(nativeNoStreaming)["extract"]["inputs"]["args"].containsKey("batch")
   }
 }

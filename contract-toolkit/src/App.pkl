@@ -4487,6 +4487,12 @@ output =
   // is a supported opt-out, and a lazily-evaluated check inside that node would
   // let a reserved-name collision through for exactly those contracts.
   let (_reservedUiCheck = reservedUiFieldInvariant)
+  // Forced here as well as inside generateExtractNode: `pipeline { extract = null }`
+  // is a supported opt-out, and the in-node reference is skipped for exactly those
+  // contracts — so a streaming trigger on an extract-less entrypoint rendered
+  // `streaming_enabled: true` and threw nothing. Same reasoning as _reservedUiCheck
+  // directly above.
+  let (_streamingEpOutputCheck = _streamingEntrypointCheck)
   // Forced for the same reason: the single-entrypoint emission below is the only
   // reader of `artifactSchemas`, so a bundle root's declaration would otherwise
   // never be evaluated and would vanish without a word.

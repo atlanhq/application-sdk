@@ -3423,6 +3423,12 @@ output =
   // Forced here rather than inside generateExtractNode so the check cannot be
   // skipped by a contract whose extract node is never evaluated. Mirrors App.pkl.
   let (_reservedUiCheck = reservedUiFieldInvariant)
+  // Forced here as well as inside generateExtractNode: `pipeline { extract = null }`
+  // is a supported opt-out, and the in-node reference is skipped for exactly those
+  // contracts — so a streaming trigger on an extract-less entrypoint rendered
+  // `streaming_enabled: true` and threw nothing. Same reasoning as _reservedUiCheck
+  // directly above.
+  let (_streamingEpOutputCheck = _streamingEntrypointCheck)
   new ModuleOutput {
     files = new Mapping {
       ["\(workflowConfigName).json"] = workflowConfigOutput
