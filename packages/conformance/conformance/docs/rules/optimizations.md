@@ -43,6 +43,12 @@ reassigned.
 returns bytes not str and has a different option API, so each site needs human judgment
 before migrating.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — JSONL is written and read with `orjson.dumps` /
+  `orjson.loads`. orjson is a core SDK dependency, so there is no install cost to paying
+  for the speed.
+
 `orjson` is already a core dependency of the application SDK, so it is available to
 every app, and it is generally *at least* 10x faster than the stdlib `json` module.
 Prefer `orjson.dumps` / `orjson.loads` for serialisation on any hot path.
@@ -74,6 +80,11 @@ needs hand-conversion and drifts from the SDK's recommended pipeline (BLDX-1492;
 docs/upgrade-guide-v3.md). WARN/recommendation because .dict() is name-anchored — it can
 also belong to a non-asset pydantic model — so the call needs a human glance.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/mysql.py — assets are serialised through `asset.to_nested_bytes()`,
+  the v9 wire shape, rather than through `.dict()`.
+
 Flags a `.dict()` method call in a module that imports pyatlan asset models.  The
 asset-mapper pattern writes assets with the v9 serialisation API —
 `asset.to_nested_bytes()` — not the pydantic `.dict()` form (`docs/upgrade-guide-v3.md`
@@ -97,6 +108,12 @@ pyatlan asset and returns it, so the return annotation documents which asset it 
 and lets pyright check the call site. A mapper that builds an asset but declares no
 return type loses that guarantee (BLDX-1492; reference app atlan-openapi-app).
 WARN/recommendation because adding the annotation is a safe, mechanical nudge.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/asset_mapper.py — `map_connection` is annotated `-> Connection`,
+  the pyatlan type it actually builds, so a wrong asset type is a type error rather than
+  a runtime surprise in the payload.
 
 Flags a function that constructs a pyatlan asset (instantiates a class imported from
 `pyatlan_v9.model.assets` / `pyatlan.model.assets`) and **returns that asset**, but
@@ -125,6 +142,12 @@ serialization path, kept only for connectors still on the built-in AtlasTransfor
 the switch adds nothing to resolve. A below-the-bar recommendation (O-series, WARN): the
 v9 models differ in attributes and serialization (to_nested_bytes vs .dict()), so each
 site needs human judgement — never a blind name swap.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/mysql.py — `from pyatlan_v9.model.assets import Column, Database,
+  Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets path appears in none
+  of the four reference apps.
 
 Flags app code that imports asset model classes from the legacy `pyatlan.model.assets`
 package, in any of the three import forms: `from pyatlan.model.assets import X`, `import
@@ -165,6 +188,12 @@ missing import, because the writers most worth catching are hand-authored templa
 import nothing. WARN (not BLOCK): a template legitimately resolved by a caller in a
 different file cannot be seen from here, so each hit needs a human glance rather than an
 automatic fail.
+
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — the App declares `name = "hello-world"` and
+  atlan.yaml carries the same literal. The name is resolved once, at declaration; a
+  `{app_name}` left in a plain string is a substitution nothing will ever perform.
 
 Flags a string `ast.Constant` containing the literal substring `{app_name}` when the
 token can actually **reach a value** — including the pieces of an escaped-brace
@@ -223,6 +252,12 @@ also valid bare JSON (a numeric-looking name, 'true', 'null') silently came back
 int/bool/None instead of str (CNCT-80, CNCT-191). WARN (not block) because a
 from-scratch wrapper may have a deliberate reason (custom RocksDB Options, a key type
 outside str/int/float/bool/bytes) that needs a human glance before migrating.
+
+### What correct looks like
+
+- **Compliant example:** No reference app imports rocksdict. The SDK seam is
+  application_sdk/common/spillable_dict.py — `SpillableDict`, which pickles values so a
+  caller needs no hand-rolled serialize/deserialize step around the store.
 
 Flags app code that imports the `rocksdict` package directly, in either import form:
 `from rocksdict import Rdict` or `import rocksdict`.  Detection is import-anchored (a

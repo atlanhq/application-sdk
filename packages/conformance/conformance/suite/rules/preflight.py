@@ -33,6 +33,12 @@ _HELP_BASE = (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P032",
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — the preflight logic is the Handler's own "
+            "`preflight_check` method. No @task in the four reference apps registers the "
+            "activity name 'preflight'; that name belongs to the SDK gate, and registering "
+            "it shadows the gate itself."
+        ),
         scope=RuleScope.APP,
         name="ReservedPreflightActivityName",
         tier=EnforcementTier.BLOCK,
@@ -71,6 +77,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P033",
+        canonical_reference=(
+            "atlan-metabase-app app/handler.py — `preflight_check` is the single "
+            "implementation and app/connector.py declares no preflight-named @task beside "
+            "it. Two implementations drift, and only one of them is the one the gate "
+            "actually runs."
+        ),
         scope=RuleScope.APP,
         name="DuplicateInWorkflowPreflight",
         tier=EnforcementTier.WARN,
@@ -103,6 +115,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P034",
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — a failing check is "
+            "`PreflightCheck(passed=False, error=AuthError(message=..., "
+            "suggested_action=..., cause=e))`. A `passed=False` with no typed error gives "
+            "the customer a red row and no reason for it."
+        ),
         scope=RuleScope.APP,
         name="UntypedPreflightCheckFailure",
         tier=EnforcementTier.WARN,
@@ -138,6 +156,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P035",
+        canonical_reference=(
+            "atlan-openapi-app app/handler.py — `preflight_check` reads only fields the "
+            "entrypoint's Input contract declares. A metadata key the contract does not "
+            "carry is one the orchestrator has no way to send, so the check silently "
+            "evaluates an absent value."
+        ),
         scope=RuleScope.APP,
         name="PreflightMetadataContractParity",
         tier=EnforcementTier.WARN,
@@ -180,6 +204,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P047",
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — the failed auth probe inside "
+            "`preflight_check` logs at DEBUG and puts the customer-facing outcome in the "
+            "PreflightCheck's typed error instead. The comment there states why: the gate "
+            "levels the verdict row itself, and a handler-authored WARNING is both a "
+            "duplicate and invisible under the customer's default ERROR filter."
+        ),
         scope=RuleScope.APP,
         name="PreflightFailureLoggedAsWarning",
         tier=EnforcementTier.WARN,

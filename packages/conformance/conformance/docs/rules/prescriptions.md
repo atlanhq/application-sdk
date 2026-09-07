@@ -90,6 +90,19 @@ impact: payload size scales with the customer's data, so the app that passed eve
 fails only in the tenant with the largest source system — the customer's crawl dies
 mid-run with a serialization error nothing in their configuration explains.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app — its generated contract/_input.py subclasses ExtractionInput with no
+  allow_unbounded_fields at all, because every filter is a bounded concrete type.
+- **Interacts with:** B005 + ledger-guard box this in. Narrowing an @entrypoint field's value type trips B005,
+  and `conformance ledger-guard` is append-only (status changes and additions allowed;
+  retypes and deletions refused), so the retype cannot land. Wrapping Any in MaxItems
+  clears P001 AND B005 but the class then raises PayloadSafetyError at import: Any is
+  refused unconditionally.
+- **Already correct when:** A justified inline `# conformance: ignore[P001] <reason>` at the declaration site IS the
+  fix for an @entrypoint contract field whose type is recorded in the ledger — every
+  alternative is blocked. Treat such a site as compliant, not as unremediated.
+
 An `Input`/`Output` contract subclass declared with the `allow_unbounded_fields=True`
 class keyword opts out of the SDK's payload-safety enforcement: arbitrary, untyped
 fields may cross task boundaries unchecked.  This is intended to be *extremely*
@@ -138,6 +151,12 @@ Customer impact: a drifted category miscounts or misroutes the customer's failur
 incident that should page as an availability breach files under the wrong bucket, so SLA
 reporting understates their outage and on-call responds late or not at all.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/errors.py — every subclass overrides `code` and never `category`.
+  The category comes from the SDK leaf you chose to extend; redeclaring it detaches the
+  class from the taxonomy the dashboards group by.
+
 `FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
 canonical answer to *what happened* and is consumed as an immutable reporting metric
 (dashboards, SLA gates, on-call routing). The 15 categorical leaves in
@@ -171,6 +190,15 @@ collapse all their distinct failure modes into one undifferentiated bucket. Cust
 impact: when distinct failure modes share one code, support cannot tell a customer's
 credential expiry from a source-system outage without reading raw logs — the customer
 gets a slower, less accurate answer to 'why did my crawl fail'.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk/errors/leaves.py — the 15 categorical leaves and the prefix each one
+  owns.
+- **Already correct when:** A class whose MRO overrides to_failure_details() builds the wire envelope itself, so
+  `code` is not what a dashboard reads and adding a prefixed one would be dead code
+  beside the real one. Those are exempt. Overriding qualified_code alone is NOT exempt —
+  that is the log surface only.
 
 Every concrete subclass of an `application_sdk.errors` leaf (`AuthError`,
 `InternalError`, `InvalidInputError`, etc.) must declare its own `code: ClassVar[str]`
@@ -207,6 +235,12 @@ orchestration layer evolve (Temporal upgrades, engine swaps, interceptor changes
 without breaking every app. A direct 'temporalio' import couples the app to the engine
 and bypasses that seam (BLDX-1417).
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — the only orchestration import is `from
+  application_sdk.app import App, task`. temporalio appears in none of the four
+  reference apps' source.
+
 A consumer app imports `temporalio` (the raw orchestration engine) directly.  Everything
 an app needs is re-exported through the SDK seam: runtime primitives and decorators via
 `application_sdk.app` (`task`, `signal`, `query`, `update`, `now`, `sleep`, `uuid4`,
@@ -232,6 +266,12 @@ unavoidable exception and stays visible in SARIF.
 (`application_sdk.execution._temporal.*` and other `_`-prefixed modules) couples the app
 to implementation details that change without a deprecation cycle, so the SDK can no
 longer evolve the seam safely (BLDX-1417).
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/connector.py — imports come from `application_sdk.app` and
+  `application_sdk.contracts`, both public. A private orchestration module is one the
+  SDK may move without a deprecation cycle.
 
 A consumer app imports from an SDK-private module — anything with a `_`-prefixed segment
 under `application_sdk` (most commonly `application_sdk.execution._temporal.*`) — or
@@ -309,6 +349,12 @@ bypasses the SDK's store routing (upstream vs deployment). For task-to-task data
 a FileReference on the contract instead and let the activity interceptor move the bytes
 (BLDX-1398).
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/mysql.py — `App.upload()` is called from `run()`, after the tasks
+  return. A @task hands its output back as a FileReference and lets the framework move
+  it; the transfer is the App's business, not the task's.
+
 An `App` subclass calls `self.upload(...)` or `self.download(...)` from within a
 `@task`-decorated method.  `App.upload` and `App.download` are themselves `@task`
 methods, so this nests an activity inside an activity — Temporal expects a single
@@ -340,6 +386,12 @@ two-store routing contract. In SDR mode the wrong store may receive data, breaki
 extract→publish hand-off. The SDK's infrastructure context (get_infrastructure().storage
 / .upstream_storage) and App.upload() route to the correct store (BLDX-1398).
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/connector.py — object-store access goes through the SDK's
+  `CloudStore` over `self.context.storage`. No reference app constructs a boto3/gcs/adls
+  client of its own.
+
 A consumer app builds its own storage backend directly: importing `boto3` (`import
 boto3` / `from boto3 ...`), constructing an obstore store (`S3Store`, `GCSStore`,
 `AzureStore`), or calling `create_store_from_binding*`.  Any of these bypasses the SDK's
@@ -368,6 +420,12 @@ Hand-setting them at construction bypasses that contract and can produce stale o
 references that point at the wrong store or a non-existent path. Use
 FileReference.from_local(path, tier=...) instead (BLDX-1398).
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — `FileReference(local_path=str(out_path),
+  tier=StorageTier.RETAINED)`. The app supplies the local path and the tier;
+  storage_path, is_durable and file_count are stamped by the SDK when it moves the file.
+
 A `FileReference(...)` is constructed with one of the SDK-managed durability fields set
 explicitly: `storage_path=`, `is_durable=`, or `file_count=`.  The SDK owns these fields
 — they are populated by the activity interceptor as it persists a local file to the
@@ -395,6 +453,12 @@ serialization error at runtime instead of a clear failure. Store the data as a f
 pass a FileReference, which crosses the task boundary as a small durable handle
 (BLDX-1398).
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/contracts.py — payloads that could be large travel as
+  `FileReference` fields, never as bytes. A bytes field puts the whole artefact inside
+  Temporal's 2MB envelope.
+
 An `Input`/`Output` contract subclass declares a field annotated `bytes`, `bytearray`,
 `memoryview`, or their `| None` / `Optional[…]` variants.  A raw binary blob on a
 contract crosses the task boundary as a Temporal payload, which has a hard 2MB limit; a
@@ -421,6 +485,14 @@ local-filesystem hint: the path is valid on the worker that produced it and mean
 on the worker that consumes it, so the data does not survive the task boundary. The path
 must be a durable FileReference so the interceptor persists and materialises the
 underlying file (BLDX-1398).
+
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/contracts.py — `greetings_file` and `output_file` are typed
+  `FileReference | None`, so a hand-off survives being scheduled on another pod.
+  atlan-metabase-app app/contracts.py shows the legitimate exception: `output_path`
+  carries an inline ignore[P012] saying it is a task-local scratch base, not a
+  cross-worker reference.
 
 An `Input`/`Output` contract subclass declares a `str` / `str | None` field whose name
 or documentation indicates a file or directory path (e.g. `output_path`, `local_dir`, a
@@ -456,6 +528,16 @@ the violation earlier (PR/CI) and covers pre-decorator code paths. Customer impa
 because the runtime rejection fires at import, an untyped entrypoint that reaches a
 release does not degrade gracefully — the app crash-loops at container start in the
 tenant, taking every workflow the customer runs on it down with the one bad method.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/connector.py — `@entrypoint async def extract_metadata(self,
+  input: MetabaseInput) -> MetabaseOutput`. Both sides of the boundary are SDK
+  Input/Output subclasses, which is what makes the payload validatable and the schema
+  evolvable.
+- **Interacts with:** Resolution is by bare class name. Two files declaring the same name, or a class
+  shadowing its own generated base (`class X(_X)` over `from generated import X as _X`),
+  used to read as violations on correct code.
 
 A method decorated with `@entrypoint` (or a concrete `run()` override on an `App`
 subclass, which is the implicit single-entrypoint form) must declare:
@@ -496,6 +578,12 @@ conforming running app is untyped today — this rule surfaces the violation ear
 one untyped task in a shipped release crash-loops the worker in the tenant, an outage
 the customer discovers before anyone else does.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/contracts.py — each @task has its own Input/Output pair
+  (GenerateGreetingsInput/Output, SummarizeInput/Output) subclassing the SDK bases. A
+  dict or a bare str across a task boundary has no schema to evolve.
+
 A method decorated with `@task` must declare:
 
 * its non-`self` parameter as a subclass of `Input`   (`application_sdk.contracts`); *
@@ -532,6 +620,12 @@ arbitrary string keys ('avoid stringly-typed contracts where the user can typo a
 only discover it at runtime').  WARN (not BLOCK) because the bounded form is technically
 sanctioned; this is a modeling nudge toward a typed nested model.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/contracts.py — collection fields are bounded with `MaxItems`
+  rather than left as an open list of primitives, which is what keeps the payload inside
+  Temporal's limit as the source grows.
+
 A field on an `Input`/`Output` contract whose annotation is a container of primitives or
 `Any` — `dict[str, str]`, `list[str]`, `set[int]`, or the bounded equivalents
 `Annotated[dict[str, str], MaxItems(N)]` — is considered an unmodeled boundary.  Even
@@ -553,7 +647,7 @@ conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
 
 ## P016 — `EntryPointContractCodeDrift` {#p016}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `entrypoint-alignment` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `entrypoint-alignment` · **Autofixable:** — · **Since:** 0.6.0
 
 > Entry-point names in @entrypoint code do not match app/generated/ contract dirs
 
@@ -566,6 +660,16 @@ returns 404 — with no caller-side workaround (BLDX-1425). Customer impact: the
 clicks 'create workflow' in their tenant and the setup flow 404s — the app is
 effectively uninstallable from the marketplace, and nothing on the customer's side can
 route around it.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/connector.py — the @entrypoint set matches the contract's
+  entrypoints exactly; none carries a bespoke one-off entrypoint. atlan-metabase-app
+  app/connector.py shows the two-entrypoint form, with a comment naming the DAG nodes in
+  contract/app.pkl they correspond to.
+- **Already correct when:** A temporary migration entrypoint is not a reason to widen the contract. Remove it once
+  its job is done — and check the DAG node, the module, the ledger (sunset, never
+  delete) and the docs together, since the entrypoint is only the visible end of it.
 
 An app's entry-point names are declared in two independent places:
 
@@ -654,6 +758,12 @@ calling v2 lifecycle methods couples the app to infrastructure details that the 
 manages on its behalf, and breaks the guarantee that every app starts up in a
 consistent, SDK-controlled way (BLDX-1411).
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/run_dev.py — the worker comes from `run_dev_combined`. No
+  reference app constructs a Temporal Worker or Client; the launcher is what wires
+  interceptors, the activity registry and the task queue together.
+
 The app calls `create_worker(...)`, `create_temporal_client(...)`, or `AppWorker(...)`
 directly, imports removed v2 worker/client boot surface (`application_sdk.worker`,
 `application_sdk.application`, `application_sdk.clients.temporal`), or calls a
@@ -690,6 +800,12 @@ directly, calling `uvicorn.run(...)` manually, or invoking v2 server lifecycle m
 mechanics that the SDK controls, and prevents the SDK from evolving the handler server
 safely (BLDX-1411).
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/run_dev.py — the HTTP surface comes from the same
+  `run_dev_combined` call as the worker. A hand-rolled FastAPI app serves none of the
+  SDK's platform endpoints (/workflows/v1/auth, /check, /metadata).
+
 The app constructs `FastAPI(...)` directly (name imported from `fastapi`), calls
 `uvicorn.run(...)`, or invokes a distinctive v2 server lifecycle method (`setup_server`,
 `start_server`, `include_router`).
@@ -717,6 +833,12 @@ create_async_atlan_client). Hand-rolling raw HTTP (httpx/requests/aiohttp/urllib
 against an Atlan endpoint re-implements auth, retries, pagination, and typing that
 pyatlan already provides, and drifts from the contract every other app follows
 (BLDX-1430).
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/asset_mapper.py — Atlan is reached through pyatlan model types and
+  `ConnectionRef`, never by requesting /api/meta directly. Raw HTTP skips auth refresh,
+  retry and the client's own request shaping.
 
 A raw HTTP call — `httpx`/`requests`/`aiohttp` request method or
 `urllib.request.urlopen`/`Request` — targets an Atlan service: its URL statically
@@ -758,6 +880,12 @@ and corrupts the workflow history. The SDK exposes deterministic equivalents thr
 seam — self.now()/now, self.uuid()/uuid4, sleep — that record their result in history so
 replay is faithful.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — `run()` only sequences @task calls; the clock,
+  the filesystem and the RNG are all touched inside tasks. Workflow code is replayed, so
+  a non-deterministic call there produces a different history on every replay.
+
 Inside an `App` subclass's workflow-context method (`run`, an `@entrypoint` method, or a
 `@signal` / `@query` / `@update` handler) a call reads wall-clock time, generates a
 UUID, sleeps, or draws randomness.  Workflow code is replayed deterministically, so use
@@ -789,6 +917,12 @@ again on every replay and produces non-deterministic, un-recorded results that b
 replay correctness. Side effects belong in a @task activity, which runs exactly once and
 whose result is durably recorded in workflow history.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — `generate_greetings` does the tempfile and the
+  write, and `run()` does neither. The comment on run() states the rule in the app's own
+  words: network, disk and clock live inside a @task.
+
 Inside an `App` subclass's workflow-context method a call performs side-effecting I/O —
 `open`, `requests`/`httpx`/`urllib`, `socket`, `subprocess`,
 `threading`/`multiprocessing`, `os.getenv` / `os.environ[...]`.  Move it into a `@task`
@@ -816,6 +950,12 @@ common way apps misuse the SDK's async surface. Customer impact: whatever the dr
 call did — a fetch, an upload, a state write — simply does not happen, so the customer
 gets a green run with results silently missing from their catalog and no error anywhere
 that explains the gap.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/connector.py — every same-class async call in `run()` is awaited.
+  A dropped coroutine does not run and does not raise; the workflow simply proceeds as
+  if the step had succeeded.
 
 A bare expression statement calls a same-class `async def` method via `self.<name>(...)`
 without `await` and without wrapping it in `asyncio.create_task` / `asyncio.gather`.
@@ -852,6 +992,12 @@ file-handle (de)serialization, and subprocess calls; an AST sweep of the connect
 found every one of those blocking a loop in production code. The correct pattern is to
 await an async equivalent, or offload blocking work via App.run_in_thread() inside a
 @task — not to bridge async with a sync workaround.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/connector.py — the blocking JSONL writes go through
+  `self.run_in_thread(write_jsonl, ...)` rather than being called inline in an async
+  def. The comment there records why the generator has to be materialised first.
 
 Inside an `async def`, code either re-enters the event loop (`asyncio.run(...)` or
 `*.run_until_complete(...)`, including `loop.run_until_complete` /
@@ -906,6 +1052,12 @@ AtlanClientMixin.get_or_create_async_atlan_client), which returns a configured,
 observability-stamped AsyncAtlanClient. This complements P019 (use pyatlan, not raw
 HTTP) by requiring the async variant of that client.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/connector.py — connector code uses the async client surface; the
+  only synchronous pyatlan AtlanClient in the repo is in
+  tests/e2e/test_connection_reuse.py, where there is no event loop to block.
+
 App code constructs or invokes pyatlan's synchronous `AtlanClient` (or the vendored
 `pyatlan_v9` equivalent) — its constructor or a factory like
 `AtlanClient.from_token(...)`.  Because the app's execution path is async, the sync
@@ -934,6 +1086,12 @@ files for publish to find and stalling the workflow (BLDX-1491, observed in the 
 connector). Customer impact: the customer's crawl extracts successfully and then
 publishes nothing — zero assets appear in their catalog while the workflow stalls or
 reports progress, the same silent-zero-asset class P030 polices at the upload seam.
+
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — the App declares `name = "hello-world"` and
+  atlan.yaml carries `name: hello-world`. The task queue is derived from that name, so
+  any disagreement routes work to a queue no worker is listening on.
 
 Three independent sources declare an app's name:
 
@@ -1001,6 +1159,12 @@ Suppress with `# conformance: ignore[P025] <reason>` on the App class definition
 default instead of raising AttributeError, so contract drift goes undetected at the call
 site and the type annotation stops being load-bearing.
 
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/connector.py — `self.require(input.greetings_file,
+  "greetings_file")`. The field is typed, so the right move is to assert it is present,
+  not to getattr past the type with a default that silently changes behaviour.
+
 Inside an `@entrypoint` or `@task` method, a declared field of a typed `Input`/`Output`
 contract parameter is read via `getattr(param, "field", default)` instead of attribute
 access. Only the three-argument form (a *default* present) is flagged: it silently
@@ -1025,6 +1189,12 @@ Fix: use attribute access (`param.field`).  Suppress with `# conformance: ignore
 between tasks silently no-ops across activity/worker boundaries. A get_app_state(KEY)
 whose KEY is never written by any set_app_state(KEY) is a dead side channel — the read
 always falls through to its default, so the intended hand-off never happens.
+
+### What correct looks like
+
+- **Compliant example:** No reference app uses app state as a cross-task channel; atlan-metabase-app
+  app/connector.py mentions `get_app_state` only in a comment about the error it raises
+  outside app context. Data between tasks travels as typed Output → Input.
 
 An `App.get_app_state(KEY)` read whose `KEY` is never written by a `set_app_state(KEY,
 <non-None value>)` anywhere in the app (a writer that only stores `None` — a placeholder
@@ -1054,6 +1224,13 @@ Building it with an f-string scatters the grammar (segments, order, separator, e
 across every connector, so a single grammar change breaks each one independently and
 silently. The pyatlan asset .creator() factories own the grammar centrally.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/asset_mapper.py — qualifiedName comes from `APISpec.creator()` /
+  `APIPath.creator()`, so the grammar is pyatlan's. Where a caller genuinely needs the
+  string and not the asset, atlan-metabase-app app/qualified_names.py carries a
+  per-function ignore[P028] naming the creator whose grammar it mirrors.
+
 An f-string composes a slash-delimited `qualifiedName` — it both interpolates a
 `*qualified_name` / `*_qn` value and contains a `/` separator (e.g.
 `f"{connection_qualified_name}/{schema}"`). qualifiedName is Atlan's asset identity;
@@ -1074,7 +1251,7 @@ ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
 
 ## P029 — `SdrManifestMissingAgentJson` {#p029}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `toolkit` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR agent manifest must surface agent_json + extraction_method at the top level of dag.extract.inputs.args
 
@@ -1089,6 +1266,19 @@ to status-only test pipelines. Customer impact: both failure modes land on the c
 — an agent crawl that hangs against their firewalled source or completes green with zero
 assets in their catalog — and both look like a working product until the customer asks
 where their metadata went.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/generated/manifest.json — `agent_json` and `extraction_method`
+  are top-level keys of $.dag.extract.inputs.args. Both are emitted by the toolkit
+  renderer, so no app-side edit produces them; an app missing them needs a toolkit bump
+  and a regenerate.
+- **Interacts with:** Not a toolkit-version gap: bumping an affected app to the newest toolkit and
+  regenerating does NOT add the field. It comes from the renderer's per-widget emission.
+- **Already correct when:** The toolkit emits agent_json defensively but historically not extraction_method, so an
+  SDR app with no extraction-method widget is half-wired through no fault of its own.
+  Fix the renderer; adding the widget app-side also switches the Self-Deployed Runtime
+  option on in the form, which is a product decision rather than a conformance fix.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, every *agent
 extraction* `manifest.json` under `app/generated/` must surface both `agent_json` and
@@ -1133,7 +1323,7 @@ alone does not clear the   runtime failure.
 
 ## P030 — `SdrUploadNotCalled` {#p030}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR app has no self.upload() call in source — ENABLE_ATLAN_UPLOAD path unreachable
 
@@ -1150,6 +1340,18 @@ customer-facing failure class — data loss disguised as success. The tenant rep
 green run while zero assets reach the customer's catalog, so it is the customer who
 discovers the gap, after trusting the green status for however long it took them to
 look.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/connector.py — `run()` uploads each transformed typename with
+  `raise_on_empty=True`, and uploads residual/ separately. An SDR app with no
+  self.upload() call leaves the ENABLE_ATLAN_UPLOAD path unreachable, so the e2e leg
+  greens without moving a byte to the tenant bucket.
+- **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
+  hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
+  contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
+  the post-processing step and rewrites unrelated generated files. Diff atlan.yaml
+  afterwards, which regeneration can silently strip hand-written comments from.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one Python
 source file (outside `tests/`) must contain a `self.upload(` call.
@@ -1244,6 +1446,12 @@ run_in_thread(), which dispatches onto its own thread pool specifically to avoid
 contention — a prior fix shipped a raw asyncio.to_thread(...) call that nothing caught
 in review.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/connector.py — blocking work is offloaded with
+  `self.run_in_thread`, the App's own bounded pool. asyncio's shared default executor is
+  process-wide, so one app's blocking work starves every other coroutine on the worker.
+
 A call offloads blocking work onto asyncio's **shared default** executor instead of the
 SDK's dedicated `run_in_thread()` pool: `asyncio.to_thread(...)`, or
 `run_in_executor(None, ...)` (including `loop.run_in_executor(None, ...)` /
@@ -1278,6 +1486,13 @@ impact: the worker never comes up, so every workflow the customer runs on that a
 down from the moment the release deploys into their tenant — a full-app outage caused by
 a name collision no test exercises and no build gate sees.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — the preflight logic is the Handler's own
+  `preflight_check` method. No @task in the four reference apps registers the activity
+  name 'preflight'; that name belongs to the SDK gate, and registering it shadows the
+  gate itself.
+
 The SDK reserves the activity name `{app_name}:preflight` for the injected preflight
 gate and registers it unconditionally on the worker. An app `@task` whose effective
 activity name is `preflight` (an explicit `@task(name="preflight")` or a bare `@task` on
@@ -1300,6 +1515,12 @@ resolvable and is not flagged.
 preflight implementations that inevitably drift. The gate runs preflight_check, so the
 app-owned activity is redundant — the exact anti-pattern the SDK-native gate eliminates.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/handler.py — `preflight_check` is the single implementation and
+  app/connector.py declares no preflight-named @task beside it. Two implementations
+  drift, and only one of them is the one the gate actually runs.
+
 When an app declares a `Handler.preflight_check` and also registers its own
 preflight-named `@task` (any `@task` whose effective name contains `preflight` as a
 token but is not the reserved gate name — that exact case is P032), the two preflight
@@ -1321,6 +1542,12 @@ Remediation: delete the app-owned preflight activity and keep the single
 PREFLIGHT_CHECK_FAILED code, so the Automation Engine and the UI lose the
 category/code/audience/suggested_action the typed form carries on the wire. This points
 at the exact lines to migrate to typed failures.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — a failing check is `PreflightCheck(passed=False,
+  error=AuthError(message=..., suggested_action=..., cause=e))`. A `passed=False` with
+  no typed error gives the customer a red row and no reason for it.
 
 A `PreflightCheck` with an explicit `passed=False` and no typed `error=` (absent, or the
 literal `None`) is an untyped failure: the gate falls back to the generic
@@ -1346,6 +1573,12 @@ metadata key that is not a field on any entrypoint Input contract is silently ab
 defensive input.metadata.get(key, default) read then passes vacuously with the wrong
 config. No runtime signal can catch this class of silent drift; the static check is the
 only guard.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/handler.py — `preflight_check` reads only fields the entrypoint's
+  Input contract declares. A metadata key the contract does not carry is one the
+  orchestrator has no way to send, so the check silently evaluates an absent value.
 
 The preflight gate does not forward the live UI form: it rebuilds
 `PreflightInput.metadata` from the extraction input's `model_dump()`
@@ -1381,6 +1614,13 @@ ProcessPoolExecutor or multiprocessing child re-implements that seam without its
 containment, timeout, spawn-not-fork safety, and width management, and fragments the
 worker's process model — the class of bug behind the CNCT-85 worker crash.
 
+### What correct looks like
+
+- **Compliant example:** No reference app builds a ProcessPoolExecutor or a multiprocessing child. The seam is
+  application_sdk/execution/heartbeat.py — `run_fault_isolated` and `run_best_effort`,
+  re-exported there as the documented app-facing path, which own the pool lifecycle, the
+  timeout and what a crashed child means for the activity.
+
 Code constructs a process-based execution primitive directly —
 `ProcessPoolExecutor(...)` or `multiprocessing.Process(...)` / `Pool(...)` — instead of
 routing crash-prone or best-effort native work through the SDK's sanctioned
@@ -1404,7 +1644,7 @@ never touches the worker) with `# conformance: ignore[P036] <reason>`.
 
 ## P037 — `SdrAgentJsonNotConsumed` {#p037}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR app resolves credentials by credential_guid only and never routes through an agent-aware resolver — agent_json is ignored
 
@@ -1416,6 +1656,13 @@ resolve_credential_raw, or a bare CredentialRef(credential_guid=...) — ignores
 agent_json entirely. Its manifest can be P029-clean, but in agent mode the credential
 never resolves and the workflow writes zero assets while reporting 'success' (observed
 for a table-format connector in fleet testing).
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/credentials.py — `build_credential_ref` routes through
+  `CredentialRef.resolve`, which covers direct (credential_guid) and agent (agent_json)
+  modes from one call. Resolving by credential_guid alone works in direct mode and
+  silently ignores agent_json in SDR mode.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, credential resolution
 must be able to consume `agent_json` — the agent-mode routing spec the platform forwards
@@ -1452,7 +1699,7 @@ the agent-aware call.
 
 ## P038 — `SdrArtifactMisrooted` {#p038}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR object-store prefix rooted from the empty-defaulting input application_name field instead of APPLICATION_NAME
 
@@ -1467,6 +1714,18 @@ the wrong-root case (observed for a document-store connector in fleet testing). 
 impact: the same data loss disguised as success that P030 polices, one seam later — the
 run goes green, the upload reports success, and zero assets reach the customer's catalog
 because the publish step reads a prefix nothing was ever written to.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/mysql.py — the upload's storage_path comes from
+  `base_result.transformed_data_prefix`, which the SDK roots from APPLICATION_NAME. An
+  input field named application_name defaults to empty, so rooting the prefix from it
+  silently writes to the bucket root.
+- **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
+  hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
+  contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
+  the post-processing step and rewrites unrelated generated files. Diff atlan.yaml
+  afterwards, which regeneration can silently strip hand-written comments from.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, the object-store
 output path/prefix (`artifacts/apps/<identity>/workflows/...`) must be rooted from the
@@ -1512,7 +1771,7 @@ empty-defaulting workflow arg.
 
 ## P039 — `SdrAgentJsonDroppedByInputContract` {#p039}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR generated extract-input contract drops the forwarded agent_json (bare Input subclass, no agent_json field, extra fields rejected)
 
@@ -1528,6 +1787,19 @@ extraction never receives the customer's credentials, so their crawl either fail
 outright or completes green with zero assets in their catalog — and because the manifest
 and the connector code both look correct, nothing on our side points at the cause until
 the customer asks where their metadata went.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/contracts.py — `MetabaseInput` declares `agent_json` as a typed
+  field, and atlan-metabase-app app/generated/_input.py extends the SDK's
+  `ExtractionInput` rather than a bare `Input`. Either route keeps the forwarded value;
+  a bare Input subclass with no agent_json field drops it before the credential resolver
+  sees it.
+- **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
+  hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
+  contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
+  the post-processing step and rewrites unrelated generated files. Diff atlan.yaml
+  afterwards, which regeneration can silently strip hand-written comments from.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml` whose generated
 manifest declares agent routing (the `{{agent-json}}` placeholder at the extract-args
@@ -1587,6 +1859,13 @@ succeed, mocked tests pass — and surfaced live on main for a document-store co
 fleet testing only when the full pipeline ran. Linting the templates catches it at
 review time. The alias (identifier) position is not graded: DuckDB accepts a reserved
 keyword after AS, so there is no runtime failure to report there.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/sql/ — ten extraction templates, none of which references a bare
+  DuckDB reserved keyword as an identifier. Where the source's own column name collides,
+  quote it in the template; the failure otherwise appears only at transform time, on the
+  customer's data.
 
 In an app's transform templates (YAML consumed by `application_sdk.transformers.query`),
 a `source_query:` value that is a bare DuckDB **reserved keyword** must be SQL-quoted.
@@ -1648,7 +1927,7 @@ render identically, so the upgrade is the fix and the template edit is unnecessa
 
 ## P042 — `SdrHandRolledUploadBridge` {#p042}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
 
 > SDR app performs the tenant-bucket transfer through a hand-rolled upload_to_atlan bridge instead of App.upload()
 
@@ -1666,6 +1945,12 @@ a green full-DAG e2e proves only that bytes moved on that run, not that the app 
 the contract. Reporting it separately also settles a contradiction: B001 already flags
 .upload_to_atlan(...) call sites from the generated deprecation manifest, so the same
 repo would otherwise get a B001 finding alongside P-series silence.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/connector.py — the tenant-bucket hand-off is `await
+  self.upload(UploadInput(...))`. A hand-rolled upload_to_atlan bridge re-implements the
+  routing to upstream_storage and then has to track it as the SDK changes.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, this rule fires when a
 custom `upload_to_atlan` method **does** perform a real storage/store transfer (in its
@@ -1723,6 +2008,12 @@ rather than a subclass, the 'except' silently stops matching and the guard becom
 code with no error and no warning. That is exactly how a normal empty-prefix condition
 became a terminal workflow failure across 12 connections (CONNECT-970).
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — control flow branches on `AppError` and `AuthError`,
+  both from `application_sdk.errors`. Branching on a class the package does not export
+  binds the app to a name the SDK can move without a deprecation cycle.
+
 A consumer app makes an SDK-internal error class load-bearing in one of five ways:
 `except X`, `except (X, Y)`, `isinstance(e, X)`, `issubclass(t, X)`, or `class Y(X)`.
 `X` resolves to a class under `application_sdk.storage.formats` whose name ends in
@@ -1775,6 +2066,13 @@ customer's metadata is extracted, the run reports success, and the assets that n
 arrived look indistinguishable from assets the source does not have — so it is the
 customer who finds the gap, if anyone does.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/mysql.py — the whole-directory hand-off is one `App.upload()` with
+  an UploadInput naming local_path and storage_path. storage.upload_prefix /
+  download_prefix move bytes without producing a FileReference the next task can
+  resolve.
+
 App source calls `upload_prefix` / `download_prefix` (or imports them from
 `application_sdk.storage`) to move artifacts itself, rather than declaring the data on
 the contract and letting the SDK move it.
@@ -1822,6 +2120,12 @@ implementation detail. Importing one is the coupling that makes the P043 defect
 possible, and it is invisible in review: the diff that breaks it is a lockfile bump, and
 no reviewer reads a lockfile and infers that an exception-class assumption in another
 file just became false (CONNECT-970).
+
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app app/errors.py — `from application_sdk.errors import
+  InvalidInputError`. The package re-exports every error an app should touch; reaching
+  into a submodule for the same class buys nothing and forfeits the stability promise.
 
 A consumer app imports a class whose name ends in `Error` from a module under
 `application_sdk.storage.formats` — most often
@@ -1922,6 +2226,14 @@ why the source was not ready (FND-901). The SDK gate emits the single 'Preflight
 outcome' row and levels it from the verdict — a handler-authored WARNING is both the
 wrong level and a duplicate record.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — the failed auth probe inside `preflight_check` logs at
+  DEBUG and puts the customer-facing outcome in the PreflightCheck's typed error
+  instead. The comment there states why: the gate levels the verdict row itself, and a
+  handler-authored WARNING is both a duplicate and invisible under the customer's
+  default ERROR filter.
+
 A `logger.warning(...)` call inside a `Handler.preflight_check` override logs below the
 customer log view's default ERROR filter, so a failed probe reported this way never
 reaches the customer. The gate owns preflight outcome logging: it emits one `Preflight
@@ -1952,6 +2264,12 @@ dangerously on strictness, where the SDK warns and proceeds but the app raises.
 CONNECT-1136 is that failure: a miner hard-failed on name-based connection qualified
 names that the crawler accepted, breaking a tenant that provisions connections
 programmatically.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/mysql.py — `run()` reads `transformed_data_prefix`,
+  `publish_state_prefix` and `current_state_prefix` off the SDK's own result rather than
+  composing the connection-scoped layout by hand. The layout is the SDK's to change.
 
 App code assembles the connection-scoped layout
 `persistent-artifacts/apps/<app>/connection/…` itself rather than asking the SDK where a
@@ -2016,6 +2334,13 @@ connection qualified name they never chose and cannot change, on every run, whil
 same connection crawls normally — so the failure looks arbitrary, no watermark is ever
 written, and query-based lineage and popularity go silently missing for as long as it
 takes someone to notice.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/asset_mapper.py — connection_qualified_name is passed through to
+  the pyatlan creators, never split and validated by the app. The SDK warns and proceeds
+  on a malformed value; an app that parses and raises turns a recoverable run into a
+  failed one.
 
 A function takes a `connection_qualified_name`, calls `.split(...)` on a value derived
 from it, and can `raise` out of its own body — while that function does not itself call
@@ -2110,7 +2435,7 @@ SARIF.
 
 ## P051 — `SdrPreflightUnavailable` {#p051}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
 
 > SDR app locks application-sdk below the 3.30.0 floor for interactive setup (test auth / preflight / metadata browsing)
 
@@ -2123,6 +2448,12 @@ customer expects. This rule reads the version actually locked in uv.lock (not th
 pyproject specifier) so it reflects what the deployed worker ships. It is a readiness
 nudge, not a broken-crawl or data-loss failure — an app below the floor still extracts
 and publishes normally, it only lacks the interactive setup UX — so it lands at WARN.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app uv.lock — the SDK resolves to 3.32.0, above the 3.30.0 floor that
+  carries interactive setup (test auth, preflight, metadata browsing). The declared
+  range in pyproject.toml is what lets the lock reach it.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, `uv.lock` must resolve
 `atlan-application-sdk` to `3.30.0` or newer — the floor at which the SDR interactive

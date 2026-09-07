@@ -68,6 +68,49 @@ class RuleMechanism(str, Enum):
     TEST = "test"
 
 
+class FixLocus(str, Enum):
+    """*Where the fix belongs, when that is not the surface ``scope`` implies.*
+
+    ``scope`` already answers which repos a rule runs against, and for most rules
+    the fix then lives in that repo's own hand-written source. Restating that
+    here would put a redundant token on half the catalog, so this enum is
+    **exception-only**: a rule declares a locus when the edit belongs somewhere a
+    reader would not look first, and leaves it unset otherwise.
+
+    Unset means *the hand-written source of the repo under scan*. That is also
+    the more accurate default for a ``both``-scoped rule — a literal ``app``
+    would have been wrong every time such a rule fired on the SDK.
+
+    Three rules were mis-routed to app teams for weeks because the honest answer
+    was "not the app": one wanted a value only the contract-toolkit renderer
+    emits, one anchored on a generated file the app is forbidden to edit, and one
+    asked for a manifest key the toolkit stopped emitting. Those are the cases
+    this enum exists for.
+
+    * ``CONTRACT``  — the pkl contract source (``contract/*.pkl``); the finding
+      may *anchor* on generated output, but the edit belongs upstream of it and
+      must be followed by the repo's own regeneration task.
+    * ``TOOLKIT``   — the ``contract-toolkit`` renderer. No app-side change can
+      resolve it; the app only picks the fix up on its next toolkit bump.
+    * ``CI``        — workflow and CI configuration under ``.github/``.
+    * ``PACKAGING`` — the app's build/deploy descriptors: ``pyproject.toml``,
+      ``uv.lock``, ``Dockerfile``, ``atlan.yaml``.
+    * ``TESTS``     — the app's own test suite.
+    * ``APP`` / ``SDK`` — spelled out only for the rare rule whose scope points
+      one way and whose fix lands on the other surface. Declaring the locus that
+      ``scope`` already implies is rejected at rule-definition time; see
+      ``RuleDefinition._reject_redundant_fix_locus``.
+    """
+
+    APP = "app"
+    CONTRACT = "contract"
+    TOOLKIT = "toolkit"
+    SDK = "sdk"
+    CI = "ci"
+    PACKAGING = "packaging"
+    TESTS = "tests"
+
+
 class RuleScope(str, Enum):
     """Where a rule applies — the consumer surface it governs.
 

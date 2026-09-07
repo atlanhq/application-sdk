@@ -5,6 +5,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -12,6 +13,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="C001",
+        canonical_reference=(
+            "atlan-metabase-app .github/workflows/checks.yml — third-party actions are "
+            "pinned to a full 40-character commit SHA with the human-readable version in a "
+            "trailing comment. Only atlanhq/application-sdk's own reusable refs use @main."
+        ),
+        fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,
         name="UnpinnedActionReference",
         tier=EnforcementTier.BLOCK,
@@ -43,6 +50,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="C002",
+        canonical_reference=(
+            "atlan-metabase-app .github/workflows/ — the full bootstrap-managed set, "
+            "resynced by `atlan-application-sdk-conformance bootstrap` rather than "
+            "hand-edited. The canonical content is the bootstrap output, so re-running it "
+            "is the fix; editing the file in place is what caused the drift."
+        ),
+        fix_locus=FixLocus.CI,
         scope=RuleScope.APP,
         name="BootstrapWorkflowDrift",
         tier=EnforcementTier.WARN,
@@ -109,6 +123,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="C003",
+        canonical_reference=(
+            "atlan-hello-world-app .gitignore — carries the standard entries this rule "
+            "checks for, including `.venv/` and `.claude/worktrees/`. A missing entry is "
+            "usually the newest one, added centrally after the repo was scaffolded."
+        ),
+        fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,
         name="GitignoreMissingEntry",
         tier=EnforcementTier.WARN,
@@ -150,6 +170,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="C004",
+        canonical_reference=(
+            "atlan-openapi-app .github/workflows/checks.yml — tooling arrives through "
+            "`atlanhq/application-sdk/.github/actions/setup-deps`, which owns the retry, "
+            "instead of each workflow curling a binary of its own. No reference app "
+            "downloads a tool inline."
+        ),
+        fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,
         name="UnretriedToolDownload",
         tier=EnforcementTier.WARN,

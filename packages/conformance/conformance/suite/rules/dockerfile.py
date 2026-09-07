@@ -35,6 +35,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -42,6 +43,13 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="I001",
+        canonical_reference=(
+            "atlan-hello-world-app Dockerfile — `FROM "
+            "registry.atlan.com/public/app-runtime-base:3`. atlan-mysql-app Dockerfile "
+            "reaches the same ref through an overridable `ARG BASE_IMAGE`, which is the "
+            "shape to copy when SDK PRs need to rebuild the connector on a PR-scoped base."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileWrongBaseImage",
         tier=EnforcementTier.BLOCK,
@@ -91,6 +99,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I002",
+        canonical_reference=(
+            "atlan-metabase-app Dockerfile — the file ends at its ENV block; no CMD and no "
+            "ENTRYPOINT anywhere. The base image's entrypoint is what supervises daprd and "
+            "the graceful drain, so replacing it silently removes both."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileEntrypointOverride",
         tier=EnforcementTier.BLOCK,
@@ -135,6 +149,16 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I003",
+        canonical_reference=(
+            "atlan-mysql-app — ENV ATLAN_APP_MODULE is declared in the Dockerfile as "
+            "well as atlan.yaml, so the image runs on its own."
+        ),
+        rule_interactions=(
+            "The value must match atlan.yaml's deploy.env exactly; read it from there "
+            "rather than inferring it from the App subclass, or the two drift and the "
+            "container starts the wrong class."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileAppModuleMissing",
         tier=EnforcementTier.BLOCK,
@@ -176,6 +200,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I004",
+        canonical_reference=(
+            "atlan-openapi-app Dockerfile — ATLAN_APP_MODULE and "
+            "ATLAN_CONTRACT_GENERATED_DIR are baked because they describe the image; "
+            "ATLAN_APP_MODE is not, because it describes the deployment and arrives from "
+            "atlan.yaml at schedule time."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileAppModeHardcoded",
         tier=EnforcementTier.BLOCK,
@@ -216,6 +247,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="I005",
+        canonical_reference=(
+            "atlan-mysql-app Dockerfile — no USER directive at all. Ownership is handled "
+            "by `COPY --chown=appuser:appuser` and the base image's non-root appuser "
+            "stands, which is what the non-root execution policy requires."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="DockerfileRootUser",
         tier=EnforcementTier.BLOCK,

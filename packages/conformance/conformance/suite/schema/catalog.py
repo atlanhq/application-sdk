@@ -22,6 +22,7 @@ from typing import Any, Literal
 
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -65,6 +66,54 @@ class RuleDefinition(BaseModel):
 
     category: str
     """Rule family, e.g. ``"silent-swallow"``."""
+
+    fix_locus: FixLocus | None = None
+    """Where the fix belongs, *when that is not the surface* ``scope`` *implies*.
+
+    ``scope`` already says which repos the rule runs against, and the fix
+    normally lands in that repo's own hand-written source.  So this field is
+    exception-only: set it when the edit belongs somewhere a reader would not
+    look first — the pkl contract, the toolkit renderer, packaging descriptors,
+    ``.github/``, the test suite — and leave it unset otherwise.
+
+    ``None`` reads as *the hand-written source of the repo under scan*, which is
+    also the honest answer for a ``both``-scoped rule: a literal ``app`` would be
+    wrong every time such a rule fires on the SDK.  Declaring the implied locus
+    is rejected outright — see :meth:`_reject_redundant_fix_locus`."""
+
+    canonical_reference: str = ""
+    """A file in a maintained reference app that already has the compliant shape.
+
+    Required for every ``app``- and ``both``-scoped rule
+    (``test_app_facing_rules_name_a_canonical_reference``), because those are the
+    rules an app engineer has to act on, and "what does correct look like here"
+    is the question the finding text cannot answer.
+
+    Only the four public reference apps count — ``atlan-hello-world-app``,
+    ``atlan-openapi-app``, ``atlan-mysql-app``, ``atlan-metabase-app`` — plus
+    ``application_sdk`` itself for rules about SDK-owned surfaces.  An arbitrary
+    connector may be mid-migration and is not a model of anything (see
+    ``docs/agents/canonical-apps.md``).
+
+    Name a path, not a sentiment: the value must carry a concrete file so a
+    reader can open it.  Two rules may not share the same reference — if they
+    would, the reference is too coarse to have been read from either."""
+
+    rule_interactions: str = ""
+    """Other rules or gates that constrain this one's fix.
+
+    Some fixes are boxed in by a second rule and the obvious remedy is illegal:
+    narrowing an ``@entrypoint`` field's type to satisfy one rule trips another,
+    and the append-only ledger guard blocks the retype outright.  Stating the
+    interaction here stops each reader re-deriving the deadlock."""
+
+    terminal_state: str = ""
+    """What "already correct" looks like, when that is not simply zero findings.
+
+    For a suppress-only rule a justified inline directive IS the fix, not a
+    failure to remediate.  Without saying so, an automated lane re-opens settled
+    work every cycle and a reviewer cannot tell a deliberate carve-out from an
+    unfixed violation."""
 
     autofixable: bool = False
     short_description: str = ""
@@ -141,7 +190,34 @@ class RuleDefinition(BaseModel):
                 data["mechanism"] = RuleMechanism(data["mechanism"].lower())
             if "scope" in data and isinstance(data["scope"], str):
                 data["scope"] = RuleScope(data["scope"].lower())
+            if "fix_locus" in data and isinstance(data["fix_locus"], str):
+                data["fix_locus"] = FixLocus(data["fix_locus"].lower())
         return data
+
+    @model_validator(mode="after")
+    def _reject_redundant_fix_locus(self) -> RuleDefinition:
+        """Reject a ``fix_locus`` that only restates ``scope``.
+
+        Half the catalog once carried ``fix_locus=APP`` next to ``scope=app`` or
+        ``scope=both``, and every ``scope=sdk`` rule carried ``fix_locus=SDK``.
+        Neither told a reader anything ``scope`` had not already told them, and a
+        field that is usually noise stops being read on the occasions it matters
+        — which is exactly when the fix is in the toolkit or the contract.
+
+        Enforcing it here rather than in a meta-test means the redundant form
+        cannot be constructed at all, so it cannot come back one rule at a time.
+        """
+        if self.fix_locus is None:
+            return self
+        implied = FixLocus.SDK if self.scope is RuleScope.SDK else FixLocus.APP
+        if self.fix_locus is implied:
+            raise ValueError(
+                f"{self.id}: fix_locus={self.fix_locus.value!r} only restates "
+                f"scope={self.scope.value!r} — omit it.  Declare fix_locus only "
+                f"when the fix belongs somewhere else (contract, toolkit, "
+                f"packaging, ci, tests)."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_superseded_by(self) -> RuleDefinition:
