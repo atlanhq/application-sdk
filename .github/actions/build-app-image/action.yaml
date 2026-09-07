@@ -196,14 +196,24 @@ runs:
     # exercises once the image is installed on the tenant, not just a local
     # seed. See FND-31.
     #
-    # check-drift is false: uv/ruff aren't installed yet, so generated-Python
-    # formatting is skipped here; the warn-only drift gate lives in the
-    # connector-integration-tests job. Self-skips when no contract/app.pkl.
+    # check-drift is ON here (FND-1777). It used to be "false" because uv/ruff
+    # are not installed on this path (the inline install above is conditional on
+    # application-sdk-ref), so generated-Python formatting is skipped and
+    # unformatted *.py read as drift. That argued for skipping the *formatting*
+    # comparison, not the whole one: regenerate_contract.warn_on_drift now drops
+    # exactly the class formatting can fabricate (a content change to a generated
+    # *.py) and still compares manifest.json, the configmaps and the root YAMLs.
+    #
+    # This is the path that bakes app/generated/ into the shipped image, so it
+    # was the one path with no drift signal at all — which is how a connector's
+    # own post-processing being dropped from its manifest reached a tenant and
+    # was misread as a platform defect (FND-1777, via FND-1766).
+    # Warn-only, as everywhere. Self-skips when no contract/app.pkl.
     - name: Regenerate contract artifacts (manifest.json) before image build
       uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
       with:
         application-sdk-ref: ${{ inputs.application-sdk-ref }}
-        check-drift: "false"
+        check-drift: "true"
 
     # Make the image able to say which build it is (FND-1684).
     #

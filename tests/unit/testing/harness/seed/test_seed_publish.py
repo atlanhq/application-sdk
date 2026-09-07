@@ -11,6 +11,11 @@ The sequence is the part worth a test. A seed that uploads a batch it has not
 checked publishes partially, and a seed that reports success on a failed publish
 hands the connector under test a connection with no cache — the exact shape that
 greens a leg while dropping lineage.
+
+The third thing pinned here is *which graph ran*. The seed submits straight to
+AE precisely so no app's manifest can be published over its node (FND-1766), and
+both readings that could catch a substitution — the version AE serves after the
+submit, and the node names on the run itself — must refuse rather than proceed.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from application_sdk.testing.harness.seed import (
     TRANSFORMED_FILE_NAME,
     DatabaseSpec,
     SchemaSpec,
+    SeedDagSupersededError,
     SeedPrefixes,
     SeedPublishEmptyError,
     SeedPublishFailedError,
@@ -35,7 +41,6 @@ from application_sdk.testing.harness.seed import (
     SeedTreeInvalidError,
     TableSpec,
     build_seed_publish_dag,
-    build_seed_submit_payload,
     seed_assets,
     seed_object_keys,
     seed_prefix_root,
@@ -71,7 +76,6 @@ def _plan() -> SeedPublishPlan:
         app_name="coalesce",
         publish_task_queue="atlan-publish-production",
         ae_workflow_name="coalesce-e2e-42-seed-snowflake",
-        app_service_url="http://coalesce.svc",
         run_id=42,
         poll_interval_seconds=1,
         poll_timeout_seconds=5,
@@ -254,53 +258,43 @@ class TestSeedPublishNode:
         assert SEED_PUBLISH_NODE_ID != "publish"
 
 
-class TestSubmitPayload:
-    """The submit body carries the slug and no token nothing will substitute."""
-
-    def test_the_slug_is_carried_and_no_credential_is_created(self) -> None:
-        payload = build_seed_submit_payload(
-            spec=_resolved(),
-            run_id=42,
-            ae_workflow_slug="slug-1",
-            app_service_url="http://x",
-        )
-        assert payload["metadata"]["ae_workflow_slug"] == "slug-1"
-        assert "payload" not in payload
-
-    def test_no_unsubstituted_credential_token_rides_the_submit(self) -> None:
-        """With no ``payload[]`` there is nothing to substitute
-        ``{{credentialGuid}}`` with, and an unsubstituted token is what
-        ``submit_workflow`` warns about."""
-        from application_sdk.testing.harness.automation_engine.retry import (
-            unsubstituted_parameter_tokens,
-        )
-
-        payload = build_seed_submit_payload(
-            spec=_resolved(),
-            run_id=42,
-            ae_workflow_slug="slug-1",
-            app_service_url="http://x",
-        )
-        assert unsubstituted_parameter_tokens(payload) == {}
-
-
 class _FakeAE:
-    """Records the submit and answers one scripted ``native-status``."""
+    """Records the submit and answers one scripted ``native-status``.
 
-    def __init__(self, *, all_succeeded: bool = True) -> None:
-        self.submitted: list[tuple[dict[str, Any], str]] = []
+    ``submit_published_version`` rather than ``submit_workflow``: the seed's
+    submit takes no payload at all, because there is no envelope to name an app
+    with (FND-1766). A fake that still accepted one would let a regression back
+    onto the Heracles path unnoticed.
+    """
+
+    def __init__(
+        self,
+        *,
+        all_succeeded: bool = True,
+        ran_nodes: tuple[str, ...] = (SEED_PUBLISH_NODE_ID,),
+        foreign: str = "",
+    ) -> None:
+        self.submitted: list[str] = []
+        self.guarded: list[tuple[str, tuple[str, ...]]] = []
         self._all_succeeded = all_succeeded
+        self._ran_nodes = ran_nodes
+        self._foreign = foreign
 
-    async def submit_workflow(
-        self, payload: dict[str, Any], *, slug: str, **_: Any
-    ) -> str:
-        self.submitted.append((payload, slug))
+    async def submit_published_version(self, slug: str, **_: Any) -> str:
+        self.submitted.append(slug)
         return "ae-run-1"
+
+    async def foreign_published_dag(
+        self, slug: str, *, expected: tuple[str, ...]
+    ) -> str:
+        self.guarded.append((slug, tuple(expected)))
+        return self._foreign
 
     async def poll_native_status(self, run_id: str, **_: Any) -> SimpleNamespace:
         return SimpleNamespace(
             run_id=run_id,
             all_nodes_succeeded=self._all_succeeded,
+            nodes=[SimpleNamespace(name=name) for name in self._ran_nodes],
             status=SimpleNamespace(
                 value="Success" if self._all_succeeded else "Failed"
             ),
@@ -326,6 +320,8 @@ def _wire(
     *,
     report: AssetValidationReport | None = None,
     all_succeeded: bool = True,
+    ran_nodes: tuple[str, ...] = (SEED_PUBLISH_NODE_ID,),
+    foreign: str = "",
 ) -> tuple[_FakeAE, list[tuple[str, str]]]:
     """Patch the three collaborators a seed reaches for, recording each."""
     uploaded: list[tuple[str, str]] = []
@@ -348,7 +344,8 @@ def _wire(
             "application_sdk.testing.harness.seed.validate_transformed_dir",
             lambda *_a, **_k: report,
         )
-    return _FakeAE(all_succeeded=all_succeeded), uploaded
+    fake = _FakeAE(all_succeeded=all_succeeded, ran_nodes=ran_nodes, foreign=foreign)
+    return fake, uploaded
 
 
 class TestSeedAssetsSequence:
@@ -511,3 +508,80 @@ class TestSeedAssetsSequence:
                 _resolved(), store=object(), ae=ae, plan=_plan(), verify=_record
             )
         assert calls == []
+
+
+class TestTheGraphThatRuns:
+    """The seed's own node, or nothing — never some app's crawl."""
+
+    @pytest.mark.asyncio
+    async def test_the_submit_names_only_the_slug(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No envelope, so no app identity, so no manifest for Heracles to
+        publish over the seed. That absence is the whole fix: naming the app
+        under test ran its ``extract`` / ``publish`` instead of the seed, and
+        naming publish instead is an unconditional 500 (publish serves no
+        manifest)."""
+        ae, _uploaded = _wire(monkeypatch)
+        await seed_assets(
+            _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
+        )
+        assert ae.submitted == ["slug-1"]
+
+    @pytest.mark.asyncio
+    async def test_the_guard_asks_for_the_seeds_own_node(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The seed's node id is unique to the seed, so — unlike teardown's,
+        which is the delete app's own — any other name at all is foreign."""
+        ae, _uploaded = _wire(monkeypatch)
+        await seed_assets(
+            _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
+        )
+        assert ae.guarded == [("slug-1", (SEED_PUBLISH_NODE_ID,))]
+
+    @pytest.mark.asyncio
+    async def test_a_substituted_version_is_refused_before_the_poll(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The poll is the expensive half: a connector's crawl spends minutes
+        failing — or succeeding against the connection under test — while
+        nothing seeds."""
+        ae, _uploaded = _wire(
+            monkeypatch, foreign="AE serves version 7 with node(s) extract, publish"
+        )
+        with pytest.raises(SeedDagSupersededError) as caught:
+            await seed_assets(
+                _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
+            )
+        assert "extract, publish" in str(caught.value)
+        assert SEED_PUBLISH_NODE_ID in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_a_foreign_run_is_refused_even_when_it_went_green(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pre-poll read can be too early; the run's own node names cannot
+        be. Checked *before* success, because a substituted run that happens to
+        succeed is the shape that greens a leg while seeding nothing — and
+        before FND-1766 the only signal was ``AE status=Failed``, which reads as
+        "publish failed" rather than "the wrong graph ran"."""
+        ae, _uploaded = _wire(monkeypatch, ran_nodes=("extract", "publish"))
+        with pytest.raises(SeedDagSupersededError) as caught:
+            await seed_assets(
+                _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
+            )
+        assert "extract, publish" in str(caught.value)
+        assert "ae-run-1" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_a_run_reporting_no_nodes_is_not_treated_as_foreign(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty node list is an unanswered read, not a substitution. Failing
+        on one would turn a status blip into a seed defect."""
+        ae, _uploaded = _wire(monkeypatch, ran_nodes=())
+        seeded = await seed_assets(
+            _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
+        )
+        assert seeded.ae_run_id == "ae-run-1"

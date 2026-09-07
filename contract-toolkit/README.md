@@ -102,7 +102,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
 - [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
-- [`examples/publish-controls/`](examples/publish-controls/) — publish toggles, `includeInputFields`, `errorHandling`.
+- [`examples/publish-controls/`](examples/publish-controls/) — publish toggles, `includeInputFields`, `errorHandling`, `zeroOutConfig`.
 - [`examples/fanin/`](examples/fanin/) — multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
 - [`examples/agent-e2e/`](examples/agent-e2e/) — agent/SDR e2e codegen: `_e2e_credential.py` emits both `<Name>CredentialBody` (direct) and `<Name>AgentCredentialBody` (lightweight), plus an `extraction-method` ConditionalInput whose `overrideEnum` widens the substitutions `Literal` to `["direct", "agent"]`.
 - [`examples/scheduled/`](examples/scheduled/) — cron background job via `schedules`; renders `triggers.schedules` into `manifest.json` (multiple schedules, non-UTC timezone, a `PAUSED` one). See [Schedules](docs/reference.md#schedules-background-jobs).
@@ -310,6 +310,13 @@ pipeline {
     // transformedNonDataPrefix: default null (arg omitted). Set it when the
     // extract workflow emits non-data payloads (see below).
     transformedNonDataPrefix = "$.extract.outputs.transformed_nondata_prefix"
+    // zeroOutConfig: default null (arg omitted, zero-out off in publish).
+    // Set it on a cross-connection enricher (see below).
+    zeroOutConfig = new ZeroOutSpec {
+      exclude { "Process"; "ColumnProcess" }
+      attrs { ["sqlCoalesceNodeStatus"] = null }
+      rootAttrs { ["classifications"] = new Listing {} }
+    }
   }
 }
 ```
@@ -321,6 +328,36 @@ Every node ships with a default `errorHandling.startToCloseTimeoutSeconds`: **1 
 `PublishStep.connectionEntity` (also settable directly on `PublishNode`) controls the publish node's `connection_entity` arg — the full connection entity JSON used for connection creation. It defaults to the `"{{connection}}"` form placeholder. Setting it to `null` omits `connection_entity` from the generated args entirely, and because the field is **linked** to `connection_creation_enabled` (which defaults to `connectionEntity != null`), a `null` entity also disables connection creation — publish then targets an already-existing connection and creates nothing. Override `connectionCreationEnabled` explicitly on the node to disable creation even when an entity is present.
 
 `PublishStep.transformedNonDataPrefix` (also settable directly on `PublishNode`) controls the publish node's optional `transformed_nondata_prefix` arg — the object-store prefix holding the run's transformed **non-data** payloads, alongside the asset rows publish reads from `transformed_data_prefix`. It defaults to `null`, which omits the arg entirely, so apps that do not set it generate byte-identical manifests. Set it — normally to an output reference such as `"$.extract.outputs.transformed_nondata_prefix"`, though a literal prefix or form placeholder is passed through verbatim — only when the upstream node actually emits non-data payloads. It leaves `transformed_data_prefix` and every other publish arg untouched.
+
+### Zero-out for cross-connection enrichers
+
+`PublishStep.zeroOutConfig` (also settable directly on `PublishNode`) controls the publish node's optional `zero_out_config` arg. It defaults to `null`, which omits the arg entirely — and an absent `zero_out_config` is exactly how zero-out stays off in publish, so apps that do not set it generate byte-identical manifests.
+
+A **cross-connection enricher** (Coalesce, dbt, Monte Carlo) writes its own namespaced attributes onto assets another connector owns. When one of those assets falls out of the enricher's run, publish's default is a hard Atlas DELETE — which destroys a still-live asset the enricher only enriches, taking its downstream lineage and its user-curated tags and descriptions with it. A zero-out spec replaces that DELETE with an UPSERT that clears just the enricher's own attributes:
+
+```pkl
+zeroOutConfig = new ZeroOutSpec {
+  // Types this app owns outright — these keep being hard-deleted.
+  exclude { "Process"; "ColumnProcess" }
+  // attribute -> zero value, written inside entity.attributes as-is.
+  attrs {
+    ["sqlCoalesceNodeStatus"] = null
+    ["sqlCoalesceProjectId"] = null
+  }
+  // Same shape, for entity-root fields.
+  rootAttrs { ["classifications"] = new Listing {} }
+}
+```
+
+`attrs` is a value map, never a list of attribute names: publish writes each value as-is, so a connector's natural zero can be `null` for a scalar, an empty listing for a list-valued attribute, or `""` (publish deliberately keeps falsy-but-valid values). `rootAttrs` is the same shape for entity-root fields and renders under the publish app's wire name, `root_attrs`.
+
+`exclude` is required. It is declared nullable only because Pkl gives every `Listing`-typed property an implicit empty default, and an empty `exclude` carries real meaning — "zero out every type", correct for an enricher whose cache only ever holds types it enriches. Write `exclude {}` to opt into that; leaving `exclude` unset fails generation rather than silently becoming it. Do not construct an empty spec to *disable* zero-out either — leave `zeroOutConfig` unset.
+
+Attribute and type names are charset-checked (`[A-Za-z_][A-Za-z0-9_]*`), and the keys publish reserves are rejected outright rather than silently discarded: `attrs` cannot set `qualifiedName` or `isPartial` (publish assigns both after applying `attrs`), and `rootAttrs` cannot set `typeName` or `attributes`.
+
+**Why this is a typed class rather than a raw mapping.** Inside a single publish args block, `null` is used with two opposite meanings. The connection-cache / current-state flags are nulled out by some enricher contracts to make the keys **absent** — publish defaults an absent `current_state_enabled` to `true`, and their mere presence morphs `Process` entities into rejected `PartialObject`s — which relies on the manifest's stock `JsonRenderer` stripping nulls. `zero_out_config.attrs`, by contrast, needs its nulls **preserved**: they are the zero values being written. Flipping `omitNullProperties` on the manifest output would emit the flags as `null` and break publish, so the toolkit serializes the spec through a `RenderDirective` with its own null-preserving renderer, scoped to that one value. Both behaviours then hold in the same args block. Setting `zeroOutConfig` changes nothing else — the prefixes, the connection args and the state flags are untouched.
+
+Because a raw `ZeroOutSpec` dropped straight into an `args` mapping would render with Pkl property names and with its zero values stripped — a manifest that generates cleanly and then misbehaves in publish — generation fails with a pointer to `zeroOutConfig` instead. Apps that previously hand-wrote this JSON as a raw Pkl string plus a post-generate merge script should delete both and set the typed property. See [`examples/publish-controls/`](examples/publish-controls/).
 
 The toolkit can append a run-level notification node when an app opts in:
 

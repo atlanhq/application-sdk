@@ -1,9 +1,16 @@
 """Unit tests for teardown through the ``connection-delete`` app (FND-1724).
 
-Two halves, split the way the seed package's tests are split: the DAG and the
-submit body are pure and pinned exactly, and the orchestration around them is
-checked for the one property teardown actually has to hold — *it never raises,
-and it says which failure happened*.
+Two halves, split the way the seed package's tests are split: the DAG is pure
+and pinned exactly, and the orchestration around it is checked for the one
+property teardown actually has to hold — *it never raises, and it says which
+failure happened*.
+
+**There is no submit body to pin any more.** Since FND-1775 the teardown submits
+its own published version straight to AE, which fetches no manifest — so nothing
+names an app and there is no envelope to get right. The fake below therefore
+implements ``submit_published_version`` and *not* ``submit_workflow``, which is
+what stops a regression drifting back onto the Heracles path unnoticed: the call
+would fail rather than quietly pass a payload nothing reads.
 
 **The node is pinned field for field against the app's own manifest**, not
 loosely. ``atlan-connection-delete-app``'s ``app/generated/manifest.json``
@@ -27,7 +34,10 @@ from typing import Any
 
 import pytest
 
-from application_sdk.testing.harness.automation_engine import NoWorkerOnTaskQueueError
+from application_sdk.testing.harness.automation_engine import (
+    AEClient,
+    NoWorkerOnTaskQueueError,
+)
 from application_sdk.testing.harness.automation_engine.wire import (
     DAGNodeResult,
     DAGNodeStatus,
@@ -35,12 +45,12 @@ from application_sdk.testing.harness.automation_engine.wire import (
     DAGRunStatus,
     PublishedVersion,
 )
+from application_sdk.testing.harness.starters import SubmitRetry
 from application_sdk.testing.harness.teardown import (
     CONNECTION_DELETE_NODE_ID,
     ConnectionDeletePlan,
     DeleteType,
     build_connection_delete_dag,
-    build_connection_delete_submit_payload,
     connection_delete_task_queue,
     delete_connection,
 )
@@ -53,9 +63,11 @@ _OUR_PUBLISHED = PublishedVersion(
     version=1787587123, dag={CONNECTION_DELETE_NODE_ID: {"node_type": "workflow"}}
 )
 
-#: What AE served on the openapi leg of FND-1724: the app under test's own
-#: two-node graph, published over the seed by Heracles' submit-time manifest
-#: fetch. Pinned as data because it is the shape the guard exists for.
+#: What AE served on the openapi leg of FND-1724, when the teardown still went
+#: through Heracles: the app under test's own two-node graph, published over the
+#: harness's version by the submit-time manifest fetch. FND-1775 removed that
+#: path, so this shape should now be unreachable — pinned as data anyway,
+#: because an unreachable outcome the guard cannot recognise is not a guard.
 _SUPERSEDED_BY_THE_APP = PublishedVersion(
     version=1787587199,
     dag={"extract": {"node_type": "workflow"}, "publish": {"node_type": "workflow"}},
@@ -122,7 +134,8 @@ class _FakeAE:
         self._published_error = published_error
         self.created: list[tuple[str, str]] = []
         self.versions: list[dict[str, Any]] = []
-        self.submits: list[dict[str, Any]] = []
+        self.submitted: list[str] = []
+        self.submit_kwargs: list[dict[str, Any]] = []
         self.poll_kwargs: list[dict[str, Any]] = []
 
     async def create_workflow(self, *, name: str, description: str) -> str:
@@ -141,16 +154,24 @@ class _FakeAE:
     async def publish_version(self, slug: str, version: int) -> None:
         return None
 
-    async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
+    async def submit_published_version(self, slug: str, **kwargs: Any) -> str:
+        """Deliberately not ``submit_workflow`` — see the module docstring."""
         if self._submit_error is not None:
             raise self._submit_error
-        self.submits.append(payload)
+        self.submitted.append(slug)
+        self.submit_kwargs.append(kwargs)
         return "run-1"
 
     async def get_published_version(self, slug: str) -> PublishedVersion | None:
         if self._published_error is not None:
             raise self._published_error
         return self._published
+
+    # The real guard, over this fake's scripted read. Borrowed rather than
+    # re-scripted: the decision it makes (which node names are foreign, and
+    # what "unanswered" degrades to) is the thing under test here, and a
+    # second copy of it in a fake would only ever agree with itself.
+    foreign_published_dag = AEClient.foreign_published_dag
 
     async def poll_native_status(self, run_id: str, **kwargs: Any) -> DAGRunResult:
         self.poll_kwargs.append(kwargs)
@@ -243,80 +264,6 @@ class TestTheNodeMatchesTheAppsManifest:
         assert "depends_on" not in dag[CONNECTION_DELETE_NODE_ID]
 
 
-class TestTheSubmitBody:
-    """The connector's own builder, so AE's submit shape has one definition."""
-
-    def _payload(self) -> dict[str, Any]:
-        return build_connection_delete_submit_payload(
-            connection_qualified_name=_QN,
-            connector_short_name="coalesce",
-            display_name="snowflake-seed",
-            run_id=1787587123,
-            ae_workflow_slug="slug-1",
-        )
-
-    def test_it_carries_the_slug_ae_minted(self) -> None:
-        assert self._payload()["metadata"]["ae_workflow_slug"] == "slug-1"
-
-    def _rows(self) -> dict[str, Any]:
-        task = self._payload()["spec"]["templates"][0]["dag"]["tasks"][0]
-        return {p["name"]: p["value"] for p in task["arguments"]["parameters"]}
-
-    def test_the_envelope_names_the_delete_app_not_the_suite(self) -> None:
-        """The envelope's identity is what decides which manifest Heracles
-        fetches and publishes over the seed. Carrying the suite's identity is
-        what made a teardown re-run the suite's crawl, on the legs where the
-        republish beat the run."""
-        payload = self._payload()
-        assert (
-            payload["metadata"]["annotations"]["package.argoproj.io/name"]
-            == "@atlan/connection-delete"
-        )
-        template_ref = payload["spec"]["templates"][0]["dag"]["tasks"][0]["templateRef"]
-        assert template_ref["name"] == "atlan-connection-delete"
-        assert "coalesce" not in payload["metadata"]["name"]
-
-    def test_it_carries_the_apps_three_mustache_rows(self) -> None:
-        """The other half of defusing the race: when Heracles' republished
-        manifest is what runs, these rows are what its
-        ``{{connection-qualified-name}}`` / ``{{delete-type}}`` /
-        ``{{delete-assets}}`` tokens resolve to. Without them the app falls back
-        to its own default of SOFT, and every run's assets would be archived
-        rather than removed."""
-        rows = self._rows()
-        assert rows["connection-qualified-name"] == _QN
-        assert rows["delete-type"] == "PURGE"
-        assert rows["delete-assets"] is True
-
-    def test_the_connection_rows_still_name_the_leg(self) -> None:
-        """Attribution does not go away with the package name: which leg's
-        connection is being deleted stays readable off the submit."""
-        assert self._rows()["connection.connectorName"] == "coalesce"
-
-    def test_it_names_no_app(self) -> None:
-        """Omitting ``metadata.app_service_url`` was the first attempt and did
-        not stop the republish — Heracles keys the fetch on the envelope
-        identity, which is what now names the delete app. The key still stays
-        absent (not empty: an empty string is still a URL AE can try) because
-        a teardown has no service URL to name."""
-        assert "app_service_url" not in self._payload()["metadata"]
-
-    def test_no_credential_block_rides_a_teardown(self) -> None:
-        """A delete names a connection, not a source — there is nothing to
-        authenticate to, and a credential block would create one to no end."""
-        assert not self._payload().get("payload")
-
-    def test_the_credential_token_is_emptied_rather_than_left_unsubstituted(
-        self,
-    ) -> None:
-        """Nothing substitutes ``{{credentialGuid}}`` on a submit with no
-        ``payload[]``, and an unsubstituted token is what ``submit_workflow``
-        warns about on every teardown it would otherwise fire on."""
-        task = self._payload()["spec"]["templates"][0]["dag"]["tasks"][0]
-        rows = {p["name"]: p["value"] for p in task["arguments"]["parameters"]}
-        assert rows["credential-guid"] == ""
-
-
 class TestDeleteConnectionReportsRatherThanRaises:
     """Teardown runs post-verdict, so nothing here may become the verdict."""
 
@@ -327,6 +274,36 @@ class TestDeleteConnectionReportsRatherThanRaises:
         assert report.succeeded
         assert report.ae_run_id == "run-1"
         assert report.errors == ()
+
+    async def test_the_submit_names_only_the_slug(self) -> None:
+        """No envelope, so no app identity, so nothing for a manifest fetch to
+        resolve and publish over the version this teardown just published.
+        FND-1724 could only make both outcomes of that fetch a delete; FND-1775
+        removes the fetch, and this is the assertion that it stays removed."""
+        ae = _FakeAE()
+        await delete_connection(_QN, ae=ae, plan=_plan())
+        assert ae.submitted == ["slug-1"]
+
+    async def test_an_unset_retry_leaves_aes_own_replication_budget(self) -> None:
+        """``submit_published_version`` retries 404 while the just-published
+        version replicates, on a budget matched to Heracles' own for the same
+        lag. Passing nothing is how a teardown takes it — the plan's field is an
+        override, not the default."""
+        ae = _FakeAE()
+        await delete_connection(_QN, ae=ae, plan=_plan())
+        assert ae.submit_kwargs == [{}]
+
+    async def test_a_retry_override_is_forwarded_to_the_submit(self) -> None:
+        """The field survives the conversion because the replication budget is
+        still a knob; what it stopped being is a *cold-start* budget, since this
+        submit calls no app pod at all."""
+        ae = _FakeAE()
+        await delete_connection(
+            _QN,
+            ae=ae,
+            plan=_plan(submit_retry=SubmitRetry(retries=3, sleep_seconds=7)),
+        )
+        assert ae.submit_kwargs == [{"retries": 3, "retry_sleep_seconds": 7}]
 
     async def test_the_workflow_description_names_the_connection(self) -> None:
         """The name has to be unique and escaping-free, so the QN goes on the
@@ -477,7 +454,7 @@ class TestDeleteConnectionReportsRatherThanRaises:
         report = await delete_connection("", ae=ae, plan=_plan())
         assert not report.complete
         assert ae.created == []
-        assert ae.submits == []
+        assert ae.submitted == []
 
 
 @pytest.mark.parametrize(

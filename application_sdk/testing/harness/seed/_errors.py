@@ -20,6 +20,7 @@ from typing import ClassVar
 from application_sdk.errors.leaves import InvalidInputError, PreconditionError
 
 __all__ = [
+    "SeedDagSupersededError",
     "SeedPublishEmptyError",
     "SeedPublishFailedError",
     "SeedSegmentInvalidError",
@@ -113,3 +114,28 @@ class SeedPublishEmptyError(PreconditionError):
 
     code: ClassVar[str] = "PRECONDITION_SEED_PUBLISH_EMPTY"
     expected_state: str | None = "at least one seeded asset present in Atlas"
+
+
+@dataclass(kw_only=True)
+class SeedDagSupersededError(PreconditionError):
+    """AE ran some other app's graph in place of the seed's one node.
+
+    The failure this exists to *name*. Before FND-1766 the seed submitted
+    through Heracles, whose native path re-derives the graph from the app under
+    test's served manifest and publishes it over the harness's version — so the
+    connector's own ``extract`` / ``publish`` ran instead of the seed, and the
+    only signal was :class:`SeedPublishFailedError` reporting ``AE
+    status=Failed``. Accurate and unactionable: it reads as "publish failed"
+    rather than "the wrong graph ran", and it sent at least one investigation
+    looking for tenant drift.
+
+    The seed now submits straight to AE
+    (:meth:`~application_sdk.testing.harness.automation_engine.AEClient.submit_published_version`),
+    which has no manifest fetch in it, so nothing should ever raise this. That
+    is the point: it is the assertion that the property holds on a live tenant,
+    on the two readings that can see a substitution — the version AE serves
+    after the submit, and the node names on the run itself.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_SEED_DAG_SUPERSEDED"
+    expected_state: str | None = "the seed's own one-node DAG is what AE ran"
