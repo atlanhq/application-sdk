@@ -49,7 +49,7 @@ def _ref(entity: str, *, prefix: str = SOURCE) -> FileReference:
     )
 
 
-class TestUploadRefs:
+class _ResetsRegistries:
     def setup_method(self) -> None:
         AppRegistry.reset()
         TaskRegistry.reset()
@@ -58,6 +58,8 @@ class TestUploadRefs:
         AppRegistry.reset()
         TaskRegistry.reset()
 
+
+class TestUploadRefs(_ResetsRegistries):
     def _app(self) -> App:
         from application_sdk.app.context import AppContext
 
@@ -261,3 +263,20 @@ class TestUploadRefs:
             )
 
         verify.assert_not_awaited()
+
+
+class TestUploadRefsFeedsTheStallWatchdog(_ResetsRegistries):
+    """``upload_refs`` takes the ADR-0018 backstop (pinned in
+    ``test_framework_task_timeouts.py``) and adds no progress hook of its own,
+    because the transfer layer already emits one per file. Pin that premise."""
+
+    def test_the_upload_path_it_delegates_to_marks_progress(self) -> None:
+        """``upload_refs`` adds no hook of its own because the transfer layer
+        already emits one per file. Pin that premise rather than the hook: if
+        ``transfer.upload`` stopped marking, this task would go quiet and
+        nothing here would notice."""
+        import inspect
+
+        from application_sdk.storage import transfer
+
+        assert 'mark_progress("storage.upload_file")' in inspect.getsource(transfer)

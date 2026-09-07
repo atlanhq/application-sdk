@@ -1319,7 +1319,18 @@ class App(ABC):
     # Framework-provided storage tasks
     # =========================================================================
 
-    @task(timeout_seconds=600, retry_max_attempts=3)
+    # No ``timeout_seconds`` (ADR-0018). 600s was a duration budget for "upload
+    # whatever this caller has", and what that caller has scales with the tenant
+    # — a directory upload of a large transformed tree can exceed it on a big
+    # crawl and be killed mid-transfer, then killed again on each retry. The
+    # transfer layer marks progress per file and per multipart part, so the stall
+    # watchdog bounds a wedge in minutes and the backstop is the last resort.
+    #
+    # Residual, accepted: a *small* single-PUT file that hangs emits nothing
+    # until it completes, so it holds until ``max_no_progress_seconds``. That is
+    # the same quiet spot ADR-0018 accepts fleet-wide, and it is bounded by the
+    # stall alert rather than by a number nobody can pick.
+    @task(retry_max_attempts=3)
     async def upload(
         self,
         input: UploadInput,
@@ -1513,7 +1524,10 @@ class App(ABC):
             )
         return result
 
-    @task(timeout_seconds=600, retry_max_attempts=3)
+    # No ``timeout_seconds``, for the same reason as ``upload`` — symmetric knob,
+    # symmetric problem, and ``transfer.download`` marks progress per file and
+    # per range chunk.
+    @task(retry_max_attempts=3)
     async def download(
         self,
         input: DownloadInput,
@@ -1574,7 +1588,12 @@ class App(ABC):
             store=store,
         )
 
-    @task(timeout_seconds=300, retry_max_attempts=3)
+    # No ``timeout_seconds``: the work here is one store round-trip per declared
+    # ref, so any number picked would scale with the size of the declaration —
+    # which is the unguessable question ADR-0018 removed the knob for. The task
+    # takes the 24h backstop and is bounded in minutes by the stall watchdog
+    # instead, which the per-ref ``mark_progress`` below feeds.
+    @task(retry_max_attempts=3)
     async def verify_refs(self, input: VerifyRefsInput) -> VerifyRefsOutput:
         """Framework task: assert every declared ``FileReference`` is really there.
 
@@ -1629,6 +1648,9 @@ class App(ABC):
         :meth:`upload_refs` uses it to check its own delivery without calling a
         ``@task`` from inside a ``@task``.
         """
+        from application_sdk._runtime.progress import (  # noqa: PLC0415 — circular: _runtime imports app contracts
+            current_progress_tracker,
+        )
         from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
             list_keys,
         )
@@ -1670,6 +1692,12 @@ class App(ABC):
                 missing.append(key)
                 continue
             verified_file_count += ref.file_count
+            # One store round-trip completed. A file boundary, not a record
+            # boundary (ADR-0018) — and without it this loop is a run of bare
+            # awaits with no progress signal, so a wedged HEAD against an
+            # unreachable store would hold silently to the backstop instead of
+            # being caught by the watchdog in minutes.
+            current_progress_tracker().mark_progress("storage.verify_ref")
 
         if missing or outside:
             raise StorageHandoffIncompleteError(
@@ -1694,7 +1722,12 @@ class App(ABC):
             prefix=prefix,
         )
 
-    @task(timeout_seconds=600, retry_max_attempts=3)
+    # No ``timeout_seconds``, for the same reason as ``verify_refs`` — more
+    # sharply here, because a declared ref can point at a directory of any size.
+    # A duration budget for "upload this tenant's transformed tree" is a moving
+    # target by construction (ADR-0018 Problem 1). Progress is already marked per
+    # file by ``storage.transfer.upload``, so the watchdog covers the loop.
+    @task(retry_max_attempts=3)
     async def upload_refs(self, input: UploadRefsInput) -> UploadRefsOutput:
         """Framework task: deliver a declaration as one outbound tree.
 
@@ -1847,6 +1880,12 @@ class App(ABC):
         )
         return UploadRefsOutput(prefix=prefix, refs=delivered, file_count=file_count)
 
+    # Keeps its ``timeout_seconds``, unlike upload/download/verify_refs/upload_refs.
+    # The ADR-0018 backstop only replaces a duration bound where the work emits
+    # progress the stall watchdog can read; this task deletes local paths and
+    # marks nothing, so the duration is still its only bound. Removing it here
+    # would trade a 300s kill for a silent hold, which is the opposite of the
+    # trade the ADR makes. Giving cleanup a progress hook is the prerequisite.
     @task(timeout_seconds=300, retry_max_attempts=3, heartbeat_timeout_seconds=60)
     async def cleanup_files(self, input: CleanupInput) -> CleanupOutput:
         """Framework task: clean up local files after a workflow run.
@@ -1927,6 +1966,9 @@ class App(ABC):
 
         return CleanupOutput(path_results=path_results)
 
+    # Keeps its ``timeout_seconds`` for the same reason as ``cleanup_files``, and
+    # more strongly: heartbeating is disabled on this task outright, so there is
+    # no watchdog here at all. The duration is the only thing bounding it.
     @task(
         timeout_seconds=300,
         retry_max_attempts=1,

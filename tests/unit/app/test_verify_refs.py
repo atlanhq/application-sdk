@@ -20,6 +20,7 @@ from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StoreTarget
 from application_sdk.storage.errors import StorageHandoffIncompleteError
+from tests.unit.conftest import RecordingProgressTracker
 
 PREFIX = "artifacts/apps/a/workflows/wf-1/run-1/transformed"
 
@@ -46,7 +47,21 @@ def _ref(entity: str, *, file_count: int = 1) -> FileReference:
     )
 
 
-class TestVerifyRefs:
+def _make_app(*, upstream: object | None = None) -> App:
+    from application_sdk.app.context import AppContext
+
+    app = _VerifyApp()
+    app._context = AppContext(
+        app_name=app._app_name,
+        app_version="1",
+        run_id="run-1",
+        _storage=object(),
+        _upstream_storage=upstream,  # type: ignore[arg-type]
+    )
+    return app
+
+
+class _ResetsRegistries:
     def setup_method(self) -> None:
         AppRegistry.reset()
         TaskRegistry.reset()
@@ -55,21 +70,10 @@ class TestVerifyRefs:
         AppRegistry.reset()
         TaskRegistry.reset()
 
-    def _app(self, *, upstream: object | None = None) -> App:
-        from application_sdk.app.context import AppContext
 
-        app = _VerifyApp()
-        app._context = AppContext(
-            app_name=app._app_name,
-            app_version="1",
-            run_id="run-1",
-            _storage=object(),
-            _upstream_storage=upstream,  # type: ignore[arg-type]
-        )
-        return app
-
+class TestVerifyRefs(_ResetsRegistries):
     async def test_all_present_returns_the_counts(self) -> None:
-        app = self._app()
+        app = _make_app()
         refs = [_ref(e) for e in ("database", "schema", "table", "column")]
 
         with mock.patch(
@@ -90,7 +94,7 @@ class TestVerifyRefs:
         A listing of ``transformed/`` here returns three keys and looks healthy.
         Checking the declaration is the only thing that can tell the difference.
         """
-        app = self._app()
+        app = _make_app()
         refs = [_ref(e) for e in ("database", "schema", "table", "column")]
         lost = f"{PREFIX}/table/entities.json"
 
@@ -113,7 +117,7 @@ class TestVerifyRefs:
         A consumer walking ``prefix`` never reaches it, so verifying only
         existence would pass a handoff that is short at read time.
         """
-        app = self._app()
+        app = _make_app()
         stray = FileReference(
             storage_path="artifacts/apps/a/workflows/wf-1/run-1/raw/table/records.json",
             is_durable=True,
@@ -136,7 +140,7 @@ class TestVerifyRefs:
 
     async def test_a_ref_with_no_storage_path_counts_as_missing(self) -> None:
         """A producer that cannot say where it wrote has declared nothing."""
-        app = self._app()
+        app = _make_app()
 
         with (
             mock.patch(
@@ -153,7 +157,7 @@ class TestVerifyRefs:
         assert exc.value.missing_keys == ["<no storage_path>"]
 
     async def test_directory_ref_is_checked_by_listing_not_by_head(self) -> None:
-        app = self._app()
+        app = _make_app()
         ref = _ref("table", file_count=3)
 
         with mock.patch(
@@ -167,7 +171,7 @@ class TestVerifyRefs:
         assert listing.await_count == 1
 
     async def test_short_directory_ref_fails_with_the_observed_count(self) -> None:
-        app = self._app()
+        app = _make_app()
         ref = _ref("table", file_count=3)
 
         with (
@@ -189,7 +193,7 @@ class TestVerifyRefs:
         which is a check that can pass while the object is not where the
         declaration says it is.
         """
-        app = self._app()
+        app = _make_app()
 
         with mock.patch(
             "application_sdk.storage.ops.exists",
@@ -205,7 +209,7 @@ class TestVerifyRefs:
         the store a task-to-task declaration must be asserted against — even
         in an SDR deployment where ``App.upload`` routes elsewhere."""
         upstream = object()
-        app = self._app(upstream=upstream)
+        app = _make_app(upstream=upstream)
 
         with mock.patch(
             "application_sdk.storage.ops.exists",
@@ -218,7 +222,7 @@ class TestVerifyRefs:
 
     async def test_upstream_target_checks_the_upstream_store(self) -> None:
         upstream = object()
-        app = self._app(upstream=upstream)
+        app = _make_app(upstream=upstream)
 
         with mock.patch(
             "application_sdk.storage.ops.exists",
@@ -232,7 +236,7 @@ class TestVerifyRefs:
         assert head.await_args.kwargs["store"] is upstream
 
     async def test_an_empty_declaration_verifies_vacuously(self) -> None:
-        app = self._app()
+        app = _make_app()
 
         with mock.patch(
             "application_sdk.storage.ops.exists", new_callable=mock.AsyncMock
@@ -241,3 +245,51 @@ class TestVerifyRefs:
 
         assert out.verified_count == 0
         head.assert_not_awaited()
+
+
+class TestVerifyRefsFeedsTheStallWatchdog(_ResetsRegistries):
+    """``verify_refs`` takes the ADR-0018 backstop instead of a duration budget
+    (pinned in ``test_framework_task_timeouts.py``), which is only safe because
+    the loop emits. These are the hooks that make it emit."""
+
+    async def test_each_verified_ref_marks_progress(
+        self, progress_marks: RecordingProgressTracker
+    ) -> None:
+        """One mark per store round-trip — a file boundary, not a record one.
+
+        Without it the loop is a run of bare awaits with no signal, so a wedged
+        HEAD against an unreachable store would hold silently all the way to the
+        24h backstop rather than being caught by the watchdog in minutes.
+        """
+        app = _make_app()
+        refs = [_ref(e) for e in ("database", "schema", "table", "column")]
+
+        with mock.patch(
+            "application_sdk.storage.ops.exists",
+            new_callable=mock.AsyncMock,
+            return_value=True,
+        ):
+            await app.verify_refs(VerifyRefsInput(refs=refs, prefix=PREFIX))
+
+        assert progress_marks.count("storage.verify_ref") == 4
+
+    async def test_a_ref_that_fails_the_check_marks_nothing(
+        self, progress_marks: RecordingProgressTracker
+    ) -> None:
+        """A signal for work that did not complete would let a store returning
+        404 for everything look like steady progress."""
+        app = _make_app()
+
+        with (
+            mock.patch(
+                "application_sdk.storage.ops.exists",
+                new_callable=mock.AsyncMock,
+                return_value=False,
+            ),
+            pytest.raises(StorageHandoffIncompleteError),
+        ):
+            await app.verify_refs(
+                VerifyRefsInput(refs=[_ref("database")], prefix=PREFIX)
+            )
+
+        assert progress_marks.count("storage.verify_ref") == 0
