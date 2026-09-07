@@ -13,6 +13,14 @@ inlined shell in the regenerate-contract composite action:
   * SDK-level, eval fails                -> fatal (exit 1)
   * SDK-level, no toolkit entry          -> fatal (SystemExit)
 
+the formatting-insensitive drift comparison (FND-1777), which is what lets the
+image-build path check drift at all:
+
+  * generated *.py content differs, no ruff -> suppressed (formatting artefact)
+  * same, with ruff available                -> reported
+  * manifest.json differs, no ruff           -> reported (the missing signal)
+  * generated *.py added / deleted, no ruff  -> reported
+
 and the root-file emit-flag split (FND-1723):
 
   * opted out + committed                -> notice, never a finding
@@ -476,6 +484,152 @@ def test_drift_warns_on_newly_emitted_untracked_file(repo, monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert "::warning::Committed contract artifacts are stale" in out
+
+
+# ── formatting-insensitive drift (FND-1777) ──────────────────────────────────
+#
+# The image-build path has no uv/ruff, so generated *.py land unformatted and
+# read as drift against a tree the app's pre-commit formatted. That false
+# positive used to buy check-drift: "false" on the one path that bakes
+# app/generated/ into the shipped image. Drop only the class formatting can
+# fabricate — a content change to a generated *.py — and keep the rest.
+
+
+def _fake_run_emitting_py(repo: Path, py_source: str, *, manifest: str):
+    """`_make_fake_run`, but the eval's generated `_input.py` gets `py_source`."""
+    inner = _make_fake_run(repo, fresh_manifest=manifest)
+
+    def fake_run(cmd, *, check=False):
+        result = inner(cmd, check=check)
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            out = Path(cmd[cmd.index("-m") + 1]) / "app" / "generated"
+            (out / "_input.py").write_text(py_source)
+        return result
+
+    return fake_run
+
+
+def test_drift_ignores_generated_py_content_when_formatting_skipped(
+    repo, monkeypatch, capsys
+):
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)  # no uvx, no ruff
+    monkeypatch.setattr(
+        mod,
+        "run",
+        _fake_run_emitting_py(repo, "import   os\n", manifest=STALE_MANIFEST),
+    )
+
+    assert mod.main(["--check-drift", "true"]) == 0
+
+    out = capsys.readouterr().out
+    assert "::warning::Committed contract artifacts are stale" not in out
+    assert "generated-Python formatting was skipped" in out
+    assert "up to date" in out
+
+
+def test_drift_reports_generated_py_content_when_formatting_ran(
+    repo, monkeypatch, capsys
+):
+    """Same difference, with ruff available: nothing is suppressed."""
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uvx")
+    monkeypatch.setattr(
+        mod,
+        "run",
+        _fake_run_emitting_py(repo, "import   os\n", manifest=STALE_MANIFEST),
+    )
+
+    assert mod.main(["--check-drift", "true"]) == 0
+
+    assert (
+        "::warning::Committed contract artifacts are stale" in capsys.readouterr().out
+    )
+
+
+def test_drift_reports_manifest_when_formatting_skipped(repo, monkeypatch, capsys):
+    """The signal that was missing on the image-build path: a stale manifest.json
+    (what a dropped post-processing step produces) is reported even with no ruff."""
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(
+        mod,
+        "run",
+        _fake_run_emitting_py(repo, "import   os\n", manifest=FRESH_MANIFEST),
+    )
+
+    assert mod.main(["--check-drift", "true"]) == 0
+
+    out = capsys.readouterr().out
+    assert "::warning::Committed contract artifacts are stale" in out
+    assert "app/generated" in out
+
+
+def test_drift_reports_new_generated_py_when_formatting_skipped(
+    repo, monkeypatch, capsys
+):
+    """Formatting rewrites existing files; it cannot create one. A newly emitted
+    *.py is real drift on every path."""
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    inner = _make_fake_run(repo, fresh_manifest=STALE_MANIFEST)
+
+    def fake_run(cmd, *, check=False):
+        result = inner(cmd, check=check)
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            out = Path(cmd[cmd.index("-m") + 1]) / "app" / "generated"
+            (out / "_e2e_base.py").write_text("import os\n")
+        return result
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    assert mod.main(["--check-drift", "true"]) == 0
+
+    assert (
+        "::warning::Committed contract artifacts are stale" in capsys.readouterr().out
+    )
+
+
+def test_drift_reports_deleted_generated_py_when_formatting_skipped(
+    repo, monkeypatch, capsys
+):
+    """A generated *.py the contract stopped emitting is a deletion, which
+    formatting also cannot produce."""
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    inner = _make_fake_run(repo, fresh_manifest=STALE_MANIFEST)
+
+    def fake_run(cmd, *, check=False):
+        result = inner(cmd, check=check)
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            (
+                Path(cmd[cmd.index("-m") + 1]) / "app" / "generated" / "_input.py"
+            ).unlink()
+        return result
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    assert mod.main(["--check-drift", "true"]) == 0
+
+    assert (
+        "::warning::Committed contract artifacts are stale" in capsys.readouterr().out
+    )
+
+
+def test_format_generated_reports_whether_it_formatted(tmp_path, monkeypatch):
+    """`warn_on_drift` keys its narrowing off this return value, so it has to
+    distinguish "skipped" from "nothing to do"."""
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    (gen / "_input.py").write_text("import os\n")
+    monkeypatch.setattr(mod, "run", lambda cmd, check=False: None)
+
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    assert mod._format_generated(tmp_path) is False
+
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uvx")
+    assert mod._format_generated(tmp_path) is True
+
+    # No generated Python at all: formatting is vacuously complete, so drift
+    # must NOT be narrowed.
+    (gen / "_input.py").unlink()
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    assert mod._format_generated(tmp_path) is True
 
 
 def test_override_toolkit_rewrites_block_form(tmp_path):

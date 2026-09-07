@@ -39,9 +39,14 @@ inputs:
     default: "true"
     description: |
       'true' (default) to warn — never fail — when committed app/generated/
-      drifts from freshly-generated output. Set 'false' on pre-build
-      invocations where uv (hence ruff formatting) is not yet available.
-      Ignored when application-sdk-ref is set (drift is expected).
+      drifts from freshly-generated output. Ignored when application-sdk-ref
+      is set (a toolkit change legitimately changes the output).
+
+      'false' turns the comparison off entirely and should now be rare: where
+      uv (hence ruff formatting) is unavailable the check no longer needs to be
+      disabled, because it drops the one class skipped formatting can fabricate
+      (a content change to a generated *.py) and keeps comparing manifest.json,
+      the configmaps and the root YAMLs. See FND-1777.
   pkl-version:
     required: false
     default: "0.27.2"

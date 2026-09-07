@@ -3474,6 +3474,59 @@ for the type vocabulary and the per-format mapping.
 
 ---
 
+## Post-processing generated output (`contract/post-generate.sh`)
+
+CI regenerates an app's contract artifacts on several paths — before the
+integration tests, before the **image build** (so the manifest baked into the
+image comes from the current contract, not a stale committed copy), on a
+Renovate toolkit bump, and in the generated-freshness gate. Every one of those
+**replaces `app/generated/` with raw `pkl eval` output**.
+
+If your app transforms that output — a merge step, a hand-maintained artifact
+installed over the toolkit's version, anything at all — the transformation must
+live in **`contract/post-generate.sh`**. That path is a convention, not a
+per-workflow input, so every regeneration entry point picks it up and they
+cannot disagree about what "freshly generated" means:
+
+```sh
+# contract/post-generate.sh — run from the repo root, with `sh`, after
+# regeneration has placed fresh pkl eval output.
+python contract/templates/merge.py
+```
+
+Have your `generate` task call the same script, so local and CI agree:
+
+```toml
+[tool.poe.tasks]
+generate = """
+cd contract && pkl project resolve && cd ..
+pkl eval --project-dir contract -m . contract/app.pkl
+sh contract/post-generate.sh
+"""
+```
+
+Wiring the step **only** into a `poe`/`make` task is the trap: it works
+perfectly locally and is silently dropped by every CI regeneration, so the
+image that ships to a tenant carries the untransformed artifact. Regeneration
+warns when it sees the signature of this (a `contract/templates/*.py`, or a
+command after the `pkl eval` line in a `generate` task, with no
+`post-generate.sh` beside it), but the warning is a heuristic — the
+`post-generate.sh` is the fix.
+
+Notes:
+
+- It runs with `sh` from the repo root, so no executable bit is needed and its
+  paths are the same ones you would use locally.
+- It runs **after** placement and is best-effort: a non-zero exit warns and
+  leaves fresh toolkit output in the tree rather than failing the job.
+- On a Renovate toolkit bump, a generated file whose committed content differs
+  from what the *previous* pin emitted is detected as app-maintained and
+  preserved, so an override survives even before you add the script. That
+  detection needs a baseline pin and therefore does not apply on the test and
+  image-build paths — `post-generate.sh` is what covers those.
+
+---
+
 ## Migration Notes
 
 ### v0.17.0 — nested `deploy`/`pools` API; `deployOverrides` renamed to `overrides`

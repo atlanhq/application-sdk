@@ -603,3 +603,26 @@ def test_the_scan_step_builds_the_runners_own_architecture() -> None:
     assert (
         "runner.arch" in scan["with"]["platforms"]
     ), "the scan platform must follow the runner, not be hardcoded"
+
+
+# ── The drift signal on the path that bakes the image (FND-1777) ─────────────
+
+
+def test_prebuild_regeneration_checks_drift() -> None:
+    """This is the only path that bakes app/generated/ into the shipped image,
+    and it used to pass check-drift: "false" — so a connector whose committed
+    artifacts carried a transformation the regeneration dropped shipped the
+    untransformed manifest with no annotation anywhere. The false positive that
+    bought the "false" (unformatted generated *.py, no ruff on this path) is now
+    handled inside regenerate_contract.warn_on_drift, which narrows rather than
+    skips. Warn-only either way, so turning it on cannot fail a build.
+    """
+    step = _step(
+        _BUILD_ACTION,
+        "Regenerate contract artifacts (manifest.json) before image build",
+    )
+    assert "regenerate-contract" in step["uses"]
+    assert step["with"].get("check-drift") == "true", (
+        "the image-build regeneration must compare against the committed "
+        f"artifacts, got check-drift={step['with'].get('check-drift')!r}"
+    )
