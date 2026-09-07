@@ -95,6 +95,14 @@ _FORBIDDEN_OUTSIDE_JSON_ENVELOPE: tuple[str, ...] = tuple(
     seq for seq in _FORBIDDEN_FILTER_SEQUENCES if seq != '"'
 )
 
+# Structured filter-map keys identify source objects. They can contain ``--``
+# (for example, valid GCP project IDs) and are not themselves substituted as
+# raw SQL fragments. Keep every delimiter and block-comment guard, but permit
+# the SQL line-comment sequence in keys only.
+_FORBIDDEN_FILTER_KEY_SEQUENCES: tuple[str, ...] = tuple(
+    seq for seq in _FORBIDDEN_FILTER_SEQUENCES if seq != "--"
+)
+
 FilterValue: TypeAlias = list[str] | str | dict[str, dict[str, Any]]
 
 _MAX_FILTER_NESTING_DEPTH = 4
@@ -160,7 +168,9 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
         elif isinstance(value, dict):
             for nested_key, nested_value in value.items():
                 if isinstance(nested_key, str):
-                    _check_str("key", nested_key)
+                    _check_str(
+                        "key", nested_key, sequences=_FORBIDDEN_FILTER_KEY_SEQUENCES
+                    )
                 _check_value("value", nested_value, depth + 1)
 
     if isinstance(v, str):
@@ -195,7 +205,7 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
     elif isinstance(v, dict):
         for key, values in v.items():
             if isinstance(key, str):
-                _check_str("key", key)
+                _check_str("key", key, sequences=_FORBIDDEN_FILTER_KEY_SEQUENCES)
             _check_value("value", values)
     return v
 
