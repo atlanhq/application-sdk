@@ -39,6 +39,14 @@ Safety contract — this can never make CI *worse* than the prior behaviour
     so tests run against the committed manifest exactly as before.
   * Drift is warn-only in app-level mode; it never fails the job.
 
+Regeneration *destroys* the committed ``app/generated/``, so anything the app
+does to that output which is not ``contract/post-generate.sh`` is dropped —
+into the image, silently. ``pkl_contract_layout.warn_unwired_post_generate``
+(reached from ``run_post_generate`` on every regeneration path, in both modes)
+warns when an app looks like it post-processes elsewhere, and the drift
+comparison is now formatting-insensitive so it can also run on the image-build
+path, which is the one that bakes the artifacts. See FND-1777.
+
 Eval writes into a temp dir and is placed by ``pkl_contract_layout.swap_outputs``,
 which handles both contract families: ``App.pkl`` (output keys prefixed
 ``app/generated/``) and ``NativeApp.pkl`` / ``NativeAppBundle.pkl`` (unprefixed
@@ -158,8 +166,9 @@ def root_files_not_emitted(out_dir: Path) -> list[str]:
     committed one is still in place — but it *may* mean the contract (or the
     toolkit under test) stopped producing an artifact the app ships. Worth
     failing on in SDK-level mode: a later sdr-e2e step hard-errors on a missing
-    root ``app.yaml``, resolves it *after* this step, and runs with check-drift
-    off, so nothing else would explain it. Informational in app-level mode.
+    root ``app.yaml``, resolves it *after* this step, and SDK-level mode skips
+    the drift check, so nothing else would explain it. Informational in
+    app-level mode.
 
     "May", because a contract can also *ask* the toolkit not to emit the file.
     That is a sanctioned configuration, not a regression, so callers split this
@@ -200,46 +209,103 @@ def opted_out_root_files(contract_dir: str, names: list[str]) -> set[str]:
     return opted_out
 
 
-def _format_generated(root: Path) -> None:
+def _format_generated(root: Path) -> bool:
     """ruff-fix + format every generated ``*.py``, mirroring
     contract-toolkit/scripts/regenerate-all.sh and renovate_pkl_sync.py, so the
     in-tree artifacts match what the consumer's pre-commit ruff would produce.
 
     Best-effort: skipped when neither ``uvx`` nor ``ruff`` is on PATH (the e2e
     pre-build invocation runs before ``setup-deps`` installs uv) — unformatted
-    but valid generated Python still imports at runtime."""
+    but valid generated Python still imports at runtime.
+
+    Returns True iff the generated Python in the tree is formatted (nothing to
+    format counts). ``warn_on_drift`` needs this: unformatted generated Python
+    reads as drift against a committed tree the app's pre-commit did format, and
+    that false positive is the whole reason the image-build path used to skip the
+    drift comparison outright (FND-1777)."""
     gen = root / "app" / "generated"
     if not gen.is_dir():
-        return
+        return True
     py_files = sorted(str(p) for p in gen.rglob("*.py"))
     if not py_files:
-        return
+        return True
     if shutil.which("uvx"):
         prefix = ["uvx", "ruff"]
     elif shutil.which("ruff"):
         prefix = ["ruff"]
     else:
         print("::notice::ruff/uvx not on PATH — skipping generated-Python formatting.")
-        return
+        return False
     run([*prefix, "check", "--fix", "--select", "F401", "--quiet", *py_files])
     run([*prefix, "format", *py_files])
+    return True
 
 
-def warn_on_drift() -> bool:
+def _porcelain_paths(path: str) -> list[tuple[str, str]]:
+    """``(status, path)`` for everything git reports under ``path``.
+
+    ``git status --porcelain`` rather than ``git diff``, so a path the contract
+    stopped emitting (deletion) and a newly-emitted one (untracked) both show up.
+    ``-z`` because a generated filename may contain anything; a rename entry is
+    ``XY new\\0old\\0``, and the new path is the one we report."""
+    proc = subprocess.run(
+        ["git", "status", "--porcelain", "-z", "--", path],
+        capture_output=True,
+        text=True,
+    )
+    out: list[tuple[str, str]] = []
+    fields = proc.stdout.split("\0")
+    i = 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        status, name = entry[:2], entry[3:]
+        out.append((status, name))
+        if "R" in status or "C" in status:
+            i += 1  # skip the paired original path
+    return out
+
+
+def _formatting_only(status: str, name: str) -> bool:
+    """Whether this entry could have been produced by *skipped* ruff formatting
+    alone, and so must not be reported as drift when formatting did not run.
+
+    Only a *modification* to a generated ``*.py``: formatting rewrites bytes in
+    files that already exist, so it can never add (``??``), delete or rename one
+    — and it never touches ``manifest.json``, the configmaps or the root YAMLs,
+    which is where a dropped post-processing step or an unregenerated contract
+    shows up. Narrowing to exactly this class is what lets the image-build path
+    compare at all (FND-1777), instead of trading the whole signal away for one
+    false positive."""
+    return name.endswith(".py") and status.strip() in {"M", "MM", "AM"}
+
+
+def warn_on_drift(*, formatted: bool = True) -> bool:
     """Warn (never fail) when the committed contract artifacts differ from the
-    freshly-generated ones. Compares the working tree (just regenerated in
-    place) against HEAD via ``git status --porcelain`` — unlike ``git diff``,
-    that also surfaces a path the contract stopped emitting (deletion) or a
-    newly-emitted file (untracked). Returns True when drift was found."""
-    drifted = [
-        path
-        for path in OUTPUT_PATHS
-        if subprocess.run(
-            ["git", "status", "--porcelain", "--", path],
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    ]
+    freshly-generated ones. Returns True when drift was found.
+
+    ``formatted=False`` (generated-Python formatting was skipped — see
+    ``_format_generated``) narrows the comparison to the classes formatting
+    cannot fabricate, rather than skipping it."""
+    drifted: list[str] = []
+    suppressed = 0
+    for path in OUTPUT_PATHS:
+        entries = _porcelain_paths(path)
+        if not formatted:
+            suppressed += sum(1 for s, n in entries if _formatting_only(s, n))
+            entries = [(s, n) for s, n in entries if not _formatting_only(s, n)]
+        if entries:
+            drifted.append(path)
+    if suppressed:
+        print(
+            f"::notice::{suppressed} generated Python file(s) differ from the "
+            "committed tree but generated-Python formatting was skipped on this "
+            "path (no uvx/ruff), so the difference is not reported as drift. "
+            "Everything else — manifest.json, configmaps, root YAMLs — is still "
+            "compared."
+        )
     if drifted:
         print(
             "::warning::Committed contract artifacts are stale vs contract/app.pkl: "
@@ -271,7 +337,9 @@ def main(argv: list[str] | None = None) -> int:
         choices=["true", "false"],
         default="true",
         help="'true' (default) to warn (never fail) when committed app/generated "
-        "drifts from freshly-generated output. Ignored in SDK-level mode.",
+        "drifts from freshly-generated output. Ignored in SDK-level mode. The "
+        "comparison is formatting-insensitive when ruff was unavailable, so "
+        "'false' is rarely needed (FND-1777).",
     )
     args = parser.parse_args(argv)
 
@@ -362,10 +430,15 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    _format_generated(Path("."))
+    formatted = _format_generated(Path("."))
 
+    # Still skipped in SDK-level mode: a toolkit change legitimately changes the
+    # output, so every SDK-dispatched run would warn and the signal would mean
+    # nothing. The class of drift that IS a bug there — the committed tree holds
+    # a transformation the fresh output does not — is caught mode-independently
+    # by run_post_generate's unwired-post-processing warning above (FND-1777).
     if args.check_drift == "true" and not sdk_mode:
-        warn_on_drift()
+        warn_on_drift(formatted=formatted)
 
     return 0
 
