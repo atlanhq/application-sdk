@@ -2360,9 +2360,14 @@ class BaseE2ETest:
                 f"{self.connector_short_name}-{self.connection_name_prefix}-"
                 f"{self.run_id}-seed-{ordinal}-{spec.connector_type}"
             ),
-            app_service_url=self.app_service_url,
             run_id=self.run_id,
-            submit_retry=self._submit_retry(),
+            # No cold-start budget and no app address. Since FND-1766 the seed
+            # submits straight to AE and calls no app pod, so there is nothing
+            # to cold-start-wait on — the suite's own submit still carries
+            # ``_submit_retry()``, which is where waiting on the app under test
+            # belongs. Leaving ``submit_retry`` unset takes
+            # ``submit_published_version``'s publish-replication budget, which
+            # is the only wait this submit actually has.
             poll_interval_seconds=self.ae_poll_interval_seconds,
             poll_timeout_seconds=self.ae_poll_timeout_seconds,
             progress_stall_seconds=self._resolved_progress_stall_seconds(),

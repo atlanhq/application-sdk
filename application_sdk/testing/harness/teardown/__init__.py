@@ -222,60 +222,6 @@ class ConnectionDeleteReport:
         return self.succeeded and not self.errors
 
 
-async def _foreign_published_dag(ae: AEClient, slug: str) -> str:
-    """Describe the DAG AE serves for *slug* when it is not the one we published.
-
-    The read half of the invariant :mod:`._dag` states. Heracles' submit-time
-    manifest fetch replaces the published version with *some* app's manifest, and
-    the harness cannot see that fetch — but it can see the version AE serves
-    afterwards, on the same read
-    :meth:`~application_sdk.testing.e2e.base.BaseE2ETest._assert_deployed_manifest_matches`
-    uses for the mirror-image assertion.
-
-    Compares *node names*, not version numbers, and this is why the harness's
-    node id is the app manifest's own: a republish of the delete app's manifest
-    carries the same node and is therefore **not** foreign — it is the other
-    correct outcome. A version number could not make that distinction; it only
-    says AE published something, which it always does.
-
-    Never raises, and never guesses:
-    :meth:`~application_sdk.testing.harness.automation_engine.AEClient.get_published_version`
-    answers ``None`` for a read that did not get through, an empty DAG says
-    nothing either, and both mean "unanswered" — the delete goes on to poll,
-    exactly as it did before this guard existed. The post-poll check on the
-    run's own node names is what covers those.
-
-    Args:
-        ae: An open AE client on this event loop.
-        slug: The workflow slug the delete published its DAG under.
-
-    Returns:
-        A one-line description of the foreign graph, or ``""`` when the graph is
-        ours or the question went unanswered.
-    """
-    try:
-        published = await ae.get_published_version(slug)
-    # conformance: ignore[E004] teardown boundary — a guard that cannot read AE must degrade to "unanswered", never replace the run's verdict with a cleanup error
-    except Exception:
-        logger.warning(
-            "harness teardown: could not read back the DAG AE published for "
-            "slug %s, so whether the connection-delete node is what runs stays "
-            "unverified until the run's own node names come back",
-            slug,
-            exc_info=True,
-        )
-        return ""
-    if published is None or not published.dag:
-        return ""
-    nodes = sorted(name for name in published.dag if isinstance(name, str))
-    if nodes == [CONNECTION_DELETE_NODE_ID]:
-        return ""
-    return (
-        f"AE serves version {published.version!r} with node(s) "
-        f"{', '.join(nodes) or '(none)'}"
-    )
-
-
 async def delete_connection(
     qualified_name: str,
     *,
@@ -291,7 +237,8 @@ async def delete_connection(
     1. **Create and seed** an AE workflow carrying the one-node DAG.
     2. **Submit** it, on the suite's own cold-start budget.
     3. **Check that the graph AE will run is ours** — see
-       :func:`_foreign_published_dag` and the invariant :mod:`._dag` states. The
+       :meth:`~application_sdk.testing.harness.automation_engine.AEClient.foreign_published_dag`
+       and the invariant :mod:`._dag` states. The
        submit names the delete app so that whichever version wins the republish
        race is a delete; this is the step that does not take that on trust, and
        it runs before the poll because a *third* graph costs minutes and deletes
@@ -406,7 +353,9 @@ async def delete_connection(
             ),
         )
 
-    foreign = await _foreign_published_dag(ae, seeded.slug)
+    foreign = await ae.foreign_published_dag(
+        seeded.slug, expected=(CONNECTION_DELETE_NODE_ID,)
+    )
     if foreign:
         # Before the poll, because the poll is the expensive half: a graph that
         # is neither delete is some app's crawl, which takes minutes to fail (or,

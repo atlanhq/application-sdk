@@ -18,6 +18,25 @@ no artifact the harness has to author or keep in sync.
 ``publish`` needs no new deployment for this: it is a platform service already
 on every tenant, addressed exactly as the connector's own DAG addresses it (see
 :func:`application_sdk.testing.e2e.payload.build_seed_dag`).
+
+**There is no submit payload here, and that absence is the fix for FND-1766.**
+A submit through Heracles' ``/api/service/package-workflows`` carries an
+envelope naming an app, and Heracles' native path re-derives the graph from that
+app's served manifest and publishes it over whatever the caller published — so
+the seed's node was replaced by the connector's own ``extract`` / ``publish``
+whenever AE's submit had already seen the republish. The seed therefore submits
+straight to AE
+(:meth:`~application_sdk.testing.harness.automation_engine.AEClient.submit_published_version`),
+which runs the currently published version and fetches no manifest. Nothing
+names an app, so nothing can name the wrong one.
+
+Picking a *different* identity was the other candidate and it does not work:
+``atlan-publish-app`` is a marketplace app (``atlan.yaml``: ``name: publish``),
+but it has no ``app/generated/``, no programmatic manifest and no
+``@entrypoint``, so its ``/workflows/v1/manifest`` answers 404 — and Heracles
+treats a failed manifest fetch as fatal *before* it writes anything, so a seed
+submit naming publish is an unconditional HTTP 500 rather than a seed that
+survives by absence.
 """
 
 from __future__ import annotations
@@ -26,7 +45,6 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
-from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
 from application_sdk.testing.harness.seed._ndjson import (
     TRANSFORMED_FILE_NAME,
     connection_entity,
@@ -37,7 +55,6 @@ __all__ = [
     "SEED_PUBLISH_NODE_ID",
     "SeedPrefixes",
     "build_seed_publish_dag",
-    "build_seed_submit_payload",
     "seed_object_keys",
 ]
 
@@ -227,81 +244,3 @@ def build_seed_publish_dag(
             },
         }
     }
-
-
-def build_seed_submit_payload(
-    *,
-    spec: ResolvedSeedSpec,
-    run_id: int,
-    ae_workflow_slug: str,
-    app_service_url: str,
-) -> dict[str, Any]:
-    """Build the AE submit body for a seed's publish run.
-
-    Deliberately the *same* builder the connector's own submit uses. The seed's
-    DAG carries no mustache tokens and no credential, so the body reduces to the
-    envelope plus the connection rows — but routing it through a second builder
-    would be a second place for AE's submit shape to drift, on a path that is
-    exercised far less often than the connector's.
-
-    Args:
-        spec: The resolved spec, which is also the seeded connection's identity.
-        run_id: This leg's run identifier, for the AE workflow name and labels.
-        ae_workflow_slug: The slug AE minted on the create.
-        app_service_url: HTTP URL AE can reach the app at.
-
-    Returns:
-        The dict to POST to ``/api/service/package-workflows?submit=true``.
-    """
-    # Imported here rather than at module scope: ``application_sdk.testing.e2e``
-    # imports ``base``, which imports this package, so a top-level import of an
-    # ``e2e`` submodule closes a cycle through a partially-initialised package.
-    from application_sdk.testing.e2e.payload import (  # noqa: PLC0415
-        ConnectionSpec,
-        RunMode,
-        build_ae_payload,
-    )
-    from application_sdk.testing.e2e.substitutions import (  # noqa: PLC0415
-        MustacheSubstitutions,
-    )
-
-    connector = spec.connector_type
-    connection = ConnectionSpec(
-        name=spec.display_name,
-        qualified_name=spec.qualified_name,
-        connector_name=connector,
-        source_logo=f"https://assets.atlan.com/assets/{connector}.png",
-        admin_users=spec.admin_users,
-        admin_groups=spec.admin_groups,
-        admin_roles=spec.admin_roles,
-    )
-    return build_ae_payload(
-        run_id=run_id,
-        mode=RunMode.DIRECT,
-        connector_short_name=connector,
-        argo_package_name=f"@atlan/{connector}",
-        argo_template_name=f"atlan-{connector}",
-        app_service_url=app_service_url,
-        connection=connection,
-        # Built through the aliases rather than the field names because the
-        # aliases *are* the manifest mustache literals this model exists to
-        # express (see its class docstring) — and they are the names its
-        # ``__init__`` actually takes.
-        mustache_subs=MustacheSubstitutions.model_validate(
-            {
-                "{{connection}}": ConnectionRef(
-                    attributes=ConnectionAttributes(
-                        qualified_name=spec.qualified_name, name=spec.display_name
-                    )
-                ),
-                # No ``payload[]`` rides this submit, so nothing would substitute
-                # the default ``{{credentialGuid}}`` token — and an
-                # unsubstituted token is what ``submit_workflow`` warns about. A
-                # seed has no credential to create: it reads an object-store
-                # prefix, not a source.
-                "{{credential-guid}}": "",
-            }
-        ),
-        credential_body=None,
-        ae_workflow_slug=ae_workflow_slug,
-    )
