@@ -209,6 +209,25 @@ was observed end to end on a tenant: AE signals the shard, the shard runs the DA
 **batch** workflow starts with no events in its arguments, and nothing reports an
 error — streaming is on in name only.
 
+### A streaming entrypoint holds streaming triggers and nothing else
+
+An entrypoint renders **one** extract node, and every trigger on it — each schedule,
+each event trigger — starts that same node. Its `workflow_type` is therefore a
+property of the entrypoint, not of the trigger that fired, and it has only two
+possible shapes: the batch type, which reads the Iceberg events table, or the
+streaming type, which reads `args.batch`. They are mutually exclusive.
+
+So a streaming entrypoint may not also carry a schedule or a non-streaming event
+trigger. Both are refused at eval time, because both fail silently otherwise:
+
+| On a streaming entrypoint | What happens without the refusal |
+|---|---|
+| a non-streaming event trigger | starts the streaming workflow with `args.batch` resolving to nothing; applies nothing |
+| a schedule | same, and a scheduled run carries no events at all |
+
+Put the streaming triggers on their own entrypoint — `examples/streaming` is that
+shape, and `examples/scheduled` is the batch-plus-schedules shape.
+
 ```pkl
 // Required whenever any trigger below streams.
 streamingWorkflowTypeOverride = "example-app:cdc-stream"
