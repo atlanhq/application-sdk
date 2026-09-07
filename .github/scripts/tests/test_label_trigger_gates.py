@@ -409,9 +409,9 @@ def test_integration_still_runs_on_every_pr_when_there_is_no_merge_queue() -> No
     integration_extra = _integration_needs(enabled=False)
     for description, github, _expected in _scenarios("e2e"):
         assert evaluate(detect, {"github": github, **detect_extra}) is True, description
-        assert evaluate(integration, {"github": github, **integration_extra}) is True, (
-            description
-        )
+        assert (
+            evaluate(integration, {"github": github, **integration_extra}) is True
+        ), description
 
 
 def test_integration_stays_gated_on_successful_detection_and_a_nonzero_suite() -> None:
@@ -529,6 +529,6 @@ def test_the_e2e_concurrency_groups_still_refuse_to_cancel_in_progress() -> None
     ]
     assert e2e_jobs, "no e2e concurrency group found; the guard has drifted"
     for name in e2e_jobs:
-        assert workflow["jobs"][name]["concurrency"]["cancel-in-progress"] is False, (
-            name
-        )
+        assert (
+            workflow["jobs"][name]["concurrency"]["cancel-in-progress"] is False
+        ), name
