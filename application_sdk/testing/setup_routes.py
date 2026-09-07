@@ -633,6 +633,46 @@ def route_mismatch(entrypoint: Entrypoint, card: Card) -> str | None:
     return None
 
 
+def _names(names: Sequence[str]) -> str:
+    """Quoted names as English, so a message can read as a sentence."""
+    quoted = [repr(name) for name in names]
+    if len(quoted) == 1:
+        return quoted[0]
+    return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
+
+
+def _is_are(names: Sequence[str]) -> str:
+    """Verb agreeing with :func:`_names` over the same sequence."""
+    return "is" if len(names) == 1 else "are"
+
+
+def _respellings(
+    missing: frozenset[str] | set[str], served: frozenset[str] | set[str]
+) -> list[tuple[str, str]]:
+    """Declared/served pairs that differ only in ``-`` versus ``_``.
+
+    A renamed key looks identical to a deleted one in a set difference, and the
+    two have opposite causes: a deletion is a contract that never shipped, a
+    respelling is a form captured before the rename. Separator style is the
+    whole difference in practice — the fleet convention is kebab on the wire
+    while generated Python arguments are snake, so a form frozen on the wrong
+    side of a rename shows up as exactly this shape.
+
+    Returns the pairs in declared-name order so the message is stable.
+    """
+
+    def normalise(name: str) -> str:
+        return name.replace("-", "_")
+
+    by_normalised = {normalise(name): name for name in sorted(served)}
+    pairs = []
+    for name in sorted(missing):
+        twin = by_normalised.get(normalise(name))
+        if twin is not None and twin != name:
+            pairs.append((name, twin))
+    return pairs
+
+
 def form_shortfall(entrypoint: Entrypoint, served: ServedForm) -> str | None:
     """Why this entry point's setup form will not render, or ``None``.
 
@@ -680,12 +720,62 @@ def form_shortfall(entrypoint: Entrypoint, served: ServedForm) -> str | None:
 
     missing = declared - served.properties
     if missing:
+        respelled = _respellings(missing, served.properties)
+        absent = sorted(missing - {declared_name for declared_name, _ in respelled})
+
+        # Two shapes with opposite causes, and a form can carry both at once.
+        # Reporting the whole set as "not missing at all" because *one* name had
+        # a separator twin would deny a genuinely undelivered field, so each
+        # shape is named for exactly the names it covers.
+        frozen_copy = (
+            "The known cause is FND-1683: on a tenant provisioned before the "
+            "platform stopped writing them, /api/service/configmaps/<id> is "
+            "answered from an unmanaged k8s ConfigMap captured once at install "
+            "time instead of being proxied to the app pod, so the served form "
+            "is frozen at that day's contract and no later change reaches it. "
+            "Check whether the app pod logged a GET /workflows/v1/configmap/ "
+            "request at all: if it did not, the pod is innocent and the image "
+            "is a red herring."
+        )
+
+        if respelled:
+            pairs = ", ".join(
+                f"{declared_name!r} is declared while {served_name!r} is served"
+                for declared_name, served_name in respelled
+            )
+            renamed_names = [declared_name for declared_name, _ in respelled]
+            if absent:
+                head = (
+                    f"Entrypoint {label!r}: the tenant's form schema is "
+                    f"missing {sorted(missing)}, which this repo's committed "
+                    f"contract declares. {_names(renamed_names)} "
+                    f"{_is_are(renamed_names)} not missing but respelled — "
+                    f"{pairs} — so the tenant is serving a form older than "
+                    "that rename while its pod may be entirely current. "
+                    f"{_names(absent)}, though, {_is_are(absent)} absent "
+                    "outright: no served name matches under any spelling, so "
+                    "that part is either an older image or a contract change "
+                    "that never reached the deployed app."
+                )
+            else:
+                head = (
+                    f"Entrypoint {label!r}: the tenant's form schema is "
+                    f"missing {sorted(missing)}, which this repo's committed "
+                    "contract declares — except it is not missing at all: "
+                    f"{pairs}. It is spelled the way this contract spelled it "
+                    "BEFORE a rename, so the tenant is serving a form older "
+                    "than that rename while its pod may be entirely current."
+                )
+            return f"{head} {frozen_copy} Served: {sorted(served.properties)}."
+
         return (
             f"Entrypoint {label!r}: the tenant's form schema is "
             f"missing {sorted(missing)}, which this repo's committed contract "
-            "declares. Most likely the tenant runs an older image than this "
-            "branch; it can also mean a contract change never reached the "
-            f"deployed app. Served: {sorted(served.properties)}."
+            "declares. Either the tenant runs an older image than this branch, "
+            "or a contract change never reached the deployed app — see "
+            "FND-1683 for a tenant that serves a frozen copy of the form from "
+            "an install-time ConfigMap and never asks its pod at all. "
+            f"Served: {sorted(served.properties)}."
         )
 
     if not served.steps:
@@ -1277,13 +1367,17 @@ def _await_route(
     configmap endpoint can still be the previous image's, serving the previous
     contract, seconds after the version check passes.
 
-    FND-1680's aws leg is that gap, measured: the version check reported
-    ``verified: tenant runs sdr-test-634b735e`` at 12:50:02, and six seconds
-    later the pod served ``extraction_method`` — the spelling this connector
-    renamed to ``extraction-method`` two days earlier. Azure passed the
-    identical assertions against the identical build, because its pod had
-    already rolled. Nothing distinguishes the two clouds but timing, which is
-    the definition of a race.
+    That race is real and is what the wait exists for. It is **not**, however,
+    the explanation for every cross-cloud split. One aws leg looked exactly
+    like the race — the version check passed, then the endpoint served
+    ``extraction_method`` where the contract had been renamed to
+    ``extraction-method``, while azure passed the identical assertions against
+    the identical build — and it survived the full window on a demonstrably
+    current pod. FND-1683: that tenant's endpoint was answered from an
+    unmanaged install-time ConfigMap and its pod was never asked, so no amount
+    of waiting could have changed the answer. When the served and declared
+    names differ only in spelling, :func:`form_shortfall` says so rather than
+    blaming the rollout.
 
     Same bound and same cadence as :func:`_await_cards`, because it is the same
     kind of wait: something downstream of the install has not caught up yet. A
