@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import builtins
+import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import e2e_tenant_app as app  # noqa: E402
+import stamp_build_identity  # noqa: E402
 from e2e_tenant_api import Response, TenantApiError, TenantClient  # noqa: E402
 
 _TENANT = "https://example-tenant.atlan.test"
@@ -112,8 +114,44 @@ def _creds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(app, "mint_oauth_token", lambda *_a, **_k: "stub.jwt.token")
 
 
+def _pod_identity(build_id: str, app_name: str = "openapi") -> Response:
+    """The envelope the app pod's configmap handler serves (FND-1684)."""
+    payload = {"build_id": build_id, "app_name": app_name}
+    return _ok(
+        {
+            "data": {
+                "kind": "ConfigMap",
+                "apiVersion": "v1",
+                "metadata": {"name": app.BUILD_IDENTITY_CONFIGMAP_ID},
+                "data": {"config": json.dumps(payload), **payload},
+            }
+        }
+    )
+
+
+#: The pod-unreachable answer every test gets unless it says otherwise.
+#:
+#: 404 rather than a match, deliberately: it is what a tenant running an SDK
+#: that predates the build-identity route returns, which is the whole fleet on
+#: the day this lands. Defaulting to it keeps each test below exercising the
+#: layer it was written for, and makes a test that wants the pod layer say so.
+_POD_UNREACHABLE = StubRoute(
+    "GET",
+    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+    Response(status=404, body={"detail": "not found"}),
+)
+
+
 def _wire(monkeypatch: pytest.MonkeyPatch, transport: StubTransport) -> StubTransport:
     monkeypatch.setattr(TenantClient, "request", transport.request)
+    # Appended, not prepended: a test that scripts its own build-identity route
+    # (sticky or one-shot) still wins, because StubTransport consumes `routes`
+    # before consulting `sticky` and scans `sticky` in order.
+    if not any(
+        _POD_UNREACHABLE.path_fragment in route.path_fragment
+        for route in (*transport.routes, *transport.sticky)
+    ):
+        transport.sticky.append(_POD_UNREACHABLE)
     return transport
 
 
@@ -508,7 +546,11 @@ class _PublishTimesOutThen:
 
 
 def test_publish_retries_a_transport_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = _PublishTimesOutThen(inner=_publish_after(), failures=2)
+    # `_wire` on the INNER transport, for its default build-identity route only;
+    # the outer patch below is what TenantClient actually calls.
+    transport = _PublishTimesOutThen(
+        inner=_wire(monkeypatch, _publish_after()), failures=2
+    )
     monkeypatch.setattr(TenantClient, "request", transport.request)
     outcome = app.install(_install_args(publish_retry_seconds=240))
     assert outcome.deployment_id == "d1"
@@ -666,6 +708,306 @@ def test_verify_fails_when_nothing_is_installed(
     )
     with pytest.raises(app.TenantAppError, match="nothing"):
         app.verify(_verify_args(_VERSION))
+
+
+# ── The check must not read its own input (FND-1684) ─────────────────────────
+#
+# `install` skips when LM's install record already names the expected version,
+# and `verify` used to read the SAME record. Since the expected version is stable
+# per connector SHA, once that record existed every later run on that SHA skipped
+# the install AND passed the verify — permanently, whatever the cluster ran. One
+# connector SHA can also resolve to more than one image — the tag carries an
+# optional digest suffix — so the record can go on naming a build the tenant no
+# longer runs.
+#
+# The tests below pin the three things that had to become true: the pod is asked
+# first and decides both ways, a skipped install is not reported as a verified
+# one, and the log names the layer that actually established the version.
+
+
+def test_verify_fails_when_the_pod_reports_a_different_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The install record can agree while the pod disagrees. The pod wins.
+
+    LM's record names the version under test while the pod reports a different
+    build. Under the old check that was a pass.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity("sdr-test-44daysago"),
+                ),
+                # Agrees with `--expected`, which is precisely the trap.
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.verify(_verify_args(_VERSION))
+    message = str(excinfo.value)
+    assert "sdr-test-44daysago" in message and _VERSION in message
+    assert app.BUILD_IDENTITY_CONFIGMAP_ID in message, (
+        "the message has to say which layer answered, or the next reader goes "
+        "back to the marketplace record that agreed"
+    )
+    assert transport.paths("GET")[0].endswith(app.BUILD_IDENTITY_CONFIGMAP_ID), (
+        "the pod is asked FIRST: a record read that happens to agree must not be "
+        "able to short-circuit the one layer it cannot fake"
+    )
+
+
+def test_verify_passes_on_the_pod_layer_without_reading_the_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity(_VERSION),
+                )
+            ],
+        ),
+    )
+    assert app.verify(_verify_args(_VERSION)) == _VERSION
+    assert not [p for p in transport.paths("GET") if p.endswith("/info")], (
+        "a pod that reports the build under test settles it; reading the "
+        "install record as well could only weaken the answer"
+    )
+
+
+def test_verify_says_which_layer_decided(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A pass on the record alone must not print the word the pod earns.
+
+    The step used to print `verified: tenant runs X` after reading an install
+    record. That sentence is what let the defect survive review twice.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[], sticky=[StubRoute("GET", "/info", _ok({"version": _VERSION}))]
+        ),
+    )
+    assert app.verify(_verify_args(_VERSION)) == _VERSION
+    out = capsys.readouterr().out
+    assert app.LAYER_INSTALL_RECORD.upper() in out
+    assert "The pod itself was NOT asked" in out
+
+
+def test_verify_fails_when_the_deployment_never_reconciled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LM writes the install record before the deployment reconciles.
+
+    So a record naming the right version, beside a deployment that FAILED, is
+    not a pass — and the deployment record is a layer `verify` did not consult
+    at all before this.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute(
+                    "GET",
+                    "/info",
+                    _ok({"installed": {"version": _VERSION, "deployment_id": "d9"}}),
+                ),
+                StubRoute(
+                    "GET",
+                    "/deployments/d9",
+                    _ok({"deployment_status": "FAILED"}),
+                ),
+            ],
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.verify(_verify_args(_VERSION))
+    assert "FAILED" in str(excinfo.value) and "d9" in str(excinfo.value)
+
+
+def test_a_skipped_install_reports_the_layer_it_rested_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The converge path is where the circularity started."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[], sticky=[StubRoute("GET", "/info", _ok({"version": _VERSION}))]
+        ),
+    )
+    outcome = app.install(_install_args())
+    assert outcome.skipped is True
+    assert outcome.verified_layer == app.LAYER_INSTALL_RECORD, (
+        "no pod answer and no deployment record means nothing corroborated the "
+        "install record, and the outcome has to say so"
+    )
+    assert outcome.as_outputs()["verified_layer"] == app.LAYER_INSTALL_RECORD
+
+
+def test_a_skipped_install_is_corroborated_by_the_pod(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity(_VERSION),
+                ),
+            ],
+        ),
+    )
+    outcome = app.install(_install_args())
+    assert outcome.skipped is True
+    assert outcome.verified_layer == app.LAYER_POD
+    assert outcome.pod_build_id == _VERSION
+
+
+def test_a_skip_is_refused_when_the_pod_contradicts_the_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity("sdr-test-stale111"),
+                ),
+            ],
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="sdr-test-stale111"):
+        app.install(_install_args())
+
+
+def test_install_fails_when_the_pod_never_took_the_new_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both records can report success while the pod serving traffic does not.
+
+    LM reporting SUCCEEDED without anything moving is a known shape (DISTR-921),
+    so the deployment verdict cannot be the last word either.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(status=404, body={})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/d1", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[
+                StubRoute("GET", "/releases/", Response(status=404, body={})),
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity("sdr-test-previous"),
+                ),
+            ],
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.install(_install_args())
+    assert "sdr-test-previous" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"deployment_id": "d1"}, id="top-level"),
+        pytest.param({"installed": {"deployment_id": "d1"}}, id="installed-nest"),
+        pytest.param({"data": {"deploymentId": "d1"}}, id="camel-in-data"),
+    ],
+)
+def test_deployment_id_is_found_wherever_lm_puts_it(payload: dict[str, object]) -> None:
+    """LM does not commit to a shape, so the walk reads whichever key is there."""
+    assert app.deployment_id_from_info(payload) == "d1"
+
+
+def test_no_deployment_id_is_a_stated_outcome_not_a_crash() -> None:
+    assert app.deployment_id_from_info({"installed": {"version": _VERSION}}) == ""
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        pytest.param(
+            {"data": {"data": {"build_id": "t1", "app_name": "openapi"}}},
+            "t1",
+            id="flattened-keys",
+        ),
+        pytest.param(
+            {"data": {"data": {"config": '{"build_id": "t2"}'}}},
+            "t2",
+            id="config-string-only",
+        ),
+        pytest.param(
+            {"data": {"data": {"config": "not json"}}}, "", id="unparseable-config"
+        ),
+        pytest.param({"data": {"data": {}}}, "", id="unstamped-image"),
+    ],
+)
+def test_pod_identity_is_read_from_either_half_of_the_envelope(
+    body: dict[str, object], expected: str
+) -> None:
+    """`data.config` is a JSON string and the keys are repeated beside it.
+
+    Both are read so neither a client that forwards only `config` nor one that
+    flattens it can make a reachable pod look unreachable — which would silently
+    demote the check to the record layer it exists to stop trusting.
+    """
+    identity = app.parse_pod_identity(body["data"])  # type: ignore[arg-type]
+    assert identity.reachable is True
+    assert identity.build_id == expected
+
+
+def test_an_unreachable_pod_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A transport fault here must not red a leg for a diagnostic it can skip."""
+
+    def _boom(*_a: object, **_k: object) -> Response:
+        raise TenantApiError("connection refused")
+
+    monkeypatch.setattr(TenantClient, "request", _boom)
+    identity = app.read_pod_build_identity(TenantClient(base_url=_TENANT, bearer="t"))
+    assert identity.reachable is False
+    assert "connection refused" in identity.detail
+
+
+def test_build_identity_ids_agree() -> None:
+    """One spelling on both sides of the wire, or the check silently degrades.
+
+    A rename on either side would not fail: the pod would 404 and `verify` would
+    fall back to the marketplace records with a warning. That is the failure mode
+    this whole change removes, so it gets a test rather than a comment.
+    """
+    root = Path(__file__).resolve().parents[3]
+    sdk = (root / "application_sdk" / "app" / "build_identity.py").read_text()
+    assert f'BUILD_IDENTITY_CONFIGMAP_ID = "{app.BUILD_IDENTITY_CONFIGMAP_ID}"' in sdk
+    assert f'BUILD_ID_ENV = "{stamp_build_identity.BUILD_ID_ARG}"' in sdk
 
 
 # ── app_id resolution ────────────────────────────────────────────────────────

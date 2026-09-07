@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 
 from application_sdk.app.entrypoint import build_workflow_type_index
+from application_sdk.common.task_queue import task_queue_from_env
 from application_sdk.contracts.base import validate_is_contract
 from application_sdk.errors import (
     APP_ALREADY_REGISTERED,
@@ -529,7 +530,20 @@ def resolve_pool_queue(pool: str) -> str | None:
        name are normalised to underscores so ``"cold-tier"`` looks up
        ``ATLAN_POOL_COLD_TIER_QUEUE``.
     2. ``{ATLAN_TASK_QUEUE}-{pool}`` derived from the app's base queue.
-    3. ``None`` — neither env var is set; the caller must handle this.
+    3. ``{atlan-<app>-<deployment>}-{pool}`` derived the same way the worker's
+       own base queue is, via :func:`task_queue_from_env`.
+    4. ``None`` — nothing in the environment names a queue; the caller must
+       handle this.
+
+    Step 3 exists because the ``atlan-app`` chart sets neither env var in steps
+    1-2. It sets ``ATLAN_APPLICATION_NAME`` + ``ATLAN_DEPLOYMENT_NAME`` (and, on
+    a pool's own pods, ``ATLAN_APP_TASK_QUEUE``), so without it every
+    chart-deployed ``@task(pool=...)`` resolved to ``None`` and its activities
+    silently ran on the workflow's default queue — the dedicated pool sat idle
+    while the main worker absorbed the load it was created to offload. Deriving
+    through :func:`task_queue_from_env` reproduces the chart's own
+    ``atlan-<app>-<deploymentName>-<pool>`` byte-for-byte, so the routing target
+    and the pool worker's poll target agree with no env plumbing.
 
     Args:
         pool: Validated lowercase kebab-case pool name
@@ -551,5 +565,5 @@ def resolve_pool_queue(pool: str) -> str | None:
     explicit = os.environ.get(env_key)
     if explicit:
         return explicit
-    base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
+    base_queue = os.environ.get("ATLAN_TASK_QUEUE", "") or (task_queue_from_env() or "")
     return f"{base_queue}-{pool}" if base_queue else None

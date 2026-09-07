@@ -153,6 +153,10 @@ hidden const QLIKSENSE: Type = new {
   value = "qlik-sense"
   category = "bi"
 }
+hidden const QLIKSENSE_ENTERPRISE_WINDOWS: Type = new {
+  value = "qlik-sense-enterprise-windows"
+  category = "bi"
+}
 hidden const KAFKA: Type = new {
   value = "kafka"
   category = "eventbus"

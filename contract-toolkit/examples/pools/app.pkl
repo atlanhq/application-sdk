@@ -1,15 +1,21 @@
 /// Multi-pool deployment example — two named worker pools with per-pool
-/// KEDA, resources, cooldownPeriod, and env.
+/// KEDA, resources, VPA, cooldownPeriod, and env.
 ///
 /// Two pools:
 ///   "hot"  — always-on (minReplicaCount=1), lenient cooldown (300 s)
-///             so warm workers survive bursts.
+///             so warm workers survive bursts. FIRST key, so this pool is the
+///             app's main worker: its config synthesises the `deploy:` block.
 ///   "cold" — scale-to-zero (minReplicaCount=0), aggressive cooldown
-///             (30 s) to reclaim resources fast.
+///             (30 s) to reclaim resources fast. A key after the first, so it
+///             renders as a dedicated `deploy.workerPools[]` entry with its own
+///             TemporalWorkerDeployment, ScaledObject, VPA, and task queue.
 ///
-/// Pool keys here must match the strings used in @task(pool="…")
-/// in Python. The runtime resolves them to task queues via
-/// ATLAN_POOL_<POOL>_QUEUE env vars.
+/// Pool keys here must match the strings used in @task(pool="…") in Python.
+/// Nothing carries the queue name between the chart and the runtime: the chart
+/// renders `atlan-<app>-<deploymentName>-<key>` and the SDK's
+/// resolve_pool_queue() derives the same string from ATLAN_APPLICATION_NAME +
+/// ATLAN_DEPLOYMENT_NAME. ATLAN_POOL_<POOL>_QUEUE stays available as an explicit
+/// override for local dev and for queues the chart does not own.
 amends "../../src/App.pkl"
 
 name = "pools-example"
@@ -46,6 +52,7 @@ deploy = new DeployConfig {
       keda {
         enabled = true
         minReplicaCount = 0
+        maxReplicaCount = 4
         cooldownPeriod = 30
         temporal {
           targetQueueSize = 5
@@ -55,6 +62,16 @@ deploy = new DeployConfig {
         requests {
           ["cpu"] = "100m"
           ["memory"] = "256Mi"
+        }
+      }
+      // A pool's VPA is gated on its OWN `enabled` — the chart never falls back
+      // to an app-level flag, so a pool that omits this block is never clamped.
+      vpa = new VpaConfig {
+        enabled = true
+        updateMode = "Auto"
+        maxAllowed {
+          ["cpu"] = "2"
+          ["memory"] = "4Gi"
         }
       }
       env {

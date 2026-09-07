@@ -115,6 +115,46 @@ _SCAFFOLD_PLACEHOLDER_RE = re.compile(
 # K010 — E2E scaffolding module that ``pkl eval`` emits for a single-entrypoint app.
 _E2E_BASE_OUTPUT = "app/generated/_e2e_base.py"
 
+# YAML artifacts (``atlan.yaml`` / ``app.yaml`` / ``app/generated/**/*.yaml``)
+# get comment-aware scanning: a ``{token}`` inside a ``#`` comment is prose,
+# not a scaffold leftover.
+_YAML_EXTENSIONS = (".yaml", ".yml")
+
+
+def _yaml_comment_start(line: str) -> int:
+    """Return the index where a YAML ``#`` comment begins on *line*.
+
+    A ``#`` starts a comment only at the start of the line or when preceded by
+    whitespace, and never inside a single- or double-quoted scalar — so a
+    placeholder inside a quoted value that merely contains ``#`` (e.g.
+    ``"{app_name}#frag"``) is still scanned. Returns ``len(line)`` when the
+    line carries no comment.
+    """
+    quote: str | None = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote == "'":
+            if ch == "'":
+                quote = None
+            i += 1
+            continue
+        if quote == '"':
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
+            return i
+        i += 1
+    return len(line)
+
+
 # A contract that declares an ``entrypoints`` block is a multi-entrypoint bundle;
 # its E2E scaffolding lands in per-entrypoint subfolders, so K010 (which requires
 # the single-entrypoint _e2e_base.py path) does not apply.
@@ -612,8 +652,14 @@ def _scan_placeholders(root: Path, present: set[str]) -> list[Finding]:
             # .DS_Store); skip them rather than crash the whole suite run.
             continue
         lines = text.splitlines()
+        is_yaml = rel.endswith(_YAML_EXTENSIONS)
         for i, line in enumerate(lines, start=1):
-            for m in _SCAFFOLD_PLACEHOLDER_RE.finditer(line):
+            # K009 targets scaffold *values*. A token inside a YAML ``#``
+            # comment is prose — e.g. an explanatory note documenting the
+            # runtime URL template ``GET /workflows/v1/manifest?entrypoint={name}``
+            # — not an unresolved leftover, so it is never flagged.
+            scan_region = line[: _yaml_comment_start(line)] if is_yaml else line
+            for m in _SCAFFOLD_PLACEHOLDER_RE.finditer(scan_region):
                 suppressed, justification = _line_hash_suppressed(lines, i, "K009")
                 findings.append(
                     Finding(

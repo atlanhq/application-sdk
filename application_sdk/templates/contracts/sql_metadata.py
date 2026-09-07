@@ -455,7 +455,14 @@ class PrimeAuthOutput(Output):
     """
 
     duration_ms: float = 0.0
-    """Wall-clock time spent on the probe connection + ``SELECT 1`` + close."""
+    """Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
+
+    Keeps a ``0.0`` default rather than the "not measured" sentinel its
+    ``PreflightCheck`` cousin uses: this field has exactly one producer
+    (``prime_sql_auth``), which stamps it on both the success and the failure
+    path, so the default is never observed on the wire. The sentinel exists for
+    app-authored fields a handler may simply never set.
+    """
 
     success: bool = True
     """Whether the probe completed cleanly. ``False`` means the probe

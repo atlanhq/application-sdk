@@ -201,7 +201,7 @@ class TestPreflightCheck:
         assert check.passed is False
         assert check.message == ""
         assert check.error is None
-        assert check.duration_ms == 0.0
+        assert check.duration_ms == -1.0
 
     def test_passed(self):
         check = PreflightCheck(name="connectivity", passed=True, duration_ms=50.0)

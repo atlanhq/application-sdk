@@ -13,6 +13,14 @@ inlined shell in the regenerate-contract composite action:
   * SDK-level, eval fails                -> fatal (exit 1)
   * SDK-level, no toolkit entry          -> fatal (SystemExit)
 
+and the root-file emit-flag split (FND-1723):
+
+  * opted out + committed                -> notice, never a finding
+  * opted in + committed + not emitted   -> error in SDK-level, warning in
+                                            app-level (the pre-existing tests)
+  * one flag each way                    -> only the opted-in file is reported
+  * probe fails (family without the flag)-> finding stays
+
 `pkl` and `uvx` are stubbed; `git` runs for real against a throwaway repo in
 tmp_path so the drift comparison is exercised end to end.
 """
@@ -104,6 +112,45 @@ def _make_fake_run(
         return real_run(cmd, check=check, text=True, capture_output=True)
 
     return fake_run
+
+
+def _make_fake_capture(flags: dict[str, str] | None = None, *, rc: int = 0):
+    """Stub for `run_capture`, i.e. the `pkl eval -x <flag>` emit-flag probe.
+
+    `flags` maps a flag name to what pkl prints for it; anything unnamed prints
+    `true` (the toolkit default). `rc` non-zero simulates a contract family that
+    has no such property, where pkl exits with "cannot find property". Probe
+    invocations are recorded on `.cmds`."""
+    flags = flags or {}
+    cmds: list[list[str]] = []
+
+    def fake_capture(cmd):
+        cmds.append(cmd)
+        flag = cmd[cmd.index("-x") + 1]
+        return types.SimpleNamespace(
+            returncode=rc, stdout=f"{flags.get(flag, 'true')}\n"
+        )
+
+    fake_capture.cmds = cmds
+    return fake_capture
+
+
+def _probed_flags(capture) -> list[str]:
+    return sorted(cmd[cmd.index("-x") + 1] for cmd in capture.cmds)
+
+
+@pytest.fixture(autouse=True)
+def default_emit_flags(monkeypatch: pytest.MonkeyPatch):
+    """Default every emit flag to the toolkit default (`true`) so no test
+    reaches a real `pkl` binary. Tests about the flags override this."""
+    monkeypatch.setattr(mod, "run_capture", _make_fake_capture())
+
+
+def _sdk_toolkit(tmp_path: Path) -> Path:
+    toolkit = tmp_path / "sdk" / "contract-toolkit" / "src"
+    toolkit.mkdir(parents=True)
+    (toolkit / "PklProject").write_text('amends "pkl:Project"\n')
+    return toolkit
 
 
 def test_missing_app_pkl_self_skips(repo, monkeypatch):
@@ -289,6 +336,125 @@ def test_sdk_level_missing_root_yaml_is_fatal(repo, monkeypatch, tmp_path, capsy
     assert mod.main(["--sdk-toolkit-src", str(toolkit)]) == 1
     out = capsys.readouterr().out
     assert "::error::pkl eval with the SDK PR's contract-toolkit did not" in out
+
+
+def test_sdk_level_opted_out_root_yamls_are_not_findings(
+    repo, monkeypatch, tmp_path, capsys
+):
+    """FND-1723: an app that sets `emitAtlanYaml`/`emitAppYaml` to false is
+    using documented toolkit surface, so a committed copy of either file is
+    hand-maintained — not an artifact the toolkit under test lost. Before the
+    fix this was a hard error, and since SDK-level mode is switched on by the
+    same input that pins the SDK, such an app could not be dispatched at all."""
+    _commit_root_yamls(repo)
+    toolkit = _sdk_toolkit(tmp_path)
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+    capture = _make_fake_capture({"emitAtlanYaml": "false", "emitAppYaml": "false"})
+    monkeypatch.setattr(mod, "run_capture", capture)
+
+    assert mod.main(["--sdk-toolkit-src", str(toolkit)]) == 0
+
+    out = capsys.readouterr().out
+    assert "::error::" not in out
+    assert "atlan.yaml not emitted because this contract sets emitAtlanYaml" in out
+    assert "app.yaml not emitted because this contract sets emitAppYaml" in out
+    assert _probed_flags(capture) == ["emitAppYaml", "emitAtlanYaml"]
+
+
+def test_emit_flag_probe_uses_the_contract_project_dir(
+    repo, monkeypatch, tmp_path, capsys
+):
+    """The probe must read the flag off the same project — hence, in SDK-level
+    mode, the same *overridden* toolkit — that produced the output being
+    judged. A probe against anything else could answer for a different toolkit
+    version than the one under test."""
+    _commit_root_yamls(repo)
+    toolkit = _sdk_toolkit(tmp_path)
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+    capture = _make_fake_capture({"emitAtlanYaml": "false", "emitAppYaml": "false"})
+    monkeypatch.setattr(mod, "run_capture", capture)
+
+    assert mod.main(["--sdk-toolkit-src", str(toolkit)]) == 0
+
+    for cmd in capture.cmds:
+        assert cmd[:2] == ["pkl", "eval"]
+        assert cmd[cmd.index("--project-dir") + 1] == "contract"
+        assert cmd[-1] == str(Path("contract") / "app.pkl")
+
+
+def test_sdk_level_opted_in_root_yaml_still_fatal_beside_an_opted_out_one(
+    repo, monkeypatch, tmp_path, capsys
+):
+    """One flag each way: atlan.yaml is opted out, app.yaml is opted in and not
+    emitted. The regression the check exists for is still caught, and only the
+    opted-in file is named in the error."""
+    _commit_root_yamls(repo)
+    toolkit = _sdk_toolkit(tmp_path)
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+    monkeypatch.setattr(
+        mod, "run_capture", _make_fake_capture({"emitAtlanYaml": "false"})
+    )
+
+    assert mod.main(["--sdk-toolkit-src", str(toolkit)]) == 1
+
+    out = capsys.readouterr().out
+    error = next(ln for ln in out.splitlines() if ln.startswith("::error::"))
+    assert "app.yaml" in error
+    assert "atlan.yaml" not in error
+
+
+def test_app_level_opted_out_root_yaml_drops_the_warning(repo, monkeypatch, capsys):
+    """App-level mode was only ever informational, but the message was still
+    wrong — it claimed the toolkit stopped producing a file the app never asked
+    it to produce."""
+    _commit_root_yamls(repo)
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+    monkeypatch.setattr(
+        mod,
+        "run_capture",
+        _make_fake_capture({"emitAtlanYaml": "false", "emitAppYaml": "false"}),
+    )
+
+    assert mod.main([]) == 0
+
+    out = capsys.readouterr().out
+    assert "::warning::pkl eval did not re-emit" not in out
+    assert "hand-maintained" in out
+
+
+def test_emit_flag_probe_failure_keeps_the_finding(repo, monkeypatch, tmp_path, capsys):
+    """A contract family without the property — `NativeApp.pkl` has neither
+    flag, `NativeAppBundle.pkl` only `emitAtlanYaml` — makes `pkl eval -x` exit
+    non-zero. That must read as "not opted out" so the probe can only ever
+    withdraw a finding an app explicitly asked for, never manufacture a green."""
+    _commit_root_yamls(repo)
+    toolkit = _sdk_toolkit(tmp_path)
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+    monkeypatch.setattr(
+        mod,
+        "run_capture",
+        _make_fake_capture({"emitAtlanYaml": "false", "emitAppYaml": "false"}, rc=1),
+    )
+
+    assert mod.main(["--sdk-toolkit-src", str(toolkit)]) == 1
+    assert "::error::pkl eval with the SDK PR's contract-toolkit did not" in (
+        capsys.readouterr().out
+    )
+
+
+def test_emit_flags_not_probed_when_every_root_yaml_is_accounted_for(
+    repo, monkeypatch, tmp_path
+):
+    """The probe costs two extra `pkl eval` runs, so it only runs when there is
+    something to explain — the fixture commits no root YAMLs, so nothing is."""
+    toolkit = _sdk_toolkit(tmp_path)
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+    capture = _make_fake_capture()
+    monkeypatch.setattr(mod, "run_capture", capture)
+
+    assert mod.main(["--sdk-toolkit-src", str(toolkit)]) == 0
+
+    assert capture.cmds == []
 
 
 def test_drift_warns_on_newly_emitted_untracked_file(repo, monkeypatch, capsys):

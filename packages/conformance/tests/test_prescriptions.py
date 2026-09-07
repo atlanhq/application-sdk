@@ -559,6 +559,102 @@ def test_p003_fires_on_empty_code(tmp_path: Path) -> None:
     assert [f.rule_id for f in findings] == ["P003"]
 
 
+def test_p003_silent_when_class_overrides_to_failure_details(tmp_path: Path) -> None:
+    """A class that builds its own wire envelope does not emit ``code``.
+
+    ``to_failure_details()`` is what produces the ``FailureDetails.code`` a
+    dashboard reads. When a class replaces it, prefixing ``code`` changes
+    nothing observable, so P003's premise ("collapses to the bare leaf") is
+    false and the finding is noise.
+    """
+    src = (
+        "class ConnectorAuthError(AuthError):\n"
+        "    def to_failure_details(self):\n"
+        "        details = super().to_failure_details()\n"
+        '        return details.model_copy(update={"code": self.error_code.code})\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == []
+
+
+def test_p003_silent_when_a_mixin_ancestor_overrides_emission(tmp_path: Path) -> None:
+    """The override is usually on a shared mixin, not on each exception class."""
+    files = {
+        "mixin.py": (
+            "class _ConnectorErrorMixin:\n"
+            "    def to_failure_details(self):\n"
+            "        details = super().to_failure_details()\n"
+            '        return details.model_copy(update={"code": self.error_code.code})\n'
+        ),
+        "errors.py": (
+            "from mixin import _ConnectorErrorMixin\n"
+            "class ConnectorAuthError(_ConnectorErrorMixin, AuthError):\n"
+            "    pass\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings] == []
+
+
+def test_p003_still_fires_when_apperror_is_in_the_scanned_tree(tmp_path: Path) -> None:
+    """``AppError.to_failure_details`` is the default envelope, not an exemption.
+
+    When this repo is scanned, ``application_sdk/errors/base.py`` is in the tree
+    and every leaf inherits that method. Crediting it as an override would
+    hollow P003 on dogfood. Mixins (the previous test) still silence; this
+    chain must still fire.
+    """
+    files = {
+        "base.py": (
+            "class AppError(Exception):\n"
+            "    def to_failure_details(self):\n"
+            "        return None\n"
+        ),
+        "leaves.py": (
+            "from base import AppError\n" "class AuthError(AppError):\n" "    pass\n"
+        ),
+        "errors.py": (
+            "from leaves import AuthError\n"
+            "class ConnectorAuthError(AuthError):\n"
+            "    pass\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
+def test_p003_still_fires_when_only_qualified_code_is_overridden(
+    tmp_path: Path,
+) -> None:
+    """``qualified_code`` is the log surface, not the wire.
+
+    A class that overrides only that still ships ``code`` — the bare leaf — in
+    ``FailureDetails``, which is precisely the collapse P003 exists to catch.
+    Exempting on it would silence a true positive.
+    """
+    src = (
+        "class ConnectorAuthError(AuthError):\n"
+        "    @property\n"
+        "    def qualified_code(self):\n"
+        '        return f"{self.category.name}.{self.error_code.code}"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
+def test_p003_still_fires_when_the_override_is_an_unrelated_method(
+    tmp_path: Path,
+) -> None:
+    """Only ``to_failure_details`` buys the exemption — not any override."""
+    src = (
+        "class ConnectorAuthError(AuthError):\n"
+        "    def __str__(self):\n"
+        '        return "boom"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
 def test_p003_fires_on_lowercase_prefix(tmp_path: Path) -> None:
     """Prefix match is case-sensitive (startswith); lowercase prefix must fire."""
     src = (
@@ -2530,3 +2626,233 @@ def test_p028_no_finding_on_dynamic_prefix_embedded_qn() -> None:
     # flagging it (which would reintroduce a false positive on non-rooted keys).
     src = 'k = f"{run_id}/{connection_qn}/current-state"\n'
     assert "P028" not in _ids(src)
+
+
+# ── P013/P014 same-bare-name resolution ───────────────────────────────────────
+
+
+def test_p014_silent_when_a_same_named_class_lives_in_another_file(
+    tmp_path: Path,
+) -> None:
+    """The annotation resolves to the class defined in the SAME module.
+
+    Two files define ``LineageInput``: a plain ``BaseModel`` in models.py and
+    the real boundary contract next to the ``@task`` that uses it. Python binds
+    the module-local one; a bare-name registry that keeps whichever it saw first
+    can bind the other and report a violation on correct code.
+    """
+    files = {
+        "models.py": (
+            "from pydantic import BaseModel\n"
+            "class LineageInput(BaseModel):\n"
+            "    path: str = ''\n"
+        ),
+        "workflow.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Input, Output\n"
+            "class LineageInput(Input):\n"
+            "    path: str = ''\n"
+            "class LineageOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def process(self, input: LineageInput) -> LineageOutput:\n"
+            "        return LineageOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
+def test_p014_still_fires_when_the_local_class_is_the_untyped_one(
+    tmp_path: Path,
+) -> None:
+    """Shadowing must not become a blanket excuse: if the module-local class is
+    the plain BaseModel, P014 still fires even though a valid same-named
+    contract exists elsewhere."""
+    files = {
+        "contracts.py": (
+            "from application_sdk.contracts import Input\n"
+            "class LineageInput(Input):\n"
+            "    path: str = ''\n"
+        ),
+        "workflow.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from pydantic import BaseModel\n"
+            "class LineageInput(BaseModel):\n"
+            "    path: str = ''\n"
+            "class LineageOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def process(self, input: LineageInput) -> LineageOutput:\n"
+            "        return LineageOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id == "P014"] == ["P014"]
+
+
+def test_p013_silent_when_a_class_shadows_its_own_generated_base(
+    tmp_path: Path,
+) -> None:
+    """The toolkit shape: the app subclasses the generated class of the SAME name.
+
+    ``from app.generated.input import AppInputContract as _Generated`` followed by
+    ``class AppInputContract(_Generated)`` de-aliases the base back to the class's
+    own name. That is never literal self-inheritance — it is an import of a
+    same-named class the bare-name registry cannot hold twice — so the chain is
+    unresolvable, not a proven non-Input.
+
+    Scan order is load-bearing: ``by_name`` is first-wins, so ``contracts.py``
+    must be registered before ``generated.py``. Otherwise the generated
+    ``AppInputContract(Input)`` occupies the name, the annotation resolves
+    ``True`` against it, and neither file-local shadowing nor ``same_name_base``
+    runs — the old resolver is silent on that fixture too.
+    """
+    files = {
+        "contracts.py": (
+            "from generated import AppInputContract as _GeneratedAppInputContract\n"
+            "class AppInputContract(_GeneratedAppInputContract):\n"
+            "    include_filter: str = ''\n"
+        ),
+        "generated.py": (
+            "from application_sdk.contracts import Input\n"
+            "class AppInputContract(Input):\n"
+            "    connection_id: str = ''\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import AppInputContract\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def extract(self, input: AppInputContract) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
+def test_p013_still_fires_on_a_resolvable_unrelated_base(tmp_path: Path) -> None:
+    """The self-name escape hatch must not leak: an ordinary resolvable class
+    that does not reach Input is still a violation."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "from pydantic import BaseModel\n"
+            "class NotAContract(BaseModel):\n"
+            "    x: int = 0\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: NotAContract) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id == "P013"] == ["P013"]
+
+
+# ── P001: the inverse — an Any field with no opt-out cannot be imported ───────
+
+
+def test_p001_fires_when_an_any_field_has_no_optout(tmp_path: Path) -> None:
+    """The exact shape a well-meaning remediation produces.
+
+    Drop the opt-out, wrap the Any in MaxItems: the old rule went silent, B005
+    stayed silent because the canonical type is unchanged, and the app stopped
+    importing. Nine apps were broken this way.
+    """
+    src = (
+        "from typing import Annotated, Any\n"
+        "class MyInput(Input):\n"
+        "    credentials: Annotated[dict[str, Any], MaxItems(50)] = {}\n"
+    )
+    findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
+    assert len(findings) == 1
+    assert "PayloadSafetyError" in findings[0].message
+    assert "MaxItems does not help" in findings[0].message
+
+
+def test_p001_fires_on_a_bare_any_field_with_no_optout(tmp_path: Path) -> None:
+    src = "from typing import Any\nclass MyOutput(Output):\n    payload: Any = None\n"
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == [
+        "P001"
+    ]
+
+
+def test_p001_silent_on_a_properly_bounded_contract(tmp_path: Path) -> None:
+    """No Any anywhere, no opt-out — the compliant shape must stay quiet."""
+    src = (
+        "from typing import Annotated\n"
+        "class MyInput(Input):\n"
+        "    include_filter: Annotated[dict[str, list[str]], MaxItems(100)] = {}\n"
+        "    name: str = ''\n"
+    )
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == []
+
+
+def test_p001_reports_the_optout_once_not_twice(tmp_path: Path) -> None:
+    """A class WITH the opt-out and an Any field is the normal, sanctioned
+    escape hatch — it gets the opt-out finding only, never both."""
+    src = (
+        "from typing import Any\n"
+        "class MyInput(Input, allow_unbounded_fields=True):\n"
+        "    payload: dict[str, Any] = {}\n"
+    )
+    findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
+    assert len(findings) == 1
+    assert "opts out of payload-safety" in findings[0].message
+
+
+def test_p001_ignores_an_any_field_on_a_non_contract_class(tmp_path: Path) -> None:
+    """Payload safety only governs Input/Output subclasses."""
+    src = "from typing import Any\nclass Helper:\n    cache: dict[str, Any] = {}\n"
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == []
+
+
+def test_p001_ignores_private_any_fields(tmp_path: Path) -> None:
+    """Underscore-prefixed class attrs are not contract fields."""
+    src = (
+        "from typing import Any, ClassVar\n"
+        "class MyInput(Input):\n"
+        "    _config_hash_exclude: ClassVar[Any] = None\n"
+        "    name: str = ''\n"
+    )
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == []
+
+
+def test_p001_ignores_public_classvar_any(tmp_path: Path) -> None:
+    """Runtime skips ClassVar regardless of the field name — not a payload field."""
+    src = (
+        "from typing import Any, ClassVar\n"
+        "class MyInput(Input):\n"
+        "    schema_marker: ClassVar[Any] = None\n"
+        "    name: str = ''\n"
+    )
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == []
+
+
+def test_p001_fires_on_falsy_optout_with_any_field(tmp_path: Path) -> None:
+    """A falsy keyword is an opt-back-in: runtime still validates and raises."""
+    src = (
+        "from typing import Any\n"
+        "class MyInput(Input, allow_unbounded_fields=False):\n"
+        "    payload: dict[str, Any] = {}\n"
+    )
+    findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
+    assert len(findings) == 1
+    assert "PayloadSafetyError" in findings[0].message
+
+
+def test_p001_fires_on_none_optout_with_any_field(tmp_path: Path) -> None:
+    src = (
+        "from typing import Any\n"
+        "class MyInput(Input, allow_unbounded_fields=None):\n"
+        "    payload: Any = None\n"
+    )
+    findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
+    assert len(findings) == 1
+    assert "does NOT set" in findings[0].message

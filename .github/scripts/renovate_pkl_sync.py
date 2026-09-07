@@ -126,6 +126,99 @@ def resolve(contract_dir: str) -> None:
     run(["pkl", "project", "resolve", f"{contract_dir}/"], check=True)
 
 
+def eval_roots(contract_dir: str) -> list[Path]:
+    """The contract's pkl EVAL ROOTS, newest-convention first.
+
+    A root is a ``.pkl`` that ``amends`` a toolkit template — that is what
+    makes it evaluable on its own. Files the roots merely ``import``
+    (``credentials.pkl`` is the common one) are modules, not roots, and
+    evaluating them is meaningless.
+
+    ``app.pkl`` is returned alone when present: it is the single-root
+    convention and its outputs land at the generated dir itself.
+    """
+    d = Path(contract_dir)
+    if not d.is_dir():
+        return []
+    if (d / "app.pkl").is_file():
+        return [d / "app.pkl"]
+    roots: list[Path] = []
+    for f in sorted(d.glob("*.pkl")):
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if any(ln.startswith("amends ") for ln in text.splitlines()):
+            roots.append(f)
+    return roots
+
+
+def _eval_root(root: Path, contract_dir: str, out: Path) -> bool:
+    """One `pkl eval -m` with the shared retry. True iff it produced output."""
+    cmd = ["pkl", "eval", "--project-dir", contract_dir, "-m", str(out), str(root)]
+    result = run(cmd)
+    attempt = 1
+    while result.returncode != 0 and attempt < EVAL_MAX_ATTEMPTS:
+        print(
+            f"::warning::pkl eval failed for {root.name} "
+            f"(attempt {attempt}/{EVAL_MAX_ATTEMPTS}); retrying in "
+            f"{EVAL_RETRY_SLEEP_S:g}s — a cold runner may still be fetching the "
+            "remote @app-contract-toolkit package."
+        )
+        time.sleep(EVAL_RETRY_SLEEP_S)
+        attempt += 1
+        result = run(cmd)
+    return result.returncode == 0
+
+
+def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
+    """Regenerate an app whose contract has ONE ROOT PER ENTRYPOINT.
+
+    Some apps (synapse: ``crawler.pkl`` + ``miner.pkl``) have no single
+    ``app.pkl``; each root generates its own tree under
+    ``<generated>/<root stem>/``. They CANNOT share one ``pkl eval -m`` base:
+    every root emits the same unprefixed key names (``_input.py``,
+    ``manifest.json``, ``__init__.py``, the connectors JSON), so a shared base
+    silently lets the last root clobber the others — measured on synapse,
+    4 of 5 filenames collide. Each root therefore gets its own eval base and
+    its own swap target.
+
+    Root files (``atlan.yaml``/``app.yaml``) are deliberately NOT written from
+    here: no per-entrypoint root emits them, so anything at the repo root is
+    hand-authored and must survive (a prior incident clobbered exactly that).
+
+    Returns True iff at least one root regenerated. A root that fails eval or
+    whose swap refuses the layout is warned about and skipped — a partial
+    regeneration is still better than none, and the caller diffs the result.
+    """
+    placed = False
+    for root in roots:
+        tmp = Path(tempfile.mkdtemp())
+        base_work: Path | None = None
+        try:
+            if not _eval_root(root, contract_dir, tmp):
+                print(
+                    f"::warning::pkl eval failed after {EVAL_MAX_ATTEMPTS} attempts "
+                    f"for {root.name} — its artifacts are left unchanged."
+                )
+                continue
+            target = f"{GENERATED_DIR}/{root.stem}"
+            base_out, base_work = _baseline_output_for_root(contract_dir, root.name)
+            if swap_outputs(tmp, generated_dir=target, baseline_dir=base_out):
+                placed = True
+                print(f"Regenerated {target} from {root.name}.")
+            else:
+                print(f"::warning::swap refused the output layout for {root.name}.")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+            if base_work is not None:
+                shutil.rmtree(base_work, ignore_errors=True)
+    if placed:
+        run_post_generate(contract_dir)
+        _format_generated()
+    return placed
+
+
 def regenerate(contract_dir: str) -> bool:
     """Regenerate contract artifacts; swap gated on eval+format success.
 
@@ -146,6 +239,13 @@ def regenerate(contract_dir: str) -> bool:
     """
     app_pkl = Path(contract_dir) / "app.pkl"
     if not app_pkl.exists():
+        roots = eval_roots(contract_dir)
+        if roots:
+            print(
+                f"::notice::No {app_pkl}; regenerating {len(roots)} per-entrypoint "
+                f"root(s): {', '.join(r.name for r in roots)}."
+            )
+            return regenerate_multi_root(contract_dir, roots)
         print(
             f"::notice::No {app_pkl} — skipping artifact regeneration (re-resolve only)."
         )
@@ -198,6 +298,56 @@ def regenerate(contract_dir: str) -> bool:
         shutil.rmtree(tmp, ignore_errors=True)
         if baseline_work is not None:
             shutil.rmtree(baseline_work, ignore_errors=True)
+
+
+def _baseline_output_for_root(
+    contract_dir: str, root_name: str
+) -> tuple[Path | None, Path | None]:
+    """``_baseline_output`` for ONE root of a multi-root contract.
+
+    Same contract and the same failure semantics: ``(eval_output, workdir)``,
+    output None whenever there is no baseline or producing one failed, never
+    raises. Without this the multi-root swap ran with ``baseline_dir=None``
+    and overwrote every app-maintained generated file on a toolkit bump —
+    the single-root path has protected those since it was written.
+    """
+    ref = baseline_contract_ref(contract_dir)
+    if ref is None:
+        return (None, None)  # no pin change in flight — nothing to protect
+    work = Path(tempfile.mkdtemp())
+    if not export_contract_at(ref, contract_dir, work):
+        print(
+            f"::warning::Could not export {contract_dir}/ at {ref[:12]} — "
+            f"app-maintained files under {GENERATED_DIR}/{Path(root_name).stem} "
+            "cannot be detected, so regeneration will overwrite them."
+        )
+        return (None, work)
+    base_root = work / contract_dir / root_name
+    if not base_root.exists():
+        # The root is new in this revision: nothing committed came from it, so
+        # there is nothing to preserve. Not a failure.
+        return (None, work)
+    out = work / "out"
+    out.mkdir()
+    result = run(
+        [
+            "pkl",
+            "eval",
+            "--project-dir",
+            str(work / contract_dir),
+            "-m",
+            str(out),
+            str(base_root),
+        ]
+    )
+    if result.returncode != 0:
+        print(
+            f"::warning::Baseline pkl eval (pre-bump toolkit pin) failed for "
+            f"{root_name} — app-maintained generated files cannot be detected, "
+            "so regeneration will overwrite them."
+        )
+        return (None, work)
+    return (out, work)
 
 
 def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:

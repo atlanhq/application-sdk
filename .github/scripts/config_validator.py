@@ -26,6 +26,17 @@ Rules enforced:
      it in CI. resources.limits.cpu (schema allows integer|string) and the
      serverResources/workerResources blocks (partly unconstrained) are
      deliberately excluded to avoid false positives.
+ 11. len(workerPools)       <= 10. Each pool renders its own TWD plus an
+     on-demand mirror variant, so per-app tiers cost Temporal twice their
+     count in worker deployments and don't scale across the fleet.
+ 12. Per pool: rules 2-8 again, against the pool's own `resources` and `vpa`
+     blocks, resolved through the chart's PER-POOL fallback chains — which
+     differ from the app-level ones (see _check_worker_pools).
+ 13. Per pool: rule 9 again, against the pool's own `keda` block.
+ 14. Every pool has a `name`; `name` and `taskQueue` are unique across pools.
+ 15. Declared workerPools require splitDeploymentEnabled=true AND
+     temporalWorkerDeployment.enabled=true — the chart drops the whole block
+     otherwise, so activities routed to a pool queue sit unpolled.
 
 Rules 4-7 hit `resources` always; `serverResources`/`workerResources` only when
 `splitDeploymentEnabled=true` (chart ignores them otherwise).
@@ -53,6 +64,20 @@ MAX_VPA_MEMORY_BYTES: int = 27 * 1024**3
 # VPA actually enforces in cluster.
 DEFAULT_VPA_MAX_CPU_MILLI: int = 2_000
 DEFAULT_VPA_MAX_MEMORY_BYTES: int = 18 * 1024**3
+
+# Cap on dedicated worker pools per app. Every pool TWD also declares an
+# on-demand (-od) mirror variant, so N pools cost Temporal 2N worker-deployment
+# children on top of the main worker. Fleet-wide (100+ apps) an unbounded
+# per-app tier count is what makes TWD reconciliation unmanageable. Change
+# requires PR + platform-team review.
+MAX_WORKER_POOLS: int = 10
+
+# Chart-shipped per-pool vpa.maxAllowed fallback, used when neither the pool nor
+# the app declares one. Deliberately separate from DEFAULT_VPA_MAX_* above: the
+# per-pool chain is pool.vpa.maxAllowed -> vpa.maxAllowed -> this, and Helm's
+# `default` swaps the WHOLE dict at each step rather than merging keys.
+DEFAULT_POOL_VPA_MAX_CPU_MILLI: int = 2_000
+DEFAULT_POOL_VPA_MAX_MEMORY_BYTES: int = 6 * 1024**3
 
 # Binary (Ki/Mi/Gi/...) use 1024; decimal (k/K/M/G/...) use 1000. Not interchangeable.
 _MEM_SUFFIXES = {
@@ -277,9 +302,13 @@ def _check_twc_sdk_floor(
 
 def _parse_vpa(
     cfg: dict,
+    label: str = "vpa",
 ) -> tuple[dict[tuple[str, str], int | None], list[Violation]]:
     """Parse vpa.{minAllowed,maxAllowed} once. Shared by _check_vpa and
-    _resolve_effective_vpa_max to avoid duplicate invalid_quantity violations."""
+    _resolve_effective_vpa_max to avoid duplicate invalid_quantity violations.
+
+    *label* prefixes the reported field path; per-pool callers pass
+    `workerPools[i].vpa`."""
     vpa = cfg.get("vpa") or {}
     mn = vpa.get("minAllowed") or {}
     mx = vpa.get("maxAllowed") or {}
@@ -292,12 +321,16 @@ def _parse_vpa(
         ):
             if resource in src:
                 parsed[(resource, kind)] = parser(
-                    src[resource], f"vpa.{kind}.{resource}", errs
+                    src[resource], f"{label}.{kind}.{resource}", errs
                 )
     return parsed, errs
 
 
-def _check_vpa(cfg: dict, parsed: dict[tuple[str, str], int | None]) -> list[Violation]:
+def _check_vpa(
+    cfg: dict,
+    parsed: dict[tuple[str, str], int | None],
+    label: str = "vpa",
+) -> list[Violation]:
     vpa = cfg.get("vpa") or {}
     mn = vpa.get("minAllowed") or {}
     mx = vpa.get("maxAllowed") or {}
@@ -307,11 +340,11 @@ def _check_vpa(cfg: dict, parsed: dict[tuple[str, str], int | None]) -> list[Vio
     if cpu_max is not None and cpu_max > MAX_VPA_CPU_MILLI:
         errs.append(
             Violation(
-                field="vpa.maxAllowed.cpu",
+                field=f"{label}.maxAllowed.cpu",
                 actual=mx.get("cpu"),
                 expected=f"<= 7 cores ({MAX_VPA_CPU_MILLI}m)",
                 rule="vpa_max_cpu_ceiling",
-                fix="Lower vpa.maxAllowed.cpu to 7 cores or less.",
+                fix=f"Lower {label}.maxAllowed.cpu to 7 cores or less.",
             )
         )
 
@@ -319,11 +352,11 @@ def _check_vpa(cfg: dict, parsed: dict[tuple[str, str], int | None]) -> list[Vio
     if mem_max is not None and mem_max > MAX_VPA_MEMORY_BYTES:
         errs.append(
             Violation(
-                field="vpa.maxAllowed.memory",
+                field=f"{label}.maxAllowed.memory",
                 actual=mx.get("memory"),
                 expected="<= 27Gi",
                 rule="vpa_max_memory_ceiling",
-                fix="Lower vpa.maxAllowed.memory to 27Gi or less.",
+                fix=f"Lower {label}.maxAllowed.memory to 27Gi or less.",
             )
         )
 
@@ -335,14 +368,35 @@ def _check_vpa(cfg: dict, parsed: dict[tuple[str, str], int | None]) -> list[Vio
         if a > b:
             errs.append(
                 Violation(
-                    field=f"vpa.minAllowed.{resource}",
+                    field=f"{label}.minAllowed.{resource}",
                     actual=mn[resource],
-                    expected=f"<= vpa.maxAllowed.{resource} ({mx[resource]})",
+                    expected=f"<= {label}.maxAllowed.{resource} ({mx[resource]})",
                     rule="vpa_min_le_max",
-                    fix=f"Lower vpa.minAllowed.{resource} or raise vpa.maxAllowed.{resource}.",
+                    fix=(
+                        f"Lower {label}.minAllowed.{resource} or raise "
+                        f"{label}.maxAllowed.{resource}."
+                    ),
                 )
             )
     return errs
+
+
+def _vpa_update_mode_is_off(update_mode: Any) -> bool:
+    """True when this updateMode leaves initial requests unclamped.
+
+    VPA clamps requests only in `Initial`, `Recreate`, or `Auto`. In `Off` it
+    emits recommendations without applying them, so requests above maxAllowed
+    deploy as-is.
+
+    Matches the enum case-insensitively. K8s VPA accepts only the canonical
+    casings, but app owners typing `off` should not get a misleading clamp
+    violation — the chart's schema rejects bad casings later anyway. Also
+    accepts bool False: PyYAML's YAML 1.1 loader coerces unquoted `off` / `no`
+    to False (Helm's YAML 1.2 loader keeps the string), a common gotcha.
+    """
+    return update_mode is False or (
+        isinstance(update_mode, str) and update_mode.strip().lower() == "off"
+    )
 
 
 def _resolve_effective_vpa_max(
@@ -363,16 +417,7 @@ def _resolve_effective_vpa_max(
     if vpa_enabled is not True:
         return None, None
     vpa = cfg.get("vpa") or {}
-    # Match VPA enum case-insensitively. K8s VPA accepts only the canonical
-    # casings (Off/Initial/Recreate/Auto), but app owners typing `off` should
-    # not get a misleading clamp violation — the chart's schema rejects bad
-    # casings later anyway. Also accept bool False: PyYAML's YAML 1.1 loader
-    # coerces unquoted `off` / `no` to False — common gotcha.
-    update_mode = vpa.get("updateMode")
-    is_off = update_mode is False or (
-        isinstance(update_mode, str) and update_mode.strip().lower() == "off"
-    )
-    if is_off:
+    if _vpa_update_mode_is_off(vpa.get("updateMode")):
         return None, None
     max_allowed = vpa.get("maxAllowed") or {}
     cpu_milli: int | None = (
@@ -393,9 +438,17 @@ def _check_resource_block(
     key: str,
     vpa_max_cpu_milli: int | None = None,
     vpa_max_memory_bytes: int | None = None,
+    label: str | None = None,
+    vpa_label: str = "vpa",
 ) -> list[Violation]:
     """Validate resources / serverResources / workerResources.
-    None vpa_max_* skips the requests<=vpa.maxAllowed rule (vpa disabled)."""
+    None vpa_max_* skips the requests<=vpa.maxAllowed rule (vpa disabled).
+
+    *label* overrides the reported field path when *cfg* is not the config root;
+    per-pool callers pass the pool dict with `workerPools[i].resources`.
+    *vpa_label* names the VPA block that clamps this one — a pool is clamped by
+    its own, so the fix text points at the knob that actually moves."""
+    label = label or key
     block = cfg.get(key) or {}
     if not block:
         return []
@@ -413,7 +466,7 @@ def _check_resource_block(
         ):
             if resource in src:
                 parsed[(resource, kind)] = parser(
-                    src[resource], f"{key}.{kind}.{resource}", errs
+                    src[resource], f"{label}.{kind}.{resource}", errs
                 )
 
     # Even without VPA, raw request above infra guarantee fails to schedule.
@@ -421,22 +474,22 @@ def _check_resource_block(
     if cpu_req is not None and cpu_req > MAX_VPA_CPU_MILLI:
         errs.append(
             Violation(
-                field=f"{key}.requests.cpu",
+                field=f"{label}.requests.cpu",
                 actual=requests.get("cpu"),
                 expected=f"<= 7 cores ({MAX_VPA_CPU_MILLI}m)",
                 rule="requests_cpu_ceiling",
-                fix=f"Lower {key}.requests.cpu to 7 cores or less.",
+                fix=f"Lower {label}.requests.cpu to 7 cores or less.",
             )
         )
     mem_req = parsed.get(("memory", "requests"))
     if mem_req is not None and mem_req > MAX_VPA_MEMORY_BYTES:
         errs.append(
             Violation(
-                field=f"{key}.requests.memory",
+                field=f"{label}.requests.memory",
                 actual=requests.get("memory"),
                 expected="<= 27Gi",
                 rule="requests_memory_ceiling",
-                fix=f"Lower {key}.requests.memory to 27Gi or less.",
+                fix=f"Lower {label}.requests.memory to 27Gi or less.",
             )
         )
 
@@ -449,11 +502,14 @@ def _check_resource_block(
     ):
         errs.append(
             Violation(
-                field=f"{key}.requests.cpu",
+                field=f"{label}.requests.cpu",
                 actual=requests.get("cpu"),
-                expected=f"<= vpa.maxAllowed.cpu ({vpa_max_cpu_milli}m)",
+                expected=f"<= {vpa_label}.maxAllowed.cpu ({vpa_max_cpu_milli}m)",
                 rule="requests_exceeds_vpa_max_cpu",
-                fix=f"Lower {key}.requests.cpu, raise vpa.maxAllowed.cpu, or disable vpa.enabled.",
+                fix=(
+                    f"Lower {label}.requests.cpu, raise {vpa_label}.maxAllowed.cpu, "
+                    f"or disable {vpa_label}.enabled."
+                ),
             )
         )
     if (
@@ -463,11 +519,14 @@ def _check_resource_block(
     ):
         errs.append(
             Violation(
-                field=f"{key}.requests.memory",
+                field=f"{label}.requests.memory",
                 actual=requests.get("memory"),
-                expected=f"<= vpa.maxAllowed.memory ({vpa_max_memory_bytes} bytes)",
+                expected=f"<= {vpa_label}.maxAllowed.memory ({vpa_max_memory_bytes} bytes)",
                 rule="requests_exceeds_vpa_max_memory",
-                fix=f"Lower {key}.requests.memory, raise vpa.maxAllowed.memory, or disable vpa.enabled.",
+                fix=(
+                    f"Lower {label}.requests.memory, raise "
+                    f"{vpa_label}.maxAllowed.memory, or disable {vpa_label}.enabled."
+                ),
             )
         )
 
@@ -481,11 +540,11 @@ def _check_resource_block(
         if req > lim:
             errs.append(
                 Violation(
-                    field=f"{key}.requests.{resource}",
+                    field=f"{label}.requests.{resource}",
                     actual=requests[resource],
-                    expected=f"<= {key}.limits.{resource} ({limits[resource]})",
+                    expected=f"<= {label}.limits.{resource} ({limits[resource]})",
                     rule="requests_le_limits",
-                    fix=f"Ensure {key}.requests.{resource} is not greater than {key}.limits.{resource}.",
+                    fix=f"Ensure {label}.requests.{resource} is not greater than {label}.limits.{resource}.",
                 )
             )
 
@@ -507,10 +566,12 @@ def _check_resources(
     return errs
 
 
-def _check_keda(cfg: dict) -> list[Violation]:
+def _check_keda(cfg: dict, label: str = "keda") -> list[Violation]:
     """keda.minReplicaCount <= keda.maxReplicaCount (when both set).
 
     Non-int / bool replica counts silently skip — chart schema handles type errors.
+    *label* prefixes the reported field path; per-pool callers pass
+    `workerPools[i].keda`.
     """
     keda = cfg.get("keda") or {}
     mn = keda.get("minReplicaCount")
@@ -524,11 +585,14 @@ def _check_keda(cfg: dict) -> list[Violation]:
     if mn > mx:
         return [
             Violation(
-                field="keda.minReplicaCount",
+                field=f"{label}.minReplicaCount",
                 actual=mn,
-                expected=f"<= keda.maxReplicaCount ({mx})",
+                expected=f"<= {label}.maxReplicaCount ({mx})",
                 rule="keda_min_le_max",
-                fix="Lower keda.minReplicaCount or raise keda.maxReplicaCount.",
+                fix=(
+                    f"Lower {label}.minReplicaCount or raise "
+                    f"{label}.maxReplicaCount."
+                ),
             )
         ]
     return []
@@ -616,6 +680,248 @@ def _check_scalar_types(cfg: dict) -> list[Violation]:
     return errs
 
 
+def _resolve_pool_vpa_max(
+    cfg: dict,
+    pool: dict,
+    pool_parsed: dict[tuple[str, str], int | None],
+    app_parsed: dict[tuple[str, str], int | None],
+) -> tuple[int | None, int | None]:
+    """Effective per-pool vpa.maxAllowed (cpu_milli, mem_bytes). None per
+    resource means the pool's VPA does not clamp that resource at admission.
+
+    Three ways the chart's per-pool chain differs from the app-level one:
+      - The pool VPA is gated on the POOL's own `vpa.enabled`; it does not
+        inherit the app-level flag, so a pool without it is never clamped.
+      - updateMode falls back pool.vpa.updateMode -> vpa.updateMode -> "Auto",
+        so an undeclared updateMode still clamps.
+      - maxAllowed swaps the whole dict at each fallback step, so a pool
+        declaring only `memory` leaves cpu uncapped — hence a per-resource None
+        rather than reaching for a chart default one key at a time.
+    """
+    pool_vpa = pool.get("vpa") or {}
+    if pool_vpa.get("enabled") is not True:
+        return None, None
+    app_vpa = cfg.get("vpa") or {}
+    update_mode = (
+        pool_vpa["updateMode"]
+        if "updateMode" in pool_vpa
+        else app_vpa.get("updateMode")
+    )
+    if _vpa_update_mode_is_off(update_mode):
+        return None, None
+
+    declared = pool_vpa.get("maxAllowed") or {}
+    parsed = pool_parsed
+    if not declared:
+        declared, parsed = app_vpa.get("maxAllowed") or {}, app_parsed
+    if not declared:
+        return DEFAULT_POOL_VPA_MAX_CPU_MILLI, DEFAULT_POOL_VPA_MAX_MEMORY_BYTES
+    return (
+        parsed.get(("cpu", "maxAllowed")) if "cpu" in declared else None,
+        parsed.get(("memory", "maxAllowed")) if "memory" in declared else None,
+    )
+
+
+def _check_pool_identity(pools: list) -> list[Violation]:
+    """Every pool needs a `name`; `name` and `taskQueue` must be unique.
+
+    A duplicate name is a hard Helm failure, not a soft one: deployment.yaml
+    keys pools as `pool:<name>` and looks the entry back up by name, so two
+    entries sharing a name render two objects with the same metadata.name. A
+    missing name renders a nameless TWD. Two pools on one taskQueue both poll
+    it, so routed activities land on whichever worker grabs the task first and
+    the tiers stop separating work.
+    """
+    errs: list[Violation] = []
+    seen_names: dict[str, int] = {}
+    seen_queues: dict[str, int] = {}
+    for i, pool in enumerate(pools):
+        if not isinstance(pool, dict):
+            continue
+        name = pool.get("name")
+        if not isinstance(name, str) or not name.strip():
+            errs.append(
+                Violation(
+                    field=f"workerPools[{i}].name",
+                    actual=name,
+                    expected="non-empty string",
+                    rule="worker_pool_name_required",
+                    fix=(
+                        "Give every workerPools entry a name. The chart derives "
+                        "the pool's TemporalWorkerDeployment name and its default "
+                        "task queue from it."
+                    ),
+                )
+            )
+        elif name in seen_names:
+            errs.append(
+                Violation(
+                    field=f"workerPools[{i}].name",
+                    actual=name,
+                    expected=(
+                        "unique across workerPools (already used by "
+                        f"workerPools[{seen_names[name]}])"
+                    ),
+                    rule="worker_pool_name_duplicate",
+                    fix=(
+                        "Rename this pool. The chart derives each pool's TWD name "
+                        "from it, so two pools sharing a name render two objects "
+                        "with the same metadata.name and the Helm apply fails."
+                    ),
+                )
+            )
+        else:
+            seen_names[name] = i
+
+        queue = pool.get("taskQueue")
+        if not isinstance(queue, str) or not queue.strip():
+            continue
+        if queue in seen_queues:
+            errs.append(
+                Violation(
+                    field=f"workerPools[{i}].taskQueue",
+                    actual=queue,
+                    expected=(
+                        "unique across workerPools (already used by "
+                        f"workerPools[{seen_queues[queue]}])"
+                    ),
+                    rule="worker_pool_task_queue_duplicate",
+                    fix=(
+                        "Give each pool its own taskQueue. Two pools polling one "
+                        "queue both receive its activities, so routed work lands "
+                        "on whichever worker grabs it first and the pools stop "
+                        "separating load."
+                    ),
+                )
+            )
+        else:
+            seen_queues[queue] = i
+    return errs
+
+
+def _check_worker_pools_rendered(bools: dict[str, bool | None]) -> list[Violation]:
+    """Declared pools require splitDeploymentEnabled + temporalWorkerDeployment.
+
+    Both chart defaults are false, so a missing flag drops the block exactly as
+    an explicit false does — hence `is not True` rather than the
+    explicit-false-only test _check_split_requires_twc uses (there, absent means
+    the safe default; here it means the pools vanish). The CI driver runs SDK
+    flag injection first, which sets both true for SDK >= 2.7.4, so this fires
+    on apps that opt out explicitly or sit below the TWC floor — the cases where
+    the app routes activities to a queue no worker polls and the workflow hangs.
+    """
+    unmet = [
+        field
+        for field in ("splitDeploymentEnabled", "temporalWorkerDeployment.enabled")
+        if bools.get(field) is not True
+    ]
+    if not unmet:
+        return []
+    return [
+        Violation(
+            field="workerPools",
+            actual=unmet,
+            expected=(
+                "splitDeploymentEnabled: true and "
+                "temporalWorkerDeployment.enabled: true"
+            ),
+            rule="worker_pools_require_split_twc",
+            fix=(
+                "Set the listed flags to true, or remove the workerPools block. "
+                "The chart renders pool deployments only under split + TWC and "
+                "drops the block silently otherwise, so activities routed to a "
+                "pool's task queue sit unpolled and the workflow hangs."
+            ),
+        )
+    ]
+
+
+def _check_worker_pools(
+    cfg: dict,
+    bools: dict[str, bool | None],
+    app_vpa_parsed: dict[tuple[str, str], int | None],
+) -> list[Violation]:
+    """Validate `workerPools` — the extra dedicated worker pools (rules 11-15).
+
+    Each entry renders its own TemporalWorkerDeployment + KEDA ScaledObject
+    (+ optional VPA) polling its own task queue. The magnitude rules are the
+    app-level ones re-pointed at the pool's blocks, but the chart resolves a
+    pool's values through different fallback chains:
+      - `pool.resources` REPLACES workerResources/resources wholesale (no key
+        merge), so a pool declaring only requests has no limits at all — the
+        requests<=limits rule simply has nothing to compare.
+      - pool VPA: see _resolve_pool_vpa_max.
+      - pool KEDA targetQueueSize is flat, not nested under `temporal`.
+    """
+    pools = cfg.get("workerPools")
+    if pools is None:
+        return []
+    if not isinstance(pools, list):
+        return [
+            Violation(
+                field="workerPools",
+                actual=pools,
+                expected="list of pool mappings",
+                rule="invalid_type",
+                fix=(
+                    f"Make workerPools a YAML list (got {type(pools).__name__}). "
+                    "The chart ranges over it; a non-list fails at render."
+                ),
+            )
+        ]
+    if not pools:
+        return []
+
+    errs = _check_worker_pools_rendered(bools)
+    if len(pools) > MAX_WORKER_POOLS:
+        errs.append(
+            Violation(
+                field="workerPools",
+                actual=len(pools),
+                expected=f"<= {MAX_WORKER_POOLS} pools",
+                rule="worker_pool_count_ceiling",
+                fix=(
+                    f"Reduce workerPools to {MAX_WORKER_POOLS} or fewer. Each pool "
+                    "renders its own TemporalWorkerDeployment plus an on-demand "
+                    "mirror variant, so Temporal-side worker deployments grow at "
+                    "twice the tier count per app."
+                ),
+            )
+        )
+    errs += _check_pool_identity(pools)
+
+    for i, pool in enumerate(pools):
+        prefix = f"workerPools[{i}]"
+        if not isinstance(pool, dict):
+            errs.append(
+                Violation(
+                    field=prefix,
+                    actual=pool,
+                    expected="mapping",
+                    rule="invalid_type",
+                    fix=(
+                        f"Make each workerPools entry a mapping (got "
+                        f"{type(pool).__name__})."
+                    ),
+                )
+            )
+            continue
+        pool_parsed, parse_errs = _parse_vpa(pool, label=f"{prefix}.vpa")
+        errs += parse_errs
+        errs += _check_vpa(pool, pool_parsed, label=f"{prefix}.vpa")
+        cpu_max, mem_max = _resolve_pool_vpa_max(cfg, pool, pool_parsed, app_vpa_parsed)
+        errs += _check_resource_block(
+            pool,
+            "resources",
+            cpu_max,
+            mem_max,
+            label=f"{prefix}.resources",
+            vpa_label=f"{prefix}.vpa",
+        )
+        errs += _check_keda(pool, label=f"{prefix}.keda")
+    return errs
+
+
 def validate_config(config_yaml: Any, sdk_version: str | None = None) -> None:
     """Run all guardrail rules. Accepts YAML string or already-parsed dict.
 
@@ -665,6 +971,7 @@ def validate_config(config_yaml: Any, sdk_version: str | None = None) -> None:
     errs += _check_vpa(cfg, vpa_parsed)
     errs += _check_resources(cfg, vpa_parsed, bools)
     errs += _check_keda(cfg)
+    errs += _check_worker_pools(cfg, bools, vpa_parsed)
 
     if errs:
         raise ConfigValidationError(errs)

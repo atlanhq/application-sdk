@@ -9,7 +9,7 @@ description: |
   installs it onto the target tenant so the tenant serves the app under test
   rather than whatever was last hand-deployed there.
 
-  The image reference is deterministic (`sdr-test-<short-sha>`), so a caller
+  The image reference is deterministic (see derive_e2e_image_tag.py), so a caller
   that builds here and a caller that reads `image` back later agree without
   passing anything around.
 
@@ -39,7 +39,8 @@ inputs:
   app-image-name:
     description: |
       GHCR image name (e.g. "atlan-mysql-app"). The image is tagged
-      ghcr.io/atlanhq/<app-image-name>:sdr-test-<short-sha>.
+      ghcr.io/atlanhq/<app-image-name>:sdr-test-<short-sha>, plus a digest of the
+      SDK ref and base image when either is pinned — see derive_e2e_image_tag.py.
     required: true
   application-sdk-ref:
     description: |
@@ -204,6 +205,32 @@ runs:
         application-sdk-ref: ${{ inputs.application-sdk-ref }}
         check-drift: "false"
 
+    # Make the image able to say which build it is (FND-1684).
+    #
+    # `verify` in e2e_tenant_app.py used to read the marketplace install record —
+    # the same record `install` writes and then skips on — so once that record
+    # existed for a build the check could only agree with it, whatever the
+    # cluster was actually serving.
+    # The only fully-truthful answer comes from the pod, and the identity CI
+    # compares against (the image tag) is minted after every committed artifact
+    # exists, so it has to enter at build time.
+    #
+    # A --build-arg alone is not enough: BuildKit ignores a build-arg the
+    # Dockerfile does not ARG, and an ARG is not inherited across FROM, so
+    # declaring it in the SDK base image would do nothing for the connector built
+    # on top of it. This appends the two lines that promote it to an image ENV,
+    # to the runner's ephemeral checkout only — nothing is written back to the
+    # connector repo, and a connector that adopts the lines itself is left alone.
+    #
+    # BEFORE the buildx build, and after the contract regeneration so it cannot
+    # disturb it. The logic is in a tested script rather than inlined shell, per
+    # docs/standards/ci.md.
+    - name: Stamp the build identity into the Dockerfile
+      shell: bash
+      env:
+        STAMP: ${{ github.action_path }}/../../scripts/stamp_build_identity.py
+      run: python3 "${STAMP}"
+
     # Buildx is required for the GHA cache backend below.
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
@@ -226,9 +253,32 @@ runs:
         # command line and out of any tmpfile on the runner — buildx
         # streams it directly into the build context.
         GIT_TOKEN: ${{ inputs.git-token }}
+        # The tag must move whenever the built image's CONTENT moves, which
+        # `github.sha` alone does not capture: an application-sdk PR dispatches
+        # an e2e run that builds this connector at its unchanged HEAD with the
+        # SDK repinned, so successive SDK commits produced byte-different images
+        # under one tag. prepare-tenant then saw the version name it expected
+        # already installed and skipped ("tenant already runs … — nothing to
+        # do"), leaving each tenant on whatever content it happened to hold.
+        # See derive_e2e_image_tag.py; the rule is tested, not inlined here,
+        # per docs/standards/ci.md.
+        DERIVE_TAG: ${{ github.action_path }}/../../scripts/derive_e2e_image_tag.py
+        # Both through env:, never `${{ }}` inside run:. GitHub expands a `${{ }}`
+        # expression into the script text BEFORE bash parses it, so the
+        # surrounding quotes protect nothing — a ref carrying a quote or `$(...)`
+        # would be executed. `application-sdk-ref` is caller-controlled and can
+        # be a branch name; the repin step above already routes it through env
+        # for exactly this reason. `github.sha` is hex and was interpolated by
+        # the `cut` this replaced, but there is no reason for the safe form to
+        # stop at one of the two.
+        COMMIT: ${{ github.sha }}
+        SDK_REF: ${{ inputs.application-sdk-ref }}
       run: |
-        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
-        IMAGE_BASE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
+        TAG=$(python3 "${DERIVE_TAG}" \
+          --commit "${COMMIT}" \
+          --sdk-ref "${SDK_REF}" \
+          --base-image-ref "${BASE_IMAGE_REF}")
+        IMAGE_BASE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:${TAG}"
         # Suffix is empty for every caller that does not build per-architecture,
         # so IMAGE is unchanged for them.
         IMAGE="${IMAGE_BASE}${{ inputs.tag-suffix }}"
@@ -238,6 +288,14 @@ runs:
         # ONLY when non-empty — passing `BASE_IMAGE=` empty would clobber the
         # Dockerfile's default FROM and break the non-e2e / merge-queue path.
         BUILD_ARGS=()
+        # The build identity the pod will report (FND-1684). TAG, not IMAGE:
+        # `tag-suffix` is per-ARCHITECTURE, and the tenant pulls the merged
+        # manifest, so a suffixed value would make each arch report a different
+        # identity and neither would match what `verify --expected` compares
+        # against — which is this un-suffixed tag, via merge-e2e-image's
+        # `version` output. The Dockerfile stamp above is what turns this
+        # build-arg into an image ENV.
+        BUILD_ARGS+=(--build-arg "ATLAN_BUILD_ID=${TAG}")
         if [ -n "${BASE_IMAGE_REF}" ]; then
           echo "Building connector on dispatched base image: ${BASE_IMAGE_REF}"
           BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE_REF}")

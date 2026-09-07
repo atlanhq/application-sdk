@@ -41,10 +41,11 @@ import hashlib
 import logging
 import math
 import os
+import re
 import tempfile
 import time
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 import obstore
 import orjson
@@ -404,6 +405,194 @@ def _is_precondition(exc: BaseException) -> bool:
     return "precondition" in msg or "412" in msg
 
 
+# ``object_store`` formats every backend HTTP failure as
+#   "Generic {store} error: Error performing {METHOD} {url} in {elapsed} -
+#    Server returned non-2xx status code: {status} {reason}: {body}"
+# and GCS, S3 and Azure Blob all put an XML
+# ``<Error><Code>...</Code><Message>...</Message></Error>`` in ``{body}``.
+# Parsing the two routing-relevant tokens out is what lets a consumer branch on
+# a field: before FND-957 the status existed only inside the free-text cause,
+# which the envelope's length cap usually truncated away before it arrived.
+# Cap for the logged copy of a driver error. Larger than the wire envelope's
+# cap on purpose — the point of the log copy is to outlive the truncation — but
+# still bounded, because ``error_message`` promotes to an indexed OTLP
+# attribute. Matches ``safe_traceback``'s ceiling.
+_LOG_CAUSE_MAX_LEN = 8000
+
+_OBSTORE_HTTP_STATUS_RE = re.compile(r"status code:\s*(\d{3})")
+_PROVIDER_CODE_RE = re.compile(r"<Code>([^<>]{1,64})</Code>")
+
+
+class _StorageEvidence(TypedDict):
+    """The kwargs every branch of :func:`_storage_error_for` splats into a leaf.
+
+    Typed rather than ``dict[str, Any]`` so pyright checks the splat against
+    each ``__init__`` it reaches. Under ``Any`` that check is silently skipped,
+    and the failure mode is the one this module exists to prevent: add a field
+    here, miss one leaf's ``__init__``, and the ``TypeError`` surfaces at raise
+    time — on the error path, under load, replacing the failure it was meant to
+    describe.
+    """
+
+    key: str
+    cause: Exception
+    http_status: int | None
+    provider_code: str | None
+    target: str | None
+
+
+def _obstore_http_evidence(exc: BaseException) -> tuple[int | None, str | None]:
+    """Return ``(http_status, provider_code)`` parsed from *exc*, best-effort.
+
+    Both are ``None`` when *exc* is not a backend HTTP failure -- a local store,
+    a request timeout, a credential decode error. Never raises: a parse miss
+    degrades the evidence attached to the failure, it must never replace the
+    failure itself.
+    """
+    text = str(exc)
+    status = _OBSTORE_HTTP_STATUS_RE.search(text)
+    provider = _PROVIDER_CODE_RE.search(text)
+    return (
+        int(status.group(1)) if status else None,
+        provider.group(1) if provider else None,
+    )
+
+
+# Scheme per obstore store class, for the ``target`` evidence field.
+_STORE_SCHEMES: dict[str, str] = {
+    "GCSStore": "gs",
+    "S3Store": "s3",
+    "AzureStore": "abfs",
+    "LocalStore": "file",
+}
+# Identity keys that are safe to read off a store's ``config``. That dict also
+# carries live credentials -- an ``S3Store`` exposes ``secret_access_key`` and
+# an ``AzureStore`` exposes ``account_key``, both in plaintext -- so this is an
+# allowlist and must stay one. Never put ``store.config`` itself on an error.
+_STORE_IDENTITY_KEYS: tuple[str, ...] = ("bucket", "container_name")
+
+
+def _store_target(store: ObjectStore, key: str) -> str | None:
+    """Return a ``scheme://container/path`` identity for the failing request.
+
+    This is the ``target`` evidence field -- "what were we talking to". It is
+    assembled from the store's class and one allowlisted identity key, never
+    from the request URL and never from ``store.config`` wholesale: a signed
+    URL carries ``X-Goog-Signature``, which ``redact_secrets`` does not strip,
+    and the config dict holds credentials outright.
+
+    Best-effort by design. Returns ``None`` rather than raising, because this
+    only decorates a failure and must never be able to replace it. (FND-957)
+    """
+    try:
+        scheme = _STORE_SCHEMES.get(type(store).__name__, "objectstore")
+        container: str | None = None
+        config = getattr(store, "config", None)
+        if config is not None and hasattr(config, "get"):
+            for candidate in _STORE_IDENTITY_KEYS:
+                value = config.get(candidate)
+                if isinstance(value, str) and value:
+                    container = value
+                    break
+        prefix = getattr(store, "prefix", None)
+        path = f"{prefix}/{key}" if isinstance(prefix, str) and prefix else key
+        return f"{scheme}://{container}/{path}" if container else f"{scheme}:///{path}"
+    except Exception:  # pragma: no cover — identity is decoration, never fatal
+        return None
+
+
+def _storage_error_for(
+    exc: Exception,
+    key: str,
+    message: str,
+    store: ObjectStore | None = None,
+) -> Exception:
+    """Build the typed storage error for a failed write.
+
+    Only two conditions reclassify: a missing Azure container, and a bucket
+    mid-relocation. Everything else — including a bare ``PreconditionFailed``
+    — is a retryable ``StorageError``. The parsed ``http_status`` and
+    ``provider_code`` are *evidence, not routing*: they ride on the envelope so
+    a consumer holding context the SDK lacks can branch on them, and so a
+    future case can argue for its own leaf from data rather than inference.
+
+    Order is load-bearing, but not for the retry verdict — both reclassifying
+    branches are retryable. It decides which ``code`` and which
+    ``suggested_action`` an operator sees, and those are wrong if a broader
+    rule matches first. Do not reorder without re-reading the notes at each
+    branch.
+
+    Every branch carries the same evidence, so a consumer reads ``http_status``,
+    ``provider_code`` and ``target`` off the envelope regardless of which leaf
+    was chosen. (FND-957)
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageBucketRelocationError,
+        StorageConfigError,
+        StorageError,
+    )
+
+    http_status, provider_code = _obstore_http_evidence(exc)
+    evidence: _StorageEvidence = {
+        "key": key,
+        "cause": exc,
+        "http_status": http_status,
+        "provider_code": provider_code,
+        "target": _store_target(store, key) if store is not None else None,
+    }
+
+    # Checked before the status routing because its remediation is a config
+    # change rather than a retry, and Azure reports it as a plain 404 that
+    # would otherwise be indistinguishable from a missing blob. It carries the
+    # same evidence as every other branch: the container name is in ``target``
+    # and the 404/ContainerNotFound pair is what tells an operator the
+    # container, not the object, is what is absent.
+    if _is_azure_container_not_found(exc):
+        return StorageConfigError(_azure_container_not_found_message(key), **evidence)
+
+    # Relocation is checked BEFORE the generic fallthrough below, and the order
+    # is load-bearing rather than stylistic — though not for the reason it might
+    # look. Both outcomes are retryable, so nothing here changes a retry
+    # decision. What the order buys is the *specific* code
+    # (DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION, which the preflight gate
+    # stamps for the same condition) and the remediation hint telling an
+    # operator to wait the move out. Fall through to the generic StorageError
+    # first and both are silently lost: the failure still retries, but nobody
+    # can tell a relocation from any other storage blip.
+    #
+    # The detection is deliberately the preflight gate's, not a second one: its
+    # rule requires BOTH the "precondition" and "relocation" tokens, so a plain
+    # etag/if-match 412 can never be misread as a relocation and pick up a
+    # "wait for the move to finish" hint for a move that is not happening.
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — error path only; avoids a module-load cycle
+        RELOCATION_BUCKET,
+        _classify_access_error,
+    )
+
+    bucket, hint = _classify_access_error(exc)
+    if bucket == RELOCATION_BUCKET:
+        return StorageBucketRelocationError(
+            f"{message}: the destination bucket is being relocated",
+            suggested_action=hint,
+            **evidence,
+        )
+    # Nothing else reclassifies. A 403 or 404 is genuinely ambiguous here:
+    # ``upload_file`` accepts an explicit store, so the same status arrives both
+    # from the deployment's own artifact store (audience APP_OWNER) and from a
+    # caller-supplied store pointing at a customer bucket (audience USER).
+    # Routing audience off the status would put customer-facing attribution on
+    # our own infrastructure half the time.
+    #
+    # A bare ``PreconditionFailed`` that is *not* a relocation deliberately
+    # stays a retryable ``StorageError`` too. The one real instance we have of
+    # that status turned out to be a relocation — temporary and self-healing —
+    # so the prior on "unclassified precondition means permanent" is weak, and
+    # a wrongly-permanent verdict fails a run that would have recovered. The
+    # status and provider code still reach ``evidence``, which is what a future
+    # non-relocation case would need to make the argument for its own leaf.
+    return StorageError(message, **evidence)
+
+
 def _log_storage_event(
     level: int,
     op: str,
@@ -413,6 +602,7 @@ def _log_storage_event(
     elapsed_ms: float | None = None,
     size_bytes: int | None = None,
     error_class: str | None = None,
+    error_message: str | None = None,
 ) -> None:
     """Emit a single structured per-attempt storage event.
 
@@ -436,6 +626,17 @@ def _log_storage_event(
                 extra["throughput_mibps"] = tput
     if error_class is not None:
         extra["error_class"] = error_class
+    if error_message is not None:
+        # The wire envelope length-caps ``cause_repr``, so without this the
+        # provider's own explanation had nowhere to live: this event previously
+        # recorded only ``error_class`` ("GenericError"), with no ``str(exc)``,
+        # no ``exc_info`` and no ``safe_traceback``. A copy here gives a
+        # truncated envelope a higher-fidelity counterpart in the logs.
+        # ``error_message`` is already in ``_KNOWN_EXTRA_KEYS``, so it promotes
+        # to an indexed OTLP attribute — hence the cap, for the same reason
+        # ``safe_traceback`` has one. Callers pass secret-redacted text.
+        # (FND-957)
+        extra["error_message"] = error_message[:_LOG_CAUSE_MAX_LEN]
     msg = f"storage.{op} {outcome} path={store_path}"
     # Keys are bound into loguru record["extra"] and promoted to OTLP indexed
     # attributes by _build_extra_dict in logger_adaptor (all are in _KNOWN_EXTRA_KEYS).
@@ -772,6 +973,10 @@ async def upload_file(
         # ensures cancellation mid-writer-close is logged rather than silently
         # discarding the buffer and leaving no object in the store.
         elapsed_ms = (time.monotonic() - started) * 1000.0
+        from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
+            redact_secrets,
+        )
+
         _log_storage_event(
             logging.WARNING,
             "upload",
@@ -780,40 +985,11 @@ async def upload_file(
             elapsed_ms=elapsed_ms,
             size_bytes=file_size,
             error_class=_exc_class_name(exc),
+            error_message=redact_secrets(str(exc)),
         )
         if isinstance(exc, Exception):
-            from application_sdk.storage.errors import (  # noqa: PLC0415
-                StorageBucketRelocationError,
-                StorageConfigError,
-                StorageError,
-            )
-
-            if _is_azure_container_not_found(exc):
-                raise StorageConfigError(
-                    _azure_container_not_found_message(key)
-                ) from exc
-            # Reuse the preflight classifier's rules rather than a second
-            # detection path: a bucket mid-relocation rejects multipart
-            # initiation for the whole move window, and a relocation that
-            # starts *after* the gate passed still lands here — the typed
-            # code and hint are what keep it platform-attributed instead of
-            # a generic storage failure counted against the connector.
-            from application_sdk.storage.preflight import (  # noqa: PLC0415 — error path only; avoids a module-load cycle
-                RELOCATION_BUCKET,
-                _classify_access_error,
-            )
-
-            bucket, hint = _classify_access_error(exc)
-            if bucket == RELOCATION_BUCKET:
-                raise StorageBucketRelocationError(
-                    f"Failed to upload file to key '{key}': the destination "
-                    "bucket is being relocated",
-                    key=key,
-                    cause=exc,
-                    suggested_action=hint,
-                ) from exc
-            raise StorageError(
-                f"Failed to upload file to key '{key}'", key=key, cause=exc
+            raise _storage_error_for(
+                exc, key, f"Failed to upload file to key '{key}'", resolved
             ) from exc
         raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
 
@@ -1246,14 +1422,9 @@ async def _put(
         await obstore.put_async(resolved, key, data, attributes=put_attributes)
     # conformance: ignore[E004] put error handler; all exceptions re-raised via StorageConfigError or StorageError chain
     except Exception as exc:
-        from application_sdk.storage.errors import (  # noqa: PLC0415
-            StorageConfigError,
-            StorageError,
-        )
-
-        if _is_azure_container_not_found(exc):
-            raise StorageConfigError(_azure_container_not_found_message(key)) from exc
-        raise StorageError(f"Failed to put key '{key}'", key=key, cause=exc) from exc
+        raise _storage_error_for(
+            exc, key, f"Failed to put key '{key}'", resolved
+        ) from exc
 
 
 async def put_json(

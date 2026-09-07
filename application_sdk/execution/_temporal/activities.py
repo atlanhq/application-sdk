@@ -20,6 +20,7 @@ from uuid import uuid4
 from temporalio import activity
 
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
+from application_sdk.app.build_identity import build_identity
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
@@ -293,6 +294,7 @@ def create_activity_from_task(
             NoopHeartbeatController,
             TemporalHeartbeatController,
             auto_heartbeat_loop,
+            stop_heartbeat_task,
         )
         from application_sdk.execution.progress_telemetry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             closed_hold_observer,
@@ -318,6 +320,9 @@ def create_activity_from_task(
         app_context = AppContext(
             app_name=context.app_name,
             app_version=app_metadata.version,
+            # Activities run outside the workflow sandbox, so the image ENV is
+            # readable directly here (FND-1684).
+            build_id=build_identity(),
             run_id=run_id,
             workflow_id=context.workflow_id,
             correlation_id=correlation_id,
@@ -662,20 +667,9 @@ def create_activity_from_task(
             finally:
                 try:
                     if heartbeat_task is not None:
-                        stop_event.set()
-                        try:
-                            await asyncio.wait_for(heartbeat_task, timeout=1.0)
-                        # conformance: ignore[E004] cleanup path cancelling heartbeat task in finally; all exceptions handled by inner cancel+log
-                        except (TimeoutError, Exception):
-                            heartbeat_task.cancel()
-                            try:
-                                await heartbeat_task
-                            # conformance: ignore[E004] heartbeat cancel cleanup in finally; debug-logged with exc_info; swallow is intentional
-                            except Exception:
-                                logger.debug(
-                                    "Heartbeat task did not cancel cleanly",
-                                    exc_info=True,
-                                )
+                        await stop_heartbeat_task(
+                            heartbeat_task, stop_event, context.task_name
+                        )
                 finally:
                     # Nested so the app-instance clears survive the heartbeat
                     # cleanup above raising — in particular a ``CancelledError``,

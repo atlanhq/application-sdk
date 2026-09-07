@@ -1,0 +1,66 @@
+/// Tests for the extract-node `extraction_method` default-emit guard (PR #3633).
+///
+/// `extraction_method` is the other half of the SDR routing pair with
+/// `agent_json`. Heracles/AE derives the agent task queue AND fills the
+/// credential-routing spec from both fields together at dispatch, so an app
+/// that declares SDR but does not model `extraction-method` must still emit
+/// the slot — the gap P029 reports.
+///
+/// Two guard branches on each of App.pkl and NativeApp.pkl:
+///   1. app does NOT model `extraction-method` → guard emits the slot
+///   2. app models `extraction-method`         → loop emits it exactly once
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/default_pipeline.pkl" as noExtractionMethodApp
+import "../examples/agent-e2e/app.pkl" as modeledExtractionMethodApp
+import "fixtures/native_app_pipeline.pkl" as noExtractionMethodNative
+import "fixtures/native_app_extraction_method.pkl" as modeledExtractionMethodNative
+
+local function extractArgs(app, manifestKey: String) =
+  let (text = app.output.files[manifestKey].text)
+  let (manifest = new json.Parser { useMapping = true }.parse(text))
+    manifest["dag"]["extract"]["inputs"]["args"]
+
+local noAppArgs = extractArgs(noExtractionMethodApp, "app/generated/manifest.json")
+local modeledAppArgs = extractArgs(modeledExtractionMethodApp, "app/generated/manifest.json")
+local noNativeArgs = extractArgs(noExtractionMethodNative, "manifest.json")
+local modeledNativeArgs = extractArgs(modeledExtractionMethodNative, "manifest.json")
+
+local modeledAppManifestText =
+  modeledExtractionMethodApp.output.files["app/generated/manifest.json"].text
+local modeledNativeManifestText =
+  modeledExtractionMethodNative.output.files["manifest.json"].text
+
+facts {
+  // App.pkl branch 1: app does not model `extraction-method` → guard emits.
+  ["App.pkl without a modeled extraction-method still gets extraction_method in extract args"] {
+    noAppArgs["extraction_method"] == "{{extraction-method}}"
+  }
+
+  // App.pkl branch 2: app models `extraction-method` → the properties loop
+  // emits it; the guard skips to avoid a duplicate key.
+  ["App.pkl modeling extraction-method gets extraction_method in extract args"] {
+    modeledAppArgs["extraction_method"] == "{{extraction-method}}"
+  }
+
+  // App.pkl branch 2 (no duplicate): the slot appears exactly once.
+  ["App.pkl modeled extraction-method emits the extraction_method slot exactly once"] {
+    modeledAppManifestText.split("\"extraction_method\"").length == 2
+  }
+
+  // NativeApp.pkl branch 1: app does not model `extraction-method` → guard emits.
+  ["NativeApp.pkl without a modeled extraction-method still gets extraction_method in extract args"] {
+    noNativeArgs["extraction_method"] == "{{extraction-method}}"
+  }
+
+  // NativeApp.pkl branch 2: app models `extraction-method` → the loop emits it.
+  ["NativeApp.pkl modeling extraction-method gets extraction_method in extract args"] {
+    modeledNativeArgs["extraction_method"] == "{{extraction-method}}"
+  }
+
+  // NativeApp.pkl branch 2 (no duplicate): the slot appears exactly once.
+  ["NativeApp.pkl modeled extraction-method emits the extraction_method slot exactly once"] {
+    modeledNativeManifestText.split("\"extraction_method\"").length == 2
+  }
+}

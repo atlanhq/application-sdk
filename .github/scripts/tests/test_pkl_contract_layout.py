@@ -449,3 +449,43 @@ def test_export_contract_at_returns_false_for_a_bad_ref(tree):
     _commit(tree, "init")
 
     assert mod.export_contract_at("nope-not-a-ref", "contract", tree / "e") is False
+
+
+def test_export_contract_at_accepts_a_multi_root_archive(tmp_path, monkeypatch):
+    """Validity is "the archive holds an evaluable contract", not "it holds
+    app.pkl". Requiring app.pkl meant a one-root-per-entrypoint app never got
+    a baseline, silently disabling override detection for exactly the apps
+    whose generated trees are most likely to be post-processed."""
+    src = tmp_path / "src"
+    (src / "contract").mkdir(parents=True)
+    (src / "contract" / "crawler.pkl").write_text(
+        'amends "@app-contract-toolkit/NativeApp.pkl"\n'
+    )
+    (src / "contract" / "credentials.pkl").write_text('name = "creds"\n')
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "t@t"],
+        ["config", "user.name", "t"],
+        ["add", "-A"],
+        ["commit", "-qm", "c"],
+    ):
+        subprocess.run(["git", *args], cwd=src, check=True, capture_output=True)
+
+    monkeypatch.chdir(src)
+    dest = tmp_path / "dest"
+    assert mod.export_contract_at("HEAD", "contract", dest) is True
+
+    # an archive with only imported modules is NOT evaluable
+    src2 = tmp_path / "src2"
+    (src2 / "contract").mkdir(parents=True)
+    (src2 / "contract" / "credentials.pkl").write_text('name = "creds"\n')
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "t@t"],
+        ["config", "user.name", "t"],
+        ["add", "-A"],
+        ["commit", "-qm", "c"],
+    ):
+        subprocess.run(["git", *args], cwd=src2, check=True, capture_output=True)
+    monkeypatch.chdir(src2)
+    assert mod.export_contract_at("HEAD", "contract", tmp_path / "dest2") is False

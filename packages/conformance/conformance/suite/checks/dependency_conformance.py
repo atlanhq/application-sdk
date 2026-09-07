@@ -1233,7 +1233,11 @@ def _lock_dependency_edges(
             continue
         if not _marker_can_hold(dep.get("marker")):
             continue  # e.g. a win32-only edge, unreachable on this install
-        dep_extras = dep.get("extra")
+        # uv uses ``extras`` for a dependency request carrying one or more
+        # extras. Older lock shapes (and our hand-written fixtures) use the
+        # singular ``extra`` key, so accept both without treating an
+        # unactivated optional dependency as reachable.
+        dep_extras = dep.get("extras", dep.get("extra"))
         activated = (
             frozenset(_normalise_name(str(e)) for e in dep_extras)
             if isinstance(dep_extras, list)

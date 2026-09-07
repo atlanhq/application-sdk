@@ -461,7 +461,24 @@ def export_contract_at(ref: str, contract_dir: str, dest: Path) -> bool:
     extract = subprocess.run(
         ["tar", "-x", "-C", str(dest)], input=archive.stdout, check=False
     )
-    return extract.returncode == 0 and (dest / contract_dir / "app.pkl").exists()
+    if extract.returncode != 0:
+        return False
+    # Validity is "the archive holds an evaluable contract", NOT "it holds
+    # app.pkl": an app with one root per entrypoint (crawler.pkl + miner.pkl)
+    # has no app.pkl and would otherwise never get a baseline, silently
+    # turning override detection off for exactly the apps whose generated
+    # trees are most likely to be post-processed.
+    exported = dest / contract_dir
+    if (exported / "app.pkl").exists():
+        return True
+    return any(
+        any(
+            ln.startswith("amends ")
+            for ln in f.read_text(encoding="utf-8").splitlines()
+        )
+        for f in sorted(exported.glob("*.pkl"))
+        if f.is_file()
+    )
 
 
 def run_post_generate(contract_dir: str = "contract") -> None:

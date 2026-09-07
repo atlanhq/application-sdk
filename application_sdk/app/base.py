@@ -897,6 +897,12 @@ class App(ABC):
     # Set by registration
     _app_name: str
     _app_version: str
+    #: The image's build identity (FND-1684), or "" when the image carries no
+    #: stamp. A ClassVar with a default, unlike its two neighbours: those are
+    #: always written by registration, while this must read as "" on any App
+    #: subclass constructed without going through it (test doubles, and every
+    #: app registered by an SDK older than this attribute).
+    _app_build_id: ClassVar[str] = ""
     _app_metadata: AppMetadata
     _original_run: Callable[..., Any]
     _input_type: type[Input]
@@ -1166,6 +1172,16 @@ class App(ABC):
     def get_version(self) -> str:
         """Get the app version."""
         return self._app_version
+
+    def get_build_id(self) -> str:
+        """Get the build identity of the image this process runs from.
+
+        ``""`` when the image carries no stamp. NOT a substitute for
+        :meth:`get_version`: that is the app's declared semver and is the same
+        for every build of the same source, while this changes whenever the
+        image content does. See :mod:`application_sdk.app.build_identity`.
+        """
+        return self._app_build_id
 
     def now(self) -> datetime:
         """Get current time (safe for workflow replay).
@@ -2096,6 +2112,8 @@ async def _run_preflight_gate(
             FAILURE_AUDIENCE_KEY,
             PREFLIGHT_OUTCOME_EVENT,
             PreflightGateInput,
+            PreflightRowOutcome,
+            gate_heartbeat_timings,
             gate_retry_policy,
             gate_timeouts,
             is_preflight_block,
@@ -2111,7 +2129,7 @@ async def _run_preflight_gate(
             PREFLIGHT_OUTCOME_EVENT,
             app_name=app_name,
             entrypoint=entry,
-            outcome="skipped",
+            outcome=PreflightRowOutcome.SKIPPED.value,
             reason=reason,
             **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
         )
@@ -2129,12 +2147,14 @@ async def _run_preflight_gate(
         # *task* failure, which Temporal retries indefinitely (see
         # _validate_workflow_input). Nothing on the gate's own path may do that.
         start_to_close, schedule_to_close = gate_timeouts(budget_seconds, max_attempts)
+        heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
         await workflow.execute_activity(
             preflight_gate_activity_name(app_name),
             gate_input,
             schedule_to_close_timeout=schedule_to_close,
             start_to_close_timeout=start_to_close,
+            heartbeat_timeout=timedelta(seconds=heartbeat_timeout),
             retry_policy=gate_retry_policy(max_attempts),
         )
     except Exception as e:
@@ -2151,7 +2171,7 @@ async def _run_preflight_gate(
             PREFLIGHT_OUTCOME_EVENT,
             app_name=app_name,
             entrypoint=entry,
-            outcome="no_verdict",
+            outcome=PreflightRowOutcome.NO_VERDICT.value,
             reason=underlying_error_type(e),
             gate_classification=CLASSIFICATION_GATE_BROKEN,
             exc_info=True,
@@ -2268,6 +2288,10 @@ def generate_workflow_class(
     output_type = ep.output_type
     app_name = app_cls._app_name
     app_version = app_cls._app_version
+    # Read once here, outside the workflow body: it is an image ENV, constant for
+    # the life of the process, and reading it inside _run would be a non-
+    # deterministic os.environ touch in the Temporal sandbox.
+    app_build_id = app_cls._app_build_id
 
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — boot-time (not in workflow sandbox); avoids a module-load cycle
         input_type_supports_gate,
@@ -2350,6 +2374,7 @@ def generate_workflow_class(
         context = AppContext(
             app_name=app_name,
             app_version=app_version,
+            build_id=app_build_id,
             run_id=run_id,
             workflow_id=workflow_id,
             correlation_id=correlation_id,

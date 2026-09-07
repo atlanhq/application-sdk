@@ -1,11 +1,33 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Auto-maintained by the vuln-triage rover; CODEOWNERS: SDK/security team + @atlan-ci (auto-merge of allowlist-only PRs).",
   "_base_image": "app-runtime-base:3",
-  "_updated": "2026-08-21",
+  "_updated": "2026-09-07",
   "_renewal_note": "Expiry dates are the remediation SLA per severity, measured from first detection. CRITICAL: 7 days. HIGH: 30 days. MEDIUM/LOW are NOT allowlisted (tracked on Linear tickets only). The gate (check_allowlist.py) passes while an entry is unexpired and fails once it expires. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
+  "CVE-2026-79921": {
+    "package": "dapr-daprd-1.18",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (Chainguard dapr-daprd-1.18 1.18.3-r5 apk in app-runtime-base:3, not a uv.lock dependency); clears on a base-image rebuild onto dapr-daprd-1.18 1.18.3-r7 or later.",
+    "expires": "2026-10-05",
+    "added_by": "@vaibhavatlan",
+    "case": 4,
+    "ticket": "BLDX-1646",
+    "re_evaluation_trigger": "fix_released",
+    "fix_available_date": "2026-09-05"
+  },
+  "CVE-2026-84304": {
+    "package": "dapr-daprd-1.18",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (Chainguard dapr-daprd-1.18 1.18.3-r5 apk in app-runtime-base:3, not a uv.lock dependency); clears on a base-image rebuild onto dapr-daprd-1.18 1.18.3-r6 or later.",
+    "expires": "2026-10-05",
+    "added_by": "@vaibhavatlan",
+    "case": 4,
+    "ticket": "BLDX-1645",
+    "re_evaluation_trigger": "fix_released",
+    "fix_available_date": "2026-09-05"
+  }
 }

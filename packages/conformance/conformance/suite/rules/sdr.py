@@ -1,7 +1,7 @@
-"""SDR-readiness rule definitions (P029, P030, P037, P038, P039, P042).
+"""SDR-readiness rule definitions (P029, P030, P037, P038, P039, P042, P051).
 
 Apps that declare ``self_deployed_runtime: true`` in ``atlan.yaml`` must satisfy
-six structural invariants before they can be considered SDR-ready:
+seven structural invariants before they can be considered SDR-ready:
 
 * ``P029`` — every ``manifest.json`` under ``app/generated/`` must include an
   ``agent_json`` key inside ``dag.extract.inputs.args``.  Missing this field
@@ -52,6 +52,15 @@ six structural invariants before they can be considered SDR-ready:
   been reimplemented on a symbol scheduled for removal in v4.0, so the finding
   needs its own severity, its own remediation text, and a retirement date P030
   does not have.
+
+* ``P051`` — an app whose ``uv.lock`` resolves ``atlan-application-sdk`` below
+  ``3.30.0``, the floor at which the SDR interactive setup surfaces (test
+  authentication, preflight checks, and metadata browsing — the ``sdr:*`` worker
+  activities) become available.  heracles rejects interactive dispatch to a
+  worker below the floor and the frontend hides the widgets, so onboarding the
+  app in a self-deployed runtime offers none of them.  A readiness nudge rather
+  than a silent-data-loss bug — hence WARN — and unlike the others it reads the
+  locked dependency version, not app source or the manifest.
 
 All rules are APP-scoped (the SDK itself does not declare ``self_deployed_runtime``
 and is therefore always skipped) and gate on ``self_deployed_runtime: true``
@@ -603,6 +612,102 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p042"
+        ),
+    ),
+    RuleDefinition(
+        id="P051",
+        scope=RuleScope.APP,
+        name="SdrPreflightUnavailable",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="sdr-readiness",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.25.0",
+        rationale=(
+            "The SDR interactive setup surfaces — test authentication, preflight "
+            "checks, and metadata browsing (the sdr:* worker activities) — first "
+            "ship in application-sdk 3.30.0. heracles rejects interactive dispatch "
+            "to a worker below that floor (its BelowFloorError guard) and the "
+            "frontend hides the widgets, so an app that declares "
+            "self_deployed_runtime: true but locks application-sdk below 3.30.0 can "
+            "offer none of the onboarding experience the customer expects. This rule "
+            "reads the version actually locked in uv.lock (not the pyproject "
+            "specifier) so it reflects what the deployed worker ships. It is a "
+            "readiness nudge, not a broken-crawl or data-loss failure — an app below "
+            "the floor still extracts and publishes normally, it only lacks the "
+            "interactive setup UX — so it lands at WARN."
+        ),
+        short_description=(
+            "SDR app locks application-sdk below the 3.30.0 floor for interactive "
+            "setup (test auth / preflight / metadata browsing)"
+        ),
+        full_description=(
+            "For apps declaring ``self_deployed_runtime: true`` in ``atlan.yaml``,\n"
+            "``uv.lock`` must resolve ``atlan-application-sdk`` to ``3.30.0`` or\n"
+            "newer — the floor at which the SDR interactive setup surfaces become\n"
+            "available on the worker:\n"
+            "\n"
+            "* **test authentication** (``sdr:test_auth``),\n"
+            "* **preflight checks** (``sdr:preflight_check``), and\n"
+            "* **metadata browsing** (``sdr:fetch_metadata``).\n"
+            "\n"
+            "Both sides of the platform gate on this floor. heracles rejects an\n"
+            "interactive dispatch to a worker running an older application-sdk\n"
+            "(``BelowFloorError`` → a 4xx with an upgrade message), and the frontend\n"
+            "hides the interactive widgets unless the agent reports an\n"
+            "``sdk_version`` at or above the floor. So an SDR app pinned lower can\n"
+            "offer none of the onboarding experience — the customer sees no preflight\n"
+            "result, no test-authentication, and a plain input in place of the\n"
+            "include/exclude metadata tree.\n"
+            "\n"
+            "The check reads the **locked** version from ``uv.lock`` — the version\n"
+            "the deployed worker actually ships — rather than the ``pyproject.toml``\n"
+            "specifier, which may be a range that resolves higher.  A version that\n"
+            "cannot be resolved (no ``uv.lock``, no ``atlan-application-sdk`` entry\n"
+            "in it, or an unparseable lock) is left **silent**: it cannot be\n"
+            "confirmed below the floor, and the D-series already governs a missing or\n"
+            "unbounded SDK declaration.\n"
+            "\n"
+            "This is a WARN, not a BLOCK: an app below the floor still extracts and\n"
+            "publishes assets normally — it is only missing the interactive setup UX,\n"
+            "not losing data or failing runs.\n"
+            "\n"
+            "**Remediation:** raise the ``atlan-application-sdk`` pin to\n"
+            "``>= 3.30.0`` in ``pyproject.toml`` and re-lock::\n"
+            "\n"
+            "    uv lock --upgrade-package atlan-application-sdk\n"
+            "\n"
+            "then rebuild and redeploy the SDR worker image so the deployed agent\n"
+            "reports the new ``sdk_version``.  A merged bump alone does not enable the\n"
+            "interactive surfaces — the platform reads the version off the running\n"
+            "worker.\n"
+            "\n"
+            "**The floor is necessary but not sufficient.**  Clearing it only lets the\n"
+            "platform *offer* each surface; they are switched on in the app's own\n"
+            "contract (``contract/app.pkl`` → ``pkl eval`` to regenerate):\n"
+            "\n"
+            "* **Preflight checks** — declare a ``preflight-check`` widget\n"
+            "  (``Config.SageV2`` with its ``checks {}``) in the entrypoint's form and\n"
+            '  list ``"preflight-check"`` in that entrypoint\'s ``required`` UIRule.\n'
+            "  It is per entrypoint: one that omits the widget runs no preflight (a\n"
+            "  miner may leave it out deliberately).\n"
+            "* **Test authentication** — set ``allowTestAuthentication = true`` on the\n"
+            "  credential / agent widget in the entrypoint form. The toolkit emits it\n"
+            "  as ``ui.showTestAuthentication`` in the generated manifest, and the\n"
+            "  setup UI shows the Test Authentication button only when that flag is set\n"
+            "  AND the agent clears this floor. Emitting it needs an\n"
+            "  ``app-contract-toolkit`` version that supports\n"
+            "  ``allowTestAuthentication``.\n"
+            "* **Include / exclude metadata filters** — once the agent clears the floor\n"
+            "  these render the interactive metadata picker; below it (or when the\n"
+            "  version can't be read) the picker falls back to a plain text box. This\n"
+            "  follows the same floor gate automatically — no per-connector change\n"
+            "  beyond declaring the filter widget.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/prescriptions.md#p051"
         ),
     ),
 )

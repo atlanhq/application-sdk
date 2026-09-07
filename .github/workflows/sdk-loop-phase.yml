@@ -67,6 +67,11 @@ on:
         required: false
         default: ''
         description: 'Consecutive re-aims so far. A re-aim is not progress, so it gets a budget of its own.'
+      review_only:
+        type: string
+        required: false
+        default: 'false'
+        description: "'true' on a review-only run: the verdict carries the A/B marker so nothing approves on it."
     secrets:
       LITELLM_API_KEY:
         required: true
@@ -100,6 +105,8 @@ on:
         value: ${{ jobs.phase.outputs.ci_state }}
       cost:
         value: ${{ jobs.phase.outputs.cost }}
+      usd:
+        value: ${{ jobs.phase.outputs.usd }}
       usage:
         value: ${{ jobs.phase.outputs.usage }}
       reaims:
@@ -109,6 +116,25 @@ on:
 
 permissions:
   contents: read
+  # `actions: write` is what the CACHE needs, not what the phase does.
+  # actions/cache v6 talks to the v2 cache service, which authorizes a SAVE
+  # with the run's Actions token and rejects a read-only one. With
+  # `contents: read` alone every job logged
+  #
+  #   Failed to save: Unable to reserve cache with key opencode-Linux-1.18.22.
+  #   More details: cache write denied: token has no writable scopes
+  #
+  # for both the opencode install and setup-uv — so the cache was never
+  # populated, every restore missed, and all four jobs of every run
+  # re-downloaded ~20-30s of the same artifacts. The lookup-only half worked,
+  # which is why this stayed invisible.
+  #
+  # It does not widen what the AGENT can do. `agent_env()` passes an
+  # ALLOWLIST, and `GITHUB_TOKEN` is not on it — the agent gets `GH_TOKEN`,
+  # the separately minted App token, which for a review phase carries no write
+  # scope at all. This grant belongs to the job, and the only step that uses
+  # it is actions/cache.
+  actions: write
 
 jobs:
   phase:
@@ -136,6 +162,7 @@ jobs:
       detail: ${{ steps.run.outputs.detail || steps.prep.outputs.detail }}
       ci_state: ${{ steps.run.outputs.ci_state || steps.prep.outputs.ci_state }}
       cost: ${{ steps.run.outputs.cost }}
+      usd: ${{ steps.run.outputs.usd }}
       usage: ${{ steps.run.outputs.usage }}
       reaims: ${{ steps.run.outputs.reaims }}
       spent_total: ${{ steps.run.outputs.spent_total }}
@@ -186,6 +213,15 @@ jobs:
         with:
           python-version: '3.14'
 
+      # The phase scripts run under the runner's python3, NOT `uv run` — and
+      # since the verdict renderer landed they import PyYAML. CI never saw the
+      # gap because pytest runs under uv, which has the project's deps; the
+      # workflow does not. Every review after that merge failed on import until
+      # this line. test_the_phase_job_installs_what_the_scripts_import derives
+      # the list from the scripts, so the next new import fails CI, not prod.
+      - name: Install what .github/scripts import
+        run: pip install "pyyaml>=6.0.2,<7.0.0"
+
       # A loop is up to 17 phase jobs, each on a fresh runner, so anything
       # installed per job is paid for 17 times. Cache the global npm store so
       # only the first job of a run pays the download.
@@ -215,6 +251,9 @@ jobs:
           PR_NUMBER: ${{ inputs.pr }}
           BASE_SHA: ${{ inputs.base_sha }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # The fast-track verdict comment links back to the run that carried
+          # it forward, so a reader can tell it from a freshly computed one.
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/sdk_loop_prep.py
 
       - name: Cache the opencode install
@@ -283,6 +322,7 @@ jobs:
           PRIOR_SHA: ${{ inputs.prior_sha }}
           SPENT_SO_FAR: ${{ inputs.spent_so_far }}
           REAIMS_SO_FAR: ${{ inputs.reaims_so_far }}
+          REVIEW_ONLY: ${{ inputs.review_only }}
           SDK_LOOP_MAX_TOKENS: ${{ vars.SDK_LOOP_MAX_TOKENS }}
           # $HEAD_SHA is referenced 9 times by the playbook (the
           # moved-since-dispatch guard, the delta diff range, the commit-status

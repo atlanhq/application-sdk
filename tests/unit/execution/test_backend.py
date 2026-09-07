@@ -84,6 +84,9 @@ def _make_ep_meta(name: str, *, output_type: type = dict) -> Any:
 
 def _make_input_data(*, with_config_hash: bool = False) -> Any:
     inp = mock.MagicMock()
+    # The contract default: a MagicMock's auto-attribute is truthy and would
+    # read as a caller-supplied dispatch ID.
+    inp.workflow_id = ""
     if with_config_hash:
         inp.config_hash = mock.MagicMock(return_value="cfghash")
     else:
@@ -258,6 +261,47 @@ class TestTemporalExecutorBackendExecute:
         kwargs = client.execute_workflow.await_args.kwargs
         assert kwargs["memo"] == {"correlation_id": "caller-corr"}
 
+    @pytest.mark.asyncio
+    async def test_execute_stamps_workflow_id_on_input(self) -> None:
+        # Production (/workflows/v1/start) populates Input.workflow_id before
+        # Temporal dispatch; the backend must match, or an input left at the
+        # "" default roots every run's artifacts on one shared prefix.
+        class _WfInput:
+            workflow_id: str = ""
+            correlation_id: str = ""
+
+        client = mock.MagicMock()
+        client.execute_workflow = mock.AsyncMock(return_value=None)
+        backend = TemporalExecutorBackend(client=client, task_queue="q")
+        app_cls = _make_app_cls()
+        ctx = mock.MagicMock(app_name="my-app", correlation_id="c1")
+        inp = _WfInput()
+        await backend.execute(app_cls, inp, context=ctx, retry_policy=SdkRetryPolicy())
+        dispatched_id = client.execute_workflow.await_args.kwargs["id"]
+        assert inp.workflow_id == dispatched_id
+        inp2 = _WfInput()
+        await backend.execute(app_cls, inp2, context=ctx, retry_policy=SdkRetryPolicy())
+        assert inp2.workflow_id != inp.workflow_id
+
+    @pytest.mark.asyncio
+    async def test_execute_dispatches_under_caller_supplied_workflow_id(self) -> None:
+        # Production dispatches under an explicitly supplied workflow_id; the
+        # backend must too, or the input claims one identity while Temporal
+        # runs under another.
+        class _WfInput:
+            workflow_id: str = "caller-wf-id"
+            correlation_id: str = ""
+
+        client = mock.MagicMock()
+        client.execute_workflow = mock.AsyncMock(return_value=None)
+        backend = TemporalExecutorBackend(client=client, task_queue="q")
+        app_cls = _make_app_cls()
+        ctx = mock.MagicMock(app_name="my-app", correlation_id="c1")
+        inp = _WfInput()
+        await backend.execute(app_cls, inp, context=ctx, retry_policy=SdkRetryPolicy())
+        assert client.execute_workflow.await_args.kwargs["id"] == "caller-wf-id"
+        assert inp.workflow_id == "caller-wf-id"
+
 
 class TestTemporalExecutorBackendStart:
     @pytest.mark.asyncio
@@ -276,6 +320,23 @@ class TestTemporalExecutorBackendStart:
             retry_policy=SdkRetryPolicy(),
         )
         assert wf_id == "wf-id-xyz"
+
+    @pytest.mark.asyncio
+    async def test_start_stamps_workflow_id_on_input(self) -> None:
+        class _WfInput:
+            workflow_id: str = ""
+            correlation_id: str = ""
+
+        handle = mock.MagicMock(id="ignored")
+        client = mock.MagicMock()
+        client.start_workflow = mock.AsyncMock(return_value=handle)
+        backend = TemporalExecutorBackend(client=client)
+        app_cls = _make_app_cls(name="starter")
+        ctx = mock.MagicMock(app_name="starter", correlation_id="c")
+        inp = _WfInput()
+        await backend.start(app_cls, inp, context=ctx, retry_policy=SdkRetryPolicy())
+        dispatched_id = client.start_workflow.await_args.kwargs["id"]
+        assert inp.workflow_id == dispatched_id
 
     @pytest.mark.asyncio
     async def test_start_uses_entry_point_when_provided(self) -> None:

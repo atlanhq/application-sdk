@@ -1,0 +1,88 @@
+# Which review rules reach which specialist, for which paths.
+#
+# THIS FILE IS NEVER READ BY A MODEL. `sdk_loop_rules.py` loads it, selects
+# the rules that apply to a PR, and the pack injects them — full text for rules
+# whose identifiers appear in the diff, a one-line index for the rest.
+#
+# ---------------------------------------------------------------------------
+# Why this exists
+# ---------------------------------------------------------------------------
+#
+# `REVIEW.md` tells the reviewer its context already holds "the rules that
+# apply to these paths". For the first version of the lane that sentence was
+# false: the pack carried the diff, symbols, callers, tests and the gate, and
+# no rules at all. The specialist briefs are forbidden from pointing at the old
+# corpus, so the seven rule files — 108 KB, 153 rules — were unreachable.
+# Measured heading by heading, 41 of them reached the model nowhere: PERF-001
+# sync HTTP in async code, PERF-003 `time.sleep()` in async code, the
+# deprecation cycle required before a public kwarg is removed, bounded waits on
+# async shutdown, credential material kept off bulk-data storage.
+#
+# The old lane read the whole corpus for every review, which was the single
+# largest input it had. This is the retrieval version of the same knowledge:
+# a `config-only` PR does not carry performance rules, a `quality` specialist
+# does not carry security rules, and the full text of a rule arrives only when
+# the diff contains the identifiers that rule is about.
+#
+# The rule files live in `.mothership/rules/` — lane-neutral, because they are
+# SDK knowledge and both lanes read them. Nothing here points into
+# `.mothership/pr-review/`.
+
+version: 1
+
+#: Full-text rule budget per specialist, in characters. Roughly 6K tokens. A
+#: cap that bites demotes the overflow to the index and says so in the pack;
+#: it never drops a rule silently.
+full_text_budget_chars: 24000
+
+rules:
+  security-rules.md:
+    specialists: [correctness]
+    paths: ["application_sdk/**", "contract-toolkit/**", "packages/**"]
+    why: >-
+      Secrets in logs and payloads, injection through interpolated values,
+      auth and tenant checks a new path routes around. Correctness owns
+      security in this lane; nobody else should be asked to hold these.
+
+  performance-rules.md:
+    specialists: [correctness]
+    paths: ["application_sdk/**", "contract-toolkit/**"]
+    why: >-
+      Blocking in async, unbounded memory, N+1, missing timeouts. In an async
+      SDK these are bugs, not style — the correctness brief already says so,
+      and these are the specific shapes.
+
+  v3-architecture-rules.md:
+    specialists: [correctness, structure]
+    paths: ["application_sdk/**"]
+    why: >-
+      The ADRs. Contract evolution and determinism are correctness; layering
+      and abstraction seams are structure. Both specialists need the source
+      the briefs distil from.
+
+  structural-rules.md:
+    specialists: [structure]
+    paths: ["application_sdk/**", "packages/**", "contract-toolkit/**"]
+
+  code-quality-rules.md:
+    specialists: [quality, structure]
+    paths: ["**/*.py"]
+    why: >-
+      Naming, constants, exception leaves, logging residue. Quality owns the
+      developer-facing half, structure the layout half.
+
+  test-quality-rules.md:
+    specialists: [quality]
+    paths: ["tests/**", "**/tests/**", "**/test_*.py", "**/conftest.py"]
+    why: >-
+      Only when the diff touches tests. A source-only PR gets the quality
+      brief's one question — could this test fail — without seventeen rules
+      about test files it did not change.
+
+  dx-rules.md:
+    specialists: [quality, structure]
+    paths: ["application_sdk/**", "contract-toolkit/**"]
+    why: >-
+      Public API ergonomics, deprecation cycles, error messages that say what
+      to do next. The builder's experience is the question behind every
+      finding, and this is the rulebook for it.

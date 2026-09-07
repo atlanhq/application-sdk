@@ -768,3 +768,144 @@ class TestTaskPool:
             asyncio.run(wrapper(MagicMock()))
 
         assert mock_exec.call_args.kwargs["task_queue"] == "explicit-cold-queue"
+
+
+class TestTaskPoolChartEnv:
+    """Pool routing under the env the `atlan-app` chart actually sets.
+
+    The chart sets neither ``ATLAN_POOL_<POOL>_QUEUE`` nor ``ATLAN_TASK_QUEUE``.
+    It sets ``ATLAN_APPLICATION_NAME`` + ``ATLAN_DEPLOYMENT_NAME``, and renders a
+    pool's queue as ``atlan-<app>-<deployment>-<pool>``. Before the
+    ``task_queue_from_env`` fallback, every chart-deployed ``@task(pool=...)``
+    resolved to ``None`` and its activities silently ran on the workflow's
+    default queue — the dedicated pool idle while the main worker absorbed the
+    load it existed to offload.
+    """
+
+    @staticmethod
+    def _chart_env(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Exactly the queue-relevant env a chart-deployed pool pod receives."""
+        monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "automation-engine")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "default")
+
+    def test_pool_queue_matches_the_chart_derivation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Derived queue is byte-identical to the chart's own formula.
+
+        The chart renders ``atlan-%s-%s-%s`` from name/deploymentName/pool
+        (``subcharts/atlan-app/templates/deployment.yaml``). Pinning the literal
+        here is the point: if either side's formula changes, routed activities
+        land on a queue no worker polls, and that is invisible at deploy time.
+        """
+        from application_sdk.app.registry import resolve_pool_queue
+
+        self._chart_env(monkeypatch)
+        assert resolve_pool_queue("heavy") == "atlan-automation-engine-default-heavy"
+
+    def test_hyphenated_pool_name_survives_derivation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A kebab-case pool key is appended verbatim, not underscore-normalised.
+
+        Underscore normalisation applies only to the env-var KEY lookup; the
+        queue itself keeps the hyphen so it matches the chart, which interpolates
+        the pool name straight into the queue string.
+        """
+        from application_sdk.app.registry import resolve_pool_queue
+
+        self._chart_env(monkeypatch)
+        monkeypatch.delenv("ATLAN_POOL_COLD_TIER_QUEUE", raising=False)
+        assert (
+            resolve_pool_queue("cold-tier")
+            == "atlan-automation-engine-default-cold-tier"
+        )
+
+    def test_explicit_env_still_outranks_the_chart_derivation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The new fallback is last, so it cannot shadow an explicit override."""
+        from application_sdk.app.registry import resolve_pool_queue
+
+        self._chart_env(monkeypatch)
+        monkeypatch.setenv("ATLAN_POOL_HEAVY_QUEUE", "operator-pinned-queue")
+        assert resolve_pool_queue("heavy") == "operator-pinned-queue"
+
+    def test_atlan_task_queue_still_outranks_the_chart_derivation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicit base queue keeps winning over the derived one."""
+        from application_sdk.app.registry import resolve_pool_queue
+
+        self._chart_env(monkeypatch)
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "local-dev-queue")
+        assert resolve_pool_queue("heavy") == "local-dev-queue-heavy"
+
+    def test_no_app_name_still_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing nameable in the env → None, not a manufactured queue.
+
+        ``derive_task_queue`` refuses to invent a queue without an app name, and
+        the fallback must not paper over that with a bare ``-heavy``.
+        """
+        from application_sdk.app.registry import resolve_pool_queue
+
+        monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+        assert resolve_pool_queue("heavy") is None
+
+    def test_app_name_without_deployment_drops_the_prefix(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """App name alone derives the bare ``{app}`` base, per derive_task_queue."""
+        from application_sdk.app.registry import resolve_pool_queue
+
+        monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "automation-engine")
+        assert resolve_pool_queue("heavy") == "automation-engine-heavy"
+
+    def test_dispatch_path_routes_to_the_chart_queue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end through the real wrapper, not just the resolver.
+
+        Calls _create_task_activity_wrapper so closure capture and kwarg
+        threading are covered too — the resolver being right is not the same as
+        the dispatched activity carrying the right queue.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import _create_task_activity_wrapper
+
+        self._chart_env(monkeypatch)
+
+        with patch(
+            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            new_callable=AsyncMock,
+        ) as mock_exec:
+            mock_exec.return_value = MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="automation-engine",
+                task_name="analyse-heavy",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=SimpleOutput,
+                context_data={"run_id": "r1", "correlation_id": "c1"},
+                pool="heavy",
+            )
+            import asyncio
+
+            asyncio.run(wrapper(MagicMock()))
+
+        assert (
+            mock_exec.call_args.kwargs["task_queue"]
+            == "atlan-automation-engine-default-heavy"
+        )

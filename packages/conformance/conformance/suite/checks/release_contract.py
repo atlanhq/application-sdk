@@ -49,10 +49,10 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
 # Top-level ``app_id:`` key in atlan.yaml. A top-level YAML key starts in
 # column 0 (no leading whitespace), so ``^`` under re.MULTILINE anchors it; a
 # nested ``app_id:`` under some other mapping is not the manifest-level
-# identity the publish step reads and must not satisfy the rule. The value is
-# captured so a present-but-empty/null value can be rejected too (see
-# ``_app_id_missing``).
-_APP_ID_RE = re.compile(r"^app_id:[ \t]*(.*)$", re.MULTILINE)
+# identity the publish step reads and must not satisfy the rule. YAML permits
+# horizontal whitespace before the mapping colon. The value is captured so a
+# present-but-empty/null value can be rejected too (see ``_app_id_missing``).
+_APP_ID_RE = re.compile(r"^app_id[ \t]*:[ \t]*(.*)$", re.MULTILINE)
 
 # YAML values that carry a non-whitespace token yet still POST an empty/None
 # identity to the Global Marketplace and hit the same 404 K011 exists to

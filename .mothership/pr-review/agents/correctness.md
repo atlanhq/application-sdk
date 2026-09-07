@@ -7,9 +7,9 @@ Your domain spans: architecture (ADRs), security, and logical correctness.
 
 ## Reference Rules — read these first
 
-- `.mothership/pr-review/references/security-rules.md`
-- `.mothership/pr-review/references/v3-architecture-rules.md`
-- `.mothership/pr-review/references/performance-rules.md`
+- `.mothership/rules/security-rules.md`
+- `.mothership/rules/v3-architecture-rules.md`
+- `.mothership/rules/performance-rules.md`
 
 These are yours to read; the orchestrator no longer loads every reference file
 for every review. [SEC] maps to security-rules, [ARCH] to v3-architecture-rules, and [BUG] to performance-rules — blocking-in-async, unbounded memory, missing timeouts and N+1 are bugs in an async SDK, not style.

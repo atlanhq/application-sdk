@@ -8,6 +8,24 @@
 * ``K015`` LegacyWorkflowTypeContractDrift (CONNECT-1081) — the manifest's
   ``legacy_workflow_types`` block and the SDK's ``App.legacy_workflow_types``
   class attribute must declare the same aliases and the same expiry.
+* ``K018`` ManifestArgNotDeclaredOnInputContract — the Input-side
+  mirror of K006: an ``extract``-node arg the entrypoint's ``Input`` contract
+  cannot receive is dropped by Pydantic, and the run silently falls back to the
+  field's default.
+* ``K021`` FilterFieldRejectsAeString (CONNECT-1333 / CONNECT-1389) — the
+  type-aware sibling of K018: an ``include_*`` / ``exclude_*`` field the
+  entrypoint's ``Input`` contract types as a strict ``dict`` with no ``str``
+  union and no ``mode="before"`` validator rejects the flat JSON *string*
+  the AE sends and crashes the run. Mixing in ``ExtractionInput`` without
+  redeclaring the field is silent (inherited ``FilterMap | str``); a
+  redeclared strict ``dict`` is an offender.
+* ``K019`` FormKeyMissingFromManifestArgs (WARE-1323) — a ``uiConfig`` form key
+  with no ``{{...}}`` placeholder in any manifest never reaches the run *and*
+  never persists, because the args template doubles as the persistence schema.
+* ``K020`` ManifestArgsLegacyNestedEnvelope — the ``extract`` node still emits
+  the legacy ``args.metadata{}`` envelope instead of flat top-level args, either
+  because the contract opts out via ``flatManifestArgs = false`` or because the
+  committed manifest is a stale pre-flattening artifact.
 
 Both are **cross-file + cross-artifact** checks: they scan all Python files, then
 read the committed ``app/generated/`` tree. Per-file scanning has no meaning
@@ -24,7 +42,11 @@ from conformance.suite.checks._ast_common import discover, make_cli_main
 from conformance.suite.schema.findings import Finding
 
 from ._check import scan_all as _scan_field_mismatch
+from ._filter_string_acceptance import scan_all as _scan_filter_string_acceptance
+from ._form_keys import scan_all as _scan_form_keys
+from ._input_fields import scan_all as _scan_input_fields
 from ._legacy_aliases import scan_all as _scan_legacy_aliases
+from ._nested_envelope import scan_all as _scan_nested_envelope
 
 SERIES = "K"
 
@@ -46,6 +68,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     return [
         *_scan_field_mismatch(paths, root),
         *_scan_legacy_aliases(paths, root),
+        *_scan_input_fields(paths, root),
+        *_scan_filter_string_acceptance(paths, root),
+        *_scan_form_keys(paths, root),
+        *_scan_nested_envelope(paths, root),
     ]
 
 
@@ -55,7 +81,12 @@ main = make_cli_main(
         "Manifest-vs-code cross-checks: K006 verifies manifest.json "
         "$.<node>.outputs.<field> refs against the Python Output contract "
         "(BLDX-1527); K015 verifies the legacy_workflow_types block against the "
-        "SDK App declaration (CONNECT-1081)."
+        "SDK App declaration (CONNECT-1081); K018 verifies the extract node's "
+        "args against the Python Input contract; K019 verifies "
+        "uiConfig form keys are wired into the args template (WARE-1323); "
+        "K020 flags a manifest still nesting args under metadata; "
+        "K021 flags a filter field that rejects the AE's flat JSON string "
+        "(CONNECT-1333 / CONNECT-1389)."
     ),
 )
 

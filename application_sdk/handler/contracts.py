@@ -375,8 +375,11 @@ class PreflightCheck(BaseModel):
     / suggested_action and a redacted, capped ``cause_repr``. Takes precedence over
     :attr:`message`. Ignored on a passed check."""
 
-    duration_ms: float = 0.0
-    """How long the check took in milliseconds."""
+    duration_ms: float = -1.0
+    """How long the check took in milliseconds. ``-1.0`` means not measured —
+    the default is a sentinel, not an elapsed time, so an unset value is never
+    mistaken for an instant check. Kept non-optional (not ``None``) so the key
+    survives ``exclude_none`` dumps and stays numeric for ClickHouse readers."""
 
     @field_validator("error", mode="before")
     @classmethod
@@ -398,6 +401,20 @@ class PreflightCheck(BaseModel):
         if self.error is not None and not self.passed:
             return self.error.suggested_action or ""
         return ""
+
+    def to_wire(self) -> dict[str, Any]:
+        """This check as the dict every consumer outside the SDK receives.
+
+        ``message`` is overwritten with :attr:`resolved_message`, so a failed
+        check's typed ``error`` wins over its deprecated ``message`` field and a
+        reader never has to apply that precedence itself.
+
+        Returns:
+            The check, JSON-mode dumped with unset fields dropped.
+        """
+        dumped = self.model_dump(mode="json", exclude_none=True)
+        dumped["message"] = self.resolved_message
+        return dumped
 
 
 class PreflightInput(BaseModel):
@@ -515,7 +532,13 @@ class PreflightOutput(BaseModel):
     own error, then to ``message``."""
 
     total_duration_ms: float = 0.0
-    """Total time for all checks in milliseconds."""
+    """Total time for all checks in milliseconds.
+
+    Deliberately NOT the ``-1.0`` sentinel its per-check sibling uses: this
+    field is an accumulator (the SDR surface does ``+= elapsed_ms`` on it), so
+    its default must be the additive identity. ``0.0`` here means "nothing
+    added yet", which is a different statement from a per-check duration that
+    was never measured."""
 
     @field_validator("error", mode="before")
     @classmethod

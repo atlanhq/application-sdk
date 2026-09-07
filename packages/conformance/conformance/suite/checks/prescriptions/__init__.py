@@ -90,6 +90,7 @@ from ._error_code_prefix import (
     collect_import_aliases,
     emit_p003,
     module_code_constants,
+    resolve_emission_override,
     resolve_indirect_codes,
     resolve_leaf_prefix,
 )
@@ -274,6 +275,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     for records in file_records.values():
         resolve_indirect_codes(records, code_consts)
     cache: dict[str, str | None] = {}
+    emission_cache: dict[str, bool] = {}
     for path, records in file_records.items():
         directives = file_directives[path]
         for rec in records:
@@ -286,13 +288,20 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                     break
             if leaf_prefix is None:
                 continue
+            # A class that replaces to_failure_details emits its code by its
+            # own route, so `code` is not what a dashboard sees and prefixing
+            # it would be dead. P003 has nothing to say about those.
+            if resolve_emission_override(rec.name, by_name, emission_cache, set()):
+                continue
             if rec.code_value is None:
                 findings.append(emit_p003(rec, leaf_prefix, directives))
             elif not rec.code_value.startswith(f"{leaf_prefix}_"):
                 findings.append(emit_p003(rec, leaf_prefix, directives))
 
     # Pass 4 — emit P013/P014 (cross-file boundary-type enforcement)
-    findings.extend(check_p013_p014(file_trees, by_name, file_directives, root))
+    findings.extend(
+        check_p013_p014(file_trees, by_name, file_directives, root, file_records)
+    )
 
     # Pass 5 — emit P027 (app-wide app_state read-with-no-writer)
     findings.extend(check_p027(file_trees, file_directives, root))

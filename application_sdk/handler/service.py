@@ -56,7 +56,18 @@ from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
+from application_sdk.app._generated_tree import (
+    MANIFEST_STEM,
+    choose_form_configmap,
+    eligible_form_configmaps,
+    names_entrypoint,
+)
+from application_sdk.app.build_identity import (
+    BUILD_IDENTITY_CONFIGMAP_ID,
+    build_identity,
+)
 from application_sdk.app.entrypoint import canonical_workflow_type
+from application_sdk.common.dispatch import resolve_dispatch_workflow_id
 from application_sdk.common.task_queue import (
     resolve_manifest_tokens,
     task_queue_from_env,
@@ -257,6 +268,11 @@ def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
 
 def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
     dumped = check.model_dump(mode="json", exclude_none=True)
+    # The -1.0 "not measured" sentinel belongs to the telemetry row
+    # (check_matrix), not to this display payload — the frontend should see
+    # no duration rather than a negative one.
+    if dumped.get("duration_ms", 0) < 0:
+        del dumped["duration_ms"]
     dumped["message"] = check.resolved_message
     if check.resolved_suggested_action:
         dumped["suggested_action"] = check.resolved_suggested_action
@@ -435,21 +451,15 @@ _storage: ObjectStore | None = None
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
-# Non-form JSON siblings that live in CONTRACT_GENERATED_DIR next to the
-# generated setup-form configmaps. Credential templates are emitted per
-# object-store family (`atlan-connectors-*.json`, `csa-connectors-*.json`).
-# Centralised so the form-discovery exclusion vocabulary is named in one place
-# instead of re-spelled inline; `_is_form_configmap` applies it in the
-# get_configmap default-entrypoint fallback, so adding the next connector-family
-# prefix here updates that site without re-spelling the list. `list_configmaps`
-# still uses its own `manifest`-only exclusion (a separate, deliberate decision).
-_CREDENTIAL_TEMPLATE_PREFIXES = ("atlan-connectors-", "csa-connectors-")
-
-
-def _is_form_configmap(stem: str) -> bool:
-    """True when a generated JSON stem is a setup-form configmap, i.e. neither
-    the DAG ``manifest`` nor a credential template."""
-    return stem != "manifest" and not stem.startswith(_CREDENTIAL_TEMPLATE_PREFIXES)
+# The form-discovery exclusion vocabulary lives in
+# `application_sdk.app._generated_tree`, which is the authority: this endpoint is
+# what a tenant's /api/service/configmaps/<name> proxies to, and the FND-1667
+# route check compares what this serves against the app's committed contract.
+# A second copy of "which sibling JSON is a form" would let the server serve one
+# file while the check compared against another — and that mismatch would read
+# as a contract regression rather than as two divergent exclusion lists.
+# `list_configmaps` below still uses its own `manifest`-only exclusion (a
+# separate, deliberate decision).
 
 
 # Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
@@ -1189,23 +1199,21 @@ def _register_workflow_routes(
 
             input_data = input_type.model_validate(body)
 
-            if explicit_workflow_id:
-                workflow_id = explicit_workflow_id
-            else:
-                config_hash = input_data.config_hash()
-                workflow_id = f"{app_name}-{config_hash}-{uuid4().hex[:8]}"
-
             # Populate framework-managed fields on input_data before Temporal dispatch.
             # These fields are declared on Input (contracts/base.py) but the /start
             # handler constructs input_data before generating them — so they must be
             # injected after the fact.
             #
-            # workflow_id: always set by the framework (caller value is popped at
-            #   line 607 and used only if explicitly provided).
+            # workflow_id: resolved and stamped by the shared dispatch helper —
+            #   the same body the executor backend uses, so the two dispatch
+            #   paths cannot drift. The caller value is popped from the body
+            #   before validation and used only if explicitly provided.
             # correlation_id: respect caller-supplied value if present (docstring:
             #   "Caller-supplied correlation ID for tracing across systems"), only
             #   generate a UUID when the caller didn't provide one.
-            input_data.workflow_id = workflow_id
+            workflow_id = resolve_dispatch_workflow_id(
+                input_data, app_name, explicit_workflow_id=explicit_workflow_id or ""
+            )
 
             correlation_id = input_data.correlation_id or str(uuid4())
             input_data.correlation_id = correlation_id
@@ -1889,6 +1897,50 @@ def _register_workflow_routes(
 
     @app.get("/workflows/v1/configmap/{config_map_id}")
     async def get_configmap(config_map_id: str) -> JSONResponse:
+        # 0. The reserved build-identity id (FND-1684).
+        #
+        # Answered BEFORE the generated-file scan, deliberately: an app that
+        # happens to ship `atlan-build-identity.json` would otherwise shadow the
+        # one fact only a running pod can report — and it would shadow it with a
+        # committed file, which is exactly the class of answer that cannot tell
+        # this build apart from one shipped months ago.
+        #
+        # Served on THIS route rather than a new one because
+        # `/api/service/configmaps/{name}` is already proxied by Heracles. A new
+        # route would need a new proxy rule, in a repo the e2e fix does not
+        # otherwise touch, before CI could read any of this.
+        #
+        # `build_id` is "" for an image that carries no stamp. That is a valid
+        # answer, not an error: the reader has to distinguish "this pod reports a
+        # different build" from "this pod cannot report one", and a 404 here
+        # would collapse the second into "no such route".
+        if config_map_id == BUILD_IDENTITY_CONFIGMAP_ID:
+            identity: dict[str, Any] = {
+                "build_id": build_identity(),
+                "app_name": _workflow_config.app_name,
+            }
+            return JSONResponse(
+                content=_wrap_response(
+                    cast(
+                        "dict[str, Any]",
+                        {
+                            "kind": "ConfigMap",
+                            "apiVersion": "v1",
+                            "metadata": {"name": config_map_id},
+                            # Same envelope as a real configmap — `data.config`
+                            # is a JSON string — so a generic client needs no
+                            # special case here, with the parsed keys repeated
+                            # alongside it for one that does.
+                            "data": {
+                                "config": orjson.dumps(identity).decode(),
+                                **identity,
+                            },
+                        },
+                    ),
+                    message="Build identity fetched successfully",
+                )
+            )
+
         # 1. Direct match against any generated configmap file stem.
         #    The setup form normally requests the form file by its stem
         #    (e.g. "snowflake-crawler"), which lands here.
@@ -1941,23 +1993,50 @@ def _register_workflow_routes(
                 # single-entrypoint app 404'd on an app-id request even though its
                 # form file was present — a blank setup wizard in the UI.
                 #
-                # Pick the form file by excluding the well-known non-form
-                # siblings (`manifest.json` and the `{atlan,csa}-connectors-*`
-                # credential templates) via `_is_form_configmap`. Sorted for
-                # determinism.
+                # Within each directory `choose_form_configmap` decides: a form
+                # that names the entrypoint (`<ep.name>.json`, or the connector
+                # convention `<source>-<ep.name>.json`), else the only file that
+                # survives the non-form exclusion (`manifest.json`,
+                # `artifact_schemas.json`, the `{atlan,csa}-connectors-*`
+                # credential templates), else the alphabetically first.
+                #
+                # That last step is a guess, and it stays: it is the
+                # compatibility path for apps whose form name the SDK cannot
+                # recognise, and 404ing them to avoid a hypothetical would break
+                # working apps. FND-1682 was not the guess being reachable — it
+                # was `artifact_schemas.json` being eligible at all, which
+                # NON_FORM_STEMS now fixes. What the guess still owes an
+                # operator is *visibility*: it produced an HTTP 200 carrying a
+                # document with no `properties`, so a blank setup wizard looked
+                # identical to a working app from the logs, the network tab and
+                # pod stderr alike. Hence the warning below — the next
+                # unrecognised sibling shows up in the logs on the first
+                # request, before anyone opens the wizard.
                 for search_dir in (
                     CONTRACT_GENERATED_DIR / ep.name,
                     CONTRACT_GENERATED_DIR,
                 ):
-                    if not search_dir.is_dir():
+                    candidates = eligible_form_configmaps(search_dir)
+                    target = choose_form_configmap(candidates, ep.name)
+                    if target is None:
                         continue
-                    for json_file in sorted(search_dir.glob("*.json")):
-                        if not _is_form_configmap(json_file.stem):
-                            continue
-                        target = json_file
-                        break
-                    if target is not None:
-                        break
+                    if len(candidates) > 1 and not names_entrypoint(
+                        target.stem, ep.name
+                    ):
+                        # conformance: ignore[L009] logs caller-invisible context (the rejected candidates) that no HTTP response carries.
+                        logger.warning(
+                            "ConfigMap form chosen alphabetically for entrypoint "
+                            "%s: %d generated files are eligible and none is "
+                            "named for it, so %s.json was served as the setup "
+                            "form (candidates=%s). If that is the wrong file, "
+                            "name the form <entrypoint>.json or "
+                            "<source>-<entrypoint>.json in the app's contract.",
+                            ep.name,
+                            len(candidates),
+                            target.stem,
+                            [c.stem for c in candidates],
+                        )
+                    break
 
         if target is not None:
             with open(target, encoding="utf-8") as f:
@@ -1995,12 +2074,28 @@ def _register_workflow_routes(
 
     @app.get("/workflows/v1/configmaps")
     async def list_configmaps() -> JSONResponse:
+        # Everything this endpoint's sibling will serve by exact stem, minus
+        # the DAG manifest, which `/workflows/v1/manifest` owns.
+        #
+        # Deliberately NOT `is_form_configmap`, and the difference is worth
+        # stating because the two look interchangeable. That predicate answers
+        # "which single file is the setup form", for the fallback that has to
+        # pick exactly one. This answers "which names does this endpoint
+        # respond to", and the credential templates it excludes are ones the
+        # UI genuinely fetches — the setup form's `credential` widget requests
+        # `atlan-connectors-<source>` as its own configmap. Filtering them here
+        # would drop names that work.
+        #
+        # The manifest stem comes from `_generated_tree` rather than a literal:
+        # a hand-spelled `"manifest"` here was the last copy of that vocabulary
+        # left in this module after FND-1682, and one divergent spelling is all
+        # the artifact_schemas bug needed.
         seen: set[str] = set()
         configmap_ids: list[str] = []
         if CONTRACT_GENERATED_DIR.exists():
             for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
                 stem = json_file.stem
-                if stem == "manifest" or stem in seen:
+                if stem == MANIFEST_STEM or stem in seen:
                     continue
                 seen.add(stem)
                 configmap_ids.append(stem)
@@ -2827,6 +2922,26 @@ def create_app_handler_service(
         ]
         context = _create_context(credentials)
         with bind_handler_context(context):
+            from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
+                PreflightSurface,
+                emit_preflight_check_outcome,
+                emit_preflight_crash_outcome,
+            )
+
+            def _crash_row(e: BaseException) -> None:
+                emit_preflight_crash_outcome(
+                    logger,
+                    app_name,
+                    e,
+                    surface=PreflightSurface.HTTP,
+                    entrypoint=entrypoint,
+                    request_id=context.request_id_str,
+                )
+
+            # Seeded from the *requested* value, not "", so a raise before
+            # validation still names what the caller asked for — an empty
+            # seed would be stamped as "<implicit>" and misattribute the row.
+            entrypoint = preflight_input.entrypoint or ""
             try:
                 logger.info(
                     "Preflight check started: app=%s request=%s",
@@ -2844,11 +2959,6 @@ def create_app_handler_service(
                     result = await ep_fn(preflight_input, context)
                 else:
                     result = await handler.preflight_check(preflight_input)
-                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
-                    PreflightSurface,
-                    emit_preflight_check_outcome,
-                )
-
                 emit_preflight_check_outcome(
                     logger,
                     app_name,
@@ -2917,6 +3027,7 @@ def create_app_handler_service(
                     e,
                     exc_info=True,
                 )
+                _crash_row(e)
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
@@ -2929,13 +3040,21 @@ def create_app_handler_service(
                     e,
                     exc_info=True,
                 )
+                _crash_row(e)
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
                 ) from None
-            except HTTPException:
-                # Deliberate HTTP responses (e.g. 400 from a malformed
-                # entrypoint name) are already client-facing — pass them
-                # through rather than masking them as a generic 500.
+            except HTTPException as e:
+                # Deliberate client-facing responses (e.g. 400 from a malformed
+                # entrypoint name) pass through unrecorded — the response *is*
+                # the channel, so a row would double-count what the caller can
+                # already see. A 5xx raised this way is a crash wearing an HTTP
+                # status: it reaches none of the boundary handlers around it, so
+                # without this it drops out of the setup funnel's denominator —
+                # the same hole on this surface that CONNECT-1170 gap 3 closed
+                # for handler raises.
+                if e.status_code >= 500:
+                    _crash_row(e)
                 raise
             except Exception as e:
                 # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
@@ -2946,6 +3065,7 @@ def create_app_handler_service(
                     e,
                     exc_info=True,
                 )
+                _crash_row(e)
                 raise HTTPException(
                     status_code=500, detail="Internal server error"
                 ) from None

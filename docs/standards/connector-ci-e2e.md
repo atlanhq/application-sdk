@@ -731,6 +731,72 @@ side benefit.
 > tenant. With `install-app-to-tenant: false`, that is whatever was last
 > hand-deployed there.
 
+### Where the version check gets its answer from (FND-1684)
+
+`Verify the tenant runs the version under test` used to read exactly one thing:
+LM's marketplace install record, via `/apps/{id}/info`. That is the same record
+`install` writes — and the same record it *skips* on:
+
+```python
+if current and current == args.version:
+    return InstallOutcome(..., skipped=True)      # install
+...
+installed = _installed_version(read_client, app_id)  # verify: the same record
+```
+
+So the check was reading its own input. The expected version is stable per
+connector SHA (`sdr-test-<commit8>[-<digest8>]`, `derive_e2e_image_tag.py`), so
+once that record existed, every later run on that SHA skipped the install *and*
+passed the verify — permanently, whatever the cluster was running. One connector
+SHA can also resolve to more than one image, since the tag carries an optional
+digest suffix, so the record can go on naming a build the tenant no longer runs.
+
+**Three layers, strongest first.** `verify` now reads them in order and the step
+log names which one decided:
+
+| Layer | Read | What it establishes |
+|---|---|---|
+| `pod` | `GET /api/service/configmaps/atlan-build-identity` | The build the **running pod** reports. Decides on its own, both ways. |
+| `deployment` | `GET .../marketplace/apps/deployments/{id}` → `deployment_status` | LM reconciled *something*. Consulted only when the pod cannot answer, and never on its own: LM reporting SUCCEEDED while nothing moves is a known shape (DISTR-921). |
+| `install-record` | `GET .../marketplace/apps/{id}/info` | The weakest, and the one that was being printed as `verified:`. Still checked, but a pass here now says so. |
+
+The install reports the same field: `verified_layer` in `$GITHUB_OUTPUT` and in
+prepare-tenant's step summary, so a skipped install that rested on the record
+alone is visible without reading the log.
+
+**Where the pod's answer comes from.** Nothing an app already exposes could
+answer this. `App._app_version` / `AppContext.app_version` is a semver declared
+in the app's own source, identical across every build of it; the served manifest
+is `{dag, execution_mode}`; `/api/service/configmaps/{name}` serves committed
+files verbatim — and the identity CI compares against is the **image tag**,
+minted after every committed artifact exists. So it enters at image build time:
+
+1. `.github/actions/build-app-image` passes `--build-arg ATLAN_BUILD_ID=<tag>`,
+   the un-suffixed tag (`tag-suffix` is per-architecture and the tenant pulls the
+   merged manifest, so a suffixed value would make each arch report a different
+   identity).
+2. `.github/scripts/stamp_build_identity.py` appends `ARG` + `ENV` to the
+   connector's Dockerfile **in the runner's checkout only** — a build-arg is not
+   an ENV, and an ARG is not inherited across `FROM`, so the two lines have to be
+   in the connector's own file. Nothing is written back to any repo, and a
+   connector that adopts the lines itself is left alone.
+3. `application_sdk.app.build_identity` reads the ENV at app registration, so
+   every app inherits it with no per-app change (`App._app_build_id`,
+   `AppContext.build_id`).
+4. The handler answers the reserved id `atlan-build-identity` on the
+   already-proxied configmap route, *ahead* of the generated-file scan, so a
+   committed file cannot answer in the pod's place.
+
+**During the transition.** The stamp arrives fleet-wide with the action
+(`@main`), but the route is served by the **connector's own pinned SDK**. Until
+an app bumps, its pod 404s and `verify` falls back to the record layers with a
+warning naming what was and was not checked. That is deliberate: hard-failing on
+a 404 would red every connector still on an older pin, for a skew with nothing
+wrong in any app. The warning distinguishes the two causes as far as it honestly
+can — it says whether the SDK on the runner carries the route, while noting that
+`harness-sdk-ref` can pin the harness ahead of the runtime, so that is a lean,
+not proof.
+
 ### Asserting the executed DAG, not just the installed version (FND-129)
 
 The install path verifies the **version** on the tenant (`expected-app-version`,
@@ -1013,6 +1079,48 @@ The shared [`regenerate-contract`](../../.github/actions/regenerate-contract/act
 
 Regeneration is bound to the build, so it runs wherever the build runs: once per leg while each leg builds its own image, and once per run for a caller that builds ahead of the matrix and passes `prebuilt-image` (see [Building the image once](#building-the-image-once)). The binding is the invariant — the fresh `app/generated/` must exist in the workspace at the moment the image is built — not the per-leg cardinality.
 
+## Workflow-setup routes (FND-1667)
+
+A contract change can 404 a connector's setup page while **every** local and CI check stays green. That is what shipped in FND-1593: the generated artifacts were self-consistent, conformance was clean, the generated-artifact freshness gate passed, and both `/workflows/setup/*` pages returned 404 in the UI. Nothing was stale or hand-edited — the break lived only in the join between what the contract generates and what the tenant serves, and no gate looked there.
+
+`sdr-e2e`'s **Verify workflow-setup routes resolve** step closes that. It runs on the install path only (gated on `expected-app-version`, the same gate as the version verify), after the version check and before the suite.
+
+What it asserts, in the direction the UI walks it:
+
+1. locate this app's marketplace cards by app `name` **and** `entrypoint` — facts that are *not* the thing under test. `entrypoint` alone is not app-scoped: every connector's crawler card carries `entrypoint: "crawler"`.
+2. `card.id` equals the `id` in the committed `app/generated/<ep>/<config>.json`. This is the assertion that bites — a check asserting `GET configmaps/<known-good-name> == 200` would have passed straight through FND-1593, because that name never stopped working. What moved was the card pointing at it.
+3. `GET /api/service/configmaps/<card.id>` returns 200 and echoes back the name asked for.
+4. the served form declares every input the committed contract does — a **subset** check, so platform-added fields are not brittle while a stale image still fails.
+5. a negative control runs **first**: an unknown config name must really be rejected, or every 200 above is vacuous.
+
+### Skips, and what they mean
+
+| Situation | Outcome |
+|---|---|
+| No `manifest.json` anywhere under `app/generated/` (nothing generated) | **Skipped**, with a `::notice::` — no setup form exists to serve. Costs zero tenant calls. |
+| Caller did not install to the tenant (`expected-app-version` empty) | Step does not run — the tenant serves some other version, and the subset check would report a stale image as a contract break |
+| A declared entrypoint has no generated config, or a config has no `id` | **Fails** — the committed artifacts are incoherent, which is not "nothing to check" |
+
+Skip-not-fail on the first two is deliberate: without it this would be a fleet-wide false positive on its first run.
+
+### Timing
+
+The catalog read is a **bounded poll** (`--wait-seconds`, default 120s), not a single read. `install()` polling the *deployment* to `SUCCEEDED` is not evidence that LM's catalog snapshot and the pod's configmap endpoint have caught up — nothing sequences those against the deployment verdict — so a single read would be flaky-by-construction on exactly the path CI takes. Progress lines are flushed, so a patient step does not read as a hung one.
+
+### Where the logic lives, and why
+
+The check is `application_sdk/testing/setup_routes.py`; the CI shell around it is [`verify_setup_routes.py`](../../.github/actions/sdr-e2e/verify_setup_routes.py) in the composite. The split is not arbitrary:
+
+- The SDK is on **both** sides of the join being asserted. `/api/service/configmaps/<name>` is Heracles proxying to the app pod's own `GET /workflows/v1/configmap/{id}`, so the response envelope, the form-file selection rule and the generated-tree layout are read from `application_sdk/app/_generated_tree.py` — the same authority the server reads. A second copy would let the server serve one file while the check compared against another, and that mismatch would read as a contract regression.
+- It therefore needs the SDK importable, which rules out `prepare-tenant`: that job runs a bare `python3` with no `uv sync`. By this point in `sdr-e2e` the app's environment is synced.
+- The `e2e` job that invokes this composite has `prepare-tenant` in its `needs:`, so every step here is strictly after the install.
+
+One insertion covers both e2e callers (`tests-reusable`'s `e2e` and `e2e-full-reusable`'s `e2e-full`), and no app repo carries any of it. `.github/scripts/tests/test_setup_routes_wiring.py` pins the placement, gate and injection discipline; `tests/unit/testing/test_setup_routes.py` proves the check bites, including a round-trip against the live configmap endpoint.
+
+### Known limitation
+
+The endpoint paths are `atlan-frontend`'s, not ours — `BASE_PATH = 'service'` plus `getAPIPath`, confirmed live. If the frontend changes how it derives the setup route, this check goes stale. The mitigation is that it is in one place rather than in every connector repo.
+
 ## Workspace-wipe defences (local-action mode)
 
 When the SDR composite is invoked via local path (`./.application-sdk/.github/actions/sdr-e2e`) during cross-repo dispatch, `setup-deps`' inner `actions/checkout` wipes the entire workspace — including `${{ github.action_path }}` itself. The composite:
@@ -1135,8 +1243,8 @@ Four things to know:
   it. A crawl declared inside a miner suite (`expect_connection = False`) would
   otherwise never observe the connection it just landed.
 - **One connection, one teardown.** All runs share the suite's minted
-  `connection_qualified_name`, and cleanup stays a single purge in
-  `teardown_method` — which pytest runs on pass, fail **and** error. That
+  `connection_qualified_name`, and cleanup stays a single `connection-delete`
+  run in `teardown_method` — which pytest runs on pass, fail **and** error. That
   guarantee is the reason this lives inside one pytest process instead of two
   ordered CI legs sharing a connection, where teardown would have to move to an
   `if: always()` job a cancelled workflow can still skip, on a leased shared tenant.
@@ -1155,6 +1263,243 @@ only when a later one genuinely cannot work without it.
 not count as the crawler's e2e suite, deliberately: it exists to seed, and it is
 graded against the consuming suite's intent. The rule stays *one collectable class
 per entrypoint, which may run prerequisite DAGs for others*.
+
+### Seeding lineage parents another *source* owns
+
+A lineage-only connector — Coalesce, ADF, Mode — publishes Process /
+ColumnProcess entities whose `inputs`/`outputs` reference **another source's**
+assets by qualified name: Snowflake tables under a Coalesce run, warehouse
+tables under an ADF pipeline. On a connector-scoped e2e tenant that source has
+never been crawled, so the publish fails wholesale (`ATLAS-404-00-00A`) — 72
+entities on adf, 9 on mode, 19,210 on coalesce. Neither `seed_connection` (the
+run's *own* connection) nor a prerequisite `dag_runs` crawl covers this shape.
+
+#### Choose the approach first: crawl if you can reach it, seed if you cannot
+
+There are now two ways to put a referenced source in place, and picking wrongly
+is the expensive mistake. The rule:
+
+> **Run a real crawl when the referenced source is reachable inside the leg. Use
+> synthetic-publish seeding only when it is not.**
+
+| Case | Reachable? | Approach |
+| --- | --- | --- |
+| postgres miner | Same app, two entrypoints; the hermetic container is already in the job | Real crawl via `dag_runs` |
+| coalesce → Snowflake | Different app, external warehouse, no tenant credentials | `seed_assets` |
+| adf → ADLS / Cosmos / Salesforce | Three external sources, none reachable | `seed_assets` |
+
+A real crawl seeds from the producer that owns the data, so its QN parity holds
+by construction and its assertions are calibrated against real crawl behaviour.
+Seeding does neither — which is why every segment of a `SeedSpec` is validated
+and the whole batch is checked offline before it is submitted. Reach for it only
+when there is nothing to crawl.
+
+#### What `seed_assets` does
+
+**Two failure modes stack here, and only one of them is an Atlas entity.**
+
+1. *Ref emission* is connector-side and needs the **connection cache**: with no
+   cache loaded, coalesce sets `cache_unavailable` and emits every ref
+   unvalidated, and mode falls back to PartialObjects. All three connectors
+   above declare `connection_cache_enabled` + `connection_cache_via_app_enabled`.
+2. *Ref resolution* is Atlas-side and needs the **entity**: the emitted ref must
+   bind to something, by exact-match qualified name and exact type — no fuzzy
+   matching, no case folding, and a `Table` never resolves a ref that said
+   `View`.
+
+Writing skeleton entities straight into Atlas with pyatlan addresses (2) and
+nothing else. `build_connection_cache` in `atlan-publish-app` builds the cache
+from a connection's *own transformed JSONL*; it does not snapshot arbitrary
+connections out of Atlas, so a direct write produces no cache — and a
+harness-authored cache blob would mean reimplementing a producer we do not own.
+(This is [FND-1147](https://linear.app/atlan-epd/issue/FND-1147) one connection
+over: *"it read 'prior crawl' as 'prior ASSETS' and seeded them with pyatlan,
+which the lineage app cannot see."*)
+
+So `seed_assets` seeds **through publish**: it serialises the transformed NDJSON
+a crawler of that source would have emitted, uploads it, and submits one
+`PublishWorkflow` node. Publish then owns the entities *and* the cache, from the
+producer that owns them. No new app is needed — `publish` is a platform service
+already on every tenant.
+
+Declare the tree and call it from `seed_prerequisites()`:
+
+```python
+from application_sdk.testing.harness import seed as harness_seed
+
+
+class TestCoalesceE2E(CrawlerGeneratedE2EBase):
+    def seed_prerequisites(self) -> None:
+        seeded = self.seed_assets(
+            harness_seed.SeedSpec(
+                connector_type="snowflake",   # the REFERENCED source's type
+                # qualified_name / display_name omitted → minted per run
+                databases=(
+                    harness_seed.DatabaseSpec(
+                        name="ANALYTICS",
+                        schemas=(
+                            harness_seed.SchemaSpec(
+                                name="PUBLIC",
+                                tables=(
+                                    harness_seed.TableSpec(
+                                        name="ORDERS", columns=("ID", "AMOUNT")
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+        # Rebase the refs the connector will emit onto seeded.qualified_name
+        # (e.g. via a mustache substitution or the connector's config), and point
+        # its own publish node's `ars_lookup_connection_qns` at the same QN.
+```
+
+The seeded tree hangs under a **second** ephemeral connection, minted per run
+exactly like the suite's own. Its QN *and* its object-store prefix are registered
+before the seed runs, so `teardown_method` reclaims both (connections first, the
+run's own before the seeded ones) even when the seed half-fails — see
+[Teardown](#teardown-goes-through-the-app-that-owns-the-artifacts) for what
+"reclaims" covers. Nothing here touches a long-lived shared connection.
+
+#### Three things to get right
+
+- **QN parity is the whole contract.** Every segment must match what the
+  connector under test emits **byte for byte, case included** — Snowflake refs
+  are `.upper()`-d, so seed them upper-cased. Derive the spec from the
+  connector's own committed transform goldens where you can; that is parity by
+  construction rather than by hope. A connector whose warehouse QNs are not
+  config-pinnable must precompute them from its source fixture, never invent
+  them. Segments that cannot compose cleanly (empty, padded, or carrying a `/`)
+  are rejected at declaration.
+- **The pre-submit check needs the `[storage]` extra.** `seed_assets` runs
+  `validate_transformed_dir(..., check_referential_integrity=True)` offline
+  before it uploads anything, which is what turns "every parent is present" from
+  hoped-for into asserted. The referential pass is backed by `rocksdict`; without
+  it the walk degrades to per-asset validation and logs a warning. A leg that
+  relies on this check should install the extra.
+- **Cross-batch parity is still on you.** The check validates integrity *within*
+  the seed. It cannot tell you the seed covers every ref the connector will
+  emit — the coalesce pilot published 82 ColumnProcesses against a golden of
+  110, silently dropping 28. Diff the seed's QN set against the connector's
+  golden refs if the count matters.
+
+#### CI wiring
+
+**Anything two apps both touch goes through the tenant store.** It is the only
+one they share: the deployment store (`objectstore`) is a local, ephemeral
+container filesystem, so an artifact written there is invisible to every other
+app and gone when the pod is. That applies to the seed's NDJSON, and equally to
+any artifact a connector expects a platform app to have produced — a connection
+cache included. A connector that reads such an artifact from its *deployment*
+store is reading a bucket the producer could never have written to.
+
+`BaseE2ETest.seed_object_store()` therefore resolves the configurator-emitted
+`atlan-objectstore` Dapr component out of `ci-deploy/components` — the tenant
+blobstorage binding the `sdr-e2e` action already selects and mounts into the
+worker. A leg whose layout differs sets `E2E_SEED_COMPONENTS_DIR` /
+`E2E_SEED_STORE_BINDING`; a suite that needs something else entirely overrides
+`seed_object_store()`.
+
+Each seed gets its own prefix under `artifacts/apps/<app>/e2e-seed/`, keyed on
+the **whole** connection qualified name percent-encoded into one path segment.
+Whole, because `SeedSpec.qualified_name` is caller-supplied and two connections
+can share a trailing segment (`default/snowflake/123`, `default/postgres/123`);
+encoded rather than nested, so no seed's prefix can ever sit inside another's
+and be swept by its teardown.
+
+Getting that wiring wrong does **not** fail the publish node. Publish is handed a
+*prefix*, and a prefix it cannot read is an empty batch rather than an error — so
+it reports success having published nothing, which then resurfaces minutes later
+as the connector's own `ATLAS-404` cascade, in a different repo. `seed_assets`
+therefore reads back the asset count under the seeded connection and raises
+`SeedPublishEmptyError` on zero, naming the prefix it uploaded to. A count it
+cannot read is reported as *unverified* (a warning), never as zero: an Atlas
+outage must not be reported as a seed defect.
+
+#### Sequencing a run against a connection the suite did not mint
+
+`DAGSpec.connection_qualified_name` names the connection one run is submitted and
+graded against. Left unset — the default, and what every run did before — it is
+the suite's own minted connection, which is still right whenever the runs are
+sequenced *because they share state on one connection* (the miner-after-crawl
+case above). Set it for the opposite case: a run that prepares a **different**
+connection for a later one to reference. The QN joins the same teardown registry
+`seed_assets` writes to, so it is deleted even if the run that was to consume it
+never got that far.
+
+
+### Teardown goes through the app that owns the artifacts
+
+`seed_assets` seeds **through publish**, because publish owns the entities and
+the cache. Teardown follows the same rule for the same reason: `teardown_method`
+submits one `connection-delete` DAG node per connection the run touched, through
+the same `AEClient`, in the same one-node shape, with `delete_type: PURGE`.
+
+**Why the harness cannot do this itself.** A connection leaves four kinds of
+artifact behind, and only one of them is reachable from a CI runner:
+
+| Artifact | Owner | Reachable from the runner? |
+| -- | -- | -- |
+| Connection + entities in Atlas | harness | yes — `pyatlan` |
+| `persistent-artifacts/apps/atlan-publish-app/state/<cqn>/` — publish-cache-v2, WAL, drift, statistics | publish | no |
+| `connection-cache/<cqn>.sqlite` | publish | no — not on the s3proxy allowlist at all |
+| Seed NDJSON under `artifacts/apps/<app>/e2e-seed/<encoded qn>/` | harness | by **key** only |
+
+`delete_prefix` is a LIST plus a bulk `POST ?delete`, and both are *bucket-level*
+URLs. The tenant's Kong s3proxy path-matches every request against an allowlist
+(`/persistent-artifacts/`, `/artifacts/apps/`, `/workflow_file_upload/`) that it
+cannot apply to a URL whose keys live in the request body, so the call comes back
+`403 code 1009 "Invalid Path"` **even when the prefix being deleted is itself
+allowlisted**. The shape of the call is what fails, not the permission. A
+single-object `DELETE` puts the key in the path, where the allowlist can read it
+— which is why the seed NDJSON is deleted by key and nothing else can be.
+
+`connection-delete` has no such problem: it runs on the tenant, where its object
+store is the tenant bucket accessed directly with no proxy in front of it.
+
+**Publish never cleans up its own cache**, which is easy to get backwards. It
+only writes `persistent-artifacts/apps/atlan-publish-app/state/<cqn>/`; nothing
+in publish reacts to the assets being deleted. That matters beyond tidiness:
+publish's Step-0 resolve auto-discovers caches by **connectorType**, not by QN,
+so with `ars_lookup_connection_qns` unset it globs every connection of the
+referenced type — meaning run N+1 materialises every orphan every prior run left,
+inside the resolver's memory ladder. Pin `ars_lookup_connection_qns` on the
+consuming connector's publish node to the seeded QN and the leak is scoped
+regardless.
+
+**An unpolled queue still gets its connections back.** `connection-delete` is a
+marketplace utility (Global Marketplace `app_id
+019ef7f4-de9a-77c3-bad1-7f201fc97052`, `type: utility`) rather than a platform
+service like publish, and it runs at `keda.minReplicaCount: 0`, so it costs
+nothing between runs and its queue is *legitimately* unpolled while nothing is
+using it. It is installed on all three e2e tenants (FND-1724, 2026-09-07). When
+nothing picks the node up off `atlan-connection-delete-<deployment>` within
+`connection_delete_stall_grace_seconds` — a worker that did not wake, or a tenant
+that does not have the app — teardown says so by name, naming the queue and the
+byte-stores being left behind, and falls back to the runner-side `pyatlan`
+purge, which reclaims the Atlas half and nothing else.
+
+That fallback is transitional. Two silences keep it alive: the worker-up-only
+tier (`source_available=false`) wires no AE client to submit a delete through at
+all, and a scale-to-zero worker that fails to wake is indistinguishable from a
+missing install. Drop it once neither is true.
+
+**None of this can red a leg.** Teardown runs after the assertions have decided
+the verdict, so every step reports rather than raises — a missing app, an
+unreachable tenant and a store with no binding are all `WARNING` lines. Tenant
+cleanliness is not what the test is asserting, and a cleanup failure that
+replaced a real verdict would cost more than the bytes it saved.
+
+Three `ClassVar`s tune it, and the defaults suit every connector:
+
+| ClassVar | Default | What it bounds |
+| -- | -- | -- |
+| `connection_delete_poll_timeout_seconds` | `900` | One connection's whole delete. The DAG-progress watchdog is *not* armed — a single node draining a connection legitimately sits `Running` — so this is the only bound. |
+| `connection_delete_stall_grace_seconds` | `120` | How long to wait for the node to be picked up before concluding nothing is polling the queue. Short on purpose — otherwise every connection burns the full ceiling first — but wide enough to clear a `minReplicaCount: 0` cold start. `0` disables the latch. |
+| `connection_delete_type` | `DeleteType.PURGE` | How thoroughly. The app's own default is `SOFT`, which would leave every run's assets recoverable and still indexed on a shared tenant. |
+
 
 ## Onboarding checklist for a new connector
 

@@ -33,8 +33,10 @@ from sdk_loop_common import (  # noqa: E402
     AGENT_ENV_PASSTHROUGH,
     ALLOWED_MODELS,
     DEFAULT_MAX_TOKENS,
+    IDLE_TIMEOUT_S,
     MAX_CONSECUTIVE_REAIMS,
     MAX_ROUNDS,
+    MODEL_PRICES_USD_PER_MTOK,
     PHASE2_AGENTS,
     PROVIDER,
     RESEARCH_DISCIPLINE,
@@ -45,9 +47,11 @@ from sdk_loop_common import (  # noqa: E402
     DismissalLedger,
     _follow_opencode_log,
     format_usage,
+    format_usd,
     gateway_base,
     head_state,
     opencode_config,
+    outstanding_subagents,
     parse_opencode_usage,
     parse_reviewed_head,
     parse_verdict,
@@ -55,6 +59,7 @@ from sdk_loop_common import (  # noqa: E402
     run_agent,
     token_budget,
     token_budget_exceeded,
+    usage_cost_usd,
     usage_total,
     write_rg_config,
 )
@@ -68,7 +73,13 @@ from sdk_loop_fence import (  # noqa: E402
     post_comment,
     start_comment,
 )
-from sdk_loop_finalize import Round, parse_rounds, render  # noqa: E402
+from sdk_loop_finalize import (  # noqa: E402
+    Round,
+    parse_rounds,
+    render,
+    render_cost,
+    total_usd,
+)
 from sdk_loop_phase import (  # noqa: E402
     LANE_MARKER,
     OUTCOME_CLEAN,
@@ -377,16 +388,26 @@ def test_the_resolver_is_told_not_to_trigger_a_review() -> None:
     assert "SDK_LOOP_DISMISSED:" in prompt
 
 
-def test_wave_two_is_skipped_deliberately_not_left_to_fail() -> None:
-    """§2b curls $PROXY_BASE with $PROXY_JWT — mothership sandbox variables
-    that do not exist on a runner. Left alone it burns the run's most
-    expensive optional step on a doomed call and reports 'unavailable', which
-    reads as an outage rather than the design decision it is."""
-    prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
-    assert "SKIP §2b" in prompt
-    assert "PROXY_JWT" in prompt
-    assert "skipped (@sdk-loop" in prompt
-    assert "NOT as unavailable" in prompt
+def test_the_prompt_carries_no_section_numbers_from_the_old_playbook() -> None:
+    """The prompt used to steer the reviewer through a router by section — skip
+    §2b, go to §2c, follow §2a's table. Those sections do not exist in the
+    injected playbook, and a leftover reference sends the reviewer looking for
+    a document it was never given.
+
+    The capability that §2b's skip encoded — no cross-model challenger without
+    $PROXY_BASE — now lives in the refutation stage, which degrades to a
+    same-family challenge and says so in the summary.
+    """
+    prompt = review_prompt(
+        1,
+        1,
+        "a" * 40,
+        DismissalLedger(),
+        scope="full",
+        agents=("correctness", "quality"),
+    )
+    for stale in ("§2a", "§2b", "§2c", "§2e", "§3e", "§11", "Appendix A"):
+        assert stale not in prompt, f"the prompt still steers by {stale}"
 
 
 def test_round_one_gets_no_delta_range() -> None:
@@ -505,15 +526,15 @@ def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None
         assert set(cfg["agent"]) == set(PHASE2_AGENTS)
         for name, spec in cfg["agent"].items():
             assert spec["mode"] == "subagent"
-            # Still the EXISTING file and no second copy in the repo — but read
-            # in Python rather than handed over as `{file:./.mothership/...}`.
-            # That template's resolution against a dot-directory was never
-            # verified here, and the same path returns zero matches through the
-            # agent's own Glob; a template that quietly resolved to nothing
-            # would give a domain agent no instructions while it still emitted
-            # a verdict. Asserting against the file's real bytes also proves
-            # the brief exists, which the string form never did.
-            brief = pathlib.Path(f".mothership/pr-review/agents/{name}.md")
+            # The loop lane's OWN brief, read in Python rather than handed over
+            # as `{file:./.mothership/...}` — that template's resolution against
+            # a dot-directory was never verified, and a template that quietly
+            # resolved to nothing would give a domain agent no instructions
+            # while it still emitted a verdict. Asserting the file's real bytes
+            # also proves the brief exists. It is `pr-loop/`, not `pr-review/`:
+            # the first cutover left this on the old lane's briefs, so every
+            # dispatched specialist ran the old contract under the new playbook.
+            brief = pathlib.Path(f".mothership/pr-loop/agents/{name}.md")
             assert (
                 brief.read_text(encoding="utf-8") in spec["prompt"]
             ), f"{name}'s prompt must carry its playbook brief verbatim"
@@ -549,37 +570,37 @@ def test_every_agent_the_playbook_dispatches_is_registered() -> None:
 
 
 def test_the_review_prompt_names_the_delegation_tool_for_this_runtime() -> None:
-    prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
+    """`Task`, not `Agent`. An agent reaching for the wrong name burns a turn
+    discovering the tool does not exist, and the routing has already decided
+    these specialists run."""
+    prompt = review_prompt(
+        1,
+        1,
+        "a" * 40,
+        DismissalLedger(),
+        scope="full",
+        agents=("correctness", "quality"),
+    )
     assert "`Task`" in prompt
-    # The multi-domain invariant, which survives the solo-scope change: when
-    # several agents ARE registered, collapsing them into one pass yields a
-    # worse verdict and says nothing about having done so.
-    assert "Do NOT do their work yourself" in prompt
 
 
-def test_the_review_prompt_references_the_playbook_and_never_restates_it() -> None:
-    """The prompt may say what is DIFFERENT about this lane; it must not carry
-    a copy of the review rules, which would be a second thing to keep in sync
-    and would drift silently from the playbook it contradicts."""
-    prompt = review_prompt(42, 3, "a" * 40, DismissalLedger())
-    assert ".mothership/pr-review/ORCHESTRATION.md" in prompt
-    assert f"round 3 of {MAX_ROUNDS}" in prompt
-    # Review policy lives in the playbook. Naming a section to skip is lane
-    # wiring; restating what a finding is, or how to tier one, is not.
-    for restatement in (
-        "Critical",
-        "Important",
-        "READY_TO_MERGE",
-        "NEEDS_FIXES",
-        "### Findings",
-        "severity",
-    ):
-        assert restatement not in prompt, f"prompt restates policy: {restatement}"
+def test_the_review_prompt_carries_the_playbook_rather_than_pointing_at_it() -> None:
+    """The inversion this cutover exists for.
 
+    "Read <playbook> and follow it exactly" bought eight measured orientation
+    turns before the diff was touched — a 1,700-line router fetched in two
+    calls because a default Read truncates, then re-read per specialist. The
+    playbook is now 8.1 KB and arrives in the prompt.
 
-# ---------------------------------------------------------------------------
-# Resolve phase
-# ---------------------------------------------------------------------------
+    The prompt must also point at nothing in the other lane's corpus: one
+    surviving pointer buys the whole orientation sequence back.
+    """
+    prompt = review_prompt(
+        1, 1, "a" * 40, DismissalLedger(), scope="full", agents=("correctness",)
+    )
+    assert "# SDK reviewer" in prompt, "the playbook was not injected"
+    assert "Read .mothership" not in prompt
+    assert ".mothership/pr-review/" not in prompt
 
 
 def test_a_push_that_moved_the_branch_is_progress() -> None:
@@ -1115,7 +1136,14 @@ def test_the_workflow_grants_every_scope_its_own_gh_calls_need() -> None:
         pathlib.Path(__file__).resolve().parents[1] / "sdk_loop_fence.py"
     ).read_text(encoding="utf-8")
     if '"run",' in fence and '"list",' in fence:
-        assert perms.get("actions") == "read", "gh run list needs actions: read"
+        # read OR write: the fence only reads, but actions/cache v6 needs the
+        # write scope to SAVE, and a called workflow cannot exceed its caller.
+        # Pinning this to exactly "read" is what would silently re-break the
+        # cache, so the assertion is "at least read", not "exactly read".
+        assert perms.get("actions") in {
+            "read",
+            "write",
+        }, "gh run list needs at least actions: read"
     if '"gh", "pr", "comment"' in fence:
         assert perms.get("pull-requests") == "write"
 
@@ -1411,3 +1439,168 @@ def test_a_reaim_streak_stops_the_run_before_it_eats_the_round_cap() -> None:
     assert not reaim_exhausted(1)
     assert reaim_exhausted(MAX_CONSECUTIVE_REAIMS)
     assert MAX_CONSECUTIVE_REAIMS < MAX_ROUNDS, "must bite before the round cap"
+
+
+def test_humanised_token_counts_are_scaled_not_truncated() -> None:
+    """opencode renders every token cell through
+    `n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1000 ? (n/1000).toFixed(1)+"K" : n`.
+    The original pattern was `([\\d,]+)`, which stops at the decimal point and
+    never sees the suffix — so a real 258,300 was stored as 258 and every token
+    figure this lane published understated by three orders of magnitude. The
+    tell in production was that across twelve measured phases no value ever
+    reached 1,000."""
+    usage = parse_opencode_usage(
+        "Input   258.3K\nOutput  4.1K\nCache Read  1.2M\nCache Write 0"
+    )
+    assert usage == {
+        "input": 258_300,
+        "output": 4_100,
+        "cache_read": 1_200_000,
+        "cache_write": 0,
+    }
+    # Un-suffixed values still parse exactly — opencode prints those verbatim
+    # below 1,000, and a scale factor must not be applied to them.
+    assert parse_opencode_usage("Input 999\nOutput 5")["input"] == 999
+
+
+def test_every_reachable_model_carries_a_real_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The prices were zeroes, declared to settle a DecimalError. That made
+    opencode's own `Total Cost` $0.00 by construction, and when the /key/info
+    fallback turned out to 403 there was no dollar figure left anywhere. A
+    model the lane can select but cannot price puts it straight back there."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    for model in ALLOWED_MODELS:
+        prices = MODEL_PRICES_USD_PER_MTOK[model]
+        assert set(prices) == {"input", "output", "cache_read", "cache_write"}
+        # input and output are never free on any real gateway; cache rates
+        # legitimately can be (xai bills no cache-write).
+        assert prices["input"] > 0 and prices["output"] > 0
+        assert opencode_config(model)["provider"][PROVIDER]["models"][model][
+            "cost"
+        ] == dict(prices)
+
+
+def test_a_phase_is_priced_from_its_own_tokens() -> None:
+    """Priced locally rather than read back from the gateway: /key/info 403s
+    with this lane's key and, when it did not, summed every lane sharing it."""
+    usage = {"input": 1_000_000, "output": 1_000_000, "cache_read": 0, "cache_write": 0}
+    assert usage_cost_usd(usage, "xai/grok-4.6") == pytest.approx(8.0)  # 2 + 6
+    assert usage_cost_usd(usage, "gpt-5.6-luna") == pytest.approx(1.4)  # 0.2 + 1.2
+    # None, never 0.0 — a phase that reports free is worse than one that
+    # reports unknown, which is the whole failure this replaces.
+    assert usage_cost_usd(usage, "some-unpriced-model") is None
+    assert usage_cost_usd({}, "xai/grok-4.6") is None
+    assert format_usd(None) == "unavailable"
+    # Four decimals: a resolve phase lands under a cent and "$0.00" reads as
+    # free.
+    assert format_usd(0.0007) == "$0.0007"
+
+
+def test_the_summary_reports_dollars_and_labels_them_as_list_price() -> None:
+    rounds = [
+        Round(1, "review", "ok", cost=100, usd=0.5),
+        Round(1, "resolve", "ok", cost=50, usd=0.01),
+    ]
+    assert total_usd(rounds) == (pytest.approx(0.51), 0)
+    out = render_cost(rounds)
+    assert "$0.5100" in out
+    assert "List price" in out and "not the gateway's bill" in out
+    # An unpriced run must say so rather than print $0.0000.
+    assert "unavailable" in render_cost([Round(1, "review", "ok", cost=100)])
+
+
+def test_a_stall_names_the_subagent_that_never_returned() -> None:
+    """PR #3529 dispatched four specialists; three printed the closing bullet
+    and `correctness` never did. Both runs then reported only "the phase did
+    not finish", naming nothing, and cost ~30 minutes each. opencode exposes no
+    per-dispatch deadline, so this does not prevent the hang — it makes it
+    attributable."""
+    transcript = (
+        "\x1b[0m• \x1b[0mcorrectness domain review\x1b[90m Correctness Agent\x1b[0m\n"
+        "\x1b[0m• \x1b[0mquality domain review\x1b[90m Quality Agent\x1b[0m\n"
+        "\x1b[0m✓ \x1b[0mquality domain review\x1b[90m Quality Agent\x1b[0m\n"
+    )
+    assert outstanding_subagents(transcript) == ["Correctness"]
+    assert outstanding_subagents(transcript.replace("• ", "✓ ")) == []
+    # `gh auth login` prints its own tick in EVERY transcript. Anchoring on the
+    # bullet alone would read it as a sub-agent finishing and hide a real one.
+    noise = "  ✓ Logged in to github.com account atlan-app-fleet[bot] (GH_TOKEN)\n"
+    assert outstanding_subagents(noise + transcript) == ["Correctness"]
+    result = AgentResult(exit_code=0, stdout=transcript, stderr="", stalled=True)
+    assert "Correctness" in result.abort_reason
+
+
+def test_the_cache_can_actually_be_written() -> None:
+    """`contents: read` alone made actions/cache v6 log "cache write denied:
+    token has no writable scopes" on every job, so the opencode and uv caches
+    never populated and all four jobs of every run re-downloaded them. A called
+    workflow cannot exceed its caller, so both halves have to grant it."""
+    root = pathlib.Path(__file__).resolve().parents[2]
+    phase = (root / "workflows" / "sdk-loop-phase.yml").read_text(encoding="utf-8")
+    caller = (root / "workflows" / "sdk-loop.yml").read_text(encoding="utf-8")
+    assert "actions: write" in phase
+    assert "actions: write" in caller
+    assert "actions: read" not in caller
+
+
+def test_the_prompt_still_forbids_reading_a_dispatched_agents_brief() -> None:
+    """Measured waste that survives the redesign: a review read four briefs
+    into its own context and then dispatched all four, carrying instructions it
+    never executes through every turn that followed. Briefs arrive inlined in
+    each agent's own prompt, so reading one is pure cost."""
+    prompt = review_prompt(
+        1,
+        1,
+        "a" * 40,
+        DismissalLedger(),
+        scope="full",
+        agents=("correctness", "quality"),
+    )
+    assert "Do NOT read the brief of an agent you dispatch" in prompt
+
+
+def test_the_idle_bound_clears_the_worst_measured_healthy_turn() -> None:
+    """Run 33500595871: the watchdog killed a working toolkit review at
+    exactly 300s of silence — while the measured maximum gap in a phase that
+    went on to post a clean verdict was 304.7s. An idle bound below the
+    healthy maximum converts the lane's slowest successes into failures, at
+    the end of the phase, where the spend is already sunk. The genuine stall
+    this bound exists for measured 43 minutes; anything in [400s, 2000s]
+    separates the two populations."""
+    assert IDLE_TIMEOUT_S > 305, "below the measured max healthy turn gap"
+    assert IDLE_TIMEOUT_S < 2000, "no longer catches the 43-minute stall class"
+
+
+def test_a_fast_track_cancels_the_round_chain() -> None:
+    """prep re-stamps the previous verdict on the live head, so a review would
+    re-read a diff whose verdict is already posted. Round 1 is the only gate
+    that needs to say so: rounds 2+ key off the previous pair's outcome, which
+    is empty when round 1 never ran.
+
+    Tested against the GENERATED file because that is what GitHub reads — the
+    generator being right is not the same as the committed workflow being right.
+    """
+    workflow = yaml.safe_load(
+        pathlib.Path(".github/workflows/sdk-loop.yml").read_text(encoding="utf-8")
+    )
+    gate = workflow["jobs"]["review-1"]["if"]
+    assert "needs.prep.outputs.outcome != 'fast_track'" in gate
+
+    # Fail-open, deliberately: a prep that skipped or died emits no outcome, and
+    # '' != 'fast_track' still reviews. Only the one value short-circuits.
+    assert "needs.prep.outputs.outcome == 'fast_track'" not in gate
+
+
+def test_the_summary_can_name_a_fast_track() -> None:
+    """`STOP_REASON` reads review/resolve outcomes newest-first and defaults to
+    'failed'. On a fast track none of those exist, so without prep's term the
+    author is told a phase broke on a run that did exactly what it should."""
+    workflow = yaml.safe_load(
+        pathlib.Path(".github/workflows/sdk-loop.yml").read_text(encoding="utf-8")
+    )
+    stop = workflow["jobs"]["finalize"]["steps"][-1]["env"]["STOP_REASON"]
+    assert stop.index("needs.prep.outputs.outcome == 'fast_track'") < stop.index(
+        "needs.resolve-8.outputs.outcome"
+    ), "the fast-track term must win over the round outcomes it replaces"
