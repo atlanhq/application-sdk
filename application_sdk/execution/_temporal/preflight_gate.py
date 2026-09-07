@@ -250,7 +250,7 @@ def build_workflow_block(
     return ApplicationError(
         f"Preflight failed: {details.message}",
         details,
-        {"checks": checks},
+        {"status": PreflightStatus.NOT_READY.value, "checks": checks},
         type=PREFLIGHT_FAILED_ERROR_TYPE,
         non_retryable=True,
     )
@@ -909,7 +909,10 @@ def _gate_error(
         or joined
         or "Preflight check failed; aborting before extraction"
     )
-    checks_payload = {"checks": [c.to_wire() for c in result.checks]}
+    checks_payload = {
+        "status": result.status.value,
+        "checks": [c.to_wire() for c in result.checks],
+    }
     return ApplicationError(
         f"{message_prefix}: {reason}",
         details,
@@ -967,7 +970,18 @@ def _plumbing_error(exc: BaseException, app_name: str) -> Any:
         )
     if exc.app_name is None:
         exc.app_name = app_name
-    return _to_application_error(exc)
+    converted = _to_application_error(exc)
+    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
+
+    # ``status`` is None on purpose: no verdict was reached and the run
+    # proceeds, so ``not_ready`` here would contradict the run's own outcome.
+    return ApplicationError(
+        str(converted),
+        *converted.details,
+        {"status": None, "checks": []},
+        type=converted.type,
+        non_retryable=converted.non_retryable,
+    )
 
 
 def _proceeded_reason(result: PreflightOutput) -> str:

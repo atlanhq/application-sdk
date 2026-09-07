@@ -844,6 +844,7 @@ class TestEveryExitCarriesFailureDetails:
         assert details.category is FailureCategory.SOURCE_UNAVAILABLE
         assert details.audience is Audience.USER
         assert details.app_name == "myapp"
+        assert err.details[1]["status"] == PreflightStatus.NOT_READY.value
         checks = err.details[1]["checks"]
         assert len(checks) == 1
         assert checks[0]["passed"] is False
@@ -883,6 +884,7 @@ class TestEveryExitCarriesFailureDetails:
         assert err.type == "DependencyUnavailableError"
         assert err.__cause__ is exc
         assert _primary_details(err).category is FailureCategory.DEPENDENCY_UNAVAILABLE
+        assert err.details[1] == {"status": None, "checks": []}
 
     async def test_resolution_eating_the_budget_is_wrapped_with_details(self) -> None:
         async def _slow_resolve(_input):

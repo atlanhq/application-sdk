@@ -459,8 +459,9 @@ holding the event loop, an uncancellable thread — so the workflow applies the 
 chain: the previous attempt's typed evidence when it left any, else a `TIMEOUT` attributed to the
 app owner. Only a gate that never ran at all fails open.
 
-Every error that leaves the gate activity carries one `FailureDetails` as `details[0]` and the
-check list as `details[1]`, whichever attempt and whichever exit produced it: the `PreflightFailed`
+Every error that leaves the gate activity carries one `FailureDetails` as `details[0]` and
+`{"status": ..., "checks": [...]}` as `details[1]` (`status` is `not_ready` on every source-attributed
+exit and `null` on a plumbing fail-open), whichever attempt and whichever exit produced it: the `PreflightFailed`
 block, the `PreflightNoVerdict` retry marker a non-final attempt raises, and a plumbing failure
 re-raised under its own class name as the wire `type`. A consumer reading the Temporal failure
 therefore always finds category, code, audience and suggested action, and a later attempt that

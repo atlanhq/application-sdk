@@ -75,7 +75,7 @@ from application_sdk.common.task_queue import (
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.credentials.ingress import lift_agent_json
-from application_sdk.errors import AppError
+from application_sdk.errors import AppError, InternalError
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
@@ -277,6 +277,65 @@ def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
     if check.resolved_suggested_action:
         dumped["suggested_action"] = check.resolved_suggested_action
     return dumped
+
+
+def _preflight_response(
+    result: PreflightOutput, *, success: bool | None = None
+) -> dict[str, Any]:
+    """The ``/workflows/v1/check`` body for a verdict.
+
+    ``data`` is the v2 map the SageV2 widget iterates: one camelCase key per
+    check with ``success`` and, because the widget renders
+    ``checkResult.success ? successMessage : failureMessage`` with no fallback,
+    both message fields (DBBI-665, WARE-1250). Envelope ``success`` means
+    "preflight executed", not "every check passed": the widget short-circuits
+    on ``!response.success`` and would otherwise render every PARTIAL or
+    NOT_READY verdict as a blank failure. The canonical verdict lives under
+    ``preflight``.
+    """
+    data: dict[str, Any] = {}
+    for check in result.checks:
+        key = check.name[0].lower() + check.name[1:]
+        msg = check.resolved_message or ""
+        data[key] = {
+            "success": check.passed,
+            "message": msg,
+            "successMessage": msg if check.passed else "",
+            "failureMessage": "" if check.passed else msg,
+        }
+    response = _wrap_response(
+        data,
+        message=result.message or f"Preflight check {result.status.value}",
+        success=len(result.checks) > 0 if success is None else success,
+    )
+    response["preflight"] = _preflight_runtime_summary(result)
+    return response
+
+
+def _preflight_failure_response(
+    exc: AppError, app_name: str, status_code: int, detail: str
+) -> JSONResponse:
+    """The ``/workflows/v1/check`` body when the handler raised instead of returning.
+
+    A raise used to leave the caller with an HTTP status and a string. It now
+    carries the same verdict shape a returned ``NOT_READY`` does, built the way
+    the gate builds it: ``status`` is ``not_ready`` and one ``preflightVerdict``
+    check carries the raise as typed ``FailureDetails`` — the leaf's own for a
+    typed raise, ``InternalError`` with ``classification_pending`` for a crash.
+    So the status says the source was not verified while the check says who
+    must act. The HTTP status and ``detail`` keep their previous values, so a
+    client that read only those sees no change.
+    """
+    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
+        _unverifiable_result,
+    )
+
+    output = _unverifiable_result(exc, app_name)
+    body = _preflight_response(output, success=False)
+    body["detail"] = detail
+    failure = output.checks[0].error
+    body["error"] = failure.model_dump(mode="json") if failure is not None else None
+    return JSONResponse(status_code=status_code, content=body)
 
 
 def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
@@ -2967,59 +3026,13 @@ def create_app_handler_service(
                     entrypoint=entrypoint,
                     request_id=context.request_id_str,
                 )
-                # Build v2-compatible response: each check becomes a top-level
-                # key in data so the frontend can iterate check names directly.
-                # v2 format: {"authenticationCheck": {"success": true,
-                # "successMessage": "...", "failureMessage": "..."}, ...}.
-                #
-                # The SageV2 widget at
-                # atlan-frontend/src/workflowsv2/components/dynamicForm2/widget/SageV2.vue:271-273
-                # renders ``checkResult.success ? successMessage :
-                # failureMessage`` with no fallback to ``message``, so omitting
-                # those fields leaves the detail panel blank on a failed check
-                # (DBBI-665, WARE-1250). ``message`` is retained so any
-                # consumer already reading the v3 field keeps working.
-                #
-                # This finishes the third sub-mismatch from BLDX-901; PR #1228
-                # converted ``checks`` → camelCase keys and ``passed`` →
-                # ``success`` but left the message-field rename.
-                v2_data: dict[str, Any] = {}
-                for check in result.checks:
-                    # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
-                    key = check.name[0].lower() + check.name[1:]
-                    msg = check.resolved_message or ""
-                    v2_data[key] = {
-                        "success": check.passed,
-                        "message": msg,
-                        "successMessage": msg if check.passed else "",
-                        "failureMessage": "" if check.passed else msg,
-                    }
-                # Envelope ``success`` reports whether preflight executed at
-                # all, not whether every check passed — per-check pass/fail
-                # belongs in ``data.<check>.success``. The SageV2 widget at
-                # SageV2.vue:249 short-circuits on ``!response.success`` and
-                # skips the per-check render loop entirely, so collapsing
-                # envelope success to ``status == READY`` (the previous
-                # behaviour) made every PARTIAL/NOT_READY response surface
-                # as "Check failed" with a blank "Hide details" panel
-                # (DBBI-665). Tying envelope success to "any check ran"
-                # keeps it false when a handler produced no checks and lets
-                # the widget render per-check rows otherwise. The canonical
-                # status is exposed separately under ``preflight``.
-                response = _wrap_response(
-                    v2_data,
-                    message=result.message or f"Preflight check {result.status.value}",
-                    success=len(result.checks) > 0,
-                )
-                response["preflight"] = _preflight_runtime_summary(result)
-                return JSONResponse(content=response)
+                return JSONResponse(content=_preflight_response(result))
             except HandlerError as e:
                 # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
                 # AppError subclass caught here first so http_status is preserved.
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Preflight check failed for app %s (request %s): %s",
                     app_name,
@@ -3028,11 +3041,8 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 _crash_row(e)
-                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+                return _preflight_failure_response(e, app_name, e.http_status, str(e))
             except AppError as e:
-                # Forward-looking: typed AppError leaves from connectors that raise
-                # non-HandlerError typed errors (already migrated).
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Preflight check failed for app %s (request %s): %s",
                     app_name,
@@ -3041,9 +3051,9 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 _crash_row(e)
-                raise HTTPException(
-                    status_code=_app_error_to_http_status(e), detail=str(e)
-                ) from None
+                return _preflight_failure_response(
+                    e, app_name, _app_error_to_http_status(e), str(e)
+                )
             except HTTPException as e:
                 # Deliberate client-facing responses (e.g. 400 from a malformed
                 # entrypoint name) pass through unrecorded — the response *is*
@@ -3057,7 +3067,7 @@ def create_app_handler_service(
                     _crash_row(e)
                 raise
             except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info); the response carries a fixed message, never the exception text.
                 logger.error(
                     "Preflight check failed unexpectedly for app %s (request %s): %s",
                     app_name,
@@ -3066,9 +3076,19 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 _crash_row(e)
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
+                return _preflight_failure_response(
+                    InternalError(
+                        message="Preflight could not be verified due to an internal error.",
+                        app_name=app_name,
+                        cause=e,
+                        retryable=False,
+                        component="preflight_handler",
+                        classification_pending=True,
+                    ),
+                    app_name,
+                    500,
+                    "Internal server error",
+                )
 
     # ------------------------------------------------------------------
     # Metadata

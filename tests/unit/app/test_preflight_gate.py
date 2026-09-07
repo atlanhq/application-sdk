@@ -623,6 +623,7 @@ class TestWorkflowAppliesTheModeToADeadFrame:
         assert err.details[0].category is FailureCategory.SOURCE_UNAVAILABLE
         assert err.details[0].audience is Audience.USER
         assert err.details[0].app_name == "mssql"
+        assert err.details[1]["status"] == "not_ready"
         assert err.details[1]["checks"][0]["passed"] is False
         (row,) = self._rows(safe_log)
         assert row["outcome"] == "blocked"

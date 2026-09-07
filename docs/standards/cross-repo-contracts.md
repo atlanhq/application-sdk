@@ -137,7 +137,7 @@ Two consequences for changes here:
 | | |
 |---|---|
 | **Produced by** | `_gate_error()` and `_plumbing_error()` in `application_sdk/execution/_temporal/preflight_gate.py`, on every error that leaves the `{app}:preflight` activity |
-| **Shape** | An `ApplicationError` whose `details[0]` is one `FailureDetails` (category, code, audience, retryable, message, suggested_action, evidence) and whose `details[1]` is `{"checks": [...]}`, every check in wire form. The wire `type` is `PreflightFailed` for the block, `PreflightNoVerdict` for a non-final attempt's retry marker, and the raising class name (e.g. `DependencyUnavailableError`) for a gate-plumbing failure |
+| **Shape** | An `ApplicationError` whose `details[0]` is one `FailureDetails` (category, code, audience, retryable, message, suggested_action, evidence) and whose `details[1]` is `{"status": ..., "checks": [...]}`, every check in wire form. `status` is `not_ready` on every exit the gate attributes to the source, and `null` on a gate-plumbing failure, where no verdict was reached and the run proceeds. The wire `type` is `PreflightFailed` for the block, `PreflightNoVerdict` for a non-final attempt's retry marker, and the raising class name (e.g. `DependencyUnavailableError`) for a gate-plumbing failure |
 | **Read by** | The Automation Engine, which attributes a failed run from `details[0]` of the terminal failure and of the gate activity's failure; the Temporal UI's activity pane, which renders `details[1]` |
 | **Pinned by** | `TestEveryExitCarriesFailureDetails` in `tests/unit/execution/test_preflight_gate_classification.py` |
 
