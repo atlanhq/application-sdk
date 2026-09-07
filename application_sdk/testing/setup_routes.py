@@ -61,14 +61,35 @@ assertion that survives is the one that always carried the weight: fetch the
 card's id, require a 200, and require the served schema to declare what this
 entry point's contract declares.
 
-Both sides of the join are the SDK's
-------------------------------------
-``/api/service/configmaps/<name>`` is Heracles proxying to the app pod's own
-``GET /workflows/v1/configmap/{id}`` — :mod:`application_sdk.handler.service`.
-So the envelope this module unwraps and the file-selection rule it applies are
-read from :mod:`application_sdk.app._generated_tree`, the same authority the
-server reads. Re-deriving either would compare one guess against another and
-drift the moment the exclusion vocabulary grew a prefix.
+Both sides of the join are the SDK's — but not directly
+--------------------------------------------------------
+``/api/service/configmaps/<name>`` is **not** a direct Heracles-to-pod proxy
+(FND-1725 corrects an earlier revision of this docstring that said so). Since
+form-config-v2 (SDK #1747), Local Marketplace sits in between: the served
+form is read from a k8s ConfigMap in the app's namespace, seeded at *publish*
+time from GM's ``versions.app_configs`` blob, and falls through to the app
+pod's own ``GET /workflows/v1/configmap/{id}`` only on a cache miss. On the
+test-only explicit-image deploy path this check's callers actually take — the
+pod image is swapped for the build under test, the publish-time cache is
+not — that cache can disagree with the image under test by construction:
+``openapi-app`` renaming a form field ``extraction_method`` to
+``extraction-method`` in its image once stayed invisible to this exact check
+because Local Marketplace kept serving the pre-rename, snake-case form.
+
+So this check asks for ``?source=app`` (atlanhq/heracles#6473; the same
+handler's existing ``source=es`` is the precedent), which skips *only* the
+Local Marketplace read and forces the app-pod path that already existed. The
+cache itself is not the problem and is not being removed — app pods are KEDA
+scale-to-zero, and every setup-form open would otherwise cost a cold start;
+where it gets seeded *from* is the problem, and reseeding it from the pod
+instead of the catalog is FND-1726, deliberately a separate, Local
+Marketplace-side fix.
+
+The envelope this module unwraps and the file-selection rule it applies are
+still read from :mod:`application_sdk.app._generated_tree`, the same
+authority the app pod's own handler reads. Re-deriving either would compare
+one guess against another and drift the moment the exclusion vocabulary grew
+a prefix.
 
 Skip, don't fail
 ----------------
@@ -140,6 +161,15 @@ __all__ = [
 #: in ~79 app repos.
 MARKETPLACE_APPS_PATH = "/api/service/marketplace/apps"
 CONFIGMAP_PATH = "/api/service/configmaps/{name}"
+
+#: Forces this route past Local Marketplace's publish-time cache onto the app
+#: pod's own ``GET /workflows/v1/configmap/{id}`` — atlanhq/heracles#6473,
+#: precedented by the same handler's existing ``source=es``. See the module
+#: docstring ("Both sides of the join are the SDK's — but not directly") for
+#: why the cache would otherwise assert against the wrong build. Depends on
+#: that heracles PR merging and being deployed; until then this is an
+#: unrecognised query value on that route.
+CONFIGMAP_SOURCE_APP_QUERY = "source=app"
 
 _HTTP_TIMEOUT = 30
 _USER_AGENT = "atlan-application-sdk-setup-routes/1.0"
@@ -1217,9 +1247,16 @@ class TenantRoutes:
         return [entry for entry in apps if isinstance(entry, dict)]
 
     def configmap(self, name: str) -> tuple[int, dict[str, Any]]:
-        """Fetch one configmap by name, exactly as the setup page does."""
+        """Fetch one configmap by name, past Local Marketplace's cache.
+
+        ``?source=app`` (atlanhq/heracles#6473) skips the Local Marketplace
+        read this endpoint otherwise serves from and forces the app-pod path
+        — see the module docstring for why asserting against the cache
+        instead would be asserting against the wrong build.
+        """
         status, body = self.get(
-            CONFIGMAP_PATH.format(name=urllib.parse.quote(name, safe=""))
+            f"{CONFIGMAP_PATH.format(name=urllib.parse.quote(name, safe=''))}"
+            f"?{CONFIGMAP_SOURCE_APP_QUERY}"
         )
         return status, body if isinstance(body, dict) else {}
 
