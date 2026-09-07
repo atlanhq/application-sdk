@@ -369,6 +369,8 @@ class AtlanObservability(Generic[T], ABC):
         - Safely copies and clears the buffer
         - Flushes records if buffer is not empty
         """
+        if not self._flush_can_run_here():
+            return
         with self._buffer_lock:
             if self._buffer:
                 # Swap rather than copy: O(1) instead of O(n) — the old list reference
@@ -379,6 +381,25 @@ class AtlanObservability(Generic[T], ABC):
                 buffer_copy = None
         if buffer_copy:
             await self._flush_records(buffer_copy)
+
+    def _flush_can_run_here(self) -> bool:
+        """Whether a flush started from the current frame would reach the store.
+
+        Two frames must leave the buffer alone. Workflow code runs on Temporal's
+        deterministic loop, which cannot do the file and network work, so
+        :meth:`_flush_records` refuses it. A thread with no running loop cannot
+        schedule the flush task at all. Handing the buffer off from either frame
+        lost the whole batch: the swap had already happened when the refusal
+        came, and the records the worker's activities had appended went with
+        it. Deferring leaves them for the worker loop's periodic flush.
+        """
+        if in_temporal_workflow():
+            return False
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        return True
 
     async def _flush_records(self, records: list[dict[str, Any]]):
         """Flush records to json.gz files and upload to object stores.
@@ -649,10 +670,11 @@ class AtlanObservability(Generic[T], ABC):
             with self._buffer_lock:
                 self._buffer.append(processed_record)
                 now = time()
-                if (
+                due = (
                     len(self._buffer) >= self._batch_size
                     or (now - self._last_flush_time) >= self._flush_interval
-                ):
+                )
+                if due and self._flush_can_run_here():
                     self._last_flush_time = now
                     # Swap rather than copy: O(1) instead of O(n).
                     buffer_copy = self._buffer

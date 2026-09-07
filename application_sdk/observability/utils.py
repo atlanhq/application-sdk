@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 
 from opentelemetry.sdk.resources import Resource
 
@@ -123,16 +124,23 @@ def in_temporal_workflow() -> bool:
     ``in_workflow()`` reads Temporal's own ContextVar, so it is correct in
     both cases and returns False outside Temporal entirely.
 
+    The module is looked up in ``sys.modules`` rather than imported. This
+    predicate now runs on every buffered record, including records logged while
+    the worker is still importing temporalio on another thread; importing it
+    here raced that import and crashed the boot on a partially initialised
+    module. A process that has not loaded ``temporalio.workflow`` cannot be
+    inside a workflow, so the answer is False without touching the import
+    system.
+
     Returns:
         bool: True inside workflow code; False in activities, the API server,
         worker process shutdown, tests and CLI tools.
     """
-    # conformance: ignore[P006] safety guard, not orchestration. Relocating this behind execution/_temporal/ would invert the dependency (observability would import execution, which already imports observability). The ExecutionContext ContextVar alternative is a derived signal that reads False for any worker not built by create_worker, failing the guard open; temporalio's own in_workflow() is ground truth.
-    from temporalio import (  # noqa: PLC0415 — cold path: consulted only on flush/shutdown paths
-        workflow,
-    )
-
-    return workflow.in_workflow()
+    workflow = sys.modules.get("temporalio.workflow")
+    in_workflow = getattr(workflow, "in_workflow", None)
+    if in_workflow is None:
+        return False
+    return bool(in_workflow())
 
 
 def get_workflow_context() -> dict[str, str]:
