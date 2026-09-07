@@ -208,7 +208,9 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Max concurrent upload/download operations |
+| `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Max concurrent transfers for large objects and for downloads (each large upload holds part size × part concurrency of buffer) |
+| `ATLAN_MAX_CONCURRENT_SMALL_TRANSFERS` | `32` | Max concurrent uploads for small objects within one directory transfer — the round-trip-bound tier (see [Directory uploads](#directory-uploads-round-trips-not-bytes)) |
+| `ATLAN_STORAGE_SMALL_OBJECT_BYTES` | `4194304` (4 MiB) | Size at or below which an object takes the small tier; `0` disables the tier |
 | `ATLAN_TEMPORARY_PATH` | `./local/tmp/` | Base path for local temporary files |
 | `ATLAN_CLEANUP_BASE_PATHS` | _(empty)_ | Extra prefixes to clean up (comma-separated) |
 | `ATLAN_OBSTORE_READ_TIMEOUT` | `90s` | Progress-based liveness bound — fail only if no bytes arrive for this long |
@@ -240,10 +242,40 @@ persist, `upload_prefix`, and the writer chunk uploads):
 1. the local file must not shrink between the opening `stat` and the read
    reaching EOF — a file truncated under the reader would put a prefix of the
    intended artifact in the store (`StorageIntegrityError`);
-2. a HEAD after the writer closes must report the byte count that was sent —
-   this is what catches a backend silently dropping the object (`StorageError`,
-   retryable);
-3. the SHA-256 computed during the upload pass is written to `{key}.sha256`.
+2. a readback after the writer closes must report the byte count that was
+   sent — this is what catches a backend silently dropping the object
+   (`StorageError`, retryable). A single-file upload reads back with a HEAD;
+   a directory upload reads the whole batch back from **one listing of its
+   prefix** (see below), with the same two checks and the same error classes;
+3. the SHA-256 computed during the upload pass is written to `{key}.sha256` —
+   only after the readback has passed, so a sidecar never advertises an
+   object the same upload then rejected.
+
+### Directory uploads: round trips, not bytes
+
+A directory hand-off over a high-latency store — an agent pushing a run's
+artifacts through the tenant's blobstorage gateway, say — is bound by the
+number of requests, not by bandwidth: `N` files at `L` seconds per request
+take `N × L / fan-out` regardless of their bytes. Every file used to cost four
+*dependent* round trips (a sidecar HEAD for the `skip_if_exists` check, the
+PUT, the readback HEAD, the sidecar PUT) at a fan-out of four, so a run that
+staged twenty thousand small parquet files spent close to three hours in the
+hand-off (FND-1339). The directory path now spends:
+
+- **one listing of the target prefix before the transfer**, when
+  `skip_if_exists` is set, to learn which sidecars exist — a file whose sidecar
+  is absent is uploaded without any probe, one whose sidecar is present costs
+  a single GET to compare digests;
+- **one PUT per object**, plus **one sidecar PUT per object**;
+- **one listing after the transfer** as the readback for every object at once.
+
+That is two round trips per object plus a request per thousand keys, and
+small objects fan out on their own tier (`ATLAN_MAX_CONCURRENT_SMALL_TRANSFERS`,
+default 32) because they are buffered whole and hold no multipart part
+buffers; large objects keep the narrow tier. Object *count* is still the
+variable that scales the cost, so writers should roll output by size
+(`RollingFileWriter`, 50 MB by default) rather than by row count — a tree of
+250 objects hands off in seconds where 20,000 take minutes at any fan-out.
 
 **On download** (`download_file` / `download_file_chunked`, and therefore
 `App.download`, `FileReference` materialize, `download_prefix`, and the

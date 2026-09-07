@@ -293,6 +293,28 @@ MAX_CONCURRENT_STORAGE_TRANSFERS = int(
     os.getenv("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", "4")
 )
 
+#: Objects at or below this many bytes travel as one PUT (no multipart) and are
+#: buffered whole, so a directory transfer can keep many of them in flight for
+#: the price of one large object's part buffers. Directory uploads and
+#: ``FileReference`` persists use it to pick the fan-out tier per file
+#: (default 4 MiB). ``0`` disables the small-object tier so every file is
+#: bounded by ``ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS``. (FND-1339)
+STORAGE_SMALL_OBJECT_BYTES = int(
+    os.getenv("ATLAN_STORAGE_SMALL_OBJECT_BYTES", str(4 * 1024 * 1024))
+)
+
+#: Concurrent uploads for *small* objects within one directory transfer
+#: (default 32). A directory hand-off over a high-latency store is bound by
+#: round trips, not bandwidth: ``N`` small files at ``L`` seconds per request
+#: take ``N * L / fan-out`` regardless of their bytes, so the tier that holds
+#: no part buffers is the one that is safe to widen. Peak buffer memory for
+#: this tier is at most ``STORAGE_SMALL_OBJECT_BYTES`` times this value
+#: (128 MiB at the defaults); large objects keep
+#: ``MAX_CONCURRENT_STORAGE_TRANSFERS``. (FND-1339)
+MAX_CONCURRENT_SMALL_TRANSFERS = int(
+    os.getenv("ATLAN_MAX_CONCURRENT_SMALL_TRANSFERS", "32")
+)
+
 # FileReference chunked-download configuration
 #: File size threshold above which downloads use parallel range GETs (default 32 MiB)
 FILE_REF_CHUNKED_THRESHOLD_BYTES = int(

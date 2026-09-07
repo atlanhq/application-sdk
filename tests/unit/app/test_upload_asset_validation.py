@@ -453,3 +453,110 @@ class TestWarnOnInvalidTransformedAssets:
         with patch.object(base_module, "_task_logger") as logger_after:
             await _warn_on_invalid_transformed_assets(str(dirs[0]), APP)
             logger_after.warning.assert_not_called()
+
+
+class TestValidationAlongsideTransfer:
+    """FND-1339: the scan no longer gates the transfer's budget.
+
+    ``App.upload`` starts the scan as a task and moves bytes while it runs;
+    retry attempts skip it; its bound is capped at half the activity's own so a
+    600s scan can never eat a 600s activity before the first PUT.
+    """
+
+    def test_retry_attempt_skips_the_scan(self, monkeypatch) -> None:
+        info = MagicMock(attempt=2, start_to_close_timeout=None)
+        monkeypatch.setattr(base_module.activity, "info", lambda: info)
+
+        assert base_module._start_transformed_asset_validation("/tmp/x", APP) is None
+        assert base_module._current_activity_attempt() == 2
+
+    async def test_first_attempt_starts_a_task_with_the_capped_budget(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        from datetime import timedelta
+
+        info = MagicMock(attempt=1, start_to_close_timeout=timedelta(seconds=100))
+        monkeypatch.setattr(base_module.activity, "info", lambda: info)
+        seen: dict[str, float | None] = {}
+
+        async def fake_warn(local_path, app_name, *, timeout=None):
+            seen["timeout"] = timeout
+
+        monkeypatch.setattr(
+            base_module, "_warn_on_invalid_transformed_assets", fake_warn
+        )
+
+        task = base_module._start_transformed_asset_validation(str(tmp_path), APP)
+
+        assert task is not None
+        await task
+        assert seen["timeout"] == 50.0
+
+    def test_budget_outside_an_activity_is_the_configured_value(
+        self, monkeypatch
+    ) -> None:
+        from application_sdk.constants import VALIDATE_ASSETS_TIMEOUT_SECONDS
+
+        def not_in_activity():
+            raise RuntimeError("Not in activity context")
+
+        monkeypatch.setattr(base_module.activity, "info", not_in_activity)
+
+        assert (
+            base_module._transformed_asset_validation_budget()
+            == VALIDATE_ASSETS_TIMEOUT_SECONDS
+        )
+        assert base_module._current_activity_attempt() == 1
+
+    def test_budget_is_the_configured_value_under_a_generous_activity_bound(
+        self, monkeypatch
+    ) -> None:
+        from datetime import timedelta
+
+        from application_sdk.constants import VALIDATE_ASSETS_TIMEOUT_SECONDS
+
+        info = MagicMock(attempt=1, start_to_close_timeout=timedelta(seconds=10_000))
+        monkeypatch.setattr(base_module.activity, "info", lambda: info)
+
+        assert (
+            base_module._transformed_asset_validation_budget()
+            == VALIDATE_ASSETS_TIMEOUT_SECONDS
+        )
+
+    async def test_explicit_timeout_reaches_the_isolated_scan(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "transformed" / "table"
+        out.mkdir(parents=True)
+        (out / "entities.json").write_bytes(b"{}\n")
+        runner = MagicMock()
+
+        async def fake_run_best_effort(*args, **kwargs):
+            runner(*args, **kwargs)
+            return None
+
+        monkeypatch.setattr(base_module, "run_best_effort", fake_run_best_effort)
+
+        await _warn_on_invalid_transformed_assets(str(tmp_path), APP, timeout=7.5)
+
+        assert runner.call_args.kwargs["timeout"] == 7.5
+
+    async def test_default_timeout_is_the_configured_value(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        from application_sdk.constants import VALIDATE_ASSETS_TIMEOUT_SECONDS
+
+        out = tmp_path / "transformed" / "table"
+        out.mkdir(parents=True)
+        (out / "entities.json").write_bytes(b"{}\n")
+        runner = MagicMock()
+
+        async def fake_run_best_effort(*args, **kwargs):
+            runner(*args, **kwargs)
+            return None
+
+        monkeypatch.setattr(base_module, "run_best_effort", fake_run_best_effort)
+
+        await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
+
+        assert runner.call_args.kwargs["timeout"] == VALIDATE_ASSETS_TIMEOUT_SECONDS

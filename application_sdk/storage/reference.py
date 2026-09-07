@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.common._listing import safe_list_directory
+from application_sdk.common._listing import file_sizes, safe_list_directory
 from application_sdk.common.atomic import atomic_write
 from application_sdk.contracts.types import FileReference
 from application_sdk.storage._locks import PathLockRegistry
@@ -222,15 +222,24 @@ async def persist_file_reference(
             await upload_file(file_key, file_path, store, normalize=False)
 
         try:
-            from application_sdk.constants import (  # noqa: PLC0415
-                MAX_CONCURRENT_STORAGE_TRANSFERS,
+            from application_sdk import (  # noqa: PLC0415 — read at call time so the deployment's env (and tests) govern
+                constants as _constants,
             )
             from application_sdk.storage._concurrency import (  # noqa: PLC0415
-                _gather_with_semaphore,
+                _gather_size_tiered,
             )
 
-            sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
-            await _gather_with_semaphore([_upload_one(fp) for fp in files], sem)
+            # Small objects fan out wider than large ones (FND-1339): a
+            # directory of many small files is round-trip-bound, while each
+            # large object already holds part-size x part-concurrency of
+            # buffer, so only the small tier is safe to widen.
+            sizes = await run_in_thread(file_sizes, files)
+            await _gather_size_tiered(
+                [(size, _upload_one(fp)) for fp, size in zip(files, sizes)],
+                small_threshold=_constants.STORAGE_SMALL_OBJECT_BYTES,
+                small_limit=_constants.MAX_CONCURRENT_SMALL_TRANSFERS,
+                large_limit=_constants.MAX_CONCURRENT_STORAGE_TRANSFERS,
+            )
         except Exception as exc:
             # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(

@@ -651,7 +651,11 @@ class TestDirectoryPersistConcurrent:
         assert sidecar.decode().strip() == _hash_bytes(b"aaa")
 
     async def test_concurrent_uploads_respect_semaphore(self, store, tmp_path) -> None:
-        """Upload concurrency is bounded by MAX_CONCURRENT_STORAGE_TRANSFERS."""
+        """Upload concurrency is bounded by the transfer constants.
+
+        Both tiers are pinned to 2 here; the tiers themselves are exercised by
+        ``test_small_files_take_the_wider_tier`` below (FND-1339).
+        """
         from unittest.mock import patch
 
         import application_sdk.storage.ops as ops_mod
@@ -675,7 +679,10 @@ class TestDirectoryPersistConcurrent:
         with patch.object(ops_mod, "upload_file", side_effect=tracking_upload):
             from application_sdk import constants
 
-            with patch.object(constants, "MAX_CONCURRENT_STORAGE_TRANSFERS", 2):
+            with (
+                patch.object(constants, "MAX_CONCURRENT_STORAGE_TRANSFERS", 2),
+                patch.object(constants, "MAX_CONCURRENT_SMALL_TRANSFERS", 2),
+            ):
                 ref = FileReference(
                     local_path=str(tmp_path), tier=StorageTier.TRANSIENT
                 )
@@ -683,6 +690,46 @@ class TestDirectoryPersistConcurrent:
 
         assert result.file_count == 6
         assert max_active <= 2, f"Expected max 2 concurrent uploads, got {max_active}"
+
+    async def test_small_files_take_the_wider_tier(self, store, tmp_path) -> None:
+        """A directory of small files persists on the small-object tier (FND-1339)."""
+        import asyncio
+        from unittest.mock import patch
+
+        import application_sdk.storage.ops as ops_mod
+
+        for i in range(12):
+            (tmp_path / f"f{i}.bin").write_bytes(b"x" * 16)
+
+        max_active = 0
+        active = 0
+        real_upload = ops_mod.upload_file
+
+        async def tracking_upload(*args, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            try:
+                await asyncio.sleep(0.02)  # hold the slot so the peak is observable
+                return await real_upload(*args, **kwargs)
+            finally:
+                active -= 1
+
+        with patch.object(ops_mod, "upload_file", side_effect=tracking_upload):
+            from application_sdk import constants
+
+            with (
+                patch.object(constants, "MAX_CONCURRENT_STORAGE_TRANSFERS", 1),
+                patch.object(constants, "MAX_CONCURRENT_SMALL_TRANSFERS", 4),
+                patch.object(constants, "STORAGE_SMALL_OBJECT_BYTES", 1024),
+            ):
+                ref = FileReference(
+                    local_path=str(tmp_path), tier=StorageTier.TRANSIENT
+                )
+                result = await persist_file_reference(store, ref)
+
+        assert result.file_count == 12
+        assert 1 < max_active <= 4, f"Expected the small tier (2..4), got {max_active}"
 
 
 class TestPersistFileReferenceListingRace:

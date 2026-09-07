@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import sys
 from pathlib import Path
@@ -10,7 +11,10 @@ from unittest.mock import patch
 import pytest
 
 from application_sdk.contracts.storage import UploadOutput
+from application_sdk.storage.batch import list_keys
+from application_sdk.storage.errors import StorageError
 from application_sdk.storage.factory import create_memory_store
+from application_sdk.storage.ops import _get_bytes
 from application_sdk.storage.transfer import download, upload
 
 _IS_WINDOWS = sys.platform == "win32"
@@ -135,12 +139,10 @@ class TestUploadDirectory:
 
         _original = transfer_mod._upload_one
 
-        async def _failing_upload_one(st, local_file, store_key, *, skip_if_exists):
+        async def _failing_upload_one(st, local_file, store_key, **kwargs):
             if "fail.txt" in str(local_file):
                 raise RuntimeError("simulated upload failure")
-            return await _original(
-                st, local_file, store_key, skip_if_exists=skip_if_exists
-            )
+            return await _original(st, local_file, store_key, **kwargs)
 
         monkeypatch.setattr(transfer_mod, "_upload_one", _failing_upload_one)
 
@@ -1041,3 +1043,263 @@ class TestUploadSameStoreCopy:
         exists_spy.assert_not_called()
         assert out.ref.file_count == 2
         assert out.synced == 0
+
+
+# =============================================================================
+# FND-1339: a directory upload is round-trip-bound — spend listings, not HEADs
+# =============================================================================
+
+
+def _make_tree(root: Path, n: int, size: int = 64) -> list[Path]:
+    paths: list[Path] = []
+    for i in range(n):
+        d = root / "raw" / f"t{i % 3}"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"chunk-{i}.parquet"
+        p.write_bytes(bytes([i % 251]) * size)
+        paths.append(p)
+    return paths
+
+
+class _RequestLog:
+    """Records the per-object requests the directory path is meant to avoid.
+
+    ``heads`` covers both HEAD shapes the old protocol spent per file (the
+    sidecar-existence probe of the skip check and the readback), ``listings``
+    the prefix listings that replace them, ``puts`` the data-object uploads.
+    """
+
+    def __init__(self, monkeypatch) -> None:
+        import application_sdk.storage.ops as ops_mod
+        from application_sdk.storage import transfer as transfer_mod
+
+        self.heads: list[str] = []
+        self.listings: list[str] = []
+        self.puts: list[str] = []
+        real_exists, real_meta = ops_mod.exists, ops_mod.get_file_meta
+        real_list = transfer_mod.list_keys_with_meta
+        real_upload = ops_mod.upload_file
+
+        async def exists(key, *a, **kw):
+            self.heads.append(key)
+            return await real_exists(key, *a, **kw)
+
+        async def meta(key, *a, **kw):
+            self.heads.append(key)
+            return await real_meta(key, *a, **kw)
+
+        async def listing(prefix, *a, **kw):
+            self.listings.append(prefix)
+            return await real_list(prefix, *a, **kw)
+
+        async def upload_file(key, *a, **kw):
+            self.puts.append(key)
+            return await real_upload(key, *a, **kw)
+
+        monkeypatch.setattr(ops_mod, "exists", exists)
+        monkeypatch.setattr(ops_mod, "get_file_meta", meta)
+        monkeypatch.setattr(transfer_mod, "list_keys_with_meta", listing)
+        monkeypatch.setattr(ops_mod, "upload_file", upload_file)
+
+
+class TestUploadDirectoryRoundTrips:
+    """Two listings per directory in place of two HEADs per file."""
+
+    async def test_first_upload_lists_twice_and_never_heads(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        paths = _make_tree(tmp_path, 12)
+        log = _RequestLog(monkeypatch)
+
+        out = await upload(str(tmp_path), "runs/r1", store=store, skip_if_exists=True)
+
+        assert out.ref.file_count == 12
+        assert out.synced is True
+        assert out.reason == "uploaded"
+        assert log.heads == []
+        # One listing answers the skip check, one is the readback.
+        assert log.listings == ["runs/r1/", "runs/r1/"]
+        assert len(log.puts) == 12
+        keys = set(await list_keys("runs/r1/", store, normalize=False))
+        for p in paths:
+            key = f"runs/r1/{p.relative_to(tmp_path).as_posix()}"
+            assert key in keys
+            assert f"{key}.sha256" in keys
+            sidecar = await _get_bytes(f"{key}.sha256", store, normalize=False)
+            assert sidecar is not None
+            assert sidecar.decode().strip() == _hash_bytes(p.read_bytes())
+
+    async def test_retry_skips_every_file_with_one_listing_and_no_puts(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        _make_tree(tmp_path, 8)
+        await upload(str(tmp_path), "runs/r2", store=store, skip_if_exists=True)
+        log = _RequestLog(monkeypatch)
+
+        out = await upload(str(tmp_path), "runs/r2", store=store, skip_if_exists=True)
+
+        assert out.synced is False
+        assert out.reason == "skipped:hash_match"
+        assert log.puts == []
+        assert log.heads == []
+        # Nothing transferred, so there is nothing to read back: skip check only.
+        assert log.listings == ["runs/r2/"]
+
+    async def test_changed_file_alone_is_reuploaded_and_read_back(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        paths = _make_tree(tmp_path, 8)
+        await upload(str(tmp_path), "runs/r3", store=store, skip_if_exists=True)
+        paths[3].write_bytes(b"changed" * 8)
+        log = _RequestLog(monkeypatch)
+
+        out = await upload(str(tmp_path), "runs/r3", store=store, skip_if_exists=True)
+
+        changed_key = f"runs/r3/{paths[3].relative_to(tmp_path).as_posix()}"
+        assert out.synced is True
+        assert log.puts == [changed_key]
+        assert log.heads == []
+        assert log.listings == ["runs/r3/", "runs/r3/"]
+        sidecar = await _get_bytes(f"{changed_key}.sha256", store, normalize=False)
+        assert sidecar is not None
+        assert sidecar.decode().strip() == _hash_bytes(b"changed" * 8)
+
+    async def test_readback_catches_a_dropped_object_and_withholds_sidecars(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        _make_tree(tmp_path, 4)
+        from application_sdk.storage import transfer as transfer_mod
+
+        real = transfer_mod._list_target_sizes
+        calls = {"n": 0}
+
+        async def dropping(prefix, st):
+            calls["n"] += 1
+            listed = await real(prefix, st)
+            if calls["n"] >= 2:  # the post-transfer readback, not the skip check
+                listed.pop("runs/r4/raw/t0/chunk-0.parquet")
+            return listed
+
+        monkeypatch.setattr(transfer_mod, "_list_target_sizes", dropping)
+
+        with pytest.raises(StorageError, match="absent from the store's listing"):
+            await upload(str(tmp_path), "runs/r4", store=store, skip_if_exists=True)
+
+        # The objects landed, but no sidecar may advertise a batch the readback
+        # rejected — same ordering guarantee as the per-object protocol.
+        keys = set(await list_keys("runs/r4/", store, normalize=False))
+        assert len(keys) == 4
+        assert not any(k.endswith(".sha256") for k in keys)
+
+    async def test_readback_catches_a_size_mismatch(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        _make_tree(tmp_path, 4)
+        from application_sdk.storage import transfer as transfer_mod
+
+        real = transfer_mod._list_target_sizes
+
+        async def short_by_one(prefix, st):
+            listed = await real(prefix, st)
+            key = "runs/r5/raw/t1/chunk-1.parquet"
+            if key in listed:
+                listed[key] -= 1
+            return listed
+
+        monkeypatch.setattr(transfer_mod, "_list_target_sizes", short_by_one)
+
+        with pytest.raises(StorageError, match="Incomplete upload"):
+            await upload(str(tmp_path), "runs/r5", store=store)
+
+    async def test_verification_off_writes_sidecars_inline_and_skips_readback(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        _make_tree(tmp_path, 4)
+        from application_sdk import constants
+
+        monkeypatch.setattr(constants, "STORAGE_VERIFY_TRANSFERS", False)
+        log = _RequestLog(monkeypatch)
+
+        out = await upload(str(tmp_path), "runs/r6", store=store, skip_if_exists=True)
+
+        assert out.synced is True
+        assert log.heads == []
+        assert log.listings == ["runs/r6/"]  # skip check only; nothing to read back
+        keys = set(await list_keys("runs/r6/", store, normalize=False))
+        assert sum(k.endswith(".sha256") for k in keys) == 4
+
+
+class TestUploadDirectoryFanOut:
+    """Small objects fan out on their own tier; large ones keep the narrow one."""
+
+    @staticmethod
+    def _track(monkeypatch, threshold: int) -> dict[str, int]:
+        import application_sdk.storage.ops as ops_mod
+
+        active = {"small": 0, "large": 0, "all": 0}
+        peak = {"small": 0, "large": 0, "all": 0}
+        real_upload = ops_mod.upload_file
+
+        async def tracking(key, local_path, *a, **kw):
+            tier = "small" if Path(local_path).stat().st_size <= threshold else "large"
+            for t in (tier, "all"):
+                active[t] += 1
+                peak[t] = max(peak[t], active[t])
+            try:
+                await asyncio.sleep(0.02)  # hold the slot so peaks are observable
+                return await real_upload(key, local_path, *a, **kw)
+            finally:
+                for t in (tier, "all"):
+                    active[t] -= 1
+
+        monkeypatch.setattr(ops_mod, "upload_file", tracking)
+        return peak
+
+    async def test_small_objects_fan_out_wider_than_large_ones(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        from application_sdk import constants
+
+        monkeypatch.setattr(constants, "MAX_CONCURRENT_STORAGE_TRANSFERS", 2)
+        monkeypatch.setattr(constants, "MAX_CONCURRENT_SMALL_TRANSFERS", 6)
+        monkeypatch.setattr(constants, "STORAGE_SMALL_OBJECT_BYTES", 100)
+        _make_tree(tmp_path / "small", 18, size=10)
+        _make_tree(tmp_path / "large", 6, size=1000)
+        peak = self._track(monkeypatch, threshold=100)
+
+        out = await upload(str(tmp_path), "runs/r7", store=store)
+
+        assert out.ref.file_count == 24
+        assert peak["large"] <= 2
+        assert 2 < peak["small"] <= 6
+
+    async def test_explicit_max_concurrency_caps_both_tiers(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        from application_sdk import constants
+
+        monkeypatch.setattr(constants, "MAX_CONCURRENT_SMALL_TRANSFERS", 32)
+        monkeypatch.setattr(constants, "STORAGE_SMALL_OBJECT_BYTES", 100)
+        _make_tree(tmp_path / "small", 8, size=10)
+        _make_tree(tmp_path / "large", 4, size=1000)
+        peak = self._track(monkeypatch, threshold=100)
+
+        out = await upload(str(tmp_path), "runs/r8", store=store, max_concurrency=1)
+
+        assert out.ref.file_count == 12
+        assert peak["all"] == 1
+
+    async def test_zero_threshold_disables_the_small_tier(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        from application_sdk import constants
+
+        monkeypatch.setattr(constants, "MAX_CONCURRENT_STORAGE_TRANSFERS", 2)
+        monkeypatch.setattr(constants, "MAX_CONCURRENT_SMALL_TRANSFERS", 16)
+        monkeypatch.setattr(constants, "STORAGE_SMALL_OBJECT_BYTES", 0)
+        _make_tree(tmp_path, 10, size=10)
+        peak = self._track(monkeypatch, threshold=0)
+
+        await upload(str(tmp_path), "runs/r9", store=store)
+
+        assert peak["all"] <= 2
