@@ -1,0 +1,87 @@
+/// Streaming dispatch example — demonstrates `EventTriggerConfig.streaming`.
+///
+/// AE signals each matching event into a persistent per-slug shard that runs this
+/// DAG inline (Shell B), instead of firing a fresh top-level run per ingest batch
+/// and reading the workflow's Iceberg events table (Shell A).
+///
+/// Streaming is a property of the ENTRYPOINT, not of the trigger, which is why this
+/// is its own example rather than another trigger on `examples/scheduled`. An
+/// entrypoint renders one extract node and every trigger on it — each schedule, each
+/// event trigger — starts that same node, so its `workflow_type` is shared. A
+/// streaming entrypoint's node dispatches `streamingWorkflowTypeOverride` and gains
+/// `args.batch`; a batch entrypoint's dispatches the batch type and reads Iceberg.
+/// The two cannot coexist: whichever renders, the other kind of trigger starts a
+/// workflow with nothing to apply and reports no error. `_streamingEntrypointCheck`
+/// refuses the mix at eval time — declaring a schedule or a non-streaming event
+/// trigger below is a hard failure, not a warning.
+amends "../../src/App.pkl"
+
+name = "streaming"
+displayName = "Streaming Dispatch Example"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new TextInput {
+          title = "Target"
+          helpText = "What to process."
+          placeholderText = "my-target"
+        }
+      }
+    }
+  }
+}
+
+// The shard hands the DAG its events inline, so the entrypoint must dispatch a
+// workflow that reads them from `args.batch` rather than the batch workflow, which
+// reads the Iceberg events table the shard never writes. Omitting this while any
+// trigger streams is refused at eval time — the failure it prevents is silent.
+streamingWorkflowTypeOverride = "example-app:cdc-stream"
+
+// Every trigger here streams, and there are no `schedules`. Both are load-bearing:
+// see the note at the top of this file.
+events {
+  // Real-time: one event, one DAG walk. `ackPaths` is left at its default and is
+  // inert on this path — the shard writes no acks and has no watchdog backstop, so
+  // declaring one explicitly is refused rather than silently ignored.
+  new EventTriggerSpec {
+    name = "cdc-user-streaming"
+    source = new EventSource {
+      name = "atlan-kafka"
+      topic = "example.cdc.user_realtime"
+    }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+  // The same shell, trading per-event latency for throughput: accumulate up to 200
+  // events — or 2s, whichever comes first — into one DAG run, so a node walk's
+  // activity round-trips are amortised across the batch instead of paid per event.
+  //
+  // `eventsPerSignal` is a different knob: how many events ride in ONE signal into
+  // the shard. Temporal charges per signal, not per event, and caps an execution at
+  // 10,000 of them — so this bounds the ingest side, while `batchSize` bounds how
+  // many the shard hands to one DAG run.
+  new EventTriggerSpec {
+    name = "cdc-audit-streaming-batched"
+    source = new EventSource {
+      name = "atlan-kafka"
+      topic = "example.cdc.audit"
+    }
+    triggerConfig = new EventTriggerConfig {
+      streaming {
+        enabled = true
+        batchSize = 200
+        batchWaitSeconds = 2
+        eventsPerSignal = 500
+      }
+    }
+  }
+}

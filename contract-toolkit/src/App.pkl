@@ -257,13 +257,31 @@ workflowType: String?
 /// list of `{id, topic, data}` envelopes the shard delivers.
 streamingWorkflowTypeOverride: String?
 
-/// Refuses the silent mismatch described above: triggers that stream, with no
-/// streaming workflow type for the DAG to dispatch.
+/// Refuses both ways an entrypoint's single extract node can end up dispatching a
+/// workflow type that cannot apply what reaches it.
+///
+/// An entrypoint renders ONE extract node, and every trigger on it — each schedule,
+/// each event trigger — starts that same node. Its `workflow_type` is therefore a
+/// property of the entrypoint, not of the trigger that fired. There are only two
+/// shapes it can take, and they are mutually exclusive:
+///
+///   - the batch type, which reads the entrypoint's Iceberg events table
+///   - the streaming type, which reads `args.batch` handed to it inline by the shard
+///
+/// So a streaming entrypoint may hold streaming event triggers and nothing else.
+/// Mixing is not expressible: whichever type the node renders, the other kind of
+/// trigger starts a workflow with nothing to apply, and reports no error doing it.
 hidden _streamingEntrypointCheck: Any =
-  if (events.toList().any((e) -> e.triggerConfig.streaming.enabled)
-      && (streamingWorkflowTypeOverride == null || streamingWorkflowTypeOverride!! == ""))
-    throw("This entrypoint has event trigger(s) with streaming.enabled = true but no streamingWorkflowTypeOverride. AE would signal the streaming shard, which would then dispatch the batch workflow type with no events in its arguments — silently applying nothing. Set streamingWorkflowTypeOverride to the app's streaming workflow type (e.g. \"my-app:my-entrypoint-stream\").")
-  else null
+  let (_streaming = events.toList().filter((e) -> e.triggerConfig.streaming.enabled))
+  let (_batch = events.toList().filter((e) -> !e.triggerConfig.streaming.enabled))
+    if (_streaming.isEmpty) null
+    else if (streamingWorkflowTypeOverride == null || streamingWorkflowTypeOverride!! == "")
+      throw("This entrypoint has event trigger(s) with streaming.enabled = true but no streamingWorkflowTypeOverride. AE would signal the streaming shard, which would then dispatch the batch workflow type with no events in its arguments — silently applying nothing. Set streamingWorkflowTypeOverride to the app's streaming workflow type (e.g. \"my-app:my-entrypoint-stream\").")
+    else if (!_batch.isEmpty)
+      throw("This entrypoint mixes streaming and non-streaming event triggers: streaming = \(_streaming.map((e) -> e.name)), batch = \(_batch.map((e) -> e.name)). Both start the same extract node, which now dispatches the streaming workflow type — so the batch trigger(s) would start it with args.batch resolving to nothing and apply nothing, silently. Move the streaming trigger(s) to their own entrypoint.")
+    else if (!schedules.isEmpty)
+      throw("This entrypoint has streaming event trigger(s) and \(schedules.length) schedule(s): \(schedules.toList().map((s) -> s.name)). A schedule starts the same extract node, which now dispatches the streaming workflow type, and a scheduled run carries no events — so args.batch resolves to nothing and the run applies nothing, silently. Move the streaming trigger(s) to their own entrypoint.")
+    else null
 
 
 /// Task queue prefix for the extract node in the AE manifest.
