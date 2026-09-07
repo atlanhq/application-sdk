@@ -290,6 +290,167 @@ def test_storage_integration_only_reacts_to_the_e2e_label_being_added() -> None:
     _assert_gate(_gate("pull_request.yaml", "storage-integration"), "e2e", {})
 
 
+# ── FND-851: integration on an `e2e`-labelled PR even under a merge queue ───
+#
+# `detect-integration` and `integration` share the same event/queue/label
+# expression. `_assert_gate` covers the queued-PR case (the label term is live
+# there). The rest pins the paths where the label term is inert, and the extra
+# `needs` gates that only `integration` carries.
+
+
+def _queue_needs(*, enabled: bool) -> dict[str, Any]:
+    return {
+        "needs": {
+            "detect-merge-queue": {
+                "outputs": {"enabled": "true" if enabled else "false"}
+            }
+        }
+    }
+
+
+def _integration_needs(
+    *,
+    enabled: bool,
+    result: str = "success",
+    count: str = "1",
+) -> dict[str, Any]:
+    return {
+        "needs": {
+            "detect-merge-queue": {
+                "outputs": {"enabled": "true" if enabled else "false"}
+            },
+            "detect-integration": {
+                "result": result,
+                "outputs": {"count": count},
+            },
+        }
+    }
+
+
+def test_detect_integration_on_a_queued_pr_only_reacts_to_the_e2e_label_being_added() -> (
+    None
+):
+    """Queued PRs skip detection unless they carry `e2e` (FND-851)."""
+    _assert_gate(
+        _gate("tests-reusable.yaml", "detect-integration"),
+        "e2e",
+        _queue_needs(enabled=True),
+    )
+
+
+def test_integration_on_a_queued_pr_only_reacts_to_the_e2e_label_being_added() -> None:
+    _assert_gate(
+        _gate("tests-reusable.yaml", "integration"),
+        "e2e",
+        _integration_needs(enabled=True),
+    )
+
+
+def test_detect_integration_and_integration_agree_on_when_the_tier_runs() -> None:
+    """Detection never runs for a tier that won't, and vice versa.
+
+    The two `if:`s must move together so Tests Gate cannot see a green skip of
+    Integration while Detect still ran, or the inverse.
+    """
+    detect = _gate("tests-reusable.yaml", "detect-integration")
+    integration = _gate("tests-reusable.yaml", "integration")
+    for enabled in (True, False):
+        detect_extra = _queue_needs(enabled=enabled)
+        integration_extra = _integration_needs(enabled=enabled)
+        for description, github, _expected in _scenarios("e2e"):
+            detect_runs = evaluate(detect, {"github": github, **detect_extra})
+            integration_runs = evaluate(
+                integration, {"github": github, **integration_extra}
+            )
+            assert detect_runs is integration_runs, (
+                f"queued={enabled} {description}: detect={detect_runs} "
+                f"integration={integration_runs}"
+            )
+
+
+@pytest.mark.parametrize(
+    "github",
+    [
+        {"event_name": "merge_group", "event": {"action": "checks_requested"}},
+        {"event_name": "push", "event": {}},
+        {"event_name": "workflow_dispatch", "event": {}},
+    ],
+    ids=["merge_group", "push", "workflow_dispatch"],
+)
+def test_integration_always_runs_off_the_pr_path(github: dict[str, Any]) -> None:
+    """Non-PR events are the queued/unlabelled cadence; the e2e term must not gate them."""
+    detect = _gate("tests-reusable.yaml", "detect-integration")
+    integration = _gate("tests-reusable.yaml", "integration")
+    # Queue output is absent on these events (`detect-merge-queue` is skipped);
+    # the `event_name != 'pull_request'` term must win without reading it.
+    assert evaluate(detect, {"github": github}) is True
+    assert (
+        evaluate(
+            integration,
+            {
+                "github": github,
+                "needs": {
+                    "detect-integration": {
+                        "result": "success",
+                        "outputs": {"count": "1"},
+                    }
+                },
+            },
+        )
+        is True
+    )
+
+
+def test_integration_still_runs_on_every_pr_when_there_is_no_merge_queue() -> None:
+    """Queue-absent consumers have no merge_group to catch a bad merge."""
+    detect = _gate("tests-reusable.yaml", "detect-integration")
+    integration = _gate("tests-reusable.yaml", "integration")
+    detect_extra = _queue_needs(enabled=False)
+    integration_extra = _integration_needs(enabled=False)
+    for description, github, _expected in _scenarios("e2e"):
+        assert evaluate(detect, {"github": github, **detect_extra}) is True, description
+        assert evaluate(integration, {"github": github, **integration_extra}) is True, (
+            description
+        )
+
+
+def test_integration_stays_gated_on_successful_detection_and_a_nonzero_suite() -> None:
+    """A failed or empty detection cannot start Integration, even on an e2e PR."""
+    expression = _gate("tests-reusable.yaml", "integration")
+    github = _pull_request("synchronize", ("e2e",))
+    assert (
+        evaluate(expression, {"github": github, **_integration_needs(enabled=True)})
+        is True
+    )
+    assert (
+        evaluate(
+            expression,
+            {
+                "github": github,
+                **_integration_needs(enabled=True, result="failure"),
+            },
+        )
+        is False
+    )
+    assert (
+        evaluate(
+            expression,
+            {
+                "github": github,
+                **_integration_needs(enabled=True, result="skipped"),
+            },
+        )
+        is False
+    )
+    assert (
+        evaluate(
+            expression,
+            {"github": github, **_integration_needs(enabled=True, count="0")},
+        )
+        is False
+    )
+
+
 # ── The paths the fix must not disturb ───────────────────────────────────────
 
 
@@ -368,6 +529,6 @@ def test_the_e2e_concurrency_groups_still_refuse_to_cancel_in_progress() -> None
     ]
     assert e2e_jobs, "no e2e concurrency group found; the guard has drifted"
     for name in e2e_jobs:
-        assert (
-            workflow["jobs"][name]["concurrency"]["cancel-in-progress"] is False
-        ), name
+        assert workflow["jobs"][name]["concurrency"]["cancel-in-progress"] is False, (
+            name
+        )
