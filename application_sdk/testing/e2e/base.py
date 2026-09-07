@@ -1632,18 +1632,18 @@ class BaseE2ETest:
         if report.dag_superseded:
             logger.warning(
                 "e2e cleanup: %s was not deleted through the connection-delete "
-                "app because AE did not run this teardown's DAG — at submit, "
-                "Heracles fetches a manifest and publishes it over the seed "
-                "version, and the graph it published is %s's own, not the "
-                "connection-delete node (slug=%s run_id=%s). The teardown "
-                "submit names no app precisely so that cannot happen, so this "
-                "is a regression in how Heracles resolves the app to fetch, not "
-                "a tenant problem — and until it is fixed every leg falls back "
-                "to the runner-side purge and leaks connection-cache/%s.sqlite "
-                "and persistent-artifacts/apps/atlan-publish-app/state/%s/. "
+                "app because the graph AE ran was neither the delete node the "
+                "teardown published nor the delete app's own manifest (slug=%s "
+                "run_id=%s). At submit, Heracles publishes a manifest over the "
+                "seed version; the teardown submit names the delete app so that "
+                "either winner of that race is a delete, so a third graph means "
+                "Heracles resolved a different app from the same envelope — an "
+                "SDK-side problem, not a tenant one. Until it is fixed this leg "
+                "falls back to the runner-side purge and leaks "
+                "connection-cache/%s.sqlite and "
+                "persistent-artifacts/apps/atlan-publish-app/state/%s/. "
                 "Details: %s",
                 qualified_name,
-                self.connector_short_name,
                 report.ae_workflow_slug or "<none>",
                 report.ae_run_id or "<none>",
                 qualified_name,

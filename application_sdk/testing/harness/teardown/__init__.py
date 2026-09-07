@@ -41,11 +41,11 @@ Two functions, and which one runs is not a preference:
 * **The worker-up-only tier wires no AE client** (``source_available=false``).
   There is nothing to submit a delete through, and a connection that tier minted
   still has to go.
-* **A supersede.** The submit deliberately names no app, so Heracles' manifest
-  fetch has nothing to publish over this DAG (:mod:`._dag` has the mechanism and
-  the leg that proved it). Should that ever stop holding, the delete detects it
-  from what AE serves and from the run's own node names, reports
-  :attr:`ConnectionDeleteReport.dag_superseded`, and the fallback runs.
+* **A third graph.** Heracles republishes *a* manifest over the seed at submit,
+  and the harness cannot stop it — so the submit names the delete app and mirrors
+  its manifest node, making both possible winners a delete (:mod:`._dag` has the
+  mechanism and the legs that proved it). If what AE runs is neither, the delete
+  reports :attr:`ConnectionDeleteReport.dag_superseded` and the fallback runs.
 * **A scaled-to-zero worker that does not wake** looks exactly like an absent app
   from here. ``connection-delete``'s ``atlan.yaml`` sets
   ``keda.minReplicaCount: 0``, so its queue is *legitimately* unpolled between
@@ -189,12 +189,12 @@ class ConnectionDeleteReport:
             failure because the remediation is completely different (look at the
             tenant vs. look at the run), and because it is the failure mode that
             otherwise reads exactly like a passing run.
-        dag_superseded: The graph AE ran is not the one this teardown published
-            — Heracles fetched an app manifest at submit and published it over
-            the seed (see :mod:`._dag`). Its own field for the same reason
-            :attr:`app_absent` has one, and a sharper one: a superseded run is
-            *some other app's DAG*, so it can even report success. Read as a
-            plain failure it would mean skipping the fallback and telling an
+        dag_superseded: The graph AE ran is neither the node this teardown
+            published nor the delete app's own — Heracles published *some other*
+            app's manifest over the seed at submit (see :mod:`._dag`). Its own
+            field for the same reason :attr:`app_absent` has one, and a sharper
+            one: what ran is another app's DAG, so it can report success. Read as
+            a plain failure it would mean skipping the fallback and telling an
             operator a connection was deleted that is still there.
         ae_workflow_slug: Slug of the AE workflow the delete ran under.
         ae_run_id: That run's id — the one link that shows what the app did.
@@ -226,16 +226,17 @@ async def _foreign_published_dag(ae: AEClient, slug: str) -> str:
     """Describe the DAG AE serves for *slug* when it is not the one we published.
 
     The read half of the invariant :mod:`._dag` states. Heracles' submit-time
-    manifest fetch is what would replace the ``connection-delete`` node with an
-    app's own graph, and the harness cannot see that fetch — but it can see the
-    version AE serves afterwards, on the same read
+    manifest fetch replaces the published version with *some* app's manifest, and
+    the harness cannot see that fetch — but it can see the version AE serves
+    afterwards, on the same read
     :meth:`~application_sdk.testing.e2e.base.BaseE2ETest._assert_deployed_manifest_matches`
     uses for the mirror-image assertion.
 
-    Compares *node names*, not version numbers. A version number only says AE
-    published something; the node set says whether what it published deletes a
-    connection or crawls one. And it is the answer even when Heracles republishes
-    a graph that happens to carry the same version.
+    Compares *node names*, not version numbers, and this is why the harness's
+    node id is the app manifest's own: a republish of the delete app's manifest
+    carries the same node and is therefore **not** foreign — it is the other
+    correct outcome. A version number could not make that distinction; it only
+    says AE published something, which it always does.
 
     Never raises, and never guesses:
     :meth:`~application_sdk.testing.harness.automation_engine.AEClient.get_published_version`
@@ -291,9 +292,10 @@ async def delete_connection(
     2. **Submit** it, on the suite's own cold-start budget.
     3. **Check that the graph AE will run is ours** — see
        :func:`_foreign_published_dag` and the invariant :mod:`._dag` states. The
-       submit names no app so that nothing can be published over this DAG; this
-       is the step that does not take that on trust, and it runs before the poll
-       because a superseded run costs minutes and deletes nothing.
+       submit names the delete app so that whichever version wins the republish
+       race is a delete; this is the step that does not take that on trust, and
+       it runs before the poll because a *third* graph costs minutes and deletes
+       nothing.
     4. **Wait for a verdict**, with the start-grace latch armed so a tenant
        without the app is detected in :attr:`ConnectionDeletePlan.stall_grace_seconds`
        rather than in the full poll ceiling. The run's own node names are checked
@@ -368,6 +370,12 @@ async def delete_connection(
         display_name=qualified_name.rsplit("/", 1)[-1] or qualified_name,
         run_id=plan.run_id,
         ae_workflow_slug=seeded.slug,
+        # The same two values the node above carries as literals. Either the
+        # seed runs and reads the literals, or the delete app's republished
+        # manifest runs and reads these rows — so a teardown that let them
+        # diverge would delete differently depending on who won a race.
+        delete_type=plan.delete_type,
+        delete_assets=True,
     )
     retry = plan.submit_retry
     try:
@@ -400,15 +408,17 @@ async def delete_connection(
 
     foreign = await _foreign_published_dag(ae, seeded.slug)
     if foreign:
-        # Before the poll, because the poll is the expensive half: a superseded
-        # run is some app's own DAG, which takes minutes to fail (or, worse,
-        # succeeds) while the connection this call exists to delete sits there.
+        # Before the poll, because the poll is the expensive half: a graph that
+        # is neither delete is some app's crawl, which takes minutes to fail (or,
+        # worse, succeeds) while the connection this call exists to delete sits
+        # there.
         logger.warning(
-            "harness teardown: the DAG AE will run for %s is not the "
-            "connection-delete node this teardown published (slug=%s run_id=%s) "
-            "— Heracles fetched an app manifest at submit and published it over "
-            "the seed version. Not polling it: %s",
+            "harness teardown: the DAG AE will run for %s carries neither the "
+            "%r node this teardown published nor the delete app's own (slug=%s "
+            "run_id=%s) — Heracles published a third app's manifest over the "
+            "seed version at submit. Not polling it: %s",
             qualified_name,
+            CONNECTION_DELETE_NODE_ID,
             seeded.slug,
             ae_run_id,
             foreign,
@@ -419,7 +429,7 @@ async def delete_connection(
             ae_workflow_slug=seeded.slug,
             ae_run_id=ae_run_id,
             errors=(
-                "the published DAG is not this teardown's connection-delete "
+                f"the published DAG carries no {CONNECTION_DELETE_NODE_ID!r} "
                 f"node: {foreign}",
             ),
         )
@@ -487,13 +497,14 @@ async def delete_connection(
         # and they are checked *before* success: a superseded run that happens to
         # go green would otherwise be reported as a delete that never happened.
         logger.warning(
-            "harness teardown: the run AE executed for %s ran node(s) %s, not "
-            "the connection-delete node this teardown published (slug=%s "
-            "run_id=%s) — Heracles published an app manifest over the seed "
-            "version, so this run is that app's DAG and %s was not deleted "
-            "through it",
+            "harness teardown: the run AE executed for %s ran node(s) %s, which "
+            "is neither the %r node this teardown published nor the delete "
+            "app's own (slug=%s run_id=%s) — Heracles published a third app's "
+            "manifest over the seed version, so this run is that app's DAG and "
+            "%s was not deleted through it",
             qualified_name,
             ", ".join(sorted(ran)),
+            CONNECTION_DELETE_NODE_ID,
             seeded.slug,
             ae_run_id,
             qualified_name,

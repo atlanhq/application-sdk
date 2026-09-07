@@ -179,10 +179,12 @@ class TestTheNodeMatchesTheAppsManifest:
         assert node["app_task_queue"] == _QUEUE
         assert node["inputs"]["task_queue"] == _QUEUE
 
-    def test_the_args_are_the_three_the_apps_input_reads(self) -> None:
-        """No more and no fewer. The storage params and search tuning live on
-        the app's per-task contracts with their own defaults, and a teardown
-        that pinned them would drift the moment the app retuned them."""
+    def test_the_args_are_the_ones_the_apps_manifest_declares(self) -> None:
+        """No more and no fewer, and the values the app's own manifest carries
+        as mustache tokens resolved to literals. The storage params and search
+        tuning live on the app's per-task contracts with their own defaults, and
+        a teardown that pinned them would drift the moment the app retuned
+        them."""
         args = build_connection_delete_dag(
             connection_qualified_name=_QN, task_queue=_QUEUE
         )[CONNECTION_DELETE_NODE_ID]["inputs"]["args"]
@@ -190,7 +192,24 @@ class TestTheNodeMatchesTheAppsManifest:
             "connection_qualified_name": _QN,
             "delete_type": "PURGE",
             "delete_assets": True,
+            "app_name": "automation-engine",
         }
+
+    def test_the_node_id_is_the_manifests_own(self) -> None:
+        """Not a teardown-flavoured name. Heracles republishes *a* manifest over
+        the seed at submit and the harness cannot stop it, so the delete app's
+        republished node and this one have to be the same node — otherwise the
+        harness's own guard would read the correct outcome as a foreign graph."""
+        assert CONNECTION_DELETE_NODE_ID == "delete"
+
+    def test_the_node_carries_the_apps_own_three_day_timeout(self) -> None:
+        """From the manifest's ``error_handling``. Draining a large connection is
+        what that number is sized for; the bound that actually stops an e2e leg
+        waiting is the harness's poll ceiling."""
+        node = build_connection_delete_dag(
+            connection_qualified_name=_QN, task_queue=_QUEUE
+        )[CONNECTION_DELETE_NODE_ID]
+        assert node["error_handling"]["start_to_close_timeout_seconds"] == 259200
 
     def test_purge_is_the_default_rather_than_the_apps_own_soft(self) -> None:
         """The app defaults to SOFT, which leaves every run's assets recoverable
@@ -238,6 +257,41 @@ class TestTheSubmitBody:
 
     def test_it_carries_the_slug_ae_minted(self) -> None:
         assert self._payload()["metadata"]["ae_workflow_slug"] == "slug-1"
+
+    def _rows(self) -> dict[str, Any]:
+        task = self._payload()["spec"]["templates"][0]["dag"]["tasks"][0]
+        return {p["name"]: p["value"] for p in task["arguments"]["parameters"]}
+
+    def test_the_envelope_names_the_delete_app_not_the_suite(self) -> None:
+        """The envelope's identity is what decides which manifest Heracles
+        fetches and publishes over the seed. Carrying the suite's identity is
+        what made a teardown re-run the suite's crawl, on the legs where the
+        republish beat the run."""
+        payload = self._payload()
+        assert (
+            payload["metadata"]["annotations"]["package.argoproj.io/name"]
+            == "@atlan/connection-delete"
+        )
+        template_ref = payload["spec"]["templates"][0]["dag"]["tasks"][0]["templateRef"]
+        assert template_ref["name"] == "atlan-connection-delete"
+        assert "coalesce" not in payload["metadata"]["name"]
+
+    def test_it_carries_the_apps_three_mustache_rows(self) -> None:
+        """The other half of defusing the race: when Heracles' republished
+        manifest is what runs, these rows are what its
+        ``{{connection-qualified-name}}`` / ``{{delete-type}}`` /
+        ``{{delete-assets}}`` tokens resolve to. Without them the app falls back
+        to its own default of SOFT, and every run's assets would be archived
+        rather than removed."""
+        rows = self._rows()
+        assert rows["connection-qualified-name"] == _QN
+        assert rows["delete-type"] == "PURGE"
+        assert rows["delete-assets"] is True
+
+    def test_the_connection_rows_still_name_the_leg(self) -> None:
+        """Attribution does not go away with the package name: which leg's
+        connection is being deleted stays readable off the submit."""
+        assert self._rows()["connection.connectorName"] == "coalesce"
 
     def test_it_names_no_app(self) -> None:
         """The one field this body must not carry, and the reason FND-1724

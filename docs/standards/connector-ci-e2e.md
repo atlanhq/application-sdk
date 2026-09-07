@@ -1459,35 +1459,45 @@ single-object `DELETE` puts the key in the path, where the allowlist can read it
 `connection-delete` has no such problem: it runs on the tenant, where its object
 store is the tenant bucket accessed directly with no proxy in front of it.
 
-**The teardown submit names no app, and that is load-bearing.** At submit,
-Heracles fetches the manifest served at `metadata.app_service_url` and publishes
-it **over** the workflow's published version — the same mechanism
-`assert_deployed_manifest` asserts on for the run itself, and the reason a
-connector's own seed DAG is only a placeholder. Teardown is the inverse case: the
-one-node DAG it publishes *is* the graph that must run, so anything published
-over it replaces the delete with the app under test's own crawl. FND-1724 shipped
-this submit carrying `self.app_service_url` and the two e2e legs of one SDK
-commit split on the shape of the app:
+**The teardown submit names the delete app, because the republish cannot be
+stopped.** At submit, Heracles fetches a manifest and publishes it **over** the
+workflow's published version — the same mechanism `assert_deployed_manifest`
+asserts on for the run itself, and the reason a connector's own seed DAG is only
+a placeholder. Which app it fetches comes off the submit envelope's *identity*
+(`package.argoproj.io/name`, `atlanName`, `templateRef`), not off
+`app_service_url`; omitting that field changed nothing.
 
-| App under test | Heracles' manifest fetch | What ran |
-| -- | -- | -- |
-| bundle (per-entrypoint manifests only) | 404 — no bare manifest to fetch | `connection-delete`, PURGE, 30s |
-| single-entrypoint | resolves | the app's own `extract` → `publish`, against the connection it was to delete |
+**Whether the republish beats the run is a race.** FND-1724 first shipped this
+submit carrying the app under test's identity, and one SDK commit produced both
+outcomes on the same app *and* the same tenant:
 
-So the delete worked on exactly the apps whose manifest endpoint happened to
-fail. Omitting the field makes "our DAG runs" a property of the submit instead.
-`delete_connection` does not take it on trust either: it reads back the version
-AE serves before polling, and re-checks the run's own node names after, and
-reports `dag_superseded` — with the fallback — rather than polling, or grading,
-a run that is some other app's DAG.
+| Leg (one SDK commit) | What ran as "teardown" |
+| -- | -- |
+| openapi `connection-create-gcp` / `-azure` | `delete` — the connection purged |
+| openapi `connection-reuse-gcp` / `-azure` | openapi's `extract` → `publish` |
+| metabase azure | `delete` |
+| metabase aws / gcp, mysql ×3 | the suite's own 5-node crawl |
 
-Pointing the submit at the delete app's *own* service (`connection-delete` does
-have one, on :8000 in its namespace) is the better end state and is not a swap:
-its `connection-delete-server` sits at `0/0` between runs, so which DAG ran would
-become a race on whether it woke, and a fetch that did resolve would bring the
-app's manifest default of `delete_type: SOFT` — archiving every run's assets
-instead of removing them. It needs that manifest's mustache tokens read first, so
-`PURGE` can ride the submit.
+A race cannot be won by naming a field differently — it can only be made
+harmless, by arranging for **both** possible winners to be a delete:
+
+- Heracles' fetch wins → the graph that runs is the delete app's own manifest
+  DAG, and this submit's `connection-qualified-name` / `delete-type` /
+  `delete-assets` parameter rows are what its mustache tokens resolve to. Those
+  rows are why the app does not fall back to its manifest default of
+  `delete_type: SOFT`, which would archive every run's assets instead of
+  removing them.
+- The seed survives → the graph that runs is the harness's copy of that same
+  node, carrying the same three values as literals.
+
+Which is why the harness's node id is `delete`, the app manifest's own, and every
+other field on it (`app_name: automation-engine`, the three-day
+`start_to_close`) is copied verbatim: the two versions are meant to be
+indistinguishable. `delete_connection` then has one job left — catching a
+*third* graph, which is a bug rather than a race. It reads back the version AE
+serves before polling and re-checks the run's own node names after, and reports
+`dag_superseded` (with the fallback) rather than polling, or grading, a run that
+is some other app's DAG.
 
 **Publish never cleans up its own cache**, which is easy to get backwards. It
 only writes `persistent-artifacts/apps/atlan-publish-app/state/<cqn>/`; nothing
