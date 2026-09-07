@@ -85,6 +85,7 @@ from application_sdk.testing.harness.seed._publish import (
     SeedPrefixes,
     build_seed_publish_dag,
     build_seed_submit_payload,
+    seed_object_keys,
     seed_prefix_root,
 )
 from application_sdk.testing.harness.seed._spec import (
@@ -130,6 +131,7 @@ __all__ = [
     "connection_entity",
     "ndjson_bytes",
     "seed_assets",
+    "seed_object_keys",
     "seed_prefix_root",
     "skeleton_assets",
     "validate_resolved_spec",
@@ -293,7 +295,10 @@ async def seed_assets(
                     f"{report.total} record(s)"
                 ),
             )
-        key = f"{prefixes.transformed}/{TRANSFORMED_FILE_NAME}"
+        # Unpacked rather than indexed: ``seed_object_keys`` is what teardown
+        # deletes, and a seed that started writing a second file would break
+        # here rather than silently leave the new one behind.
+        (key,) = seed_object_keys(root=prefixes.root)
         await upload_file(key, str(written.path), store)
 
     logger.info(

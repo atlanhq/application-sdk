@@ -1,4 +1,15 @@
-"""Purging what a harness run created.
+"""Purging a connection from the runner, with ``pyatlan``.
+
+**This is the degraded path.** The owner of connection deletion is the
+``connection-delete`` app, which runs *on the tenant* and clears the byte-stores
+this module cannot reach — see :mod:`application_sdk.testing.harness.teardown`
+for why that distinction is structural rather than stylistic, and
+:func:`~application_sdk.testing.harness.teardown.delete_connection` for the
+node that calls it. What is here runs only when that node could not: no AE
+client on this tier, no worker on the app's task queue, or a delete that did not
+succeed. It reclaims the Atlas half and nothing else, which is what the harness
+did for every run before FND-1724 — strictly better than leaving a connection
+behind, and strictly worse than the app.
 
 Lifted from ``BaseE2ETest.teardown_method``, whose purge path is the part of the
 harness with the least test coverage and the most consequence: assets a failed

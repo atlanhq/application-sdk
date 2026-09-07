@@ -39,7 +39,7 @@ run is graded against. The plumbing it composes is
 :mod:`application_sdk.testing.harness`:
 
 * :mod:`~application_sdk.testing.harness.identity` mints the run id and the
-  ephemeral connection name — including the qualified name teardown purges,
+  ephemeral connection name — including the qualified name teardown deletes,
   which used to come back from ``Connection.creator`` at one-second resolution
   and could collide between two matrix legs;
 * :mod:`~application_sdk.testing.harness.starters` publishes the seed version;
@@ -50,7 +50,9 @@ run is graded against. The plumbing it composes is
   qualified-name depths;
 * :mod:`~application_sdk.testing.harness.preconditions` is the worker-health
   probe behind :meth:`BaseE2ETest.assert_worker_up`;
-* :mod:`~application_sdk.testing.harness.teardown` purges;
+* :mod:`~application_sdk.testing.harness.teardown` reclaims — through the
+  tenant's ``connection-delete`` app, which owns the byte-stores a runner
+  cannot reach, with the ``pyatlan`` purge as its fallback;
 * :mod:`~application_sdk.testing.harness.budgets` carries every timing this
   class' ``ClassVar`` declarations carry.
 
@@ -95,10 +97,10 @@ from application_sdk.common.task_queue import (
     derive_task_queue,
 )
 from application_sdk.contracts.types import ConnectionRef
-from application_sdk.errors.base import safe_traceback
+from application_sdk.errors.base import safe_traceback, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.batch import delete_prefix
 from application_sdk.storage.binding import create_store_from_binding_optional
+from application_sdk.storage.ops import delete as delete_object
 from application_sdk.testing.e2e._errors import (
     AmbiguousDAGRunError,
     AtlasReadIndeterminateError,
@@ -179,7 +181,14 @@ from application_sdk.testing.harness.starters import (
     SubmitRetry,
     publish_seed_version,
 )
-from application_sdk.testing.harness.teardown import purge_connection
+from application_sdk.testing.harness.teardown import (
+    ConnectionDeletePlan,
+    ConnectionDeleteReport,
+    DeleteType,
+    connection_delete_task_queue,
+    delete_connection,
+    purge_connection,
+)
 from application_sdk.testing.harness.waiting import poll_until
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; pyatlan is a lazy import
@@ -893,6 +902,39 @@ class BaseE2ETest:
     # int to pin the window; setup_method rejects a pinned value that is not
     # strictly below ae_poll_timeout_seconds.
     dag_progress_stall_seconds: ClassVar[int | None] = None
+    # ---- Teardown, which runs through the ``connection-delete`` app --------
+    #
+    # Teardown submits one ``connection-delete`` DAG per connection the run
+    # touched (see :mod:`application_sdk.testing.harness.teardown`), so it needs
+    # its own two budgets rather than the run's. Both are deliberately smaller
+    # than the DAG budgets above: teardown is post-verdict, its failures never
+    # red a leg, and a leg that sits in cleanup is a leg holding a CI runner for
+    # nothing.
+    #
+    # Ceiling on one connection's delete. Wide enough for the app to drain a
+    # crawl's worth of assets (its own search-and-delete loop is budgeted in
+    # tens of thousands per call), narrow enough that a wedged delete does not
+    # outlast the run that created it. The DAG-progress watchdog is NOT armed on
+    # this poll — connection-delete is a single node that legitimately sits
+    # Running while it drains, which a glyph comparison cannot tell from a wedge
+    # — so this ceiling is the only bound.
+    connection_delete_poll_timeout_seconds: ClassVar[int] = 900
+    # How long to wait for the delete node to be picked up before concluding
+    # that nothing polls the connection-delete queue, and why it is far shorter
+    # than ae_stall_grace_seconds: when nothing does — a scale-to-zero worker
+    # that will not wake, or a tenant without the app installed — EVERY
+    # connection would otherwise burn the full ceiling above before the pyatlan
+    # fallback gets to reclaim the Atlas half. It still has to clear a cold
+    # start: connection-delete's atlan.yaml sets ``keda.minReplicaCount: 0``, so
+    # its queue is legitimately unpolled between runs and KEDA has to scale it
+    # up on queue depth. 0 disables the latch, which means an unpolled queue
+    # waits out the ceiling instead.
+    connection_delete_stall_grace_seconds: ClassVar[int] = 120
+    # How thoroughly teardown deletes. PURGE because that is what the pyatlan
+    # purge this replaced did, and an ephemeral connection is never coming back;
+    # the app's own default is SOFT, which would leave every run's assets
+    # recoverable-and-still-indexed on a shared tenant.
+    connection_delete_type: ClassVar[DeleteType] = DeleteType.PURGE
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
     # Probe errors that can never heal by retrying: a deterministic bug in the
@@ -1432,82 +1474,275 @@ class BaseE2ETest:
         run_sync(self._teardown_method_async(method))
 
     async def _teardown_method_async(self, method: Any) -> None:
-        """Purge this run's connection, then close the clients it opened.
+        """Reclaim this run's connections, then close the clients it opened.
 
-        The purge itself is
-        :func:`~application_sdk.testing.harness.teardown.purge_connection`, which
-        reports rather than raises: the batching that is a correctness bound
-        (``purge_by_guid`` puts one ``guid=`` parameter per asset into one
-        DELETE, and httpx refuses a URL whose query exceeds 64 KiB, so an
-        unbatched purge deletes *nothing*), the read-everything-before-deleting
-        order that offset pagination makes mandatory, and the two independently
-        guarded phases all live there now.
+        The reclaim itself is
+        :func:`~application_sdk.testing.harness.teardown.delete_connection`,
+        which submits a one-node ``connection-delete`` DAG the same way
+        :meth:`seed_assets` submits its publish node — because the app owns the
+        artifacts and runs *on the tenant*, where the byte-stores the harness
+        cannot reach through the s3proxy are ordinary object-store keys. What
+        the harness still deletes itself is the seed NDJSON it wrote, which is
+        no app's to clean up.
+
+        Nothing here raises. Every step reports, and the module those two
+        functions live in explains why that is a stronger guarantee than
+        remembering to wrap the call.
 
         Args:
             method: The test method pytest just ran. Unused; part of the xunit
                 signature.
         """
         try:
-            await self._purge_this_run()
-            await self._purge_seeded_prefixes()
+            await self._delete_connections()
+            await self._delete_seed_objects()
         finally:
             await self._close_clients()
 
-    async def _purge_this_run(self) -> None:
-        """Delete every ephemeral connection this run minted, if there are any.
+    async def _delete_connections(self) -> None:
+        """Delete every ephemeral connection this run touched, if there are any.
 
         The run's own connection first, then every lineage-parent connection
         :meth:`seed_assets` registered — in that order because the run's assets
-        hold lineage *references* into the seeded skeletons, and purging the
+        hold lineage *references* into the seeded skeletons, and deleting the
         referrer before the referent is the direction that cannot strand an
-        edge. Each purge is independently guarded: one connection that will not
-        purge must not orphan the others, for the same reason the two phases
-        inside :func:`~application_sdk.testing.harness.teardown.purge_connection`
-        are independently guarded.
+        edge. That ordering is also why each connection gets its own single-node
+        run rather than all of them sharing one graph: chained ``depends_on``
+        nodes would keep the order and let one stuck delete orphan every later
+        one, parallel nodes would keep them independent and lose the order, and
+        one run per connection keeps both.
+
+        A delete that does not complete falls back to
+        :func:`~application_sdk.testing.harness.teardown.purge_connection`,
+        which reclaims the Atlas half from the runner and nothing else. The
+        fallback is transitional — see the teardown module's docstring for the
+        two silences it covers (a tier with no AE client, and a scale-to-zero
+        worker that does not wake) and for when it should go.
         """
         conn_qn = getattr(self, "connection_qualified_name", "")
         seeded = tuple(getattr(self, "_seeded_connection_qns", ()))
-        for target in (conn_qn, *seeded):
+        for ordinal, target in enumerate((conn_qn, *seeded), start=1):
             if not target:
                 continue
-            try:
-                async with self._atlas_client() as client:
-                    await purge_connection(client, target)
-            # conformance: ignore[E004] teardown boundary — this runs after the assertions have decided the verdict, so a cleanup failure must never replace a real one; it is logged at WARNING with exc_info
-            except Exception:
-                logger.warning(
-                    "e2e cleanup: could not reach the tenant to purge %s — manual "
-                    "purge may be needed",
-                    target,
-                    exc_info=True,
-                )
+            report = await self._delete_connection_via_app(target, ordinal=ordinal)
+            if report is not None and report.complete:
+                continue
+            self._warn_connection_delete_incomplete(target, report)
+            await self._purge_connection_from_runner(target)
 
-    async def _purge_seeded_prefixes(self) -> None:
-        """Delete the object-store prefix each :meth:`seed_assets` call wrote.
+    async def _delete_connection_via_app(
+        self, qualified_name: str, *, ordinal: int
+    ) -> ConnectionDeleteReport | None:
+        """Run the ``connection-delete`` node for one connection.
 
-        Separate from the connection purge and run *after* it: the entities are
-        what a stranded run trips over, the NDJSON is only bytes, and a store the
-        harness cannot reach must not stop the connections from being purged.
-        Guarded per prefix and report-not-raise, on the same teardown-boundary
-        rule as :meth:`_purge_this_run` — cleanup runs after the assertions have
-        decided the verdict and must never replace a real one.
+        Args:
+            qualified_name: The connection to delete.
+            ordinal: Its position in this run's teardown, which is what keeps
+                two teardown runs' AE workflow names apart — see
+                :meth:`_connection_delete_plan`.
+
+        Returns:
+            The report, or ``None`` when this tier has no AE client to submit
+            through at all. ``None`` is a distinct answer from a failed report:
+            there is no missing app to name and nothing to link to, only the
+            fallback.
+        """
+        ae = getattr(self, "_ae", None)
+        if ae is None:
+            # The worker-up-only tier (source_available=False) wires no AE
+            # client. A run there still mints a connection name, and a suite
+            # that created one by other means still needs it reclaimed.
+            return None
+        try:
+            plan = self._connection_delete_plan(ordinal=ordinal)
+        # conformance: ignore[E004] teardown boundary — resolving the plan reads the suite's own class attrs and can raise on a suite that never finished setup; a cleanup failure must never replace the run's verdict
+        except Exception as error:
+            # Reported as a failed delete rather than as "no AE client": the
+            # client is there, and saying otherwise would send a reader looking
+            # at the wrong tier. Logged here for the traceback, which the
+            # report's redacted one-liner cannot carry.
+            logger.warning(
+                "e2e cleanup: could not resolve how to address the "
+                "connection-delete app for %s",
+                qualified_name,
+                exc_info=True,
+            )
+            return ConnectionDeleteReport(
+                qualified_name=qualified_name,
+                errors=(
+                    "could not resolve how to address the connection-delete "
+                    f"app: {sanitize_cause_repr(error)}",
+                ),
+            )
+        return await delete_connection(qualified_name, ae=ae, plan=plan)
+
+    def _warn_connection_delete_incomplete(
+        self, qualified_name: str, report: ConnectionDeleteReport | None
+    ) -> None:
+        """Say what the app did not clean up, and — when it can — why.
+
+        A missing ``connection-delete`` app is called out by name rather than
+        folded into a generic cleanup warning, because it is the failure mode
+        that otherwise reads exactly like a passing run: the leg is green, the
+        assets are gone (the fallback took them), and the byte-stores quietly
+        accumulate on a shared tenant forever. A *superseded* DAG
+        (:attr:`~application_sdk.testing.harness.teardown.ConnectionDeleteReport.dag_superseded`)
+        gets the same treatment for a sharper reason: it reads like a tenant
+        problem while being an SDK one, and it is what FND-1724 shipped and had
+        to fix. It stays a warning all the same —
+        tenant cleanliness is not what the test is asserting, and a cleanup
+        failure must never become the run's verdict.
+
+        Args:
+            qualified_name: The connection whose delete did not complete.
+            report: What the delete managed, or ``None`` when no AE client
+                existed to run it.
+        """
+        if report is None:
+            logger.warning(
+                "e2e cleanup: no AE client on this tier, so %s could not be "
+                "deleted through the connection-delete app. Falling back to the "
+                "runner-side purge, which reclaims the Atlas assets and leaves "
+                "the connection's byte-stores (connection-cache/%s.sqlite and "
+                "persistent-artifacts/apps/atlan-publish-app/state/%s/) behind",
+                qualified_name,
+                qualified_name,
+                qualified_name,
+            )
+            return
+        if report.app_absent:
+            logger.warning(
+                "e2e cleanup: nothing polled %s, so %s could not be deleted "
+                "through the connection-delete app — either its scale-to-zero "
+                "worker did not wake (keda.minReplicaCount is 0) or the app is "
+                "not installed on this tenant (Global Marketplace app_id "
+                "019ef7f4-de9a-77c3-bad1-7f201fc97052). Falling back to the "
+                "runner-side purge, which reclaims the Atlas assets and leaves "
+                "connection-cache/%s.sqlite and "
+                "persistent-artifacts/apps/atlan-publish-app/state/%s/ behind — "
+                "publish never cleans up its own cache, so those grow without "
+                "bound on a shared tenant. Details: %s",
+                self._connection_delete_task_queue(),
+                qualified_name,
+                qualified_name,
+                qualified_name,
+                "; ".join(report.errors),
+            )
+            return
+        if report.dag_superseded:
+            logger.warning(
+                "e2e cleanup: %s was not deleted through the connection-delete "
+                "app because the graph AE ran was neither the delete node the "
+                "teardown published nor the delete app's own manifest (slug=%s "
+                "run_id=%s). At submit, Heracles publishes a manifest over the "
+                "seed version; the teardown submit names the delete app so that "
+                "either winner of that race is a delete, so a third graph means "
+                "Heracles resolved a different app from the same envelope — an "
+                "SDK-side problem, not a tenant one. Until it is fixed this leg "
+                "falls back to the runner-side purge and leaks "
+                "connection-cache/%s.sqlite and "
+                "persistent-artifacts/apps/atlan-publish-app/state/%s/. "
+                "Details: %s",
+                qualified_name,
+                report.ae_workflow_slug or "<none>",
+                report.ae_run_id or "<none>",
+                qualified_name,
+                qualified_name,
+                "; ".join(report.errors),
+            )
+            return
+        logger.warning(
+            "e2e cleanup: the connection-delete run for %s did not complete "
+            "(slug=%s run_id=%s), so its byte-stores may remain. Falling back to "
+            "the runner-side purge. Details: %s",
+            qualified_name,
+            report.ae_workflow_slug or "<none>",
+            report.ae_run_id or "<none>",
+            "; ".join(report.errors),
+        )
+
+    async def _purge_connection_from_runner(self, qualified_name: str) -> None:
+        """Reclaim the Atlas half of one connection with ``pyatlan``.
+
+        The degraded path, run only when the app could not. Independently
+        guarded, for the same reason the two phases inside
+        :func:`~application_sdk.testing.harness.teardown.purge_connection` are:
+        one connection that will not purge must not orphan the others.
+
+        Args:
+            qualified_name: The connection to purge.
+        """
+        try:
+            async with self._atlas_client() as client:
+                await purge_connection(client, qualified_name)
+        # conformance: ignore[E004] teardown boundary — this runs after the assertions have decided the verdict, so a cleanup failure must never replace a real one; it is logged at WARNING with exc_info
+        except Exception:
+            logger.warning(
+                "e2e cleanup: could not reach the tenant to purge %s — manual "
+                "purge may be needed",
+                qualified_name,
+                exc_info=True,
+            )
+
+    async def _delete_seed_objects(self) -> None:
+        """Delete the object-store keys each :meth:`seed_assets` call wrote.
+
+        The one artifact ``connection-delete`` does not cover: its
+        ``archive_storage`` clears the *app-owned* per-connection stores
+        (``connection-cache/``, ``argo-artifacts/``, ``delta/``, publish's
+        state root), and the seed NDJSON under ``artifacts/apps/<app>/e2e-seed/``
+        is harness-specific — nothing on the tenant knows it exists.
+
+        **By key, never by prefix**, and that is the whole reason this method
+        changed shape. ``delete_prefix`` is a LIST plus a bulk ``POST ?delete``,
+        both *bucket-level* URLs, and the tenant's Kong s3proxy path-matches
+        against an allowlist it cannot apply to a URL whose keys live in the
+        request body — so the call came back ``403 code 1009`` even though
+        ``/artifacts/apps/`` is on that allowlist. A single-object DELETE puts
+        the key in the path, where the allowlist can see it. The harness knows
+        exactly which keys it wrote, so it never needs the listing.
+
+        What that leaves behind is publish's own state under the seed root
+        (``.../publish-state/`` and ``.../current-state/``): the harness did not
+        write those keys and cannot enumerate them from here. They are bounded
+        per seed and outside ``archive_storage``'s prefixes; extending the app
+        to cover them is the fix, not a second listing attempt from the runner.
+
+        Run after the connections, on the same ordering rule as before: the
+        entities are what a stranded run trips over, the NDJSON is only bytes,
+        and a store the harness cannot reach must not stop the deletes.
         """
         prefixes = tuple(getattr(self, "_seeded_prefixes", ()))
         if not prefixes:
             return
+        try:
+            store = self.seed_object_store()
+        # conformance: ignore[E004] teardown boundary — see _purge_connection_from_runner; a store the harness cannot resolve leaves bytes behind, which is strictly less harmful than replacing the run's verdict
+        except Exception:
+            logger.warning(
+                "e2e cleanup: no usable seed object store, so the seed NDJSON "
+                "under %s was left behind — manual cleanup may be needed",
+                ", ".join(prefixes),
+                exc_info=True,
+            )
+            return
         for prefix in prefixes:
-            try:
-                deleted = await delete_prefix(prefix, self.seed_object_store())
+            for key in harness_seed.seed_object_keys(root=prefix):
+                try:
+                    deleted = await delete_object(key, store)
+                # conformance: ignore[E004] teardown boundary — see above
+                except Exception:
+                    logger.warning(
+                        "e2e cleanup: could not delete the seed object %s — "
+                        "manual cleanup may be needed",
+                        key,
+                        exc_info=True,
+                    )
+                    continue
                 logger.info(
-                    "e2e cleanup: deleted %d seed object(s) under %s", deleted, prefix
-                )
-            # conformance: ignore[E004] teardown boundary — see _purge_this_run; a store the harness cannot reach leaves bytes behind, which is strictly less harmful than replacing the run's verdict
-            except Exception:
-                logger.warning(
-                    "e2e cleanup: could not delete the seed prefix %s — manual "
-                    "cleanup may be needed",
-                    prefix,
-                    exc_info=True,
+                    "e2e cleanup: %s seed object %s",
+                    "deleted" if deleted else "found no",
+                    key,
                 )
 
     async def _close_clients(self) -> None:
@@ -2143,6 +2378,71 @@ class BaseE2ETest:
         several tenants in one CI run.
         """
         return f"atlan-publish-{self.resolved_tenant_deployment_name()}"
+
+    def _connection_delete_task_queue(self) -> str:
+        """Task queue the tenant's ``connection-delete`` app polls.
+
+        Derived from :meth:`resolved_tenant_deployment_name` on the same rule as
+        :meth:`_publish_task_queue`: which deployment the tenant registers its
+        apps under is a property of the tenant, and one suite runs against
+        several tenants in one CI run. Resolves to
+        ``atlan-connection-delete-production`` on a standard tenant, mirroring
+        ``atlan-publish-production``.
+
+        Returns:
+            The queue name.
+        """
+        return connection_delete_task_queue(self.resolved_tenant_deployment_name())
+
+    def _connection_delete_plan(self, *, ordinal: int) -> ConnectionDeletePlan:
+        """Resolve how this leg dispatches and waits on one connection's delete.
+
+        Every value is the one this suite's own run uses, so teardown cannot be
+        dispatched to a different tenant than the run it is cleaning up after.
+        The envelope names the delete app
+        (:mod:`application_sdk.testing.harness.teardown._dag`), so whichever
+        graph wins Heracles' submit-time republish is a delete; ``app_service_url``
+        stays omitted because a teardown submit has no service URL to name. Of
+        what the plan does carry, two values are deliberately not the run's:
+
+        * **The budgets** are teardown's own
+          (:attr:`connection_delete_poll_timeout_seconds`,
+          :attr:`connection_delete_stall_grace_seconds`) rather than the run's.
+          Teardown is post-verdict, so a leg that sits in cleanup is holding a
+          CI runner for nothing — and the stall grace here is the app-absent
+          detector, which has to be short for exactly that reason.
+        * **The AE workflow name** has to be unique twice over, because
+          ``create_workflow`` is idempotent on the name: against the suite's own
+          run (hence ``-teardown-``) and against the other connections this same
+          teardown deletes (hence *ordinal*). It is the same collision
+          :meth:`_seed_publish_plan` solves, for the same reason, and *ordinal*
+          is used there too rather than a rendering of the QN: a QN's segments
+          are caller-supplied, so any flattening of them into a name is a second
+          encoding that can collide. The QN is not lost — it is on the
+          workflow's description.
+
+        Args:
+            ordinal: This connection's position in the run's teardown, counting
+                from one.
+
+        Returns:
+            The plan.
+        """
+        return ConnectionDeletePlan(
+            connector_short_name=self.connector_short_name,
+            task_queue=self._connection_delete_task_queue(),
+            ae_workflow_name=(
+                f"{self.connector_short_name}-{self.connection_name_prefix}-"
+                f"{self.run_id}-teardown-{ordinal}"
+            ),
+            run_id=self.run_id,
+            delete_type=self.connection_delete_type,
+            submit_retry=self._submit_retry(),
+            poll_interval_seconds=self.ae_poll_interval_seconds,
+            poll_timeout_seconds=self.connection_delete_poll_timeout_seconds,
+            stall_grace_seconds=self.connection_delete_stall_grace_seconds,
+            minter=getattr(self, "_minter", None),
+        )
 
     def seed_object_store(self) -> ObjectStore:
         """The object store a seed writes its transformed NDJSON into.

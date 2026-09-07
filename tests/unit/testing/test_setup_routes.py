@@ -448,6 +448,98 @@ class TestFormShortfall:
         # stale image from a renamed field.
         assert "credential-guid" in reason
 
+    def test_a_respelled_field_is_not_reported_as_a_stale_image(self) -> None:
+        """FND-1683: the field is present, spelled the way it was before a rename.
+
+        The tenant serves a form frozen at install time by an unmanaged
+        ConfigMap, and its pod is never asked — so "the tenant runs an older
+        image" points the reader at a rollout that is entirely current. This
+        is the exact shape that cost days: `extraction_method` served where
+        `extraction-method` is declared, surviving the full wait window.
+        """
+        served = _served(
+            {"extraction_method", "connection"},
+            {"credential": ["extraction_method"], "connection": ["connection"]},
+        )
+
+        reason = form_shortfall(_declaring("extraction-method", "connection"), served)
+
+        assert reason is not None
+        # Both spellings, so the reader sees a rename rather than an absence.
+        assert (
+            "'extraction-method' is declared while 'extraction_method' is served"
+            in reason
+        )
+        assert "spelled the way this contract spelled it BEFORE a rename" in reason
+        assert "not missing at all" in reason
+        # Name the real cause and the one-line way to confirm it.
+        assert "FND-1683" in reason
+        assert "GET /workflows/v1/configmap/" in reason
+        # And do NOT send the reader to the image.
+        assert "older image" not in reason
+
+    def test_a_mix_of_respelled_and_absent_names_both_shapes(self) -> None:
+        """One respelled field must not launder a genuinely undelivered one.
+
+        A form can carry both at once, and they have opposite causes. Saying
+        "not missing at all" because one name had a separator twin would deny
+        the field that really never arrived, and send nobody to look for it.
+        """
+        served = _served(
+            {"extraction_method", "connection"},
+            {"credential": ["extraction_method"], "connection": ["connection"]},
+        )
+
+        reason = form_shortfall(
+            _declaring("extraction-method", "connection", "include-filter"), served
+        )
+
+        assert reason is not None
+        # The respelled one is named as respelled...
+        assert (
+            "'extraction-method' is declared while 'extraction_method' is served"
+            in reason
+        )
+        assert "not missing but respelled" in reason
+        # ...and the absent one is still called absent, with its own cause.
+        assert "'include-filter', though, is absent outright" in reason
+        assert "older image" in reason
+        # The blanket claim must NOT appear when something really is missing.
+        assert "not missing at all" not in reason
+        # The frozen-copy pointer is still worth carrying in the mixed case.
+        assert "FND-1683" in reason
+
+    def test_a_genuinely_absent_field_still_names_both_causes(self) -> None:
+        """No respelling twin: the old wording stands, plus the frozen-copy pointer."""
+        served = _served(
+            {"connection"},
+            {"connection": ["connection"]},
+        )
+
+        reason = form_shortfall(_declaring("include-filter", "connection"), served)
+
+        assert reason is not None
+        assert "include-filter" in reason
+        assert "older image" in reason
+        # The frozen-copy case is still worth naming — it is invisible otherwise.
+        assert "FND-1683" in reason
+
+    def test_respelling_detection_ignores_a_field_served_under_its_own_name(
+        self,
+    ) -> None:
+        """A twin must actually differ, or every match would report itself."""
+        served = _served(
+            {"extraction-method"},
+            {"credential": ["extraction-method"]},
+        )
+
+        # 'connection' is absent outright; 'extraction-method' is served as-is.
+        reason = form_shortfall(_declaring("extraction-method", "connection"), served)
+
+        assert reason is not None
+        assert "is declared while" not in reason
+        assert "older image" in reason
+
     def test_a_contract_declaring_nothing_is_reported(self) -> None:
         """Zero declared inputs makes the check vacuous, so it must not pass."""
         reason = form_shortfall(_declaring(), _served({"anything"}))
@@ -2174,6 +2266,50 @@ class TestTransientRetries:
         # Two waits for three attempts, and the second is longer than the first.
         assert len(slept) == setup_routes._RETRY_ATTEMPTS - 1
         assert slept[1] > slept[0]
+
+
+class TestConfigmapAsksPastTheCache:
+    """FND-1725: the served form must come from the app pod, not LM's cache.
+
+    ``TenantRoutes.configmap`` is the only path this check reads a served form
+    through, so pinning the query string here is pinning the whole check's
+    guarantee that it asserts against the build actually under test rather
+    than whatever Local Marketplace cached at the last publish — see the
+    module docstring.
+    """
+
+    def test_configmap_requests_source_app(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        requested: list[str] = []
+
+        class _Response:
+            status = 200
+
+            def read(self) -> bytes:
+                return b'{"ok": true}'
+
+            def __enter__(self) -> "_Response":
+                return self
+
+            def __exit__(self, *exc: object) -> bool:
+                return False
+
+        class _Opener:
+            def open(
+                self, request: urllib.request.Request, timeout: object = None
+            ) -> object:
+                requested.append(request.full_url)
+                return _Response()
+
+        monkeypatch.setattr(setup_routes, "_OPENER", _Opener())
+
+        routes = TenantRoutes(base_url="https://tenant.example.invalid", bearer="t")
+        routes.configmap("atlan-openapi")
+
+        assert requested == [
+            "https://tenant.example.invalid/api/service/configmaps/atlan-openapi?source=app"
+        ]
 
 
 class TestRedirectsAreDeclined:

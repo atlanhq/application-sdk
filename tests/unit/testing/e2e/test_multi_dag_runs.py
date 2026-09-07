@@ -59,6 +59,7 @@ from application_sdk.testing.e2e.client import (
 from application_sdk.testing.harness import atlas as atlas_api
 from application_sdk.testing.harness.identity import Minter
 from application_sdk.testing.harness.outcome import Settled
+from application_sdk.testing.harness.teardown import CONNECTION_DELETE_NODE_ID
 
 # ---------------------------------------------------------------------------
 # Fixtures for the two things a run reads from outside itself
@@ -575,17 +576,36 @@ class TestDeclaredRuns:
             "default/bundle/1"
         }
 
-    def test_teardown_is_still_one_purge(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_teardown_is_still_one_delete(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """N runs, one cleanup — and it stays in ``teardown_method``, which
-        pytest runs on pass, fail and error alike."""
+        pytest runs on pass, fail and error alike.
+
+        One ``connection-delete`` run since FND-1724, not one ``pyatlan`` purge:
+        the shared connection is registered once however many DAGs touched it,
+        and the runner-side purge fires only when the app's run did not
+        complete — which is what ``calls.purged`` being empty says here.
+
+        The third scripted reading is the teardown's, and it has to carry the
+        ``connection-delete`` node: a reading whose nodes are the connector's
+        says the graph AE ran was published over the teardown's DAG, which
+        ``delete_connection`` reports as a supersede rather than as a delete.
+        """
         harness = _CrawlThenMine()
-        ae = _FakeAE(_succeeded("extract", "publish"), _succeeded("extract"))
+        ae = _FakeAE(
+            _succeeded("extract", "publish"),
+            _succeeded("extract"),
+            _succeeded(CONNECTION_DELETE_NODE_ID),
+        )
         calls = _wire(harness, ae, monkeypatch, total=4)
 
         harness.test_full_dag_runs_end_to_end()
         harness.teardown_method(None)
 
-        assert calls.purged == ["default/bundle/1"]
+        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        assert len(teardowns) == 1
+        assert calls.purged == []
 
     def test_a_failing_run_stops_the_sequence(
         self, monkeypatch: pytest.MonkeyPatch

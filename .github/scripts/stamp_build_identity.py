@@ -3,8 +3,8 @@
 
 FND-1684. The e2e version check used to read its own input: ``install`` skipped
 when the marketplace install record already named the expected version, and
-``verify`` then read the same record. A tenant whose pods had not moved in weeks
-passed the check that exists to catch exactly that.
+``verify`` then read the same record. Once that record existed for a build, the
+check could only agree with it, whatever the cluster was actually serving.
 
 The only fully-truthful answer is one the **pod itself** emits, and nothing
 committed to an app repo can carry it: the identity CI compares against is the

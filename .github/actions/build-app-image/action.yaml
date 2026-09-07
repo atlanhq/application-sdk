@@ -208,8 +208,9 @@ runs:
     # Make the image able to say which build it is (FND-1684).
     #
     # `verify` in e2e_tenant_app.py used to read the marketplace install record —
-    # the same record `install` writes and then skips on — so a tenant whose pods
-    # had not moved in weeks passed the check that exists to catch exactly that.
+    # the same record `install` writes and then skips on — so once that record
+    # existed for a build the check could only agree with it, whatever the
+    # cluster was actually serving.
     # The only fully-truthful answer comes from the pod, and the identity CI
     # compares against (the image tag) is minted after every committed artifact
     # exists, so it has to enter at build time.
