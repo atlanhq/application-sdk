@@ -188,7 +188,12 @@ class SeedPublishPlan:
         ae_workflow_name: Name for the AE workflow this seed runs under. Must not
             collide with the suite's own, or AE would carry two graphs on one
             workflow and the run list would not say which ran.
-        run_id: This leg's run identifier, for the AE workflow name and labels.
+        run_id: Ignored.
+
+            .. deprecated:: 3.34.0
+               It was the submit envelope's run label; the AE workflow's name
+               comes from :attr:`ae_workflow_name`. Since FND-1766 the seed
+               builds no envelope, so nothing reads this. Removed in v4.0.
         submit_retry: How long to let AE keep answering 404 while the seed's
             freshly published version replicates, or ``None`` for
             :meth:`~application_sdk.testing.harness.automation_engine.AEClient.submit_published_version`'s

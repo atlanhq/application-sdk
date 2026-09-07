@@ -41,11 +41,13 @@ Two functions, and which one runs is not a preference:
 * **The worker-up-only tier wires no AE client** (``source_available=false``).
   There is nothing to submit a delete through, and a connection that tier minted
   still has to go.
-* **A third graph.** Heracles republishes *a* manifest over the seed at submit,
-  and the harness cannot stop it — so the submit names the delete app and mirrors
-  its manifest node, making both possible winners a delete (:mod:`._dag` has the
-  mechanism and the legs that proved it). If what AE runs is neither, the delete
-  reports :attr:`ConnectionDeleteReport.dag_superseded` and the fallback runs.
+* **A graph that is not ours.** Since FND-1775 the submit goes straight to AE
+  and fetches no manifest, so the version published moments earlier is the
+  version that runs and nothing can be published over it (:mod:`._dag`'s
+  historical note has what this replaced). The read-back stays anyway, on the
+  same rule as the seed's: if what AE runs is *not* this teardown's node the
+  delete reports :attr:`ConnectionDeleteReport.dag_superseded` and the fallback
+  runs, so an impossible outcome degrades instead of quietly deleting nothing.
 * **A scaled-to-zero worker that does not wake** looks exactly like an absent app
   from here. ``connection-delete``'s ``atlan.yaml`` sets
   ``keda.minReplicaCount: 0``, so its queue is *legitimately* unpolled between
@@ -94,7 +96,6 @@ from application_sdk.testing.harness.teardown._dag import (
     CONNECTION_DELETE_WORKFLOW_TYPE,
     DeleteType,
     build_connection_delete_dag,
-    build_connection_delete_submit_payload,
     connection_delete_task_queue,
 )
 from application_sdk.testing.harness.teardown._purge import (
@@ -115,7 +116,6 @@ __all__ = [
     "DeleteType",
     "PurgeReport",
     "build_connection_delete_dag",
-    "build_connection_delete_submit_payload",
     "connection_delete_task_queue",
     "delete_connection",
     "purge_connection",
@@ -141,12 +141,21 @@ class ConnectionDeletePlan:
             not collide with the suite's own or with another teardown in the
             same run: ``create_workflow`` is idempotent on the name, so a shared
             name would publish one graph over the other.
-        run_id: This leg's run identifier.
+        run_id: Ignored.
+
+            .. deprecated:: 3.34.0
+               It was the submit envelope's run label. The teardown no longer
+               builds an envelope, so nothing reads this. Removed in v4.0. See
+               FND-1775 and :mod:`._dag`'s historical note.
         delete_type: How thoroughly to delete. ``PURGE`` for e2e teardown — it
             is what the ``pyatlan`` purge this replaced did, and an ephemeral
             connection is never coming back.
-        submit_retry: Cold-start sizing for the submit, or ``None`` to leave
-            ``submit_workflow``'s own default budget in place.
+        submit_retry: How long to let AE keep answering 404 while the
+            just-published version replicates, or ``None`` to leave
+            ``submit_published_version``'s own budget in place. It is *not* a
+            cold-start budget any more: since FND-1775 this submit calls no app
+            pod, and whether the delete app's worker is up is asked by
+            :attr:`stall_grace_seconds` instead.
         poll_interval_seconds: Gap between ``native-status`` reads.
         poll_timeout_seconds: Ceiling on the whole delete wait.
         stall_grace_seconds: How long to wait for *any* node to start before
@@ -189,13 +198,15 @@ class ConnectionDeleteReport:
             failure because the remediation is completely different (look at the
             tenant vs. look at the run), and because it is the failure mode that
             otherwise reads exactly like a passing run.
-        dag_superseded: The graph AE ran is neither the node this teardown
-            published nor the delete app's own — Heracles published *some other*
-            app's manifest over the seed at submit (see :mod:`._dag`). Its own
-            field for the same reason :attr:`app_absent` has one, and a sharper
-            one: what ran is another app's DAG, so it can report success. Read as
-            a plain failure it would mean skipping the fallback and telling an
-            operator a connection was deleted that is still there.
+        dag_superseded: The graph AE ran is not the node this teardown
+            published — something republished over the version it submitted.
+            Since FND-1775 that should be impossible, which is the point of the
+            field rather than an argument against it: it asserts the
+            AE-native submit's determinism on a live tenant. Its own field for
+            the same reason :attr:`app_absent` has one, and a sharper one: what
+            ran is another app's DAG, so it can report success. Read as a plain
+            failure it would mean skipping the fallback and telling an operator
+            a connection was deleted that is still there.
         ae_workflow_slug: Slug of the AE workflow the delete ran under.
         ae_run_id: That run's id — the one link that shows what the app did.
         errors: One line per failed step, in order. Already secret-redacted: an
@@ -230,19 +241,19 @@ async def delete_connection(
 ) -> ConnectionDeleteReport:
     """Delete one connection, its assets and its byte-stores, via the app.
 
-    Four steps, mirroring :func:`~application_sdk.testing.harness.seed.seed_assets`
+    Five steps, mirroring :func:`~application_sdk.testing.harness.seed.seed_assets`
     step for step, minus the ones that only a seed needs (there is nothing to
     serialise, validate or upload):
 
     1. **Create and seed** an AE workflow carrying the one-node DAG.
-    2. **Submit** it, on the suite's own cold-start budget.
+    2. **Submit** it straight to AE — no envelope, no manifest fetch, so no
+       app under test in the path and nothing that can publish over it.
     3. **Check that the graph AE will run is ours** — see
        :meth:`~application_sdk.testing.harness.automation_engine.AEClient.foreign_published_dag`
-       and the invariant :mod:`._dag` states. The
-       submit names the delete app so that whichever version wins the republish
-       race is a delete; this is the step that does not take that on trust, and
-       it runs before the poll because a *third* graph costs minutes and deletes
-       nothing.
+       and the invariant :mod:`._dag` states. Step 2 is what makes this
+       unreachable, and this is the step that does not take that on trust; it
+       runs before the poll because a graph that is not ours costs minutes and
+       deletes nothing.
     4. **Wait for a verdict**, with the start-grace latch armed so a tenant
        without the app is detected in :attr:`ConnectionDeletePlan.stall_grace_seconds`
        rather than in the full poll ceiling. The run's own node names are checked
@@ -311,27 +322,19 @@ async def delete_connection(
             ),
         )
 
-    payload = build_connection_delete_submit_payload(
-        connection_qualified_name=qualified_name,
-        connector_short_name=plan.connector_short_name,
-        display_name=qualified_name.rsplit("/", 1)[-1] or qualified_name,
-        run_id=plan.run_id,
-        ae_workflow_slug=seeded.slug,
-        # The same two values the node above carries as literals. Either the
-        # seed runs and reads the literals, or the delete app's republished
-        # manifest runs and reads these rows — so a teardown that let them
-        # diverge would delete differently depending on who won a race.
-        delete_type=plan.delete_type,
-        delete_assets=True,
-    )
+    # Straight to AE, not through Heracles' package-workflows. The graph AE
+    # has to run is the one published above, and Heracles' native path
+    # re-derives the graph from an app's manifest and publishes it over exactly
+    # that — see FND-1775 and ``_dag``'s historical note. Nothing names an app
+    # here, so there is no payload: the node carries its three values as
+    # literals and no token needs substituting.
     retry = plan.submit_retry
     try:
         if retry is None:
-            ae_run_id = await ae.submit_workflow(payload, slug=seeded.slug)
+            ae_run_id = await ae.submit_published_version(seeded.slug)
         else:
-            ae_run_id = await ae.submit_workflow(
-                payload,
-                slug=seeded.slug,
+            ae_run_id = await ae.submit_published_version(
+                seeded.slug,
                 retries=retry.retries,
                 retry_sleep_seconds=retry.sleep_seconds,
             )
@@ -357,15 +360,15 @@ async def delete_connection(
         seeded.slug, expected=(CONNECTION_DELETE_NODE_ID,)
     )
     if foreign:
-        # Before the poll, because the poll is the expensive half: a graph that
-        # is neither delete is some app's crawl, which takes minutes to fail (or,
-        # worse, succeeds) while the connection this call exists to delete sits
-        # there.
+        # Before the poll, because the poll is the expensive half: a graph
+        # that is not this node is some app's crawl, which takes minutes to fail
+        # (or, worse, succeeds) while the connection this call exists to delete
+        # sits there.
         logger.warning(
-            "harness teardown: the DAG AE will run for %s carries neither the "
-            "%r node this teardown published nor the delete app's own (slug=%s "
-            "run_id=%s) — Heracles published a third app's manifest over the "
-            "seed version at submit. Not polling it: %s",
+            "harness teardown: the DAG AE will run for %s is not the %r node "
+            "this teardown published (slug=%s run_id=%s) — something "
+            "republished over the version it submitted, which should be "
+            "impossible on the AE-native submit. Not polling it: %s",
             qualified_name,
             CONNECTION_DELETE_NODE_ID,
             seeded.slug,
@@ -440,17 +443,18 @@ async def delete_connection(
 
     ran = {node.name for node in result.nodes}
     if ran and ran != {CONNECTION_DELETE_NODE_ID}:
-        # The pre-poll read can be too early — Heracles publishes over the seed
-        # around the submit, and an unreadable or not-yet-updated version answers
-        # "unanswered" by design. The names on the run itself cannot be early,
-        # and they are checked *before* success: a superseded run that happens to
-        # go green would otherwise be reported as a delete that never happened.
+        # The pre-poll read can be too early — a substitution would land
+        # around the submit, and an unreadable or not-yet-updated version
+        # answers "unanswered" by design. The names on the run itself cannot be
+        # early, and they are checked *before* success: a superseded run that
+        # happens to go green would otherwise be reported as a delete that
+        # never happened.
         logger.warning(
-            "harness teardown: the run AE executed for %s ran node(s) %s, which "
-            "is neither the %r node this teardown published nor the delete "
-            "app's own (slug=%s run_id=%s) — Heracles published a third app's "
-            "manifest over the seed version, so this run is that app's DAG and "
-            "%s was not deleted through it",
+            "harness teardown: the run AE executed for %s ran node(s) %s "
+            "rather than the %r node this teardown published (slug=%s "
+            "run_id=%s) — something republished over the version it submitted, "
+            "so this run is some other app's DAG and %s was not deleted "
+            "through it",
             qualified_name,
             ", ".join(sorted(ran)),
             CONNECTION_DELETE_NODE_ID,

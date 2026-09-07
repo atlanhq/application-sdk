@@ -1459,17 +1459,22 @@ single-object `DELETE` puts the key in the path, where the allowlist can read it
 `connection-delete` has no such problem: it runs on the tenant, where its object
 store is the tenant bucket accessed directly with no proxy in front of it.
 
-**The teardown submit names the delete app, because the republish cannot be
-stopped.** At submit, Heracles fetches a manifest and publishes it **over** the
-workflow's published version — the same mechanism `assert_deployed_manifest`
-asserts on for the run itself, and the reason a connector's own seed DAG is only
-a placeholder. Which app it fetches comes off the submit envelope's *identity*
-(`package.argoproj.io/name`, `atlanName`, `templateRef`), not off
-`app_service_url`; omitting that field changed nothing.
+**The teardown submits its own published version straight to AE.**
+`POST /automation/api/v1/workflows/<slug>/submit` starts the version the harness
+published moments earlier and fetches no manifest, so the graph that runs is the
+graph the harness wrote. There is no envelope, no app identity and no submit
+body — a submit that names nothing has no body to get wrong. FND-1775.
 
-**Whether the republish beats the run is a race.** FND-1724 first shipped this
-submit carrying the app under test's identity, and one SDK commit produced both
-outcomes on the same app *and* the same tenant:
+**What this replaced, because believing the old mechanism is live leads back to
+a disproved fix.** Until FND-1775 teardown went through Heracles'
+`/api/service/package-workflows`, whose native path *always* re-derives the
+graph from an app's served manifest and publishes it **over** the workflow's
+published version — the same mechanism `assert_deployed_manifest` asserts on for
+the run itself. Which app it fetched came off the submit envelope's *identity*
+(`package.argoproj.io/name`, `atlanName`, `templateRef`), not off
+`app_service_url`; omitting that field changed nothing. FND-1724 first shipped
+that submit carrying the app under test's identity, and one SDK commit produced
+both outcomes on the same app *and* the same tenant:
 
 | Leg (one SDK commit) | What ran as "teardown" |
 | -- | -- |
@@ -1478,26 +1483,23 @@ outcomes on the same app *and* the same tenant:
 | metabase azure | `delete` |
 | metabase aws / gcp, mysql ×3 | the suite's own 5-node crawl |
 
-A race cannot be won by naming a field differently — it can only be made
-harmless, by arranging for **both** possible winners to be a delete:
+FND-1724 could not stop the republish, so it made it harmless: the envelope
+named the delete app and the harness's node was a verbatim copy of that app's
+manifest node, so **both** possible winners were a delete. FND-1766 then
+established that the deciding variable was metastore replication lag rather than
+a race between two writers, and that submitting to AE removes the class outright
+instead of defusing one instance of it — so the envelope builder, the delete
+app's package and template names, and `ConnectionDeleteSubstitutions` all went.
 
-- Heracles' fetch wins → the graph that runs is the delete app's own manifest
-  DAG, and this submit's `connection-qualified-name` / `delete-type` /
-  `delete-assets` parameter rows are what its mustache tokens resolve to. Those
-  rows are why the app does not fall back to its manifest default of
-  `delete_type: SOFT`, which would archive every run's assets instead of
-  removing them.
-- The seed survives → the graph that runs is the harness's copy of that same
-  node, carrying the same three values as literals.
-
-Which is why the harness's node id is `delete`, the app manifest's own, and every
-other field on it (`app_name: automation-engine`, the three-day
-`start_to_close`) is copied verbatim: the two versions are meant to be
-indistinguishable. `delete_connection` then has one job left — catching a
-*third* graph, which is a bug rather than a race. It reads back the version AE
-serves before polling and re-checks the run's own node names after, and reports
+What survives is the harness node id `delete` — still the app manifest's own,
+now only because renaming a released constant buys nothing — and the read-back
+guard. That guard is not left over: it is the assertion that the AE-native
+submit's determinism holds on a live tenant, on the same rule as the seed's
+`SeedDagSupersededError`. `delete_connection` reads back the version AE serves
+before polling and re-checks the run's own node names after, and reports
 `dag_superseded` (with the fallback) rather than polling, or grading, a run that
-is some other app's DAG.
+is some other app's DAG. It should now be unreachable, and being unreachable is
+what it is for.
 
 **Publish never cleans up its own cache**, which is easy to get backwards. It
 only writes `persistent-artifacts/apps/atlan-publish-app/state/<cqn>/`; nothing

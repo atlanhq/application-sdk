@@ -40,37 +40,35 @@ producing node to thread ``$.<node>.outputs.*`` references from, and a teardown
 whose target came from a reference would be a teardown the harness could not
 state.
 
-**The submit must name the delete app, not the app under test, and the DAG must
-be the delete app's own.** At submit, Heracles fetches a manifest and publishes
-it *over* the workflow's published version — the mechanism
-:meth:`~application_sdk.testing.e2e.base.BaseE2ETest._assert_deployed_manifest_matches`
-exists to assert on, and the reason a connector's seed DAG is described as a
-placeholder. Which app it fetches comes off the submit envelope's *identity*
-(``package.argoproj.io/name``, ``atlanName``, ``templateRef``), so a teardown
-that carries the suite's identity has the suite's crawl published over its
-delete.
+**The harness submits this DAG straight to AE**, through
+:meth:`~application_sdk.testing.harness.automation_engine.AEClient.submit_published_version`
+(``POST /automation/api/v1/workflows/<slug>/submit``), which starts the version
+published two calls earlier and fetches no manifest. The graph that runs is
+therefore the graph built here: no envelope, no app identity, and no second
+candidate. Which is what leaves this module a DAG builder and nothing else —
+there is no submit body to build, because a submit that names nothing has no
+body to get right.
 
-**Whether the republish beats the run is a race, and that is the load-bearing
-fact.** FND-1724 first shipped this submit carrying the app under test's
-identity, and one SDK commit produced both outcomes on the same app *and* the
-same tenant — openapi's ``connection-create-gcp`` leg ran the delete while its
-``connection-reuse-gcp`` leg had ``extract`` → ``publish`` published over it
-minutes later. Omitting ``app_service_url`` (the first fix attempt) changed
-nothing, which is what proved the fetch is not keyed on that field. A race
-cannot be won by naming the field differently; it can only be made *harmless*,
-by making both possible outcomes a delete:
+**Historical note, because believing otherwise leads straight back to a
+disproved fix.** Until FND-1775 this teardown submitted through Heracles'
+``/api/service/package-workflows``, whose native path *always* re-derives the
+graph from an app's served manifest and publishes it over the harness's own
+version. FND-1724 could not stop that, so it made it harmless: the envelope
+named the delete app and this node was a verbatim copy of that app's manifest
+node, so whichever version AE ended up serving was a delete either way.
+FND-1766 then established that the deciding variable was metastore replication
+lag rather than a race between two writers, and that submitting to AE removes
+the class outright rather than defusing one instance of it. The envelope
+builder, the delete app's package and template names, and
+``ConnectionDeleteSubstitutions`` went with it.
 
-* Heracles' fetch wins → the graph that runs is the delete app's own manifest
-  DAG, with its ``{{connection-qualified-name}}`` / ``{{delete-type}}`` /
-  ``{{delete-assets}}`` tokens substituted from this submit's parameter rows.
-* The seed survives → the graph that runs is this module's copy of that same
-  node, with the same three values as literals.
-
-Which is why :data:`CONNECTION_DELETE_NODE_ID` is the app manifest's own node id
-and every other field is copied from it verbatim: the two versions are meant to
-be indistinguishable. The guard in
-:func:`application_sdk.testing.harness.teardown.delete_connection` then has one
-job left — catching a *third* graph, which is no longer a race but a bug.
+What survives of that design is :data:`CONNECTION_DELETE_NODE_ID`'s *value* and
+the read-back guard in
+:func:`application_sdk.testing.harness.teardown.delete_connection`. The guard is
+not left over: it is the assertion that the determinism above holds on a live
+tenant, on the same rule as
+:class:`~application_sdk.testing.harness.seed.SeedDagSupersededError` — it
+should now be unreachable, and being unreachable is what it is for.
 """
 
 from __future__ import annotations
@@ -78,41 +76,21 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
-
 __all__ = [
     "CONNECTION_DELETE_APP_NAME",
     "CONNECTION_DELETE_NODE_ID",
-    "CONNECTION_DELETE_PACKAGE_NAME",
-    "CONNECTION_DELETE_TEMPLATE_NAME",
     "CONNECTION_DELETE_WORKFLOW_TYPE",
     "DeleteType",
     "build_connection_delete_dag",
-    "build_connection_delete_submit_payload",
     "connection_delete_task_queue",
 ]
 
 #: The DAG's single node id, taken from the app's own
-#: ``app/generated/manifest.json``. **Not** a teardown-flavoured name: whichever
-#: of the two versions AE ends up running (see the module docstring's race), the
-#: node has to be the same one, or the harness would have to tell a delete it
-#: published from a delete the app published.
+#: ``app/generated/manifest.json``. It was verbatim because FND-1724 needed the
+#: node the harness published and the node the app published to be
+#: indistinguishable (the module docstring's historical note has why); it stays
+#: verbatim now only because renaming a released constant buys nothing.
 CONNECTION_DELETE_NODE_ID = "delete"
-
-#: Envelope identity — ``package.argoproj.io/name`` and, through
-#: ``connector_short_name``, ``atlanName``, the run label and
-#: ``metadata.name``. This is what decides *which app's manifest* Heracles
-#: fetches and publishes over the seed, so it names the delete app rather than
-#: the suite under test. Attribution to a leg is not lost: it lives on the AE
-#: workflow's name and description, which
-#: :class:`~application_sdk.testing.harness.teardown.ConnectionDeletePlan`
-#: composes from the connector.
-CONNECTION_DELETE_PACKAGE_NAME = "@atlan/connection-delete"
-
-#: The cluster-scoped ``templateRef`` name, on the same rule as
-#: :data:`CONNECTION_DELETE_PACKAGE_NAME`. Native execution does not run an Argo
-#: template, but the envelope carries one and it must not name the suite's.
-CONNECTION_DELETE_TEMPLATE_NAME = "atlan-connection-delete"
 
 #: The app's own ``start_to_close`` for the delete activity — three days, from
 #: its manifest's ``error_handling``. Copied rather than left to AE's default
@@ -230,11 +208,12 @@ def build_connection_delete_dag(
                     "connection_qualified_name": connection_qualified_name,
                     "delete_type": delete_type.value,
                     "delete_assets": delete_assets,
-                    # Also on the app's manifest, inside ``args`` as well as on
-                    # the node. Kept because the goal is a node byte-identical
-                    # to the one the tenant runs from the marketplace, not a
-                    # minimal one — see the module docstring on why the two
-                    # versions must be indistinguishable.
+                    # Also on the app's manifest, inside ``args`` as well as
+                    # on the node. Kept even though FND-1775 removed the reason
+                    # the whole node had to be byte-identical: whether the app's
+                    # own input model reads it here is the app's business, and
+                    # copying its manifest is how this node stays correct
+                    # without asserting on internals the harness cannot see.
                     "app_name": CONNECTION_DELETE_APP_NAME,
                 },
             },
@@ -243,116 +222,3 @@ def build_connection_delete_dag(
             },
         }
     }
-
-
-def build_connection_delete_submit_payload(
-    *,
-    connection_qualified_name: str,
-    connector_short_name: str,
-    display_name: str,
-    run_id: int,
-    ae_workflow_slug: str,
-    delete_type: DeleteType = DeleteType.PURGE,
-    delete_assets: bool = True,
-) -> dict[str, Any]:
-    """Build the AE submit body for one connection's delete run.
-
-    The same builder the connector's own submit and the seed's submit use, for
-    the reason stated there: this DAG carries no mustache tokens and no
-    credential, so the body reduces to the envelope plus the connection rows —
-    but a second builder would be a second place for AE's submit shape to drift,
-    on a path exercised far less often than the connector's.
-
-    **It names the delete app, not the suite**, which is the one place this body
-    must differ from the connector's — the envelope's identity is what decides
-    which manifest Heracles fetches and publishes over the seed, and the module
-    docstring has the evidence. Three consequences, all deliberate:
-
-    * ``package.argoproj.io/name`` is :data:`CONNECTION_DELETE_PACKAGE_NAME` and
-      ``templateRef`` is :data:`CONNECTION_DELETE_TEMPLATE_NAME`, so a fetch that
-      resolves resolves to the delete app.
-    * the parameter rows carry
-      :class:`~application_sdk.testing.e2e.substitutions.ConnectionDeleteSubstitutions`,
-      so that manifest's ``{{connection-qualified-name}}`` / ``{{delete-type}}``
-      / ``{{delete-assets}}`` tokens resolve to *this* teardown's values instead
-      of the app's ``SOFT`` default.
-    * ``app_service_url`` stays absent. Omitting it was the first fix attempt and
-      it did not stop the republish, which is what proved the fetch is not keyed
-      on it — but a teardown still has no reason to name an address, and a
-      guessed in-cluster URL would be one more thing to be wrong.
-
-    Args:
-        connection_qualified_name: The connection being deleted.
-        connector_short_name: The suite under test. Names the connection rows
-            (``connectorName``, the source logo), so an AE run list still shows
-            whose connection this is; it deliberately no longer reaches the
-            envelope's package or template.
-        display_name: Human-readable name for the connection rows.
-        run_id: This leg's run identifier.
-        ae_workflow_slug: The slug AE minted on the create.
-        delete_type: How thoroughly to delete, for the substitution rows. The
-            node's own literal comes from :func:`build_connection_delete_dag`,
-            and both have to say the same thing — which is why the caller passes
-            one value into both rather than each defaulting on its own.
-        delete_assets: Whether to drain the connection's assets first, likewise.
-
-    Returns:
-        The dict to POST to ``/api/service/package-workflows?submit=true``.
-    """
-    # Imported here rather than at module scope for the reason the seed's
-    # builder states: ``application_sdk.testing.e2e`` imports ``base``, which
-    # imports this package, so a top-level import closes a cycle through a
-    # partially-initialised package.
-    from application_sdk.testing.e2e.payload import (  # noqa: PLC0415
-        ConnectionSpec,
-        RunMode,
-        build_ae_payload,
-    )
-    from application_sdk.testing.e2e.substitutions import (  # noqa: PLC0415
-        ConnectionDeleteSubstitutions,
-    )
-
-    connection = ConnectionSpec(
-        name=display_name,
-        qualified_name=connection_qualified_name,
-        connector_name=connector_short_name,
-        source_logo=f"https://assets.atlan.com/assets/{connector_short_name}.png",
-    )
-    return build_ae_payload(
-        run_id=run_id,
-        mode=RunMode.DIRECT,
-        # The delete app is what this submit runs, so it is what the envelope
-        # names — labels, ``atlanName`` and ``metadata.name`` included. The leg
-        # stays identifiable through the AE workflow's own name and description,
-        # and through the connection rows built above.
-        connector_short_name=CONNECTION_DELETE_WORKFLOW_TYPE,
-        argo_package_name=CONNECTION_DELETE_PACKAGE_NAME,
-        argo_template_name=CONNECTION_DELETE_TEMPLATE_NAME,
-        # Not the app under test's URL, and not "" — no key at all. The
-        # module docstring has the mechanism.
-        app_service_url=None,
-        connection=connection,
-        mustache_subs=ConnectionDeleteSubstitutions.model_validate(
-            {
-                # The three the delete app's manifest reads. Present so a
-                # republished manifest resolves to this teardown's values; the
-                # seed carries the same three as literals.
-                "{{connection-qualified-name}}": connection_qualified_name,
-                "{{delete-type}}": delete_type,
-                "{{delete-assets}}": delete_assets,
-                "{{connection}}": ConnectionRef(
-                    attributes=ConnectionAttributes(
-                        qualified_name=connection_qualified_name, name=display_name
-                    )
-                ),
-                # No ``payload[]`` rides this submit, so nothing would
-                # substitute the default ``{{credentialGuid}}`` token — and an
-                # unsubstituted token is what ``submit_workflow`` warns about. A
-                # teardown has no credential to create: it names a connection,
-                # not a source.
-                "{{credential-guid}}": "",
-            }
-        ),
-        credential_body=None,
-        ae_workflow_slug=ae_workflow_slug,
-    )

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.33.0
-source-sha:    445a7501b91f2a64c74d9511d6042a591b00e75e
-source-date:   2026-09-07T12:28:32+01:00
+source-sha:    3c3a651a421692823eb320baff6bdb78542db197
+source-date:   2026-09-07T15:10:25+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 383 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 382 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -4598,13 +4598,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.teardown import build_connection_delete_dag`
 - **Signature:** `build_connection_delete_dag(*, *, ...)`
 - **Summary:** Build the single-node DAG that deletes one connection and its artifacts.
-- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
-
-#### `build_connection_delete_submit_payload`
-
-- **Import:** `from application_sdk.testing.harness.teardown import build_connection_delete_submit_payload`
-- **Signature:** `build_connection_delete_submit_payload(*, *, ...)`
-- **Summary:** Build the AE submit body for one connection's delete run.
 - **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
 
 #### `build_seed_dag`

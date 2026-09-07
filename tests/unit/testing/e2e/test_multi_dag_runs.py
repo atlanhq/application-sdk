@@ -141,6 +141,7 @@ class _FakeAE:
         self.created_names: list[str] = []
         self.published: list[tuple[str, int]] = []
         self.submits: list[_Submit] = []
+        self.submitted_versions: list[str] = []
 
     async def create_workflow(self, *, name: str, description: str) -> str:
         self.created_names.append(name)
@@ -163,6 +164,15 @@ class _FakeAE:
             )
         )
         return f"run-{len(self.submits)}"
+
+    async def submit_published_version(self, slug: str, **_kwargs: Any) -> str:
+        """The teardown's submit since FND-1775 — its own list, not
+        :attr:`submits`, because it is a different endpoint with no envelope to
+        read an entrypoint off. The connector's own submit stays on
+        ``submit_workflow`` above, so a test can tell which path a call took.
+        """
+        self.submitted_versions.append(slug)
+        return f"run-{len(self.submits) + len(self.submitted_versions)}"
 
     async def poll_native_status(self, run_id: str, **_kwargs: Any) -> DAGRunResult:
         return self._results.pop(0) if len(self._results) > 1 else self._results[0]
@@ -611,6 +621,10 @@ class TestDeclaredRuns:
         teardowns = [name for name in ae.created_names if "-teardown-" in name]
         assert len(teardowns) == 1
         assert calls.purged == []
+        # And it went to AE's own submit, not through Heracles: the delete's
+        # graph is the one the harness published, which is FND-1775.
+        assert len(ae.submitted_versions) == 1
+        assert [s.entrypoint for s in ae.submits] == ["crawler", "miner"]
 
     def test_a_failing_run_stops_the_sequence(
         self, monkeypatch: pytest.MonkeyPatch
