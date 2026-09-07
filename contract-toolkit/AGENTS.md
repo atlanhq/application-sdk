@@ -58,7 +58,7 @@ examples/
 |-- fanin/                 # DependencyCondition and fan-in
 |-- openapi/               # OpenAPI loader with extra object-store credential
 |-- postgres/              # Basic open-source SQL datasource
-|-- publish-controls/      # Publish toggles
+|-- publish-controls/      # Publish toggles, zeroOutConfig
 `-- trino/                 # Multi-catalog SQL connector
 tests/
 `-- *_test.pkl

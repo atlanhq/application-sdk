@@ -1,0 +1,261 @@
+// Tests the typed zero-out construct on the built-in PublishNode:
+// `ZeroOutSpec` + `PublishNode.zeroOutConfig` / `PublishStep.zeroOutConfig`,
+// emitted as the publish node's `args["zero_out_config"]`.
+//
+// Background: a cross-connection enricher (Coalesce, dbt, Monte Carlo) writes
+// namespaced attributes onto assets another connector owns. Publish's default
+// for an asset that falls out of the run is a hard Atlas DELETE, which destroys
+// a still-live asset; a zero-out spec replaces that with an UPSERT clearing
+// only the enricher's own attributes.
+//
+// The load-bearing behaviour, and the reason this is a typed class rather than
+// a plain Mapping: inside ONE publish args block, `null` carries two opposite
+// meanings. The connection-cache / current-state flags are nulled by enricher
+// contracts to make the keys absent, which needs the manifest renderer to STRIP
+// nulls. `zero_out_config.attrs` needs its nulls PRESERVED — they are the zero
+// values publish splats into the synthesized entity. The spec is therefore
+// serialized through a `RenderDirective` with its own null-preserving renderer,
+// so both survive under the manifest's stock `JsonRenderer`. Apps previously
+// hand-wrote this JSON as a raw Pkl string, spliced unparsed and unvalidated.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/default_pipeline.pkl" as defaultPipelineApp
+import "fixtures/publish_zero_out.pkl" as zeroOutApp
+import "fixtures/publish_zero_out_override.pkl" as zeroOutOverrideApp
+import "fixtures/publish_zero_out_raw_args.pkl" as rawArgsApp
+import "fixtures/extra_nodes_publish_override.pkl" as overrideApp
+import "../src/App.pkl" as App
+
+local function publishArgsOf(manifestText: String) =
+  new json.Parser { useMapping = true }.parse(manifestText)["dag"]["publish"]["inputs"]["args"]
+
+// Default (undeclared) pipeline: the publish node must not carry the arg.
+local defaultPublishArgs = publishArgsOf(
+  defaultPipelineApp.output.files["app/generated/manifest.json"].text
+)
+
+// Typed pipeline with `pipeline.publish.zeroOutConfig` set.
+local zeroOutPublishArgs = publishArgsOf(
+  zeroOutApp.output.files["app/generated/manifest.json"].text
+)
+
+// `extraNodes["publish"]` override that both nulls the state flags out of the
+// manifest and declares a zero-out spec.
+local zeroOutOverrideArgs = publishArgsOf(
+  zeroOutOverrideApp.output.files["app/generated/manifest.json"].text
+)
+
+// App that replaces publish wholesale without setting the property: the arg
+// must stay absent there too.
+local overridePublishArgs = publishArgsOf(
+  overrideApp.output.files["app/generated/manifest.json"].text
+)
+
+local coalesceSpec: App.ZeroOutSpec = new {
+  exclude { "Process"; "ColumnProcess" }
+  attrs {
+    ["sqlCoalesceNodeStatus"] = null
+    ["sqlCoalesceProjectId"] = null
+  }
+}
+
+facts {
+  // ---- Spec shape --------------------------------------------------------------
+
+  // An empty listing means "zero out every type", which is meaningful, so it
+  // must stay distinguishable from "not configured". Pkl gives every
+  // `Listing`-typed property an implicit empty default, so `exclude` is declared
+  // nullable and unset has to fail loudly instead.
+  ["ZeroOutSpec requires exclude"] {
+    module.catch(() -> (new App.ZeroOutSpec {})._specCheck).contains("ZeroOutSpec.exclude is required")
+  }
+
+  // The spec's own checks must run on the render path too, and reach the author
+  // as the explanatory message rather than as a bare non-null-assertion failure.
+  ["An unset exclude fails rendering with the explanatory message"] {
+    module.catch(() ->
+      new App.PublishNode { zeroOutConfig = new App.ZeroOutSpec {} }.args["zero_out_config"].text
+    ).contains("ZeroOutSpec.exclude is required")
+  }
+
+  ["A reserved attrs key fails rendering with the explanatory message"] {
+    module.catch(() ->
+      new App.PublishNode {
+        zeroOutConfig = new App.ZeroOutSpec { exclude {}; attrs { ["qualifiedName"] = null } }
+      }.args["zero_out_config"].text
+    ).contains("publish assigns it after applying attrs")
+  }
+
+  ["ZeroOutSpec accepts an empty exclude — zero out every type"] {
+    module.catchOrNull(() -> (new App.ZeroOutSpec { exclude {} })._specCheck) == null
+    new App.ZeroOutSpec { exclude {} }.exclude!!.isEmpty
+  }
+
+  ["ZeroOutSpec defaults attrs and rootAttrs to empty"] {
+    local spec = new App.ZeroOutSpec { exclude {} }
+    spec.attrs.toMap().isEmpty
+    spec.rootAttrs.toMap().isEmpty
+  }
+
+  // attrs is `attribute -> value`, never a list of names: publish writes the
+  // value as-is, so a connector's natural zero can be null, `[]` or `""`.
+  ["ZeroOutSpec attrs keeps non-null zero values"] {
+    local spec = new App.ZeroOutSpec {
+      exclude {}
+      attrs {
+        ["a"] = null
+        ["b"] = new Listing {}
+        ["c"] = ""
+      }
+    }
+    spec.attrs["a"] == null
+    spec.attrs["b"].isEmpty
+    spec.attrs["c"] == ""
+  }
+
+  ["ZeroOutSpec rejects a non-identifier type name"] {
+    module.catch(() -> (new App.ZeroOutSpec { exclude { "Process " } }).exclude!!.toList()) != null
+  }
+
+  ["ZeroOutSpec rejects a non-identifier attribute name"] {
+    module.catch(() ->
+      (new App.ZeroOutSpec { exclude {}; attrs { ["not a name"] = null } }).attrs.toMap()
+    ) != null
+  }
+
+  // Publish assigns qualifiedName/isPartial after splatting attrs, and reserves
+  // typeName/attributes at the entity root — so declaring them is an error here
+  // rather than a value that silently disappears in publish.
+  ["ZeroOutSpec rejects attrs publish overwrites"] {
+    module.catch(() ->
+      (new App.ZeroOutSpec { exclude {}; attrs { ["qualifiedName"] = null } })._specCheck
+    ) != null
+    module.catch(() ->
+      (new App.ZeroOutSpec { exclude {}; attrs { ["isPartial"] = null } })._specCheck
+    ) != null
+  }
+
+  ["ZeroOutSpec rejects reserved rootAttrs"] {
+    module.catch(() ->
+      (new App.ZeroOutSpec { exclude {}; rootAttrs { ["typeName"] = null } })._specCheck
+    ) != null
+    module.catch(() ->
+      (new App.ZeroOutSpec { exclude {}; rootAttrs { ["attributes"] = null } })._specCheck
+    ) != null
+  }
+
+  // ---- Direct class instances -------------------------------------------------
+
+  ["PublishNode omits zero_out_config by default"] {
+    new App.PublishNode {}.args.toMap().containsKey("zero_out_config") == false
+  }
+
+  // Explicit null is the same shape as "never declared" — one omission, not two.
+  ["PublishNode with an explicit null omits the arg"] {
+    new App.PublishNode { zeroOutConfig = null }.args.toMap().containsKey("zero_out_config") == false
+  }
+
+  ["PublishNode emits zero_out_config as a RenderDirective when set"] {
+    new App.PublishNode { zeroOutConfig = coalesceSpec }.args["zero_out_config"] is RenderDirective
+  }
+
+  // Setting the spec must not disturb any sibling arg.
+  ["PublishNode keeps the other publish args independent of the spec"] {
+    local node = new App.PublishNode { zeroOutConfig = coalesceSpec }
+    node.args["transformed_data_prefix"] == "$.extract.outputs.transformed_data_prefix"
+    node.args["publish_state_prefix"] == "$.extract.outputs.publish_state_prefix"
+    node.args["current_state_prefix"] == "$.extract.outputs.current_state_prefix"
+    node.args["connection_entity"] == "{{connection}}"
+    node.args["executor_enabled"] == true
+  }
+
+  // ---- Typed pipeline (PublishStep) -------------------------------------------
+
+  ["PublishStep defaults zeroOutConfig to null"] {
+    new App.PublishStep {}.zeroOutConfig == null
+  }
+
+  ["Default pipeline generates a publish node without zero_out_config"] {
+    defaultPublishArgs.toMap().containsKey("zero_out_config") == false
+  }
+
+  // Regression guard: `generateDAG()` copies PublishStep fields onto PublishNode
+  // one by one, so a field missing from that copy block is silently dropped for
+  // every app on the typed pipeline path.
+  ["PublishStep.zeroOutConfig reaches the generated publish node"] {
+    zeroOutPublishArgs.toMap().containsKey("zero_out_config")
+    zeroOutPublishArgs["zero_out_config"]["exclude"].toList() == List("Process", "ColumnProcess")
+  }
+
+  // The whole point: the nulls in `attrs` are values being written, and they
+  // must survive the manifest renderer.
+  ["Generated zero_out_config preserves null zero values"] {
+    local attrs = zeroOutPublishArgs["zero_out_config"]["attrs"]
+    attrs.toMap().containsKey("sqlCoalesceNodeStatus")
+    attrs["sqlCoalesceNodeStatus"] == null
+    attrs.toMap().containsKey("sqlCoalesceProjectId")
+    attrs["sqlCoalesceProjectId"] == null
+  }
+
+  ["Generated zero_out_config preserves non-null zero values"] {
+    local attrs = zeroOutPublishArgs["zero_out_config"]["attrs"]
+    attrs["sqlCoalesceTags"].toList().isEmpty
+    attrs["sqlCoalesceProjectName"] == ""
+  }
+
+  // `rootAttrs` renders under the publish app's wire name, not the Pkl name.
+  ["Generated zero_out_config renders rootAttrs as root_attrs"] {
+    local zoc = zeroOutPublishArgs["zero_out_config"]
+    zoc.toMap().containsKey("root_attrs")
+    zoc.toMap().containsKey("rootAttrs") == false
+    zoc["root_attrs"]["classifications"].toList().isEmpty
+  }
+
+  // It is a JSON object in the manifest, not the raw JSON string the pre-typed
+  // contracts emitted and then post-processed.
+  ["Generated zero_out_config is an object, not a string"] {
+    zeroOutPublishArgs["zero_out_config"] is Mapping
+  }
+
+  ["Setting the spec preserves the other generated publish args"] {
+    zeroOutPublishArgs["transformed_data_prefix"] == "$.extract.outputs.transformed_data_prefix"
+    zeroOutPublishArgs["connection_qualified_name"] != null
+    zeroOutPublishArgs["connection_entity"] == "{{connection}}"
+    zeroOutPublishArgs["connection_cache_enabled"] == true
+    zeroOutPublishArgs["current_state_enabled"] == true
+  }
+
+  // ---- extraNodes override path -----------------------------------------------
+
+  ["extraNodes publish override omits zero_out_config when unset"] {
+    overridePublishArgs.toMap().containsKey("zero_out_config") == false
+  }
+
+  ["extraNodes publish override emits the spec"] {
+    zeroOutOverrideArgs["zero_out_config"]["exclude"].toList() == List("Process", "ColumnProcess")
+    zeroOutOverrideArgs["zero_out_config"]["attrs"]["sqlCoalesceNodeStatus"] == null
+  }
+
+  // The load-bearing coexistence: the spec's nulls are kept while the sibling
+  // args nulled by the same contract are still stripped from the manifest.
+  ["Sibling null args are still stripped alongside a zero-out spec"] {
+    zeroOutOverrideArgs.toMap().containsKey("connection_cache_enabled") == false
+    zeroOutOverrideArgs.toMap().containsKey("connection_cache_via_app_enabled") == false
+    zeroOutOverrideArgs.toMap().containsKey("current_state_enabled") == false
+    zeroOutOverrideArgs.toMap().containsKey("current_state_via_app_enabled") == false
+    zeroOutOverrideArgs["zero_out_config"]["attrs"]["sqlCoalesceProjectId"] == null
+  }
+
+  // ---- Misuse guard -----------------------------------------------------------
+
+  // A spec dropped straight into args would render with Pkl property names and
+  // with its zero values stripped — a manifest that generates cleanly and then
+  // misbehaves in publish. Generation must fail instead.
+  ["A ZeroOutSpec placed directly in args is rejected"] {
+    module.catch(() ->
+      rawArgsApp.output.files["app/generated/manifest.json"].text
+    ).contains("PublishNode.zeroOutConfig")
+  }
+}

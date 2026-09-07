@@ -42,6 +42,7 @@
           "executor_enabled": "{{load-to-atlan}}",
           "connection_entity": "{{connection}}",
           "transformed_nondata_prefix": "$.extract.outputs.transformed_nondata_prefix",
+          "zero_out_config": {"exclude":["Process","ColumnProcess"],"attrs":{"trinoJobStatus":null,"trinoJobRunAt":null},"root_attrs":{"classifications":[]}},
           "connection_cache_enabled": true,
           "connection_cache_via_app_enabled": true,
           "current_state_enabled": true,
