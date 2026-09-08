@@ -12,7 +12,7 @@ that ``run()`` now holds the expected set and asserts against it first.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -49,6 +49,29 @@ def _transformed_ref(entity: str) -> FileReference:
 
 
 def _app() -> SqlApp:
+    """A SqlApp with an app context bound — i.e. shaped like a real run.
+
+    ``finalize_extraction`` skips verification when ``_context`` is ``None``,
+    because that means ``run()`` was invoked directly and no interceptor
+    persisted anything. A context-less app here would therefore silently skip
+    the assertions these tests exist to pin, so it has to be bound: without it
+    the tests pass for the wrong reason.
+    """
+    from application_sdk.app.context import AppContext
+
+    app = SqlApp.__new__(SqlApp)
+    app._app_name = "test-app"
+    app._context = AppContext(
+        app_name="test-app",
+        app_version="1",
+        run_id="run-1",
+        _storage=object(),  # type: ignore[arg-type]
+    )
+    return app
+
+
+def _app_without_context() -> SqlApp:
+    """A SqlApp as a direct ``run()`` call sees it — no worker, no context."""
     app = SqlApp.__new__(SqlApp)
     app._app_name = "test-app"
     return app
@@ -94,8 +117,13 @@ def _patches(transform_outputs: dict[str, TransformOutput], verify: AsyncMock):
     return out
 
 
-async def _run(transform_outputs: dict[str, TransformOutput], verify: AsyncMock):
-    app = _app()
+async def _run(
+    transform_outputs: dict[str, TransformOutput],
+    verify: AsyncMock,
+    *,
+    app: SqlApp | None = None,
+):
+    app = app if app is not None else _app()
     patches = _patches(transform_outputs, verify)
     for p in patches:
         p.start()
@@ -483,3 +511,89 @@ class TestFinalizeExtractionVerifiesTheAddedEntity:
 
         assert seen == [4], "run() must delegate to finalize_extraction"
         assert len(result.transformed_files) == 4
+
+
+class TestVerificationIsSkippedWithoutAWorker:
+    """Backwards compatibility, and why skipping is correct rather than a hole.
+
+    Before FND-1790 ``SqlApp.run()`` performed no I/O, so every connector's
+    ``run()`` unit tests drive the real ``run()`` with the tasks mocked and no
+    infrastructure bound. Adding a store assertion there would fail all of them
+    — an `AppContextError` even with correct ``FileReference`` mocks — forcing a
+    test-only edit on every connector in the fleet to buy an assertion that
+    cannot mean anything in that context.
+
+    The condition is structural, not test-shaped: the workflow wrapper binds
+    ``_context`` before ``run()`` and clears it after, so its absence means
+    there is no worker, hence no activity interceptor, hence nothing was
+    persisted and nothing to verify.
+    """
+
+    async def test_no_context_skips_verification_but_keeps_the_declaration(
+        self,
+    ) -> None:
+        app = _app_without_context()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref("database")],
+        )
+        verify = AsyncMock()
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            out = await app.finalize_extraction(base, [])
+
+        verify.assert_not_awaited()
+        # The declaration still reaches the output, so a connector's own
+        # upload_refs / verify_refs call is unaffected.
+        assert [r.storage_path for r in out.transformed_files] == [
+            f"{PREFIX}/database/entities.json"
+        ]
+
+    async def test_the_skip_is_logged(self) -> None:
+        """If it ever happens under a worker it must be visible, not silent."""
+        app = _app_without_context()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref("database")],
+        )
+
+        with (
+            patch.object(SqlApp, "verify_refs", new=AsyncMock()),
+            patch("application_sdk.templates.sql_app.logger") as log,
+        ):
+            await app.finalize_extraction(base, [])
+
+        assert log.warning.called
+
+    async def test_a_bound_context_still_verifies(self) -> None:
+        """The guard must be context-shaped, not a blanket disable — otherwise
+        it would turn the whole fix off in production too."""
+        app = _app()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref("database")],
+        )
+        verify = AsyncMock(return_value=VerifyRefsOutput(verified_count=1))
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            await app.finalize_extraction(base, [])
+
+        verify.assert_awaited_once()
+
+    async def test_the_full_run_survives_a_connector_shaped_unit_test(self) -> None:
+        """The regression that broke `atlan-mysql-app`: transform tasks mocked
+        with bare MagicMocks, no context, driving the real ``run()``.
+
+        ``transformed_file`` is then a MagicMock rather than a FileReference,
+        which is a test artefact — the activity boundary validates
+        ``TransformOutput`` in production — but it reached ``VerifyRefsInput``
+        and failed pydantic validation with an error naming an SDK contract the
+        connector author had never heard of.
+        """
+        outputs = {e: MagicMock() for e in ENTITIES}
+        verify = AsyncMock()
+
+        result = await _run(outputs, verify, app=_app_without_context())
+
+        verify.assert_not_awaited()
+        assert result.transformed_data_prefix == PREFIX

@@ -1422,6 +1422,14 @@ class SqlApp(App):
         list, and asserting exactly what is handed on is cheaper to reason
         about than a split proof, at four metadata lookups.
 
+        **Verification is skipped when there is no app context**, i.e. when
+        ``run()`` was called directly rather than by a worker. Without a worker
+        there is no activity interceptor, so nothing was persisted and there is
+        nothing in the store to check. This is what lets a connector's existing
+        ``run()`` unit tests keep passing unchanged: the declaration is still
+        assembled and returned, only the store assertion is skipped. It logs a
+        warning, so if it ever happens under a worker it is visible.
+
         Args:
             base: The ``ExtractionOutput`` returned by ``super().run()``.
             extra: ``TransformOutput`` values for the entities this override
@@ -1441,6 +1449,37 @@ class SqlApp(App):
             *base.transformed_files,
             *self.collect_transformed_files(extra),
         ]
+
+        # No app context means ``run()`` was invoked directly rather than by a
+        # worker: the workflow wrapper binds ``_context`` before ``run()`` and
+        # clears it after, so its absence is structural, not incidental.
+        #
+        # Skipping the check there is correct rather than a concession. Without
+        # a worker there is no activity interceptor, so no ``transformed_file``
+        # ref was ever persisted — there is nothing in the object store to
+        # verify, and asserting against a store nothing wrote to would fail on
+        # the absence of data that was never supposed to be there yet.
+        #
+        # It is also what keeps this change backwards compatible. Every SQL
+        # connector has ``run()`` unit tests that drive the real ``run()`` with
+        # the tasks mocked out and no infrastructure bound; before FND-1790
+        # ``run()`` performed no I/O, so those tests needed none. Failing them
+        # would force a test-only edit on every connector in the fleet to buy
+        # an assertion that cannot mean anything in that context.
+        #
+        # The declaration is still assembled and still returned on
+        # ``transformed_files``, so a connector's own ``upload_refs`` /
+        # ``verify_refs`` call is unaffected — only the pre-delivery assertion
+        # is skipped, and only where nothing was delivered.
+        if self._context is None:
+            logger.warning(
+                "Skipping transformed-declaration verification: no app context, "
+                "so run() is not executing under a worker and nothing was "
+                "persisted to verify (%d ref(s) declared)",
+                len(declaration),
+            )
+            return base.model_copy(update={"transformed_files": declaration})
+
         if declaration:
             await self.verify_refs(
                 VerifyRefsInput(
