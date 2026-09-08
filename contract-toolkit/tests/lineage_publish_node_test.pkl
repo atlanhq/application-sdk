@@ -83,20 +83,46 @@ facts {
   // Class-level defaults: precise per-type assertions without manifest noise.
   // -----------------------------------------------------------------------
 
-  // PublishNode's base default is false — true is injected by the pipeline
-  // rendering (PublishStep → renderNode) so the pipeline asset publish always
-  // sends true without every app contract having to repeat it. Direct /
-  // extraNodes use of PublishNode is safe by default (false).
-  ["PublishNode base default for connection_cache_enabled is false"] {
-    assetPublishNode.args["connection_cache_enabled"] == false
-    assetPublishNode.args["connection_cache_via_app_enabled"] == false
+  // PublishNode defaults all four write gates to true, MATCHING PublishStep.
+  //
+  // These previously asserted false, on a "safe base for direct use" rationale.
+  // That rationale did not hold up: the defaults follow the publish ROLE, not
+  // the construction path, and PublishNode *is* the asset-publish role. Two
+  // different answers for the same role meant an app that declared its publish
+  // node under `extraNodes` was silently opted out of the asset-publish
+  // defaults — which is how atlan-metabase-app stopped writing its
+  // current-state snapshot (see the class docs on currentStateEnabled).
+  //
+  // Source of truth for `true` here is the 2026-05-14 alignment in
+  // #project-killargo (Faizan Shaik, approved by Niteesh Hegde): all four gates
+  // default true on PublishNode, with explicit opt-out properties. Chris
+  // Grote's role matrix in the same channel (2026-05-22) states the same split
+  // — asset publish true, lineage publish false — and the lineage half already
+  // shipped as BLDX-1299.
+  ["PublishNode base default for connection_cache_enabled is true"] {
+    assetPublishNode.args["connection_cache_enabled"] == true
+    assetPublishNode.args["connection_cache_via_app_enabled"] == true
   }
 
-  // current_state_enabled and current_state_via_app_enabled follow the same
-  // safe-base pattern: PublishNode defaults to false, PublishStep injects true.
-  ["PublishNode base default for current_state_enabled is false"] {
-    assetPublishNode.args["current_state_enabled"] == false
-    assetPublishNode.args["current_state_via_app_enabled"] == false
+  ["PublishNode base default for current_state_enabled is true"] {
+    assetPublishNode.args["current_state_enabled"] == true
+    assetPublishNode.args["current_state_via_app_enabled"] == true
+  }
+
+  // The regression guard: a bare PublishNode must never emit
+  // current_state_enabled = false, because publish-app treats an ABSENT arg as
+  // true, so a false here actively overrides a platform default that is on.
+  ["A bare PublishNode does not silently disable the current-state snapshot"] {
+    assetPublishNode.args["current_state_enabled"] != false
+  }
+
+  // PublishNode and PublishStep must agree on all four gates — they are the
+  // same role, and divergence here is the defect this alignment removes.
+  ["PublishNode and PublishStep agree on all four write gates"] {
+    assetPublishNode.args["connection_cache_enabled"] == defaultPublishArgs["connection_cache_enabled"]
+    assetPublishNode.args["connection_cache_via_app_enabled"] == defaultPublishArgs["connection_cache_via_app_enabled"]
+    assetPublishNode.args["current_state_enabled"] == defaultPublishArgs["current_state_enabled"]
+    assetPublishNode.args["current_state_via_app_enabled"] == defaultPublishArgs["current_state_via_app_enabled"]
   }
 
   // Default pipeline (no pipeline block): PublishStep defaults inject true.
