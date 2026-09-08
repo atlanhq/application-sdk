@@ -133,7 +133,7 @@ def _make_fake_run(
     "root-only" simulates a partial eval (rc=0) that writes only atlan.yaml."""
     real_run = subprocess.run
 
-    def fake_run(cmd, *, check=False, cwd=None):
+    def fake_run(cmd, *, check=False):
         prog = cmd[0]
         if prog == "pkl" and cmd[1:3] == ["project", "resolve"]:
             if resolve_changes_lock:
@@ -267,7 +267,7 @@ def test_regenerate_retries_transient_eval_failure(repo, monkeypatch):
     real_run = subprocess.run
     calls = {"eval": 0}
 
-    def fake_run(cmd, *, check=False, cwd=None):
+    def fake_run(cmd, *, check=False):
         prog = cmd[0]
         if prog == "pkl" and cmd[1:3] == ["project", "resolve"]:
             (repo / "contract" / "PklProject.deps.json").write_text(
@@ -577,7 +577,7 @@ def test_missing_pkl_project_is_noop(repo, monkeypatch):
     (repo / "contract" / "PklProject").unlink()
     before = _commit_count(repo)
 
-    def fail_if_called(cmd, *, check=False, cwd=None):
+    def fail_if_called(cmd, *, check=False):
         if cmd[0] == "pkl":
             pytest.fail(f"pkl must not run when PklProject is absent: {cmd}")
         return subprocess.run(cmd, check=check, text=True, capture_output=True)
@@ -607,7 +607,7 @@ def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):
 
     formatted: list[str] = []
 
-    def spy_run(cmd, *, check=False, cwd=None):
+    def spy_run(cmd, *, check=False):
         if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "format":
             formatted.extend(a for a in cmd[3:] if not a.startswith("-"))
         return types.SimpleNamespace(returncode=0)
@@ -639,7 +639,7 @@ def test_format_generated_check_defers_to_consumer_ruff_config(tmp_path, monkeyp
 
     check_calls: list[list[str]] = []
 
-    def spy_run(cmd, *, check=False, cwd=None):
+    def spy_run(cmd, *, check=False):
         if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "check":
             check_calls.append(cmd)
         return types.SimpleNamespace(returncode=0)
@@ -666,7 +666,7 @@ def test_format_generated_lints_real_path_not_temp_dir(tmp_path, monkeypatch):
 
     check_calls: list[list[str]] = []
 
-    def spy_run(cmd, *, check=False, cwd=None):
+    def spy_run(cmd, *, check=False):
         if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "check":
             check_calls.append(cmd)
         return types.SimpleNamespace(returncode=0)
@@ -693,7 +693,7 @@ def test_format_generated_passes_force_exclude(tmp_path, monkeypatch):
 
     calls: list[list[str]] = []
 
-    def spy_run(cmd, *, check=False, cwd=None):
+    def spy_run(cmd, *, check=False):
         if cmd[:2] == ["uvx", "ruff"]:
             calls.append(cmd)
         return types.SimpleNamespace(returncode=0)
@@ -709,7 +709,7 @@ def test_format_generated_passes_force_exclude(tmp_path, monkeypatch):
 
 
 def test_resolve_failure_is_fatal(repo, monkeypatch):
-    def fake_run(cmd, *, check=False, cwd=None):
+    def fake_run(cmd, *, check=False):
         if cmd[0] == "pkl" and cmd[1:3] == ["project", "resolve"]:
             if check:
                 raise subprocess.CalledProcessError(1, cmd)
@@ -764,7 +764,7 @@ def test_multi_root_gives_each_root_its_own_eval_base(repo, monkeypatch):
     _multi_root_contract(repo)
     bases: list[str] = []
 
-    def fake_run(cmd, *, check=False, cwd=None):
+    def fake_run(cmd, *, check=False):
         if cmd[0] == "pkl" and cmd[1] == "eval":
             out = Path(cmd[cmd.index("-m") + 1])
             bases.append(str(out))
@@ -793,7 +793,7 @@ def test_multi_root_never_writes_repo_root_files(repo, monkeypatch):
     _multi_root_contract(repo)
     (repo / "atlan.yaml").write_text("hand: authored\n")
 
-    def fake_run(cmd, *, check=False, cwd=None):
+    def fake_run(cmd, *, check=False):
         if cmd[0] == "pkl" and cmd[1] == "eval":
             out = Path(cmd[cmd.index("-m") + 1])
             out.mkdir(parents=True, exist_ok=True)
@@ -810,7 +810,7 @@ def test_multi_root_one_bad_root_does_not_sink_the_others(repo, monkeypatch):
     """A partial regeneration beats none: the caller diffs the result."""
     _multi_root_contract(repo)
 
-    def fake_run(cmd, *, check=False, cwd=None):
+    def fake_run(cmd, *, check=False):
         if cmd[0] == "pkl" and cmd[1] == "eval":
             if Path(cmd[-1]).stem == "miner":
                 return subprocess.CompletedProcess(cmd, 1, "", "boom")
@@ -854,9 +854,7 @@ def test_multi_root_swap_gets_a_per_root_baseline(repo, monkeypatch):
     monkeypatch.setattr(
         mod,
         "run",
-        lambda cmd, *, check=False, cwd=None: subprocess.CompletedProcess(
-            cmd, 0, "", ""
-        ),
+        lambda cmd, *, check=False: subprocess.CompletedProcess(cmd, 0, "", ""),
     )
     monkeypatch.setattr(mod, "run_post_generate", lambda d: None)
     monkeypatch.setattr(mod, "_format_generated", lambda: None)
@@ -873,12 +871,19 @@ def test_multi_root_baseline_absent_root_is_not_a_failure(repo, monkeypatch):
     there is nothing to preserve — None baseline, no warning-worthy failure."""
     _multi_root_contract(repo)
     monkeypatch.setattr(mod, "baseline_contract_ref", lambda d: "abc123")
-    monkeypatch.setattr(mod, "export_contract_at", lambda ref, d, dest: True)
+    monkeypatch.setattr(mod, "export_repo_at", lambda ref, d, dest: True)
     out, work = mod._baseline_output_for_root("contract", "crawler.pkl")
     assert out is None and work is not None  # workdir returned for cleanup
 
 
-# --- baseline formatting (override detection must not trip on ruff noise) ----
+# --- baseline comparability (the classifier must not read pipeline noise) ----
+#
+# `overridden_files` diffs the committed artifact against the baseline eval. The
+# committed side has been through swap + post-generate + ruff; the baseline side
+# had been through none of them, so any file those stages touch read as
+# app-maintained and was frozen against the toolkit from then on. These tests
+# cover both stages, and the two directions that matter: pipeline noise must not
+# read as an override, and a genuine override must still be preserved.
 
 # One generated module as `pkl eval` emits it. It stands in for both kinds of
 # difference the toolkit really does emit: its `application_sdk` import lands in
@@ -903,42 +908,17 @@ def _ruff_normalise(text: str) -> str:
 FORMATTED_PY = _ruff_normalise(RAW_PY)
 RAW_PY_BUMPED = RAW_PY.replace("z = ( 1 )", "z = ( 1 )\nadded_by_the_bump = True")
 
-
-def _fake_ruff_run(repo: Path, *, baseline_py: str, bumped_py: str):
-    """`run` replacement whose `uvx ruff` actually normalises, so a
-    formatting-only baseline difference is reproducible.
-
-    Everything the real ruff would do is collapsed into `_ruff_normalise`,
-    applied to the paths ruff is handed and resolved against `cwd` the way a real
-    invocation would be. Without that, a stubbed no-op ruff cannot tell a
-    formatted baseline from an unformatted one, which is the whole subject here.
-    """
-    real_run = subprocess.run
-    normalise = _ruff_normalise
-
-    def fake_run(cmd, *, check=False, cwd=None):
-        prog = cmd[0]
-        if prog == "pkl" and cmd[1:3] == ["project", "resolve"]:
-            return types.SimpleNamespace(returncode=0)
-        if prog == "pkl" and cmd[1] == "eval":
-            out = Path(cmd[cmd.index("-m") + 1])
-            gen = out / "app" / "generated"
-            gen.mkdir(parents=True, exist_ok=True)
-            is_baseline = Path(cmd[cmd.index("--project-dir") + 1]).is_absolute()
-            (gen / "_e2e_credential.py").write_text(
-                baseline_py if is_baseline else bumped_py
-            )
-            return types.SimpleNamespace(returncode=0)
-        if prog == "uvx":  # ruff, for real enough to matter
-            base = Path(cwd) if cwd is not None else Path.cwd()
-            for arg in cmd:
-                target = base / arg
-                if arg.endswith(".py") and target.is_file():
-                    target.write_text(normalise(target.read_text()))
-            return types.SimpleNamespace(returncode=0)
-        return real_run(cmd, check=check, text=True, capture_output=True)
-
-    return fake_run
+# An app that post-processes its generated manifest — the FND-142 shape. The
+# committed manifest is the patched one, so a raw baseline can never match it.
+POST_GENERATE_SH = 'python3 -c "%s"\n' % (
+    "import pathlib;"
+    "p = pathlib.Path('app/generated/manifest.json');"
+    "p.write_text(p.read_text().replace('\\\"patched\\\": false', '\\\"patched\\\": true'))"
+)
+TOOLKIT_MANIFEST = '{"patched": false}\n'
+PATCHED_MANIFEST = '{"patched": true}\n'
+TOOLKIT_MANIFEST_BUMPED = '{"patched": false, "added_by_the_bump": true}\n'
+PATCHED_MANIFEST_BUMPED = '{"patched": true, "added_by_the_bump": true}\n'
 
 
 def _bump_pin_in_worktree(repo: Path) -> None:
@@ -951,16 +931,48 @@ def _bump_pin_in_worktree(repo: Path) -> None:
     pkl_project.write_text(pkl_project.read_text().replace("0.14.1", "0.14.2"))
 
 
+def _make_baseline_fake_run(*, baseline: dict[str, str], bumped: dict[str, str]):
+    """`run` replacement for the baseline tests: `pkl eval` writes the given
+    `app/generated` files, and `uvx ruff` actually normalises.
+
+    Ruff has to do something real here — a no-op stub cannot tell a formatted
+    baseline from an unformatted one, which is half the subject. It resolves the
+    paths it is handed against the *current* cwd, because `_replay_app_pipeline`
+    chdir's into the exported repo and a stub that ignored that would pass
+    whether or not the production code got the directory right.
+    """
+    real_run = subprocess.run
+
+    def fake_run(cmd, *, check=False):
+        prog = cmd[0]
+        if prog == "pkl" and cmd[1:3] == ["project", "resolve"]:
+            return types.SimpleNamespace(returncode=0)
+        if prog == "pkl" and cmd[1] == "eval":
+            out = Path(cmd[cmd.index("-m") + 1])
+            gen = out / "app" / "generated"
+            gen.mkdir(parents=True, exist_ok=True)
+            is_baseline = Path(cmd[cmd.index("--project-dir") + 1]).is_absolute()
+            for name, body in (baseline if is_baseline else bumped).items():
+                (gen / name).write_text(body)
+            return types.SimpleNamespace(returncode=0)
+        if prog == "uvx":  # ruff, for real enough to matter
+            for arg in cmd:
+                target = Path.cwd() / arg
+                if arg.endswith(".py") and target.is_file():
+                    target.write_text(_ruff_normalise(target.read_text()))
+            return types.SimpleNamespace(returncode=0)
+        return real_run(cmd, check=check, text=True, capture_output=True)
+
+    return fake_run
+
+
 def test_formatting_only_baseline_difference_is_not_an_override(repo, monkeypatch):
     """A file that differs from the raw baseline only because ruff formatted it
     must still receive the bump.
 
-    The committed generated Python has been through `_format_generated`; the
-    baseline eval output has not. Comparing the two unequal-by-construction shapes
-    made every ruff-touched file read as app-maintained, so it was preserved on
-    that bump and on every bump after it — frozen against the toolkit forever,
-    with the sync exiting 0 and a `Preserved app-maintained` notice as the only
-    trace. atlan-microstrategy-app#132 lost a pydantic field rename this way.
+    atlan-microstrategy-app#132 lost a pydantic field rename exactly this way:
+    the sync exited 0, reported the file as app-maintained, and shipped a module
+    that raises `NameError` on import.
     """
     gen = repo / "app" / "generated"
     (gen / "_e2e_credential.py").write_text(FORMATTED_PY)
@@ -971,7 +983,10 @@ def test_formatting_only_baseline_difference_is_not_an_override(repo, monkeypatc
     monkeypatch.setattr(
         mod,
         "run",
-        _fake_ruff_run(repo, baseline_py=RAW_PY, bumped_py=RAW_PY_BUMPED),
+        _make_baseline_fake_run(
+            baseline={"_e2e_credential.py": RAW_PY},
+            bumped={"_e2e_credential.py": RAW_PY_BUMPED},
+        ),
     )
     assert mod.regenerate("contract") is True
 
@@ -979,25 +994,63 @@ def test_formatting_only_baseline_difference_is_not_an_override(repo, monkeypatc
     assert "added_by_the_bump = True" in (gen / "_e2e_credential.py").read_text()
 
 
-def test_a_genuine_override_still_survives_a_formatted_baseline(repo, monkeypatch):
+def test_post_generated_file_is_not_frozen_by_its_own_post_processing(
+    repo, monkeypatch
+):
+    """An app's post-generate step must not make its own output permanently
+    immune to toolkit updates.
+
+    FND-142: the committed manifest is the *patched* one, so it can never match a
+    raw baseline — the mechanism meant to protect the patch is what stopped the
+    file ever receiving a toolkit change again (coalesce shipped a manifest with
+    no `args.app_name` that way). Replaying post-generate over the baseline makes
+    them comparable, and the real `run_post_generate` after the swap re-applies
+    the patch, so the bump lands *and* stays patched.
+    """
+    (repo / "contract" / "post-generate.sh").write_text(POST_GENERATE_SH)
+    (repo / "app" / "generated" / "manifest.json").write_text(PATCHED_MANIFEST)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "app post-processes its manifest")
+    _bump_pin_in_worktree(repo)
+
+    monkeypatch.setattr(
+        mod,
+        "run",
+        _make_baseline_fake_run(
+            baseline={"manifest.json": TOOLKIT_MANIFEST},
+            bumped={"manifest.json": TOOLKIT_MANIFEST_BUMPED},
+        ),
+    )
+    assert mod.regenerate("contract") is True
+
+    manifest = (repo / "app" / "generated" / "manifest.json").read_text()
+    assert manifest == PATCHED_MANIFEST_BUMPED  # bump landed AND patch re-applied
+
+
+def test_a_genuine_override_still_survives_a_replayed_baseline(repo, monkeypatch):
     """The protection this whole mechanism exists for must not be traded away.
 
-    Formatting the baseline narrows what counts as app-maintained; it must not
-    empty it. A file whose committed content differs from the baseline by more
-    than ruff can explain is still the app's, and the bump must not overwrite it.
+    Replaying the pipeline narrows what counts as app-maintained; it must not
+    empty it. A file whose committed content differs by more than the app's own
+    pipeline can explain — post-processing that is NOT wired into
+    `contract/post-generate.sh`, the FND-1777 population — is still the app's,
+    and the bump must not overwrite it.
     """
     gen = repo / "app" / "generated"
     (gen / "_e2e_credential.py").write_text(
         FORMATTED_PY.replace("z = 1", "z = 1\nhand_maintained = True")
     )
     _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "app post-processes this file")
+    _git(repo, "commit", "-qm", "unwired post-processing")
     _bump_pin_in_worktree(repo)
 
     monkeypatch.setattr(
         mod,
         "run",
-        _fake_ruff_run(repo, baseline_py=RAW_PY, bumped_py=RAW_PY_BUMPED),
+        _make_baseline_fake_run(
+            baseline={"_e2e_credential.py": RAW_PY},
+            bumped={"_e2e_credential.py": RAW_PY_BUMPED},
+        ),
     )
     assert mod.regenerate("contract") is True
 
@@ -1006,50 +1059,35 @@ def test_a_genuine_override_still_survives_a_formatted_baseline(repo, monkeypatc
     assert "added_by_the_bump" not in text  # not clobbered by the toolkit output
 
 
-def test_baseline_formatting_sees_the_repos_ruff_config(repo, monkeypatch):
-    """`exclude` / `per-file-ignores` patterns resolve against the config file's
-    directory, so the baseline must be formatted with the repo's config sitting
-    at its root — otherwise an app that exempts a generated file from ruff gets a
-    formatted baseline against an unformatted committed file, and the exemption
-    itself becomes the difference that reads as an override."""
-    (repo / "pyproject.toml").write_text(
-        '[tool.ruff]\nexclude = ["app/generated/_input.py"]\n'
-    )
+def test_the_replay_never_touches_the_working_tree(repo, monkeypatch):
+    """The replay swaps baseline output into a tree and runs app code over it.
+    That tree must be the throwaway export, never the consumer's checkout — a
+    crash mid-replay would otherwise strand pre-bump artifacts in the repo."""
+    gen = repo / "app" / "generated"
+    (gen / "_e2e_credential.py").write_text(FORMATTED_PY)
     _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "ruff config")
+    _git(repo, "commit", "-qm", "formatted generated python")
+    _bump_pin_in_worktree(repo)
     seen: list[Path] = []
 
-    def fake_run(cmd, *, check=False, cwd=None):
-        if cmd[0] == "uvx" and cwd is not None:
-            seen.append(Path(cwd))
-        return types.SimpleNamespace(returncode=0)
+    real_replay = mod._replay_app_pipeline
 
-    monkeypatch.setattr(mod, "run", fake_run)
-    out = Path(repo / "baseline-out")
-    (out / "app" / "generated").mkdir(parents=True)
-    (out / "app" / "generated" / "_e2e_credential.py").write_text(RAW_PY)
+    def spy_replay(repo_dir, out, generated_dir, contract_dir):
+        real_replay(repo_dir, out, generated_dir, contract_dir)
+        # Whatever the replay wrote, it must have written it under its own export.
+        seen.append(Path(repo_dir).resolve())
 
-    mod._format_baseline(out)
+    monkeypatch.setattr(mod, "_replay_app_pipeline", spy_replay)
+    monkeypatch.setattr(
+        mod,
+        "run",
+        _make_baseline_fake_run(
+            baseline={"_e2e_credential.py": RAW_PY},
+            bumped={"_e2e_credential.py": RAW_PY_BUMPED},
+        ),
+    )
+    assert mod.regenerate("contract") is True
 
-    assert seen, "ruff was never invoked against the baseline output"
-    assert all(root == out for root in seen)  # cwd is the baseline root
-    assert (out / "pyproject.toml").read_text() == (repo / "pyproject.toml").read_text()
-
-
-def test_baseline_formatting_is_a_no_op_without_generated_python(repo, monkeypatch):
-    """A contract that emits no Python (JSON/YAML only) must not invoke ruff at
-    all — nothing to normalise, and a pointless uvx download on every bump."""
-    called: list[list[str]] = []
-
-    def fake_run(cmd, *, check=False, cwd=None):
-        called.append(cmd)
-        return types.SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(mod, "run", fake_run)
-    out = Path(repo / "json-only-out")
-    (out / "app" / "generated").mkdir(parents=True)
-    (out / "app" / "generated" / "manifest.json").write_text("{}\n")
-
-    mod._format_baseline(out)
-
-    assert called == []
+    assert seen, "the replay never ran"
+    assert all(not d.is_relative_to(repo.resolve()) for d in seen)
+    assert Path.cwd().resolve() == repo.resolve()  # cwd restored

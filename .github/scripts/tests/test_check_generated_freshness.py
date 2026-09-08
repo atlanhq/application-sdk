@@ -70,7 +70,7 @@ def _fake_run(
     output dir; `uvx` (ruff) is a no-op; everything else (git) runs for real."""
     real_run = subprocess.run
 
-    def fake_run(cmd, *, check=False, cwd=None):
+    def fake_run(cmd, *, check=False):
         prog = cmd[0]
         if prog == "pkl" and cmd[1] == "eval":
             if eval_rc == 0:
@@ -101,7 +101,7 @@ def test_drift_when_regeneration_adds_untracked_file(repo, monkeypatch):
     # Committed tree has no _input.py; a fresh eval that emits one is drift.
     real = _fake_run()
 
-    def fake_run(cmd, *, check=False, cwd=None):
+    def fake_run(cmd, *, check=False):
         if cmd[0] == "pkl" and cmd[1] == "eval":
             out_dir = Path(cmd[cmd.index("-m") + 1])
             gen = out_dir / "app" / "generated"
@@ -119,7 +119,7 @@ def test_drift_when_regeneration_adds_untracked_file(repo, monkeypatch):
 def test_opt_out_skips_check(repo, monkeypatch):
     called = {"pkl": False}
 
-    def fake_run(cmd, *, check=False, cwd=None):
+    def fake_run(cmd, *, check=False):
         if cmd[0] == "pkl":
             called["pkl"] = True
         return subprocess.run(cmd, check=check, text=True, capture_output=True)
@@ -146,7 +146,7 @@ def test_eval_failure_with_contract_fails_red(repo, monkeypatch):
 def test_na_when_pkl_not_installed(repo, monkeypatch):
     # OSError from spawning pkl (binary absent) is an infra gap, not a broken
     # contract — stays inconclusive (exit 0), distinct from an eval failure.
-    def raise_oserror(cmd, *, check=False, cwd=None):
+    def raise_oserror(cmd, *, check=False):
         if cmd[0] == "pkl":
             raise OSError("pkl: command not found")
         return subprocess.run(cmd, check=check, text=True, capture_output=True)
@@ -193,7 +193,7 @@ def test_untracked_output_ignored_by_gitignore_still_caught(repo, monkeypatch):
     # generated file from the freshness check (--exclude-standard is dropped).
     (repo / ".gitignore").write_text("app/generated/\n")
 
-    def fake_run(cmd, *, check=False, cwd=None):
+    def fake_run(cmd, *, check=False):
         if cmd[0] == "pkl" and cmd[1] == "eval":
             out_dir = Path(cmd[cmd.index("-m") + 1])
             gen = out_dir / "app" / "generated"

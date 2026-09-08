@@ -606,16 +606,14 @@ def baseline_contract_ref(contract_dir: str = "contract") -> str | None:
     return parent.stdout.strip()
 
 
-def export_contract_at(ref: str, contract_dir: str, dest: Path) -> bool:
-    """Materialise ``contract_dir`` as of ``ref`` under ``dest``. False on failure.
+def _extract_at(ref: str, dest: Path, *pathspec: str) -> bool:
+    """``git archive ref -- <pathspec>`` into ``dest``. False on failure.
 
     ``git archive`` keeps this to one plumbing call and cannot touch the working
-    tree. The exported tree carries that revision's ``PklProject.deps.json``, so
-    the baseline eval resolves the OLD toolkit package without re-resolving.
-    """
+    tree — which is the property both callers depend on."""
     dest.mkdir(parents=True, exist_ok=True)
     archive = subprocess.run(
-        ["git", "archive", ref, contract_dir],
+        ["git", "archive", ref, *pathspec],
         capture_output=True,
         check=False,
     )
@@ -624,24 +622,67 @@ def export_contract_at(ref: str, contract_dir: str, dest: Path) -> bool:
     extract = subprocess.run(
         ["tar", "-x", "-C", str(dest)], input=archive.stdout, check=False
     )
-    if extract.returncode != 0:
-        return False
-    # Validity is "the archive holds an evaluable contract", NOT "it holds
-    # app.pkl": an app with one root per entrypoint (crawler.pkl + miner.pkl)
-    # has no app.pkl and would otherwise never get a baseline, silently
-    # turning override detection off for exactly the apps whose generated
-    # trees are most likely to be post-processed.
-    exported = dest / contract_dir
-    if (exported / "app.pkl").exists():
+    return extract.returncode == 0
+
+
+def _holds_evaluable_contract(exported_contract: Path) -> bool:
+    """Whether an exported ``contract_dir`` is worth evaluating.
+
+    Validity is "the archive holds an evaluable contract", NOT "it holds
+    app.pkl": an app with one root per entrypoint (crawler.pkl + miner.pkl) has
+    no app.pkl and would otherwise never get a baseline, silently turning
+    override detection off for exactly the apps whose generated trees are most
+    likely to be post-processed."""
+    if (exported_contract / "app.pkl").exists():
         return True
     return any(
         any(
             ln.startswith("amends ")
             for ln in f.read_text(encoding="utf-8").splitlines()
         )
-        for f in sorted(exported.glob("*.pkl"))
+        for f in sorted(exported_contract.glob("*.pkl"))
         if f.is_file()
     )
+
+
+def export_contract_at(ref: str, contract_dir: str, dest: Path) -> bool:
+    """Materialise ``contract_dir`` as of ``ref`` under ``dest``. False on failure.
+
+    The exported tree carries that revision's ``PklProject.deps.json``, so the
+    baseline eval resolves the OLD toolkit package without re-resolving.
+    """
+    if not _extract_at(ref, dest, contract_dir):
+        return False
+    return _holds_evaluable_contract(dest / contract_dir)
+
+
+def export_repo_at(ref: str, contract_dir: str, dest: Path) -> bool:
+    """Materialise the WHOLE repo as of ``ref`` under ``dest``. False on failure.
+
+    ``export_contract_at`` exports only ``contract_dir``, which is everything a
+    baseline ``pkl eval`` needs. Replaying the app's own *post*-eval pipeline over
+    that output needs the rest of the repo, for two reasons that are both
+    unbounded from here:
+
+      * ``contract/post-generate.sh`` is app-authored and reaches wherever it
+        likes — ``python3 scripts/patch_generated.py`` is the common shape, and
+        nothing constrains it to ``contract/``.
+      * ruff's ``exclude`` and ``per-file-ignores`` patterns resolve against the
+        directory holding the config, so they only match when that config sits at
+        the root above a real ``app/generated/**``.
+
+    Exporting the tree gives both for free, into a throwaway directory, so the
+    replay is faithful without the consumer's working tree ever being touched.
+    Cost is one local ``git archive`` of a repo that is single-digit MB.
+
+    Same validity question as ``export_contract_at``: an export with no evaluable
+    contract is no baseline. Note ``.gitattributes export-ignore`` can drop paths
+    from the archive — a post-generate step reaching one of those fails inside the
+    replay, which is non-fatal and leaves the baseline where it is today.
+    """
+    if not _extract_at(ref, dest):
+        return False
+    return _holds_evaluable_contract(dest / contract_dir)
 
 
 def run_post_generate(contract_dir: str = "contract") -> None:

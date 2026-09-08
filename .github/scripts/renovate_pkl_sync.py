@@ -83,9 +83,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from pkl_contract_layout import (  # noqa: E402
     GENERATED_DIR,
+    POST_GENERATE_SCRIPT,
     ROOT_FILES,
     baseline_contract_ref,
-    export_contract_at,
+    export_repo_at,
+    plan_swap,
     run_post_generate,
     swap_outputs,
 )
@@ -113,21 +115,11 @@ COMMIT_MESSAGE_LOCK_ONLY = (
     "chore: sync PklProject.deps.json with updated app-contract-toolkit"
 )
 
-# Ruff config filenames, in the order ruff itself prefers them. `_format_baseline`
-# copies the first one the repo has into the baseline output root so path-scoped
-# settings resolve there the same way they do in the working tree.
-RUFF_CONFIG_FILES = (".ruff.toml", "ruff.toml", "pyproject.toml")
 
-
-def run(
-    cmd: list[str], *, check: bool = False, cwd: Path | None = None
-) -> subprocess.CompletedProcess:
+def run(cmd: list[str], *, check: bool = False) -> subprocess.CompletedProcess:
     """Run a subprocess. Single seam so tests can stub pkl/ruff and let git run
-    for real against a throwaway repo.
-
-    ``cwd`` exists for the baseline formatting pass, which has to run from the
-    baseline output root rather than the repo root — see ``_format_baseline``."""
-    return subprocess.run(cmd, check=check, text=True, cwd=cwd)
+    for real against a throwaway repo."""
+    return subprocess.run(cmd, check=check, text=True)
 
 
 def resolve(contract_dir: str) -> None:
@@ -325,14 +317,18 @@ def _baseline_output_for_root(
     if ref is None:
         return (None, None)  # no pin change in flight — nothing to protect
     work = Path(tempfile.mkdtemp())
-    if not export_contract_at(ref, contract_dir, work):
+    # `repo` and `out` are siblings under `work`: the eval output must not land
+    # inside the export, or the replay's own swap would be writing into the tree
+    # it is reading from.
+    repo = work / "repo"
+    if not export_repo_at(ref, contract_dir, repo):
         print(
-            f"::warning::Could not export {contract_dir}/ at {ref[:12]} — "
+            f"::warning::Could not export the repo at {ref[:12]} — "
             f"app-maintained files under {GENERATED_DIR}/{Path(root_name).stem} "
             "cannot be detected, so regeneration will overwrite them."
         )
         return (None, work)
-    base_root = work / contract_dir / root_name
+    base_root = repo / contract_dir / root_name
     if not base_root.exists():
         # The root is new in this revision: nothing committed came from it, so
         # there is nothing to preserve. Not a failure.
@@ -344,7 +340,7 @@ def _baseline_output_for_root(
             "pkl",
             "eval",
             "--project-dir",
-            str(work / contract_dir),
+            str(repo / contract_dir),
             "-m",
             str(out),
             str(base_root),
@@ -357,7 +353,9 @@ def _baseline_output_for_root(
             "so regeneration will overwrite them."
         )
         return (None, work)
-    _format_baseline(out)
+    _replay_app_pipeline(
+        repo, out, f"{GENERATED_DIR}/{Path(root_name).stem}", contract_dir
+    )
     return (out, work)
 
 
@@ -376,9 +374,11 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
     lets every app's post-processed artifacts survive regeneration with no per-app
     declaration at all.
 
-    Its output is then run through ``_format_baseline``, because the committed
-    side of that comparison has been through ``_format_generated`` and a raw
-    baseline would differ from it on formatting alone.
+    The eval output is then run through ``_replay_app_pipeline``, which applies
+    the app's own post-eval stages to it. Without that, the baseline is raw eval
+    output while the committed side has been swapped, post-generated and
+    ruff-formatted — and the difference between the two pipelines, rather than
+    any decision the app made, is what the classifier ends up reading.
     """
     ref = baseline_contract_ref(contract_dir)
     if ref is None:
@@ -386,9 +386,13 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
         return (None, None)
 
     work = Path(tempfile.mkdtemp())
-    if not export_contract_at(ref, contract_dir, work):
+    # `repo` and `out` are siblings under `work`: the eval output must not land
+    # inside the export, or the replay's own swap would be writing into the tree
+    # it is reading from.
+    repo = work / "repo"
+    if not export_repo_at(ref, contract_dir, repo):
         print(
-            f"::warning::Could not export {contract_dir}/ at {ref[:12]} — "
+            f"::warning::Could not export the repo at {ref[:12]} — "
             "app-maintained generated files cannot be detected, so regeneration "
             "will overwrite them. Check the diff for reverted post-processing."
         )
@@ -396,7 +400,7 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
 
     out = work / "out"
     out.mkdir()
-    base_contract = work / contract_dir
+    base_contract = repo / contract_dir
     result = run(
         [
             "pkl",
@@ -415,7 +419,7 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
             "will overwrite them. Check the diff for reverted post-processing."
         )
         return (None, work)
-    _format_baseline(out)
+    _replay_app_pipeline(repo, out, GENERATED_DIR, contract_dir)
     return (out, work)
 
 
@@ -455,59 +459,89 @@ def _format_generated() -> None:
     run(["uvx", "ruff", "format", "--force-exclude", *paths])
 
 
-def _format_baseline(out: Path) -> None:
-    """ruff the baseline eval output the way the working tree's copy is formatted.
+def _replay_app_pipeline(
+    repo: Path, out: Path, generated_dir: str, contract_dir: str
+) -> None:
+    """Put the baseline eval output through the app's own post-eval pipeline,
+    inside an exported copy of the repo, so it is comparable with what is
+    committed.
 
-    ``overridden_files`` decides a file is app-maintained by comparing the
-    committed bytes against this baseline. But the committed generated Python has
-    been through ``_format_generated`` and the baseline eval output has not, so
-    every file ruff rewrites differs for formatting reasons alone, is misread as
-    an app override, and is then preserved on this bump and on every bump after
-    it — the file is frozen against the toolkit forever, silently, with the sync
-    exiting 0.
+    ``overridden_files`` asks whether a committed artifact is one the app
+    maintains itself, and answers by diffing it against the baseline eval. But
+    what is committed is not raw eval output — it is eval output that has been
+    through ``swap_outputs``, the app's ``contract/post-generate.sh`` and
+    ``_format_generated``. Diffing a four-stage artifact against a one-stage one
+    makes every file any of those stages touches read as app-maintained, so it is
+    preserved on this bump and on every bump after it: frozen against the toolkit
+    forever, with the sync exiting 0 and a ``Preserved app-maintained`` notice as
+    the only trace.
 
-    That is not a rare shape. The toolkit emits its ``application_sdk`` imports as
-    their own group (a repo whose isort config calls that package third-party
-    re-sorts them), and the credential model's
-    ``model_config = ConfigDict(frozen=True, populate_by_name=True, serialize_by_alias=True)``
-    is over the default line length at class indent with no app-specific text in
-    it — so `_e2e_credential.py` and `_e2e_substitutions.py` read as overridden in
-    any app that has them, whether or not the app post-processes anything.
-    Observed on atlan-microstrategy-app#132, where toolkit 0.25.1's rename of a
-    name-mangled pydantic field was dropped from the Renovate PR and the freshness
-    gate caught it only because that gate runs without a baseline.
+    Both missing stages bite, and independently:
 
-    Mirrors ``_format_generated`` — same two ruff passes, same ``--force-exclude``
-    — but from ``out`` with paths relative to it, and with the repo's ruff config
-    copied in beside them. Both details are load-bearing for the same reason
-    ``_format_generated`` insists on real repo-relative paths: ``exclude`` and
-    ``per-file-ignores`` patterns resolve against the config file's directory, so
-    an app that exempts ``app/generated/_input.py`` from ruff must get an
-    unformatted baseline for that file too. Format it here and the exemption
-    itself becomes the difference that reads as an override — trading one frozen
-    file for another. The prefixed (``App.pkl``) family puts the eval output at
-    exactly ``app/generated/**`` under ``out``, so those patterns match; the
-    native families emit unprefixed keys and a path-scoped pattern will not match
-    there, which leaves those apps where they are today rather than improving
-    them.
+      * **ruff.** The toolkit emits its ``application_sdk`` imports as their own
+        group (a repo whose isort config calls that package third-party re-sorts
+        them), and the credential model's ``model_config = ConfigDict(...)`` line
+        is over the default length at class indent with no app-specific text in
+        it. So ``_e2e_credential.py`` and ``_e2e_substitutions.py`` freeze in any
+        app that has them, post-processing or not. Observed on
+        atlan-microstrategy-app#132, where 0.25.1's rename of a name-mangled
+        pydantic field was dropped from the Renovate PR.
+      * **post-generate.** FND-142: an app that genuinely post-processes a file
+        differs from the raw baseline on the first bump and then *permanently*,
+        so the protection meant to preserve its post-processing is what stops the
+        file ever receiving a toolkit change again (coalesce shipped a manifest
+        with no ``args.app_name`` that way).
 
-    Best-effort, like ``_format_generated``: a ruff hiccup leaves the baseline
-    unformatted, which is exactly the behaviour before this function existed.
+    Replaying both turns "differs from raw eval output" into the question the
+    classifier actually wants to ask: *can the app's own pipeline reproduce what
+    is committed?* If it can, there is nothing to protect — and the real swap is
+    followed by a real ``run_post_generate``, so an app that wires its
+    post-processing into the hook has it re-applied regardless. Preservation then
+    fires only where it must: post-processing the hook does NOT cover, which is
+    exactly the population FND-1777's ``warn_unwired_post_generate`` flags.
+
+    Runs entirely inside ``repo``, a throwaway ``git archive`` export — the
+    consumer's working tree is never touched, which rules out the obvious
+    alternative of swapping the baseline into the real tree and restoring it
+    afterwards. It also makes ruff resolve the repo's own config naturally, since
+    that config now sits at the root above a real ``app/generated/**``:
+    path-scoped ``exclude`` / ``per-file-ignores`` patterns match here exactly as
+    they do in the working tree, so an app that exempts
+    ``app/generated/_input.py`` gets an unformatted baseline for it, as it must.
+
+    Results are copied back into ``out`` at the positions the eval emitted them,
+    so ``out`` keeps its original family shape and ``plan_swap`` reads it exactly
+    as before.
+
+    Best-effort throughout: a refused swap, a failing post-generate or a ruff
+    hiccup leaves the baseline as raw eval output, i.e. the behaviour before this
+    function existed.
     """
-    inputs = sorted(out.rglob("*.py"))
-    if not inputs:
+    _, plan = plan_swap(out, generated_dir)
+    if not plan:
         return
-    for name in RUFF_CONFIG_FILES:
-        config = Path(name)
-        if config.exists():
-            shutil.copyfile(config, out / name)
-            break
-    paths = [str(p.relative_to(out)) for p in inputs]
-    run(
-        ["uvx", "ruff", "check", "--fix", "--quiet", "--force-exclude", *paths],
-        cwd=out,
-    )
-    run(["uvx", "ruff", "format", "--force-exclude", *paths], cwd=out)
+    previous = Path.cwd()
+    try:
+        os.chdir(repo)
+    except OSError as exc:
+        print(f"::warning::Could not enter the exported baseline repo ({exc}).")
+        return
+    try:
+        if not swap_outputs(out, generated_dir=generated_dir):
+            return  # swap_outputs already warned with the specific reason
+        # Guarded rather than called unconditionally: run_post_generate warns
+        # about unwired post-processing when the script is absent, and that
+        # warning belongs to the real run, not to this replay of it.
+        if (Path(contract_dir) / POST_GENERATE_SCRIPT).is_file():
+            print("Replaying the app's post-generate step over the baseline:")
+            run_post_generate(contract_dir)
+        _format_generated()
+    finally:
+        os.chdir(previous)
+    for dest, src in plan.items():
+        produced = repo / dest
+        if produced.is_file():
+            shutil.copyfile(produced, src)
 
 
 def stage_and_commit(message: str) -> bool:
