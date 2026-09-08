@@ -27,7 +27,6 @@ from application_sdk.app.registry import (
 from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
-    PREFLIGHT_GATE_MODE_ENV,
     SHUTDOWN_DRAIN_DELAY_SECONDS,
 )
 from application_sdk.execution._temporal.activities import get_all_task_activities
@@ -230,24 +229,6 @@ async def _log_worker_fatal_error(exc: BaseException) -> None:
         " <- ".join(describe_exception_chain(exc)),
         exc_info=exc,
     )
-
-
-def _resolve_gate_enforcement(app_cls: type | None) -> bool:
-    """Resolve the preflight gate's posture for one app.
-
-    ``True`` = hard (block on ``NOT_READY``); ``False`` = soft (emit
-    ``would_block``, proceed). Precedence: ``ATLAN_PREFLIGHT_GATE_MODE`` env
-    (deploy-time ops lever, no app release needed) > the app's declared
-    ``App.preflight_gate_mode`` (git-blamed opt-in) > soft default. Only the
-    literal ``"hard"`` enforces; an unknown or malformed value falls back to
-    soft — a run is never blocked by accident, blocking is always a deliberate
-    opt-in.
-    """
-    val = os.environ.get(PREFLIGHT_GATE_MODE_ENV)
-    if val:
-        return val.strip().lower() == "hard"
-    declared = getattr(app_cls, "preflight_gate_mode", "soft")
-    return str(declared).strip().lower() == "hard"
 
 
 def _resolve_verify_storage(app_cls: type | None) -> bool:
@@ -620,10 +601,11 @@ def create_worker(
 
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
         build_preflight_gate_activity,
+        gate_attempts,
+        gate_budget_seconds,
         log_gate_posture,
         preflight_gate_activity_name,
-        resolve_gate_attempts,
-        resolve_gate_budget_seconds,
+        resolve_gate_mode,
     )
     from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
 
@@ -716,18 +698,30 @@ def create_worker(
                 name,
             )
 
-        enforce = _resolve_gate_enforcement(app_cls)
-        budget_seconds = resolve_gate_budget_seconds(
+        mode = resolve_gate_mode(app_cls)
+        budget_seconds, budget_complaint = gate_budget_seconds(
             getattr(app_cls, "preflight_gate_timeout_seconds", None)
         )
-        attempts = resolve_gate_attempts(
+        if budget_complaint:
+            logger.warning(
+                "preflight_gate_timeout_seconds: %s; using %ds",
+                budget_complaint,
+                budget_seconds,
+            )
+        attempts, attempts_complaint = gate_attempts(
             getattr(app_cls, "preflight_gate_max_attempts", None)
         )
+        if attempts_complaint:
+            logger.warning(
+                "preflight_gate_max_attempts: %s; using %d",
+                attempts_complaint,
+                attempts,
+            )
         # Every app, soft included: this row is the denominator for ranking
         # hard-mode apps that never reach a verdict (such an app emits no outcome
         # row carrying gate_mode, so it is invisible from outcomes alone).
-        log_gate_posture(name, enforce=enforce, budget_seconds=budget_seconds)
-        if enforce:
+        log_gate_posture(name, mode=mode, budget_seconds=budget_seconds)
+        if mode.enforces:
             # conformance: ignore[L006] same as the artifact-validation notice above: once per hard-mode app at boot, over a single-digit loop, and it is the one line saying a worker will start aborting runs.
             logger.info(
                 "Preflight gate is HARD for app %r — the run WILL abort before "
@@ -743,7 +737,7 @@ def create_worker(
             build_preflight_gate_activity(
                 gate_handler,
                 name,
-                enforce=enforce,
+                mode=mode,
                 budget_seconds=budget_seconds,
                 attempts=attempts,
                 verify_storage=_resolve_verify_storage(app_cls),

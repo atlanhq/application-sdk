@@ -29,6 +29,7 @@ from application_sdk.handler.contracts import (
     EventTriggerConfig,
     MetadataInput,
     MetadataOutput,
+    PreflightCheck,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
@@ -523,6 +524,140 @@ class TestPreflightEndpoint:
         kwargs = rows[0].kwargs
         assert kwargs["outcome"] == "crashed"
         assert kwargs["preflight_surface"] == "http"
+
+    def test_untyped_crash_is_not_ready_and_classified_internal(self) -> None:
+        # The two facts live on different fields: the verdict on the output,
+        # the classification on the failed check. A caller reads both.
+        class _Crashing(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise RuntimeError("password=hunter2 leaked in a driver message")
+
+        client = _make_client(handler=_Crashing())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        body = response.json()
+        assert response.status_code == 500
+        assert body["detail"] == "Internal server error"
+        assert body["success"] is False
+        assert body["preflight"]["status"] == "not_ready"
+        (check,) = body["preflight"]["checks"]
+        assert check["name"] == "preflightVerdict"
+        assert check["passed"] is False
+        assert check["error"]["category"] == "INTERNAL"
+        assert check["error"]["audience"] == "APP_OWNER"
+        assert check["error"]["evidence"]["classification_pending"] is True
+        assert body["error"]["category"] == "INTERNAL"
+        assert body["data"]["preflightVerdict"]["success"] is False
+        assert body["data"]["preflightVerdict"]["failureMessage"]
+        assert "hunter2" not in response.text
+
+    def test_crash_body_never_carries_the_exception_text(self) -> None:
+        # Secret redaction is not enough: a driver message names the caller's
+        # own hosts and accounts, and those must not reach the HTTP caller
+        # either. The cause stays in the server-side log only.
+        class _Crashing(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise ConnectionError(
+                    "could not connect to db-prod-7.internal.example.net:5432 "
+                    "database=finance_warehouse user=svc_ro"
+                )
+
+        client = _make_client(handler=_Crashing())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        body = response.json()
+        assert response.status_code == 500
+        assert "cause_repr" not in response.text
+        assert "db-prod-7" not in response.text
+        assert "finance_warehouse" not in response.text
+        assert body["error"]["code"]
+        (check,) = body["preflight"]["checks"]
+        assert "cause_repr" not in check["error"]
+
+    def test_typed_raise_keeps_its_leaf_and_http_status(self) -> None:
+        from application_sdk.errors.leaves import AuthError
+
+        class _Rejected(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise AuthError(
+                    message="wrong password", suggested_action="Rotate the credential."
+                )
+
+        client = _make_client(handler=_Rejected())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        body = response.json()
+        assert response.status_code == 401
+        assert body["detail"] == "wrong password"
+        assert body["preflight"]["status"] == "not_ready"
+        (check,) = body["preflight"]["checks"]
+        assert check["error"]["category"] == "AUTH"
+        assert check["error"]["audience"] == "USER"
+        assert check["suggested_action"] == "Rotate the credential."
+        assert body["data"]["preflightVerdict"]["failureMessage"] == "wrong password"
+
+    def test_source_unavailable_raise_maps_to_503_with_the_verdict(self) -> None:
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        class _Unreachable(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise SourceUnavailableError(message="The source did not answer")
+
+        client = _make_client(handler=_Unreachable())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        body = response.json()
+        assert response.status_code == 503
+        assert body["preflight"]["status"] == "not_ready"
+        assert (
+            body["preflight"]["checks"][0]["error"]["category"] == "SOURCE_UNAVAILABLE"
+        )
+
+    def test_returned_verdicts_check_error_drops_the_exception_text(self) -> None:
+        # A handler that returns NOT_READY with a typed error built from a driver
+        # exception carries that exception's text as cause_repr. The Temporal
+        # payload keeps it; the HTTP caller must not see it.
+        from application_sdk.errors.leaves import AuthError
+
+        class _Rejected(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                cause = RuntimeError(
+                    "login failed for user svc_ro at db-prod-7.internal"
+                )
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="connectivity",
+                            passed=False,
+                            error=AuthError(
+                                message="Rejected", cause=cause
+                            ).to_failure_details(),
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_Rejected())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 200
+        assert "cause_repr" not in response.text
+        assert "db-prod-7" not in response.text
+        (check,) = response.json()["preflight"]["checks"]
+        assert check["error"]["category"] == "AUTH"
+
+    def test_deprecated_handler_error_carries_the_verdict_too(self) -> None:
+        client = _make_client(handler=_FailingHandler())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        body = response.json()
+        assert response.status_code == 500
+        assert body["detail"].endswith("preflight failed")
+        assert body["preflight"]["status"] == "not_ready"
+        assert body["preflight"]["checks"][0]["error"]["audience"] == "APP_OWNER"
+
+    def test_request_contract_error_stays_a_plain_4xx(self) -> None:
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/check?entrypoint=no-such-entrypoint",
+            json={"credentials": [], "entrypoint": "bad name!"},
+        )
+        assert response.status_code == 400
+        assert "preflight" not in response.json()
 
     def test_a_5xx_httpexception_still_emits_a_crash_row(self) -> None:
         # An HTTPException is not proof of a deliberate client-facing response.

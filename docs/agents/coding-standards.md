@@ -102,20 +102,27 @@ Raising is not a no-op, though, and the error's type decides what happens — se
 
 ### Fail-open semantics
 
-Enforcement is scoped by **who caused the failure**, not by whether a verdict was reached.
+Enforcement is scoped by **who raised**, not by the error's category and not by whether a
+verdict was reached.
 
 - **Source-attributable** (`gate_classification="source_unverifiable"`) — a `NOT_READY`
-  verdict, a probe overrunning `App.preflight_gate_timeout_seconds`, a handler crash, or a
-  provably absent credential. Subject to `preflight_gate_mode`: hard aborts the run, soft
-  reports `would_block` and proceeds.
-- **Gate plumbing** (`gate_classification="gate_broken"`) — a typed
-  `DependencyUnavailableError` / `RateLimitedError` / `ResourceExhaustedError`, a
-  secret-store outage, a collapsed not-found wrapping a transport error, an unavailable
-  worker, or `schedule_to_close`. **Always** fails open, in both postures: a platform blip
-  must never fail a healthy run.
+  verdict, anything the handler raises (typed or not), a probe overrunning
+  `App.preflight_gate_timeout_seconds`, a killed attempt whose earlier attempt left typed
+  evidence, or a provably absent credential. Subject to `preflight_gate_mode`: hard aborts
+  the run, soft reports `would_block` and proceeds. A verdict is reached on the attempt it
+  happens on.
+- **Frame lost** (`gate_classification="frame_lost"`) — Temporal ended a running attempt
+  and nothing survived: a probe that stalled the loop past the gate's cancel, or a worker
+  that died under it. The chain cannot tell them apart, so this is its own value; the mode
+  applies as for a source-attributable failure.
+- **Gate plumbing** (`gate_classification="gate_broken"`) — the gate's own credential
+  resolution failing (secret-store outage, a collapsed not-found wrapping a transport error),
+  or no worker ever running the attempt. **Always** fails open, in both postures: a platform
+  blip must never fail a healthy run.
 
-So a handler signals "ask me later" by raising a typed plumbing error, and never by
-returning `NOT_READY` for a transient — that would make a hard gate fail closed on a blip.
+So a handler signals "ask me later" by **returning** `PARTIAL` with the failed check carrying
+a typed retryable error, never by raising one and never by returning `NOT_READY` — raising
+blocks a hard gate on a transient and discards the other checks; `NOT_READY` blocks it too.
 
 Every gated run emits a structured `Preflight gate outcome` event
 (`outcome ∈ {proceeded, blocked, would_block, no_verdict, skipped}`), plus a
@@ -130,9 +137,10 @@ beside one). Each row stamps `failure.audience` (who must act) except `proceeded
 - **Verdict blocks** (`PreflightFailed` from a handler `NOT_READY`) — the outcome row at
   `error`, no stack trace, audience from the primary check's typed error (typically `USER`).
   The block is an expected typed outcome, not a crash — but it aborted the customer's run.
-- **No-verdict outcomes** (budget overrun, handler crash — `source_unverifiable`) — the
-  outcome row at `error` with `exc_info`, in both modes: the failure is real even when soft
-  mode proceeds. There is a real exception behind these and it is the only diagnostic.
+- **No-verdict outcomes** (budget overrun, handler crash — `source_unverifiable`; a killed
+  frame — `frame_lost`) — the outcome row at `error` with `exc_info`, in both modes: the
+  failure is real even when soft mode proceeds. There is a real exception behind these and it
+  is the only diagnostic.
 - **Gate plumbing failures** (exception during dispatch — `gate_broken`) — the workflow's
   `no_verdict` row at `error` with `exc_info=True`, audience `APP_OWNER`.
 - **Advisory failures** (`proceeded` with any failed check — PARTIAL, or READY with a failed

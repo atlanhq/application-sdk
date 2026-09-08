@@ -41,6 +41,9 @@ _REMOVED_ENV_VARS: frozenset[str] = frozenset(
         # CorrelationContextInterceptor was folded into LogInterceptor;
         # no longer toggleable.
         "APPLICATION_SDK_ENABLE_CORRELATION_INTERCEPTOR",
+        # The preflight gate posture is read from App.preflight_gate_mode only,
+        # so the worker and the workflow can never disagree about it.
+        "ATLAN_PREFLIGHT_GATE_MODE",
     }
 )
 

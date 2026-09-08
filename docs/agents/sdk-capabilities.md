@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.33.0
-source-sha:    3c3a651a421692823eb320baff6bdb78542db197
-source-date:   2026-09-07T15:10:25+01:00
+sdk-version:   3.33.1
+source-sha:    184c7820591c9d60ad035c369d8a186527c79403
+source-date:   2026-09-08T02:40:43+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -26,7 +26,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 65 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
@@ -2184,6 +2184,14 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Import:** `from application_sdk.handler import PreflightCheck`
 - **Signature:** `class PreflightCheck`
 - **Summary:** Result of a single preflight check.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `PreflightGateMode`
+
+- **Import:** `from application_sdk.handler import PreflightGateMode`
+- **Also importable from:** `application_sdk.handler`
+- **Signature:** `class PreflightGateMode`
+- **Summary:** The gate's posture for one app: what it does with a source it cannot certify.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightInput`

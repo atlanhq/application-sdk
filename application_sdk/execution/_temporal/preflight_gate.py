@@ -7,18 +7,26 @@ return normally.
 
 The activity raises ``ApplicationError(type="PreflightFailed")`` — red in Temporal,
 attributed to preflight — for anything it can attribute to the **source** while the
-app is in hard mode: a ``NOT_READY`` verdict, a probe overrunning the budget, a
-handler crash, or a provably absent credential. Failures of the gate's own
-**plumbing** propagate instead, so the workflow fails open in either mode; a
-platform blip must never fail a healthy run. ``_is_gate_broken`` draws that line
-off the raised error's own ``FailureCategory`` (CNCT-99).
+app is in hard mode: a ``NOT_READY`` verdict, anything the handler raises (a typed
+leaf is its statement about the source, an untyped crash is an app fault), a probe
+overrunning the budget, or a provably absent credential. Failures of the gate's own
+**plumbing** — its credential-resolution frame and its store probes — propagate
+instead, so the workflow fails open in either mode; a platform blip must never
+fail a healthy run. The line is drawn by *who raised*, never by the error's
+category: a handler cannot declare its source to be plumbing.
 
-Enforcement lives here rather than in the workflow because this is the only frame
-holding the resolved posture, and because the activity bounds the handler itself —
-if Temporal's ``start_to_close`` killed it first there would be no frame left to
-classify the failure in. Credential resolution also happens *inside* the activity;
-the deterministic workflow only forwards the secret-free
-:class:`PreflightGateInput`.
+Enforcement lives here because the activity bounds the handler itself and so
+usually survives to classify the failure. When it does not — a probe that stalls
+the event loop outlives the cancel and Temporal kills the frame — the workflow
+applies the mode from the failure chain instead (:func:`classify_gate_failure`),
+so a dead frame is never a silent proceed. A killed frame that left no evidence
+is classified ``frame_lost`` rather than ``source_unverifiable``, because the
+chain cannot separate a stalled probe from a worker that died under it. The mode
+still applies: a hard-mode app has asked that an uncertified source never run,
+and a stalled probe is the common cause and the one its owner can fix, while a
+lost worker is rare, retried by Temporal, and separable in the dashboards by the
+classification. Credential resolution also happens *inside* the activity; the
+deterministic workflow only forwards the secret-free :class:`PreflightGateInput`.
 """
 
 from __future__ import annotations
@@ -26,9 +34,9 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import orjson
 from pydantic import BaseModel, Field, ValidationError
@@ -54,9 +62,9 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.errors.leaves import (
         AppTimeoutError,
         DependencyUnavailableError,
-        InternalError,
         PreconditionError,
     )
+    from application_sdk.errors.wire import FailureDetails
     from application_sdk.execution._temporal.preflight_persist import (
         persist_check_result,
     )
@@ -66,9 +74,11 @@ with workflow.unsafe.imports_passed_through():
         BaseMetadataConfig,
         HandlerCredential,
         PreflightCheck,
+        PreflightGateMode,
         PreflightInput,
         PreflightOutput,
         PreflightStatus,
+        unverifiable_preflight_result,
     )
     from application_sdk.infrastructure.context import get_infrastructure
 
@@ -118,6 +128,22 @@ PREFLIGHT_FALLBACK_CODE = "PREFLIGHT_CHECK_FAILED"
 EMPTY_CHECK_MATRIX = "[]"
 
 
+def _iter_chain(exc: BaseException | None) -> Iterator[BaseException]:
+    """Walk an error and its causes, Temporal's ``cause`` first, then ``__cause__``.
+
+    Temporal wraps an activity's error in an ``ActivityError`` whose ``cause`` is
+    the converted ``ApplicationError``; a plain Python chain hangs off
+    ``__cause__``. Both are followed, cycles are cut.
+    """
+    seen: set[int] = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        nxt = getattr(current, "cause", None)
+        current = nxt if nxt is not None else current.__cause__
+
+
 def is_preflight_block(exc: BaseException | None) -> bool:
     """Whether ``exc`` (or any cause in its chain) is the deliberate gate block.
 
@@ -125,15 +151,139 @@ def is_preflight_block(exc: BaseException | None) -> bool:
     wraps it in an ``ActivityError``, so the marker may sit on a cause rather
     than the top-level error.
     """
-    seen: set[int] = set()
-    current = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if getattr(current, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE:
-            return True
-        nxt = getattr(current, "cause", None)
-        current = nxt if nxt is not None else current.__cause__
-    return False
+    return any(
+        getattr(link, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        for link in _iter_chain(exc)
+    )
+
+
+class GateFailure(NamedTuple):
+    """What the workflow learned from a gate activity that returned no verdict."""
+
+    classification: PreflightClassification
+    evidence: FailureDetails | None
+    checks: list[PreflightCheck]
+    attempt: int
+
+
+def _gate_failure_evidence(
+    exc: BaseException | None,
+) -> tuple[FailureDetails, list[PreflightCheck]] | None:
+    """The typed evidence a gate attempt left in the failure chain, if any.
+
+    A non-final attempt that could not reach a verdict raises the
+    ``PreflightNoVerdict`` marker carrying the same payload as a block. When
+    Temporal later kills the retry, that marker is the last attempt's failure in
+    the chain, and its ``details[0]`` is the source fault the gate had already
+    classified. ``None`` when no attempt got that far, and ``None`` for a payload
+    this reader cannot parse: the workflow frame must never raise, and a newer
+    producer's shape is the gate's problem to report, not the run's to fail on.
+    """
+    try:
+        for link in _iter_chain(exc):
+            if getattr(link, "type", None) != PREFLIGHT_NO_VERDICT_ERROR_TYPE:
+                continue
+            details = list(getattr(link, "details", ()) or ())
+            if not details:
+                return None
+            primary = FailureDetails.model_validate(details[0])
+            wire_checks = details[1].get("checks", []) if len(details) > 1 else []
+            checks = [PreflightCheck.model_validate(c) for c in wire_checks]
+            return primary, checks
+    except Exception:
+        return None
+    return None
+
+
+def _gate_attempt(exc: BaseException | None) -> int:
+    """The attempt the failure chain says ran last; ``0`` when none did.
+
+    The gate stamps its attempt on every error it raises (``details[1]``) and on
+    every heartbeat, so a killed frame reports it through Temporal's
+    ``last_heartbeat_details``. An attempt no worker ever started leaves neither.
+    """
+    for link in _iter_chain(exc):
+        details = list(getattr(link, "details", ()) or ())
+        if len(details) > 1 and isinstance(details[1], dict):
+            attempt = details[1].get("attempt")
+            if isinstance(attempt, int):
+                return attempt
+        beats = list(getattr(link, "last_heartbeat_details", ()) or ())
+        if beats and isinstance(beats[0], int):
+            return beats[0]
+    return 0
+
+
+def _frame_died(exc: BaseException | None) -> bool:
+    return any(
+        getattr(link, "type", None)
+        in (TimeoutType.START_TO_CLOSE, TimeoutType.HEARTBEAT)
+        for link in _iter_chain(exc)
+    )
+
+
+def classify_gate_failure(exc: BaseException) -> GateFailure:
+    """Workflow-side classification of a gate activity that did not return a verdict.
+
+    ``SOURCE_UNVERIFIABLE`` when an attempt left typed evidence in the chain.
+    ``FRAME_LOST`` when Temporal ended a running attempt and nothing survived:
+    ``START_TO_CLOSE`` and ``HEARTBEAT`` fire against a frame that was running,
+    which is either a probe that held the loop past the gate's own cancel or a
+    worker that died under it, and the chain cannot tell the two apart.
+    ``GATE_BROKEN`` otherwise: no worker ran the attempt, or the gate's own
+    plumbing raised. Never raises.
+    """
+    attempt = _gate_attempt(exc)
+    evidence = _gate_failure_evidence(exc)
+    if evidence is not None:
+        return GateFailure(
+            PreflightClassification.SOURCE_UNVERIFIABLE,
+            evidence[0],
+            evidence[1],
+            attempt,
+        )
+    if _frame_died(exc):
+        return GateFailure(PreflightClassification.FRAME_LOST, None, [], attempt)
+    return GateFailure(PreflightClassification.GATE_BROKEN, None, [], attempt)
+
+
+def frame_death_details(
+    exc: BaseException, app_name: str, budget_seconds: int
+) -> FailureDetails:
+    """The failure a lost gate frame is attributed to when it left no evidence.
+
+    The gate's cancel fires at the budget and the block follows inside the
+    headroom, so a frame Temporal had to end was held past both by something the
+    gate could not interrupt, or its worker was gone. Attributed to the app owner
+    because a probe parked on the loop is the common case and the one the owner
+    can fix; the row's ``frame_lost`` classification keeps the worker-loss case
+    separable in the dashboards.
+    """
+    return AppTimeoutError(
+        message=(
+            "Preflight gate attempt ended without a verdict at Temporal's deadline "
+            f"({underlying_error_type(exc)}) after the {budget_seconds}s budget; "
+            "the gate could not tell a stalled probe from a lost worker"
+        ),
+        app_name=app_name,
+        operation="preflight_check",
+        timeout_seconds=float(budget_seconds),
+        retryable=False,
+    ).to_failure_details()
+
+
+def build_workflow_block(
+    details: FailureDetails, checks: list[PreflightCheck], app_name: str, attempt: int
+) -> ApplicationError:
+    """The ``PreflightFailed`` block the workflow raises for a dead gate frame.
+
+    Built by the same builder as the activity's block, from the evidence the
+    chain kept, so the consumer reads one payload whichever frame decided.
+    """
+    verdict = PreflightOutput(
+        status=PreflightStatus.NOT_READY, error=details, checks=checks
+    )
+    return _build_block_error(verdict, app_name, attempt)
 
 
 def underlying_error_type(exc: BaseException) -> str:
@@ -171,18 +321,13 @@ def underlying_error_type(exc: BaseException) -> str:
     persistent platform fault reaches the dashboard as its real cause (e.g.
     ``DaprSidecarUnreachableError``) instead of an uninformative wrapper name.
     """
-    seen: set[int] = set()
     timeout_reason: str | None = None
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        found = getattr(current, "type", None)
+    for link in _iter_chain(exc):
+        found = getattr(link, "type", None)
         if isinstance(found, str) and found:
             return found
         if timeout_reason is None and isinstance(found, TimeoutType):
             timeout_reason = f"Timeout:{found.name}"
-        nxt = getattr(current, "cause", None)
-        current = nxt if nxt is not None else current.__cause__
     return timeout_reason or type(exc).__name__
 
 
@@ -208,6 +353,7 @@ def input_type_supports_gate(input_type: type) -> bool:
 
 
 if TYPE_CHECKING:
+    from application_sdk.execution.errors import ApplicationError
     from application_sdk.handler.base import Handler
 
 
@@ -355,10 +501,8 @@ def preflight_gate_activity_name(app_name: str) -> str:
     return get_activity_name(app_name, "preflight")
 
 
-GATE_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
-
 # The handler's check budget, in seconds. Per-app via ``App.preflight_gate_timeout_seconds``
-# and clamped by ``resolve_gate_budget_seconds`` — a slow source is an app-specific
+# and clamped by ``gate_budget_seconds`` — a slow source is an app-specific
 # fact, so a fleet-wide bump is the wrong lever (it costs every app's
 # time-to-first-activity). The ceiling keeps an app from stalling extraction start
 # indefinitely; the floor keeps a typo from leaving no time to run any check.
@@ -377,9 +521,10 @@ GATE_TIMEOUT_MIN_SECONDS = 5
 GATE_TIMEOUT_MAX_SECONDS = 300
 
 # Retry attempts for the gate activity, per-app via ``App.preflight_gate_max_attempts``.
-# A second attempt rescues a *transient* slow probe (cold pool, cluster resuming);
-# it cannot rescue a systematically slow one, it just doubles time-to-verdict. So
-# an app declaring a large budget should usually pair it with one attempt.
+# A source fault is a verdict on the attempt it happens, so a retry never re-asks
+# the handler. It retries the gate's own retryable plumbing (a store probe, a
+# credential lookup) and sizes ``schedule_to_close``, which is why a large budget
+# usually pairs with one attempt.
 GATE_ATTEMPTS_DEFAULT = 2
 GATE_ATTEMPTS_MIN = 1
 GATE_ATTEMPTS_MAX = 3
@@ -426,16 +571,37 @@ def _min_handler_seconds(budget_seconds: float) -> float:
     return min(GATE_MIN_HANDLER_SECONDS, budget_seconds / 2)
 
 
-# Why the gate could not reach a verdict. Stamped on the outcome event so
-# connector-pulse can separate "we know we couldn't ask the source" from "our own
-# plumbing broke" — only the former is subject to gate mode.
-CLASSIFICATION_SOURCE_UNVERIFIABLE = "source_unverifiable"
-CLASSIFICATION_GATE_BROKEN = "gate_broken"
+def _resolution_exhausted_budget(budget_seconds: float) -> DependencyUnavailableError:
+    """The plumbing fault for a credential resolution that left no time to probe.
 
-# The handler returned a real verdict. Stamped explicitly rather than left absent
-# so consumers key on a value: "field missing" would otherwise have to mean both
-# "this was a genuine verdict" and "this row predates the classification".
-CLASSIFICATION_VERDICT = "verdict"
+    The secret store being slow says nothing about the source, so this fails
+    open rather than calling the handler with no time and blaming it for the
+    timeout.
+    """
+    return DependencyUnavailableError(
+        message=(
+            "Credential resolution consumed the entire preflight budget "
+            f"({budget_seconds:.0f}s); no time left to verify the source"
+        ),
+        service="secret_store",
+    )
+
+
+class PreflightClassification(SerializableEnum):
+    """Why a gate row reads the way it does; the ``gate_classification`` wire values.
+
+    Only ``SOURCE_UNVERIFIABLE`` and ``FRAME_LOST`` are subject to the gate mode.
+    ``GATE_BROKEN`` always fails open, ``VERDICT`` is a real answer from the
+    handler, and ``NOT_RUN`` is a gate that never dispatched. Stamped explicitly
+    on every row so a consumer keys on a value, never on a missing field.
+    """
+
+    VERDICT = "verdict"
+    SOURCE_UNVERIFIABLE = "source_unverifiable"
+    FRAME_LOST = "frame_lost"
+    GATE_BROKEN = "gate_broken"
+    NOT_RUN = "not_run"
+
 
 # Who must act, stamped on the outcome row (FND-901). Same key and values the log
 # interceptor projects from raised AppErrors, riding the OTel ``failure.``
@@ -443,31 +609,93 @@ CLASSIFICATION_VERDICT = "verdict"
 # the block is raised and would otherwise carry no audience.
 FAILURE_AUDIENCE_KEY = "failure.audience"
 
-# Synthetic check name for a no-verdict outcome, so the check matrix and the red
-# activity pane carry a row rather than showing zero checks.
-UNVERIFIABLE_CHECK_NAME = "preflightVerdict"
-
 # Error type for a retryable no-verdict on a non-final attempt. Deliberately not
 # PREFLIGHT_FAILED_ERROR_TYPE: the workflow must not treat it as the deliberate
 # block and abort before the retry has had its turn.
 PREFLIGHT_NO_VERDICT_ERROR_TYPE = "PreflightNoVerdict"
 
-# ``FailureCategory`` already draws the line this gate needs: DEPENDENCY_UNAVAILABLE
-# is documented as Atlan-internal platform services while SOURCE_UNAVAILABLE is the
-# customer's own system (see errors/categories.py). RATE_LIMITED joins the plumbing
-# side because a 429 means "ask me later", not "the source is not ready" — collapsing
-# it into a verdict would make hard mode fail *closed* on a transient.
-_GATE_BROKEN_CATEGORIES: frozenset[FailureCategory] = frozenset(
-    {
-        FailureCategory.DEPENDENCY_UNAVAILABLE,
-        FailureCategory.RATE_LIMITED,
-        FailureCategory.RESOURCE_EXHAUSTED,
-        FailureCategory.CANCELLED,
-    }
+
+GATE_OUTCOME_ROW_KEYS: tuple[str, ...] = (
+    "app_name",
+    "entrypoint",
+    "outcome",
+    "reason",
+    "checks",
+    CHECK_MATRIX_KEY,
+    GATE_MODE_KEY,
+    GATE_CLASSIFICATION_KEY,
+    GATE_DURATION_KEY,
+    GATE_TIMEOUT_KEY,
+    GATE_ATTEMPTS_KEY,
 )
+"""Every key a ``Preflight gate outcome`` row carries, whichever frame emits it."""
 
 
-def log_gate_posture(app_name: str, *, enforce: bool, budget_seconds: int) -> None:
+def gate_outcome_row(
+    *,
+    app_name: str,
+    entrypoint: str,
+    outcome: PreflightRowOutcome,
+    reason: str,
+    checks: list[PreflightCheck],
+    mode: PreflightGateMode,
+    classification: PreflightClassification,
+    duration_ms: float,
+    budget_seconds: int,
+    attempt: int,
+    audience: str | None = None,
+) -> dict[str, Any]:
+    """The one ``Preflight gate outcome`` row shape, for the activity and the workflow.
+
+    Both frames emit through this builder so a consumer parsing ``gate_mode`` or
+    ``gate_duration_ms`` never finds a row missing the key it filters on.
+    ``check_matrix`` is present on every row, ``[]`` where no check ran.
+    """
+    row: dict[str, Any] = {
+        "app_name": app_name,
+        "entrypoint": entrypoint,
+        "outcome": outcome.value,
+        "reason": reason,
+        "checks": len(checks),
+        CHECK_MATRIX_KEY: _check_matrix_json(checks),
+        GATE_MODE_KEY: mode.value,
+        GATE_CLASSIFICATION_KEY: classification.value,
+        GATE_DURATION_KEY: duration_ms,
+        GATE_TIMEOUT_KEY: int(budget_seconds),
+        GATE_ATTEMPTS_KEY: attempt,
+    }
+    if audience is not None:
+        row[FAILURE_AUDIENCE_KEY] = audience
+    return row
+
+
+def gate_outcome_level(
+    outcome: PreflightRowOutcome,
+    classification: PreflightClassification,
+    checks: list[PreflightCheck],
+) -> str:
+    """The log level an outcome row is emitted at (FND-901).
+
+    The customer-facing log view filters at ERROR, so a run that was blocked, or
+    whose source could not be verified in either mode, or whose gate could not
+    run, must be the ERROR record itself. A run that proceeded past a failed
+    advisory check is the case WARNING exists for. Everything else is INFO.
+    """
+    if outcome in (PreflightRowOutcome.BLOCKED, PreflightRowOutcome.NO_VERDICT):
+        return "error"
+    if classification in (
+        PreflightClassification.SOURCE_UNVERIFIABLE,
+        PreflightClassification.FRAME_LOST,
+    ):
+        return "error"
+    if outcome is PreflightRowOutcome.PROCEEDED and any(not c.passed for c in checks):
+        return "warning"
+    return "info"
+
+
+def log_gate_posture(
+    app_name: str, *, mode: PreflightGateMode, budget_seconds: int
+) -> None:
     """Emit the queryable boot-time posture row for one gate-registered app.
 
     Emitted for **every** gate app, soft included — the point is a complete
@@ -483,14 +711,14 @@ def log_gate_posture(app_name: str, *, enforce: bool, budget_seconds: int) -> No
         PREFLIGHT_POSTURE_EVENT,
         app_name=app_name,
         **{
-            GATE_MODE_KEY: "hard" if enforce else "soft",
+            GATE_MODE_KEY: mode.value,
             GATE_TIMEOUT_KEY: budget_seconds,
         },
     )
 
 
 def _clamp_declared_int(
-    raw: Any, *, low: int, high: int, default: int, unit: str
+    raw: object, *, low: int, high: int, default: int, unit: str
 ) -> tuple[int, str]:
     """Coerce and clamp a declared ``ClassVar`` int. Returns ``(value, complaint)``.
 
@@ -520,7 +748,12 @@ def _clamp_declared_int(
     return clamped, ""
 
 
-def _clamp_budget(raw: Any) -> tuple[int, str]:
+def gate_budget_seconds(raw: object) -> tuple[int, str]:
+    """Clamp a declared ``App.preflight_gate_timeout_seconds``. Never raises.
+
+    Returns ``(budget, complaint)``. The worker logs the complaint once at boot;
+    the workflow, running deterministic code, discards it.
+    """
     return _clamp_declared_int(
         raw,
         low=GATE_TIMEOUT_MIN_SECONDS,
@@ -530,7 +763,8 @@ def _clamp_budget(raw: Any) -> tuple[int, str]:
     )
 
 
-def _clamp_attempts(raw: Any) -> tuple[int, str]:
+def gate_attempts(raw: object) -> tuple[int, str]:
+    """Clamp a declared ``App.preflight_gate_max_attempts``. Never raises."""
     return _clamp_declared_int(
         raw,
         low=GATE_ATTEMPTS_MIN,
@@ -540,32 +774,32 @@ def _clamp_attempts(raw: Any) -> tuple[int, str]:
     )
 
 
-def resolve_gate_budget_seconds(raw: Any) -> int:
-    """Resolve an app's declared gate budget, warning once about a bad value.
+def coerce_gate_mode(declared: object) -> PreflightGateMode:
+    """The posture a declared ``App.preflight_gate_mode`` value resolves to.
 
-    Called at worker build, where a complaint about a malformed declaration is
-    worth a log line. Never raises — a bad value must not stop a worker booting,
-    it just falls back to the default.
+    Only the enum member or the literal ``"hard"``, case and whitespace aside,
+    enforces. Anything else resolves to soft: blocking is a deliberate opt-in and
+    a typo must never abort a run.
     """
-    budget, complaint = _clamp_budget(raw)
-    if complaint:
-        logger.warning(
-            "preflight_gate_timeout_seconds: %s; using %ds", complaint, budget
-        )
-    return budget
+    if isinstance(declared, PreflightGateMode):
+        return declared
+    if isinstance(declared, str) and declared.strip().lower() == "hard":
+        return PreflightGateMode.HARD
+    return PreflightGateMode.SOFT
 
 
-def resolve_gate_attempts(raw: Any) -> int:
-    """Resolve an app's declared gate attempts, warning once about a bad value."""
-    attempts, complaint = _clamp_attempts(raw)
-    if complaint:
-        logger.warning("preflight_gate_max_attempts: %s; using %d", complaint, attempts)
-    return attempts
+def resolve_gate_mode(app_cls: type | None) -> PreflightGateMode:
+    """One app's gate posture, from its class alone.
+
+    There is no deploy-time override: the worker bakes this into the activity
+    and the workflow reads the same attribute, so the two frames cannot disagree.
+    """
+    return coerce_gate_mode(getattr(app_cls, "preflight_gate_mode", None))
 
 
 def gate_retry_policy(attempts: Any) -> RetryPolicy:
     """The gate's retry policy for one app, from its declared attempts."""
-    resolved, _ = _clamp_attempts(attempts)
+    resolved, _ = gate_attempts(attempts)
     return RetryPolicy(maximum_attempts=resolved, backoff_coefficient=2)
 
 
@@ -600,8 +834,8 @@ def gate_timeouts(
     ``attempts``: a one-attempt app must not reserve a two-attempt window, or it
     holds its slot for twice as long as its owner asked for.
     """
-    budget, _ = _clamp_budget(budget_seconds)
-    resolved_attempts, _ = _clamp_attempts(attempts)
+    budget, _ = gate_budget_seconds(budget_seconds)
+    resolved_attempts, _ = gate_attempts(attempts)
     start_to_close = budget + GATE_ACTIVITY_HEADROOM_SECONDS
     # +10s absorbs the retry backoff between attempts.
     schedule_to_close = resolved_attempts * start_to_close + 10
@@ -674,57 +908,176 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
     return orjson.dumps(rows).decode()
 
 
-def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
-    """Build the ``PreflightFailed`` ApplicationError for a NOT_READY verdict.
+def _primary_failure(result: PreflightOutput, app_name: str) -> FailureDetails:
+    """The ``FailureDetails`` a NOT_READY-shaped verdict is attributed to.
 
-    ``details[0]`` is the primary failure's ``FailureDetails``: the handler's typed
-    aggregate ``result.error`` when present, else the first failed check's typed
-    ``error``, else the first failed check's message wrapped in ``PreconditionError``
-    and stamped with the ``PREFLIGHT_FALLBACK_CODE`` sentinel ``code`` (so the
-    outcome event's ``reason`` marks an un-migrated block). ``details[1]`` carries
-    every check so the red activity pane shows them — a failed activity has no
-    result payload.
+    The handler's typed aggregate ``result.error`` when present, else the first
+    failed check's typed ``error``, else the first failed check's message wrapped
+    in ``PreconditionError`` and stamped with the ``PREFLIGHT_FALLBACK_CODE``
+    sentinel ``code`` (so the outcome event's ``reason`` marks an un-migrated
+    block). Prefers the aggregate because it is the reason the verdict is
+    NOT_READY and stays pinned to the real cause even when a non-fatal row is
+    inserted ahead of it in ``checks``.
     """
-    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
-
     failed = [c for c in result.checks if not c.passed]
-    # Prefer the handler's typed aggregate error. It is the reason the verdict is
-    # NOT_READY and stays pinned to the real cause even when a non-fatal row is
-    # inserted ahead of it in ``checks``; the per-check scan is the fallback for
-    # handlers that set only ``checks``.
     primary_error = result.error or next(
         (c.error for c in failed if c.error is not None), None
     )
     if primary_error is not None:
-        details = primary_error
-        if details.app_name is None:
-            details = details.model_copy(update={"app_name": app_name})
-    else:
-        fallback = failed[0].resolved_message if failed else ""
-        details = (
-            PreconditionError(
-                message=fallback or "Preflight check failed",
-                app_name=app_name,
-                retryable=False,
-            )
-            .to_failure_details()
-            .model_copy(update={"code": PREFLIGHT_FALLBACK_CODE})
+        if primary_error.app_name is None:
+            return primary_error.model_copy(update={"app_name": app_name})
+        return primary_error
+    fallback = failed[0].resolved_message if failed else ""
+    return (
+        PreconditionError(
+            message=fallback or "Preflight check failed",
+            app_name=app_name,
+            retryable=False,
         )
+        .to_failure_details()
+        .model_copy(update={"code": PREFLIGHT_FALLBACK_CODE})
+    )
 
+
+def _gate_payload(
+    status: PreflightStatus | None, checks: list[PreflightCheck], attempt: int
+) -> dict[str, Any]:
+    """``details[1]`` of every error the gate raises; see cross-repo-contracts."""
+    return {
+        "status": status.value if status is not None else None,
+        "checks": [c.to_wire() for c in checks],
+        "attempt": attempt,
+    }
+
+
+def _gate_error(
+    result: PreflightOutput,
+    app_name: str,
+    attempt: int,
+    *,
+    error_type: str,
+    non_retryable: bool,
+    message_prefix: str,
+) -> ApplicationError:
+    """Build the ``ApplicationError`` the gate raises for a NOT_READY-shaped verdict.
+
+    ``details[0]`` is :func:`_primary_failure`; ``details[1]`` carries every check
+    so the red activity pane shows them — a failed activity has no result
+    payload. One builder for the block, the retry marker and the workflow's block
+    for a dead frame, so the exits cannot drift apart in shape: whatever attempt
+    Temporal ends up reporting, the consumer reads the same payload.
+    """
+    from application_sdk.execution.errors import (  # noqa: PLC0415 — execution/__init__ imports this module
+        ApplicationError,
+    )
+
+    failed = [c for c in result.checks if not c.passed]
+    details = _primary_failure(result, app_name)
     joined = "; ".join(m for m in (c.resolved_message for c in failed) if m)
     reason = (
         result.resolved_message
         or joined
         or "Preflight check failed; aborting before extraction"
     )
-    checks_payload = {"checks": [c.to_wire() for c in result.checks]}
     return ApplicationError(
-        f"Preflight failed: {reason}",
+        f"{message_prefix}: {reason}",
         details,
-        checks_payload,
-        type=PREFLIGHT_FAILED_ERROR_TYPE,
-        non_retryable=True,
+        _gate_payload(result.status, result.checks, attempt),
+        type=error_type,
+        non_retryable=non_retryable,
     )
+
+
+def _build_block_error(
+    result: PreflightOutput, app_name: str, attempt: int
+) -> ApplicationError:
+    """The deliberate ``PreflightFailed`` block for a NOT_READY verdict."""
+    return _gate_error(
+        result,
+        app_name,
+        attempt,
+        error_type=PREFLIGHT_FAILED_ERROR_TYPE,
+        non_retryable=True,
+        message_prefix="Preflight failed",
+    )
+
+
+def _build_no_verdict_error(
+    result: PreflightOutput, app_name: str, attempt: int
+) -> ApplicationError:
+    """The retryable ``PreflightNoVerdict`` marker for a non-final attempt.
+
+    Same payload as the block: a later attempt that Temporal kills leaves this
+    attempt's typed evidence in the failure chain instead of a bare message.
+    """
+    return _gate_error(
+        result,
+        app_name,
+        attempt,
+        error_type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+        non_retryable=False,
+        message_prefix="Preflight could not reach a verdict",
+    )
+
+
+def _plumbing_error(
+    exc: BaseException, app_name: str, attempt: int
+) -> ApplicationError:
+    """Wrap a gate-plumbing failure so it leaves the activity with ``FailureDetails``.
+
+    Temporal records a bare exception as a class name and a message, and the
+    consumer reading ``details[0]`` then has nothing to attribute. The wire
+    ``type`` stays the class name, so :func:`underlying_error_type` and the
+    fail-open row's ``reason`` read exactly as before. A failure that is not
+    already typed is the gate's own dependency misbehaving, hence
+    ``DependencyUnavailableError``; so is a typed one whose evidence cannot be
+    serialised, which is why ``details[0]`` is built here and never left empty.
+    ``status`` is ``None``: no verdict was reached and the run proceeds.
+    """
+    from application_sdk.execution._temporal.activities import (  # noqa: PLC0415 — avoid import cycle at module load
+        _to_application_error,
+    )
+    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
+
+    if not isinstance(exc, AppError):
+        exc = DependencyUnavailableError(
+            message=f"Preflight plumbing failed: {sanitize_cause_repr(exc)}",
+            service="preflight_gate",
+            cause=exc,
+        )
+    if exc.app_name is None:
+        exc.app_name = app_name
+    converted = _to_application_error(exc)
+    primary = (
+        converted.details[0]
+        if converted.details
+        else DependencyUnavailableError(
+            message=f"Preflight plumbing failed: {sanitize_cause_repr(exc)}",
+            service="preflight_gate",
+            app_name=app_name,
+        ).to_failure_details()
+    )
+    return ApplicationError(
+        str(converted),
+        primary,
+        _gate_payload(None, [], attempt),
+        type=converted.type,
+        non_retryable=converted.non_retryable,
+    )
+
+
+def _proceeded_reason(result: PreflightOutput) -> str:
+    """The ``reason`` for a proceeded row: the status, or the failed check's code.
+
+    A run that proceeds past a failed advisory check is the one the dashboards
+    need to rank, and a reason of ``PARTIAL`` hides which check failed. The code
+    of the first failed check names it; an untyped failure gets the same sentinel
+    an untyped block does.
+    """
+    failed = next((c for c in result.checks if not c.passed), None)
+    if failed is None:
+        return result.status.value
+    return failed.error.code if failed.error is not None else PREFLIGHT_FALLBACK_CODE
 
 
 class PreflightRowOutcome(SerializableEnum):
@@ -976,18 +1329,6 @@ def emit_preflight_crash_outcome(
     )
 
 
-def _is_gate_broken(exc: BaseException) -> bool:
-    """Whether ``exc`` is the gate's own plumbing failing, not source evidence.
-
-    Routed off the raised error's own ``FailureCategory`` rather than a list of
-    exception classes, so an app raising any typed SDK error lands on the right
-    side without the gate knowing about it. An untyped exception is *not* treated
-    as plumbing: a handler crash is an app fault the gate can attribute, and
-    defaulting it to fail-open is what let hard mode mean nothing.
-    """
-    return isinstance(exc, AppError) and type(exc).category in _GATE_BROKEN_CATEGORIES
-
-
 def _activity_info() -> Any:
     """``activity.info()``, or ``None`` when it cannot be read.
 
@@ -1006,9 +1347,18 @@ def _activity_info() -> Any:
         return None
 
 
-def _gate_heartbeat() -> None:
+class _Beats:
+    """When this attempt last sent a heartbeat, on the monotonic clock."""
+
+    def __init__(self) -> None:
+        self.last_sent = time.monotonic()
+
+
+def _gate_heartbeat(beats: _Beats) -> None:
+    """Beat with the attempt number, so a killed frame still reports which one ran."""
     try:
-        activity.heartbeat()
+        activity.heartbeat(_current_attempt())
+        beats.last_sent = time.monotonic()
     # conformance: ignore[E002] no activity context — nothing to beat and nothing to report
     except RuntimeError:
         pass
@@ -1032,7 +1382,7 @@ def _effective_budget(budget_seconds: float) -> float:
     return min(budget_seconds, ceiling) if ceiling > 0 else budget_seconds
 
 
-def _attempt_is_live() -> bool:
+def _attempt_is_live(beats: _Beats | None = None) -> bool:
     """Whether this activity attempt is still the one Temporal is waiting on.
 
     An abandoned attempt (its ``start_to_close`` window closed, the retry
@@ -1051,6 +1401,13 @@ def _attempt_is_live() -> bool:
     trusting two clocks to agree — over-suppressing a *live* attempt's verdict
     is the worse failure. Tolerant of no activity context (direct calls, unit
     tests) and of missing fields, mirroring ``_effective_budget``.
+    A third signal needs no server round trip: the attempt's own heartbeats.
+    ``heartbeat_timeout`` is measured by the server from the last beat it
+    received, and a beat cannot arrive before it was sent, so an attempt that
+    has not sent one for longer than that timeout has certainly been timed out.
+    This is the signal that covers a worker frozen mid-attempt and resumed: its
+    probe can fail in the first second back, before the heartbeat loop has had
+    a chance to learn from the server that the attempt is gone.
     """
     try:
         cancelled = activity.is_cancelled()
@@ -1059,6 +1416,10 @@ def _attempt_is_live() -> bool:
     if cancelled:
         return False
     info = _activity_info()
+    heartbeat_timeout = getattr(info, "heartbeat_timeout", None)
+    if beats is not None and isinstance(heartbeat_timeout, timedelta):
+        if time.monotonic() - beats.last_sent > heartbeat_timeout.total_seconds():
+            return False
     started_time = getattr(info, "started_time", None)
     start_to_close = getattr(info, "start_to_close_timeout", None)
     if not isinstance(started_time, datetime) or not isinstance(
@@ -1108,54 +1469,15 @@ def _current_attempt() -> int:
 def _is_final_attempt(attempts: int) -> bool:
     """Whether this is the gate activity's last retry attempt.
 
-    A slow source deserves the retries the app's policy grants, so a no-verdict
-    only becomes a verdict once they are exhausted. Reads the app's own
-    ``attempts`` rather than a module default: a one-attempt app has no retry to
-    wait for, and deferring its verdict would mean never reaching one. Outside an
-    activity context (direct calls, unit tests) the answer is ``True`` —
-    enforcement must never be skipped just because the attempt is unknown.
+    Consulted only by the storage probes: one flaky probe must not block a
+    hard-mode run on its first attempt, so a failed probe becomes a verdict once
+    the app's attempts are exhausted. The handler path never defers; a source
+    fault is a verdict on the attempt it happens. Outside an activity context
+    (direct calls, unit tests) the answer is ``True``, so enforcement is never
+    skipped because the attempt is unknown.
     """
     attempt = getattr(_activity_info(), "attempt", None)
     return True if attempt is None else attempt >= max(1, attempts)
-
-
-def _unverifiable_result(exc: BaseException, app_name: str) -> PreflightOutput:
-    """Build the ``NOT_READY`` verdict for a source the gate could not verify.
-
-    Shaped as a normal handler verdict with one failed check so the existing
-    block/emit machinery (``_build_block_error``, ``_check_matrix_json``) applies
-    unchanged — a no-verdict outcome reports through the same surfaces as a real
-    one instead of needing a parallel path.
-    """
-    if isinstance(exc, AppError):
-        details = exc.to_failure_details()
-        if details.app_name is None:
-            details = details.model_copy(update={"app_name": app_name})
-    else:
-        # An untyped handler crash is an app fault, not a timeout — INTERNAL with
-        # classification_pending is what the taxonomy has for "unclassified, needs
-        # a typed leaf". Labelling it TIMEOUT would report every AttributeError to
-        # the Automation Engine as a slow source.
-        #
-        # The raw message is sanitized, never interpolated: a driver exception
-        # routinely carries the connection string (see credentials/errors.py), and
-        # this text lands on FailureDetails.message, in Temporal history, and in
-        # ClickHouse. to_failure_details() sanitizes cause_repr but not message.
-        details = InternalError(
-            message=f"Preflight could not be verified: {sanitize_cause_repr(exc)}",
-            app_name=app_name,
-            cause=exc,
-            retryable=False,
-            component="preflight_handler",
-            classification_pending=True,
-        ).to_failure_details()
-    return PreflightOutput(
-        status=PreflightStatus.NOT_READY,
-        message=details.message,
-        checks=[
-            PreflightCheck(name=UNVERIFIABLE_CHECK_NAME, passed=False, error=details)
-        ],
-    )
 
 
 # Floor below which the gate skips the storage probes rather than starting a
@@ -1278,7 +1600,7 @@ async def _append_storage_checks(
     stays where it lives today.
 
     Deliberate taxonomy note: the gate fails **open** when its own plumbing
-    *raises* (see ``_is_gate_broken``); this check instead returns a *verdict*
+    *raises* (see :func:`_plumbing_error`); this check instead returns a *verdict*
     that a confirmed storage failure — surviving the activity's retry policy —
     blocks a hard-mode run. A store that rejects every upload for hours is not
     the transient blip the fail-open exists to protect.
@@ -1518,7 +1840,7 @@ def build_preflight_gate_activity(
     handler: Handler,
     app_name: str,
     *,
-    enforce: bool = False,
+    mode: PreflightGateMode = PreflightGateMode.SOFT,
     budget_seconds: float = GATE_TIMEOUT_DEFAULT_SECONDS,
     attempts: int = GATE_ATTEMPTS_DEFAULT,
     verify_storage: bool = False,
@@ -1533,39 +1855,41 @@ def build_preflight_gate_activity(
     because the gate is mandatory. Binds the same per-invocation handler context
     the HTTP and SDR paths use (:func:`bind_invocation_context`).
 
-    ``enforce`` is the gate's posture for this app, resolved once at worker
-    build (see ``_resolve_gate_enforcement`` in the worker). Soft (``False``,
-    the default) never raises: the verdict stays honest ``NOT_READY``, the run
-    proceeds, and the dodged block is emitted as ``outcome="would_block"`` so
-    connector-pulse can rank apps whose checks would have blocked real runs.
-    Hard (``True``) is the per-app opt-in: it raises and aborts the run. The
-    handler is never consulted about posture — verdict and enforcement are
-    deliberately separate concerns.
+    ``mode`` is the gate's posture for this app, resolved once at worker build by
+    :func:`resolve_gate_mode`. Soft (the default) never raises: the verdict
+    stays honest ``NOT_READY``, the run proceeds, and the dodged block is emitted
+    as ``outcome="would_block"`` so connector-pulse can rank apps whose checks
+    would have blocked real runs. Hard is the per-app opt-in: it raises and
+    aborts the run. The handler is never consulted about posture — verdict and
+    enforcement are deliberately separate concerns.
 
     ``budget_seconds`` is the handler's check budget, already clamped by
-    :func:`resolve_gate_budget_seconds`. The activity enforces it itself rather
-    than trusting the handler to self-police: it is stamped on
-    ``PreflightInput.timeout_seconds`` *net of credential resolution* and also
-    applied as an ``asyncio.wait_for``. Enforcing here is what makes mode
-    applicable at all — if Temporal's timeout killed the activity first, there
-    would be no frame left to classify the failure or consult ``enforce``.
+    :func:`gate_budget_seconds`. The activity enforces it itself rather than
+    trusting the handler to self-police: credential resolution runs under it,
+    what remains is stamped on ``PreflightInput.timeout_seconds``, and the
+    handler call is waited on with ``asyncio.wait`` for exactly that number and
+    cancelled at the deadline without being awaited. Enforcing here is what
+    makes mode applicable at all — if Temporal's timeout killed the activity
+    first, there would be no frame left to classify the failure or consult the
+    mode.
 
-    Note the one case this cannot cover: ``wait_for`` only cancels at an await
-    point, so a handler doing blocking synchronous I/O on the event loop is not
-    interrupted, and that run still falls through to the workflow's mode-blind
-    fail-open. Handlers must keep their probes awaitable.
+    Note the one case this cannot cover: cancellation lands at an await point,
+    so a handler doing blocking synchronous I/O on the event loop is not
+    interrupted. Temporal then ends the frame, and the workflow applies the mode
+    to that from the failure chain (:func:`classify_gate_failure`). Handlers
+    must keep their probes awaitable and bounded.
     """
+    enforce = mode.enforces
 
     @activity.defn(name=preflight_gate_activity_name(app_name))
     async def preflight_gate(input: PreflightGateInput) -> PreflightOutput:
         entry = input.entrypoint or "<implicit>"
-        gate_mode = "hard" if enforce else "soft"
 
         def _emit_outcome(
-            outcome: str,
+            outcome: PreflightRowOutcome,
             reason: str,
             verdict: PreflightOutput,
-            classification: str,
+            classification: PreflightClassification,
             audience: str | None = None,
             exc_info: BaseException | None = None,
         ) -> None:
@@ -1602,7 +1926,7 @@ def build_preflight_gate_activity(
             the three call sites instead of a rule each has to remember.
             """
             checks = verdict.checks
-            if not _attempt_is_live():
+            if not _attempt_is_live(beats):
                 # WARNING, not DEBUG: a handler outrunning its Temporal deadline
                 # is a real anomaly, and at DEBUG a suppressed orphan would be
                 # indistinguishable from a gate that never ran — in the series
@@ -1613,37 +1937,23 @@ def build_preflight_gate_activity(
                     _current_attempt(),
                 )
                 return
-            if (
-                outcome == "blocked"
-                or classification == CLASSIFICATION_SOURCE_UNVERIFIABLE
-            ):
-                emit = logger.error
-            elif outcome == "proceeded" and any(not c.passed for c in checks):
-                emit = logger.warning
-            else:
-                emit = logger.info
-            extra: dict[str, Any] = {}
-            if audience is not None:
-                extra[FAILURE_AUDIENCE_KEY] = audience
-            if exc_info is not None:
-                extra["exc_info"] = exc_info
-            emit(
-                PREFLIGHT_OUTCOME_EVENT,
-                outcome=outcome,
-                reason=reason,
+            emit = getattr(logger, gate_outcome_level(outcome, classification, checks))
+            row = gate_outcome_row(
                 app_name=app_name,
                 entrypoint=entry,
-                checks=len(checks),
-                **{
-                    CHECK_MATRIX_KEY: _check_matrix_json(checks),
-                    GATE_MODE_KEY: gate_mode,
-                    GATE_CLASSIFICATION_KEY: classification,
-                    GATE_DURATION_KEY: round((time.monotonic() - started) * 1000, 1),
-                    GATE_TIMEOUT_KEY: int(budget_seconds),
-                    GATE_ATTEMPTS_KEY: _current_attempt(),
-                },
-                **extra,
+                outcome=outcome,
+                reason=reason,
+                checks=checks,
+                mode=mode,
+                classification=classification,
+                duration_ms=round((time.monotonic() - started) * 1000, 1),
+                budget_seconds=int(budget_seconds),
+                attempt=_current_attempt(),
+                audience=audience,
             )
+            if exc_info is not None:
+                row["exc_info"] = exc_info
+            emit(PREFLIGHT_OUTCOME_EVENT, **row)
             _persist(verdict)
 
         def _persist(verdict: PreflightOutput) -> None:
@@ -1680,34 +1990,24 @@ def build_preflight_gate_activity(
                 )
 
         def _no_verdict(exc: BaseException) -> PreflightOutput:
-            """Apply gate mode to a source we could not verify.
+            """Apply gate mode to a source we could not verify, on any attempt.
 
             Raises the deliberate block in hard mode, returns the honest
-            ``NOT_READY`` in soft. Plumbing failures never reach here — they
-            propagate to the workflow's fail-open.
+            ``NOT_READY`` in soft. Everything that escapes the handler lands
+            here: a typed leaf is the handler's statement about the source, and
+            an untyped crash is an app fault — neither is the gate's plumbing,
+            so neither may fail open. Only the gate's own frames (credential
+            resolution, the store probes) raise past this.
             """
-            if not _is_final_attempt(attempts):
-                # Let the app's retry policy have its turn; a slow source may
-                # answer next attempt. Not the block error type, so the workflow
-                # does not abort on a first slow attempt.
-                from application_sdk.execution.errors import (  # noqa: PLC0415 — avoid import cycle at module load
-                    ApplicationError,
-                )
-
-                raise ApplicationError(
-                    "Preflight could not reach a verdict: "
-                    f"{sanitize_cause_repr(exc)}",
-                    type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
-                )
-            unverifiable = _unverifiable_result(exc, app_name)
-            block_error = _build_block_error(unverifiable, app_name)
+            unverifiable = unverifiable_preflight_result(exc, app_name)
+            block_error = _build_block_error(unverifiable, app_name, _current_attempt())
             _emit_outcome(
-                PreflightRowOutcome.BLOCKED.value
+                PreflightRowOutcome.BLOCKED
                 if enforce
-                else PreflightRowOutcome.WOULD_BLOCK.value,
+                else PreflightRowOutcome.WOULD_BLOCK,
                 block_error.details[0].code,
                 unverifiable,
-                CLASSIFICATION_SOURCE_UNVERIFIABLE,
+                PreflightClassification.SOURCE_UNVERIFIABLE,
                 audience=block_error.details[0].audience.value,
                 # The exception, not exc_info=True: on the budget-overrun path this
                 # runs outside any ``except`` (the AppTimeoutError is constructed,
@@ -1715,7 +2015,7 @@ def build_preflight_gate_activity(
                 # nothing — on the one path where the cause is the whole diagnostic.
                 exc_info=exc,
             )
-            if enforce:
+            if enforce and _attempt_is_live(beats):
                 raise block_error
             return unverifiable
 
@@ -1739,42 +2039,44 @@ def build_preflight_gate_activity(
         )
         _, heartbeat_interval = gate_heartbeat_timings(s2c_seconds)
         heartbeat_stop = asyncio.Event()
+        beats = _Beats()
         heartbeat_task = asyncio.ensure_future(
             auto_heartbeat_loop(
                 interval_seconds=heartbeat_interval,
-                heartbeat_fn=_gate_heartbeat,
+                heartbeat_fn=lambda: _gate_heartbeat(beats),
                 stop_event=heartbeat_stop,
                 task_name=preflight_gate_activity_name(app_name),
             )
         )
         try:
-            # Resolve inside the activity (the workflow forwarded only references).
+            # Resolve inside the activity (the workflow forwarded only references),
+            # under the same deadline the handler gets: a hung vault must end at
+            # the budget as the gate's own fault, not at Temporal's kill with no
+            # classification at all.
+            resolution_deadline = budget - _min_handler_seconds(budget)
             try:
-                credentials, credentials_by_name = await _resolve_gate_credentials(
-                    input
+                credentials, credentials_by_name = await asyncio.wait_for(
+                    _resolve_gate_credentials(input), timeout=resolution_deadline
                 )
             except Exception as e:
                 # Resolution is gate plumbing, so the default here is the opposite of
                 # the handler path below: only a *provable* credential absence is a
                 # config fact this run can be blamed for. Everything else — including
                 # the resolver's collapsed "unexpected vault error" not-founds —
-                # propagates and fails open.
-                if not _is_definitive_credential_absence(e):
-                    raise
-                return _no_verdict(e)
+                # propagates and fails open. asyncio.TimeoutError is the builtin
+                # TimeoutError, which a socket can raise too, so only the clock says
+                # whether the budget was really spent.
+                if _is_definitive_credential_absence(e):
+                    return _no_verdict(e)
+                if time.monotonic() - started >= resolution_deadline:
+                    raise _plumbing_error(
+                        _resolution_exhausted_budget(budget),
+                        app_name,
+                        _current_attempt(),
+                    ) from e
+                raise _plumbing_error(e, app_name, _current_attempt()) from e
 
             remaining = budget - (time.monotonic() - started)
-            if remaining < _min_handler_seconds(budget):
-                # Resolution ate the budget. That is the secret store being slow, not
-                # the source being unready — fail open rather than calling the handler
-                # with no time and blaming it for the timeout.
-                raise DependencyUnavailableError(
-                    message=(
-                        "Credential resolution consumed the entire preflight budget "
-                        f"({budget:.0f}s); no time left to verify the source"
-                    ),
-                    service="secret_store",
-                )
 
             # Floor of the remaining budget, and the one number the handler is told —
             # the timeout message quotes it too, so what we enforce, what we report,
@@ -1837,7 +2139,7 @@ def build_preflight_gate_activity(
                     check = asyncio.ensure_future(
                         handler.preflight_check(preflight_input)
                     )
-                    done, _ = await asyncio.wait({check}, timeout=remaining)
+                    done, _ = await asyncio.wait({check}, timeout=handler_budget)
                     if done:
                         result = check.result()
                     else:
@@ -1858,7 +2160,7 @@ def build_preflight_gate_activity(
                 # A handler that raises the deliberate block itself already carries a
                 # verdict and its own emitted row; pass it straight through rather
                 # than re-wrapping it as an unverifiable source.
-                if _is_gate_broken(e) or is_preflight_block(e):
+                if is_preflight_block(e):
                     raise
                 return _no_verdict(e)
 
@@ -1884,20 +2186,7 @@ def build_preflight_gate_activity(
                 # hard-mode run on its first attempt. Same deferral the handler
                 # no-verdict path uses; the retried attempt re-runs everything.
                 if not _is_final_attempt(attempts):
-                    from application_sdk.execution.errors import (  # noqa: PLC0415 — avoid import cycle at module load
-                        ApplicationError,
-                    )
-
-                    failed_stores = ", ".join(
-                        c.name
-                        for c in result.checks
-                        if not c.passed and c.name.startswith("objectStoreAccess:")
-                    )
-                    raise ApplicationError(
-                        "Preflight storage checks failed; deferring to the gate's "
-                        f"retry policy ({failed_stores})",
-                        type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
-                    )
+                    raise _build_no_verdict_error(result, app_name, _current_attempt())
             # The outcome event is the gate's queryable row (connector-pulse builds the
             # dashboard from it). The activity holds the verdict, so it emits the
             # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
@@ -1909,26 +2198,26 @@ def build_preflight_gate_activity(
             # (workflow_run_id, outcome) key kept both rows of an orphaned
             # attempt-1 + attempt-2 pair, which is CONNECT-1170 gap 1.
             if result.status is PreflightStatus.NOT_READY:
-                block_error = _build_block_error(result, app_name)
+                block_error = _build_block_error(result, app_name, _current_attempt())
                 _emit_outcome(
-                    PreflightRowOutcome.BLOCKED.value
+                    PreflightRowOutcome.BLOCKED
                     if enforce
-                    else PreflightRowOutcome.WOULD_BLOCK.value,
+                    else PreflightRowOutcome.WOULD_BLOCK,
                     block_error.details[0].code,
                     result,
-                    CLASSIFICATION_VERDICT,
+                    PreflightClassification.VERDICT,
                     audience=block_error.details[0].audience.value,
                 )
-                if enforce:
+                if enforce and _attempt_is_live(beats):
                     raise block_error
                 # Soft: the verdict stays honest NOT_READY; the gate just does not
                 # enforce it. The would_block row above is the loud record.
                 return result
             _emit_outcome(
-                PreflightRowOutcome.PROCEEDED.value,
-                result.status.value,
+                PreflightRowOutcome.PROCEEDED,
+                _proceeded_reason(result),
                 result,
-                CLASSIFICATION_VERDICT,
+                PreflightClassification.VERDICT,
             )
             return result
         finally:

@@ -132,6 +132,22 @@ Two consequences for changes here:
   segment, which is not a name and would collapse every such connection onto a
   single shared directory.
 
+## The preflight gate's Temporal failure payload
+
+| | |
+|---|---|
+| **Produced by** | `_gate_error()` and `_plumbing_error()` in `application_sdk/execution/_temporal/preflight_gate.py`, on every error that leaves the `{app}:preflight` activity, and on the block the workflow raises for a dead gate frame (`build_workflow_block()`, which routes through `_gate_error()`) |
+| **Shape** | An `ApplicationError` whose `details[0]` is one `FailureDetails` (category, code, audience, retryable, message, suggested_action, evidence) and whose `details[1]` is `{"status": ..., "checks": [...], "attempt": N}`, every check in wire form. `status` is `not_ready` on every exit the gate attributes to the source, and `null` on a gate-plumbing failure, where no verdict was reached and the run proceeds. `attempt` is the activity attempt that raised. The wire `type` is `PreflightFailed` for the block, `PreflightNoVerdict` for a non-final attempt's retry marker, and the raising class name (e.g. `DependencyUnavailableError`) for a gate-plumbing failure. `details[0]` is present even when the raising leaf's own evidence cannot be serialised; the gate synthesises one rather than leave the position empty |
+| **Read by** | The Automation Engine, which attributes a failed run from `details[0]` of the terminal failure and of the gate activity's failure; the Temporal UI's activity pane, which renders `details[1]`; the workflow itself, which reads `attempt` and the marker's evidence off a killed frame's chain |
+| **Pinned by** | `TestEveryExitCarriesFailureDetails`, `TestPlumbingPayloadNeverLosesItsPrimary` and `TestEveryGateErrorCarriesTheAttempt` in `tests/unit/execution/test_preflight_gate_classification.py` |
+
+Every exit shares one builder on purpose. A consumer must be able to read a killed attempt's
+chain and find the previous attempt's typed evidence, so the retry marker cannot carry less
+than the block does; and a plumbing failure that left the activity as a bare class name gave
+the reader nothing to attribute at all. The workflow parses this payload inside its own
+`except`, so it reads tolerantly: a payload it cannot parse is `gate_broken` and fails open
+rather than failing the workflow task.
+
 ## The preflight-results write route
 
 The one entry here that runs the other way: the SDK is the **caller**, not the
