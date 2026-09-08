@@ -1397,14 +1397,24 @@ class SqlApp(App):
         such an override: concatenate, assert, return.
 
         **Why a helper and not a documented recipe.** ``super().run()`` calls
-        ``App.verify_refs`` on the four refs it drove and then returns, so a
-        ref appended afterwards is never asserted. An override that
-        concatenates and returns a ``model_copy`` therefore ships an
-        unverified entity while looking, at the call site, exactly like it
-        verified everything — which is the same silent shortfall FND-1790 is
-        about, one layer up. Documenting the extra ``verify_refs`` call would
-        leave a step that is invisible when omitted; this method removes the
-        chance to omit it.
+        ``App.verify_refs`` on the four refs it drove and then returns, so an
+        override that concatenates a fifth ref and returns a ``model_copy``
+        ships it unverified while looking, at the call site, exactly like it
+        verified everything — the same silent shortfall FND-1790 is about, one
+        layer up. Documenting the extra ``verify_refs`` call would leave a step
+        that is invisible when omitted; this method removes the chance to omit
+        it.
+
+        **Using ``App.upload_refs`` is not a substitute.** It gives partial
+        cover — it fails if a declared ref cannot be materialised, and it
+        verifies the copies it delivered — but it checks the *destination*
+        after the fact. It does not assert the declaration against the
+        deployment store before delivery starts, and it does not check
+        containment in ``transformed_data_prefix``. So a missing ref surfaces
+        as a materialisation failure part-way through a delivery rather than as
+        a ``StorageHandoffIncompleteError`` naming the key, and a ref that
+        landed outside the prefix is not caught at all. Call this first and
+        hand ``upload_refs`` the finalised declaration.
 
         Verifies the **whole** declaration, not just *extra*. The four default
         refs were already checked inside ``super().run()``, so those HEADs are
