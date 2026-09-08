@@ -58,6 +58,45 @@ failure mode. Because it now concludes on every PR, it can be added to branch
 protection directly, without the always-concluding-gate wrapper that
 path-filtered required checks need (see `sdk-gate.yaml` for that pattern).
 
+## An artifact upload retry must use a DIFFERENT artifact name
+
+`actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403
+as non-retryable and fails the step, so every upload on a gating path is paired
+with a retry (first attempt `continue-on-error: true`, companion step guarded on
+`steps.<id>.outcome == 'failure'`). Three rules the pairing has to follow:
+
+1. **The retry uploads under `<first attempt's name>-retry`.** A failed finalize
+   leaves an artifact record that holds the name for the rest of the run but
+   never becomes visible: it is absent from `GET /actions/runs/<id>/artifacts`,
+   and `overwrite: true` deletes by looking the name up in that same listing —
+   so it finds nothing, skips (on a `core.debug` line, invisible in the log),
+   and `CreateArtifact` then 409s on the record it could not see:
+
+   ```
+   Upload test results          FinalizeArtifact -> (403) Forbidden   [warning]
+   Upload test results (retry)  CreateArtifact   -> (409) Conflict:
+                                an artifact with this name already exists
+   ```
+
+   A same-named retry can therefore never absorb the one failure it exists for,
+   and on a fatal path it turns a warning into a red job after all the expensive
+   work has passed. `overwrite: true` stays on the retry for the case it does
+   handle: re-running a failed job inside a run that already holds the artifact.
+
+2. **A backoff step sits between the two attempts** (`run: sleep 20`, guarded on
+   the same outcome). The 403 comes from an intermediary having a moment; an
+   immediate retry lands in the same window and both attempts fail together.
+
+3. **Consumers resolve these artifacts by glob**, `pattern: <name>*` with
+   `merge-multiple: true`, not by exact `name:` — otherwise the retry's artifact
+   is invisible to them. Note that with `pattern:` (unlike `name:`)
+   `download-artifact` treats "nothing matched" as **success**, so any step
+   gated on `steps.<download>.outcome` has to move onto `hashFiles(...)`.
+
+`.github/scripts/tests/test_artifact_upload_retry.py` enforces all three over
+every workflow and composite action in this repo, and `EXEMPT` there carries the
+reason for each upload that does not need the hardening.
+
 ## Label gates must be event-aware
 
 **Rule:** if a workflow can receive a `labeled` event, every job gated on a

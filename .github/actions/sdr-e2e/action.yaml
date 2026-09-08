@@ -1440,6 +1440,14 @@ runs:
         path: results/
         retention-days: 14
 
+    # A finalize 403 comes from an intermediary having a moment, and the
+    # retry runs about a second later — well inside the same window. Wait
+    # it out, so the two attempts fail independently or not at all.
+    - name: Wait before the upload retry
+      if: steps.upload-e2e-results.outcome == 'failure'
+      shell: bash
+      run: sleep 20
+
     - name: Upload test results (retry)
       if: steps.upload-e2e-results.outcome == 'failure'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -1447,7 +1455,12 @@ runs:
         # artifact-suffix keeps parallel matrix legs from colliding on this
         # name (upload-artifact rejects duplicate names within a run); empty
         # suffix preserves the historical single-artifact name.
-        name: sdr-integration-tests-${{ inputs.app-name }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}-results
+        # A DISTINCT name, never the first attempt's: a FinalizeArtifact
+        # failure leaves an unfinalized record holding that name for the whole
+        # run. The list API cannot see it, so `overwrite` cannot clear it and
+        # CreateArtifact 409s — a same-named retry could never have worked.
+        # Consumers resolve this artifact by `<name>*` glob, not exact name.
+        name: sdr-integration-tests-${{ inputs.app-name }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}-results-retry
         path: results/
         retention-days: 14
         overwrite: true

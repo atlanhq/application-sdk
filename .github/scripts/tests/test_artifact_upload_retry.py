@@ -25,9 +25,35 @@ had an outcome guard. Both let a genuinely unretried upload keep the guard green
 
 Here a retry is an `actions/upload-artifact` step whose `if:` is guarded on
 `steps.<id>.outcome == 'failure'` where `<id>` is another upload step **in the
-same job or composite**, and which uploads the same artifact name and path. That
-is checked, not assumed: a companion step that guards on the right outcome but
-uploads something else, or is not an upload at all, does not satisfy the pairing.
+same job or composite**, and which uploads the same path under the first
+attempt's name plus `-retry`. That is checked, not assumed: a companion step
+that guards on the right outcome but uploads something else, or is not an upload
+at all, does not satisfy the pairing.
+
+Why the retry must NOT reuse the first attempt's name
+-----------------------------------------------------
+It was written that way originally, with `overwrite: true` believed to clear
+whatever the failed attempt left behind. It cannot, and the retry could
+therefore never succeed against the very failure it exists for:
+
+    Upload test results          FinalizeArtifact -> (403) Forbidden   [warning]
+    Upload test results (retry)  CreateArtifact   -> (409) Conflict:
+                                 an artifact with this name already exists
+
+A failed *finalize* leaves an artifact record that holds the name for the rest
+of the run but never becomes visible: it is absent from the run's artifact
+listing (verified against the run above — the leg's artifact was simply not
+there), and `overwrite` deletes by looking the name up in that same listing, so
+it finds nothing to delete and `CreateArtifact` then 409s on the record it could
+not see. The name is burnt for the whole run; only a different one can land.
+
+`overwrite: true` stays on the retry for the case it does handle — re-running a
+failed job inside a run that already holds that artifact — which is why it is
+still asserted below.
+
+And the retry waits before it runs: the 403 comes from an intermediary having a
+moment, and firing the second attempt a second later puts it inside the same
+window. That backoff is asserted too.
 """
 
 from __future__ import annotations
@@ -43,6 +69,10 @@ UPLOAD_ACTION = "actions/upload-artifact"
 
 # `steps.<id>.outcome == 'failure'` — the only shape that makes a step a retry.
 OUTCOME_GUARD_RE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outcome\s*==\s*'failure'")
+
+# What a retry appends to the first attempt's artifact name. Consumers resolve
+# these artifacts by `<name>*` glob because of it.
+RETRY_SUFFIX = "-retry"
 
 # Uploads that do NOT need retry hardening, each with the reason it is exempt.
 # Keyed by (path suffix, artifact name) so an exemption cannot silently widen to
@@ -246,12 +276,14 @@ def test_every_gating_upload_has_a_matching_retry_upload():
             )
             continue
 
-        # A companion that uploads a different artifact is not a retry of this one.
+        # A companion that uploads a different artifact is not a retry of this
+        # one — but it must not reuse the name either: same-named retries 409.
         for companion in companions:
-            if _artifact_name(companion) != _artifact_name(step):
+            expected = _artifact_name(step) + RETRY_SUFFIX
+            if _artifact_name(companion) != expected:
                 problems.append(
                     f"{where}: its retry uploads artifact "
-                    f"'{_artifact_name(companion)}', not '{_artifact_name(step)}'"
+                    f"'{_artifact_name(companion)}', not '{expected}'"
                 )
             if _artifact_path(companion) != _artifact_path(step):
                 problems.append(
@@ -264,8 +296,8 @@ def test_every_gating_upload_has_a_matching_retry_upload():
     assert not problems, (
         "Every artifact upload on a gating path needs a companion "
         f"`{UPLOAD_ACTION}` step, in the same job/composite, guarded on the first "
-        "attempt's outcome and uploading the same name and path (see any "
-        "conformance-*.yaml for the pattern) — or an EXEMPT entry with a "
+        f"attempt's outcome and uploading the same path under `<name>{RETRY_SUFFIX}` "
+        "(see any conformance-*.yaml for the pattern) — or an EXEMPT entry with a "
         "reason:\n  " + "\n  ".join(problems)
     )
 
@@ -283,9 +315,11 @@ def test_first_attempt_never_fails_the_job_before_the_retry_runs():
     )
 
 
-def test_retries_overwrite_so_a_partial_artifact_cannot_block_them():
-    """A failed finalize can leave a same-named artifact behind; without
-    overwrite the retry 409s on it and the hardening is worthless."""
+def test_retries_overwrite_so_a_job_rerun_cannot_block_them():
+    """Re-running a failed job keeps the run's existing artifacts, so a retry
+    landing on a name the run already carries needs overwrite. (It does NOT
+    rescue a same-named retry after a finalize 403 — see the module docstring;
+    that is what the distinct name below is for.)"""
     bad = []
     for rel, scope, steps in _scopes():
         _, retries = _classify(steps)
@@ -294,6 +328,66 @@ def test_retries_overwrite_so_a_partial_artifact_cannot_block_them():
                 if _with(companion).get("overwrite") is not True:
                     bad.append(_label(rel, scope, companion))
     assert not bad, "Retry attempts must set `overwrite: true`:\n  " + "\n  ".join(bad)
+
+
+def test_no_retry_reuses_its_first_attempts_artifact_name():
+    """The whole point, stated over the repo rather than over one pairing.
+
+    A retry on the first attempt's name is guaranteed to fail with 409 against
+    the finalize 403 it exists to absorb, so it is worse than no retry: it
+    turns a warning into a red job on a gating path.
+    """
+    bad = []
+    for rel, scope, steps in _scopes():
+        first_attempts, retries = _classify(steps)
+        by_id = {s.get("id"): s for s in first_attempts if s.get("id")}
+        for target_id, companions in retries.items():
+            first = by_id.get(target_id)
+            if first is None:
+                continue
+            for companion in companions:
+                if _artifact_name(companion) == _artifact_name(first):
+                    bad.append(
+                        f"{_label(rel, scope, companion)}: uploads "
+                        f"'{_artifact_name(first)}', the name the failed attempt "
+                        f"already burnt for the run"
+                    )
+    assert not bad, (
+        "A retry must upload under its own name "
+        f"(`<first name>{RETRY_SUFFIX}`):\n  " + "\n  ".join(bad)
+    )
+
+
+def _guards_on(step: dict, step_id: str) -> bool:
+    return step_id in OUTCOME_GUARD_RE.findall(str(step.get("if", "")))
+
+
+def test_every_retry_waits_before_it_runs():
+    """A finalize 403 is an intermediary having a moment. The retry fires about
+    a second after the first attempt, so with no pause it lands in the same
+    window and both attempts fail together — which is the one case that still
+    reddens the job."""
+    problems = []
+    for rel, scope, steps in _scopes():
+        _, retries = _classify(steps)
+        for target_id, companions in retries.items():
+            waits = [
+                s
+                for s in steps
+                if "run" in s
+                and "sleep" in str(s.get("run", ""))
+                and _guards_on(s, target_id)
+            ]
+            if not waits:
+                for companion in companions:
+                    problems.append(
+                        f"{_label(rel, scope, companion)}: no `run: sleep …` step "
+                        f"guarded on steps.{target_id}.outcome == 'failure'"
+                    )
+    assert not problems, (
+        "Each retry needs a backoff step ahead of it, guarded on the same "
+        "outcome as the retry itself:\n  " + "\n  ".join(problems)
+    )
 
 
 def test_a_retry_is_not_identified_by_its_name():

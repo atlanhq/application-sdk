@@ -2452,7 +2452,11 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
-          pattern: sdr-integration-tests-${{ inputs.app-name }}*-results
+          # Trailing `*` as well as the middle one: a leg whose first upload
+          # attempt hit the artifact service's finalize 403 lands under
+          # `…-results-retry` (see the retry step in sdr-e2e), and a pattern
+          # anchored on `-results` would silently skip that leg.
+          pattern: sdr-integration-tests-${{ inputs.app-name }}*-results*
           merge-multiple: true
           path: connector-results
 
@@ -2633,14 +2637,20 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
-          name: unit-test-coverage
+          # Glob + merge-multiple rather than the bare name: the tier's retry
+          # attempt uploads under `<name>-retry`, and merge-multiple keeps the
+          # single-artifact layout the CLI's globs expect.
+          pattern: unit-test-coverage*
+          merge-multiple: true
           path: unit-evidence
 
       - name: Download integration evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
-          name: integration-test-results
+          # Glob + merge-multiple, for the same reason as the unit tier above.
+          pattern: integration-test-results*
+          merge-multiple: true
           path: integration-evidence
 
       # `pattern:` with merge-multiple LEFT OFF, and that is the whole point:
@@ -2661,7 +2671,11 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
-          pattern: sdr-integration-tests-${{ inputs.app-name }}*-results
+          # Trailing `*` as well as the middle one: a leg whose first upload
+          # attempt hit the artifact service's finalize 403 lands under
+          # `…-results-retry` (see the retry step in sdr-e2e), and a pattern
+          # anchored on `-results` would silently skip that leg.
+          pattern: sdr-integration-tests-${{ inputs.app-name }}*-results*
           path: e2e-evidence
 
       # ── What this repo is WIRED for, whether or not e2e ran (FND-34) ───────
@@ -2761,12 +2775,24 @@ jobs:
           path: results/test-readiness.json
           retention-days: 14
 
+      # A finalize 403 comes from an intermediary having a moment, and the
+      # retry runs about a second later — well inside the same window. Wait
+      # it out, so the two attempts fail independently or not at all.
+      - name: Wait before the upload retry
+        if: steps.upload-scorecard.outcome == 'failure'
+        run: sleep 20
+
       - name: Upload scorecard (retry)
         if: steps.upload-scorecard.outcome == 'failure'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: test-readiness-scorecard
+          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
+          # failure leaves an unfinalized record holding that name for the whole
+          # run. The list API cannot see it, so `overwrite` cannot clear it and
+          # CreateArtifact 409s — a same-named retry could never have worked.
+          # Consumers resolve this artifact by `<name>*` glob, not exact name.
+          name: test-readiness-scorecard-retry
           path: results/test-readiness.json
           retention-days: 14
           overwrite: true

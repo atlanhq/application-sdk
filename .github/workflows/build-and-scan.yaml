@@ -138,11 +138,23 @@ jobs:
           path: /tmp/image.tar
           retention-days: 7
 
+      # A finalize 403 comes from an intermediary having a moment, and the
+      # retry runs about a second later — well inside the same window. Wait
+      # it out, so the two attempts fail independently or not at all.
+      - name: Wait before the upload retry
+        if: steps.upload-image.outcome == 'failure'
+        run: sleep 20
+
       - name: Upload image artifact (retry)
         if: steps.upload-image.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: docker-image
+          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
+          # failure leaves an unfinalized record holding that name for the whole
+          # run. The list API cannot see it, so `overwrite` cannot clear it and
+          # CreateArtifact 409s — a same-named retry could never have worked.
+          # Consumers resolve this artifact by `<name>*` glob, not exact name.
+          name: docker-image-retry
           path: /tmp/image.tar
           retention-days: 7
           overwrite: true
@@ -159,7 +171,13 @@ jobs:
         if: inputs.image == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: docker-image
+          # `pattern` + merge-multiple, not the bare name: the upload's retry
+          # attempt lands under `docker-image-retry` (it has to — see that
+          # step), and exactly one of the two names ever exists in a run, so
+          # the glob resolves to a single artifact flattened into /tmp either
+          # way.
+          pattern: docker-image*
+          merge-multiple: true
           path: /tmp
 
       - name: Load local image
@@ -231,12 +249,24 @@ jobs:
           path: /tmp/trivy_results.json
           retention-days: 7
 
+      # A finalize 403 comes from an intermediary having a moment, and the
+      # retry runs about a second later — well inside the same window. Wait
+      # it out, so the two attempts fail independently or not at all.
+      - name: Wait before the upload retry
+        if: steps.upload-trivy.outcome == 'failure'
+        run: sleep 20
+
       - name: Upload Trivy results (retry)
         if: steps.upload-trivy.outcome == 'failure'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: trivy-results
+          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
+          # failure leaves an unfinalized record holding that name for the whole
+          # run. The list API cannot see it, so `overwrite` cannot clear it and
+          # CreateArtifact 409s — a same-named retry could never have worked.
+          # Consumers resolve this artifact by `<name>*` glob, not exact name.
+          name: trivy-results-retry
           path: /tmp/trivy_results.json
           retention-days: 7
           overwrite: true
@@ -274,7 +304,10 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
-          name: trivy-results
+          # Glob, not the bare name: the upload's retry attempt lands under
+          # `trivy-results-retry`. Only one of the two ever exists in a run.
+          pattern: trivy-results*
+          merge-multiple: true
           path: /tmp
 
       - name: Check against allowlist
