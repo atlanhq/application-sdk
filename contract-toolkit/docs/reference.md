@@ -202,13 +202,22 @@ Streaming is a different execution, not a faster one: the batch shell's workflow
 the entrypoint's Iceberg events table, while the streaming shard hands the DAG its
 events inline and never writes that table. Those are two different workflow types in
 the app, so one `workflowType` (or `workflowTypeOverride` on NativeApp.pkl) cannot
-serve both. When streaming is on, the
-extract node renders this type and gains `args.batch = "$.event.batch"`.
+serve both. When streaming is on, the extract node renders this type and gains
+`args.batch = "$.event.batch"`.
 
-Omitting it is refused at eval time. Without that refusal the failure is silent and
-was observed end to end on a tenant: AE signals the shard, the shard runs the DAG, the
-**batch** workflow starts with no events in its arguments, and nothing reports an
-error — streaming is on in name only.
+**Both directions are refused at eval time**, because both leave a contract saying one
+thing while the node renders the other:
+
+| Declared | Refused because |
+|---|---|
+| triggers stream, no `streamingWorkflowType` | the shard dispatches the **batch** workflow, which starts with no events in its arguments |
+| `streamingWorkflowType` set, nothing streams | the node renders the batch type and the declared streaming type is dropped |
+
+The first was observed end to end on a tenant before the refusal existed: AE signalled
+the shard, the shard ran the DAG, the batch workflow started with nothing to apply, and
+nothing reported an error — streaming was on in name only. The second is its mirror and
+fails just as quietly, which is why a declared-but-inert value is refused here the same
+way it is for the batch knobs and `ackPaths`.
 
 ### A streaming entrypoint holds streaming triggers and nothing else
 
