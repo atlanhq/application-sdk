@@ -761,6 +761,65 @@ if ! echo "$ERR_MSG" | grep -q "isDistinct"; then
 fi
 
 # --------------------------------------------------------------------------
+# 12. FND-1802: connectByOptions must contain connectByDefault. The two are set
+#     independently and each is individually valid, so a contract narrowing the
+#     form to host-only while leaving the default at "url" type-checks fine and
+#     renders a `default` outside its own `enum` — a form whose radio has no
+#     selected option. The guard lives on renderConnectByRadio's evaluation path
+#     rather than in a `hidden` property: a hidden property is never forced, and
+#     neither is an unreferenced `let`, so either shape would compile and never run.
+# --------------------------------------------------------------------------
+echo ":: Checking connectByOptions/connectByDefault agreement invariant..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-connectby-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-connectby-out-XXXXXX")"
+cat > "$BAD_CONTRACT" <<'PKLEOF'
+amends "src/App.pkl"
+
+import "src/Connectors.pkl"
+
+name = "connectby-invariant"
+displayName = "ConnectBy Invariant"
+connector = Connectors.CRATEDB
+icon = "https://example.com/icon.svg"
+
+credentialUrlGroup = new AdvancedJDBCUrlGroup {
+  protocol = ""
+  urlAddonBefore = "driver://"
+  connectByOptions = new Listing { "host" }
+  connectByDefault = "url"
+  hostField = new FieldSpec { name = "host"; displayName = "Host" }
+  portField = new FieldSpec { name = "port"; fieldType = "number"; displayName = "Port"; required = false }
+}
+
+credentialAuthOptions {
+  ["basic"] = new JDBCUrlAuthOption {
+    label = "Basic"
+    nestedLabel = "Basic"
+    urlPartMapping = new UrlPartMapping { hostname = "host"; port = "port" }
+    fields { new FieldSpec { name = "username"; displayName = "Username" } }
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new CredentialInput { credType = "atlan-connectors-connectby-invariant" }
+      }
+    }
+  }
+}
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "must be one of the offered"; then
+  echo "FAIL: connectByDefault outside connectByOptions should throw"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
 # Done
 # --------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then

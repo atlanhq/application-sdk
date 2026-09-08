@@ -698,6 +698,29 @@ class AdvancedJDBCUrlGroup {
 
   connectByDefault: String(this == "host" || this == "url") = "host"
 
+  /// Connection modes the form offers, in the order the radio renders them.
+  ///
+  /// Defaults to both, which is what every existing consumer already gets — this
+  /// property changes nothing unless a contract narrows it.
+  ///
+  /// Set `new Listing { "host" }` for a source whose credential form has only
+  /// ever collected host/port. URL mode is not free: it adds the `URL` radio
+  /// option, an `extra.compiled_url` field (editable in URL mode, a disabled
+  /// preview in host mode), and a second condition branch on host/port. A
+  /// connector migrating a v2 marketplace configmap that offered Host alone has
+  /// no use for any of it, and rendering it anyway is a visible change to a form
+  /// customers already use.
+  ///
+  /// Narrowing to `{ "host" }` suppresses exactly those three: the enum entry,
+  /// the `extra.compiled_url` property, and the URL branch on host/port. It does
+  /// NOT drop `urlPropertyId` / `protocol` from the group's widget config —
+  /// hand-authored host-only forms in the fleet carry both while declaring no
+  /// `compiled_url` property, so keeping them is the parity-preserving choice.
+  connectByOptions: Listing<String(this == "host" || this == "url")> = new Listing {
+    "host"
+    "url"
+  }
+
   urlLabel: String = "SQLAlchemy Connection URL"
 
   /// Set for sources whose JDBC URL separates its parameters with `;` rather
@@ -2155,6 +2178,7 @@ local function renderCompiledUrlField(
 }
 
 local function renderHostOrPortField(
+  group: AdvancedJDBCUrlGroup,
   f: FieldSpec,
   options: Mapping<String, AuthOption>,
   isPort: Boolean
@@ -2174,10 +2198,16 @@ local function renderHostOrPortField(
         ["type"] = visible["type"]
         ["ui"] = if (isPort) hostUi.put("disabled", false).toMapping() else visible["ui"]
       }
-      new Mapping {
-        ["filter"] = connectByFilter("url", options)
-        ["type"] = visible["type"]
-        ["ui"] = hostUi.filter((k, _) -> k != "rules").put("disabled", true).toMapping()
+      // The URL-mode branch renders host/port as disabled, because in URL mode
+      // they are derived from the compiled URL rather than typed. With URL mode
+      // not offered, the branch can never match — a dead filter that reads as an
+      // intentional condition to the next person.
+      when (group.connectByOptions.toList().contains("url")) {
+        new Mapping {
+          ["filter"] = connectByFilter("url", options)
+          ["type"] = visible["type"]
+          ["ui"] = hostUi.filter((k, _) -> k != "rules").put("disabled", true).toMapping()
+        }
       }
     }
     ["ui"] = new Mapping {}
@@ -2241,9 +2271,14 @@ local function renderJdbcUrlField(
     }
   }
   ["properties"] = new Mapping {
-    ["extra.compiled_url"] = renderCompiledUrlField(group, options)
-    ["host"] = renderHostOrPortField(group.hostField, options, false)
-    ["port"] = renderHostOrPortField(group.portField, options, true)
+    // Only meaningful when URL mode is offered — see `connectByOptions`. A
+    // host-only form has nothing to compile a URL from and no mode in which to
+    // edit one, so emitting it would add a permanently-disabled field.
+    when (group.connectByOptions.toList().contains("url")) {
+      ["extra.compiled_url"] = renderCompiledUrlField(group, options)
+    }
+    ["host"] = renderHostOrPortField(group, group.hostField, options, false)
+    ["port"] = renderHostOrPortField(group, group.portField, options, true)
     ["auth-type"] = renderJdbcAuthTypeField(options)
     for (authKey, opt in options) {
       [authKey] = renderJdbcAuthOption(opt)
@@ -2274,12 +2309,33 @@ local function renderJdbcUrlField(
   }
 }
 
-local function renderConnectByRadio(group: AdvancedJDBCUrlGroup): Mapping<String, Any> = new Mapping {
+local const connectByModeLabels: Mapping<String, String> = new {
+  ["host"] = "Host"
+  ["url"] = "URL"
+}
+
+// Validation lives on the RETURNED value's evaluation path, not in a `hidden`
+// property. A hidden property is never forced on its own, and a `let` binding
+// that is not referenced is not forced either — either shape would compile and
+// silently never run.
+local function renderConnectByRadio(group: AdvancedJDBCUrlGroup): Mapping<String, Any> =
+  let (opts = group.connectByOptions.toList())
+  if (opts.isEmpty)
+    throw("AdvancedJDBCUrlGroup.connectByOptions must offer at least one mode.")
+  else if (opts.distinct.length != opts.length)
+    throw("AdvancedJDBCUrlGroup.connectByOptions must not repeat a mode: \(opts).")
+  else if (!opts.contains(group.connectByDefault))
+    throw(
+      "AdvancedJDBCUrlGroup.connectByDefault is \"\(group.connectByDefault)\" but "
+      + "connectByOptions offers \(opts). The default must be one of the offered "
+      + "modes, or the form renders a default outside its own enum."
+    )
+  else new Mapping {
   ["type"] = "string"
-  ["enum"] = new Listing { "host"; "url" }
+  ["enum"] = new Listing { for (m in opts) { m } }
   ["default"] = group.connectByDefault
   ["required"] = true
-  ["enumNames"] = new Listing { "Host"; "URL" }
+  ["enumNames"] = new Listing { for (m in opts) { connectByModeLabels[m] } }
   ["ui"] = new Mapping {
     ["widget"] = "radio"
     ["hidden"] = false

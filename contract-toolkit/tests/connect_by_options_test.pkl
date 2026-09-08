@@ -1,0 +1,129 @@
+/// `AdvancedJDBCUrlGroup.connectByOptions` — narrowing a credential form to
+/// host-only.
+///
+/// The default offers both modes and is asserted here as a control, so a
+/// regression that drops URL mode for everyone fails loudly rather than showing
+/// up as fleet-wide form drift.
+amends "pkl:test"
+
+import "pkl:json"
+import "../src/App.pkl" as App
+import "../src/Connectors.pkl"
+
+local function appWith(modes: Listing<String>) = (App) {
+  name = "connect-by-test"
+  displayName = "Connect By Test"
+  connector = Connectors.CRATEDB
+  icon = "https://example.com/icon.svg"
+
+  credentialUrlGroup = new App.AdvancedJDBCUrlGroup {
+    protocol = ""
+    urlAddonBefore = "driver://"
+    connectByOptions = modes
+    hostField = new App.FieldSpec {
+      name = "host"
+      displayName = "Host"
+      placeholder = "host.example.com"
+    }
+    portField = new App.FieldSpec {
+      name = "port"
+      fieldType = "number"
+      displayName = "Port"
+      defaultValue = "4200"
+      required = false
+    }
+    extraFields {
+      new App.FieldSpec {
+        name = "database"
+        displayName = "Database"
+        defaultValue = "crate"
+        required = false
+      }
+    }
+  }
+
+  credentialAuthOptions {
+    ["basic"] = new App.JDBCUrlAuthOption {
+      label = "Basic"
+      nestedLabel = "Basic"
+      urlPartMapping = new App.UrlPartMapping {
+        hostname = "host"
+        port = "port"
+        pathname = "extra.database"
+      }
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Credential"] {
+        inputs {
+          ["credential-guid"] = new App.CredentialInput {
+            credType = "atlan-connectors-connect-by-test"
+          }
+        }
+      }
+    }
+  }
+}
+
+local hostOnly = appWith(new Listing { "host" })
+local bothModes = appWith(new Listing { "host"; "url" })
+
+local key = "app/generated/atlan-connectors-connect-by-test.json"
+local parser = new json.Parser { useMapping = true }
+
+local hostOnlyText = hostOnly.output.files[key].text
+local hostOnlyJson = parser.parse(hostOnlyText)
+local bothJson = parser.parse(bothModes.output.files[key].text)
+
+local hostOnlyProps = hostOnlyJson["config"]["properties"]
+local bothProps = bothJson["config"]["properties"]
+
+facts {
+  ["host-only narrows the connectBy radio to a single option"] {
+    hostOnlyProps["connectBy"]["enum"].toList() == List("host")
+    hostOnlyProps["connectBy"]["enumNames"].toList() == List("Host")
+  }
+
+  ["host-only emits no extra.compiled_url property"] {
+    !hostOnlyProps["jdbcUrl"]["properties"].containsKey("extra.compiled_url")
+  }
+
+  ["host-only leaves no dead connectBy:url filter anywhere in the form"] {
+    // A filter naming a mode the enum no longer offers can never match, and
+    // reads as an intentional condition to whoever meets it next.
+    !hostOnlyText.contains("\"connectBy\": \"url\"")
+  }
+
+  ["host-only gives host and port a single condition branch"] {
+    hostOnlyProps["jdbcUrl"]["properties"]["host"]["conditions"].toList().length == 1
+    hostOnlyProps["jdbcUrl"]["properties"]["port"]["conditions"].toList().length == 1
+  }
+
+  ["host-only still renders every input field"] {
+    hostOnlyProps["jdbcUrl"]["properties"].containsKey("host")
+    hostOnlyProps["jdbcUrl"]["properties"].containsKey("port")
+    hostOnlyProps["jdbcUrl"]["properties"].containsKey("auth-type")
+    hostOnlyProps["jdbcUrl"]["properties"].containsKey("basic")
+    hostOnlyProps["jdbcUrl"]["properties"]["extra"]["properties"].containsKey("database")
+  }
+
+  ["host-only keeps urlPropertyId and protocol on the widget"] {
+    // Parity with hand-authored host-only forms, which carry both while
+    // declaring no compiled_url property.
+    hostOnlyProps["jdbcUrl"]["ui"]["urlPropertyId"] == "credential-guid.extra.compiled_url"
+    hostOnlyProps["jdbcUrl"]["ui"].containsKey("protocol")
+  }
+
+  ["CONTROL: the default still offers both modes"] {
+    bothProps["connectBy"]["enum"].toList() == List("host", "url")
+    bothProps["connectBy"]["enumNames"].toList() == List("Host", "URL")
+    bothProps["jdbcUrl"]["properties"].containsKey("extra.compiled_url")
+    bothProps["jdbcUrl"]["properties"]["host"]["conditions"].toList().length == 2
+  }
+}
