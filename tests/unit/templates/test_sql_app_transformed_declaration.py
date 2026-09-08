@@ -281,3 +281,69 @@ class TestCollectTransformedFilesIsPublicForRunOverrides:
             )
 
         assert exc.value.typename == "extras-procedure"
+
+
+class TestRunOverrideSurfaceIsPublic:
+    """Every helper a documented ``run()`` override needs is public.
+
+    ``build_task_input`` was already public and documented as the API for
+    overrides, but it takes a ``cred_ref`` that only a private method produced —
+    so the documented path could not be walked as documented. The three helpers
+    below close that, and the private names stay as deprecated shims because a
+    `gh search code` over atlanhq finds a dozen connector repos on them.
+    """
+
+    def test_the_whole_wiring_path_is_public(self) -> None:
+        for name in (
+            "resolve_credential_ref",
+            "build_task_input",
+            "build_transform_input",
+            "collect_transformed_files",
+            "extract_procedures",
+            "transform_procedures",
+        ):
+            assert hasattr(SqlApp, name), f"SqlApp.{name} is missing"
+            assert not name.startswith("_")
+
+    def test_build_transform_input_threads_the_ref(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import ExtractionTaskInput
+
+        ref = _transformed_ref("database")
+        out = SqlApp.build_transform_input(ExtractionTaskInput(workflow_id="w"), ref)
+
+        assert out.workflow_id == "w"
+        assert out.raw_file is ref
+
+    def test_resolve_credential_ref_is_reachable_on_an_instance(self) -> None:
+        app = _app()
+        assert app.resolve_credential_ref(ExtractionInput()) is None
+
+
+class TestDeprecatedPrivateAliases:
+    """The old names keep working for one major version.
+
+    They were private and carried no compatibility promise, but a dozen
+    connector repos call them today. Renaming with no shim would break every
+    one on its next SDK bump — a fleet-wide outage traded for a tidier diff.
+    """
+
+    def test_build_transform_input_alias_delegates_and_warns(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import ExtractionTaskInput
+
+        ref = _transformed_ref("database")
+        with pytest.warns(DeprecationWarning, match="build_transform_input"):
+            out = SqlApp._build_transform_input(ExtractionTaskInput(), ref)
+
+        assert out.raw_file is ref
+
+    def test_resolve_credential_ref_alias_delegates_and_warns(self) -> None:
+        app = _app()
+        with pytest.warns(DeprecationWarning, match="resolve_credential_ref"):
+            assert app._resolve_credential_ref(ExtractionInput()) is None
+
+    def test_each_alias_names_its_removal_version(self) -> None:
+        """A deprecation with no removal version never gets removed."""
+        import inspect
+
+        for fn in (SqlApp._build_transform_input, SqlApp._resolve_credential_ref):
+            assert "v4.0.0" in inspect.getsource(fn)

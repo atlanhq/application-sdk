@@ -76,6 +76,7 @@ import asyncio
 import dataclasses
 import os
 import time
+import warnings
 from collections.abc import Callable, Sequence
 from decimal import Decimal
 from pathlib import Path
@@ -465,6 +466,45 @@ class SqlApp(App):
     need to iterate tables per-schema, paginate by database, or otherwise
     sequence fetches must override ``run()`` and call the ``extract_*``
     / ``transform_*`` activities directly in the order they need.
+
+    **The ``run()``-override surface.** Overriding ``run()`` is a documented
+    path, so everything an override needs to wire the pieces together is
+    public. Reaching for anything underscore-prefixed here means the surface
+    has a gap — raise it rather than working around it:
+
+    - ``extract_*`` / ``transform_*`` — the per-entity tasks themselves.
+    - :meth:`resolve_credential_ref` — produces the ``cred_ref`` that
+      :meth:`build_task_input` needs.
+    - :meth:`build_task_input` — builds a typed task input from the
+      top-level ``ExtractionInput``.
+    - :meth:`build_transform_input` — threads an extract's ``raw_file`` ref
+      into the matching transform's input.
+    - :meth:`collect_transformed_files` — turns the transforms' outputs into
+      the declaration ``App.verify_refs`` / ``App.upload_refs`` check
+      against. An override that adds an entity the default ``run()`` does
+      not drive must fold its refs in here, or that entity's assets are
+      dropped from the upload silently.
+
+    An override that adds a fifth entity therefore looks like::
+
+        async def run(self, input: ExtractionInput) -> ExtractionOutput:
+            base = await super().run(input)
+            cred_ref = self.resolve_credential_ref(input)
+            task_input = self.build_task_input(
+                ExtractionTaskInput, input, cred_ref=cred_ref
+            )
+            proc = await self.extract_procedures(task_input)
+            out = await self.transform_procedures(
+                self.build_transform_input(task_input, proc.raw_file)
+            )
+            return base.model_copy(
+                update={
+                    "transformed_files": [
+                        *base.transformed_files,
+                        *self.collect_transformed_files([out]),
+                    ]
+                }
+            )
     """
 
     _app_registered: ClassVar[bool] = True  # abstract template, not concrete
@@ -1186,7 +1226,7 @@ class SqlApp(App):
         Override for custom orchestration (e.g. sequential fetches, multi-DB).
         Use ``build_task_input()`` to construct typed inputs.
         """
-        cred_ref = self._resolve_credential_ref(input)
+        cred_ref = self.resolve_credential_ref(input)
 
         task_input = self.build_task_input(
             ExtractionTaskInput, input, cred_ref=cred_ref
@@ -1248,16 +1288,16 @@ class SqlApp(App):
         # checked against before it is handed on.
         transform_results = await asyncio.gather(
             self.transform_databases(
-                self._build_transform_input(task_input, db_result.raw_file)
+                self.build_transform_input(task_input, db_result.raw_file)
             ),
             self.transform_schemas(
-                self._build_transform_input(task_input, schema_result.raw_file)
+                self.build_transform_input(task_input, schema_result.raw_file)
             ),
             self.transform_tables(
-                self._build_transform_input(task_input, table_result.raw_file)
+                self.build_transform_input(task_input, table_result.raw_file)
             ),
             self.transform_columns(
-                self._build_transform_input(task_input, column_result.raw_file)
+                self.build_transform_input(task_input, column_result.raw_file)
             ),
         )
 
@@ -1429,16 +1469,17 @@ class SqlApp(App):
                 )
         return refs
 
-    # =====================================================================
-    # Internal helpers
-    # =====================================================================
-
     @staticmethod
-    def _build_transform_input(
+    def build_transform_input(
         base: ExtractionTaskInput,
         raw_file: FileReference | None,
     ) -> TransformInput:
         """Build a ``TransformInput`` from ``base`` carrying ``raw_file``.
+
+        Part of the supported ``run()``-override surface (see the class
+        docstring). ``transform_*`` is public, and this is the only thing that
+        builds its input correctly — an override that adds an entity the
+        default ``run()`` does not drive needs both.
 
         Called by ``run()`` to thread the durable ``FileReference``
         returned by each ``extract_*`` activity (as
@@ -1537,16 +1578,71 @@ class SqlApp(App):
             },
         )
 
-    def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
+    def resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
         """Resolve credential ref from extraction input.
+
+        Part of the supported ``run()``-override surface (see the class
+        docstring). :meth:`build_task_input` takes a ``cred_ref`` and cannot be
+        called correctly without one, so a public builder needing a privately
+        produced argument left the documented path unusable as documented.
+
+        Call this rather than :meth:`CredentialRef.resolve_or_none` directly.
+        Both return the same value today, but this method is the SDK's routing
+        seam and is shared with the injected preflight gate — going through it
+        is what keeps an override and the gate resolving identically if the
+        routing ever changes.
 
         Delegates to :meth:`CredentialRef.resolve_or_none` — prefers the input's
         own ``credential_ref``, routes direct (credential_guid) / agent
         (agent_json) modes, and degrades to a legacy GUID ref or ``None`` on a
-        routing edge case. Shared with the injected preflight gate so both paths
-        route identically.
+        routing edge case.
         """
         return CredentialRef.resolve_or_none(input)
+
+    # =====================================================================
+    # Deprecated private aliases — remove in v4.0.0
+    # =====================================================================
+    #
+    # These were private, so they carried no compatibility promise — but a
+    # `gh search code` over the atlanhq org finds 12 connector repos calling
+    # ``_resolve_credential_ref`` and 4 calling ``_build_transform_input``.
+    # A rename with no shim breaks every one of them on their next SDK bump,
+    # which is a fleet-wide outage traded for a tidier diff. They delegate, so
+    # there is exactly one implementation either way.
+
+    def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
+        """**Deprecated** — use :meth:`resolve_credential_ref`.
+
+        Removed in v4.0.0.
+        """
+        warnings.warn(
+            "SqlApp._resolve_credential_ref is deprecated; use the public "
+            "SqlApp.resolve_credential_ref instead. Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.resolve_credential_ref(input)
+
+    @staticmethod
+    def _build_transform_input(
+        base: ExtractionTaskInput,
+        raw_file: FileReference | None,
+    ) -> TransformInput:
+        """**Deprecated** — use :meth:`build_transform_input`.
+
+        Removed in v4.0.0.
+        """
+        warnings.warn(
+            "SqlApp._build_transform_input is deprecated; use the public "
+            "SqlApp.build_transform_input instead. Will be removed in v4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return SqlApp.build_transform_input(base, raw_file)
+
+    # =====================================================================
+    # Internal helpers
+    # =====================================================================
 
     async def _extract_entity(
         self,
