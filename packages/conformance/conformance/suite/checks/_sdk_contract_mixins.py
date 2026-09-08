@@ -42,6 +42,7 @@ SDK_CONTRACT_BASE_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("workflow_id", "str", "active"),
         SdkField("correlation_id", "str", "active"),
         SdkField("app_name", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "Output": (
         SdkField("status", "OutputStatus", "active"),
@@ -115,6 +116,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("temp_table_regex", "str", "active"),
         SdkField("total_batches", "int", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "ExecuteColumnBatchOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -138,6 +140,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "ExtractionOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -175,6 +178,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "ExtractionTaskOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -201,6 +205,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchColumnsInput": (
         SdkField("app_name", "str", "active"),
@@ -215,6 +220,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchColumnsOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -236,6 +242,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchDatabasesOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -254,6 +261,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("prepone_enabled", "bool", "active"),
         SdkField("prepone_hours", "float", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchIncrementalMarkerOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -275,6 +283,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchProceduresOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -296,6 +305,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchSchemasOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -322,6 +332,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchTablesInput": (
         SdkField("app_name", "str", "active"),
@@ -336,6 +347,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchTablesOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -358,6 +370,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchViewsOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -388,6 +401,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("temp_table_regex", "str", "active"),
         SdkField("upload_concurrency", "int", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "IncrementalExtractionOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -435,6 +449,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "PrepareColumnQueriesInput": (
         SdkField("app_name", "str", "active"),
@@ -457,6 +472,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "PrepareColumnQueriesOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -486,6 +502,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
             "workflow_args", "dict[str, str | int | float | bool | None]", "active"
         ),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "QueryBatchOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -507,6 +524,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("output_path", "str", "active"),
         SdkField("output_prefix", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "QueryExtractionOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -528,6 +546,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
             "workflow_args", "dict[str, str | int | float | bool | None]", "active"
         ),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "QueryFetchOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -543,6 +562,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("connection_qualified_name", "str", "active"),
         SdkField("correlation_id", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "ReadCurrentStateOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -570,6 +590,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("temp_table_regex", "str", "active"),
         SdkField("typename", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "TransformOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -587,6 +608,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("correlation_id", "str", "active"),
         SdkField("next_marker_timestamp", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "UpdateMarkerOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -617,6 +639,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("temp_table_regex", "str", "active"),
         SdkField("upload_concurrency", "int", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
         SdkField("workflow_run_id", "str", "active"),
     ),
     "WriteCurrentStateOutput": (
