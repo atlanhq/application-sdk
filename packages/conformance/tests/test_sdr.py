@@ -1187,6 +1187,43 @@ def test_p030_real_bridge_is_p042_not_a_p030_absence(tmp_path: Path) -> None:
     assert "v4.0.0" in p042[0].message
 
 
+def test_p042_message_names_both_upload_calls(tmp_path: Path) -> None:
+    """P042's remediation must offer the declaration path, like P030's does.
+
+    The population this rule finds is connectors whose bridge scans one
+    directory — usually *because* the transforms fanned out. Pointing them at
+    ``await self.upload(local_path)`` over that same directory greens a
+    single-container e2e and uploads only the subset of files the calling pod
+    wrote, which is the trap this PR closed on P030's absence message. The
+    two messages have to agree.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _REAL_BRIDGE,
+        },
+    )
+    p042 = [f for f in _run(tmp_path) if f.rule_id == "P042"]
+    assert len(p042) == 1
+    assert "self.upload(...)" in p042[0].message
+    assert "self.upload_refs(...)" in p042[0].message
+    assert "await self.upload_refs(...)" in p042[0].message
+
+
+def test_p042_prose_names_upload_refs_in_its_remediation() -> None:
+    """The published P042 page must name the declaration path too.
+
+    Trigger text and remedy text are generated from the same rule object, so a
+    remedy paragraph naming only ``upload()`` ships a page that contradicts the
+    checker's own finding message.
+    """
+    rule = get_rule("P042")
+    assert "upload_refs" in rule.full_description
+    remediation = rule.full_description.split("**Remediation:**", 1)[1]
+    assert "upload_refs" in remediation
+
+
 def test_p042_silent_when_self_upload_is_present(tmp_path: Path) -> None:
     """A bridge alongside a real self.upload() is redundant, not a substitution.
 

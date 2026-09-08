@@ -733,7 +733,8 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
         # replacement.  Any no-op stub keeps its own finding above.
         return findings
 
-    # A transferring bridge with no self.upload() is the substitution shape.
+    # A transferring bridge with no sanctioned upload call is the substitution
+    # shape.
     # Reported per bridge and at the bridge, so the finding lands on the code
     # that has to change rather than on atlan.yaml.  A no-op stub is NOT
     # reported here — it already carries its own, sharper P030 above, and
@@ -749,7 +750,8 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
                 column=1,
                 message=(
                     f"{rel}:{lineno}: '{name}' performs the deployment-store→tenant-"
-                    "bucket transfer by hand and no self.upload(...) call exists in "
+                    "bucket transfer by hand and neither self.upload(...) nor "
+                    "self.upload_refs(...) is called in "
                     "the app. Bytes do move, so this is not the silent-zero-asset "
                     "shape P030 reports — it is a reimplementation of a contract the "
                     "SDK owns, on a symbol the SDK has deprecated for removal in "
@@ -759,7 +761,13 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
                     "@task retry/replay, the cross-pod deployment-store fallback for "
                     "KEDA-scaled workers, partial-local reconcile, and SHA-256 "
                     "sidecar dedup for idempotent replay. Migrate to "
-                    "await self.upload(...). A green full-DAG e2e shows the bridge "
+                    "await self.upload_refs(...) where the hand-off is a "
+                    "FileReference declaration a fanned-out step produced — it "
+                    "lands every declared ref under one prefix by reference and "
+                    "verifies the delivered tree, so it does not regress on a "
+                    "distributed run the way a directory scan does — and to "
+                    "await self.upload(...) otherwise. A green full-DAG e2e shows "
+                    "the bridge "
                     "worked on that run; it does not show the bridge tracks the "
                     "contract, and it will not survive the v4.0 removal."
                 ),

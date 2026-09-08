@@ -1719,10 +1719,17 @@ not show the bridge preserves the key layout under replay, survives a pod that n
 held the local files, or reconciles a partial local state — and it says nothing about
 v4.0.
 
-**Remediation:** replace the bridge body with `await self.upload(...)` in the `run()`
-method or the relevant `@entrypoint` method (crawler AND miner), and delete the bridge.
-If the bridge exists because `App.upload()` genuinely cannot express something the app
-needs, that is an SDK gap worth filing rather than a reason to suppress.
+**Remediation:** replace the bridge body with `await self.upload_refs(...)` where the
+hand-off is a `FileReference` declaration a fanned-out step produced, and `await
+self.upload(...)` otherwise — in the `run()` method or the relevant `@entrypoint` method
+(crawler AND miner) — and delete the bridge.  The choice matters on exactly the
+connectors this rule finds: a bridge that scans one directory is usually there *because*
+the transforms fanned out, and swapping it for a `self.upload(local_path)` over the same
+directory greens a single-container e2e while uploading only the subset of files the
+calling pod happened to write. `upload_refs` streams from the deployment store for the
+files this pod never held.  If the bridge exists because neither call can express
+something the app needs, that is an SDK gap worth filing rather than a reason to
+suppress.
 
 This is a WARN, and deliberately a *lower*-urgency one than P030: the app is working
 today.  The deadline is v4.0, not the next run — which is why the rule carries
