@@ -6,6 +6,16 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.25.1] - 2026-09-08
+
+### Bug fixes
+
+- sanitize leading underscores in generated Python field names (#3701) ([c749ac8](https://github.com/atlanhq/application-sdk/commit/c749ac8))
+
+### Other changes
+
+- ci(contract-toolkit): warn when regeneration would drop an app's own post-processing (#3691) ([8ef12b6](https://github.com/atlanhq/application-sdk/commit/8ef12b6))
+
 ## [0.25.0] - 2026-09-07
 
 ### Features
