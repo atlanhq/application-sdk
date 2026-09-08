@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.33.2 (September 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.33.1...v3.33.2
+
+### Bug Fixes
+
+- bind `lazy` eagerly so the package export is the function, not its submodule (#3693) (by @prateek11rai in [d724b0e](https://github.com/atlanhq/application-sdk/commit/d724b0e))
+- keep the transform tasks' FileReferences and verify the tree before handing the prefix on (#3700) (by @cmgrote in [02589f9](https://github.com/atlanhq/application-sdk/commit/02589f9))
+
+
 ## v3.33.1 (September 07, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.33.0...v3.33.1
