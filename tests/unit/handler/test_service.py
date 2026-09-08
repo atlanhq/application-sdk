@@ -29,6 +29,7 @@ from application_sdk.handler.contracts import (
     EventTriggerConfig,
     MetadataInput,
     MetadataOutput,
+    PreflightCheck,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
@@ -593,7 +594,6 @@ class TestPreflightEndpoint:
         assert body["data"]["preflightVerdict"]["failureMessage"] == "wrong password"
 
     def test_source_unavailable_raise_maps_to_503_with_the_verdict(self) -> None:
-        from application_sdk.errors.categories import FailureCategory
         from application_sdk.errors.leaves import SourceUnavailableError
 
         class _Unreachable(_TestHandler):
@@ -603,13 +603,43 @@ class TestPreflightEndpoint:
         client = _make_client(handler=_Unreachable())
         response = client.post("/workflows/v1/check", json={"credentials": []})
         body = response.json()
-        assert response.status_code == _CATEGORY_TO_HTTP.get(
-            FailureCategory.SOURCE_UNAVAILABLE, 500
-        )
+        assert response.status_code == 503
         assert body["preflight"]["status"] == "not_ready"
         assert (
             body["preflight"]["checks"][0]["error"]["category"] == "SOURCE_UNAVAILABLE"
         )
+
+    def test_returned_verdicts_check_error_drops_the_exception_text(self) -> None:
+        # A handler that returns NOT_READY with a typed error built from a driver
+        # exception carries that exception's text as cause_repr. The Temporal
+        # payload keeps it; the HTTP caller must not see it.
+        from application_sdk.errors.leaves import AuthError
+
+        class _Rejected(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                cause = RuntimeError(
+                    "login failed for user svc_ro at db-prod-7.internal"
+                )
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="connectivity",
+                            passed=False,
+                            error=AuthError(
+                                message="Rejected", cause=cause
+                            ).to_failure_details(),
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_Rejected())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 200
+        assert "cause_repr" not in response.text
+        assert "db-prod-7" not in response.text
+        (check,) = response.json()["preflight"]["checks"]
+        assert check["error"]["category"] == "AUTH"
 
     def test_deprecated_handler_error_carries_the_verdict_too(self) -> None:
         client = _make_client(handler=_FailingHandler())

@@ -113,6 +113,7 @@ _CATEGORY_TO_HTTP: dict[FailureCategory, int] = {
     FailureCategory.PRECONDITION: 412,
     FailureCategory.RATE_LIMITED: 429,
     FailureCategory.TIMEOUT: 504,
+    FailureCategory.SOURCE_UNAVAILABLE: 503,
     FailureCategory.DEPENDENCY_UNAVAILABLE: 503,
     FailureCategory.RESOURCE_EXHAUSTED: 503,
     FailureCategory.DATA_INTEGRITY: 500,
@@ -268,7 +269,14 @@ def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
-    dumped = check.model_dump(mode="json", exclude_none=True)
+    """One check as the HTTP caller sees it.
+
+    ``cause_repr`` is the exception text behind a typed error. It stays in the
+    server log and the Temporal payload; an HTTP caller gets the typed fields.
+    """
+    dumped = check.model_dump(
+        mode="json", exclude_none=True, exclude={"error": {"cause_repr"}}
+    )
     # The -1.0 "not measured" sentinel belongs to the telemetry row
     # (check_matrix), not to this display payload — the frontend should see
     # no duration rather than a negative one.
