@@ -362,8 +362,21 @@ jobs:
       # path (build-and-publish-app.yaml, fail_on_findings=false) records a
       # monitored version instead. Without this Endor fragments the project and
       # the dashboards stop meaning anything.
+      # image-type / finding-tags travel as ENV, not as `additional_args`.
+      # Verified on run 33856478534: the action ACCEPTS additional_args for a
+      # container scan and then drops it -- the endorctl command it actually
+      # ran carried no --image-type and no --finding-tags. The consequence is
+      # not cosmetic: without image-type nothing is classified app-vs-base, so
+      # container_metadata.base_image stays empty and the Containers view has
+      # nothing to group or filter on. endorctl reads every flag from its own
+      # ENDOR_* variable, and the action does not strip those, so this is the
+      # reliable channel. Re-verify by grepping a run log for the printed
+      # `endorctl container scan ...` line, not by trusting the `with:` block.
       - name: Endor Labs container scan
         if: steps.creds.outputs.configured == 'true'
+        env:
+          ENDOR_CONTAINER_SCAN_IMAGE_TYPE: app
+          ENDOR_CONTAINER_SCAN_FINDING_TAGS: ${{ steps.image.outputs.ref }}
         uses: endorlabs/github-action@f46ffb04c928a9c9c356f9627bd60b710ed0963e # v1.1.13
         with:
           namespace: atlan
@@ -379,7 +392,6 @@ jobs:
           as_ref: ${{ github.event_name != 'pull_request' }}
           pr: ${{ github.event_name == 'pull_request' }}
           scan_summary_output_type: table
-          additional_args: --image-type=app --finding-tags=${{ steps.image.outputs.ref }}
 
   # ── Security Gate — check Trivy results against allowlist ───────────────────
   security-gate:

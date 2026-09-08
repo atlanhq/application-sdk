@@ -134,8 +134,21 @@ jobs:
           docker save --platform linux/amd64 -o /tmp/base-image.tar "$TARGET_IMAGE"
           echo "ref=$TARGET_IMAGE" >> "$GITHUB_OUTPUT"
 
+      # image-type / finding-tags travel as ENV, not as `additional_args`.
+      # Verified on run 33856478534: the action ACCEPTS additional_args for a
+      # container scan and then drops it -- the endorctl command it actually
+      # ran carried no --image-type and no --finding-tags. The consequence is
+      # not cosmetic: without image-type nothing is classified app-vs-base, so
+      # container_metadata.base_image stays empty and the Containers view has
+      # nothing to group or filter on. endorctl reads every flag from its own
+      # ENDOR_* variable, and the action does not strip those, so this is the
+      # reliable channel. Re-verify by grepping a run log for the printed
+      # `endorctl container scan ...` line, not by trusting the `with:` block.
       - name: Endor Labs container scan
         if: steps.creds.outputs.configured == 'true'
+        env:
+          ENDOR_CONTAINER_SCAN_IMAGE_TYPE: base
+          ENDOR_CONTAINER_SCAN_FINDING_TAGS: ${{ steps.image.outputs.ref }}
         uses: endorlabs/github-action@f46ffb04c928a9c9c356f9627bd60b710ed0963e # v1.1.13
         with:
           namespace: atlan
@@ -150,7 +163,6 @@ jobs:
           as_ref: true
           pr: false
           scan_summary_output_type: table
-          additional_args: --image-type=base --finding-tags=${{ steps.image.outputs.ref }}
 
   # NOTE: reconciliation (allowlist-entry removal + Linear ticket close/update)
   # is intentionally NOT a job here. It runs on `release: released` (not
