@@ -648,6 +648,13 @@ publish app will actually read.
 hand each one to `App.upload(ref=...)` instead of scanning a directory that,
 on a fanned-out run, was written by pods it never shared a filesystem with.
 
+A `run()` override that adds an entity the default `run()` does not drive must
+finish with `SqlApp.finalize_extraction(base, [extra_transform_output])`, not by
+concatenating onto `base.transformed_files` by hand. `super().run()` verified
+the four refs it drove and then *returned*, so a ref appended afterwards is
+never asserted — the override reads as if it verified everything while shipping
+an unverified entity, which is this same shortfall one layer up.
+
 #### Delivering the declaration — `App.upload_refs()`
 
 `verify_refs()` asserts a declaration. `upload_refs()` **delivers** one: it

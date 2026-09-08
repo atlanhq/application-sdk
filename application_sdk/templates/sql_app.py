@@ -482,8 +482,12 @@ class SqlApp(App):
     - :meth:`collect_transformed_files` — turns the transforms' outputs into
       the declaration ``App.verify_refs`` / ``App.upload_refs`` check
       against. An override that adds an entity the default ``run()`` does
-      not drive must fold its refs in here, or that entity's assets are
-      dropped from the upload silently.
+      not drive must fold its refs in, or that entity's assets are dropped
+      from the upload silently.
+    - :meth:`finalize_extraction` — does that folding **and** verifies the
+      combined declaration. Prefer it to concatenating by hand: it is the
+      only way the extra entity gets asserted, because ``super().run()``
+      verifies the four refs it drove and then returns.
 
     An override that adds a fifth entity therefore looks like::
 
@@ -497,14 +501,11 @@ class SqlApp(App):
             out = await self.transform_procedures(
                 self.build_transform_input(task_input, proc.raw_file)
             )
-            return base.model_copy(
-                update={
-                    "transformed_files": [
-                        *base.transformed_files,
-                        *self.collect_transformed_files([out]),
-                    ]
-                }
-            )
+            return await self.finalize_extraction(base, [out])
+
+    A connector that also has to bridge the tree across an SDR store boundary
+    passes the finalised declaration to ``App.upload_refs`` — which verifies
+    its own delivery — and returns the prefix that comes back.
     """
 
     _app_registered: ClassVar[bool] = True  # abstract template, not concrete
@@ -1354,52 +1355,101 @@ class SqlApp(App):
         # then diffs the tenant against the subset and archives the rest
         # (APP-CORRECTNESS-001).
         #
-        # ``transformed_files`` is the expected set. ``verify_refs`` asserts
-        # every declared object is present in the store and sits under the
+        # ``finalize_extraction`` collects the transforms' refs into the
+        # expected set and asserts every declared object is present under the
         # prefix about to be returned, so a hole fails the run here instead of
         # surfacing as a short publish two stages downstream.
-        transformed_files = self.collect_transformed_files(transform_results)
-
-        if transformed_files:
-            await self.verify_refs(
-                VerifyRefsInput(
-                    # auto_materialize=False: verification is a HEAD against
-                    # the store, so the interceptor must not download all four
-                    # transformed files onto whichever pod runs the check.
-                    refs=[
-                        ref.model_copy(update={"auto_materialize": False})
-                        for ref in transformed_files
-                    ],
-                    prefix=transformed_data_prefix,
-                )
-            )
-        else:
-            logger.warning(
-                "No entity produced transformed output; transformed_data_prefix "
-                "%s names an empty tree",
-                transformed_data_prefix,
-            )
-
-        return ExtractionOutput(
+        #
+        # The default path goes through the same method a ``run()`` override
+        # calls, deliberately: the two cannot drift, and an override adding a
+        # fifth entity gets the identical assertion rather than a recipe it has
+        # to reproduce correctly.
+        base = ExtractionOutput(
             databases_extracted=db_result.total_record_count,
             schemas_extracted=schema_result.total_record_count,
             tables_extracted=table_result.total_record_count,
             columns_extracted=column_result.total_record_count,
             connection_qualified_name=connection_qn,
             transformed_data_prefix=transformed_data_prefix,
-            # The producer's declaration of what it wrote, surfaced so a
-            # connector's Atlan bridge can upload each ref by reference
-            # instead of scanning a directory it may not share (FND-1790).
-            transformed_files=transformed_files,
             # Expose the resolved local base path so subclasses can derive
             # additional prefixes (e.g. lineage-specific dirs) without calling
             # workflow.info() a second time.
             output_path=resolved_base,
         )
+        # ``transformed_files`` on the result is the producer's declaration of
+        # what it wrote, surfaced so a connector's Atlan bridge can upload each
+        # ref by reference instead of scanning a directory it may not share.
+        return await self.finalize_extraction(base, transform_results)
 
     # =====================================================================
     # Public helpers for ``run()`` overrides
     # =====================================================================
+
+    async def finalize_extraction(
+        self,
+        base: ExtractionOutput,
+        extra: Sequence[TransformOutput] = (),
+    ) -> ExtractionOutput:
+        """Fold extra transforms into ``base``'s declaration and verify it all.
+
+        Call this from a ``run()`` override that adds entities the default
+        ``run()`` does not drive — procedures, say. It is the whole tail of
+        such an override: concatenate, assert, return.
+
+        **Why a helper and not a documented recipe.** ``super().run()`` calls
+        ``App.verify_refs`` on the four refs it drove and then returns, so a
+        ref appended afterwards is never asserted. An override that
+        concatenates and returns a ``model_copy`` therefore ships an
+        unverified entity while looking, at the call site, exactly like it
+        verified everything — which is the same silent shortfall FND-1790 is
+        about, one layer up. Documenting the extra ``verify_refs`` call would
+        leave a step that is invisible when omitted; this method removes the
+        chance to omit it.
+
+        Verifies the **whole** declaration, not just *extra*. The four default
+        refs were already checked inside ``super().run()``, so those HEADs are
+        redundant — but the thing being handed downstream is the concatenated
+        list, and asserting exactly what is handed on is cheaper to reason
+        about than a split proof, at four metadata lookups.
+
+        Args:
+            base: The ``ExtractionOutput`` returned by ``super().run()``.
+            extra: ``TransformOutput`` values for the entities this override
+                drove itself. Empty is valid and means "verify what base
+                declared", which is a no-op assertion rather than an error.
+
+        Returns:
+            ``base`` with ``transformed_files`` extended by *extra*'s refs.
+
+        Raises:
+            TransformedFileMissingError: If a result in *extra* reports records
+                but carries no ``transformed_file``.
+            StorageHandoffIncompleteError: If any declared ref is missing from
+                the store or resolves outside ``base.transformed_data_prefix``.
+        """
+        declaration = [
+            *base.transformed_files,
+            *self.collect_transformed_files(extra),
+        ]
+        if declaration:
+            await self.verify_refs(
+                VerifyRefsInput(
+                    # auto_materialize=False: this is a HEAD per ref, not a
+                    # reason to pull every transformed file onto this pod.
+                    refs=[
+                        ref.model_copy(update={"auto_materialize": False})
+                        for ref in declaration
+                    ],
+                    prefix=base.transformed_data_prefix,
+                )
+            )
+        else:
+            logger.warning(
+                "No entity produced transformed output; transformed_data_prefix "
+                "%s names an empty tree",
+                base.transformed_data_prefix,
+            )
+        return base.model_copy(update={"transformed_files": declaration})
 
     @staticmethod
     def collect_transformed_files(
@@ -1417,21 +1467,19 @@ class SqlApp(App):
         those methods are public for exactly that. A connector adding an entity
         the default ``run()`` does not know about — procedures, say — holds a
         ``TransformOutput`` that never passed through ``run()``, so its ref is
-        absent from :attr:`ExtractionOutput.transformed_files`. Concatenate
-        what this returns with that list before handing the declaration to
-        ``App.upload_refs``; leave it out and every asset of that entity is
-        dropped from the upload, silently, because the ref-based path has no
-        directory listing to fall back on.
+        absent from :attr:`ExtractionOutput.transformed_files`. Its refs have
+        to be folded into that list, or every asset of that entity is dropped
+        from the upload silently, because the ref-based path has no directory
+        listing to fall back on.
 
-        The alternative is each connector restating the rule below, which is
-        the drift this ticket exists to remove::
-
-            base = await super().run(input)
-            proc = await self.transform_procedures(...)
-            declaration = [
-                *base.transformed_files,
-                *SqlApp.collect_transformed_files([proc]),
-            ]
+        **Most overrides should call :meth:`finalize_extraction` instead**,
+        which uses this and then verifies the combined declaration.
+        Concatenating this return value by hand and returning it leaves the
+        extra entity unasserted: ``super().run()`` verified the four refs it
+        drove and then returned, so nothing checks the fifth. Reach for this
+        method directly only when you are assembling a declaration you will
+        verify yourself — ``App.upload_refs`` verifies its own delivery, so
+        handing it the concatenated list also covers you.
 
         A transform that mapped zero records legitimately contributes no ref;
         that is the "genuine zero-row entity" signal publish already relies on

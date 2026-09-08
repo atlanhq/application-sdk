@@ -347,3 +347,139 @@ class TestDeprecatedPrivateAliases:
 
         for fn in (SqlApp._build_transform_input, SqlApp._resolve_credential_ref):
             assert "v4.0.0" in inspect.getsource(fn)
+
+
+class TestFinalizeExtractionVerifiesTheAddedEntity:
+    """The bug in the recipe this replaced: ``super().run()`` verifies the four
+    refs it drove and then *returns*, so a fifth ref appended afterwards was
+    never asserted. The override looked, at its call site, exactly like it had
+    verified everything — the same silent shortfall as FND-1790, one layer up.
+    """
+
+    async def test_the_added_entity_is_verified_not_just_appended(self) -> None:
+        app = _app()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref(e) for e in ENTITIES],
+        )
+        procedures = TransformOutput(
+            typename="extras-procedure",
+            total_record_count=9,
+            transformed_file=_transformed_ref("extras-procedure"),
+        )
+        verify = AsyncMock(return_value=VerifyRefsOutput(verified_count=5))
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            out = await app.finalize_extraction(base, [procedures])
+
+        # Appended...
+        assert [r.storage_path for r in out.transformed_files] == [
+            f"{PREFIX}/{e}/entities.json" for e in (*ENTITIES, "extras-procedure")
+        ]
+        # ...and asserted. The fifth ref must be in what was checked, which is
+        # the whole point: appending without this is the bug.
+        sent: VerifyRefsInput = verify.await_args.args[0]
+        assert f"{PREFIX}/extras-procedure/entities.json" in [
+            r.storage_path for r in sent.refs
+        ]
+        assert sent.prefix == PREFIX
+
+    async def test_the_whole_declaration_is_verified_not_only_the_extra(
+        self,
+    ) -> None:
+        """Asserting exactly what is handed downstream is cheaper to reason
+        about than a split proof, at four redundant metadata lookups."""
+        app = _app()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref(e) for e in ENTITIES],
+        )
+        procedures = TransformOutput(
+            typename="extras-procedure",
+            total_record_count=1,
+            transformed_file=_transformed_ref("extras-procedure"),
+        )
+        verify = AsyncMock(return_value=VerifyRefsOutput())
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            await app.finalize_extraction(base, [procedures])
+
+        sent: VerifyRefsInput = verify.await_args.args[0]
+        assert len(sent.refs) == 5
+
+    async def test_refs_go_in_without_auto_materialize(self) -> None:
+        app = _app()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref("database")],
+        )
+        verify = AsyncMock(return_value=VerifyRefsOutput())
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            await app.finalize_extraction(base, [])
+
+        sent: VerifyRefsInput = verify.await_args.args[0]
+        assert all(r.auto_materialize is False for r in sent.refs)
+
+    async def test_no_extra_still_verifies_what_base_declared(self) -> None:
+        """Empty ``extra`` is valid — a no-op assertion, not an error."""
+        app = _app()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref("database")],
+        )
+        verify = AsyncMock(return_value=VerifyRefsOutput())
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            out = await app.finalize_extraction(base, [])
+
+        verify.assert_awaited_once()
+        assert len(out.transformed_files) == 1
+
+    async def test_an_empty_declaration_skips_the_check_and_warns(self) -> None:
+        app = _app()
+        base = ExtractionOutput(transformed_data_prefix=PREFIX)
+        verify = AsyncMock()
+
+        with (
+            patch.object(SqlApp, "verify_refs", new=verify),
+            patch("application_sdk.templates.sql_app.logger") as log,
+        ):
+            out = await app.finalize_extraction(base, [])
+
+        verify.assert_not_awaited()
+        assert out.transformed_files == []
+        assert log.warning.called
+
+    async def test_a_hole_in_the_added_entity_raises_before_verifying(self) -> None:
+        app = _app()
+        base = ExtractionOutput(transformed_data_prefix=PREFIX)
+        verify = AsyncMock()
+
+        with (
+            patch.object(SqlApp, "verify_refs", new=verify),
+            pytest.raises(TransformedFileMissingError),
+        ):
+            await app.finalize_extraction(
+                base,
+                [TransformOutput(typename="extras-procedure", total_record_count=9)],
+            )
+
+        verify.assert_not_awaited()
+
+    async def test_the_default_run_path_goes_through_the_same_method(self) -> None:
+        """If ``run()`` kept its own copy of the concatenate-and-verify block,
+        the two would drift and only the override would be wrong."""
+        verify = AsyncMock(return_value=VerifyRefsOutput(verified_count=4))
+        seen: list[int] = []
+        real = SqlApp.finalize_extraction
+
+        async def _spy(self, base, extra=()):  # noqa: ANN001 — test spy
+            seen.append(len(list(extra)))
+            return await real(self, base, extra)
+
+        with patch.object(SqlApp, "finalize_extraction", new=_spy):
+            result = await _run(_all_produced(), verify)
+
+        assert seen == [4], "run() must delegate to finalize_extraction"
+        assert len(result.transformed_files) == 4
