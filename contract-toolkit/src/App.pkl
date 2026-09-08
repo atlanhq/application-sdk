@@ -3109,6 +3109,38 @@ local credentialConfigOutput: FileOutput = new FileOutput {
 
 local function toPyName(k: String): String = k.replaceAll("-", "_")
 
+/// `toPyName` for a name that is emitted as a Python CLASS ATTRIBUTE, as opposed
+/// to a manifest key or a wire alias.
+///
+/// Pydantic rejects a field whose attribute name starts with `_` — it treats the
+/// name as a private attribute and raises at class-creation time:
+///
+///     NameError: Fields must not use names with leading underscores;
+///     e.g., use 'CratedbCredentialBody__enable_ssl' instead of
+///     '_CratedbCredentialBody__enable_ssl'
+///
+/// (the mangled spelling is Python's, applied to any `__name` written inside a
+/// class body). Marketplace credential forms use a leading `__` for
+/// connection-behaviour toggles the source itself does not store — this file's
+/// own reference documents `__enable_ssl` as the canonical `extraFields`
+/// example, and `atlan-trino-app` ships `__jwt_token`,
+/// `__enable_tls_https` and `__disable_ssl_verification`. Passed through
+/// unsanitized, every one of those generates a module that cannot be imported.
+/// It went unnoticed because the apps carrying such fields were all on
+/// `hasCredentialConfig = false` or on a base that emits no e2e codegen;
+/// `atlan-cratedb-app` is the first to combine the two.
+///
+/// Only the attribute is sanitized. The `alias=` stays the raw field name, so
+/// the wire format — what the tenant stores and what the runtime reads — is
+/// unchanged, and `extra.__enable_ssl` keeps working.
+///
+/// Deliberately NOT folded into `toPyName`: that function also builds manifest
+/// arg keys (`[toPyName(paramKey)] = "{{...}}"`), which are wire format, not
+/// identifiers. Stripping there would silently rename a manifest key and break
+/// the substitution it feeds.
+local function toPyFieldName(k: String): String =
+  toPyName(k).replaceFirst(Regex("^_+"), "")
+
 local function getPyDefaultFactoryField(k: String, fieldType: String, factory: String): String =
   let (line = "\(k): \(fieldType) = Field(default_factory=\(factory))")
   if (line.length <= 84)
@@ -3145,7 +3177,7 @@ local function applyLifecycle(fieldLine: String, u: Widgets.UIElement): String =
       fieldLine.replaceFirst(Regex(" = (.+)$"), " = Field(default=$1\(lifecycleKwargs))")
 
 local function getInputPyField(k: String, u: Widgets.UIElement): String =
-  let (k = toPyName(k))
+  let (k = toPyFieldName(k))
   let (baseLine =
     if (u is Widgets.BooleanInput)
       "\(k): bool = \(if ((u as Widgets.BooleanInput).default) "True" else "False")"
@@ -3262,7 +3294,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   local skipFields: Set<String> = extractionInputProvidedFields.toList().toSet()
   local uiFieldLines: String = (new Listing {
     for (k, u in props) {
-      if (u.includeInInput && !skipFields.contains(toPyName(k)))
+      if (u.includeInInput && !skipFields.contains(toPyFieldName(k)))
         "    " + getInputPyField(k.replaceAll("-", "_"), u) + "\n" +
         (if (u.helpText != "") "    \"\"\"" + u.helpText + "\"\"\"\n" else "")
       else
@@ -3271,8 +3303,8 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   }).toList().fold("", (acc: String, s: String) -> acc + s)
   local objectStringCoercionFields: List<String> = (new Listing {
     for (k, u in props) {
-      when (u.includeInInput && !skipFields.contains(toPyName(k)) && needsJsonObjectStringCoercion(u)) {
-        toPyName(k)
+      when (u.includeInInput && !skipFields.contains(toPyFieldName(k)) && needsJsonObjectStringCoercion(u)) {
+        toPyFieldName(k)
       }
     }
   }).toList()
@@ -3308,8 +3340,8 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // py-names already emitted from uiConfig — used to deduplicate the publish scaffold
   local uiPyNames: Set<String> = (new Listing {
     for (k, u in props) {
-      when (u.includeInInput && !skipFields.contains(toPyName(k))) {
-        toPyName(k)
+      when (u.includeInInput && !skipFields.contains(toPyFieldName(k))) {
+        toPyFieldName(k)
       }
     }
   }).toList().toSet()
@@ -3470,7 +3502,7 @@ local function fmtSubsField(pyName: String, typeStr: String, defaultExpr: String
 
 // Returns a typed pydantic Field line for a substitution field, or null to skip.
 local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
-  let (pyName = toPyName(k))
+  let (pyName = toPyFieldName(k))
   if (u is Widgets.ConnectionCreator || u is Widgets.ConnectionSelector || u is Widgets.ConnectionRefInput)
     null
   else if (u is Widgets.BooleanInput)
@@ -3714,7 +3746,7 @@ local function generateE2ESubstitutionsPy(): FileOutput? =
   let (skip = e2eSubsSkip())
   let (fieldLines = (new Listing {
     for (k, u in props) {
-      when (!skip.contains(toPyName(k)) && u.includeInInput && getSubsFieldLine(k, u) != null) {
+      when (!skip.contains(toPyFieldName(k)) && u.includeInInput && getSubsFieldLine(k, u) != null) {
         getSubsFieldLine(k, u)!! + "\n"
       }
     }
@@ -3749,7 +3781,7 @@ local function generateE2ESubstitutionsPy(): FileOutput? =
 // Returns a typed Field line for a single FieldSpec in a CredentialBody class.
 // authSpecific=true means the field only appears in some auth options (always use a default).
 local function credFieldLine(f: FieldSpec, authSpecific: Boolean): String =
-  let (pyName = toPyName(f.name))
+  let (pyName = toPyFieldName(f.name))
   let (pyType = if (f.fieldType == "number") "int" else "str")
   let (defExpr =
     if (f.defaultValue != null)
@@ -3882,7 +3914,7 @@ local function generateE2ECredentialPy(): FileOutput? =
 
     local condCommonLines = (new Listing {
       for (f in condCommonSpecs) {
-        "    " + toPyName(f.name) + ": str | None = Field(default=None, alias=\"" + f.name + "\")\n"
+        "    " + toPyFieldName(f.name) + ": str | None = Field(default=None, alias=\"" + f.name + "\")\n"
       }
     }).toList().fold("", (acc: String, s: String) -> acc + s)
 
