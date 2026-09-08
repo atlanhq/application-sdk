@@ -315,6 +315,29 @@ def test_first_attempt_never_fails_the_job_before_the_retry_runs():
     )
 
 
+def test_first_attempts_overwrite_so_only_one_artifact_is_ever_live():
+    """Both attempts overwrite, and the first attempt is the load-bearing one.
+
+    Artifacts survive across attempts of a run. Without overwrite on the first
+    attempt, re-running a failed job in a run that already carries the artifact
+    409s there, hands the upload to the retry, and leaves BOTH `<name>` (from
+    the earlier attempt) and `<name>-retry` live. Consumers glob `<name>*`, so
+    a `merge-multiple` download then flattens two files of the same inner name
+    in undefined order — for `docker-image` that means Trivy scanning the
+    previous attempt's image. Overwrite here is what keeps at most one live
+    artifact per name, which is the invariant those globs rest on.
+    """
+    bad = [
+        _label(rel, scope, step)
+        for rel, scope, step, _ in _live_first_attempts()
+        if _with(step).get("overwrite") is not True
+    ]
+    assert not bad, (
+        "The first upload attempt must set `overwrite: true` as well:\n  "
+        + "\n  ".join(bad)
+    )
+
+
 def test_retries_overwrite_so_a_job_rerun_cannot_block_them():
     """Re-running a failed job keeps the run's existing artifacts, so a retry
     landing on a name the run already carries needs overwrite. (It does NOT
@@ -479,6 +502,108 @@ def test_a_retry_in_another_job_does_not_satisfy_the_pairing():
     other_first, other_retries = by_scope["job elsewhere"]
     assert len(other_first) == 1
     assert not other_retries
+
+
+def _retried_literal_names() -> set[str]:
+    """Artifact names that have a retry, expression-free so they can be grepped."""
+    names = set()
+    for _, _, steps in _scopes():
+        first_attempts, retries = _classify(steps)
+        for step in first_attempts:
+            if not step.get("id") or step["id"] not in retries:
+                continue
+            name = _artifact_name(step)
+            if name and "${{" not in name:
+                names.add(name)
+    return names
+
+
+def _addresses_by_bare_name(text: str, name: str) -> bool:
+    """Does `text` use `name` as a whole token, i.e. as an artifact address?
+
+    Artifact names collide with filenames and flags built from the same words
+    (`trivy-results.json`, `--trivy-results`, `docker-image://…`), none of
+    which read an artifact. So the name must stand alone: no word character,
+    dot or dash on the left, and no word character, dot, colon, slash or dash
+    on the right. Excluding a trailing dash is also what stops the retry name
+    from registering as a mention of its own base.
+
+    The one dash allowed on the left is a shell default (`${NAME:-<base>}`),
+    which is an artifact address like any other.
+    """
+    pattern = rf"(?:(?<![\w.-])|(?<=:-)){re.escape(name)}(?![\w.:/-])"
+    return re.search(pattern, text) is not None
+
+
+def _consumer_files() -> list[Path]:
+    """Everything in .github/ that could address an artifact by name.
+
+    Workflows and composites cover `download-artifact` steps and `run:` blocks;
+    the scripts cover the `gh run download` / artifact-listing callers. This
+    suite's own files are excluded — they name artifacts as fixtures.
+    """
+    files = _yaml_files()
+    files += sorted(p for p in (ROOT / "scripts").glob("*.py"))
+    return files
+
+
+def test_no_consumer_addresses_a_retried_artifact_by_base_name_alone():
+    """The class the `-retry` name creates, checked across every consumer.
+
+    Anything that reads a retried artifact has to cope with the second name:
+    a `download-artifact` glob (`<name>*`), a `--name` resolved from the run's
+    artifact listing, or a jq/regex that accepts either. A file that mentions
+    the base name and nowhere mentions the retry name or a glob of it is
+    reading only the first attempt's artifact — which is exactly the artifact
+    that is missing whenever the retry was needed.
+
+    Both cross-run `gh run download --name trivy-results` callers (the
+    dashboard publish and the vulnerability auto-fix) shipped in that state and
+    are what this guard exists to catch.
+    """
+    names = _retried_literal_names()
+    assert len(names) >= 5, f"retried-name discovery collapsed: {sorted(names)}"
+
+    problems = []
+    for path in _consumer_files():
+        text = path.read_text()
+        for name in sorted(names):
+            if not _addresses_by_bare_name(text, name):
+                continue
+            if f"{name}{RETRY_SUFFIX}" in text or f"{name}*" in text:
+                continue
+            problems.append(f"{_rel(path)}: names '{name}' with no retry-aware read")
+    assert not problems, (
+        "A consumer of a retried artifact must accept the retry name too — glob "
+        f"`<name>*`, resolve `--name` from the run's artifact listing, or match "
+        f"`<name>{RETRY_SUFFIX}` explicitly:\n  " + "\n  ".join(problems)
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'gh run download "$RUN_ID" --name trivy-results --dir /tmp',
+        "          name: trivy-results\n",
+        "--jq '.artifacts[] | select(.name == \"trivy-results\")'",
+        "${ARTIFACT_NAME:-trivy-results}",
+    ],
+)
+def test_the_bare_name_matcher_catches_an_artifact_address(text: str):
+    assert _addresses_by_bare_name(text, "trivy-results")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "--output trivy-results.json",  # a file it writes, not an artifact
+        "python3 check_allowlist.py --trivy-results results.json",  # a flag
+        "gh run download --name trivy-results-retry",  # the retry's own name
+        "trivy-container-results.json",  # a different artifact entirely
+    ],
+)
+def test_the_bare_name_matcher_ignores_lookalikes(text: str):
+    assert not _addresses_by_bare_name(text, "trivy-results")
 
 
 def test_exemptions_still_point_at_real_uploads():

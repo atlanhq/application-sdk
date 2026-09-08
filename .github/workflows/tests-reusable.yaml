@@ -2774,6 +2774,12 @@ jobs:
           name: test-readiness-scorecard
           path: results/test-readiness.json
           retention-days: 14
+          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
+          # a run, so re-running a failed job would otherwise 409 here and burn the
+          # retry on a conflict that has nothing to do with a finalize failure. It is
+          # also what holds the invariant every consumer of this upload globs on:
+          # at most ONE live artifact ever matches `<name>*`.
+          overwrite: true
 
       # A finalize 403 comes from an intermediary having a moment, and the
       # retry runs about a second later — well inside the same window. Wait

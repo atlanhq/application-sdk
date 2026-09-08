@@ -87,15 +87,32 @@ with a retry (first attempt `continue-on-error: true`, companion step guarded on
    the same outcome). The 403 comes from an intermediary having a moment; an
    immediate retry lands in the same window and both attempts fail together.
 
-3. **Consumers resolve these artifacts by glob**, `pattern: <name>*` with
-   `merge-multiple: true`, not by exact `name:` — otherwise the retry's artifact
-   is invisible to them. Note that with `pattern:` (unlike `name:`)
-   `download-artifact` treats "nothing matched" as **success**, so any step
-   gated on `steps.<download>.outcome` has to move onto `hashFiles(...)`.
+3. **Both attempts set `overwrite: true`** — the first attempt is the
+   load-bearing one. Artifacts survive across attempts of a run, so without it
+   re-running a failed job 409s on the *first* attempt, hands the upload to the
+   retry, and leaves both `<name>` (from the earlier attempt) and
+   `<name>-retry` live. A `merge-multiple` consumer then flattens two files of
+   the same inner name in undefined order — for `docker-image` that means
+   scanning the previous attempt's image. Overwrite is what keeps **at most one
+   live artifact per name**, which is the invariant the globs below rest on.
 
-`.github/scripts/tests/test_artifact_upload_retry.py` enforces all three over
-every workflow and composite action in this repo, and `EXEMPT` there carries the
-reason for each upload that does not need the hardening.
+4. **Consumers accept the retry name.** Three shapes, pick per call site:
+   - same-run `download-artifact`: `pattern: <name>*` + `merge-multiple: true`,
+     never an exact `name:`;
+   - cross-run `gh run download`: resolve the name from the run's artifact
+     listing first (newest live match of `<name>` or `<name>-retry`) and pass
+     that — a hard-coded `--name <name>` silently no-ops on a retried upload;
+   - a jq/regex selector: match either name explicitly.
+
+   Note that with `pattern:` (unlike `name:`) `download-artifact` treats
+   "nothing matched" as **success**, so any step gated on
+   `steps.<download>.outcome` has to move onto `hashFiles(...)`.
+
+`.github/scripts/tests/test_artifact_upload_retry.py` enforces all four over
+every workflow, composite action and script in this repo — including a
+cross-file check that no consumer addresses a retried artifact by its base name
+alone — and `EXEMPT` there carries the reason for each upload that does not need
+the hardening.
 
 ## Label gates must be event-aware
 

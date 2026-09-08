@@ -137,6 +137,12 @@ jobs:
           name: docker-image
           path: /tmp/image.tar
           retention-days: 7
+          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
+          # a run, so re-running a failed job would otherwise 409 here and burn the
+          # retry on a conflict that has nothing to do with a finalize failure. It is
+          # also what holds the invariant every consumer of this upload globs on:
+          # at most ONE live artifact ever matches `<name>*`.
+          overwrite: true
 
       # A finalize 403 comes from an intermediary having a moment, and the
       # retry runs about a second later — well inside the same window. Wait
@@ -173,9 +179,14 @@ jobs:
         with:
           # `pattern` + merge-multiple, not the bare name: the upload's retry
           # attempt lands under `docker-image-retry` (it has to — see that
-          # step), and exactly one of the two names ever exists in a run, so
-          # the glob resolves to a single artifact flattened into /tmp either
-          # way.
+          # step), so the glob is what finds a retried upload at all.
+          #
+          # It resolves to ONE artifact because both upload attempts set
+          # `overwrite: true`. Without that on the first attempt, re-running a
+          # failed job in a run that already carried `docker-image` would 409
+          # there, publish `docker-image-retry`, and leave two live image.tars
+          # for merge-multiple to flatten in undefined order — Trivy could then
+          # scan the previous attempt's image.
           pattern: docker-image*
           merge-multiple: true
           path: /tmp
@@ -248,6 +259,12 @@ jobs:
           name: trivy-results
           path: /tmp/trivy_results.json
           retention-days: 7
+          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
+          # a run, so re-running a failed job would otherwise 409 here and burn the
+          # retry on a conflict that has nothing to do with a finalize failure. It is
+          # also what holds the invariant every consumer of this upload globs on:
+          # at most ONE live artifact ever matches `<name>*`.
+          overwrite: true
 
       # A finalize 403 comes from an intermediary having a moment, and the
       # retry runs about a second later — well inside the same window. Wait
@@ -305,7 +322,8 @@ jobs:
         continue-on-error: true
         with:
           # Glob, not the bare name: the upload's retry attempt lands under
-          # `trivy-results-retry`. Only one of the two ever exists in a run.
+          # `trivy-results-retry`. One live match only, for the reason the
+          # image download above spells out — both attempts overwrite.
           pattern: trivy-results*
           merge-multiple: true
           path: /tmp
