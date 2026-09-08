@@ -247,7 +247,7 @@ workflowType: String?
 /// Streaming is a genuinely different execution: the batch shell's workflow reads the
 /// entrypoint's Iceberg events table, while the streaming shard hands the DAG its
 /// events inline and never writes that table. Those are two different workflow types
-/// in the app, so one `workflowTypeOverride` cannot serve both — and an entrypoint
+/// in the app, so one `workflowType` cannot serve both — and an entrypoint
 /// whose triggers stream while its DAG still dispatches the batch type is the worst
 /// available outcome: AE signals the shard, the shard runs the DAG, the batch
 /// workflow starts with no events in its arguments, and nothing reports an error.
@@ -256,7 +256,7 @@ workflowType: String?
 /// When set, and when at least one event trigger has `streaming.enabled`, the extract
 /// node renders this workflow type and gains `args.batch = "$.event.batch"` — the
 /// list of `{id, topic, data}` envelopes the shard delivers.
-streamingWorkflowTypeOverride: String?
+streamingWorkflowType: String?
 
 /// Refuses both ways an entrypoint's single extract node can end up dispatching a
 /// workflow type that cannot apply what reaches it.
@@ -270,14 +270,23 @@ streamingWorkflowTypeOverride: String?
 ///   - the streaming type, which reads `args.batch` handed to it inline by the shard
 ///
 /// So a streaming entrypoint may hold streaming event triggers and nothing else.
+/// A `DISABLED` non-streaming trigger counts: it is one somebody means to enable, and
+/// enabling it later would silently retarget it rather than fail.
 /// Mixing is not expressible: whichever type the node renders, the other kind of
 /// trigger starts a workflow with nothing to apply, and reports no error doing it.
 hidden _streamingEntrypointCheck: Any =
   let (_streaming = events.toList().filter((e) -> e.triggerConfig.streaming.enabled))
   let (_batch = events.toList().filter((e) -> !e.triggerConfig.streaming.enabled))
-    if (_streaming.isEmpty) null
-    else if (streamingWorkflowTypeOverride == null || streamingWorkflowTypeOverride!! == "")
-      throw("This entrypoint has event trigger(s) with streaming.enabled = true but no streamingWorkflowTypeOverride. AE would signal the streaming shard, which would then dispatch the batch workflow type with no events in its arguments — silently applying nothing. Set streamingWorkflowTypeOverride to the app's streaming workflow type (e.g. \"my-app:my-entrypoint-stream\").")
+    if (_streaming.isEmpty)
+      // The mirror of the case below, and the same class this whole check exists for:
+      // a declared value silently dropped. With nothing streaming, the node renders
+      // the batch type and the streaming type the author wrote is discarded without a
+      // word — a contract that reads as streaming and behaves as batch.
+      if (streamingWorkflowType != null && streamingWorkflowType!! != "")
+        throw("This entrypoint sets streamingWorkflowType but no event trigger has streaming.enabled = true, so the extract node renders the batch workflow type and the streaming type is dropped. Set streaming { enabled = true } on the trigger(s) that should stream, or remove streamingWorkflowType.")
+      else null
+    else if (streamingWorkflowType == null || streamingWorkflowType!! == "")
+      throw("This entrypoint has event trigger(s) with streaming.enabled = true but no streamingWorkflowType. AE would signal the streaming shard, which would then dispatch the batch workflow type with no events in its arguments — silently applying nothing. Set streamingWorkflowType to the app's streaming workflow type (e.g. \"my-app:my-entrypoint-stream\").")
     else if (!_batch.isEmpty)
       throw("This entrypoint mixes streaming and non-streaming event triggers: streaming = \(_streaming.map((e) -> e.name)), batch = \(_batch.map((e) -> e.name)). Both start the same extract node, which now dispatches the streaming workflow type — so the batch trigger(s) would start it with args.batch resolving to nothing and apply nothing, silently. Move the streaming trigger(s) to their own entrypoint.")
     else if (!schedules.isEmpty)
@@ -2439,6 +2448,12 @@ class EventSource {
 /// mechanics rather than defaulting into the contract by being appended to a flat
 /// class.
 class StreamingDispatch {
+  /// Referenced by both the default and `_shapeCheck`, so "off its default" stays a
+  /// structural test like its two neighbours (`batchSize > 1`, `batchWaitSeconds > 0`)
+  /// rather than a restatement of the literal. Changing the number here previously
+  /// meant every trigger that never mentions the field started failing the check.
+  const local defaultEventsPerSignal = 500
+
   /// Opt this trigger into AE's streaming dispatch shell: instead of firing a fresh
   /// top-level run per batch, AE signals each matching event into a persistent,
   /// signal-driven shard (one per workflow slug) that runs the DAG inline. Reserved
@@ -2478,14 +2493,16 @@ class StreamingDispatch {
   /// which one-signal-per-event breaches at 5 events/second. Lower this only to
   /// shrink per-signal payloads; there is no latency benefit to sending events singly,
   /// because the shard batches on arrival either way.
-  eventsPerSignal: Int(this >= 1 && this <= 1000) = 500
+  eventsPerSignal: Int(this >= 1 && this <= 1000) = defaultEventsPerSignal
 
   /// Batch knobs are silently inert unless streaming is on — that failure mode is a
   /// trigger that looks tuned and behaves default, which is invisible until someone
   /// reads a latency graph. Fail at eval time instead. Lazy (hidden), so the
   /// renderer must reference it for the throw to fire.
   hidden _shapeCheck: Any =
-    if (!enabled && (batchSize > 1 || batchWaitSeconds > 0 || eventsPerSignal != 500))
+    if (!enabled
+        && (batchSize > 1 || batchWaitSeconds > 0
+            || eventsPerSignal != defaultEventsPerSignal))
       throw("StreamingDispatch: batchSize/batchWaitSeconds/eventsPerSignal require enabled = true; without it AE ignores all three.")
     else if (batchSize == 1 && batchWaitSeconds > 0)
       throw("StreamingDispatch: batchWaitSeconds is meaningless at batchSize = 1 (the shard never waits); raise the batch size or drop the wait.")
@@ -2509,6 +2526,12 @@ class EventTriggerConfig {
   /// fire-and-forget. Refused rather than silently voided: the batch-knob case costs
   /// latency, this one costs events. Spans both levels, so it lives here rather than
   /// on `StreamingDispatch`.
+  /// Forced from the manifest renderer only, unlike `_streamingEntrypointCheck` which
+  /// is also forced from `output`. That asymmetry is deliberate: the skip here is
+  /// `uiConfig == null`, and a contract on that path emits no manifest at all, so an
+  /// unrefused value never reaches AE. `_streamingEntrypointCheck` needed the extra
+  /// force because `pipeline { extract = null }` still emits a manifest, with the
+  /// trigger config in it.
   hidden _ackShapeCheck: Any =
     if (streaming.enabled && !ackPaths.isEmpty)
       throw("EventTriggerConfig: ackPaths is inert when streaming.enabled = true (the streaming path writes no acks and has no watchdog backstop); drop ackPaths or drop streaming.")
@@ -2964,7 +2987,7 @@ local function generateExtractNode(): Mapping<String, Any> =
   let (step = pipeline.extract!!)
   let (_extractEhCheck = validateWorkflowNodeErrorHandling(step.errorHandling, "pipeline.extract.errorHandling"))
   let (topLevelFormFields = manifestTopLevelArgs.toMap().values.toList())
-    let (_streamingEpCheck = _streamingEntrypointCheck)
+  let (_streamingEpCheck = _streamingEntrypointCheck)
   let (_isStreaming = events.toList().any((e) -> e.triggerConfig.streaming.enabled))
   new Mapping {
     ["activity_name"] = "execute_workflow"
@@ -2975,7 +2998,7 @@ local function generateExtractNode(): Mapping<String, Any> =
     // the runtime app class name) or failure logs won't surface (HYP-1678).
     ["app_name"] = name
     ["inputs"] = new Mapping {
-      ["workflow_type"] = if (_isStreaming) streamingWorkflowTypeOverride!! else workflowTypeResolved
+      ["workflow_type"] = if (_isStreaming) streamingWorkflowType!! else workflowTypeResolved
       ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""

@@ -191,17 +191,18 @@ under `streaming` and is meaningless outside AE's current implementation.
 | `streaming.batchWaitSeconds` | `Number` (≥ 0) | `0` | Max wait for a batch to fill before running with whatever accumulated. |
 | `streaming.eventsPerSignal` | `Int` (1–1000) | `500` | How many events the consumer packs into one signal to the shard. |
 
-The entrypoint also needs **`streamingWorkflowTypeOverride`** — the workflow type the
+The entrypoint also needs **`streamingWorkflowType`** — the workflow type the
 DAG dispatches when any of its triggers stream:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `streamingWorkflowTypeOverride` | `String?` | `null` | Workflow type dispatched under streaming. **Required** when any trigger sets `streaming.enabled`. |
+| `streamingWorkflowType` | `String?` | `null` | Workflow type dispatched under streaming. **Required** when any trigger sets `streaming.enabled`. |
 
 Streaming is a different execution, not a faster one: the batch shell's workflow reads
 the entrypoint's Iceberg events table, while the streaming shard hands the DAG its
 events inline and never writes that table. Those are two different workflow types in
-the app, so one `workflowTypeOverride` cannot serve both. When streaming is on, the
+the app, so one `workflowType` (or `workflowTypeOverride` on NativeApp.pkl) cannot
+serve both. When streaming is on, the
 extract node renders this type and gains `args.batch = "$.event.batch"`.
 
 Omitting it is refused at eval time. Without that refusal the failure is silent and
@@ -230,7 +231,7 @@ shape, and `examples/scheduled` is the batch-plus-schedules shape.
 
 ```pkl
 // Required whenever any trigger below streams.
-streamingWorkflowTypeOverride = "example-app:cdc-stream"
+streamingWorkflowType = "example-app:cdc-stream"
 
 events {
   // Real-time: one event, one DAG walk.
@@ -279,6 +280,7 @@ its events inline from the `$.event.*` jsonpath namespace:
 | `$.event.batch` | Always a list of `{id, topic, data}` envelopes, whatever the batch size. |
 | `$.event.event_ids` | The batch's event ids. |
 | `$.event.data` | Convenience alias for the single event's payload — set only when the batch holds exactly one event. |
+| `$.event.topic` | Convenience alias for the single event's Kafka topic — set only when the batch holds exactly one event. Not derivable from the payload: a Debezium record carries `__op` and `__source_ts_ms`, nothing naming its table. |
 
 **Caveats.**
 

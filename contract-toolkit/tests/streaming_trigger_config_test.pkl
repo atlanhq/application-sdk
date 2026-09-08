@@ -61,7 +61,7 @@ local appUiConfig = new App.UIConfig {
 
 // Real-time streaming: opted in, batching left at the default (one event per DAG run).
 local appStreamingRealtime = (App) {
-  streamingWorkflowTypeOverride = "example-app:cdc-stream"
+  streamingWorkflowType = "example-app:cdc-stream"
   name = "app-streaming-realtime"
   displayName = "App Streaming Realtime"
   icon = "https://example.com/icon.svg"
@@ -85,7 +85,7 @@ local appStreamingRealtime = (App) {
 
 // Batched streaming: trades per-event latency for fewer, cheaper DAG walks.
 local appStreamingBatched = (App) {
-  streamingWorkflowTypeOverride = "example-app:cdc-stream"
+  streamingWorkflowType = "example-app:cdc-stream"
   name = "app-streaming-batched"
   displayName = "App Streaming Batched"
   icon = "https://example.com/icon.svg"
@@ -143,7 +143,7 @@ local appNoStreamCfg = appCfg(appNoStreaming)
 // ── NativeApp.pkl ─────────────────────────────────────────────────────────
 
 local nativeStreamingRealtime = (NativeApp) {
-  streamingWorkflowTypeOverride = "native-app:cdc-stream"
+  streamingWorkflowType = "native-app:cdc-stream"
   name = "native-streaming-realtime"
   displayName = "Native Streaming Realtime"
   connector = Connectors.API
@@ -168,7 +168,7 @@ local nativeStreamingRealtime = (NativeApp) {
 }
 
 local nativeStreamingBatched = (NativeApp) {
-  streamingWorkflowTypeOverride = "native-app:cdc-stream"
+  streamingWorkflowType = "native-app:cdc-stream"
   name = "native-streaming-batched"
   displayName = "Native Streaming Batched"
   connector = Connectors.API
@@ -308,7 +308,7 @@ facts {
         enabled = true
         batchSize = 1000
       }
-    }.streaming.batchSize) != null
+    }.streaming.batchSize).contains("this <= 500")
   }
 
   ["events-per-signal above one Dapr delivery is rejected at eval time"] {
@@ -317,7 +317,7 @@ facts {
         enabled = true
         eventsPerSignal = 5000
       }
-    }.streaming.eventsPerSignal) != null
+    }.streaming.eventsPerSignal).contains("this <= 1000")
   }
 
   // Review finding: ackPaths is an explicit at-least-once assertion, and the
@@ -327,7 +327,7 @@ facts {
     module.catch(() -> new App.EventTriggerConfig {
       ackPaths { "$.extract.outputs.ack_path" }
       streaming { enabled = true }
-    }._ackShapeCheck) != null
+    }._ackShapeCheck).contains("ackPaths is inert when streaming.enabled")
   }
 
   ["ackPaths alone (no streaming) is still allowed"] {
@@ -364,9 +364,11 @@ facts {
   }
 
   ["streaming without a streaming workflow type is refused"] {
+    // Asserts the message: a bare `!= null` would pass identically if the throw
+    // came from the `!!` on a null override rather than from the refusal.
     module.catch(() -> appDag((appStreamingRealtime) {
-      streamingWorkflowTypeOverride = null
-    })) != null
+      streamingWorkflowType = null
+    })).contains("no streamingWorkflowType")
   }
 
   ["both schemas render the same streaming shape"] {
@@ -449,11 +451,20 @@ facts {
   // forced only inside generateExtractNode — so an extract-less contract rendered
   // streaming_enabled: true and threw nothing. Both schemas now force the check in
   // the output block as well. Reported by mothership-ai.
+  // The mirror of the missing-workflow-type refusal: the type is declared and nothing
+  // streams, so the node renders the batch type and the declared value is dropped.
+  // Same "declared and inert" class as the batch knobs and ackPaths.
+  ["a streaming workflow type with nothing streaming is refused"] {
+    module.catch(() -> appDag((appNoStreaming) {
+      streamingWorkflowType = "example-app:cdc-stream"
+    })).contains("no event trigger has streaming.enabled")
+  }
+
   ["App.pkl: streaming on an extract-less entrypoint is still refused"] {
     module.catch(() -> forceOutput((appStreamingRealtime) {
       pipeline { extract = null }
-      streamingWorkflowTypeOverride = null
-    })).contains("streamingWorkflowTypeOverride")
+      streamingWorkflowType = null
+    })).contains("streamingWorkflowType")
   }
 
   // No NativeApp equivalent: it has no `pipeline`, so the extract node is not

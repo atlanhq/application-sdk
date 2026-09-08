@@ -8,7 +8,7 @@
 /// is its own example rather than another trigger on `examples/scheduled`. An
 /// entrypoint renders one extract node and every trigger on it — each schedule, each
 /// event trigger — starts that same node, so its `workflow_type` is shared. A
-/// streaming entrypoint's node dispatches `streamingWorkflowTypeOverride` and gains
+/// streaming entrypoint's node dispatches `streamingWorkflowType` and gains
 /// `args.batch`; a batch entrypoint's dispatches the batch type and reads Iceberg.
 /// The two cannot coexist: whichever renders, the other kind of trigger starts a
 /// workflow with nothing to apply and reports no error. `_streamingEntrypointCheck`
@@ -43,7 +43,7 @@ uiConfig = new UIConfig {
 // workflow that reads them from `args.batch` rather than the batch workflow, which
 // reads the Iceberg events table the shard never writes. Omitting this while any
 // trigger streams is refused at eval time — the failure it prevents is silent.
-streamingWorkflowTypeOverride = "example-app:cdc-stream"
+streamingWorkflowType = "example-app:cdc-stream"
 
 // Every trigger here streams, and there are no `schedules`. Both are load-bearing:
 // see the note at the top of this file.
