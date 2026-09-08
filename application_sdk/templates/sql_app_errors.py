@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from application_sdk.errors.categories import Audience
-from application_sdk.errors.leaves import AppTimeoutError, UnimplementedError
+from application_sdk.errors.leaves import (
+    AppTimeoutError,
+    DataIntegrityError,
+    UnimplementedError,
+)
 
 
 @dataclass(kw_only=True)
@@ -84,3 +88,35 @@ class SqlProbeTimeoutError(AppTimeoutError):
     code: ClassVar[str] = "TIMEOUT_SQL_PROBE"
     audience: ClassVar[Audience] = Audience.USER
     operation: str | None = "prime_sql_auth"
+
+
+@dataclass(kw_only=True)
+class TransformedFileMissingError(DataIntegrityError):
+    """A transform reported records but declared no output file (FND-1790).
+
+    ``TransformOutput.transformed_file`` is the transform's declaration of
+    what it wrote. A transform that mapped ``n > 0`` records and returned no
+    ref has produced asset data nothing can point at: the framework will not
+    persist it, the completeness check has nothing to assert, and the entity
+    simply will not be in the tree publish walks — where its absence reads as
+    "removed from source" and archives the assets.
+
+    ``SqlApp._transform_entity`` never does this (it emits a ref whenever
+    ``count > 0``), so reaching this error means a subclass overrode a
+    ``transform_*`` task and dropped the ref. Failing here names the entity
+    and the count; the alternative is a quiet short publish two stages later.
+
+    Non-retryable: the same override returns the same shape on every attempt.
+    """
+
+    code: ClassVar[str] = "DATA_INTEGRITY_SQL_APP_TRANSFORMED_FILE_MISSING"
+    message: str = (
+        "A transform task reported records but returned no transformed_file "
+        "reference, so its output cannot be verified or handed downstream"
+    )
+    suggested_action: str | None = (
+        "Return the FileReference for the file the transform wrote on "
+        "TransformOutput.transformed_file (see SqlApp._transform_entity)"
+    )
+    typename: str | None = None
+    record_count: int = 0

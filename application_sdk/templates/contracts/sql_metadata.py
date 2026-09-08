@@ -313,6 +313,36 @@ class ExtractionOutput(Output, PublishInputMixin):
     additional output prefixes (e.g. lineage-specific dirs) can derive them
     from this field instead of re-calling workflow.info()."""
 
+    transformed_files: Annotated[list[FileReference], MaxItems(1000)] = Field(
+        default_factory=list
+    )
+    """The producer's declaration of what the transform step actually wrote.
+
+    One durable ``FileReference`` per entity that transformed at least one
+    record, exactly as the matching ``transform_*`` task returned it —
+    ``transformed/<entity>/entities.json`` for the v3 ``SqlApp`` template.
+    Entities that transformed zero rows contribute nothing.
+
+    Populated by ``SqlApp.run()``. A ``run()`` that does not set it — a
+    connector override, or one of the deprecated v2 extractor templates —
+    leaves it empty, so read an empty list as "this run declared nothing",
+    not as "this run produced nothing". From ``SqlApp.run()`` the two
+    coincide.
+
+    Why this exists alongside :attr:`transformed_data_prefix` (FND-1790):
+    the prefix is publish's contract and is walked, and a walk cannot tell a
+    short tree from a small one — three of four entities present looks
+    identical to a run that only had three.  These refs are the expected set
+    the prefix can be checked against.  ``SqlApp.run()`` checks them itself
+    via ``App.verify_refs`` before returning; they are surfaced here so a
+    connector's own Atlan bridge can hand each ref to ``App.upload(ref=...)``
+    instead of scanning a directory that, on a fanned-out run, was written by
+    pods this one never shared a filesystem with.
+
+    ``transformed_data_prefix`` is unchanged and remains the field publish
+    reads — these refs supplement it, they do not replace it.
+    """
+
 
 class ExtractionTaskInput(Input):
     """Fields shared by all per-task inputs derived from ExtractionInput.
