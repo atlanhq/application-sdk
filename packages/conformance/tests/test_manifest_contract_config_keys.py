@@ -492,6 +492,72 @@ def test_k018_silent_when_the_losing_declaration_sets_extra_allow(
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
 
+_DIRECT_BIND_APP_SRC = """\
+from application_sdk.app import App, entrypoint
+
+from app.generated.crawler._input import AppInputContract as CrawlerInput
+from app.generated.miner._input import AppInputContract as MinerInput
+
+
+class CrawlOutput:
+    status: str
+
+
+class MineOutput:
+    status: str
+
+
+class MyApp(App):
+    @entrypoint(name="crawler")
+    async def crawl(self, input: CrawlerInput) -> CrawlOutput:
+        pass
+
+    @entrypoint(name="miner")
+    async def mine(self, input: MinerInput) -> MineOutput:
+        pass
+"""
+
+
+def test_k018_silent_when_a_directly_bound_contract_sibling_sets_extra_allow(
+    tmp_path: Path,
+) -> None:
+    """Both entrypoints bind the generated contract itself — the root is ambiguous.
+
+    With no app-side subclass to give it a distinct name, the record
+    `_pair_manifests_with_contracts` hands to `_walk_chain` *is* the ambiguous
+    one, and its first-wins lookup can only ever reach the crawler's. Seeding
+    that node directly would read `extra="allow"` off the wrong declaration;
+    starting the walk at the name unions both. Same hazard as the base-chain
+    case above, one level up.
+    """
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/generated/crawler/_input.py": _generated_input(
+                "    output_dir: str = ''\n"
+            ),
+            "app/generated/miner/_input.py": (
+                "from pydantic import ConfigDict\n"
+                "from application_sdk.templates.contracts.sql_metadata import "
+                "ExtractionInput\n"
+                "\n"
+                "class AppInputContract(ExtractionInput):\n"
+                "    model_config = ConfigDict(extra='allow')\n"
+            ),
+            "app/connector.py": _DIRECT_BIND_APP_SRC,
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "crawler" / "manifest.json",
+        {"extract": _extract_node({})},
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "miner" / "manifest.json",
+        {"extract": _extract_node({"anything_at_all": "{{anything-at-all}}"})},
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
 # ---------------------------------------------------------------------------
 # K018 — arg-shape handling
 # ---------------------------------------------------------------------------

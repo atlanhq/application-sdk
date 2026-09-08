@@ -221,6 +221,16 @@ def _walk_chain(
     direction: an ambiguous name that any declaration leaves unresolved, or
     that any declaration opens with ``extra="allow"``, silences the manifest
     rather than guessing which one the runtime import picked.
+
+    The walk starts at *rec*'s own NAME rather than seeding its node directly,
+    so that union covers the root record too. *rec* reaches this function from
+    a first-wins ``by_name`` lookup in :func:`_pair_manifests_with_contracts`,
+    and when two entrypoints bind their generated ``AppInputContract``
+    *directly* — no app-side subclass to give it a distinct name — the root IS
+    the ambiguous record. Seeding its node would then read ``extra="allow"``
+    and base resolvability off whichever declaration the pairing happened to
+    pick, which is the same first-wins hazard one level up. Ambiguity is a
+    property of a name, so it is handled in exactly one place: ``walk``.
     """
     nodes: list[ast.ClassDef] = []
     fully_resolved = True
@@ -244,9 +254,7 @@ def _walk_chain(
         elif not _is_known_sdk_contract(name):
             fully_resolved = False
 
-    nodes.append(rec.node)
-    for base in rec.bases:
-        walk(base)
+    walk(rec.name)
     return nodes, fully_resolved
 
 
@@ -489,9 +497,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         if any(_class_allows_extra(node) for node in chain_nodes):
             continue  # real Pydantic extra="allow" keeps undeclared keys.
 
-        declared = _resolved_field_names(
-            input_rec, file_aliases, by_name, by_name_all
-        )
+        declared = _resolved_field_names(input_rec, file_aliases, by_name, by_name_all)
         directives = file_directives.get(input_rec.file, {})
 
         findings.extend(
