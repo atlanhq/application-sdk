@@ -1318,7 +1318,7 @@ class SqlApp(App):
         # every declared object is present in the store and sits under the
         # prefix about to be returned, so a hole fails the run here instead of
         # surfacing as a short publish two stages downstream.
-        transformed_files = self._collect_transformed_files(transform_results)
+        transformed_files = self.collect_transformed_files(transform_results)
 
         if transformed_files:
             await self.verify_refs(
@@ -1358,18 +1358,40 @@ class SqlApp(App):
         )
 
     # =====================================================================
-    # Internal helpers
+    # Public helpers for ``run()`` overrides
     # =====================================================================
 
     @staticmethod
-    def _collect_transformed_files(
+    def collect_transformed_files(
         results: Sequence[TransformOutput],
     ) -> list[FileReference]:
-        """Return the ``transformed_file`` refs the transform tasks declared.
+        """Return the ``transformed_file`` refs a set of transforms declared.
 
         This is the producer's declaration of what the transform step wrote —
         the expected set ``transformed_data_prefix`` gets checked against
         before it is handed downstream (FND-1790).
+
+        **Public because a ``run()`` override needs it.** The class docstring
+        already directs connectors that need their own sequencing to override
+        ``run()`` and drive ``extract_*`` / ``transform_*`` themselves, and
+        those methods are public for exactly that. A connector adding an entity
+        the default ``run()`` does not know about — procedures, say — holds a
+        ``TransformOutput`` that never passed through ``run()``, so its ref is
+        absent from :attr:`ExtractionOutput.transformed_files`. Concatenate
+        what this returns with that list before handing the declaration to
+        ``App.upload_refs``; leave it out and every asset of that entity is
+        dropped from the upload, silently, because the ref-based path has no
+        directory listing to fall back on.
+
+        The alternative is each connector restating the rule below, which is
+        the drift this ticket exists to remove::
+
+            base = await super().run(input)
+            proc = await self.transform_procedures(...)
+            declaration = [
+                *base.transformed_files,
+                *SqlApp.collect_transformed_files([proc]),
+            ]
 
         A transform that mapped zero records legitimately contributes no ref;
         that is the "genuine zero-row entity" signal publish already relies on
@@ -1406,6 +1428,10 @@ class SqlApp(App):
                     observed="transformed_file=None",
                 )
         return refs
+
+    # =====================================================================
+    # Internal helpers
+    # =====================================================================
 
     @staticmethod
     def _build_transform_input(

@@ -20,6 +20,7 @@ from application_sdk.contracts.storage import VerifyRefsInput, VerifyRefsOutput
 from application_sdk.contracts.types import FileReference
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
+    ExtractionOutput,
     ExtractionTaskOutput,
     PrimeAuthOutput,
     TransformOutput,
@@ -222,16 +223,61 @@ class TestCollectTransformedFiles:
             )
             for e in ENTITIES
         ]
-        refs = SqlApp._collect_transformed_files(outs)
+        refs = SqlApp.collect_transformed_files(outs)
         assert [r.storage_path for r in refs] == [
             f"{PREFIX}/{e}/entities.json" for e in ENTITIES
         ]
 
     def test_unnamed_entity_still_names_the_count(self) -> None:
         with pytest.raises(TransformedFileMissingError) as exc:
-            SqlApp._collect_transformed_files([TransformOutput(total_record_count=5)])
+            SqlApp.collect_transformed_files([TransformOutput(total_record_count=5)])
         assert "<unknown>" in exc.value.message
         assert exc.value.record_count == 5
 
     def test_empty_input_declares_nothing(self) -> None:
-        assert SqlApp._collect_transformed_files([]) == []
+        assert SqlApp.collect_transformed_files([]) == []
+
+
+class TestCollectTransformedFilesIsPublicForRunOverrides:
+    """The reason it is public: a ``run()`` override adding a fifth entity.
+
+    ``SqlApp.run()`` builds the declaration for the four entities it drives.
+    A connector that adds one — procedures, say — holds a ``TransformOutput``
+    that never passed through ``run()``, so its ref is absent from
+    ``ExtractionOutput.transformed_files``. Without a public way to apply the
+    same "records but no ref = raise, zero rows = skip" rule, every connector
+    restates it by hand, which is the drift FND-1790 exists to remove.
+    """
+
+    def test_reachable_off_the_class_with_no_instance(self) -> None:
+        """A ``run()`` override calls it before it has anything else to hand."""
+        assert SqlApp.collect_transformed_files([]) == []
+
+    def test_the_documented_concatenation_yields_the_whole_declaration(self) -> None:
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref(e) for e in ENTITIES],
+        )
+        procedures = TransformOutput(
+            typename="extras-procedure",
+            total_record_count=9,
+            transformed_file=_transformed_ref("extras-procedure"),
+        )
+
+        declaration = [
+            *base.transformed_files,
+            *SqlApp.collect_transformed_files([procedures]),
+        ]
+
+        assert [r.storage_path for r in declaration] == [
+            f"{PREFIX}/{e}/entities.json" for e in (*ENTITIES, "extras-procedure")
+        ]
+
+    def test_the_added_entity_gets_the_same_hole_check(self) -> None:
+        """The whole point of sharing the helper rather than the rule."""
+        with pytest.raises(TransformedFileMissingError) as exc:
+            SqlApp.collect_transformed_files(
+                [TransformOutput(typename="extras-procedure", total_record_count=9)]
+            )
+
+        assert exc.value.typename == "extras-procedure"
