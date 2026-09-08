@@ -133,7 +133,7 @@ def _make_fake_run(
     "root-only" simulates a partial eval (rc=0) that writes only atlan.yaml."""
     real_run = subprocess.run
 
-    def fake_run(cmd, *, check=False):
+    def fake_run(cmd, *, check=False, cwd=None):
         prog = cmd[0]
         if prog == "pkl" and cmd[1:3] == ["project", "resolve"]:
             if resolve_changes_lock:
@@ -267,7 +267,7 @@ def test_regenerate_retries_transient_eval_failure(repo, monkeypatch):
     real_run = subprocess.run
     calls = {"eval": 0}
 
-    def fake_run(cmd, *, check=False):
+    def fake_run(cmd, *, check=False, cwd=None):
         prog = cmd[0]
         if prog == "pkl" and cmd[1:3] == ["project", "resolve"]:
             (repo / "contract" / "PklProject.deps.json").write_text(
@@ -577,7 +577,7 @@ def test_missing_pkl_project_is_noop(repo, monkeypatch):
     (repo / "contract" / "PklProject").unlink()
     before = _commit_count(repo)
 
-    def fail_if_called(cmd, *, check=False):
+    def fail_if_called(cmd, *, check=False, cwd=None):
         if cmd[0] == "pkl":
             pytest.fail(f"pkl must not run when PklProject is absent: {cmd}")
         return subprocess.run(cmd, check=check, text=True, capture_output=True)
@@ -607,7 +607,7 @@ def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):
 
     formatted: list[str] = []
 
-    def spy_run(cmd, *, check=False):
+    def spy_run(cmd, *, check=False, cwd=None):
         if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "format":
             formatted.extend(a for a in cmd[3:] if not a.startswith("-"))
         return types.SimpleNamespace(returncode=0)
@@ -639,7 +639,7 @@ def test_format_generated_check_defers_to_consumer_ruff_config(tmp_path, monkeyp
 
     check_calls: list[list[str]] = []
 
-    def spy_run(cmd, *, check=False):
+    def spy_run(cmd, *, check=False, cwd=None):
         if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "check":
             check_calls.append(cmd)
         return types.SimpleNamespace(returncode=0)
@@ -666,7 +666,7 @@ def test_format_generated_lints_real_path_not_temp_dir(tmp_path, monkeypatch):
 
     check_calls: list[list[str]] = []
 
-    def spy_run(cmd, *, check=False):
+    def spy_run(cmd, *, check=False, cwd=None):
         if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "check":
             check_calls.append(cmd)
         return types.SimpleNamespace(returncode=0)
@@ -693,7 +693,7 @@ def test_format_generated_passes_force_exclude(tmp_path, monkeypatch):
 
     calls: list[list[str]] = []
 
-    def spy_run(cmd, *, check=False):
+    def spy_run(cmd, *, check=False, cwd=None):
         if cmd[:2] == ["uvx", "ruff"]:
             calls.append(cmd)
         return types.SimpleNamespace(returncode=0)
@@ -709,7 +709,7 @@ def test_format_generated_passes_force_exclude(tmp_path, monkeypatch):
 
 
 def test_resolve_failure_is_fatal(repo, monkeypatch):
-    def fake_run(cmd, *, check=False):
+    def fake_run(cmd, *, check=False, cwd=None):
         if cmd[0] == "pkl" and cmd[1:3] == ["project", "resolve"]:
             if check:
                 raise subprocess.CalledProcessError(1, cmd)
@@ -764,7 +764,7 @@ def test_multi_root_gives_each_root_its_own_eval_base(repo, monkeypatch):
     _multi_root_contract(repo)
     bases: list[str] = []
 
-    def fake_run(cmd, *, check=False):
+    def fake_run(cmd, *, check=False, cwd=None):
         if cmd[0] == "pkl" and cmd[1] == "eval":
             out = Path(cmd[cmd.index("-m") + 1])
             bases.append(str(out))
@@ -793,7 +793,7 @@ def test_multi_root_never_writes_repo_root_files(repo, monkeypatch):
     _multi_root_contract(repo)
     (repo / "atlan.yaml").write_text("hand: authored\n")
 
-    def fake_run(cmd, *, check=False):
+    def fake_run(cmd, *, check=False, cwd=None):
         if cmd[0] == "pkl" and cmd[1] == "eval":
             out = Path(cmd[cmd.index("-m") + 1])
             out.mkdir(parents=True, exist_ok=True)
@@ -810,7 +810,7 @@ def test_multi_root_one_bad_root_does_not_sink_the_others(repo, monkeypatch):
     """A partial regeneration beats none: the caller diffs the result."""
     _multi_root_contract(repo)
 
-    def fake_run(cmd, *, check=False):
+    def fake_run(cmd, *, check=False, cwd=None):
         if cmd[0] == "pkl" and cmd[1] == "eval":
             if Path(cmd[-1]).stem == "miner":
                 return subprocess.CompletedProcess(cmd, 1, "", "boom")
@@ -854,7 +854,9 @@ def test_multi_root_swap_gets_a_per_root_baseline(repo, monkeypatch):
     monkeypatch.setattr(
         mod,
         "run",
-        lambda cmd, *, check=False: subprocess.CompletedProcess(cmd, 0, "", ""),
+        lambda cmd, *, check=False, cwd=None: subprocess.CompletedProcess(
+            cmd, 0, "", ""
+        ),
     )
     monkeypatch.setattr(mod, "run_post_generate", lambda d: None)
     monkeypatch.setattr(mod, "_format_generated", lambda: None)
@@ -874,3 +876,180 @@ def test_multi_root_baseline_absent_root_is_not_a_failure(repo, monkeypatch):
     monkeypatch.setattr(mod, "export_contract_at", lambda ref, d, dest: True)
     out, work = mod._baseline_output_for_root("contract", "crawler.pkl")
     assert out is None and work is not None  # workdir returned for cleanup
+
+
+# --- baseline formatting (override detection must not trip on ruff noise) ----
+
+# One generated module as `pkl eval` emits it. It stands in for both kinds of
+# difference the toolkit really does emit: its `application_sdk` import lands in
+# its own group (a repo whose isort config calls that package third-party
+# re-sorts it), and the credential model's ConfigDict line is over the default
+# line length at class indent.
+RAW_PY = "from pydantic import Field\n\nfrom application_sdk.x import Y\n\nz = ( 1 )\n"
+
+
+def _ruff_normalise(text: str) -> str:
+    """Stand in for ruff: merge and sort the import groups, unwrap the parens."""
+    return text.replace(
+        "from pydantic import Field\n\nfrom application_sdk.x import Y",
+        "from application_sdk.x import Y\nfrom pydantic import Field",
+    ).replace("z = ( 1 )", "z = 1")
+
+
+# What the working tree holds: the same module after `_format_generated`. Derived
+# from the stub that produces it rather than spelled out, because a hand-written
+# copy differing by so much as a blank line is no longer "the formatted baseline"
+# — it reads as a genuine override and the test passes with the fix disabled.
+FORMATTED_PY = _ruff_normalise(RAW_PY)
+RAW_PY_BUMPED = RAW_PY.replace("z = ( 1 )", "z = ( 1 )\nadded_by_the_bump = True")
+
+
+def _fake_ruff_run(repo: Path, *, baseline_py: str, bumped_py: str):
+    """`run` replacement whose `uvx ruff` actually normalises, so a
+    formatting-only baseline difference is reproducible.
+
+    Everything the real ruff would do is collapsed into `_ruff_normalise`,
+    applied to the paths ruff is handed and resolved against `cwd` the way a real
+    invocation would be. Without that, a stubbed no-op ruff cannot tell a
+    formatted baseline from an unformatted one, which is the whole subject here.
+    """
+    real_run = subprocess.run
+    normalise = _ruff_normalise
+
+    def fake_run(cmd, *, check=False, cwd=None):
+        prog = cmd[0]
+        if prog == "pkl" and cmd[1:3] == ["project", "resolve"]:
+            return types.SimpleNamespace(returncode=0)
+        if prog == "pkl" and cmd[1] == "eval":
+            out = Path(cmd[cmd.index("-m") + 1])
+            gen = out / "app" / "generated"
+            gen.mkdir(parents=True, exist_ok=True)
+            is_baseline = Path(cmd[cmd.index("--project-dir") + 1]).is_absolute()
+            (gen / "_e2e_credential.py").write_text(
+                baseline_py if is_baseline else bumped_py
+            )
+            return types.SimpleNamespace(returncode=0)
+        if prog == "uvx":  # ruff, for real enough to matter
+            base = Path(cwd) if cwd is not None else Path.cwd()
+            for arg in cmd:
+                target = base / arg
+                if arg.endswith(".py") and target.is_file():
+                    target.write_text(normalise(target.read_text()))
+            return types.SimpleNamespace(returncode=0)
+        return real_run(cmd, check=check, text=True, capture_output=True)
+
+    return fake_run
+
+
+def _bump_pin_in_worktree(repo: Path) -> None:
+    """Rewrite the toolkit pin in the working tree and leave it uncommitted —
+    Renovate's ``postUpgradeTasks`` shape, and the only state in which
+    ``baseline_contract_ref`` finds a baseline at all. Without a pin change in
+    flight it returns None, no baseline is computed, and the swap overwrites
+    unconditionally, which passes an override test for the wrong reason."""
+    pkl_project = repo / "contract" / "PklProject"
+    pkl_project.write_text(pkl_project.read_text().replace("0.14.1", "0.14.2"))
+
+
+def test_formatting_only_baseline_difference_is_not_an_override(repo, monkeypatch):
+    """A file that differs from the raw baseline only because ruff formatted it
+    must still receive the bump.
+
+    The committed generated Python has been through `_format_generated`; the
+    baseline eval output has not. Comparing the two unequal-by-construction shapes
+    made every ruff-touched file read as app-maintained, so it was preserved on
+    that bump and on every bump after it — frozen against the toolkit forever,
+    with the sync exiting 0 and a `Preserved app-maintained` notice as the only
+    trace. atlan-microstrategy-app#132 lost a pydantic field rename this way.
+    """
+    gen = repo / "app" / "generated"
+    (gen / "_e2e_credential.py").write_text(FORMATTED_PY)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "formatted generated python")
+    _bump_pin_in_worktree(repo)
+
+    monkeypatch.setattr(
+        mod,
+        "run",
+        _fake_ruff_run(repo, baseline_py=RAW_PY, bumped_py=RAW_PY_BUMPED),
+    )
+    assert mod.regenerate("contract") is True
+
+    # The bump landed, formatted — not the preserved pre-bump copy.
+    assert "added_by_the_bump = True" in (gen / "_e2e_credential.py").read_text()
+
+
+def test_a_genuine_override_still_survives_a_formatted_baseline(repo, monkeypatch):
+    """The protection this whole mechanism exists for must not be traded away.
+
+    Formatting the baseline narrows what counts as app-maintained; it must not
+    empty it. A file whose committed content differs from the baseline by more
+    than ruff can explain is still the app's, and the bump must not overwrite it.
+    """
+    gen = repo / "app" / "generated"
+    (gen / "_e2e_credential.py").write_text(
+        FORMATTED_PY.replace("z = 1", "z = 1\nhand_maintained = True")
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "app post-processes this file")
+    _bump_pin_in_worktree(repo)
+
+    monkeypatch.setattr(
+        mod,
+        "run",
+        _fake_ruff_run(repo, baseline_py=RAW_PY, bumped_py=RAW_PY_BUMPED),
+    )
+    assert mod.regenerate("contract") is True
+
+    text = (gen / "_e2e_credential.py").read_text()
+    assert "hand_maintained = True" in text  # preserved
+    assert "added_by_the_bump" not in text  # not clobbered by the toolkit output
+
+
+def test_baseline_formatting_sees_the_repos_ruff_config(repo, monkeypatch):
+    """`exclude` / `per-file-ignores` patterns resolve against the config file's
+    directory, so the baseline must be formatted with the repo's config sitting
+    at its root — otherwise an app that exempts a generated file from ruff gets a
+    formatted baseline against an unformatted committed file, and the exemption
+    itself becomes the difference that reads as an override."""
+    (repo / "pyproject.toml").write_text(
+        '[tool.ruff]\nexclude = ["app/generated/_input.py"]\n'
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "ruff config")
+    seen: list[Path] = []
+
+    def fake_run(cmd, *, check=False, cwd=None):
+        if cmd[0] == "uvx" and cwd is not None:
+            seen.append(Path(cwd))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    out = Path(repo / "baseline-out")
+    (out / "app" / "generated").mkdir(parents=True)
+    (out / "app" / "generated" / "_e2e_credential.py").write_text(RAW_PY)
+
+    mod._format_baseline(out)
+
+    assert seen, "ruff was never invoked against the baseline output"
+    assert all(root == out for root in seen)  # cwd is the baseline root
+    assert (out / "pyproject.toml").read_text() == (repo / "pyproject.toml").read_text()
+
+
+def test_baseline_formatting_is_a_no_op_without_generated_python(repo, monkeypatch):
+    """A contract that emits no Python (JSON/YAML only) must not invoke ruff at
+    all — nothing to normalise, and a pointless uvx download on every bump."""
+    called: list[list[str]] = []
+
+    def fake_run(cmd, *, check=False, cwd=None):
+        called.append(cmd)
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    out = Path(repo / "json-only-out")
+    (out / "app" / "generated").mkdir(parents=True)
+    (out / "app" / "generated" / "manifest.json").write_text("{}\n")
+
+    mod._format_baseline(out)
+
+    assert called == []

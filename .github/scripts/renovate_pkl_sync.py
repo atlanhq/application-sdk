@@ -113,11 +113,21 @@ COMMIT_MESSAGE_LOCK_ONLY = (
     "chore: sync PklProject.deps.json with updated app-contract-toolkit"
 )
 
+# Ruff config filenames, in the order ruff itself prefers them. `_format_baseline`
+# copies the first one the repo has into the baseline output root so path-scoped
+# settings resolve there the same way they do in the working tree.
+RUFF_CONFIG_FILES = (".ruff.toml", "ruff.toml", "pyproject.toml")
 
-def run(cmd: list[str], *, check: bool = False) -> subprocess.CompletedProcess:
+
+def run(
+    cmd: list[str], *, check: bool = False, cwd: Path | None = None
+) -> subprocess.CompletedProcess:
     """Run a subprocess. Single seam so tests can stub pkl/ruff and let git run
-    for real against a throwaway repo."""
-    return subprocess.run(cmd, check=check, text=True)
+    for real against a throwaway repo.
+
+    ``cwd`` exists for the baseline formatting pass, which has to run from the
+    baseline output root rather than the repo root — see ``_format_baseline``."""
+    return subprocess.run(cmd, check=check, text=True, cwd=cwd)
 
 
 def resolve(contract_dir: str) -> None:
@@ -347,6 +357,7 @@ def _baseline_output_for_root(
             "so regeneration will overwrite them."
         )
         return (None, work)
+    _format_baseline(out)
     return (out, work)
 
 
@@ -364,6 +375,10 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
     on a cold runner). Worth it: comparing committed content against it is what
     lets every app's post-processed artifacts survive regeneration with no per-app
     declaration at all.
+
+    Its output is then run through ``_format_baseline``, because the committed
+    side of that comparison has been through ``_format_generated`` and a raw
+    baseline would differ from it on formatting alone.
     """
     ref = baseline_contract_ref(contract_dir)
     if ref is None:
@@ -400,6 +415,7 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
             "will overwrite them. Check the diff for reverted post-processing."
         )
         return (None, work)
+    _format_baseline(out)
     return (out, work)
 
 
@@ -437,6 +453,61 @@ def _format_generated() -> None:
     paths = [str(p) for p in inputs]
     run(["uvx", "ruff", "check", "--fix", "--quiet", "--force-exclude", *paths])
     run(["uvx", "ruff", "format", "--force-exclude", *paths])
+
+
+def _format_baseline(out: Path) -> None:
+    """ruff the baseline eval output the way the working tree's copy is formatted.
+
+    ``overridden_files`` decides a file is app-maintained by comparing the
+    committed bytes against this baseline. But the committed generated Python has
+    been through ``_format_generated`` and the baseline eval output has not, so
+    every file ruff rewrites differs for formatting reasons alone, is misread as
+    an app override, and is then preserved on this bump and on every bump after
+    it — the file is frozen against the toolkit forever, silently, with the sync
+    exiting 0.
+
+    That is not a rare shape. The toolkit emits its ``application_sdk`` imports as
+    their own group (a repo whose isort config calls that package third-party
+    re-sorts them), and the credential model's
+    ``model_config = ConfigDict(frozen=True, populate_by_name=True, serialize_by_alias=True)``
+    is over the default line length at class indent with no app-specific text in
+    it — so `_e2e_credential.py` and `_e2e_substitutions.py` read as overridden in
+    any app that has them, whether or not the app post-processes anything.
+    Observed on atlan-microstrategy-app#132, where toolkit 0.25.1's rename of a
+    name-mangled pydantic field was dropped from the Renovate PR and the freshness
+    gate caught it only because that gate runs without a baseline.
+
+    Mirrors ``_format_generated`` — same two ruff passes, same ``--force-exclude``
+    — but from ``out`` with paths relative to it, and with the repo's ruff config
+    copied in beside them. Both details are load-bearing for the same reason
+    ``_format_generated`` insists on real repo-relative paths: ``exclude`` and
+    ``per-file-ignores`` patterns resolve against the config file's directory, so
+    an app that exempts ``app/generated/_input.py`` from ruff must get an
+    unformatted baseline for that file too. Format it here and the exemption
+    itself becomes the difference that reads as an override — trading one frozen
+    file for another. The prefixed (``App.pkl``) family puts the eval output at
+    exactly ``app/generated/**`` under ``out``, so those patterns match; the
+    native families emit unprefixed keys and a path-scoped pattern will not match
+    there, which leaves those apps where they are today rather than improving
+    them.
+
+    Best-effort, like ``_format_generated``: a ruff hiccup leaves the baseline
+    unformatted, which is exactly the behaviour before this function existed.
+    """
+    inputs = sorted(out.rglob("*.py"))
+    if not inputs:
+        return
+    for name in RUFF_CONFIG_FILES:
+        config = Path(name)
+        if config.exists():
+            shutil.copyfile(config, out / name)
+            break
+    paths = [str(p.relative_to(out)) for p in inputs]
+    run(
+        ["uvx", "ruff", "check", "--fix", "--quiet", "--force-exclude", *paths],
+        cwd=out,
+    )
+    run(["uvx", "ruff", "format", "--force-exclude", *paths], cwd=out)
 
 
 def stage_and_commit(message: str) -> bool:
