@@ -840,6 +840,136 @@ class ErrorHandlingConfig {
     else null
 }
 
+/// Atlas type or attribute name. Both are Java-identifier-shaped in Atlas, so
+/// one charset covers `ZeroOutSpec.exclude` type names and the attribute names
+/// used as `attrs` / `rootAttrs` keys. Rejects the silent-failure typos —
+/// trailing whitespace, a stray quote from hand-written JSON — that publish
+/// would otherwise accept and then never match against a real entity.
+typealias AtlasIdentifier = String(matches(Regex("[A-Za-z_][A-Za-z0-9_]*")))
+
+/// Zero-out spec for cross-connection enrichers — the publish app's
+/// `args["zero_out_config"]`.
+///
+/// A cross-connection enricher (Coalesce, dbt, Monte Carlo) writes its own
+/// namespaced attributes onto assets another connector owns. When one of those
+/// assets falls out of the enricher's run, publish's default behaviour is a hard
+/// Atlas DELETE — which destroys a still-live asset the enricher only enriches.
+/// A zero-out spec replaces that DELETE with an UPSERT that clears just the
+/// enricher's own attributes and leaves the asset (and its user-curated tags and
+/// descriptions) intact.
+///
+/// Set it via `PublishNode.zeroOutConfig` (or `PublishStep.zeroOutConfig` on the
+/// typed pipeline). Leaving it unset omits the arg entirely, which is what
+/// disables zero-out in publish — there is no "empty spec means off" form, so do
+/// not construct a `ZeroOutSpec` to turn it off.
+///
+/// ### Why this is a typed class and not a plain `Mapping`
+///
+/// A publish args block uses `null` with two opposite meanings, and no single
+/// renderer setting serves both. The connection-cache / current-state flags are
+/// nulled out by some contracts to make the keys **absent** (publish defaults an
+/// absent `current_state_enabled` to `true`, and their presence morphs `Process`
+/// entities into rejected `PartialObject`s), which relies on the stock
+/// `JsonRenderer` stripping nulls. `zero_out_config.attrs`, by contrast, needs
+/// its nulls **preserved**: they are the zero values being written, splatted
+/// verbatim into the synthesized entity. Flipping `omitNullProperties` on the
+/// manifest output would emit the flags as `null` and break publish.
+///
+/// The toolkit resolves that by serializing this spec through a `RenderDirective`
+/// with its own null-preserving renderer, so a spec's nulls survive while its
+/// sibling args keep being stripped. Apps used to hand-write the same JSON as a
+/// raw Pkl string — spliced unparsed, so a typo produced a broken manifest with
+/// no error at eval time. This class type-checks the same shape instead.
+class ZeroOutSpec {
+  /// Type names that keep receiving a hard Atlas DELETE instead of a zero-out
+  /// UPSERT. Pass the enricher's own native types (e.g. `Process` /
+  /// `ColumnProcess` for a lineage-producing enricher, `DbtModel` / `DbtSource`
+  /// for dbt) — it owns those entities outright, so deleting them is correct.
+  /// Every other type in the stale diff gets the zero-out UPSERT.
+  ///
+  /// Required. Declared nullable only because Pkl gives every `Listing`-typed
+  /// property an implicit empty default, and here an empty listing carries real
+  /// meaning — "zero out every type", correct for an enricher whose cache only
+  /// ever holds types it enriches. Leaving `exclude` unset therefore has to fail
+  /// rather than silently become that. Write `exclude {}` to opt into it.
+  exclude: Listing<AtlasIdentifier>?
+
+  /// `attribute -> zero value`, written inside the synthesized entity's
+  /// `attributes`.
+  ///
+  /// The value is written **as-is**, so it is the connector's own choice of zero:
+  /// `null` for a scalar it namespaces, `new Listing {}` for a list-valued one.
+  /// Publish deliberately keeps falsy-but-valid values (empty string included),
+  /// so this is a value map, never a list of attribute names.
+  ///
+  /// `qualifiedName` and `isPartial` are set by publish after this splat and
+  /// cannot be zeroed here — declaring either is an error rather than a silent
+  /// no-op. Defaults to empty.
+  attrs: Mapping<AtlasIdentifier, Any> = new Mapping {}
+
+  /// `attribute -> value` for entity-root fields rather than `attributes`
+  /// members — `classifications` being the usual one. Same value semantics as
+  /// `attrs`.
+  ///
+  /// `typeName` and `attributes` are reserved by publish and ignored if present,
+  /// so declaring either is an error here. Defaults to empty.
+  rootAttrs: Mapping<AtlasIdentifier, Any> = new Mapping {}
+
+  hidden _specCheck: Any =
+    let (clobberedAttrs = attrs.toMap().keys.findOrNull((k) -> k == "qualifiedName" || k == "isPartial"))
+    let (reservedRootAttrs = rootAttrs.toMap().keys.findOrNull((k) -> k == "typeName" || k == "attributes"))
+    if (exclude == null)
+      throw("ZeroOutSpec.exclude is required. List the type names that should still be hard-deleted "
+            + "(the enricher's own native types), or write `exclude {}` to zero out every type.")
+    else if (clobberedAttrs != null)
+      throw("ZeroOutSpec.attrs cannot set \"\(clobberedAttrs)\": publish assigns it after applying attrs, "
+            + "so the declared value would be silently discarded.")
+    else if (reservedRootAttrs != null)
+      throw("ZeroOutSpec.rootAttrs cannot set \"\(reservedRootAttrs)\": publish reserves it for the "
+            + "synthesized entity's own structure and drops the declared value.")
+    else null
+}
+
+/// Null-preserving, single-line JSON renderer used only to serialize a
+/// `ZeroOutSpec` into a `RenderDirective`.
+///
+/// `omitNullProperties = false` is what keeps the `attrs` zero values in the
+/// output; scoping it to this one value (rather than the manifest's own
+/// renderer) is what lets the publish node's sibling args keep being stripped
+/// when a contract nulls them. `indent = ""` collapses the result onto one line
+/// so the directive splices cleanly into the surrounding pretty-printed JSON.
+const local zeroOutConfigRenderer: JsonRenderer = new JsonRenderer {
+  omitNullProperties = false
+  indent = ""
+}
+
+/// Serialize a `ZeroOutSpec` into the verbatim JSON text emitted as
+/// `args["zero_out_config"]`. Keys are the publish app's wire names, so
+/// `rootAttrs` becomes `root_attrs`.
+const local function renderZeroOutConfig(spec: ZeroOutSpec): RenderDirective =
+  let (_zeroOutSpecCheck = spec._specCheck)
+  new RenderDirective {
+    text = zeroOutConfigRenderer.renderValue(new Mapping {
+      ["exclude"] = spec.exclude!!
+      ["attrs"] = spec.attrs
+      ["root_attrs"] = spec.rootAttrs
+    })
+  }
+
+/// Reject a `ZeroOutSpec` placed directly into a node's `args` mapping.
+///
+/// The stock manifest renderer would emit it with Pkl property names
+/// (`rootAttrs`, not `root_attrs`) and with the `attrs` zero values stripped —
+/// a manifest that generates cleanly and then misbehaves in publish. Point the
+/// author at the typed property instead.
+local function checkNoRawZeroOutSpecArgs(node: DAGNode): Any =
+  let (rawKey = node.args.toMap().keys.findOrNull((k) -> node.args[k] is ZeroOutSpec))
+  if (rawKey == null) null
+  else throw("args[\"\(rawKey)\"] is a ZeroOutSpec. A ZeroOutSpec cannot be rendered as a plain args "
+             + "value — its zero values would be stripped and its keys emitted with Pkl names. Set "
+             + "PublishNode.zeroOutConfig (or PublishStep.zeroOutConfig) instead, which serializes it "
+             + "into args[\"zero_out_config\"] with the publish app's wire shape.")
+
 /// Pre-built publish node.
 open class PublishNode extends DAGNode {
   hidden upstream: String = "extract"
@@ -937,6 +1067,33 @@ open class PublishNode extends DAGNode {
   /// other node.
   transformedNonDataPrefix: String? = null
 
+  /// Zero-out spec emitted as `args["zero_out_config"]` when non-null.
+  ///
+  /// Set it on a cross-connection enricher (Coalesce, dbt, Monte Carlo) so that
+  /// an asset dropping out of the run has the enricher's own attributes cleared
+  /// instead of being hard-deleted from Atlas. See `ZeroOutSpec` for the shape
+  /// and for why it is a typed class rather than a raw mapping.
+  ///
+  /// Defaults to `null`, which **omits the arg entirely** — and an absent
+  /// `zero_out_config` is exactly how zero-out stays off in publish, so
+  /// generated manifests for apps that do not set it are byte-identical to
+  /// before this property existed. Do not construct an empty `ZeroOutSpec` to
+  /// disable it; `exclude = new Listing {}` means "zero out every type".
+  ///
+  /// Settable directly on the node (`extraNodes["publish"]`) or, for the typed
+  /// pipeline, via `PublishStep.zeroOutConfig`. It changes nothing else: the
+  /// prefixes, the connection args and the connection-cache / current-state
+  /// flags are untouched, and a contract that nulls those flags to keep them out
+  /// of the manifest keeps that behaviour — the spec's own nulls are preserved
+  /// by a renderer scoped to this one value.
+  ///
+  /// Not offered on `LineagePublishNode`: its stale diff is the connector's own
+  /// `Process` / `ColumnProcess` entities, which are precisely the types an
+  /// enricher hard-deletes, so a spec there would exclude everything it saw. If
+  /// a lineage publish ever genuinely needs one, add the property rather than
+  /// routing a raw JSON string through `LineagePublishNode.extraArgs`.
+  zeroOutConfig: ZeroOutSpec? = null
+
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -950,6 +1107,9 @@ open class PublishNode extends DAGNode {
     when (connectionEntity != null) { ["connection_entity"] = connectionEntity }
     when (transformedNonDataPrefix != null) {
       ["transformed_nondata_prefix"] = transformedNonDataPrefix
+    }
+    when (zeroOutConfig != null) {
+      ["zero_out_config"] = renderZeroOutConfig(zeroOutConfig!!)
     }
     ["connection_cache_enabled"] = connectionCacheEnabled
     ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
@@ -1623,6 +1783,17 @@ class PublishStep {
   /// `PublishNode.transformedNonDataPrefix` for the full semantics; this
   /// property is passed straight through to the generated node.
   transformedNonDataPrefix: String? = null
+
+  /// Zero-out spec for the generated publish node, emitted as its
+  /// `args["zero_out_config"]`.
+  ///
+  /// Defaults to `null`, which omits the arg entirely and leaves zero-out off in
+  /// publish, so existing generated manifests are unchanged. Set it on a
+  /// cross-connection enricher so a stale asset has the enricher's own
+  /// attributes cleared rather than being hard-deleted. See `ZeroOutSpec` for
+  /// the shape and `PublishNode.zeroOutConfig` for the full semantics; this
+  /// property is passed straight through to the generated node.
+  zeroOutConfig: ZeroOutSpec? = null
 
   /// Optional lineage-publish sub-step. When set, adds a `"lineage-publish"`
   /// node after the main publish step.
@@ -2585,6 +2756,7 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
           currentStateViaAppEnabled = ps.currentStateViaAppEnabled
           connectionEntity = ps.connectionEntity
           transformedNonDataPrefix = ps.transformedNonDataPrefix
+          zeroOutConfig = ps.zeroOutConfig
         })
   }
   when (pipeline.publish != null && pipeline.publish!!.lineagePublish != null) {
@@ -2637,6 +2809,7 @@ local function renderNode(node: DAGNode): Mapping<String, Any> =
   let (_popularityCheck = if (node is PopularityNode) (node as PopularityNode)._popularityDependencyCheck else null)
   let (_popularityFormRefCheck = if (node is PopularityNode) validatePopularityFormRefs(node as PopularityNode) else null)
   let (_ehCheck = if (node.errorHandling != null) node.errorHandling._timeoutOrderingCheck else null)
+  let (_rawZeroOutCheck = checkNoRawZeroOutSpecArgs(node))
   new Mapping {
   ["activity_name"] = "execute_workflow"
   ["activity_display_name"] = node.displayName
@@ -2936,6 +3109,38 @@ local credentialConfigOutput: FileOutput = new FileOutput {
 
 local function toPyName(k: String): String = k.replaceAll("-", "_")
 
+/// `toPyName` for a name that is emitted as a Python CLASS ATTRIBUTE, as opposed
+/// to a manifest key or a wire alias.
+///
+/// Pydantic rejects a field whose attribute name starts with `_` — it treats the
+/// name as a private attribute and raises at class-creation time:
+///
+///     NameError: Fields must not use names with leading underscores;
+///     e.g., use 'CratedbCredentialBody__enable_ssl' instead of
+///     '_CratedbCredentialBody__enable_ssl'
+///
+/// (the mangled spelling is Python's, applied to any `__name` written inside a
+/// class body). Marketplace credential forms use a leading `__` for
+/// connection-behaviour toggles the source itself does not store — this file's
+/// own reference documents `__enable_ssl` as the canonical `extraFields`
+/// example, and `atlan-trino-app` ships `__jwt_token`,
+/// `__enable_tls_https` and `__disable_ssl_verification`. Passed through
+/// unsanitized, every one of those generates a module that cannot be imported.
+/// It went unnoticed because the apps carrying such fields were all on
+/// `hasCredentialConfig = false` or on a base that emits no e2e codegen;
+/// `atlan-cratedb-app` is the first to combine the two.
+///
+/// Only the attribute is sanitized. The `alias=` stays the raw field name, so
+/// the wire format — what the tenant stores and what the runtime reads — is
+/// unchanged, and `extra.__enable_ssl` keeps working.
+///
+/// Deliberately NOT folded into `toPyName`: that function also builds manifest
+/// arg keys (`[toPyName(paramKey)] = "{{...}}"`), which are wire format, not
+/// identifiers. Stripping there would silently rename a manifest key and break
+/// the substitution it feeds.
+local function toPyFieldName(k: String): String =
+  toPyName(k).replaceFirst(Regex("^_+"), "")
+
 local function getPyDefaultFactoryField(k: String, fieldType: String, factory: String): String =
   let (line = "\(k): \(fieldType) = Field(default_factory=\(factory))")
   if (line.length <= 84)
@@ -2972,7 +3177,7 @@ local function applyLifecycle(fieldLine: String, u: Widgets.UIElement): String =
       fieldLine.replaceFirst(Regex(" = (.+)$"), " = Field(default=$1\(lifecycleKwargs))")
 
 local function getInputPyField(k: String, u: Widgets.UIElement): String =
-  let (k = toPyName(k))
+  let (k = toPyFieldName(k))
   let (baseLine =
     if (u is Widgets.BooleanInput)
       "\(k): bool = \(if ((u as Widgets.BooleanInput).default) "True" else "False")"
@@ -3089,7 +3294,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   local skipFields: Set<String> = extractionInputProvidedFields.toList().toSet()
   local uiFieldLines: String = (new Listing {
     for (k, u in props) {
-      if (u.includeInInput && !skipFields.contains(toPyName(k)))
+      if (u.includeInInput && !skipFields.contains(toPyFieldName(k)))
         "    " + getInputPyField(k.replaceAll("-", "_"), u) + "\n" +
         (if (u.helpText != "") "    \"\"\"" + u.helpText + "\"\"\"\n" else "")
       else
@@ -3098,8 +3303,8 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   }).toList().fold("", (acc: String, s: String) -> acc + s)
   local objectStringCoercionFields: List<String> = (new Listing {
     for (k, u in props) {
-      when (u.includeInInput && !skipFields.contains(toPyName(k)) && needsJsonObjectStringCoercion(u)) {
-        toPyName(k)
+      when (u.includeInInput && !skipFields.contains(toPyFieldName(k)) && needsJsonObjectStringCoercion(u)) {
+        toPyFieldName(k)
       }
     }
   }).toList()
@@ -3135,8 +3340,8 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // py-names already emitted from uiConfig — used to deduplicate the publish scaffold
   local uiPyNames: Set<String> = (new Listing {
     for (k, u in props) {
-      when (u.includeInInput && !skipFields.contains(toPyName(k))) {
-        toPyName(k)
+      when (u.includeInInput && !skipFields.contains(toPyFieldName(k))) {
+        toPyFieldName(k)
       }
     }
   }).toList().toSet()
@@ -3297,7 +3502,7 @@ local function fmtSubsField(pyName: String, typeStr: String, defaultExpr: String
 
 // Returns a typed pydantic Field line for a substitution field, or null to skip.
 local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
-  let (pyName = toPyName(k))
+  let (pyName = toPyFieldName(k))
   if (u is Widgets.ConnectionCreator || u is Widgets.ConnectionSelector || u is Widgets.ConnectionRefInput)
     null
   else if (u is Widgets.BooleanInput)
@@ -3541,7 +3746,7 @@ local function generateE2ESubstitutionsPy(): FileOutput? =
   let (skip = e2eSubsSkip())
   let (fieldLines = (new Listing {
     for (k, u in props) {
-      when (!skip.contains(toPyName(k)) && u.includeInInput && getSubsFieldLine(k, u) != null) {
+      when (!skip.contains(toPyFieldName(k)) && u.includeInInput && getSubsFieldLine(k, u) != null) {
         getSubsFieldLine(k, u)!! + "\n"
       }
     }
@@ -3576,7 +3781,7 @@ local function generateE2ESubstitutionsPy(): FileOutput? =
 // Returns a typed Field line for a single FieldSpec in a CredentialBody class.
 // authSpecific=true means the field only appears in some auth options (always use a default).
 local function credFieldLine(f: FieldSpec, authSpecific: Boolean): String =
-  let (pyName = toPyName(f.name))
+  let (pyName = toPyFieldName(f.name))
   let (pyType = if (f.fieldType == "number") "int" else "str")
   let (defExpr =
     if (f.defaultValue != null)
@@ -3709,7 +3914,7 @@ local function generateE2ECredentialPy(): FileOutput? =
 
     local condCommonLines = (new Listing {
       for (f in condCommonSpecs) {
-        "    " + toPyName(f.name) + ": str | None = Field(default=None, alias=\"" + f.name + "\")\n"
+        "    " + toPyFieldName(f.name) + ": str | None = Field(default=None, alias=\"" + f.name + "\")\n"
       }
     }).toList().fold("", (acc: String, s: String) -> acc + s)
 

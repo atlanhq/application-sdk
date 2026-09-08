@@ -390,7 +390,7 @@ git ls-files 'contract-toolkit/examples/*/app.pkl' | sed 's#.*/examples/##;s#/ap
 At the time of writing the tracked set is: `minimal` (smallest contract, start
 here), `full` (every overridable feature), `bundle` (multi-entrypoint), `card-split`
 (multi-entrypoint where only one entrypoint is a card), `connection-ref`
-(ConnectionRefInput), `publish-controls` (publish toggles), `fanin` (fan-in via
+(ConnectionRefInput), `publish-controls` (publish toggles, zero-out spec), `fanin` (fan-in via
 `dependsOn`), `deploy` (single-pool KEDA/resources), `pools` (named worker
 pools), `scheduled` (cron background job), `behind-the-scenes`
 (`marketplaceCard = false`), `agent-e2e` (agent-mode codegen). Re-run the command

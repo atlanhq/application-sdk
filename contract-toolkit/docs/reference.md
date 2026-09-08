@@ -590,6 +590,7 @@ class PublishStep {
   includeInputFields: Boolean = true     // generates output_dir/load_to_atlan/publish_dry_run in _input.py
   connectionEntity: String? = "{{connection}}"  // args["connection_entity"]; null omits it AND sets connection_creation_enabled=false
   transformedNonDataPrefix: String? = null      // args["transformed_nondata_prefix"]; null omits it
+  zeroOutConfig: ZeroOutSpec? = null            // args["zero_out_config"]; null omits it (zero-out off in publish)
   lineagePublish: LineagePublishStep?    // opt-in lineage publish (default-off)
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
     startToCloseTimeoutSeconds = 259200  // 72h default — AE's 2h is too tight for large tenants
@@ -2193,6 +2194,7 @@ class PublishNode extends DAGNode {
   connectionEntity: String? = "{{connection}}"
   connectionCreationEnabled: Boolean = connectionEntity != null
   transformedNonDataPrefix: String? = null
+  zeroOutConfig: ZeroOutSpec? = null
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -2206,6 +2208,9 @@ class PublishNode extends DAGNode {
     when (connectionEntity != null) { ["connection_entity"] = connectionEntity }
     when (transformedNonDataPrefix != null) {
       ["transformed_nondata_prefix"] = transformedNonDataPrefix
+    }
+    when (zeroOutConfig != null) {
+      ["zero_out_config"] = <RenderDirective serializing the spec>
     }
   }
   dependsOn { upstream }
@@ -2248,6 +2253,113 @@ pointing it at an output key the extract workflow never populates leaves publish
 resolving a prefix that does not exist. It does not affect
 `transformed_data_prefix`, the publish state / current-state args, or any other
 node. See [`examples/publish-controls/`](../examples/publish-controls/).
+
+#### `ZeroOutSpec` — zero-out for cross-connection enrichers
+
+A **cross-connection enricher** (Coalesce, dbt, Monte Carlo) writes its own
+namespaced attributes onto assets another connector owns. When one of those
+assets falls out of the enricher's run, publish's default is a hard Atlas
+DELETE — which destroys a still-live asset the enricher only enriches, taking
+its downstream lineage and its user-curated tags and descriptions with it. A
+zero-out spec replaces that DELETE with an UPSERT that clears just the
+enricher's own attributes:
+
+```pkl
+class ZeroOutSpec {
+  exclude: Listing<AtlasIdentifier>?             // required; `exclude {}` = zero out every type
+  attrs: Mapping<AtlasIdentifier, Any> = new Mapping {}      // -> entity.attributes
+  rootAttrs: Mapping<AtlasIdentifier, Any> = new Mapping {}  // -> entity root, emitted as root_attrs
+}
+
+typealias AtlasIdentifier = String(matches(Regex("[A-Za-z_][A-Za-z0-9_]*")))
+```
+
+Set it via `PublishNode.zeroOutConfig` or, on the typed pipeline,
+`PublishStep.zeroOutConfig`:
+
+```pkl
+pipeline {
+  publish {
+    zeroOutConfig = new ZeroOutSpec {
+      // Types this app owns outright — these keep being hard-deleted.
+      exclude { "Process"; "ColumnProcess" }
+      attrs {
+        ["sqlCoalesceNodeStatus"] = null
+        ["sqlCoalesceProjectId"] = null
+      }
+      rootAttrs { ["classifications"] = new Listing {} }
+    }
+  }
+}
+```
+
+which generates:
+
+```json
+"zero_out_config": {"exclude":["Process","ColumnProcess"],"attrs":{"sqlCoalesceNodeStatus":null,"sqlCoalesceProjectId":null},"root_attrs":{"classifications":[]}},
+```
+
+`exclude` names the types that still receive a hard DELETE — the enricher's own
+native types, which it owns outright. Every other type in the stale diff gets
+the zero-out UPSERT.
+
+`attrs` is `attribute -> value`, **never a list of attribute names**: publish
+writes each value as-is, so a connector's natural zero can be `null` for a
+scalar, an empty listing for a list-valued attribute such as
+`sqlCoalesceTags`, or `""` — publish uses `is not None` rather than truthiness
+precisely so that falsy-but-valid Atlas values survive. `rootAttrs` is the same
+shape for entity-root fields (`classifications` being the usual one) and renders
+under the publish app's wire name, `root_attrs`.
+
+The default `null` **omits the arg entirely**, and an absent `zero_out_config`
+is exactly how zero-out stays off in publish — so apps that never set it
+generate byte-identical manifests. Do not construct an empty spec to disable it.
+
+`exclude` is required, and is declared nullable only because Pkl gives every
+`Listing`-typed property an implicit empty default. An empty `exclude` carries
+real meaning — "zero out every type", correct for an enricher whose cache only
+ever holds types it enriches — so it has to stay distinguishable from unset.
+Write `exclude {}` to opt into it; leaving `exclude` unset fails generation.
+
+Keys publish reserves are rejected rather than silently discarded: `attrs`
+cannot set `qualifiedName` or `isPartial` (publish assigns both after applying
+`attrs`), and `rootAttrs` cannot set `typeName` or `attributes`.
+
+**Why a typed class and not a plain `Mapping`.** Inside one publish args block,
+`null` is used with two opposite meanings, and no single renderer setting serves
+both:
+
+* The connection-cache / current-state flags are nulled out by some enricher
+  contracts to make the keys **absent**. Publish defaults an absent
+  `current_state_enabled` to `true`, and their mere presence morphs `Process`
+  entities into rejected `PartialObject`s. That relies on the manifest's stock
+  `JsonRenderer` **stripping** nulls.
+* `zero_out_config.attrs` needs its nulls **preserved** — they are the zero
+  values being written, splatted verbatim into the synthesized entity.
+
+Flipping `omitNullProperties = false` on `manifestOutput` is therefore not the
+fix: it would emit the four flags as `null` and break publish. Instead the
+toolkit serializes the spec through a `RenderDirective` whose `text` is emitted
+verbatim, using a null-preserving, single-line `JsonRenderer` scoped to that one
+value. Both behaviours then hold in the same args block. Setting `zeroOutConfig`
+changes nothing else — the prefixes, connection args and state flags are
+untouched.
+
+A raw `ZeroOutSpec` dropped straight into an `args` mapping would render with
+Pkl property names (`rootAttrs`, not `root_attrs`) and with its zero values
+stripped — a manifest that generates cleanly and then misbehaves in publish — so
+generation fails with a pointer to `zeroOutConfig` instead. Apps that previously
+hand-wrote this JSON as a raw Pkl string plus a post-generate merge script should
+delete both and set the typed property; a hand-written string is spliced
+unparsed, so a typo produces a broken manifest with no error at eval time.
+
+Not offered on `LineagePublishNode`: its stale diff is the connector's own
+`Process` / `ColumnProcess` entities, precisely the types an enricher
+hard-deletes, so a spec there would exclude everything it saw. If a lineage
+publish ever genuinely needs one, add the property rather than routing a raw
+JSON string through `LineagePublishNode.extraArgs`.
+
+See [`examples/publish-controls/`](../examples/publish-controls/).
 
 If the workflow form contains `enable-tags`, `PublishNode` also emits
 `tag_pipeline_enabled = "{{enable-tags}}"` and
@@ -3359,6 +3471,59 @@ multi-entrypoint app each entrypoint's copy lands at
 
 See [Artifact Schemas (data hand-off declarations)](#artifact-schemas-data-hand-off-declarations)
 for the type vocabulary and the per-format mapping.
+
+---
+
+## Post-processing generated output (`contract/post-generate.sh`)
+
+CI regenerates an app's contract artifacts on several paths — before the
+integration tests, before the **image build** (so the manifest baked into the
+image comes from the current contract, not a stale committed copy), on a
+Renovate toolkit bump, and in the generated-freshness gate. Every one of those
+**replaces `app/generated/` with raw `pkl eval` output**.
+
+If your app transforms that output — a merge step, a hand-maintained artifact
+installed over the toolkit's version, anything at all — the transformation must
+live in **`contract/post-generate.sh`**. That path is a convention, not a
+per-workflow input, so every regeneration entry point picks it up and they
+cannot disagree about what "freshly generated" means:
+
+```sh
+# contract/post-generate.sh — run from the repo root, with `sh`, after
+# regeneration has placed fresh pkl eval output.
+python contract/templates/merge.py
+```
+
+Have your `generate` task call the same script, so local and CI agree:
+
+```toml
+[tool.poe.tasks]
+generate = """
+cd contract && pkl project resolve && cd ..
+pkl eval --project-dir contract -m . contract/app.pkl
+sh contract/post-generate.sh
+"""
+```
+
+Wiring the step **only** into a `poe`/`make` task is the trap: it works
+perfectly locally and is silently dropped by every CI regeneration, so the
+image that ships to a tenant carries the untransformed artifact. Regeneration
+warns when it sees the signature of this (a `contract/templates/*.py`, or a
+command after the `pkl eval` line in a `generate` task, with no
+`post-generate.sh` beside it), but the warning is a heuristic — the
+`post-generate.sh` is the fix.
+
+Notes:
+
+- It runs with `sh` from the repo root, so no executable bit is needed and its
+  paths are the same ones you would use locally.
+- It runs **after** placement and is best-effort: a non-zero exit warns and
+  leaves fresh toolkit output in the tree rather than failing the job.
+- On a Renovate toolkit bump, a generated file whose committed content differs
+  from what the *previous* pin emitted is detected as app-maintained and
+  preserved, so an override survives even before you add the script. That
+  detection needs a baseline pin and therefore does not apply on the test and
+  image-build paths — `post-generate.sh` is what covers those.
 
 ---
 

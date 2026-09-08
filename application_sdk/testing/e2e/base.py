@@ -1588,8 +1588,8 @@ class BaseE2ETest:
         accumulate on a shared tenant forever. A *superseded* DAG
         (:attr:`~application_sdk.testing.harness.teardown.ConnectionDeleteReport.dag_superseded`)
         gets the same treatment for a sharper reason: it reads like a tenant
-        problem while being an SDK one, and it is what FND-1724 shipped and had
-        to fix. It stays a warning all the same —
+        problem while being an SDK one, and since FND-1775 it should not be
+        reachable at all. It stays a warning all the same —
         tenant cleanliness is not what the test is asserting, and a cleanup
         failure must never become the run's verdict.
 
@@ -1632,14 +1632,13 @@ class BaseE2ETest:
         if report.dag_superseded:
             logger.warning(
                 "e2e cleanup: %s was not deleted through the connection-delete "
-                "app because the graph AE ran was neither the delete node the "
-                "teardown published nor the delete app's own manifest (slug=%s "
-                "run_id=%s). At submit, Heracles publishes a manifest over the "
-                "seed version; the teardown submit names the delete app so that "
-                "either winner of that race is a delete, so a third graph means "
-                "Heracles resolved a different app from the same envelope — an "
-                "SDK-side problem, not a tenant one. Until it is fixed this leg "
-                "falls back to the runner-side purge and leaks "
+                "app because the graph AE ran was not the delete node the "
+                "teardown published (slug=%s run_id=%s). The teardown submits "
+                "its own published version straight to AE, which fetches no "
+                "manifest, so something republished over that version — an "
+                "SDK-side or AE-side problem, not a tenant one, and one that "
+                "should be impossible. Until it is understood this leg falls "
+                "back to the runner-side purge and leaks "
                 "connection-cache/%s.sqlite and "
                 "persistent-artifacts/apps/atlan-publish-app/state/%s/. "
                 "Details: %s",
@@ -1693,20 +1692,31 @@ class BaseE2ETest:
         state root), and the seed NDJSON under ``artifacts/apps/<app>/e2e-seed/``
         is harness-specific — nothing on the tenant knows it exists.
 
-        **By key, never by prefix**, and that is the whole reason this method
-        changed shape. ``delete_prefix`` is a LIST plus a bulk ``POST ?delete``,
-        both *bucket-level* URLs, and the tenant's Kong s3proxy path-matches
-        against an allowlist it cannot apply to a URL whose keys live in the
-        request body — so the call came back ``403 code 1009`` even though
-        ``/artifacts/apps/`` is on that allowlist. A single-object DELETE puts
-        the key in the path, where the allowlist can see it. The harness knows
-        exactly which keys it wrote, so it never needs the listing.
+        **By key, never by prefix** — though on current evidence neither
+        reaches the store. ``delete_prefix`` is a LIST plus a bulk
+        ``POST ?delete``, both *bucket-level* URLs, and the tenant's Kong
+        s3proxy path-matches against an allowlist it cannot apply to a URL
+        whose keys live in the request body, so it came back
+        ``403 code 1009``. The per-key DELETE was the fix for that — the
+        allowlist can read a path — and a live e2e run on 2026-09-07
+        (FND-1766's three-cloud A/B) came back ``403`` on it too. The
+        allowlist does not grant DELETE under ``/artifacts/apps/`` to a runner
+        in any request shape.
 
-        What that leaves behind is publish's own state under the seed root
-        (``.../publish-state/`` and ``.../current-state/``): the harness did not
-        write those keys and cannot enumerate them from here. They are bounded
-        per seed and outside ``archive_storage``'s prefixes; extending the app
-        to cover them is the fix, not a second listing attempt from the runner.
+        This method therefore expects to fail, and is written to fail
+        harmlessly: each key is attempted, a refusal is logged with the key
+        named, and the run's verdict is untouched. Keeping it is still worth
+        more than deleting it — it will start working the moment the allowlist
+        or the store binding changes, and its log line is what names the
+        leftover.
+
+        **The actual fix is on the tenant, not here.** ``connection-delete``'s
+        ``archive_storage`` already clears the app-owned per-connection stores
+        from inside the cluster, where no proxy sits in front of the bucket;
+        bringing the seed root into its scope deletes these keys and publish's
+        own state under the same root (``.../publish-state/``,
+        ``.../current-state/``) in one go. Both are bounded per seed. A third
+        URL shape from the runner is not the answer.
 
         Run after the connections, on the same ordering rule as before: the
         entities are what a stranded run trips over, the NDJSON is only bytes,
@@ -2360,9 +2370,14 @@ class BaseE2ETest:
                 f"{self.connector_short_name}-{self.connection_name_prefix}-"
                 f"{self.run_id}-seed-{ordinal}-{spec.connector_type}"
             ),
-            app_service_url=self.app_service_url,
             run_id=self.run_id,
-            submit_retry=self._submit_retry(),
+            # No cold-start budget and no app address. Since FND-1766 the seed
+            # submits straight to AE and calls no app pod, so there is nothing
+            # to cold-start-wait on — the suite's own submit still carries
+            # ``_submit_retry()``, which is where waiting on the app under test
+            # belongs. Leaving ``submit_retry`` unset takes
+            # ``submit_published_version``'s publish-replication budget, which
+            # is the only wait this submit actually has.
             poll_interval_seconds=self.ae_poll_interval_seconds,
             poll_timeout_seconds=self.ae_poll_timeout_seconds,
             progress_stall_seconds=self._resolved_progress_stall_seconds(),
@@ -2437,7 +2452,13 @@ class BaseE2ETest:
             ),
             run_id=self.run_id,
             delete_type=self.connection_delete_type,
-            submit_retry=self._submit_retry(),
+            # No cold-start budget. Since FND-1775 the teardown submits straight
+            # to AE and calls no app pod, so there is nothing to cold-start-wait
+            # on — whether the delete app's worker is up is asked by
+            # ``stall_grace_seconds`` below, and leaving ``submit_retry`` unset
+            # takes ``submit_published_version``'s publish-replication budget,
+            # which is the only wait this submit actually has. Same reasoning as
+            # ``_seed_publish_plan``.
             poll_interval_seconds=self.ae_poll_interval_seconds,
             poll_timeout_seconds=self.connection_delete_poll_timeout_seconds,
             stall_grace_seconds=self.connection_delete_stall_grace_seconds,

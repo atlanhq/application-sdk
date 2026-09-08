@@ -1,0 +1,41 @@
+/// Fixture: MISUSE — a `ZeroOutSpec` dropped straight into a node's `args`
+/// mapping instead of onto `PublishNode.zeroOutConfig`.
+///
+/// The stock manifest renderer would emit it with Pkl property names
+/// (`rootAttrs`, not `root_attrs`) and with the `attrs` zero values stripped:
+/// a manifest that generates cleanly and then misbehaves in publish. Generation
+/// must fail instead, so this fixture exists only to be caught by
+/// `publish_zero_out_test.pkl`.
+amends "../../src/App.pkl"
+
+name = "publish-zero-out-raw-args"
+displayName = "Publish Zero Out Raw Args"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = new PublishStep {}
+}
+
+extraNodes {
+  ["publish"] = new PublishNode {
+    args {
+      ["zero_out_config"] = new ZeroOutSpec {
+        exclude { "Process" }
+        attrs { ["sqlCoalesceNodeStatus"] = null }
+      }
+    }
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

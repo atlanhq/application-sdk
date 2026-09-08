@@ -27,10 +27,15 @@ from application_sdk.contracts.base import (
     validate_payload_safety,
 )
 from application_sdk.contracts.storage import (
+    DeclaredFile,
     DownloadInput,
     DownloadOutput,
     UploadInput,
     UploadOutput,
+    UploadRefsInput,
+    UploadRefsOutput,
+    VerifyRefsInput,
+    VerifyRefsOutput,
 )
 from application_sdk.contracts.types import (
     BoundedDict,
@@ -41,6 +46,7 @@ from application_sdk.contracts.types import (
     Lazy,
     MaxItems,
     StorageTier,
+    StoreTarget,
 )
 
 __all__ = [
@@ -48,6 +54,7 @@ __all__ = [
     "BoundedList",
     "ConnectionRef",
     "ContractMetadata",
+    "DeclaredFile",
     "ContractValidationError",
     "DownloadInput",
     "DownloadOutput",
@@ -65,8 +72,13 @@ __all__ = [
     "Record",
     "SerializableEnum",
     "StorageTier",
+    "StoreTarget",
     "UploadInput",
     "UploadOutput",
+    "UploadRefsInput",
+    "UploadRefsOutput",
+    "VerifyRefsInput",
+    "VerifyRefsOutput",
     "get_contract_fields",
     "has_default",
     "is_backwards_compatible",

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.contracts.storage import VerifyRefsOutput
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.errors.categories import Audience
@@ -1200,7 +1201,17 @@ class TestRunThreadsRawFileRefs:
         def make_transform(entity: str):
             async def _transform(input_):
                 captured[entity] = input_
-                return TransformOutput(typename=entity, total_record_count=1)
+                return TransformOutput(
+                    typename=entity,
+                    total_record_count=1,
+                    transformed_file=FileReference(
+                        local_path=str(
+                            tmp_path / "transformed" / entity / "entities.json"
+                        ),
+                        storage_path=f"transformed/{entity}/entities.json",
+                        is_durable=True,
+                    ),
+                )
 
             return _transform
 
@@ -1222,6 +1233,11 @@ class TestRunThreadsRawFileRefs:
                 app, "transform_columns", side_effect=make_transform("column")
             ),
             patch.object(app, "_resolve_credential_ref", return_value=None),
+            patch.object(
+                app,
+                "verify_refs",
+                new=AsyncMock(return_value=VerifyRefsOutput(verified_count=4)),
+            ),
             patch(
                 "application_sdk.templates.sql_app._temporal_workflow.info",
                 return_value=MagicMock(workflow_id="wf-test", run_id="run-test"),
@@ -1471,11 +1487,18 @@ class TestRunOutputPrefixes:
     def _patch_extract_tasks(self):
         """Return list of patches that mock all extract_* + transform_*.
 
-        Use real ``ExtractionTaskOutput`` instances (not MagicMocks) for
-        the extract returns — ``run()`` reads ``.raw_file`` and threads
-        it into ``_build_transform_input`` which Pydantic-validates the
-        ref against ``FileReference``; MagicMock auto-attrs would fail
-        that validation (BLDX-1281).
+        Use real ``ExtractionTaskOutput`` / ``TransformOutput`` instances
+        (not MagicMocks) for the task returns — ``run()`` reads
+        ``.raw_file`` and threads it into ``_build_transform_input``
+        which Pydantic-validates the ref against ``FileReference``
+        (BLDX-1281), and reads ``.transformed_file`` into
+        ``VerifyRefsInput`` which validates it the same way (FND-1790).
+        MagicMock auto-attrs fail both.
+
+        ``verify_refs`` is patched out: it is a framework task that HEADs
+        the object store, and these tests are about run()'s output
+        plumbing. Its own wiring is pinned in
+        ``TestRunVerifiesTransformedDeclaration``.
         """
         return [
             patch.object(
@@ -1517,22 +1540,74 @@ class TestRunOutputPrefixes:
             patch.object(
                 SqlApp,
                 "transform_databases",
-                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+                new=AsyncMock(
+                    return_value=TransformOutput(
+                        typename="database",
+                        total_record_count=1,
+                        transformed_file=FileReference(
+                            local_path="/tmp/transformed/database/entities.json",
+                            storage_path=(
+                                "artifacts/apps/test/workflows/wf-1/run-1"
+                                "/transformed/database/entities.json"
+                            ),
+                            is_durable=True,
+                        ),
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,
                 "transform_schemas",
-                new=AsyncMock(return_value=MagicMock(total_record_count=1)),
+                new=AsyncMock(
+                    return_value=TransformOutput(
+                        typename="schema",
+                        total_record_count=1,
+                        transformed_file=FileReference(
+                            local_path="/tmp/transformed/schema/entities.json",
+                            storage_path=(
+                                "artifacts/apps/test/workflows/wf-1/run-1"
+                                "/transformed/schema/entities.json"
+                            ),
+                            is_durable=True,
+                        ),
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,
                 "transform_tables",
-                new=AsyncMock(return_value=MagicMock(total_record_count=2)),
+                new=AsyncMock(
+                    return_value=TransformOutput(
+                        typename="table",
+                        total_record_count=2,
+                        transformed_file=FileReference(
+                            local_path="/tmp/transformed/table/entities.json",
+                            storage_path=(
+                                "artifacts/apps/test/workflows/wf-1/run-1"
+                                "/transformed/table/entities.json"
+                            ),
+                            is_durable=True,
+                        ),
+                    )
+                ),
             ),
             patch.object(
                 SqlApp,
                 "transform_columns",
-                new=AsyncMock(return_value=MagicMock(total_record_count=10)),
+                new=AsyncMock(
+                    return_value=TransformOutput(
+                        typename="column",
+                        total_record_count=10,
+                        transformed_file=FileReference(
+                            local_path="/tmp/transformed/column/entities.json",
+                            storage_path=(
+                                "artifacts/apps/test/workflows/wf-1/run-1"
+                                "/transformed/column/entities.json"
+                            ),
+                            is_durable=True,
+                        ),
+                    )
+                ),
             ),
             # Mock prime_sql_auth (BLDX-1295) — the real one opens an
             # actual SQL client. These run() tests are about output
@@ -1542,6 +1617,11 @@ class TestRunOutputPrefixes:
                 SqlApp,
                 "prime_sql_auth",
                 new=AsyncMock(return_value=PrimeAuthOutput(duration_ms=5.0)),
+            ),
+            patch.object(
+                SqlApp,
+                "verify_refs",
+                new=AsyncMock(return_value=VerifyRefsOutput(verified_count=4)),
             ),
             patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
         ]
@@ -1880,10 +1960,34 @@ class TestPrimeSqlAuth:
             patch.object(SqlApp, "extract_schemas", new=_fake_extract),
             patch.object(SqlApp, "extract_tables", new=_fake_extract),
             patch.object(SqlApp, "extract_columns", new=_fake_extract),
-            patch.object(SqlApp, "transform_databases", new=AsyncMock()),
-            patch.object(SqlApp, "transform_schemas", new=AsyncMock()),
-            patch.object(SqlApp, "transform_tables", new=AsyncMock()),
-            patch.object(SqlApp, "transform_columns", new=AsyncMock()),
+            patch.object(
+                SqlApp,
+                "transform_databases",
+                # A genuine zero-row transform: no transformed_file, so
+                # run() declares nothing and skips verify_refs (FND-1790).
+                new=AsyncMock(return_value=TransformOutput(total_record_count=0)),
+            ),
+            patch.object(
+                SqlApp,
+                "transform_schemas",
+                # A genuine zero-row transform: no transformed_file, so
+                # run() declares nothing and skips verify_refs (FND-1790).
+                new=AsyncMock(return_value=TransformOutput(total_record_count=0)),
+            ),
+            patch.object(
+                SqlApp,
+                "transform_tables",
+                # A genuine zero-row transform: no transformed_file, so
+                # run() declares nothing and skips verify_refs (FND-1790).
+                new=AsyncMock(return_value=TransformOutput(total_record_count=0)),
+            ),
+            patch.object(
+                SqlApp,
+                "transform_columns",
+                # A genuine zero-row transform: no transformed_file, so
+                # run() declares nothing and skips verify_refs (FND-1790).
+                new=AsyncMock(return_value=TransformOutput(total_record_count=0)),
+            ),
         ):
             await app.run(ExtractionInput(output_path="/tmp/test"))
 
@@ -1956,10 +2060,34 @@ class TestPrimeSqlAuth:
                 "extract_columns",
                 new=AsyncMock(side_effect=_make_extract_recorder("extract_columns")),
             ),
-            patch.object(SqlApp, "transform_databases", new=AsyncMock()),
-            patch.object(SqlApp, "transform_schemas", new=AsyncMock()),
-            patch.object(SqlApp, "transform_tables", new=AsyncMock()),
-            patch.object(SqlApp, "transform_columns", new=AsyncMock()),
+            patch.object(
+                SqlApp,
+                "transform_databases",
+                # A genuine zero-row transform: no transformed_file, so
+                # run() declares nothing and skips verify_refs (FND-1790).
+                new=AsyncMock(return_value=TransformOutput(total_record_count=0)),
+            ),
+            patch.object(
+                SqlApp,
+                "transform_schemas",
+                # A genuine zero-row transform: no transformed_file, so
+                # run() declares nothing and skips verify_refs (FND-1790).
+                new=AsyncMock(return_value=TransformOutput(total_record_count=0)),
+            ),
+            patch.object(
+                SqlApp,
+                "transform_tables",
+                # A genuine zero-row transform: no transformed_file, so
+                # run() declares nothing and skips verify_refs (FND-1790).
+                new=AsyncMock(return_value=TransformOutput(total_record_count=0)),
+            ),
+            patch.object(
+                SqlApp,
+                "transform_columns",
+                # A genuine zero-row transform: no transformed_file, so
+                # run() declares nothing and skips verify_refs (FND-1790).
+                new=AsyncMock(return_value=TransformOutput(total_record_count=0)),
+            ),
         ):
             await app.run(ExtractionInput(output_path="/tmp/test"))
 

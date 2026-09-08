@@ -1,0 +1,599 @@
+"""FND-1790: SqlApp.run() keeps the transform declaration and checks it.
+
+``run()`` used to throw away the four ``TransformOutput.transformed_file``
+refs its transform tasks returned and hand publish a string-joined prefix
+instead.  Publish walks that prefix and cannot tell a short tree from a small
+one, so a run whose transformed tree was genuinely incomplete published a
+subset and archived the rest (``ATLAS-404-00-00A`` on the rejected children).
+
+The prefix stays exactly as it was — it is publish's contract.  What changes is
+that ``run()`` now holds the expected set and asserts against it first.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from application_sdk.contracts.storage import VerifyRefsInput, VerifyRefsOutput
+from application_sdk.contracts.types import FileReference
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionInput,
+    ExtractionOutput,
+    ExtractionTaskOutput,
+    PrimeAuthOutput,
+    TransformOutput,
+)
+from application_sdk.templates.sql_app import SqlApp
+from application_sdk.templates.sql_app_errors import TransformedFileMissingError
+
+OUTPUT_PATH = "./local/tmp/artifacts/apps/test/workflows/wf-1/run-1"
+PREFIX = "artifacts/apps/test/workflows/wf-1/run-1/transformed"
+
+ENTITIES = ("database", "schema", "table", "column")
+TASK_BY_ENTITY = {
+    "database": ("extract_databases", "transform_databases"),
+    "schema": ("extract_schemas", "transform_schemas"),
+    "table": ("extract_tables", "transform_tables"),
+    "column": ("extract_columns", "transform_columns"),
+}
+
+
+def _transformed_ref(entity: str) -> FileReference:
+    return FileReference(
+        local_path=f"{OUTPUT_PATH}/transformed/{entity}/entities.json",
+        storage_path=f"{PREFIX}/{entity}/entities.json",
+        is_durable=True,
+    )
+
+
+def _app() -> SqlApp:
+    """A SqlApp with an app context bound — i.e. shaped like a real run.
+
+    ``finalize_extraction`` skips verification when ``_context`` is ``None``,
+    because that means ``run()`` was invoked directly and no interceptor
+    persisted anything. A context-less app here would therefore silently skip
+    the assertions these tests exist to pin, so it has to be bound: without it
+    the tests pass for the wrong reason.
+    """
+    from application_sdk.app.context import AppContext
+
+    app = SqlApp.__new__(SqlApp)
+    app._app_name = "test-app"
+    app._context = AppContext(
+        app_name="test-app",
+        app_version="1",
+        run_id="run-1",
+        _storage=object(),  # type: ignore[arg-type]
+    )
+    return app
+
+
+def _app_without_context() -> SqlApp:
+    """A SqlApp as a direct ``run()`` call sees it — no worker, no context."""
+    app = SqlApp.__new__(SqlApp)
+    app._app_name = "test-app"
+    return app
+
+
+def _patches(transform_outputs: dict[str, TransformOutput], verify: AsyncMock):
+    """Patch prime + the four extract/transform pairs + verify_refs."""
+    out = [
+        patch.object(SqlApp, "_resolve_credential_ref", return_value=None),
+        patch.object(
+            SqlApp,
+            "prime_sql_auth",
+            new=AsyncMock(return_value=PrimeAuthOutput(duration_ms=1.0)),
+        ),
+        patch.object(SqlApp, "verify_refs", new=verify),
+    ]
+    for entity in ENTITIES:
+        extract_name, transform_name = TASK_BY_ENTITY[entity]
+        out.append(
+            patch.object(
+                SqlApp,
+                extract_name,
+                new=AsyncMock(
+                    return_value=ExtractionTaskOutput(
+                        typename=entity,
+                        total_record_count=1,
+                        raw_file=FileReference(
+                            local_path=f"{OUTPUT_PATH}/raw/{entity}/records.json",
+                            storage_path=f"raw/{entity}/records.json",
+                            is_durable=True,
+                        ),
+                    )
+                ),
+            )
+        )
+        out.append(
+            patch.object(
+                SqlApp,
+                transform_name,
+                new=AsyncMock(return_value=transform_outputs[entity]),
+            )
+        )
+    return out
+
+
+async def _run(
+    transform_outputs: dict[str, TransformOutput],
+    verify: AsyncMock,
+    *,
+    app: SqlApp | None = None,
+):
+    app = app if app is not None else _app()
+    patches = _patches(transform_outputs, verify)
+    for p in patches:
+        p.start()
+    try:
+        return await app.run(ExtractionInput(output_path=OUTPUT_PATH))
+    finally:
+        for p in patches:
+            p.stop()
+
+
+def _all_produced() -> dict[str, TransformOutput]:
+    return {
+        e: TransformOutput(
+            typename=e, total_record_count=3, transformed_file=_transformed_ref(e)
+        )
+        for e in ENTITIES
+    }
+
+
+class TestRunVerifiesTransformedDeclaration:
+    async def test_the_refs_reach_the_output_and_the_check(self) -> None:
+        verify = AsyncMock(return_value=VerifyRefsOutput(verified_count=4))
+
+        result = await _run(_all_produced(), verify)
+
+        # 1. The declaration survives onto the output, so a connector's own
+        #    Atlan bridge can upload by ref instead of scanning a directory.
+        assert [r.storage_path for r in result.transformed_files] == [
+            f"{PREFIX}/{e}/entities.json" for e in ENTITIES
+        ]
+        # 2. And the same set was asserted before the prefix was handed on.
+        verify.assert_awaited_once()
+        sent: VerifyRefsInput = verify.await_args.args[0]
+        assert sent.prefix == PREFIX
+        assert [r.storage_path for r in sent.refs] == [
+            f"{PREFIX}/{e}/entities.json" for e in ENTITIES
+        ]
+
+    async def test_the_prefix_contract_is_unchanged(self) -> None:
+        """Publish reads ``transformed_data_prefix``; this must not move."""
+        verify = AsyncMock(return_value=VerifyRefsOutput(verified_count=4))
+
+        result = await _run(_all_produced(), verify)
+
+        assert result.transformed_data_prefix == PREFIX
+        assert result.output_path == OUTPUT_PATH
+
+    async def test_verification_does_not_download_the_transformed_files(self) -> None:
+        """The check is a HEAD. Left on, the interceptor would materialise
+        every transformed file onto whichever pod runs the check."""
+        verify = AsyncMock(return_value=VerifyRefsOutput(verified_count=4))
+
+        await _run(_all_produced(), verify)
+
+        sent: VerifyRefsInput = verify.await_args.args[0]
+        assert all(r.auto_materialize is False for r in sent.refs)
+
+    async def test_a_zero_row_entity_contributes_nothing_and_is_not_an_error(
+        self,
+    ) -> None:
+        """The genuine zero-row signal publish already relies on: no records,
+        no file, no complaint."""
+        outputs = _all_produced()
+        outputs["column"] = TransformOutput(typename="column", total_record_count=0)
+        verify = AsyncMock(return_value=VerifyRefsOutput(verified_count=3))
+
+        result = await _run(outputs, verify)
+
+        assert [r.storage_path for r in result.transformed_files] == [
+            f"{PREFIX}/{e}/entities.json" for e in ("database", "schema", "table")
+        ]
+
+    async def test_records_without_a_file_is_a_hole_and_fails_loudly(self) -> None:
+        """A transform that mapped records but declared no file has produced
+        asset data nothing can point at — it will simply be absent from the
+        tree publish walks, where absence reads as removed-from-source."""
+        outputs = _all_produced()
+        outputs["table"] = TransformOutput(typename="table", total_record_count=7)
+        verify = AsyncMock()
+
+        with pytest.raises(TransformedFileMissingError) as exc:
+            await _run(outputs, verify)
+
+        assert exc.value.typename == "table"
+        assert exc.value.record_count == 7
+        verify.assert_not_awaited()
+
+    async def test_no_entity_produced_output_skips_the_check_and_warns(self) -> None:
+        outputs = {
+            e: TransformOutput(typename=e, total_record_count=0) for e in ENTITIES
+        }
+        verify = AsyncMock()
+
+        with patch("application_sdk.templates.sql_app.logger") as logger:
+            result = await _run(outputs, verify)
+
+        assert result.transformed_files == []
+        verify.assert_not_awaited()
+        assert logger.warning.called
+
+    async def test_a_failed_check_propagates_instead_of_returning_the_prefix(
+        self,
+    ) -> None:
+        """The whole point: the run stops at the producer rather than handing
+        publish a prefix it cannot vouch for."""
+        from application_sdk.storage.errors import StorageHandoffIncompleteError
+
+        verify = AsyncMock(
+            side_effect=StorageHandoffIncompleteError(
+                "short", missing_keys=[f"{PREFIX}/table/entities.json"]
+            )
+        )
+
+        with pytest.raises(StorageHandoffIncompleteError):
+            await _run(_all_produced(), verify)
+
+
+class TestCollectTransformedFiles:
+    """Unit-level cover for the collector the run() path delegates to."""
+
+    def test_order_follows_the_declaration(self) -> None:
+        outs = [
+            TransformOutput(
+                typename=e, total_record_count=1, transformed_file=_transformed_ref(e)
+            )
+            for e in ENTITIES
+        ]
+        refs = SqlApp.collect_transformed_files(outs)
+        assert [r.storage_path for r in refs] == [
+            f"{PREFIX}/{e}/entities.json" for e in ENTITIES
+        ]
+
+    def test_unnamed_entity_still_names_the_count(self) -> None:
+        with pytest.raises(TransformedFileMissingError) as exc:
+            SqlApp.collect_transformed_files([TransformOutput(total_record_count=5)])
+        assert "<unknown>" in exc.value.message
+        assert exc.value.record_count == 5
+
+    def test_empty_input_declares_nothing(self) -> None:
+        assert SqlApp.collect_transformed_files([]) == []
+
+
+class TestCollectTransformedFilesIsPublicForRunOverrides:
+    """The reason it is public: a ``run()`` override adding a fifth entity.
+
+    ``SqlApp.run()`` builds the declaration for the four entities it drives.
+    A connector that adds one — procedures, say — holds a ``TransformOutput``
+    that never passed through ``run()``, so its ref is absent from
+    ``ExtractionOutput.transformed_files``. Without a public way to apply the
+    same "records but no ref = raise, zero rows = skip" rule, every connector
+    restates it by hand, which is the drift FND-1790 exists to remove.
+    """
+
+    def test_reachable_off_the_class_with_no_instance(self) -> None:
+        """A ``run()`` override calls it before it has anything else to hand."""
+        assert SqlApp.collect_transformed_files([]) == []
+
+    def test_the_documented_concatenation_yields_the_whole_declaration(self) -> None:
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref(e) for e in ENTITIES],
+        )
+        procedures = TransformOutput(
+            typename="extras-procedure",
+            total_record_count=9,
+            transformed_file=_transformed_ref("extras-procedure"),
+        )
+
+        declaration = [
+            *base.transformed_files,
+            *SqlApp.collect_transformed_files([procedures]),
+        ]
+
+        assert [r.storage_path for r in declaration] == [
+            f"{PREFIX}/{e}/entities.json" for e in (*ENTITIES, "extras-procedure")
+        ]
+
+    def test_the_added_entity_gets_the_same_hole_check(self) -> None:
+        """The whole point of sharing the helper rather than the rule."""
+        with pytest.raises(TransformedFileMissingError) as exc:
+            SqlApp.collect_transformed_files(
+                [TransformOutput(typename="extras-procedure", total_record_count=9)]
+            )
+
+        assert exc.value.typename == "extras-procedure"
+
+
+class TestRunOverrideSurfaceIsPublic:
+    """Every helper a documented ``run()`` override needs is public.
+
+    ``build_task_input`` was already public and documented as the API for
+    overrides, but it takes a ``cred_ref`` that only a private method produced —
+    so the documented path could not be walked as documented. The three helpers
+    below close that, and the private names stay as deprecated shims because a
+    `gh search code` over atlanhq finds a dozen connector repos on them.
+    """
+
+    def test_the_whole_wiring_path_is_public(self) -> None:
+        for name in (
+            "resolve_credential_ref",
+            "build_task_input",
+            "build_transform_input",
+            "collect_transformed_files",
+            "extract_procedures",
+            "transform_procedures",
+        ):
+            assert hasattr(SqlApp, name), f"SqlApp.{name} is missing"
+            assert not name.startswith("_")
+
+    def test_build_transform_input_threads_the_ref(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import ExtractionTaskInput
+
+        ref = _transformed_ref("database")
+        out = SqlApp.build_transform_input(ExtractionTaskInput(workflow_id="w"), ref)
+
+        assert out.workflow_id == "w"
+        assert out.raw_file is ref
+
+    def test_resolve_credential_ref_is_reachable_on_an_instance(self) -> None:
+        app = _app()
+        assert app.resolve_credential_ref(ExtractionInput()) is None
+
+
+class TestDeprecatedPrivateAliases:
+    """The old names keep working for one major version.
+
+    They were private and carried no compatibility promise, but a dozen
+    connector repos call them today. Renaming with no shim would break every
+    one on its next SDK bump — a fleet-wide outage traded for a tidier diff.
+    """
+
+    def test_build_transform_input_alias_delegates_and_warns(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import ExtractionTaskInput
+
+        ref = _transformed_ref("database")
+        with pytest.warns(DeprecationWarning, match="build_transform_input"):
+            out = SqlApp._build_transform_input(ExtractionTaskInput(), ref)
+
+        assert out.raw_file is ref
+
+    def test_resolve_credential_ref_alias_delegates_and_warns(self) -> None:
+        app = _app()
+        with pytest.warns(DeprecationWarning, match="resolve_credential_ref"):
+            assert app._resolve_credential_ref(ExtractionInput()) is None
+
+    def test_each_alias_names_its_removal_version(self) -> None:
+        """A deprecation with no removal version never gets removed."""
+        import inspect
+
+        for fn in (SqlApp._build_transform_input, SqlApp._resolve_credential_ref):
+            assert "v4.0.0" in inspect.getsource(fn)
+
+
+class TestFinalizeExtractionVerifiesTheAddedEntity:
+    """The bug in the recipe this replaced: ``super().run()`` verifies the four
+    refs it drove and then *returns*, so a fifth ref appended afterwards was
+    never asserted. The override looked, at its call site, exactly like it had
+    verified everything — the same silent shortfall as FND-1790, one layer up.
+    """
+
+    async def test_the_added_entity_is_verified_not_just_appended(self) -> None:
+        app = _app()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref(e) for e in ENTITIES],
+        )
+        procedures = TransformOutput(
+            typename="extras-procedure",
+            total_record_count=9,
+            transformed_file=_transformed_ref("extras-procedure"),
+        )
+        verify = AsyncMock(return_value=VerifyRefsOutput(verified_count=5))
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            out = await app.finalize_extraction(base, [procedures])
+
+        # Appended...
+        assert [r.storage_path for r in out.transformed_files] == [
+            f"{PREFIX}/{e}/entities.json" for e in (*ENTITIES, "extras-procedure")
+        ]
+        # ...and asserted. The fifth ref must be in what was checked, which is
+        # the whole point: appending without this is the bug.
+        sent: VerifyRefsInput = verify.await_args.args[0]
+        assert f"{PREFIX}/extras-procedure/entities.json" in [
+            r.storage_path for r in sent.refs
+        ]
+        assert sent.prefix == PREFIX
+
+    async def test_the_whole_declaration_is_verified_not_only_the_extra(
+        self,
+    ) -> None:
+        """Asserting exactly what is handed downstream is cheaper to reason
+        about than a split proof, at four redundant metadata lookups."""
+        app = _app()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref(e) for e in ENTITIES],
+        )
+        procedures = TransformOutput(
+            typename="extras-procedure",
+            total_record_count=1,
+            transformed_file=_transformed_ref("extras-procedure"),
+        )
+        verify = AsyncMock(return_value=VerifyRefsOutput())
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            await app.finalize_extraction(base, [procedures])
+
+        sent: VerifyRefsInput = verify.await_args.args[0]
+        assert len(sent.refs) == 5
+
+    async def test_refs_go_in_without_auto_materialize(self) -> None:
+        app = _app()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref("database")],
+        )
+        verify = AsyncMock(return_value=VerifyRefsOutput())
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            await app.finalize_extraction(base, [])
+
+        sent: VerifyRefsInput = verify.await_args.args[0]
+        assert all(r.auto_materialize is False for r in sent.refs)
+
+    async def test_no_extra_still_verifies_what_base_declared(self) -> None:
+        """Empty ``extra`` is valid — a no-op assertion, not an error."""
+        app = _app()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref("database")],
+        )
+        verify = AsyncMock(return_value=VerifyRefsOutput())
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            out = await app.finalize_extraction(base, [])
+
+        verify.assert_awaited_once()
+        assert len(out.transformed_files) == 1
+
+    async def test_an_empty_declaration_skips_the_check_and_warns(self) -> None:
+        app = _app()
+        base = ExtractionOutput(transformed_data_prefix=PREFIX)
+        verify = AsyncMock()
+
+        with (
+            patch.object(SqlApp, "verify_refs", new=verify),
+            patch("application_sdk.templates.sql_app.logger") as log,
+        ):
+            out = await app.finalize_extraction(base, [])
+
+        verify.assert_not_awaited()
+        assert out.transformed_files == []
+        assert log.warning.called
+
+    async def test_a_hole_in_the_added_entity_raises_before_verifying(self) -> None:
+        app = _app()
+        base = ExtractionOutput(transformed_data_prefix=PREFIX)
+        verify = AsyncMock()
+
+        with (
+            patch.object(SqlApp, "verify_refs", new=verify),
+            pytest.raises(TransformedFileMissingError),
+        ):
+            await app.finalize_extraction(
+                base,
+                [TransformOutput(typename="extras-procedure", total_record_count=9)],
+            )
+
+        verify.assert_not_awaited()
+
+    async def test_the_default_run_path_goes_through_the_same_method(self) -> None:
+        """If ``run()`` kept its own copy of the concatenate-and-verify block,
+        the two would drift and only the override would be wrong."""
+        verify = AsyncMock(return_value=VerifyRefsOutput(verified_count=4))
+        seen: list[int] = []
+        real = SqlApp.finalize_extraction
+
+        async def _spy(self, base, extra=()):  # noqa: ANN001 — test spy
+            seen.append(len(list(extra)))
+            return await real(self, base, extra)
+
+        with patch.object(SqlApp, "finalize_extraction", new=_spy):
+            result = await _run(_all_produced(), verify)
+
+        assert seen == [4], "run() must delegate to finalize_extraction"
+        assert len(result.transformed_files) == 4
+
+
+class TestVerificationIsSkippedWithoutAWorker:
+    """Backwards compatibility, and why skipping is correct rather than a hole.
+
+    Before FND-1790 ``SqlApp.run()`` performed no I/O, so every connector's
+    ``run()`` unit tests drive the real ``run()`` with the tasks mocked and no
+    infrastructure bound. Adding a store assertion there would fail all of them
+    — an `AppContextError` even with correct ``FileReference`` mocks — forcing a
+    test-only edit on every connector in the fleet to buy an assertion that
+    cannot mean anything in that context.
+
+    The condition is structural, not test-shaped: the workflow wrapper binds
+    ``_context`` before ``run()`` and clears it after, so its absence means
+    there is no worker, hence no activity interceptor, hence nothing was
+    persisted and nothing to verify.
+    """
+
+    async def test_no_context_skips_verification_but_keeps_the_declaration(
+        self,
+    ) -> None:
+        app = _app_without_context()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref("database")],
+        )
+        verify = AsyncMock()
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            out = await app.finalize_extraction(base, [])
+
+        verify.assert_not_awaited()
+        # The declaration still reaches the output, so a connector's own
+        # upload_refs / verify_refs call is unaffected.
+        assert [r.storage_path for r in out.transformed_files] == [
+            f"{PREFIX}/database/entities.json"
+        ]
+
+    async def test_the_skip_is_logged(self) -> None:
+        """If it ever happens under a worker it must be visible, not silent."""
+        app = _app_without_context()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref("database")],
+        )
+
+        with (
+            patch.object(SqlApp, "verify_refs", new=AsyncMock()),
+            patch("application_sdk.templates.sql_app.logger") as log,
+        ):
+            await app.finalize_extraction(base, [])
+
+        assert log.warning.called
+
+    async def test_a_bound_context_still_verifies(self) -> None:
+        """The guard must be context-shaped, not a blanket disable — otherwise
+        it would turn the whole fix off in production too."""
+        app = _app()
+        base = ExtractionOutput(
+            transformed_data_prefix=PREFIX,
+            transformed_files=[_transformed_ref("database")],
+        )
+        verify = AsyncMock(return_value=VerifyRefsOutput(verified_count=1))
+
+        with patch.object(SqlApp, "verify_refs", new=verify):
+            await app.finalize_extraction(base, [])
+
+        verify.assert_awaited_once()
+
+    async def test_the_full_run_survives_a_connector_shaped_unit_test(self) -> None:
+        """The regression that broke `atlan-mysql-app`: transform tasks mocked
+        with bare MagicMocks, no context, driving the real ``run()``.
+
+        ``transformed_file`` is then a MagicMock rather than a FileReference,
+        which is a test artefact — the activity boundary validates
+        ``TransformOutput`` in production — but it reached ``VerifyRefsInput``
+        and failed pydantic validation with an error naming an SDK contract the
+        connector author had never heard of.
+        """
+        outputs = {e: MagicMock() for e in ENTITIES}
+        verify = AsyncMock()
+
+        result = await _run(outputs, verify, app=_app_without_context())
+
+        verify.assert_not_awaited()
+        assert result.transformed_data_prefix == PREFIX
