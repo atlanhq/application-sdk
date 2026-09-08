@@ -447,6 +447,18 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "I004",
         "I005",
         "S002",
+        "P052",
+        "P053",
+        "P054",
+        "P055",
+        "P056",
+        "P057",
+        "P058",
+        "P059",
+        "P060",
+        "P061",
+        "P062",
+        "P065",
     }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam
     # (P006/P007, BLDX-1417), declare its deprecations correctly (B002–B004),
@@ -464,6 +476,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P007",
         "P046",
         "P050",
+        "P063",
+        "P064",
     }, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
     assert both == {r.id for r in rules} - app_scoped - sdk_scoped
@@ -681,6 +695,7 @@ def test_catalog_p_series_present() -> None:
         "P050",
         "P051",
     }
+    expected.update(f"P{i:03}" for i in range(52, 66))
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
     extra = p_ids - expected

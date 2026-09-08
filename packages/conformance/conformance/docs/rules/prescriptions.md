@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**50 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.preflight` (P047), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
+**64 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.preflight` (P047), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -73,6 +73,20 @@ reassigned.
 | [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
+| [P052](#p052) | `PreflightHandlerContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P053](#p053) | `PreflightFailureAction` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P054](#p054) | `PreflightExpectedFailureRaised` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P055](#p055) | `PreflightVerdictAggregation` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P056](#p056) | `PreflightGateInputParity` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P057](#p057) | `PreflightBlockingProbe` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P058](#p058) | `PreflightBudgetOverride` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P059](#p059) | `PreflightCancellationCleanup` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P060](#p060) | `PreflightFailureExposure` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P061](#p061) | `PreflightRemovedGateContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P062](#p062) | `PreflightBehaviorContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P063](#p063) | `PreflightWorkflowEnforcement` | `warn` | `sdk` | `preflight-gate` | — | 0.27.0 |
+| [P064](#p064) | `PreflightExitEvidence` | `warn` | `sdk` | `preflight-gate` | — | 0.27.0 |
+| [P065](#p065) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 
 ---
 
@@ -1288,6 +1302,9 @@ Remediation: rename the task, or fold its logic into the app's `Handler.prefligh
 (which the gate already calls). A non-literal `@task(name=<expr>)` is not statically
 resolvable and is not flagged.
 
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p032).
+
 ---
 
 ## P033 — `DuplicateInWorkflowPreflight` {#p033}
@@ -1309,6 +1326,9 @@ activity is dead weight that silently rots.
 Remediation: delete the app-owned preflight activity and keep the single
 `Handler.preflight_check` implementation the gate calls.
 
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p033).
+
 ---
 
 ## P034 — `UntypedPreflightCheckFailure` {#p034}
@@ -1322,16 +1342,20 @@ PREFLIGHT_CHECK_FAILED code, so the Automation Engine and the UI lose the
 category/code/audience/suggested_action the typed form carries on the wire. This points
 at the exact lines to migrate to typed failures.
 
-A `PreflightCheck` with an explicit `passed=False` and no typed `error=` (absent, or the
-literal `None`) is an untyped failure: the gate falls back to the generic
+A `PreflightCheck` with proven or default `passed=False` and no typed `error=` (absent,
+or the literal `None`) is an untyped failure: the gate falls back to the generic
 `PREFLIGHT_CHECK_FAILED` code and only the deprecated free-text `message` reaches the
 caller. The typed form `error=AuthError(message=..., suggested_action=...,
 cause=exc).to_failure_details()` carries category / code / audience / retryable /
 suggested_action to the Automation Engine and the UI.
 
-Only an explicit `passed=False` literal is flagged; a failure expressed purely by the
-default `passed` and a non-literal `passed` are left alone to keep false positives near
-zero. A locally-defined, non-SDK class named `PreflightCheck` is not flagged.
+Supported SDK public imports, literal values, local boolean bindings, and the default
+false value are recognized. An unresolved dynamic `passed` without an error produces
+P065 instead of a proven violation. A locally-defined non-SDK class named
+`PreflightCheck` is not flagged.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p034).
 
 ---
 
@@ -1351,18 +1375,22 @@ The preflight gate does not forward the live UI form: it rebuilds
 `PreflightInput.metadata` from the extraction input's `model_dump()`
 (`_config_from_snapshot`), so only fields declared on an entrypoint `Input` contract
 survive. A key read inside `preflight_check` via `input.metadata.get("key", ...)` or
-`input.metadata["key"]` that is absent from the union of every entrypoint Input
-contract's fields is silently missing on the gate path, so a defensive `.get(key,
-default)` read passes vacuously with the wrong configuration (e.g. database scoping
-silently dropped).
+`input.metadata["key"]` that is absent from the selected convention-based entrypoint
+input contract is silently missing on the gate path, so a defensive `.get(key, default)`
+read passes vacuously with the wrong configuration (e.g. database scoping silently
+dropped).
 
-Remediation: declare the key as a field on the extraction input contract (matching the
-UI form), or stop reading it in `preflight_check`. Keys are compared to contract field
-names with underscore/hyphen normalization; field aliases are not treated as allowed
-because `model_dump` emits field names, not aliases. The rule does not fire when no
-entrypoint Input contract is resolvable or when a contract (or an in-repo ancestor) opts
-into extra keys via either `model_config` form: `ConfigDict(extra="allow")` or
-`{"extra": "allow"}`.
+When dispatch cannot be narrowed, the existing union fallback applies; P065 reports
+unresolved contract definitions. Remediation: declare the key as a field on the
+extraction input contract (matching the UI form), or stop reading it in
+`preflight_check`. Keys are compared to contract field names with underscore/hyphen
+normalization; field aliases are not treated as allowed because `model_dump` emits field
+names, not aliases. The rule does not fire when no entrypoint Input contract is
+resolvable or when a contract (or an in-repo ancestor) opts into extra keys via either
+`model_config` form: `ConfigDict(extra="allow")` or `{"extra": "allow"}`.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p035).
 
 ---
 
@@ -1932,9 +1960,11 @@ Remediation: express the failure through the typed check result —
 `PreflightCheck(passed=False, error=<AppError>.to_failure_details())` — and delete the
 warning; use INFO/DEBUG for non-failure progress. `warning` and the deprecated `warn`
 alias are both matched, on any receiver named like a logger (`logger`, `log`,
-`self._log`, `logging`). Only class-method `preflight_check` overrides are scanned:
-module-level per-entrypoint `preflight_check` functions are not resolved, and helper
-functions the method calls are not followed.
+`self._log`, `logging`). Supported class handlers, module callbacks, and directly
+resolvable helpers are scanned; dynamic dispatch requires behavioral evidence.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p047).
 
 ---
 
@@ -2176,5 +2206,226 @@ the agent clears the floor   these render the interactive metadata picker; below
 when the   version can't be read) the picker falls back to a plain text box. This
 follows the same floor gate automatically — no per-connector change   beyond declaring
 the filter widget.
+
+---
+
+## P052 — `PreflightHandlerContract` {#p052}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Declare SDK PreflightInput and PreflightOutput on every supported handler.
+
+**Rationale:** Missing types and legacy output dictionaries hide contract drift from both UI and
+workflow consumers.
+
+Declare SDK PreflightInput and PreflightOutput on every supported handler.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p052).
+
+---
+
+## P053 — `PreflightFailureAction` {#p053}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Provide nonblank failure messages and audience-appropriate suggested actions.
+
+**Rationale:** A typed error with no action still leaves a blocked workflow without a usable next step.
+
+Provide nonblank failure messages and audience-appropriate suggested actions.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p053).
+
+---
+
+## P054 — `PreflightExpectedFailureRaised` {#p054}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Return expected typed preflight failures rather than letting them escape.
+
+**Rationale:** The target origin-based gate applies hard mode to handler raises; a raised transient is
+no longer a fail-open request.
+
+Return expected typed preflight failures rather than letting them escape.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p054).
+
+---
+
+## P055 — `PreflightVerdictAggregation` {#p055}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Keep READY, PARTIAL and NOT_READY consistent with check outcomes.
+
+**Rationale:** Advisory failures must not become mandatory blocks and a successful status must not hide
+failed checks.
+
+Keep READY, PARTIAL and NOT_READY consistent with check outcomes.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p055).
+
+---
+
+## P056 — `PreflightGateInputParity` {#p056}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Preserve the selected entrypoint and supply routable credentials before the gate.
+
+**Rationale:** The injected gate runs before workflow-body normalization, so a UI check can succeed
+while the gate sees different inputs.
+
+Preserve the selected entrypoint and supply routable credentials before the gate.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p056).
+
+---
+
+## P057 — `PreflightBlockingProbe` {#p057}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Keep source probes awaitable and bounded across every connection phase.
+
+**Rationale:** Blocking I/O or unbounded executor waits can outlive the gate and stall worker
+activities.
+
+Keep source probes awaitable and bounded across every connection phase.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p057).
+
+---
+
+## P058 — `PreflightBudgetOverride` {#p058}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Keep probe and retry deadlines inside the remaining gate budget.
+
+**Rationale:** Floors, extra margins and equal nested timeout boundaries turn healthy probes into
+timeout races.
+
+Keep probe and retry deadlines inside the remaining gate budget.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p058).
+
+---
+
+## P059 — `PreflightCancellationCleanup` {#p059}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Release owned preflight resources without blocking the event loop.
+
+**Rationale:** Cancellation of an await does not terminate a driver thread or release its resources.
+
+Release owned preflight resources without blocking the event loop.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p059).
+
+---
+
+## P060 — `PreflightFailureExposure` {#p060}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Keep raw exception and credential values out of preflight outputs and logs.
+
+**Rationale:** Typed wire fields and traceback locals are independent channels through which secrets
+can escape.
+
+Keep raw exception and credential values out of preflight outputs and logs.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p060).
+
+---
+
+## P061 — `PreflightRemovedGateContract` {#p061}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Migrate removed mode overrides and private gate-classification helpers.
+
+**Rationale:** SDK PR #3685 removes the old gate contract. Until its release floor is established this
+is an upgrade advisory, not proof of current incompatibility.
+
+Migrate removed mode overrides and private gate-classification helpers.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p061).
+
+---
+
+## P062 — `PreflightBehaviorContract` {#p062}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Execute registered real-handler scenarios for each applicable entrypoint.
+
+**Rationale:** Static shape checks cannot prove verdict semantics, probe coverage, recovery, or
+resource lifetime. Missing and skipped scenarios are incomplete evidence.
+
+Execute registered real-handler scenarios for each applicable entrypoint.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p062).
+
+---
+
+## P063 — `PreflightWorkflowEnforcement` {#p063}
+
+**Tier:** `warn` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Verify gate enforcement through real Temporal workflow histories.
+
+**Rationale:** Only execution history can prove extraction was never scheduled after a hard gate
+failure, including activity death.
+
+Verify gate enforcement through real Temporal workflow histories.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p063).
+
+---
+
+## P064 — `PreflightExitEvidence` {#p064}
+
+**Tier:** `warn` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Verify typed verdicts, outcome fields and safe evidence handoff on every exit.
+
+**Rationale:** Activity and workflow failures must preserve cause and status, and logging must not
+silently discard the evidence.
+
+Verify typed verdicts, outcome fields and safe evidence handoff on every exit.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p064).
+
+---
+
+## P065 — `PreflightAnalysisCoverage` {#p065}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Report unresolved preflight dispatch and contracts instead of a clean result.
+
+**Rationale:** An undiscovered handler or unresolved contract must not be mistaken for conforming code.
+
+Report unresolved preflight dispatch and contracts instead of a clean result.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p065).
 
 ---

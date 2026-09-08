@@ -5,10 +5,7 @@ Flags ``logger.warning(...)`` / ``logger.warn(...)`` calls inside a
 ERROR, so a preflight failure a handler logs at WARNING is invisible on exactly
 the runs where the customer needs it. Failures belong in the typed check result
 — the gate emits the one outcome row and levels it — and non-failure progress
-belongs at INFO/DEBUG. Only class-method overrides are scanned (module-level
-per-entrypoint ``preflight_check`` functions are not resolved by
-``find_preflight_check_sites``), and helpers the method calls are not followed
-— matching the false-negative-over-false-positive stance of the P series.
+belongs at INFO/DEBUG. Direct local helpers are included with bounded traversal.
 """
 
 from __future__ import annotations
@@ -18,7 +15,7 @@ import ast
 from conformance.suite.checks._ast_common import make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._common import Registry, find_preflight_check_sites
+from ._common import Registry, iter_function_nodes, reachable_preflight_sites
 
 _P047 = "P047"
 
@@ -37,17 +34,13 @@ def _is_logger_warning(node: ast.Call) -> bool:
     else:
         return False
     lowered = name.lower()
-    return (
-        lowered in {"logging", "log"}
-        or lowered.endswith("logger")
-        or lowered.endswith("_log")
-    )
+    return lowered in {"logging", "log"} or lowered.endswith(("logger", "_log"))
 
 
 def scan(reg: Registry) -> list[Finding]:
     findings: list[Finding] = []
-    for src, method in find_preflight_check_sites(reg):
-        for node in ast.walk(method):
+    for src, method in reachable_preflight_sites(reg):
+        for node in iter_function_nodes(method):
             if not (isinstance(node, ast.Call) and _is_logger_warning(node)):
                 continue
             findings.append(

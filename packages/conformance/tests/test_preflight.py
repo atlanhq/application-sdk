@@ -215,7 +215,7 @@ def test_p033_fires_via_transitive_handler_without_preflight_input_annotation(
         + "class A(App):\n    @task\n    async def run_preflight(self): ...\n"
     )
     ids = sorted(f.rule_id for f in _scan(tmp_path, {"app.py": app, "h.py": handler}))
-    assert ids == ["P033"]
+    assert ids == ["P033", "P052"]
 
 
 def test_p033_message_points_at_colocated_handler(tmp_path: Path) -> None:
@@ -292,18 +292,17 @@ def test_p034_silent_on_passed_true(tmp_path: Path) -> None:
     assert _ids(tmp_path, _pc('PreflightCheck(name="x", passed=True)')) == []
 
 
-def test_p034_silent_on_omitted_passed(tmp_path: Path) -> None:
-    # Deliberate false-negative: bare templates are the biggest FP source.
-    assert _ids(tmp_path, _pc('PreflightCheck(name="x")')) == []
+def test_p034_reports_default_failure(tmp_path: Path) -> None:
+    assert _ids(tmp_path, _pc('PreflightCheck(name="x")')) == ["P034"]
 
 
-def test_p034_silent_on_non_literal_passed(tmp_path: Path) -> None:
+def test_dynamic_passed_reports_incomplete_analysis(tmp_path: Path) -> None:
     src = (
         "from application_sdk.handler.contracts import PreflightCheck\n"
         "def make(ok):\n"
         '    return PreflightCheck(name="x", passed=ok)\n'
     )
-    assert _ids(tmp_path, src) == []
+    assert _ids(tmp_path, src) == ["P065"]
 
 
 def test_p034_silent_on_non_sdk_preflightcheck(tmp_path: Path) -> None:
