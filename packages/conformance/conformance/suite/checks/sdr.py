@@ -13,7 +13,8 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
   entrypoints (miner/QI, ``clean`` — no ``{{agent-json}}`` placeholder) are exempt.
 
 * ``P030`` — at least one Python source file (outside ``tests/``) must contain
-  a ``self.upload(`` call so the ``ENABLE_ATLAN_UPLOAD`` path is reachable.
+  a ``self.upload(`` or ``self.upload_refs(`` call so the
+  ``ENABLE_ATLAN_UPLOAD`` path is reachable.
   Without it extraction "passes" but no assets transfer to the Atlan tenant
   bucket in SDR deployments.  Delegating to SDK ``SqlApp.run()`` does NOT
   satisfy this — ``run()`` persists to the deployment store only, while the
@@ -595,8 +596,21 @@ def _find_upload_bridges(
     return bridges
 
 
-def _has_self_upload_call(paths: list[Path]) -> bool:
-    """Whether any app source file makes a real ``self.upload(...)`` call.
+#: The framework tasks whose presence makes the tenant-bucket transfer
+#: reachable.  ``upload`` is ``App.upload``; ``upload_refs`` (SDK 3.33.2)
+#: delivers a ``FileReference`` declaration as one outbound tree by looping the
+#: *same* ``_upload_impl`` body — so it carries the same ``ENABLE_ATLAN_UPLOAD``
+#: gate, the same ADR-0014 dual-write routing and the same transformed-asset
+#: validation — and then verifies the delivered tree against the declaration in
+#: the upstream store.  It is the shape a fanned-out connector needs, because
+#: scanning ``<output>/transformed`` from the calling pod sees only the subset
+#: of files that pod happened to write.  Either call clears the absence
+#: finding; nothing else does.
+_SANCTIONED_UPLOAD_ATTRS = frozenset({"upload", "upload_refs"})
+
+
+def _has_sanctioned_upload_call(paths: list[Path]) -> bool:
+    """Whether app source makes a real ``self.upload``/``upload_refs`` call.
 
     Detected on the AST, not as text: a raw ``"self.upload(" in text`` search
     cannot tell a call from a *mention*, so a comment or docstring naming
@@ -607,7 +621,11 @@ def _has_self_upload_call(paths: list[Path]) -> bool:
     ``super().upload(...)`` counts too: an app that overrides ``upload`` to add
     connector-specific logic and then defers to the SDK's real ``App.upload()``
     has a structurally reachable transfer path — the same ``super()`` shape
-    T017 (``e2e_agent_spec``) already treats as first-class.
+    T017 (``e2e_agent_spec``) already treats as first-class.  The same holds for
+    ``upload_refs`` (see :data:`_SANCTIONED_UPLOAD_ATTRS`), which is a peer
+    framework task over the identical upload body rather than a wrapper around
+    it — an app that migrated its store-boundary hand-off to a declaration is
+    the *opposite* of the unreachable-gate shape this rule exists to catch.
     """
     for path in paths:
         try:
@@ -618,7 +636,7 @@ def _has_self_upload_call(paths: list[Path]) -> bool:
             if not (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "upload"
+                and node.func.attr in _SANCTIONED_UPLOAD_ATTRS
             ):
                 continue
             receiver = node.func.value
@@ -637,12 +655,15 @@ def _has_self_upload_call(paths: list[Path]) -> bool:
 def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
     """P030 / P042: the tenant-bucket upload path must be reachable, and be ours.
 
-    ``self.upload()`` is the one shape that clears both rules.  Everything else
+    ``self.upload()`` — or its peer framework task ``self.upload_refs()``, which
+    delivers a ``FileReference`` declaration through the same upload body — is
+    the shape that clears both rules.  Everything else
     falls into one of three findings, and the split into two rule IDs is what
     keeps them from sharing a severity and a remediation:
 
     * **P030, no upload at all** — no source file makes a real
-      ``self.upload(...)`` call (matched on the AST, so a comment or docstring
+      ``self.upload(...)`` / ``self.upload_refs(...)`` call (matched on the AST,
+      so a comment or docstring
       mentioning it does not count) and no custom upload-bridge method
       (``upload_to_atlan``) is defined.  The ENABLE_ATLAN_UPLOAD path is
       unreachable; delegating to SDK ``SqlApp.run()`` does NOT count (it
@@ -655,7 +676,8 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
       (``raise NotImplementedError``/``pass``/``...``) are not stubs and are
       excluded — a subclass may well implement the real thing.
     * **P042, hand-rolled bridge in place of ``App.upload()``** — a
-      ``upload_to_atlan`` that DOES transfer, with no ``self.upload(`` anywhere.
+      ``upload_to_atlan`` that DOES transfer, with no ``self.upload(`` /
+      ``self.upload_refs(`` anywhere.
       Bytes move, so this is not the silent-zero-asset shape P030 describes; it
       is a reimplementation of an SDK contract, on a symbol the SDK has
       deprecated for removal in v4.0.
@@ -670,11 +692,12 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
     reconcile, and SHA-256 sidecar dedup.  A green full-DAG e2e proves bytes
     moved on that run, not that the app tracks the contract.
 
-    An app with ``self.upload(`` somewhere is flagged for neither absence nor
+    An app with ``self.upload(`` / ``self.upload_refs(`` somewhere is flagged
+    for neither absence nor
     P042, but a no-op stub alongside it is still flagged (the stub is dead
     weight that masks the real transfer path).
     """
-    has_self_upload = _has_self_upload_call(paths)
+    has_self_upload = _has_sanctioned_upload_call(paths)
     bridges = _find_upload_bridges(paths, root)
     findings: list[Finding] = []
 
@@ -697,14 +720,15 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
                     "workflow reports 'success' with 0 assets published. Implement a "
                     "key-preserving deployment-store→tenant-bucket transfer (preserve "
                     "the workflows/{workflow_id}/{run_id}/ key layout) or call "
-                    "self.upload(...), and verify with a green full-DAG e2e proving "
+                    "self.upload(...) / self.upload_refs(...), and verify with a "
+                    "green full-DAG e2e proving "
                     "assets land in Atlas."
                 ),
             )
         )
 
     if has_self_upload:
-        # The sanctioned path is present, so there is no absence and no
+        # A sanctioned path is present, so there is no absence and no
         # hand-rolled substitution — a bridge alongside it is redundant, not a
         # replacement.  Any no-op stub keeps its own finding above.
         return findings
@@ -754,15 +778,19 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
             line=1,
             column=1,
             message=(
-                "No self.upload() call (and no custom upload_to_atlan transfer "
-                "bridge) found in any app source file. In SDR mode "
+                "No self.upload() or self.upload_refs() call (and no custom "
+                "upload_to_atlan transfer bridge) found in any app source file. "
+                "In SDR mode "
                 "ENABLE_ATLAN_UPLOAD gates whether extracted assets are transferred "
                 "to the Atlan tenant bucket — if the gate is structurally unreachable "
                 "the workflow completes with status 'success' but no assets land in "
                 "the bucket. Delegating to SDK SqlApp.run() does NOT satisfy this: "
                 "run() persists to the deployment store only, while publish reads "
                 "the tenant bucket. Add await self.upload(...) to the entrypoint or "
-                "run() method, and never mark this finding a false positive without "
+                "run() method — or await self.upload_refs(...) to deliver a "
+                "FileReference declaration as one tree, which is the shape a "
+                "fanned-out connector needs — and never mark this finding a false "
+                "positive without "
                 "a green full-DAG e2e proving assets land in Atlas."
             ),
         )
@@ -1319,7 +1347,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     ----------
     paths:
         Python source files to inspect (as returned by :func:`discover`).
-        These are the files checked by P030/P042 for a ``self.upload(`` call /
+        These are the files checked by P030/P042 for a ``self.upload(`` or
+        ``self.upload_refs(`` call /
         upload-bridge shape, by P037 for the credential-resolution shape, by
         P038 for the object-store prefix rooting.
     root:

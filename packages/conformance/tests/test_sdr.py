@@ -4,7 +4,9 @@ P029 catches the MSSQL regression pattern: an SDR app whose manifest.json is
 missing agent_json in dag.extract.inputs.args.  The SDR worker starts, the
 workflow status is "success", but no credentials are routed so no assets move.
 
-P030 catches apps that never call self.upload(): the ENABLE_ATLAN_UPLOAD gate
+P030 catches apps that never call self.upload() (or its peer framework task
+self.upload_refs(), which delivers a FileReference declaration through the same
+upload body): the ENABLE_ATLAN_UPLOAD gate
 is structurally unreachable, so assets never land in the Atlan tenant bucket
 even when the flag is true.
 
@@ -217,6 +219,20 @@ def test_p030_prose_does_not_contradict_its_block_tier() -> None:
     rule = get_rule("P030")
     assert rule.tier == EnforcementTier.BLOCK
     assert "this is a warn" not in rule.full_description.lower()
+
+
+def test_p030_prose_names_upload_refs_as_a_satisfying_call() -> None:
+    """The rule honours ``upload_refs``, so the published page must say so.
+
+    An app that migrated its store-boundary hand-off to a declaration reads the
+    generated doc to find out whether it still owes a ``self.upload()`` call.
+    A checker that accepts the call while the prose says only ``self.upload(``
+    sends that app looking for a second transfer it does not need.
+    """
+    rule = get_rule("P030")
+    assert "upload_refs" in rule.full_description
+    assert "upload_refs" in rule.short_description
+    assert "upload_refs" in rule.rationale
 
 
 def test_p042_rule_metadata() -> None:
@@ -486,6 +502,66 @@ def test_p030_silent_when_super_upload_call_present(tmp_path: Path) -> None:
     )
     findings = _run(tmp_path)
     assert not any(f.rule_id == "P030" for f in findings)
+
+
+def test_p030_silent_when_upload_refs_call_present(tmp_path: Path) -> None:
+    """``await self.upload_refs(...)`` is a real transfer path, not an absence.
+
+    ``App.upload_refs`` (SDK 3.33.2) is a peer framework task over the same
+    ``_upload_impl`` body as ``App.upload`` — same ENABLE_ATLAN_UPLOAD gate,
+    same dual-write routing — and it verifies the delivered tree against the
+    declaration on top.  Matching only ``upload`` flagged the app that had
+    migrated to the stronger hand-off, which is the opposite of this rule's
+    purpose.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": (
+                "from application_sdk.app import App\n"
+                "from application_sdk.contracts.storage import (\n"
+                "    DeclaredFile,\n"
+                "    UploadRefsInput,\n"
+                ")\n\n"
+                "class Connector(App):\n"
+                "    async def run(self, workflow_args):\n"
+                "        out = await self.extract(workflow_args)\n"
+                "        delivered = await self.upload_refs(\n"
+                "            UploadRefsInput(\n"
+                "                files=[DeclaredFile(ref=r) for r in out.files],\n"
+                "                source_prefix=out.prefix,\n"
+                "                prefix=out.prefix,\n"
+                "            )\n"
+                "        )\n"
+                "        return delivered.prefix\n"
+            ),
+        },
+    )
+    findings = _run(tmp_path)
+    assert not any(f.rule_id == "P030" for f in findings)
+
+
+def test_p030_absence_message_names_both_upload_calls(tmp_path: Path) -> None:
+    """The remediation text must offer the declaration path, not just upload().
+
+    The finding is anchored on ``atlan.yaml`` and honours no suppression, so its
+    message is the whole of what the app author is told to do.  Naming only
+    ``self.upload(...)`` there points a fanned-out connector at the transfer
+    that scans one directory — the shape ``upload_refs`` exists to replace.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    p030 = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert len(p030) == 1
+    assert "self.upload()" in p030[0].message
+    assert "self.upload_refs()" in p030[0].message
+    assert "await self.upload_refs(...)" in p030[0].message
 
 
 def test_p030_silent_on_non_sdr_app(tmp_path: Path) -> None:
@@ -1126,6 +1202,30 @@ def test_p042_silent_when_self_upload_is_present(tmp_path: Path) -> None:
                 "class App:\n"
                 "    async def run(self):\n"
                 "        await self.upload('output')\n"
+            ),
+        },
+    )
+    findings = _run(tmp_path)
+    assert not any(f.rule_id in ("P030", "P042") for f in findings)
+
+
+def test_p042_silent_when_upload_refs_is_present(tmp_path: Path) -> None:
+    """A bridge alongside ``self.upload_refs()`` is redundant, not a substitution.
+
+    P042 fires on a hand-rolled bridge standing *in place of* the SDK path. The
+    declaration hand-off is that path, so a repo mid-migration — new
+    ``upload_refs`` call in, old bridge not yet deleted — must not be told it
+    reimplemented a contract it is already using.
+    """
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": _REAL_BRIDGE,
+            "app/main.py": (
+                "class App:\n"
+                "    async def run(self):\n"
+                "        await self.upload_refs(self._declaration())\n"
             ),
         },
     )
