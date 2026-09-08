@@ -1347,10 +1347,18 @@ def _activity_info() -> Any:
         return None
 
 
-def _gate_heartbeat() -> None:
+class _Beats:
+    """When this attempt last sent a heartbeat, on the monotonic clock."""
+
+    def __init__(self) -> None:
+        self.last_sent = time.monotonic()
+
+
+def _gate_heartbeat(beats: _Beats) -> None:
     """Beat with the attempt number, so a killed frame still reports which one ran."""
     try:
         activity.heartbeat(_current_attempt())
+        beats.last_sent = time.monotonic()
     # conformance: ignore[E002] no activity context — nothing to beat and nothing to report
     except RuntimeError:
         pass
@@ -1374,7 +1382,7 @@ def _effective_budget(budget_seconds: float) -> float:
     return min(budget_seconds, ceiling) if ceiling > 0 else budget_seconds
 
 
-def _attempt_is_live() -> bool:
+def _attempt_is_live(beats: _Beats | None = None) -> bool:
     """Whether this activity attempt is still the one Temporal is waiting on.
 
     An abandoned attempt (its ``start_to_close`` window closed, the retry
@@ -1393,6 +1401,13 @@ def _attempt_is_live() -> bool:
     trusting two clocks to agree — over-suppressing a *live* attempt's verdict
     is the worse failure. Tolerant of no activity context (direct calls, unit
     tests) and of missing fields, mirroring ``_effective_budget``.
+    A third signal needs no server round trip: the attempt's own heartbeats.
+    ``heartbeat_timeout`` is measured by the server from the last beat it
+    received, and a beat cannot arrive before it was sent, so an attempt that
+    has not sent one for longer than that timeout has certainly been timed out.
+    This is the signal that covers a worker frozen mid-attempt and resumed: its
+    probe can fail in the first second back, before the heartbeat loop has had
+    a chance to learn from the server that the attempt is gone.
     """
     try:
         cancelled = activity.is_cancelled()
@@ -1401,6 +1416,10 @@ def _attempt_is_live() -> bool:
     if cancelled:
         return False
     info = _activity_info()
+    heartbeat_timeout = getattr(info, "heartbeat_timeout", None)
+    if beats is not None and isinstance(heartbeat_timeout, timedelta):
+        if time.monotonic() - beats.last_sent > heartbeat_timeout.total_seconds():
+            return False
     started_time = getattr(info, "started_time", None)
     start_to_close = getattr(info, "start_to_close_timeout", None)
     if not isinstance(started_time, datetime) or not isinstance(
@@ -1907,7 +1926,7 @@ def build_preflight_gate_activity(
             the three call sites instead of a rule each has to remember.
             """
             checks = verdict.checks
-            if not _attempt_is_live():
+            if not _attempt_is_live(beats):
                 # WARNING, not DEBUG: a handler outrunning its Temporal deadline
                 # is a real anomaly, and at DEBUG a suppressed orphan would be
                 # indistinguishable from a gate that never ran — in the series
@@ -1996,7 +2015,7 @@ def build_preflight_gate_activity(
                 # nothing — on the one path where the cause is the whole diagnostic.
                 exc_info=exc,
             )
-            if enforce and _attempt_is_live():
+            if enforce and _attempt_is_live(beats):
                 raise block_error
             return unverifiable
 
@@ -2020,10 +2039,11 @@ def build_preflight_gate_activity(
         )
         _, heartbeat_interval = gate_heartbeat_timings(s2c_seconds)
         heartbeat_stop = asyncio.Event()
+        beats = _Beats()
         heartbeat_task = asyncio.ensure_future(
             auto_heartbeat_loop(
                 interval_seconds=heartbeat_interval,
-                heartbeat_fn=_gate_heartbeat,
+                heartbeat_fn=lambda: _gate_heartbeat(beats),
                 stop_event=heartbeat_stop,
                 task_name=preflight_gate_activity_name(app_name),
             )
@@ -2188,7 +2208,7 @@ def build_preflight_gate_activity(
                     PreflightClassification.VERDICT,
                     audience=block_error.details[0].audience.value,
                 )
-                if enforce and _attempt_is_live():
+                if enforce and _attempt_is_live(beats):
                     raise block_error
                 # Soft: the verdict stays honest NOT_READY; the gate just does not
                 # enforce it. The would_block row above is the loud record.

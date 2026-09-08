@@ -1132,6 +1132,91 @@ class TestADeadAttemptNeverBlocks:
         assert _no_outcome(mock_logger)
 
 
+class TestAnAttemptThatStoppedBeatingIsDead:
+    """An attempt silent for longer than its heartbeat timeout has been timed out.
+
+    Reproduced live: a worker frozen mid-attempt and resumed saw its probe fail
+    in the first second back, before the heartbeat loop could learn from the
+    server that the attempt was gone, and emitted a second ``blocked`` row next
+    to the workflow's ``frame_lost`` row. The last send time is a local
+    monotonic reading, so no clocks have to agree.
+    """
+
+    @staticmethod
+    def _info(heartbeat_timeout: float | None) -> mock.MagicMock:
+        info = mock.MagicMock()
+        info.attempt = 1
+        info.started_time = None
+        info.start_to_close_timeout = timedelta(seconds=30)
+        info.heartbeat_timeout = (
+            timedelta(seconds=heartbeat_timeout) if heartbeat_timeout else None
+        )
+        return info
+
+    def test_overdue_heartbeat_means_dead(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import (
+            _attempt_is_live,
+            _Beats,
+        )
+
+        beats = _Beats()
+        beats.last_sent -= 5.0
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=self._info(1.0)),
+            mock.patch(f"{_GATE}.activity.is_cancelled", return_value=False),
+        ):
+            assert _attempt_is_live(beats) is False
+
+    def test_recent_heartbeat_means_live(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import (
+            _attempt_is_live,
+            _Beats,
+        )
+
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=self._info(60.0)),
+            mock.patch(f"{_GATE}.activity.is_cancelled", return_value=False),
+        ):
+            assert _attempt_is_live(_Beats()) is True
+
+    def test_no_heartbeat_timeout_declared_stays_live(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import (
+            _attempt_is_live,
+            _Beats,
+        )
+
+        beats = _Beats()
+        beats.last_sent -= 500.0
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=self._info(None)),
+            mock.patch(f"{_GATE}.activity.is_cancelled", return_value=False),
+        ):
+            assert _attempt_is_live(beats) is True
+
+    async def test_a_silent_attempt_emits_no_row_and_raises_no_block(self) -> None:
+        output = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
+        )
+        handler = _ReturningHandler(output)
+
+        async def _slow_return(input):
+            await asyncio.sleep(0.3)
+            return output
+
+        handler.preflight_check = _slow_return
+        gate = _gate(handler, mode=PreflightGateMode.HARD, budget=5)
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=self._info(0.1)),
+            mock.patch(f"{_GATE}.activity.is_cancelled", return_value=False),
+            mock.patch(f"{_GATE}.gate_heartbeat_timings", return_value=(60.0, 600.0)),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        assert _no_outcome(mock_logger)
+
+
 class TestEveryGateErrorCarriesTheAttempt:
     """``details[1].attempt`` on the block and the marker names the attempt that ran."""
 
