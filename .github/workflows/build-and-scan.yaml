@@ -389,7 +389,15 @@ jobs:
           image_tar: /tmp/image.tar
           os_reachability: ${{ inputs.endor_os_reachability }}
           project_name: ${{ github.event.repository.name }}
-          as_ref: ${{ github.event_name != 'pull_request' }}
+          # as_ref stays FALSE. It looked right -- keep every tag as its own
+          # version -- but --as-ref files the scan under CONTEXT_TYPE_REF, and
+          # Endor's inventory views (Containers, dashboards) read the monitored
+          # CONTEXT_TYPE_MAIN. Verified directly: the same image scanned with
+          # --as-ref lands as CONTEXT_TYPE_REF id=<tag>, without it as
+          # CONTEXT_TYPE_MAIN id=default. Every scan we had done was invisible in
+          # the Containers list for exactly this reason. Version history is worth
+          # less than the fleet being able to see its own scan results.
+          as_ref: false
           pr: ${{ github.event_name == 'pull_request' }}
           scan_summary_output_type: table
 

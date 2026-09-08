@@ -160,7 +160,9 @@ jobs:
           image: ${{ steps.image.outputs.ref }}
           image_tar: /tmp/base-image.tar
           project_name: app-runtime-base
-          as_ref: true
+          # See the as_ref note in build-and-scan.yaml: --as-ref files results
+          # under CONTEXT_TYPE_REF, which the Containers view does not show.
+          as_ref: false
           pr: false
           scan_summary_output_type: table
 
