@@ -47,6 +47,21 @@ def _ref(entity: str, *, file_count: int = 1) -> FileReference:
     )
 
 
+def _dir_ref(entity: str, *, file_count: int, slash: bool = True) -> FileReference:
+    """A directory ref, in the shape ``persist_file_reference`` writes one.
+
+    Its directory branch keys off ``_make_storage_prefix``, which always ends
+    in ``/``. Pass ``slash=False`` for the other shape in the wild: a directory
+    key pinned by hand, where ``file_count`` is the only signal left.
+    """
+    return FileReference(
+        local_path=f"/tmp/transformed/{entity}",
+        storage_path=f"{PREFIX}/{entity}" + ("/" if slash else ""),
+        is_durable=True,
+        file_count=file_count,
+    )
+
+
 def _make_app(*, upstream: object | None = None) -> App:
     from application_sdk.app.context import AppContext
 
@@ -158,12 +173,12 @@ class TestVerifyRefs(_ResetsRegistries):
 
     async def test_directory_ref_is_checked_by_listing_not_by_head(self) -> None:
         app = _make_app()
-        ref = _ref("table", file_count=3)
+        ref = _dir_ref("table", file_count=3)
 
         with mock.patch(
             "application_sdk.storage.batch.list_keys",
             new_callable=mock.AsyncMock,
-            return_value=[f"{ref.storage_path}/{i}.json" for i in range(3)],
+            return_value=[f"{PREFIX}/table/{i}.json" for i in range(3)],
         ) as listing:
             out = await app.verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
 
@@ -172,19 +187,134 @@ class TestVerifyRefs(_ResetsRegistries):
 
     async def test_short_directory_ref_fails_with_the_observed_count(self) -> None:
         app = _make_app()
-        ref = _ref("table", file_count=3)
+        ref = _dir_ref("table", file_count=3)
 
         with (
             mock.patch(
                 "application_sdk.storage.batch.list_keys",
                 new_callable=mock.AsyncMock,
-                return_value=[f"{ref.storage_path}/0.json"],
+                return_value=[f"{PREFIX}/table/0.json"],
             ),
             pytest.raises(StorageHandoffIncompleteError) as exc,
         ):
             await app.verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
 
-        assert exc.value.missing_keys == [f"{ref.storage_path} (1/3 objects)"]
+        assert exc.value.missing_keys == [f"{PREFIX}/table/ (1/3 objects)"]
+
+    async def test_single_file_directory_ref_is_listed_not_headed(self) -> None:
+        """A directory holding exactly one file has ``file_count == 1``.
+
+        Discriminating on ``file_count > 1`` alone HEADs its key as an object,
+        which 404s on a prefix that is perfectly intact — so the run fails
+        claiming data is lost when nothing is. The trailing slash the
+        interceptor writes is what distinguishes them.
+        """
+        app = _make_app()
+        ref = _dir_ref("table", file_count=1)
+
+        with (
+            mock.patch(
+                "application_sdk.storage.batch.list_keys",
+                new_callable=mock.AsyncMock,
+                return_value=[f"{PREFIX}/table/only.json"],
+            ) as listing,
+            mock.patch(
+                "application_sdk.storage.ops.exists", new_callable=mock.AsyncMock
+            ) as head,
+        ):
+            out = await app.verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
+
+        assert out.verified_count == 1
+        assert listing.await_count == 1
+        head.assert_not_awaited()
+
+    async def test_slashless_directory_ref_is_caught_by_its_file_count(self) -> None:
+        """The other signal: a directory key pinned by hand, with no slash."""
+        app = _make_app()
+        ref = _dir_ref("table", file_count=2, slash=False)
+
+        with (
+            mock.patch(
+                "application_sdk.storage.batch.list_keys",
+                new_callable=mock.AsyncMock,
+                return_value=[f"{PREFIX}/table/{i}.json" for i in range(2)],
+            ) as listing,
+            mock.patch(
+                "application_sdk.storage.ops.exists", new_callable=mock.AsyncMock
+            ) as head,
+        ):
+            await app.verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
+
+        assert listing.await_count == 1
+        head.assert_not_awaited()
+
+    async def test_sidecars_do_not_count_toward_the_declared_file_count(self) -> None:
+        """Every uploaded object carries a ``{key}.sha256`` sidecar.
+
+        Counting a raw listing sees roughly 2N keys for N files, so a tree
+        missing half its data objects clears ``file_count`` and the check
+        passes on exactly the shortfall it exists to catch.
+        """
+        app = _make_app()
+        ref = _dir_ref("table", file_count=4)
+        # Two data objects, each with a sidecar: 4 keys, but only 2 files.
+        listing = [
+            f"{PREFIX}/table/{i}.json{suffix}"
+            for i in range(2)
+            for suffix in ("", ".sha256")
+        ]
+
+        with (
+            mock.patch(
+                "application_sdk.storage.batch.list_keys",
+                new_callable=mock.AsyncMock,
+                return_value=listing,
+            ),
+            pytest.raises(StorageHandoffIncompleteError) as exc,
+        ):
+            await app.verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
+
+        assert exc.value.missing_keys == [f"{PREFIX}/table/ (2/4 objects)"]
+
+    async def test_the_listing_prefix_carries_a_trailing_slash(self) -> None:
+        """Without it the listing bleeds into sibling directories.
+
+        ``list_keys`` only appends the slash when ``normalize=True``, and this
+        call passes ``normalize=False`` to match the writer's key — so
+        ``transformed/table`` would also match ``transformed/table_v2/`` and
+        count its objects toward this ref.
+        """
+        app = _make_app()
+        ref = _dir_ref("table", file_count=1)
+
+        with mock.patch(
+            "application_sdk.storage.batch.list_keys",
+            new_callable=mock.AsyncMock,
+            return_value=[f"{PREFIX}/table/only.json"],
+        ) as listing:
+            await app.verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
+
+        assert listing.await_args.args[0] == f"{PREFIX}/table/"
+        assert listing.await_args.kwargs["normalize"] is False
+
+    async def test_a_directory_ref_declaring_zero_files_is_not_a_pass(self) -> None:
+        """``len(found) < 0`` is false for every listing, so a zero-count ref
+        would otherwise clear the check without inspecting anything — and a
+        vacuous pass is indistinguishable from a real one."""
+        app = _make_app()
+        ref = _dir_ref("table", file_count=0)
+
+        with (
+            mock.patch(
+                "application_sdk.storage.batch.list_keys",
+                new_callable=mock.AsyncMock,
+                return_value=[],
+            ),
+            pytest.raises(StorageHandoffIncompleteError) as exc,
+        ):
+            await app.verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
+
+        assert exc.value.missing_keys == [f"{PREFIX}/table/ (declared 0 files)"]
 
     async def test_keys_are_not_renormalised_before_the_lookup(self) -> None:
         """``persist_file_reference`` writes with ``normalize=False``.

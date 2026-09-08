@@ -1610,13 +1610,20 @@ class App(ABC):
         returned **are** that declaration — this task is what turns them from a
         value nobody read into an assertion.
 
-        Each ref is checked by its ``storage_path`` (used verbatim, matching
-        how ``persist_file_reference`` wrote it).  Single-file refs are checked
-        with a HEAD; a ref whose ``file_count`` exceeds 1 is a directory ref and
-        is checked by listing its prefix and requiring at least ``file_count``
-        objects.  When ``input.prefix`` is set, every ref must also resolve
-        underneath it — a ref outside the prefix is data the downstream walk
-        will never reach, which is the same hole by a different route.
+        Each ref is checked by its ``storage_path``, used verbatim — matching
+        how ``persist_file_reference`` wrote it, so the check asks about the
+        key that actually exists rather than a re-normalised guess at it.
+
+        A ref is a **directory** ref when its key ends in ``/`` (what the
+        interceptor's directory branch writes) *or* its ``file_count`` is
+        anything other than 1 (which catches a hand-pinned directory key with
+        no slash).  Those are listed, excluding SHA-256 sidecars, and must
+        yield at least ``file_count`` data objects.  Everything else is a
+        single-file ref and is checked with a HEAD.
+
+        When ``input.prefix`` is set, every ref must also resolve underneath
+        it — a ref outside the prefix is data the downstream walk will never
+        reach, which is the same hole by a different route.
 
         Args:
             input: ``VerifyRefsInput`` with the declared refs, the prefix they
@@ -1628,7 +1635,8 @@ class App(ABC):
 
         Raises:
             StorageHandoffIncompleteError: If any declared ref is missing from
-                the store or resolves outside ``input.prefix``.
+                the store, is short of its declared object count, declares zero
+                files, or resolves outside ``input.prefix``.
             ObjectStoreNotConfiguredError: If the requested store is not bound.
 
         Example — SQL extraction asserting its transform outputs before
@@ -1652,7 +1660,7 @@ class App(ABC):
             current_progress_tracker,
         )
         from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
-            list_keys,
+            list_data_keys,
         )
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
             StorageHandoffIncompleteError,
@@ -1674,7 +1682,8 @@ class App(ABC):
         verified_file_count = 0
 
         for ref in input.refs:
-            key = (ref.storage_path or "").strip("/")
+            raw_key = ref.storage_path or ""
+            key = raw_key.strip("/")
             if not key:
                 # A producer that cannot say where it wrote has declared
                 # nothing — that is the hole, not a reason to skip the check.
@@ -1683,10 +1692,44 @@ class App(ABC):
             if prefix and not (key == prefix or key.startswith(prefix + "/")):
                 outside.append(key)
                 continue
-            if ref.file_count > 1:
-                found = await list_keys(key, store=store, normalize=False)
+
+            # Directory or single file? Two independent signals, because
+            # neither alone is sufficient:
+            #
+            # * The trailing slash is what ``persist_file_reference``'s
+            #   directory branch writes (``_make_storage_prefix`` always ends
+            #   in ``/``), and it survives a directory holding exactly one
+            #   file — which ``file_count`` does not.
+            # * ``file_count`` catches a directory ref whose key was pinned by
+            #   hand without the slash.
+            #
+            # Getting this wrong is not a near-miss: a one-file directory ref
+            # HEADed as an object key 404s on a prefix that is perfectly
+            # intact, so the run fails claiming data is lost when it is not.
+            if raw_key.endswith("/") or ref.file_count != 1:
+                if ref.file_count < 1:
+                    # ``len(found) < 0`` is false for every listing, so a
+                    # zero-count ref would otherwise pass without checking
+                    # anything — a vacuous pass is indistinguishable from a
+                    # real one, which is the failure mode this task exists to
+                    # remove. A producer declaring zero files has declared
+                    # nothing to verify.
+                    missing.append(f"{key}/ (declared 0 files)")
+                    continue
+                # ``list_data_keys``, not ``list_keys``: every uploaded object
+                # carries a ``{key}.sha256`` sidecar, so a raw listing returns
+                # roughly 2N keys for N files and a tree missing half its data
+                # objects would still clear ``file_count``.
+                #
+                # The trailing slash is added explicitly. ``list_keys`` only
+                # appends one when ``normalize=True``, and this call passes
+                # ``normalize=False`` to match the key the writer used — so
+                # without it the listing would also match sibling prefixes
+                # (``transformed/table`` picking up ``transformed/table_v2/``)
+                # and count their objects toward this ref.
+                found = await list_data_keys(key + "/", store=store, normalize=False)
                 if len(found) < ref.file_count:
-                    missing.append(f"{key} ({len(found)}/{ref.file_count} objects)")
+                    missing.append(f"{key}/ ({len(found)}/{ref.file_count} objects)")
                     continue
             elif not await exists(key, store=store, normalize=False):
                 missing.append(key)

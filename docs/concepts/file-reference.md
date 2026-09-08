@@ -613,13 +613,26 @@ await self.verify_refs(
 )
 ```
 
-Each ref is checked by its `storage_path` — a HEAD for a single-file ref, a
-prefix listing for a directory ref (`file_count > 1`). With `prefix` set, a ref
-that resolves *outside* it fails too: that is data the downstream walk will
-never reach, which is the same hole by a different route. Anything missing
-raises `StorageHandoffIncompleteError` (`DATA_INTEGRITY`, non-retryable) naming
-the keys, so the run fails at the producer instead of surfacing as a short
-publish two stages later.
+Each ref is checked by its `storage_path`, used verbatim — matching the key
+`persist_file_reference` wrote, so the check asks about the key that actually
+exists rather than a re-normalised guess at it.
+
+A ref counts as a **directory** ref when its key ends in `/` (what the
+interceptor's directory branch writes) *or* its `file_count` is anything other
+than 1 (which catches a hand-pinned directory key with no slash). Those are
+listed — with sidecars excluded, since every object carries a `{key}.sha256`
+and a raw listing would return roughly 2N keys for N files — and must yield at
+least `file_count` data objects. Everything else is checked with a HEAD.
+
+Both signals are needed: a directory holding exactly one file has
+`file_count == 1`, so discriminating on the count alone would HEAD its prefix
+as an object key and 404 on a tree that is perfectly intact.
+
+With `prefix` set, a ref that resolves *outside* it fails too: that is data the
+downstream walk will never reach, which is the same hole by a different route.
+Anything missing raises `StorageHandoffIncompleteError` (`DATA_INTEGRITY`,
+non-retryable) naming the keys, so the run fails at the producer instead of
+surfacing as a short publish two stages later.
 
 Set `auto_materialize=False` on the copies you pass in. Verification is a
 metadata lookup; without it the interceptor would download every declared file

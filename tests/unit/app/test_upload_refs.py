@@ -280,3 +280,33 @@ class TestUploadRefsFeedsTheStallWatchdog(_ResetsRegistries):
         from application_sdk.storage import transfer
 
         assert 'mark_progress("storage.upload_file")' in inspect.getsource(transfer)
+
+
+class TestDeliveredDirectoryRefsStayVerifiable(_ResetsRegistries):
+    """``upload_refs`` verifies its own delivery, and that check tells a
+    directory from a file partly by the trailing slash on the key.
+
+    A one-file directory has ``file_count == 1``, so the slash is the *only*
+    signal left for it — and it comes from the transfer layer, not from here.
+    If ``_make_upload_output`` stopped appending it, ``upload_refs`` would HEAD
+    a one-file directory as an object key and fail a delivery that landed
+    perfectly. Pin the premise where it actually lives.
+    """
+
+    def test_the_transfer_layer_marks_directory_refs_with_a_trailing_slash(
+        self,
+    ) -> None:
+        from application_sdk.storage.transfer import _make_upload_output
+
+        out = _make_upload_output(
+            "/tmp/transformed/table",
+            f"{DEST}/table",
+            1,
+            StorageTier.RETAINED,
+            1,
+            "uploaded",
+            is_dir=True,
+        )
+
+        assert out.ref.storage_path == f"{DEST}/table/"
+        assert out.ref.file_count == 1
