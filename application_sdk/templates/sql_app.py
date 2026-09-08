@@ -1604,16 +1604,36 @@ class SqlApp(App):
     # =====================================================================
     #
     # These were private, so they carried no compatibility promise — but a
-    # `gh search code` over the atlanhq org finds 12 connector repos calling
-    # ``_resolve_credential_ref`` and 4 calling ``_build_transform_input``.
+    # `gh search code` for ``self._resolve_credential_ref`` over the atlanhq org
+    # finds call sites in 7 connector repos (cloudera-impala, db2, mssql, mysql,
+    # presto, sapase, sapdatasphere) and 4 for ``self._build_transform_input``
+    # (db2, mssql app + miner, mysql, sapase). Searching the bare names matches
+    # 12 and 4, but the extras are docstring cross-references and design docs —
+    # worth stating precisely, because "12 repos break" and "7 repos break" are
+    # the same decision only until someone re-derives the number.
     # A rename with no shim breaks every one of them on their next SDK bump,
     # which is a fleet-wide outage traded for a tidier diff. They delegate, so
     # there is exactly one implementation either way.
+    #
+    # What the shims do NOT save: a test that patches one of these names. The
+    # patch lands on the shim while every SDK-internal caller now goes to the
+    # public name, so the mock is never reached — quieter than a broken import
+    # and worth knowing before debugging one. Each docstring says so.
 
     def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
         """**Deprecated** — use :meth:`resolve_credential_ref`.
 
         Removed in v4.0.0.
+
+        .. warning::
+            **Patching this name no longer intercepts the SDK.** ``run()`` and
+            the preflight gate call :meth:`resolve_credential_ref` now, so a
+            ``patch.object(SqlApp, "_resolve_credential_ref", ...)`` in a
+            connector's tests still patches *something* — this shim — and is
+            simply never reached. Depending on what the test asserts that
+            surfaces as a failed call-count, or as the real implementation
+            running under a mock the author believes is in place. Move the
+            patch site to the public name.
         """
         warnings.warn(
             "SqlApp._resolve_credential_ref is deprecated; use the public "
@@ -1631,6 +1651,11 @@ class SqlApp(App):
         """**Deprecated** — use :meth:`build_transform_input`.
 
         Removed in v4.0.0.
+
+        .. warning::
+            **Patching this name no longer intercepts the SDK** — see
+            :meth:`_resolve_credential_ref` for why. Move the patch site to
+            :meth:`build_transform_input`.
         """
         warnings.warn(
             "SqlApp._build_transform_input is deprecated; use the public "
