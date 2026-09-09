@@ -94,18 +94,20 @@ def check_and_update_the_marker() -> int:
 
     path = directory / MARKER_NAME
     restarted_count = 0
-    raw = ""
     try:
         raw = path.read_text()
     except FileNotFoundError:
-        pass  # a fresh pod, not an error - and it still needs its marker
+        raw = ""  # a fresh pod, not an error - and it still needs its marker
     except UnicodeDecodeError:
         # The read reached the file, so a marker is there; only its bytes are
         # unusable. Presence is the signal, so this is a restart. Falling through
         # also replaces the file, which an early return would leave in place for
         # every later start to trip over.
-        logger.warning("%s is not valid UTF-8; treating it as one start", path)
+        raw = ""
         restarted_count = 1
+        logger.warning(
+            "%s is not valid UTF-8; treating it as one start", path, exc_info=True
+        )
     except OSError:
         logger.warning(
             "could not read %s, so this start is treated as clean", path, exc_info=True
@@ -119,7 +121,9 @@ def check_and_update_the_marker() -> int:
             # Truncated or hand-edited. The file existing is the signal; only the
             # count is lost, and one is the answer that changes behaviour.
             logger.warning(
-                "%s is not readable as a marker; treating it as one start", path
+                "%s is not readable as a marker; treating it as one start",
+                path,
+                exc_info=True,
             )
             restarted_count = 1
 
@@ -146,7 +150,7 @@ def clear() -> None:
     try:
         path.unlink()
     except FileNotFoundError:
-        pass  # the worker may return before ever writing one
+        logger.debug("no marker at %s to remove; nothing wrote one", path)
     except OSError:
         logger.warning(
             "could not remove %s, so the next container start in this pod will be "
@@ -228,8 +232,8 @@ async def wait_for_pod_to_get_replaced(
             await asyncio.wait_for(
                 shutdown_event.wait(), timeout=min(RECHECK_SECONDS, remaining)
             )
-        except TimeoutError:
-            pass  # nobody asked us to stop; keep waiting
+        except TimeoutError:  # conformance: ignore[E002] the timeout is the sleep expiring, not a failure: it fires every RECHECK_SECONDS for the whole wait and means nobody asked us to stop
+            pass
         else:
             logger.info(
                 "shutdown requested while waiting, which is this pod being replaced"

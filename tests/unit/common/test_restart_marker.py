@@ -82,9 +82,9 @@ def test_no_volume_means_detection_is_inert(monkeypatch, tmp_path, logs):
     missing = tmp_path / "not-mounted"
     monkeypatch.setenv(rm.MARKER_DIR_ENV, str(missing))
     assert rm.check_and_update_the_marker() == 0
-    assert not missing.exists(), (
-        "check_and_update_the_marker() must not create the directory"
-    )
+    assert (
+        not missing.exists()
+    ), "check_and_update_the_marker() must not create the directory"
     assert logs.says("warning", str(missing), "emptyDir"), (
         "an absent volume must be reported, or it is indistinguishable from a "
         f"pod that never restarted: {logs.rows}"
@@ -123,12 +123,12 @@ async def test_a_clean_start_does_not_wait(marker_dir, monkeypatch):
 async def test_a_restart_does_not_wait_while_waiting_is_switched_off(marker_dir, logs):
     rm.check_and_update_the_marker()
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
-    assert logs.says("warning", "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS=0"), (
-        f"must say it is switched off rather than announce a 0s wait: {logs.rows}"
-    )
-    assert not logs.says("warning", "not polling for up to"), (
-        f"must not announce a wait it is not doing: {logs.rows}"
-    )
+    assert logs.says(
+        "warning", "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS=0"
+    ), f"must say it is switched off rather than announce a 0s wait: {logs.rows}"
+    assert not logs.says(
+        "warning", "not polling for up to"
+    ), f"must not announce a wait it is not doing: {logs.rows}"
 
 
 async def test_a_restart_waits_out_the_budget_then_proceeds(
