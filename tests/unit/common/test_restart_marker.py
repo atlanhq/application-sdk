@@ -101,6 +101,17 @@ def test_an_unparsable_start_count_still_counts_as_a_restart(marker_dir):
     assert rm.check_and_update_the_marker() == 1
 
 
+def test_a_non_utf8_marker_counts_as_a_restart_and_is_replaced(marker_dir):
+    """A marker that cannot be decoded must not reach the caller: it is read
+    before the wait's own error handling, so raising here would stop the worker
+    from starting at all."""
+    path = marker_dir / rm.MARKER_NAME
+    path.write_bytes(b"\xff\xfe not utf-8")
+    assert rm.check_and_update_the_marker() == 1
+    # replaced, so the next start reads a usable marker rather than tripping again
+    assert json.loads(path.read_text())["starts"] == 2
+
+
 # ---------------------------------------------------------------- the wait
 
 
@@ -142,6 +153,8 @@ async def test_the_wait_holds_until_something_ends_it(
     await asyncio.sleep(0.1)
     assert not task.done(), "the wait returned without being released"
     task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 async def test_the_release_file_ends_the_wait_early(

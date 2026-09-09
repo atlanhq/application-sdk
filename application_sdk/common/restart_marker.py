@@ -94,10 +94,18 @@ def check_and_update_the_marker() -> int:
 
     path = directory / MARKER_NAME
     restarted_count = 0
+    raw = ""
     try:
         raw = path.read_text()
     except FileNotFoundError:
-        raw = ""  # a fresh pod, not an error - and it still needs its marker
+        pass  # a fresh pod, not an error - and it still needs its marker
+    except UnicodeDecodeError:
+        # The read reached the file, so a marker is there; only its bytes are
+        # unusable. Presence is the signal, so this is a restart. Falling through
+        # also replaces the file, which an early return would leave in place for
+        # every later start to trip over.
+        logger.warning("%s is not valid UTF-8; treating it as one start", path)
+        restarted_count = 1
     except OSError:
         logger.warning(
             "could not read %s, so this start is treated as clean", path, exc_info=True
