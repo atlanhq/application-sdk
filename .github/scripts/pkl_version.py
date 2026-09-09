@@ -120,7 +120,9 @@ def _cmd_check_runtime(args: argparse.Namespace) -> int:
         return 1 if args.strict else 0
     if actual != expected:
         level = "error" if args.strict else "warning"
-        source = "requested" if args.expected.strip() else f"the SDK pin ({SOT_RELPATH})"
+        source = (
+            "requested" if args.expected.strip() else f"the SDK pin ({SOT_RELPATH})"
+        )
         print(
             f"::{level}::pkl version skew — this runner has {actual}, {source} is "
             f"{expected}. pkl is a language, not just a renderer: a contract that "
