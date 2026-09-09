@@ -157,9 +157,9 @@ jobs:
         with:
           version: "0.12.11"
 
-      # Version omitted deliberately: this job has no pkl pin of its own, so it
-      # tracks the action's fleet-wide default rather than reintroducing a
-      # fourth literal "0.27.2" that drifts silently.
+      # Version omitted deliberately — as it now is at every call site: the
+      # action resolves the single pin in application_sdk/pkl_version.py, so no
+      # workflow carries a literal of its own to drift silently (FND-1864).
       - uses: ./.github/actions/install-pkl
 
       # Renovate 43 requires Node >=24.11 — newer than the ubuntu-latest default,
