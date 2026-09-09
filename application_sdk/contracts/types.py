@@ -294,6 +294,19 @@ class AssetArtifact:
         return Asset
 
 
+def _marker_on_class(contract: type, field: str) -> AssetArtifact | None:
+    """One class's own ``model_fields`` entry for *field*, marker or ``None``."""
+    model_fields = getattr(contract, "model_fields", None)
+    if not isinstance(model_fields, dict):
+        return None
+    field_info = model_fields.get(field)
+    metadata = getattr(field_info, "metadata", None) or ()
+    for entry in metadata:
+        if isinstance(entry, AssetArtifact):
+            return entry
+    return None
+
+
 def asset_artifact_marker(contract: type | None, field: str) -> AssetArtifact | None:
     """The :class:`AssetArtifact` marker on ``contract``'s *field*, or ``None``.
 
@@ -306,6 +319,24 @@ def asset_artifact_marker(contract: type | None, field: str) -> AssetArtifact | 
     ``Annotated`` metadata, which is where a contract records facts about a field
     that Pydantic itself has no opinion about.
 
+    **Resolved across the MRO, because one lookup is not enough.**  Pydantic
+    carries an inherited field's metadata through unchanged, so a subclass that
+    merely *inherits* a marked field answers correctly from its own
+    ``model_fields``.  A subclass that **redeclares** it does not: redeclaring
+    builds a fresh metadata tuple from the new annotation, and the marker is gone
+    from it (measured — ``Redeclare(Base).model_fields[f].metadata == []``).  A
+    connector narrowing a type or attaching its own ``Field(...)`` would then have
+    silently dropped the declaration: the interceptor would fall back to a
+    ``ContractSource`` and the guard would start demanding an envelope again, on a
+    field the app was told it could stop declaring.  That is the one shape the
+    fleet-wide claim rests on, so it is the one this may not get wrong.
+
+    **A redeclaration therefore cannot unmark a field, deliberately.**  The marker
+    asserts a fact about the *bytes* — one Atlas entity per line, written by the
+    SDK — and narrowing a Python annotation does not change what wrote them.  A
+    subclass that genuinely hands off something else needs a different field, not
+    a quieter one.
+
     Args:
         contract: The model class declaring *field*, or ``None`` for a bare
             reference reached with no owning contract — which carries no
@@ -313,30 +344,32 @@ def asset_artifact_marker(contract: type | None, field: str) -> AssetArtifact | 
         field: The field name.
 
     Returns:
-        The marker instance, or ``None`` when the field is absent, unmarked, or
-        not a Pydantic field at all.  Never raises: this sits under two advisory
-        paths, neither of which may break a hand-off or a registration.
+        The marker instance from the most derived class that carries one, or
+        ``None`` when no class in the MRO marks the field, the field is absent, or
+        *contract* is not a Pydantic model.  Never raises: this sits under two
+        advisory paths, neither of which may break a hand-off or a registration.
     """
     if contract is None:
         return None
-    model_fields = getattr(contract, "model_fields", None)
-    if not isinstance(model_fields, dict):
-        return None
-    field_info = model_fields.get(field)
-    metadata = getattr(field_info, "metadata", None) or ()
-    for entry in metadata:
-        if isinstance(entry, AssetArtifact):
-            return entry
+    # `__mro__` is absent on non-classes; the single-class tuple keeps a stray
+    # instance or a plain object answering `None` instead of raising into a
+    # hand-off.
+    for klass in getattr(contract, "__mro__", (contract,)):
+        marker = _marker_on_class(klass, field)
+        if marker is not None:
+            return marker
     return None
 
 
 def asset_artifact_fields(contract: type) -> frozenset[str]:
     """Every field on *contract* carrying the :class:`AssetArtifact` marker.
 
-    ``model_fields`` resolves the full MRO, so a field marked on an SDK base is
-    reported for every subclass that inherits it — which is what makes a
-    connector's ``MyExtractionOutput(ExtractionOutput)`` exempt without the
-    connector restating anything.
+    ``model_fields`` enumerates inherited fields as well as own ones, and each
+    name is resolved through :func:`asset_artifact_marker`, so a field marked on
+    an SDK base is reported for every subclass — including one that redeclares
+    it, where the subclass's own metadata no longer carries the marker.  That is
+    what makes a connector's ``MyExtractionOutput(ExtractionOutput)`` exempt
+    without the connector restating anything.
 
     The set form exists for callers that need the whole picture rather than one
     field: the conformance suite's static mirror of this fact is drift-tested

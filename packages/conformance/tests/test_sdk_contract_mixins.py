@@ -29,16 +29,17 @@ from typing import NamedTuple
 
 import pytest
 from conformance.suite.checks._entrypoint_contract_fields import (
+    _ASSET_ARTIFACT_RE,
     _iter_fields,
     resolve_contract_fields,
 )
 from conformance.suite.checks._sdk_contract_mixins import (
+    MODEL_BACKED_FIELDS_AHEAD_OF_PIN,
     SDK_CONTRACT_BASE_FIELDS,
     SDK_MODEL_BACKED_ARTIFACT_FIELDS,
     SDK_TEMPLATE_CONTRACT_FIELDS,
     SdkField,
 )
-from conformance.suite.checks.artifact_schema_declared._check import _ASSET_ARTIFACT_RE
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     collect_classes,
@@ -329,6 +330,66 @@ def test_model_backed_registry_covers_every_live_marker() -> None:
         "SDK_MODEL_BACKED_ARTIFACT_FIELDS does not list, so K016 will demand an "
         "artifactSchemas entry the SDK exempts — add them in "
         f"_sdk_contract_mixins.py: {unmirrored}"
+    )
+
+
+@_requires_sdk
+def test_model_backed_registry_has_no_stale_entries() -> None:
+    """No mirror entry exempts a field the pinned SDK does not mark.
+
+    The other direction, and the one a subset assertion cannot see. A marker the
+    SDK later removes or renames leaves its name behind here, where it goes on
+    exempting every inherited field that happens to share it — silently, on a
+    boundary nothing then model-validates, with the drift test still green.
+
+    The pin-lag window is the one legitimate reason for an entry with no live
+    marker, and it is named explicitly in ``MODEL_BACKED_FIELDS_AHEAD_OF_PIN``
+    rather than blanket-tolerated. When the pin catches up, the name shows up
+    live, this test's allowlist expectation stops holding, and the entry has to be
+    removed from the allowlist — see :func:`test_ahead_of_pin_allowlist_is_current`.
+    """
+    live = set(_live_model_backed_artifact_fields())
+    stale = sorted(
+        SDK_MODEL_BACKED_ARTIFACT_FIELDS - live - MODEL_BACKED_FIELDS_AHEAD_OF_PIN
+    )
+    assert not stale, (
+        "SDK_MODEL_BACKED_ARTIFACT_FIELDS exempts field name(s) the installed SDK "
+        "does not mark with AssetArtifact, so K016 is waving through boundary "
+        f"fields nothing declares: {stale}. Remove them from "
+        "_sdk_contract_mixins.py, or — if the marker is on the SDK's main and "
+        "this package's pin has not caught up — add them to "
+        "MODEL_BACKED_FIELDS_AHEAD_OF_PIN with that reason."
+    )
+
+
+@_requires_sdk
+def test_ahead_of_pin_allowlist_is_current() -> None:
+    """The allowlist holds only names the pinned SDK genuinely does not mark yet.
+
+    This is what stops the pin-lag excuse outliving the pin lag. Once the pin
+    moves to an SDK carrying the marker, the name is live, the allowlist entry is
+    no longer excusing anything, and it has to go — otherwise the next genuinely
+    stale entry hides behind it.
+    """
+    live = set(_live_model_backed_artifact_fields())
+    landed = sorted(MODEL_BACKED_FIELDS_AHEAD_OF_PIN & live)
+    assert not landed, (
+        "MODEL_BACKED_FIELDS_AHEAD_OF_PIN lists field name(s) the pinned SDK now "
+        f"marks, so the pin has caught up: {landed}. Remove them from the "
+        "allowlist in _sdk_contract_mixins.py — the exemption stays, only the "
+        "temporary excuse for it goes."
+    )
+
+
+def test_ahead_of_pin_allowlist_is_a_subset_of_the_registry() -> None:
+    """An allowlist entry that is not a registry entry excuses nothing."""
+    orphans = sorted(
+        MODEL_BACKED_FIELDS_AHEAD_OF_PIN - SDK_MODEL_BACKED_ARTIFACT_FIELDS
+    )
+    assert not orphans, (
+        f"MODEL_BACKED_FIELDS_AHEAD_OF_PIN names {orphans}, which "
+        "SDK_MODEL_BACKED_ARTIFACT_FIELDS does not exempt — drop them, or add the "
+        "matching registry entries they were meant to excuse."
     )
 
 

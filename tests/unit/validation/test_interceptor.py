@@ -697,6 +697,14 @@ class TestModelDeclaredFields:
             )
         assert events[0]["outcome"] == "absent"
         assert events[0]["artifact_schema_source"] == "model"
+        # The classification, not just the enforcement, because it is what makes
+        # the fail-open safe: every plumbing failure degrades to `absent`, which
+        # it shares with the honest "the artifact was not there" — and only this
+        # attribute tells a reader which of the two happened. Asserting the
+        # enforcement alone would still pass if the report started claiming the
+        # artifact was unverifiable, quietly turning a broken validator into
+        # evidence against the app.
+        assert events[0]["artifact_classification"] == "validator_broken"
         assert events[0]["artifact_enforcement"] != "blocked"
 
     @pytest.mark.asyncio

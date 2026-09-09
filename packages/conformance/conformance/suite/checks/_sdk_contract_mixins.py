@@ -680,5 +680,26 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
 #
 # ``tests/test_sdk_contract_mixins.py`` rebuilds this set from an AST scan of the
 # installed SDK's contract modules, so a newly marked field cannot ship without
-# the rule learning about it.
+# the rule learning about it, and a name the SDK has stopped marking cannot sit
+# here exempting fields forever — see the ahead-of-pin allowlist below for the one
+# window in which an entry may have no live marker backing it.
 SDK_MODEL_BACKED_ARTIFACT_FIELDS: frozenset[str] = frozenset({"transformed_files"})
+
+#: Entries of :data:`SDK_MODEL_BACKED_ARTIFACT_FIELDS` the *pinned* SDK does not
+#: mark yet, because the marker landed in the SDK after this package's pin.
+#:
+#: The two drift directions need different rules, and this is what lets both be
+#: checked. A name the SDK marks and the mirror omits is a fleet-wide false
+#: positive, so that direction is absolute. A mirror entry with no live marker is
+#: either (a) this window — the marker is on the SDK's ``main`` and the pin has
+#: not caught up — or (b) genuine staleness, where a removed or renamed marker
+#: leaves a name behind that goes on exempting every inherited field sharing it,
+#: silently and with the test still green. Only (a) is legitimate, and only (a) is
+#: listed here.
+#:
+#: **Every entry is a deletion waiting for a pin bump.** Once
+#: ``packages/conformance/uv.lock`` moves to an SDK that carries the marker, the
+#: drift test sees it live and fails until the name is removed from this
+#: allowlist — which is the point: the exemption stays, the temporary excuse for
+#: it does not.
+MODEL_BACKED_FIELDS_AHEAD_OF_PIN: frozenset[str] = frozenset({"transformed_files"})

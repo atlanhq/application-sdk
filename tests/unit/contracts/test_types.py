@@ -341,3 +341,66 @@ class TestAssetArtifactMarker:
         from application_sdk.templates.contracts.sql_metadata import ExtractionOutput
 
         assert "transformed_files" in asset_artifact_fields(ExtractionOutput)
+
+
+class _RedeclaredPlain(_Marked):
+    """Redeclares the marked field with no marker of its own.
+
+    The shape a connector reaches for when it wants a narrower type or its own
+    ``Field(...)``. Pydantic rebuilds the metadata tuple from the new annotation,
+    so this subclass's own ``model_fields`` entry carries no ``AssetArtifact``.
+    """
+
+    transformed: FileReference | None = None
+
+
+class _RedeclaredWithField(_Marked):
+    transformed: Annotated[FileReference | None, MaxItems(1)] = None
+
+
+class _RedeclaredKeepingMarker(_Marked):
+    transformed: Annotated[FileReference | None, AssetArtifact()] = None
+
+
+class TestMarkerSurvivesRedeclaration:
+    """A subclass may narrow a marked field; it may not silently undeclare it.
+
+    This is the path the fleet-wide claim rests on. A connector is told it can
+    delete its hand-written envelope because it inherits the marker — so if
+    redeclaring the field dropped the marker, that connector would land on
+    ``not_declared`` on a public boundary, and at v4.0 on a hard error, having
+    done exactly what it was told.
+    """
+
+    def test_pydantic_really_does_drop_the_metadata(self) -> None:
+        """The premise, pinned: this is a fact about Pydantic, not a guess.
+
+        If a future Pydantic starts carrying an inherited field's metadata
+        through a redeclaration, the MRO walk becomes redundant rather than
+        wrong — but the reason it exists should fail visibly instead of quietly
+        becoming folklore.
+        """
+        own = _RedeclaredPlain.model_fields["transformed"].metadata
+        assert not any(isinstance(m, AssetArtifact) for m in own)
+
+    def test_a_bare_redeclaration_keeps_the_marker(self) -> None:
+        assert asset_artifact_marker(_RedeclaredPlain, "transformed") is not None
+
+    def test_a_redeclaration_with_other_metadata_keeps_the_marker(self) -> None:
+        assert asset_artifact_marker(_RedeclaredWithField, "transformed") is not None
+
+    def test_a_redeclaration_restating_the_marker_keeps_it(self) -> None:
+        assert (
+            asset_artifact_marker(_RedeclaredKeepingMarker, "transformed") is not None
+        )
+
+    def test_the_field_set_covers_a_redeclared_field(self) -> None:
+        assert "transformed" in asset_artifact_fields(_RedeclaredPlain)
+
+    def test_redeclaring_an_unmarked_field_stays_unmarked(self) -> None:
+        """Stickiness is not contagious: only a marked ancestor confers it."""
+
+        class _RedeclaredPlainNeighbour(_Marked):
+            plain: FileReference | None = None
+
+        assert asset_artifact_marker(_RedeclaredPlainNeighbour, "plain") is None

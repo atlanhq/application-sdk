@@ -664,9 +664,11 @@ The marker does two things at once, and neither of them is "turn the check off":
 **You almost certainly do not need to write this.** `ExtractionOutput.transformed_files` is the
 SDK's own field — declared by the SDK, populated by `SqlApp.run()`, written by
 `SqlApp._transform_entity` — so every SQL connector inherits the marker and needs no
-`artifactSchemas` entry for it. `Annotated` metadata resolves through the MRO, so your
-`MyExtractionOutput(ExtractionOutput)` is covered with no change. Mark a field of your own only when
-its bytes really are one Atlas entity per line in the nested format.
+`artifactSchemas` entry for it. Your `MyExtractionOutput(ExtractionOutput)` is covered with no
+change, and stays covered if you **redeclare** the field to narrow its type or attach your own
+`Field(...)`: the marker is resolved across the contract's MRO, so a subclass cannot silently
+undeclare an inherited artifact. Mark a field of your own only when its bytes really are one Atlas
+entity per line in the nested format.
 
 A leftover `artifactSchemas` entry for a marked field is **ignored** — a field cannot have two
 declarations, and of the two the model is the stronger. Deleting the entry changes nothing at
