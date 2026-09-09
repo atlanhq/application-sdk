@@ -6,6 +6,7 @@ Covers the platform→asset mapping, the caching/retry behaviour of the download
 
 from __future__ import annotations
 
+import os
 import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -106,7 +107,11 @@ class TestEnsurePkl:
         monkeypatch.setattr(pkl_mod, "_download", fake_download)
         first = pkl_mod.ensure_pkl("0.32.1")
         second = pkl_mod.ensure_pkl("0.32.1")
-        assert first == second == tmp_path / "0.32.1" / "pkl"
+        # Derive the filename rather than hardcoding "pkl": on Windows the
+        # cached binary is `pkl.exe` (pkl publishes `pkl-windows-amd64.exe`),
+        # so a literal here passes on POSIX and reds every Windows leg.
+        expected = tmp_path / "0.32.1" / pkl_mod._binary_name()
+        assert first == second == expected
         assert len(calls) == 1
 
     def test_cache_is_keyed_by_version(
@@ -132,7 +137,7 @@ class TestEnsurePkl:
 
 
 class TestDownload:
-    def test_marks_the_binary_executable_and_renames_into_place(
+    def test_renames_into_place_leaving_no_partial(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         target = tmp_path / "cache" / "pkl"
@@ -143,10 +148,31 @@ class TestDownload:
         monkeypatch.setattr(pkl_mod.urllib.request, "urlretrieve", fake_urlretrieve)
         pkl_mod._download("https://example.invalid/pkl", target)
         assert target.read_text(encoding="utf-8") == "binary"
-        assert target.stat().st_mode & stat.S_IXUSR
         # No .part left behind: a truncated fetch must not survive as a
         # cached binary every later run would execute.
         assert not list(target.parent.glob("*.part"))
+
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason=(
+            "os.chmod on Windows honours only the read-only flag, so S_IXUSR is "
+            "never set there however _download chmods — Windows decides "
+            "executability by extension, which is why the cached binary is "
+            "pkl.exe. The bit is load-bearing on POSIX only, so assert it there "
+            "rather than weakening the assertion for every platform."
+        ),
+    )
+    def test_marks_the_binary_executable_on_posix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = tmp_path / "cache" / "pkl"
+        monkeypatch.setattr(
+            pkl_mod.urllib.request,
+            "urlretrieve",
+            lambda url, filename: Path(filename).write_text("binary", encoding="utf-8"),
+        )
+        pkl_mod._download("https://example.invalid/pkl", target)
+        assert target.stat().st_mode & stat.S_IXUSR
 
     def test_retries_then_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
