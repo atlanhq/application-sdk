@@ -81,7 +81,9 @@ def test_no_volume_means_detection_is_inert(monkeypatch, tmp_path, logs):
     missing = tmp_path / "not-mounted"
     monkeypatch.setenv(rm.MARKER_DIR_ENV, str(missing))
     assert rm.check_and_update_the_marker() == 0
-    assert not missing.exists(), "begin() must not create the directory"
+    assert not missing.exists(), (
+        "check_and_update_the_marker() must not create the directory"
+    )
     assert logs.says("warning", str(missing), "emptyDir"), (
         "an absent volume must be reported, or it is indistinguishable from a "
         f"pod that never restarted: {logs.rows}"
