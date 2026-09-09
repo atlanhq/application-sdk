@@ -297,6 +297,10 @@ def _ci_files() -> list[Path]:
 _PKL_ASSET_LITERAL = re.compile(
     r"releases/download/(\d+\.\d+\.\d+)/pkl-",
 )
+# The pkl release URL, however the asset name is spelled. Anchors the
+# "downloads pkl" test below, which must not depend on the asset literal.
+_PKL_RELEASE_URL = "apple/pkl/releases/download/"
+
 # A `PKL_VERSION: "x.y.z"` env or `default: "x.y.z"` on a pkl-version input.
 _PKL_ENV_LITERAL = re.compile(r"PKL_VERSION\s*:\s*[\"'](\d+\.\d+\.\d+)[\"']")
 
@@ -355,6 +359,47 @@ def test_no_install_pkl_call_site_pins_a_version() -> None:
     assert not offenders, (
         "these install-pkl call sites pin a pkl version instead of taking the "
         f"SoT default ({pv.SOT_RELPATH}): {sorted(set(offenders))}"
+    )
+
+
+def test_every_pkl_download_also_verifies_the_runtime() -> None:
+    """Anything that installs pkl must assert that PATH's pkl IS that version.
+
+    Downloading the right asset is not the same as running it: a runner image
+    or an earlier step can leave another pkl ahead of ``/usr/local/bin``, and
+    the drivers that follow invoke bare ``pkl``. So a download without a
+    ``check-runtime --strict`` reintroduces the FND-1864 skew on whichever path
+    it sits on — which is exactly what happened: the verify was added to
+    ``install-pkl`` and not to ``regenerate-contract``, whose download is a
+    separate copy. Echoing ``pkl --version`` is logging, not verification, so
+    this looks for the assertion specifically.
+
+    The right long-term fix is one download for the whole repo; this guard is
+    what makes the interim two-copy state safe, and it will simply keep passing
+    once they are folded together.
+    """
+    # Anchor on the release path, NOT on a `/pkl-<asset>` fragment: both
+    # downloads name the asset through `${PKL_ASSET}` (chosen from runner.arch
+    # in the expression layer), so a pattern wanting the literal asset name
+    # matches zero files and the guard silently passes forever. Caught by
+    # stripping the verify step and watching this stay green.
+    downloads = [
+        p for p in _ci_files() if _PKL_RELEASE_URL in p.read_text(encoding="utf-8")
+    ]
+    assert downloads, (
+        "no pkl download found in any CI file — this guard is only meaningful "
+        f"if it matches something; has the URL {_PKL_RELEASE_URL!r} changed?"
+    )
+    offenders = [
+        p.relative_to(REPO_ROOT).as_posix()
+        for p in downloads
+        if "check-runtime" not in p.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        "these files download pkl but never assert the pkl on PATH is the "
+        f"version they resolved: {sorted(offenders)}. Add a "
+        "`check-runtime --strict --expected <resolved>` step after the "
+        "download (see .github/actions/install-pkl/action.yaml)."
     )
 
 

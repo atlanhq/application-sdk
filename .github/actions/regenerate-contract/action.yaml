@@ -123,6 +123,32 @@ runs:
         sudo mv /tmp/pkl /usr/local/bin/pkl
         pkl --version
 
+    # Assert that `pkl` on PATH is the version resolved above — the same guard
+    # install-pkl runs, for the same reason: downloading the right asset is not
+    # the same as *running* it, since a runner image or an earlier step can
+    # leave another pkl ahead of /usr/local/bin. The `pkl --version` echo in the
+    # step above is logging, not verification; regenerate_contract.py then
+    # invokes bare `pkl`, so an unnoticed mismatch here reintroduces the
+    # FND-1864 skew on the connector regeneration path specifically.
+    #
+    # A copy rather than `uses:` install-pkl: a nested relative composite
+    # resolves against the CALLER's workspace, which for this action is the
+    # connector repo and has no copy of the SDK's actions. Folding both
+    # downloads into one action is the real fix and wants its own change —
+    # until then the guard test in .github/scripts/tests/test_pkl_version.py is
+    # what keeps the two copies from drifting on the version itself.
+    - name: Verify the installed pkl is the resolved one
+      if: steps.guard.outputs.present == 'true'
+      shell: bash
+      env:
+        EXPECTED: ${{ steps.pkl.outputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        python3 "${ACTION_PATH}/../../scripts/pkl_version.py" \
+          --sot "${ACTION_PATH}/../../../application_sdk/pkl_version.py" \
+          check-runtime --strict --expected "$EXPECTED" --actual "$(pkl --version)"
+
     # SDK-level only: fetch just the toolkit source at the dispatched ref. A
     # sparse, blobless clone keeps this to a few hundred KB rather than the full
     # SDK history. The script overrides the connector's @app-contract-toolkit
