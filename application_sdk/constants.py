@@ -506,27 +506,17 @@ WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
 #: Malformed or non-finite values (e.g. ``"abc"``, ``"inf"``, ``"nan"``) fall
 #: back to 0.
 #: How long a worker whose pod already restarted waits before it starts polling.
+#: The mechanism is in ``application_sdk.common.restart_marker``.
 #:
-#: A container killed for exceeding its memory limit restarts inside the same
-#: pod, whose resource spec cannot change, so it returns on the limit that just
-#: killed it. Waiting gives whatever replaces the pod time to do so before the
-#: worker takes work it cannot finish.
+#: This sizes the wait, it does not enable it: the marker's volume does that, so
+#: with no volume mounted the value is never read. ``0`` is the kill switch for a
+#: deployment that mounts the volume and wants the old behaviour.
 #:
-#: This only sizes the wait; it does not enable the behaviour. The marker's
-#: volume does that, and without it nothing is ever detected and nothing waits
-#: (see ``application_sdk.common.restart_marker``). ``0`` disables waiting even
-#: where the volume is mounted, which is the kill switch. Malformed values fall
-#: back to the default rather than failing startup, because a typo in a
-#: deployment must not stop a worker from running at all.
-#:
-#: The default has to exceed however long the slowest thing that replaces a pod
-#: takes to do it. Waiting too long costs bounded wall-clock on a pod that was
-#: going to be replaced anyway; waiting too little is worse than not waiting,
-#: because the worker resumes on the limit that already failed, takes work, and
-#: dies - moments before it would have been rescued. Nothing is charged to the
-#: activity meanwhile: the attempt that was running when the container died has
-#: already timed out, and a queued retry neither heartbeats nor expires
-#: (schedule-to-start defaults to infinity, and does not retry even when set).
+#: The default has to outlast whatever replaces the pod. Over-waiting only costs
+#: wall-clock on a pod that was going to be replaced anyway; under-waiting is
+#: worse than not waiting, because the worker resumes on the limit that already
+#: failed moments before it would have been rescued. An unparsable value (an
+#: unset Helm value renders as "") falls back rather than failing every worker.
 def _load_dirty_restart_max_wait_seconds() -> int:
     raw = os.getenv("ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS", "600")
     try:
