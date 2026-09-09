@@ -191,9 +191,11 @@ from application_sdk.testing.harness.teardown import (
 )
 from application_sdk.testing.harness.waiting import poll_until
 
-if TYPE_CHECKING:  # pragma: no cover - typing only; pyatlan is a lazy import
+if TYPE_CHECKING:  # pragma: no cover - typing only; both are lazy imports
     from obstore.store import ObjectStore
     from pyatlan.client.aio.client import AsyncAtlanClient
+
+    from application_sdk.testing.harness.temporal import PollerInfo
 
 logger = get_logger(__name__)
 
@@ -377,6 +379,56 @@ class NodeDispatch:
 
     app_name: str
     task_queue: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class QueuePollerReading:
+    """What Temporal answered when asked who is holding one dispatched queue.
+
+    Recorded per task-queue name when the poll stops early, so a stuck-node
+    line can say whether anything ever *claimed* the task rather than inferring
+    it from AE's status. AE reports ``Running`` for a task that was dispatched
+    and never claimed by any poller exactly as it does for one a worker picked
+    up and stalled on (FND-1880), and the two need opposite investigations —
+    "the worker/queue wiring is wrong" against "the activity is hanging".
+
+    Attributes:
+        task_queue: The queue asked about.
+        namespace: Temporal namespace the read was scoped to.
+        pollers: Every poller Temporal reported. **Empty is the finding, not a
+            failed read**: a read that raised is never recorded at all (see
+            :meth:`BaseE2ETest._read_queue_pollers`), so an empty tuple means
+            Temporal answered "nobody is holding this queue".
+    """
+
+    task_queue: str
+    namespace: str
+    pollers: tuple[PollerInfo, ...]
+
+    @property
+    def unclaimed(self) -> bool:
+        """Whether Temporal reported no poller at all on the queue.
+
+        Returns:
+            True when nothing is holding the queue, which is the observed form
+            of "no worker ever claimed this task".
+        """
+        return not self.pollers
+
+    @property
+    def identities(self) -> str:
+        """The pollers as ``identity (Workflow, build X)``, comma-separated.
+
+        Returns:
+            One clause per poller, in the order Temporal reported them. Empty
+            when :attr:`unclaimed` — no caller renders it in that case.
+        """
+        return ", ".join(
+            f"{poller.identity} ({poller.task_queue_type.value}"
+            + (f", build {poller.build_id}" if poller.build_id else "")
+            + ")"
+            for poller in self.pollers
+        )
 
 
 @dataclass(frozen=True)
@@ -646,6 +698,13 @@ class BaseE2ETest:
     # never mutated in place, so the class-level empty default is not shared
     # state.
     _node_dispatch: dict[str, NodeDispatch] = {}
+    # Task queue -> what Temporal said was polling it when the poll stopped
+    # early. Populated by _capture_stop_point_pollers, which is a no-op unless
+    # a Temporal address is configured, and read only by _claim_clause. Empty
+    # therefore means "not observed", never "no pollers" — the observed
+    # no-pollers answer is a recorded reading whose tuple is empty. Plain
+    # instance field, same reason as source_available above.
+    _queue_pollers: dict[str, QueuePollerReading] = {}
     # Node name -> the identity the app under test declares for that node,
     # captured from the manifest-derived seed DAG in _bootstrap_workflow and
     # read only by _assert_deployed_manifest_matches. Empty means there is
@@ -1068,6 +1127,7 @@ class BaseE2ETest:
                 )
 
         self._node_dispatch = {}
+        self._queue_pollers = {}
         self._expected_node_identities = {}
         self._seed_version = None
         self._admin_reading = None
@@ -3405,8 +3465,8 @@ class BaseE2ETest:
           the child workflow to read, and asserts no cause (see
           :attr:`~application_sdk.testing.e2e.client.DAGNodeStatus.is_not_started`);
         * dispatched but never finished (``Running`` where the poll stopped) —
-          the worker took it and stopped making progress, so the queue is named
-          too;
+          which does not say whether a worker ever claimed it, so the line names
+          the queue and hands off to :meth:`_claim_clause` for the cause;
         * ran and failed — the error message is the whole story.
 
         Both places the poll can stop early read the same: the ceiling and the
@@ -3439,10 +3499,76 @@ class BaseE2ETest:
         if node.status is DAGNodeStatus.RUNNING and ae_result.stopped_watching:
             return (
                 f"  - {node.name}: STILL RUNNING{stop_point} — "
-                f"dispatched to {self._dispatch_note(node.name)}{stall_clause}. A "
-                "worker took it and stopped making progress (or died holding it)."
+                f"dispatched to {self._dispatch_note(node.name)}{stall_clause}. "
+                f"{self._claim_clause(node.name, ae_result)}"
             )
         return f"  - {node.name}: status={node.status.value} error={node.error_message}"
+
+    def _claim_clause(self, node_name: str, ae_result: DAGRunResult) -> str:
+        """Whether anything ever *claimed* a still-Running node's task.
+
+        The sentence this replaced asserted one of the two causes as fact — "a
+        worker took it and stopped making progress (or died holding it)" — on
+        the strength of AE reporting ``Running``. AE reports ``Running`` for a
+        task that was dispatched and never claimed by any poller just as it does
+        for one a worker picked up and stalled on, and the two need opposite
+        investigations: a queue-name mismatch against a hanging activity. On the
+        run behind FND-1880 the real cause was the first (the worker polled
+        ``atlan-<app>-<deployment>`` while the harness dispatched to
+        ``atlan-<app_with_underscores>-<deployment>``), and the assertion was
+        read as evidence against that hypothesis — costing a round trip in the
+        extraction path before it was reconsidered.
+
+        The two cases are *distinguishable*, so when Temporal can be read this
+        says which rather than hedging: a queue with no pollers is the observed
+        form of "nothing ever claimed it". Without that read — the default, and
+        what a connector CI leg always gets, since the runner has no route into
+        the tenant vcluster — it hedges honestly and names the one check that
+        settled FND-1284: the dispatched queue against the queue the owning
+        app's worker prints in its own startup line.
+
+        Args:
+            node_name: The node whose queue to answer for.
+            ae_result: The snapshot the line is being rendered from, for the
+                child workflow id (``{ae_run_id}-{node_id}``).
+
+        Returns:
+            One sentence naming the cause when it was observed, else the honest
+            either-or plus what to check first.
+        """
+        dispatch = self._node_dispatch.get(node_name)
+        reading = (
+            self._queue_pollers.get(dispatch.task_queue)
+            if dispatch is not None and dispatch.task_queue
+            else None
+        )
+        child = f"'{ae_result.run_id}-{node_name}'"
+        if reading is None:
+            return (
+                "AE reports Running BOTH for a task no poller ever claimed and "
+                "for one a worker claimed and stalled on, so this does not say "
+                "which. Check the dispatched queue above against the queue the "
+                "owning app's worker names in its own startup line (queue=...): a "
+                "mismatch means nothing ever claimed it. If they match, read the "
+                f"child workflow {child} on the tenant's Temporal — a history that "
+                "stopped growing is a worker that took it and stopped making "
+                "progress (or died holding it)."
+            )
+        if reading.unclaimed:
+            return (
+                "NO poller has claimed it: Temporal reports 0 pollers on "
+                f"{reading.task_queue!r} in namespace {reading.namespace!r}, so "
+                "nothing ever picked this task up — the deployed worker's queue "
+                "does not match the dispatched one (or the worker is not running). "
+                "The activity's own code is not implicated."
+            )
+        return (
+            "A worker claimed it and stopped making progress (or died holding it): "
+            f"Temporal reports {len(reading.pollers)} poller(s) on "
+            f"{reading.task_queue!r} in namespace {reading.namespace!r} "
+            f"({reading.identities}). Read the child workflow {child} on the "
+            "tenant's Temporal for what it is stuck on."
+        )
 
     def _describe_dag_nodes(self, ae_result: DAGRunResult) -> str:
         """Per-node breakdown, every node — succeeded ones included.
@@ -3790,7 +3916,7 @@ class BaseE2ETest:
                 when a Temporal address is configured.
         """
         try:
-            return await self._ae.poll_native_status(
+            ae_result = await self._ae.poll_native_status(
                 run_id,
                 interval_seconds=self.ae_poll_interval_seconds,
                 timeout_seconds=self.ae_poll_timeout_seconds,
@@ -3801,6 +3927,10 @@ class BaseE2ETest:
         except DAGProgressStalledError as stalled:
             if stalled.result is None:
                 raise
+            # Before the message is built, not after: this is what lets the
+            # per-node line say whether anything claimed the task instead of
+            # asserting one of the two causes. See _claim_clause.
+            await self._capture_stop_point_pollers(stalled.result)
             raise DAGProgressStalledError(
                 message=(
                     f"Full-DAG e2e stalled for connector={self.connector_short_name}\n"
@@ -3828,6 +3958,45 @@ class BaseE2ETest:
             unpolled.observed_pollers = observed
             unpolled.add_note(f"Temporal was asked directly: {observed}")
             raise
+        # The ceiling path returns rather than raising, and its Running-node line
+        # has the same question to answer as the watchdog's.
+        await self._capture_stop_point_pollers(ae_result)
+        return ae_result
+
+    async def _capture_stop_point_pollers(self, ae_result: DAGRunResult) -> None:
+        """Record who is holding the queues of the nodes still Running at the stop.
+
+        Only the queues the diagnostic will actually ask about — one read per
+        distinct queue among the nodes AE still reports ``Running`` — so a wide
+        DAG does not turn a failure message into a fan of frontend calls, and a
+        run that finished does no reads at all.
+
+        Assigned wholesale, never mutated in place — this run's stop point is
+        the only observation that may answer for it. A multi-DAG suite calls
+        ``run_full_dag`` more than once on the same instance, so an accumulating
+        dict would let the crawl's reading render as the verdict on the mine's
+        node; and the class-level default is shared until ``setup_method``
+        replaces it, so an in-place write would reach every other suite too.
+
+        Args:
+            ae_result: The snapshot the failure will be rendered from.
+        """
+        self._queue_pollers = {}
+        if not ae_result.stopped_watching or not self._resolved_temporal_address():
+            return
+        queues = {
+            dispatch.task_queue
+            for node in ae_result.nodes
+            if node.status is DAGNodeStatus.RUNNING
+            and (dispatch := self._node_dispatch.get(node.name)) is not None
+            and dispatch.task_queue
+        }
+        readings: dict[str, QueuePollerReading] = {}
+        for queue in sorted(queues):
+            reading = await self._read_queue_pollers(queue)
+            if reading is not None:
+                readings[queue] = reading
+        self._queue_pollers = readings
 
     async def _observed_pollers(self) -> str | None:
         """Read who is actually polling the extract queue, when that is possible.
@@ -3853,10 +4022,47 @@ class BaseE2ETest:
             original diagnostic exactly as it was: a Temporal that cannot be
             read must never turn a real finding into a harness error.
         """
+        reading = await self._read_queue_pollers(self._extract_task_queue())
+        if reading is None:
+            return None
+        if reading.unclaimed:
+            return (
+                f"Temporal confirms it: {reading.task_queue!r} in namespace "
+                f"{reading.namespace!r} has NO pollers at all. Nothing is holding "
+                "that queue, so the agent_spec().agent_name and the deployed "
+                "worker's queue do not match (or the worker is not running)."
+            )
+        return (
+            f"Temporal reports {len(reading.pollers)} poller(s) on "
+            f"{reading.task_queue!r} in namespace {reading.namespace!r}: "
+            f"{reading.identities}. Something IS holding that queue, so "
+            "the node was not picked up for another reason — read the child "
+            "workflow's history rather than hunting a queue-name mismatch."
+        )
+
+    async def _read_queue_pollers(self, queue: str) -> QueuePollerReading | None:
+        """Ask Temporal who is polling *queue*, when that is possible at all.
+
+        The one poller read in this class, with the queue as a parameter: the
+        stall guard asks about the extract queue it inferred against, and the
+        stuck-node diagnostic asks about whichever queue the seed DAG routed
+        that node to — two questions, the same read, so a change to how the
+        frontend is reached cannot land on one of them only.
+
+        Args:
+            queue: Task-queue name to describe.
+
+        Returns:
+            What Temporal answered, or ``None`` when no address is configured or
+            the read itself failed. ``None`` is "not observed" and never "no
+            pollers": the empty answer is a reading whose
+            :attr:`QueuePollerReading.pollers` is empty, and conflating the two
+            would let an unreachable frontend manufacture the exact finding this
+            read exists to deliver.
+        """
         address = self._resolved_temporal_address()
         if not address:
             return None
-        queue = self._extract_task_queue()
         namespace = self._resolved_temporal_namespace()
         try:
             from application_sdk.testing.harness.temporal import (  # noqa: PLC0415
@@ -3872,30 +4078,14 @@ class BaseE2ETest:
         except Exception:
             logger.warning(
                 "could not read Temporal at %s for task queue %s, so the "
-                "no-worker diagnosis stays an inference from the stall grace",
+                "diagnosis for that queue stays an inference",
                 address,
                 queue,
                 exc_info=True,
             )
             return None
-        if not pollers:
-            return (
-                f"Temporal confirms it: {queue!r} in namespace {namespace!r} has "
-                "NO pollers at all. Nothing is holding that queue, so the "
-                "agent_spec().agent_name and the deployed worker's queue do not "
-                "match (or the worker is not running)."
-            )
-        identities = ", ".join(
-            f"{poller.identity} ({poller.task_queue_type.value}"
-            + (f", build {poller.build_id}" if poller.build_id else "")
-            + ")"
-            for poller in pollers
-        )
-        return (
-            f"Temporal reports {len(pollers)} poller(s) on {queue!r} in namespace "
-            f"{namespace!r}: {identities}. Something IS holding that queue, so "
-            "the node was not picked up for another reason — read the child "
-            "workflow's history rather than hunting a queue-name mismatch."
+        return QueuePollerReading(
+            task_queue=queue, namespace=namespace, pollers=tuple(pollers)
         )
 
     def _resolved_temporal_address(self) -> str:
