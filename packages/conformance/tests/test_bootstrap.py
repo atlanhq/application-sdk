@@ -3099,3 +3099,208 @@ def test_sdk_unit_coverage_floor_matches_the_reusable_workflow_default() -> None
         "conformance/bootstrap/extract.py to match, or C002 will keep "
         "preserving per-app floors below the SDK's own."
     )
+
+
+# ---------------------------------------------------------------------------
+# FND-1143: the unslotted-input freeze, end to end through --resync
+# ---------------------------------------------------------------------------
+
+
+def _dataforge_tests_yaml() -> str:
+    """A tests.yaml wired to dataforge the way the connectors that use it are.
+
+    Hand-positioned, under its own explanatory comments, rather than rendered
+    from the template: these seven repos wrote these lines before any slot
+    existed, and a fixture rendered from the template would pass on a preserve
+    that only works for the exact bytes the template emits.
+    """
+    canonical = render("tests.yaml", app_name="app")
+    return canonical.replace(
+        '      app-image-name: "atlan-app-app"\n',
+        '      app-image-name: "atlan-app-app"\n'
+        "      # Source: the dataforge org-vault entry — no provisioned resource\n"
+        "      # for this family, so managed mode, looked up by datasource + tier.\n"
+        '      dataforge-datasource: "cosmosnosql"\n'
+        '      dataforge-mode: "managed"\n'
+        '      dataforge-env-tier: "dev"\n'
+        '      dataforge-output-prefix: "COSMOSNOSQL"\n'
+        "      # No hermetic Cosmos, so an unresolved source must fail fast:\n"
+        '      # the "true" default would let a dataforge miss turn the\n'
+        "      # INTEGRATION merge gate green against no source at all.\n"
+        '      dataforge-hermetic-fallback: "false"\n',
+    )
+
+
+def test_resync_keeps_the_dataforge_inputs(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The FND-1143 headline: seven connectors pass these, and until the
+    template had slots for them --resync refused their whole file.
+
+    ``dataforge-hermetic-fallback: "false"`` is the load-bearing one — it is
+    what makes an unresolved source FAIL the integration tier instead of
+    passing it green against no source at all.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_dataforge_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    after = wf.read_text()
+    assert 'dataforge-datasource: "cosmosnosql"' in after
+    assert 'dataforge-mode: "managed"' in after
+    assert 'dataforge-env-tier: "dev"' in after
+    assert 'dataforge-output-prefix: "COSMOSNOSQL"' in after
+    assert 'dataforge-hermetic-fallback: "false"' in after
+
+
+def test_resync_of_a_dataforge_file_lands_the_structural_catch_up(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The damage the refusal did was never the dataforge lines themselves.
+
+    A whole-file refusal withholds every structural update the template
+    carries. On atlan-postgres-app that was ``merge_group:`` and the
+    ``labeled`` trigger type — and a required check that never dispatches for
+    ``merge_group`` leaves the merge-queue entry pending until it times out.
+    """
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    stale = _dataforge_tests_yaml().replace("  merge_group:\n", "")
+    assert "merge_group" not in stale, "fixture is not actually stale"
+    wf.write_text(stale)
+    assert scan_path(wf, tmp_path), "fixture is not actually drifted"
+    _cmd_bootstrap(["--resync"])
+    assert "  merge_group:\n" in wf.read_text()
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_resync_is_idempotent_on_a_dataforge_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second run must be a no-op, or the fleet churns a .bak on every run."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_dataforge_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    once = wf.read_text()
+    (tmp_path / ".github" / "workflows" / "tests.yaml.bak").unlink()
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == once
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+def test_resync_drops_a_redundant_install_app_to_tenant(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nine repos declared ``install-app-to-tenant: true``, which is the
+    reusable's own default. The line goes; the install does not."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(
+        render("tests.yaml", app_name="app").replace(
+            '      app-image-name: "atlan-app-app"\n',
+            '      app-image-name: "atlan-app-app"\n'
+            "      # Install the PR-built image before the legs run (FND-128).\n"
+            "      install-app-to-tenant: true\n",
+        )
+    )
+    _cmd_bootstrap(["--resync"])
+    assert "install-app-to-tenant" not in wf.read_text()
+
+
+def test_resync_still_refuses_an_install_app_to_tenant_opt_out(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``false`` is a real opt-out with no slot to carry it, so the refusal
+    must keep the declaration rather than silently re-enabling the install."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    customised = render("tests.yaml", app_name="app").replace(
+        '      app-image-name: "atlan-app-app"\n',
+        '      app-image-name: "atlan-app-app"\n      install-app-to-tenant: false\n',
+    )
+    wf.write_text(customised)
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == customised
+
+
+def test_sdk_install_app_to_tenant_default_matches_the_reusable_workflow() -> None:
+    """``SDK_INSTALL_APP_TO_TENANT_DEFAULT`` must equal the input's own default.
+
+    The whole safety argument for dropping ``install-app-to-tenant: true``
+    rather than slotting it is that the value restates the reusable's default,
+    so deleting it changes nothing. The constant is a copy — this package ships
+    standalone into consumer repos — so it is pinned against the real default
+    here, in the monorepo where both exist. If the SDK ever flips the default to
+    ``false``, this fails here instead of nine repos silently losing their
+    pre-e2e install. Skipped when the monorepo tree isn't checked out, matching
+    the coverage-floor pin above.
+    """
+    workflow = _MONOREPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
+    if not workflow.exists():
+        pytest.skip(f"monorepo source not checked out: {workflow}")
+    block = workflow.read_text(encoding="utf-8").split("install-app-to-tenant:", 1)
+    assert len(block) == 2, "tests-reusable.yaml no longer declares the input"
+    m = re.search(r"default:\s*\"?(true|false)\"?", block[1])
+    assert m is not None, "the input no longer declares a boolean default"
+    assert m.group(1) == extract_mod.SDK_INSTALL_APP_TO_TENANT_DEFAULT, (
+        "tests-reusable.yaml's install-app-to-tenant default has moved to "
+        f"{m.group(1)} — update SDK_INSTALL_APP_TO_TENANT_DEFAULT in "
+        "conformance/bootstrap/extract.py, or --resync will keep deleting a "
+        "declaration that is no longer redundant."
+    )
+
+
+def test_every_reusable_input_has_a_slot_or_a_documented_reason() -> None:
+    """The trap FND-1143 closed, pinned so it cannot re-open silently.
+
+    An input the canonical template has no place for freezes any repo that
+    passes it: --resync refuses the whole file (FND-604) and every structural
+    update the template carries is withheld with it. So each of the reusable's
+    inputs must be reachable — through a render param, a dispatch passthrough
+    the template hardcodes, or the one deliberate policy drop. A new input added
+    to tests-reusable.yaml without one lands here, not in a connector's frozen
+    CI.
+    """
+    workflow = _MONOREPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
+    if not workflow.exists():
+        pytest.skip(f"monorepo source not checked out: {workflow}")
+    text = workflow.read_text(encoding="utf-8")
+    inputs_block = text.split("    inputs:", 1)[1].split("\n    secrets:", 1)[0]
+    declared = set(re.findall(r"^      ([a-z0-9-]+):$", inputs_block, re.MULTILINE))
+    assert declared, "could not read the reusable's inputs block"
+    # Reachable through a per-repo value slot, verbatim splice, or policy drop.
+    slotted = {field for _, field, _ in extract_mod._TESTS_YAML_VALUE_INPUTS}
+    slotted |= {field for _, field in extract_mod._TESTS_YAML_BLOCK_INPUTS}
+    slotted |= {
+        "app-name",
+        "app-image-name",
+        "enable-e2e",
+        "services-script",
+        "unit-coverage-fail-under",
+        "force-external-runtime",
+        # Hardcoded by the template: forwarded from this workflow's own
+        # workflow_dispatch inputs, or pinned to the SDK posture (two-store).
+        "application-sdk-ref",
+        "distinct-id",
+        "run-e2e",
+        "base-image-ref",
+        "agent-name-override",
+        "e2e-clouds",
+        "two-store",
+        # Policy drop, not a slot — see redundant_install_app_to_tenant.
+        "install-app-to-tenant",
+    }
+    assert declared - slotted == set(), (
+        f"tests-reusable.yaml inputs with no slot in the bootstrap template: "
+        f"{sorted(declared - slotted)} — add one (render param + read-back in "
+        "extract_tests_yaml_params + template line), or any repo that passes "
+        "one is frozen out of every structural CI update."
+    )
