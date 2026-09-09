@@ -62,7 +62,7 @@ jobs:
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.10"
+          version: "0.12.11"
 
       - name: "Run C-series checks (published package)"
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref == ''
@@ -97,13 +97,31 @@ jobs:
         with:
           name: conformance-ci-sarif
           path: ci.sarif
+          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
+          # a run, so re-running a failed job would otherwise 409 here and burn the
+          # retry on a conflict that has nothing to do with a finalize failure. It is
+          # also what holds the invariant every consumer of this upload globs on:
+          # at most ONE live artifact ever matches `<name>*`.
+          overwrite: true
+
+      # A finalize 403 comes from an intermediary having a moment, and the
+      # retry runs about a second later — well inside the same window. Wait
+      # it out, so the two attempts fail independently or not at all.
+      - name: Wait before the upload retry
+        if: steps.upload-sarif.outcome == 'failure'
+        run: sleep 20
 
       - name: "Upload SARIF artifact (retry)"
         if: steps.upload-sarif.outcome == 'failure'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: conformance-ci-sarif
+          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
+          # failure leaves an unfinalized record holding that name for the whole
+          # run. The list API cannot see it, so `overwrite` cannot clear it and
+          # CreateArtifact 409s — a same-named retry could never have worked.
+          # Consumers resolve this artifact by `<name>*` glob, not exact name.
+          name: conformance-ci-sarif-retry
           path: ci.sarif
           overwrite: true
 

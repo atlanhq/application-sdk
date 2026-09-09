@@ -199,6 +199,7 @@ def _is_known_sdk_contract(name: str) -> bool:
 def _walk_chain(
     rec: ClassRecord,
     by_name: dict[str, ClassRecord],
+    by_name_all: dict[str, list[ClassRecord]] | None = None,
 ) -> tuple[list[ast.ClassDef], bool]:
     """Return (in-repo ClassDefs across the chain, whether it fully resolved).
 
@@ -208,6 +209,28 @@ def _walk_chain(
     incomplete, and the caller must then skip rather than guess. That matches
     K006's stated preference for a false negative over a false positive on a
     repo shape the check does not understand.
+
+    *by_name_all* is the same opt-in multimap
+    :func:`resolve_contract_fields` takes: when a base-class NAME is declared
+    more than once in the scanned repo, ``by_name`` keeps only whichever
+    declaration the filesystem walk reached first, and the chain silently
+    becomes that one's. Passing the multimap walks EVERY declaration of an
+    ambiguous name instead, so both the ``extra="allow"`` scan and the
+    resolvability verdict see the union — either of which, on this check's
+    stated false-negative-over-false-positive preference, is the safe
+    direction: an ambiguous name that any declaration leaves unresolved, or
+    that any declaration opens with ``extra="allow"``, silences the manifest
+    rather than guessing which one the runtime import picked.
+
+    The walk starts at *rec*'s own NAME rather than seeding its node directly,
+    so that union covers the root record too. *rec* reaches this function from
+    a first-wins ``by_name`` lookup in :func:`_pair_manifests_with_contracts`,
+    and when two entrypoints bind their generated ``AppInputContract``
+    *directly* — no app-side subclass to give it a distinct name — the root IS
+    the ambiguous record. Seeding its node would then read ``extra="allow"``
+    and base resolvability off whichever declaration the pairing happened to
+    pick, which is the same first-wins hazard one level up. Ambiguity is a
+    property of a name, so it is handled in exactly one place: ``walk``.
     """
     nodes: list[ast.ClassDef] = []
     fully_resolved = True
@@ -219,17 +242,19 @@ def _walk_chain(
             return  # cycle — mirrors resolve_contract_fields' guard
         visiting.add(name)
 
-        ancestor = by_name.get(name)
-        if ancestor is not None:
-            nodes.append(ancestor.node)
-            for base_name in ancestor.bases:
-                walk(base_name)
+        ancestors = (by_name_all or {}).get(name)
+        if not ancestors:
+            sole = by_name.get(name)
+            ancestors = [sole] if sole is not None else []
+        if ancestors:
+            for ancestor in ancestors:
+                nodes.append(ancestor.node)
+                for base_name in ancestor.bases:
+                    walk(base_name)
         elif not _is_known_sdk_contract(name):
             fully_resolved = False
 
-    nodes.append(rec.node)
-    for base in rec.bases:
-        walk(base)
+    walk(rec.name)
     return nodes, fully_resolved
 
 
@@ -297,6 +322,16 @@ def _sole_extraction_input(
     unreferenced class cannot be the live one, so candidates with no mention
     anywhere are dropped before the uniqueness test. Still ambiguous after that
     (two live descendants, or none) means skip rather than guess.
+
+    Deliberately reads first-wins ``by_name`` rather than the ambiguity-aware
+    multimap the field resolution uses. This fallback runs only in
+    single-entrypoint mode (its one caller guards on ``mode == "single"``), and
+    the bare-name collision that motivates the multimap is a bundle-app shape:
+    one ``AppInputContract`` per entrypoint, all emitted by ``pkl eval``. With
+    one entrypoint there is one generated contract, and any remaining collision
+    is between hand-written classes the app can simply rename. Widening here
+    would instead turn one candidate into two and skip the check outright —
+    a false negative on the very family this fallback exists to cover.
     """
     candidates = [
         rec
@@ -314,9 +349,37 @@ def _resolved_field_names(
     rec: ClassRecord,
     file_aliases: dict[str, dict[str, str]],
     by_name: dict[str, ClassRecord],
+    by_name_all: dict[str, list[ClassRecord]] | None = None,
 ) -> set[str]:
-    aliases = file_aliases.get(rec.file, {})
-    return {f.name for f in resolve_contract_fields(rec.node, aliases, by_name)}
+    """Every field name *rec* can receive, across its resolved base chain.
+
+    Class registries are keyed by BARE class name, and the contract-toolkit
+    names every entrypoint's generated Input contract ``AppInputContract`` —
+    so every bundle app declares that one name once per entrypoint. ``by_name``
+    keeps only the first the filesystem walk reached, and an inherited field
+    that lives on any of the others silently reads as undeclared.
+
+    Passing *by_name_all* resolves ambiguous ancestors to the UNION of their
+    declarations, and widens *rec* itself the same way when its own name is
+    ambiguous (the shape where two entrypoints bind the generated contract
+    directly, so the pairing in :func:`_pair_manifests_with_contracts` can only
+    reach the first). Presence ONLY, as B005 does in
+    ``deprecation/_contract_compat.py``: this widens what counts as
+    *declared*, it does not change which contract a manifest is paired with.
+    Omitting the multimap keeps the first-wins behaviour, and with it there is
+    no behaviour change on a repo where no class name is declared twice.
+    """
+    records = (by_name_all or {}).get(rec.name) or [rec]
+    names: set[str] = set()
+    for candidate in records:
+        aliases = file_aliases.get(candidate.file, {})
+        names.update(
+            f.name
+            for f in resolve_contract_fields(
+                candidate.node, aliases, by_name, by_name_all=by_name_all
+            )
+        )
+    return names
 
 
 def _pair_manifests_with_contracts(
@@ -383,6 +446,11 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     file_directives: dict[str, dict[int, _IgnoreDirective]] = {}
     file_aliases: dict[str, dict[str, str]] = {}
     by_name: dict[str, ClassRecord] = {}
+    # Every declaration per class name, not just the first. Both registries are
+    # keyed by BARE class name, and `pkl eval` emits one `AppInputContract` per
+    # entrypoint, so on any bundle app that name is ambiguous — see
+    # _resolved_field_names.
+    by_name_all: dict[str, list[ClassRecord]] = {}
 
     for path in paths:
         try:
@@ -404,6 +472,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         file_aliases[rel] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
+            by_name_all.setdefault(rec.name, []).append(rec)
 
     code = CodeContractScan()
     app_cache: dict[str, bool | None] = {}
@@ -422,13 +491,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     findings: list[Finding] = []
 
     for manifest, input_rec in pairs:
-        chain_nodes, fully_resolved = _walk_chain(input_rec, by_name)
+        chain_nodes, fully_resolved = _walk_chain(input_rec, by_name, by_name_all)
         if not fully_resolved:
             continue  # incomplete picture — stay silent rather than guess.
         if any(_class_allows_extra(node) for node in chain_nodes):
             continue  # real Pydantic extra="allow" keeps undeclared keys.
 
-        declared = _resolved_field_names(input_rec, file_aliases, by_name)
+        declared = _resolved_field_names(input_rec, file_aliases, by_name, by_name_all)
         directives = file_directives.get(input_rec.file, {})
 
         findings.extend(

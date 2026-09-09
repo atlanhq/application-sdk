@@ -90,8 +90,13 @@ def test_e2e_evidence_is_downloaded_by_pattern_not_exact_name(
     # Since FND-6 each leg's artifact is suffixed with the leg name (which now
     # includes the cloud), so the historical exact name matches nothing and the
     # download quietly no-ops under continue-on-error.
+    #
+    # The trailing `*` matters as much as the middle one: a leg whose first
+    # upload attempt hit the artifact service's finalize 403 publishes under
+    # `…-results-retry`, and a pattern anchored on `-results` would skip that
+    # leg's junit entirely.
     with_ = _e2e_download(scorecard)["with"]
-    assert with_["pattern"].endswith("*-results")
+    assert with_["pattern"].endswith("*-results*")
     assert "name" not in with_
 
 
@@ -124,7 +129,8 @@ def test_the_callback_download_matches_the_per_leg_names_too(
         if "sdr-integration-tests" in str(s.get("with", {}))
     ]
     assert len(download) == 1
-    assert download[0]["with"]["pattern"].endswith("*-results")
+    # Trailing `*` for the retry-named artifact, as above.
+    assert download[0]["with"]["pattern"].endswith("*-results*")
 
 
 # ── Argument selection stays in the tested script ────────────────────────────
