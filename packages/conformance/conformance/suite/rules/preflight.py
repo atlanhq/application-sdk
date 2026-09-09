@@ -419,6 +419,20 @@ _CONTRACT_RULES = (
         rationale="An undiscovered handler or unresolved contract must not be mistaken for conforming code.",
         help_uri=f"{_HELP_BASE}#p065",
     ),
+    RuleDefinition(
+        id="P066",
+        name="DeprecatedPartialPreflight",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Replace deprecated PARTIAL preflight results with an explicit readiness decision.",
+        full_description="PARTIAL is deprecated for app preflight results. Return NOT_READY for blocking failures or READY when extraction can proceed, preserving truthful typed check evidence. Recognizes literal and enum values, conditional expressions, and single local assignments in supported handler paths. Dynamic construction requires behavioral validation.",
+        rationale="Customer impact: PARTIAL allows extraction to proceed and can conceal a blocking source failure behind a degraded verdict. Explicit readiness decisions prevent this ambiguity.",
+        help_uri=f"{_HELP_BASE}#p066",
+    ),
 )
 
 _GUIDE_BASE = (

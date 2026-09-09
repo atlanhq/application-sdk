@@ -1,5 +1,7 @@
 # Preflight conformance
 
+Current policy: P066 reports deprecated app PARTIAL results as BLOCK/error. P062 rejects PARTIAL at runtime; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The SDK enum and runtime gate are unchanged. There are now 20 preflight rules (17 static, 3 behavioral), with 8 BLOCK and 12 WARN.
+
 P052–P061 and P065 add static diagnostics for handler types, actionable errors, raised expected failures, verdict consistency, entrypoint inputs, blocking probes, budgets, cleanup, sensitive failure text, removed gate configuration, and incomplete analysis. Existing P032–P035 and P047 continue to apply. P032, P034, P052, P053, and P062–P064 use BLOCK (SARIF `error`). P034/P052/P053 enforce typed failures, handler contracts, and definite missing failure guidance. Behavioral rules require complete passing scenarios when explicitly run with `--with-tests`; missing or skipped scenarios are errors. Static-only runs still report behavioral checks as not evaluated. Other preflight rules remain WARN because their findings include heuristics, unresolved analysis, or SDK-version-dependent advice. `--exit-zero` preserves error findings while returning a successful process exit for soft enforcement.
 
 Run static checks:

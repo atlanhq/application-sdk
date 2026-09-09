@@ -253,6 +253,29 @@ class _Checker:
         )
         if isinstance(status_name, str):
             status_name = status_name.upper()
+        pending = [status]
+        seen = set()
+        while pending:
+            candidate = pending.pop()
+            if isinstance(candidate, ast.Name) and candidate.id not in seen:
+                seen.add(candidate.id)
+                pending.append(bindings.get(candidate.id))
+            elif isinstance(candidate, ast.IfExp):
+                pending.extend([candidate.body, candidate.orelse])
+            elif (
+                isinstance(candidate, ast.Constant)
+                and isinstance(candidate.value, str)
+                and candidate.value.upper() == "PARTIAL"
+                or isinstance(candidate, ast.Attribute)
+                and candidate.attr == "PARTIAL"
+            ):
+                self.emit(
+                    src,
+                    call,
+                    "P066",
+                    "PARTIAL preflight results are deprecated. Return NOT_READY for a blocking failure or READY when extraction can proceed; preserve truthful typed check evidence. Do not replace PARTIAL blindly.",
+                )
+                break
         checks = kwargs.get("checks")
         if not isinstance(checks, (ast.List, ast.Tuple)):
             if "checks" in kwargs:

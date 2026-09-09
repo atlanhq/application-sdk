@@ -93,6 +93,9 @@ def assert_preflight_result(
     from application_sdk.handler.contracts import PreflightOutput
 
     assert isinstance(result, PreflightOutput), "Handler must return PreflightOutput"
+    assert (
+        result.status.value != "partial"
+    ), "PARTIAL is deprecated for preflight results"
     checks = {check.name: check for check in result.checks}
     assert len(checks) == len(result.checks), "Check names must be unique"
     assert set(checks) <= observed_checks, "Result contains an unobserved probe"
@@ -118,7 +121,7 @@ def assert_preflight_result(
         assert not set(mandatory_order[failed_index + 1 :]) & set(
             checks
         ), "Mandatory probes did not short-circuit"
-    derived = "not_ready" if required_failed else "partial" if failed else "ready"
+    derived = "not_ready" if required_failed else "ready"
     assert (
         result.status.value == expected_status == derived
     ), "Verdict contradicts scenario roles"

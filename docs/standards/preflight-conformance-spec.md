@@ -1,5 +1,7 @@
 # Preflight conformance specification
 
+Current policy: P066 reports deprecated app PARTIAL results as BLOCK/error. P062 rejects PARTIAL at runtime; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The SDK enum and runtime gate are unchanged. There are now 20 preflight rules (17 static, 3 behavioral), with 8 BLOCK and 12 WARN.
+
 Status: conformance implementation and remaining acceptance requirements, 2026-09-08. P034, P052, P053, and P062–P064 now join P032 at BLOCK; other preflight rules remain WARN. Static checks run by default; behavioral checks require `--with-tests` and app/SDK scenario adapters. SDK production behavior is unchanged.
 
 The implementation uses bounded static analysis, not general Python execution analysis. It follows direct module helpers, imported helpers, same-class methods, and imported error inheritance. Dynamic factories, arbitrary client instances, decorator wrappers, and semantic recovery still require behavioral adapters. The full acceptance criteria below describe the intended coverage; registration of a TEST rule is not proof that every SDK or app scenario has been implemented or executed.
@@ -31,17 +33,17 @@ Every failed check must also provide a nonblank `suggested_action`. For USER err
 
 A `NOT_READY` result must contain at least one failed, typed check. If an aggregate error is present, it must describe the actual blocking reason rather than an unrelated advisory failure. SDK failures before any handler check can run may carry no checks, but must retain a typed aggregate cause and an explicit verdict or no-verdict state.
 
-`READY` means required checks passed and no advisory failure is being reported. `PARTIAL` preserves failed advisory checks and permits continuation. `NOT_READY` means a required capability was not established and hard mode blocks. The handler owns aggregation; the SDK check model does not currently expose a `required` field. Do not introduce that field as part of conformance without a separate contract decision.
+`READY` means required checks passed and extraction can proceed, including explicitly supported advisory failures. `PARTIAL` is deprecated for app results. `NOT_READY` means a required capability was not established and hard mode blocks. The handler owns aggregation; the SDK check model does not currently expose a `required` field. Do not introduce that field as part of conformance without a separate contract decision.
 
 Mandatory checks run in dependency order and short-circuit on the first mandatory failure, following the CONNECT-733 alignment decision. Preserve already completed checks; omit checks that did not run. Permitting additional independent mandatory probes after failure would change that agreed contract and is not part of this specification. Selected-resource aggregation must follow the workflow's supported scope semantics: at least one usable resource permits continuation only where extraction supports that reduced scope. A workflow requiring every selected resource must not inherit an at-least-one rule blindly.
 
 ### Transients and continuation
 
-Expected source failures return structured results. A transient is eligible for `PARTIAL` only when a tested extraction retry or fallback can tolerate that condition within its declared bounds. The fixture must exercise that recovery with the same injected source condition. If that evidence is absent, do not prescribe `PARTIAL` solely because the error category is transient or `retryable` is true.
+Expected source failures return structured results. A transient permits READY only when a tested extraction retry or fallback can tolerate that condition within its declared bounds. The fixture must exercise recovery with the same injected source condition. Otherwise return NOT_READY; retryability alone does not establish readiness.
 
 For a required capability that remains unavailable after the permitted probe/retry budget, return a typed `NOT_READY`. `retryable` describes the failure; it does not independently authorize continuation or promise that the gate retries it. Under the target PR contract, handler faults produce a verdict on the attempt where they occur, and deliberate blocks remain non-retryable at the gate boundary.
 
-This narrows the blanket transient-to-`PARTIAL` prescription in the September 7 intake. It is a proposed policy for the conformance programme, not a claim that PR #3685 already verifies extraction recovery. Resolve any disagreement with the PR's migration guidance before promoting this behavioral requirement to BLOCK.
+The current conformance policy deprecates PARTIAL. This does not remove SDK compatibility handling for existing histories or older app versions.
 
 ### Target SDK enforcement
 
@@ -135,8 +137,8 @@ Run tests without production credentials or live customer systems. Isolate delib
 | --- | --- |
 | Healthy mandatory checks | READY with actual successful probes; expected scope and credentials used. |
 | Mandatory authentication/permission failure | NOT_READY, typed cause and action, no later mandatory or dependent probes; completed rows preserved. |
-| Advisory failure | PARTIAL, typed failed row, correct action; required successful rows retained. |
-| Recoverable transient | PARTIAL only for the declared tolerated condition; same-condition extraction retry/fallback fixture succeeds within bounds. |
+| Advisory failure | READY only when extraction supports continuation, typed failed row, correct action; required successful rows retained. |
+| Recoverable transient | READY only for the declared tolerated condition; same-condition extraction retry/fallback fixture succeeds within bounds. |
 | Persistent required-source failure | NOT_READY after bounded attempts; do not relabel source evidence as SDK plumbing to proceed. |
 | Mixed selected resources | Status matches the selected workflow's supported scope; zero usable required scope blocks. |
 | Extraction fallback | Test both tolerated and non-tolerated status codes/exceptions; preflight and extraction decisions agree in both directions. |
@@ -218,6 +220,6 @@ The registry's main table and comments reuse identifiers. This document qualifie
 5. Run a representative app cohort covering SQL, HTTP, multi-entrypoint, direct/agent credentials, cold-start sources, and fallback extraction. Use synthetic reproductions derived from the registry, including negative controls.
 6. Promote precise rules to BLOCK only after applicable apps have scenarios, known findings are fixed or explicitly accounted for, detector counterexamples pass, and unresolved-analysis rates are reported. Hard-mode enablement additionally needs a fresh, build-bound runtime measurement; green conformance alone is insufficient.
 
-Version applicability must use the actual released SDK version containing #3685 once known, not an inferred version number. A rule's existing `since` field identifies the conformance package version, not the consumer SDK version; implement consumer applicability explicitly. Before that release, obsolete-contract findings explain upcoming incompatibility rather than claiming current behavior is broken. Returning a typed PARTIAL where justified can migrate before the bump; removed imports and deployment overrides must be addressed for the target version. Unknown SDK version yields an applicability diagnostic.
+Version applicability must use the actual released SDK version containing #3685 once known, not an inferred version number. A rule's existing `since` field identifies the conformance package version, not the consumer SDK version; implement consumer applicability explicitly. Before that release, obsolete-contract findings explain upcoming incompatibility rather than claiming current behavior is broken. Migrating PARTIAL to an explicit readiness decision can happen before the bump; removed imports and deployment overrides must be addressed for the target version. Unknown SDK version yields an applicability diagnostic.
 
 Each implementation PR must include registry mappings, detector fixtures, scenario evidence, known blind spots, and the precise enforcement tier. No live fleet measurement, app remediation, issue updates, CI workflow edits, or SDK behavior changes are authorized by this specification alone.

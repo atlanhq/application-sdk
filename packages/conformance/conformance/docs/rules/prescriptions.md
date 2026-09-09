@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**64 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.preflight` (P047), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
+**65 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.preflight` (P047), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -87,6 +87,7 @@ reassigned.
 | [P063](#p063) | `PreflightWorkflowEnforcement` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [P064](#p064) | `PreflightExitEvidence` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [P065](#p065) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P066](#p066) | `DeprecatedPartialPreflight` | `block` | `app` | `preflight-gate` | — | 0.27.0 |
 
 ---
 
@@ -2462,5 +2463,25 @@ Report unresolved preflight dispatch and contracts instead of a clean result.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p065).
+
+---
+
+## P066 — `DeprecatedPartialPreflight` {#p066}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+
+> Replace deprecated PARTIAL preflight results with an explicit readiness decision.
+
+**Rationale:** Customer impact: PARTIAL allows extraction to proceed and can conceal a blocking source
+failure behind a degraded verdict. Explicit readiness decisions prevent this ambiguity.
+
+PARTIAL is deprecated for app preflight results. Return NOT_READY for blocking failures
+or READY when extraction can proceed, preserving truthful typed check evidence.
+Recognizes literal and enum values, conditional expressions, and single local
+assignments in supported handler paths. Dynamic construction requires behavioral
+validation.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#p066).
 
 ---

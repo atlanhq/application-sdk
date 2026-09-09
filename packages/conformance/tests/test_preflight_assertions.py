@@ -108,3 +108,15 @@ def test_unrelated_workflow_failure_rejected():
             expected_terminal="failed",
             expected_failure_type="PreflightFailedError",
         )
+
+
+def test_partial_result_is_deprecated():
+    output = result()
+    output.status = PreflightStatus.PARTIAL
+    with pytest.raises(AssertionError, match="PARTIAL is deprecated"):
+        assert_preflight_result(
+            output,
+            required_checks=set(),
+            observed_checks={"connection"},
+            expected_status="partial",
+        )

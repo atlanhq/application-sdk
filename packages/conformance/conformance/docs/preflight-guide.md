@@ -12,9 +12,9 @@ P032 blocks. The other preflight rules currently warn; exit code zero can includ
 
 ## Shared preflight contract
 
-Use SDK `PreflightInput`, `PreflightOutput`, `PreflightCheck` and typed failure details. Failed checks need stable codes, meaningful messages and audience-appropriate suggested actions. Resolve requirements per entrypoint: a failed mandatory check blocks; an advisory failure may produce `PARTIAL`. `READY` cannot conceal failures. Declare which probes are mandatory in behavioral scenarios rather than guessing from names or exception classes.
+Use SDK `PreflightInput`, `PreflightOutput`, `PreflightCheck` and typed failure details. Failed checks need stable codes, meaningful messages and audience-appropriate suggested actions. Resolve requirements per entrypoint: a failed mandatory check blocks; a supported advisory failure may retain a typed failed row while returning `READY`. `PARTIAL` is deprecated. Declare which probes are mandatory in behavioral scenarios rather than guessing from names or exception classes.
 
-Retryability alone does not justify `PARTIAL`. Demonstrate that extraction tolerates or recovers from the condition. Test recovery separately from persistent exhaustion. A Monte Carlo connection failure after retries, for example, needs different evidence from a transient that extraction successfully recovers from. Preserve external cancellation and distinguish failure to start a gate from failure after it starts.
+Retryability alone does not justify returning `READY` after a failed probe. Demonstrate that extraction tolerates or recovers from the condition. Test recovery separately from persistent exhaustion. A Monte Carlo connection failure after retries, for example, needs different evidence from a transient that extraction successfully recovers from. Preserve external cancellation and distinguish failure to start a gate from failure after it starts.
 
 ## P032
 
@@ -62,7 +62,7 @@ Retryability alone does not justify `PARTIAL`. Demonstrate that extraction toler
 
 **Contract:** expected source failures should produce intentional typed verdicts rather than accidentally escape the handler.
 
-**Investigate:** trace matching exception handlers and distinguish expected failures, programming defects and external cancellation. Check the installed SDK's mode semantics: PR3685 describes the target origin-based behavior, not a release floor. **Fix:** convert expected failures to checks with the correct mandatory/advisory classification. Never turn every transient into `PARTIAL`. **Verify:** test recoverable and persistent failures in supported modes and confirm subsequent extraction behavior.
+**Investigate:** trace matching exception handlers and distinguish expected failures, programming defects and external cancellation. Check the installed SDK's mode semantics: PR3685 describes the target origin-based behavior, not a release floor. **Fix:** convert expected failures to checks with the correct mandatory/advisory classification. Replace deprecated `PARTIAL` with an explicit readiness decision. **Verify:** test recoverable and persistent failures in supported modes and confirm subsequent extraction behavior.
 
 ## P055
 
@@ -129,3 +129,16 @@ Retryability alone does not justify `PARTIAL`. Demonstrate that extraction toler
 **Contract:** unresolved dispatch, imports or contracts remain visible as analysis gaps.
 
 **Investigate:** locate the actual handler and follow registries, dynamic imports or factories. Snowflake-style dispatch requires checking every registered probe. **Fix:** use a supported resolvable pattern where appropriate, improve analysis with regression tests, or add executable scenarios for the unresolved path. **Verify:** demonstrate that a known defect on that path is detected. Do not relabel unresolved as compliant or change runtime semantics merely to satisfy static discovery.
+
+
+## P066
+
+**Contract:** App preflight results must not use the deprecated PARTIAL status. This rule reports BLOCK/error.
+
+**Investigate:** Determine whether each failed probe prevents extraction or whether extraction supports proceeding. Inspect the same source operation and recovery path used by extraction.
+
+**Fix:** Return NOT_READY for blocking failures and READY when extraction can proceed. Keep failed check evidence typed and actionable; never relabel a failed probe as passed to satisfy the rule.
+
+**Verify:** Exercise both outcomes with real-handler scenarios. P062 rejects PARTIAL at runtime, including dynamically constructed statuses.
+
+Static detection covers supported PreflightOutput construction with literals, enum members, conditional expressions, and single local assignments. Arbitrary factories and mutations require behavioral tests. The SDK enum remains available for compatibility; this is a conformance deprecation.

@@ -126,7 +126,7 @@ def test_partial_failed_check_is_valid(tmp_path: Path) -> None:
     assert check(
         tmp_path,
         'return PreflightOutput(status="PARTIAL", checks=[PreflightCheck(passed=False, error=external_factory())])',
-    ) == ["P065"]
+    ) == ["P066", "P065"]
 
 
 def test_interactive_input_without_entrypoint_valid(tmp_path: Path) -> None:
@@ -208,4 +208,26 @@ def test_typed_failure_reraise(tmp_path, catch, raised):
 def test_sdk_default_action_not_missing(tmp_path, name):
     assert "P053" not in check(
         tmp_path, f"raise {name}()", f"from application_sdk.errors import {name}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        '"partial"',
+        '"PARTIAL"',
+        "PreflightStatus.PARTIAL",
+        '"partial" if degraded else "ready"',
+    ],
+)
+def test_partial_preflight_is_deprecated(tmp_path, status):
+    assert "P066" in check(
+        tmp_path, f"return PreflightOutput(status={status}, checks=[])"
+    )
+
+
+@pytest.mark.parametrize("status", ['"ready"', '"not_ready"'])
+def test_supported_preflight_status_is_not_deprecated(tmp_path, status):
+    assert "P066" not in check(
+        tmp_path, f"return PreflightOutput(status={status}, checks=[])"
     )
