@@ -37,6 +37,17 @@ Design constraints:
 * **Preserve graceful shutdown.** SIGTERM/SIGINT are forwarded to daprd so its
   ``--dapr-graceful-shutdown-seconds`` behaviour (the reason the entrypoint runs
   daprd directly) is unchanged. This process exits with daprd's exit code.
+* **``DAPR_LOG_LEVEL`` wins for daprd lines.** The SDK logger and its sinks are
+  gated at the app's ``LOG_LEVEL`` (``INFO`` by default, and the chart pins it).
+  A daprd line only exists because ``DAPR_LOG_LEVEL`` let daprd emit it, so when
+  that is set *more* verbose than ``LOG_LEVEL`` the forwarder must not let the
+  app's gate silently veto the operator's choice: lines below the app threshold
+  are re-emitted **at** the threshold with their real daprd level folded into
+  the message (``[daprd debug] ...``). With the defaults (daprd ``warn``, app
+  ``INFO``) nothing is promoted and behaviour is unchanged. This matters most
+  for the Dapr HTTP API, which logs the reason for a failed output-binding
+  invoke only at debug — the one line a customer is asked to produce when a
+  binding call 500s.
 * **Transparent when disabled.** Outside SDR mode the child is exec'd directly,
   so the process tree and PID semantics match running daprd without the wrapper.
 """
@@ -45,6 +56,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import sys
@@ -62,6 +74,44 @@ _LEVEL_TO_METHOD = {
     "fatal": "critical",
     "panic": "critical",
 }
+
+# Numeric severities for the AtlanLoggerAdapter method names above, in stdlib
+# ``logging`` units so they compare directly against the app's ``LOG_LEVEL``.
+_METHOD_LEVELNO = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+}
+_LEVELNO_METHOD = {v: k for k, v in _METHOD_LEVELNO.items()}
+
+
+def _promotion_floor() -> int | None:
+    """Return the app ``LOG_LEVEL`` (numeric) when ``DAPR_LOG_LEVEL`` is more
+    verbose than it, else ``None``.
+
+    ``DAPR_LOG_LEVEL`` is what the entrypoint hands to ``daprd --log-level``
+    (default ``warn``). When an operator sets it below the app's ``LOG_LEVEL``
+    they are asking for daprd detail the SDK logger would otherwise drop at its
+    gate, so daprd lines under the app threshold get promoted to the threshold
+    by :func:`_make_emitter`. Any parsing problem returns ``None`` (no
+    promotion), never an exception — this runs in daprd's supervisor.
+    """
+    try:
+        from application_sdk.constants import (  # noqa: PLC0415 — deferred: keep module import light; constants pulls the env
+            LOG_LEVEL,
+        )
+
+        app_levelno = logging.getLevelNamesMapping()[LOG_LEVEL.upper()]
+        dapr_method = _LEVEL_TO_METHOD.get(
+            os.environ.get("DAPR_LOG_LEVEL", "warn").strip().lower(), "info"
+        )
+        dapr_levelno = _METHOD_LEVELNO[dapr_method]
+    # conformance: ignore[E004] misconfigured level names must not take daprd down; falling back to "no promotion" preserves the pre-existing behaviour
+    except Exception:
+        return None  # conformance: ignore[E007] supervisor of daprd; the SDK logger may not be usable here, and the fallback is the previous behaviour
+    return app_levelno if dapr_levelno < app_levelno else None
 
 
 def _split_child_command(argv: list[str]) -> list[str]:
@@ -108,9 +158,18 @@ def _make_emitter() -> tuple[Any, Any]:
         # conformance: ignore[E007] returns the stderr-fallback emitter itself; the SDK logger is unavailable here, so logging this failure through it is impossible
         return _stderr_fallback, None
 
+    floor = _promotion_floor()
+
     def _emit(level: str, message: str) -> None:
         try:
-            method = getattr(logger, _LEVEL_TO_METHOD.get(level, "info"), logger.info)
+            method_name = _LEVEL_TO_METHOD.get(level, "info")
+            if floor is not None and _METHOD_LEVELNO[method_name] < floor:
+                # The operator asked daprd for this line (DAPR_LOG_LEVEL); the
+                # app's LOG_LEVEL gate must not drop it. Keep the real level in
+                # the text so nothing about daprd's own severity is lost.
+                message = f"[daprd {level}] {message}"
+                method_name = _LEVELNO_METHOD.get(floor, "info")
+            method = getattr(logger, method_name, logger.info)
             method(message)
         # conformance: ignore[E004] the SDK logger just failed while emitting this line; reporting the failure through the same logger is impossible, so we fall back to stderr
         except Exception:

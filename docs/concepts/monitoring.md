@@ -738,3 +738,9 @@ DAPR_LOG_LEVEL=warn   # forward warn + error (and above); raise to error to drop
 ```
 
 `DAPR_LOG_LEVEL` is a minimum-severity floor — `warn` captures both warnings **and** errors. It's the recommended knob for controlling daprd log volume reaching the lakehouse.
+
+Setting it **below** the app's `LOG_LEVEL` also works, and is the way to see why a Dapr API call failed — the Dapr HTTP API logs the reason for a failed output-binding invoke (upstream status code, dial/TLS error) only at `debug`. The SDK logger and its sinks are gated at `LOG_LEVEL` (`INFO` by default, and the Helm chart pins it), so the forwarder re-emits any daprd line below that gate **at** the gate level with the real daprd level folded into the text, e.g. `[INFO] ... dapr.runtime - [daprd debug] [dapr.runtime.http] error invoking output binding eventstore: ...`. A line daprd was configured to emit is therefore never dropped by the app's level:
+
+```bash
+DAPR_LOG_LEVEL=debug  # daprd debug lines surface as INFO records tagged "[daprd debug]"
+```
