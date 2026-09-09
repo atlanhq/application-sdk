@@ -23,7 +23,6 @@ permissions:
 
 env:
   PKG_NAME: app-contract-toolkit
-  PKL_VERSION: "0.27.2"
   RELEASE_LABEL: "release:contract-toolkit"
   BUMP_BRANCH: "bump-version-contract-toolkit"
 
@@ -56,9 +55,9 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
+      # No version: — install-pkl resolves the SDK pin from
+      # application_sdk/pkl_version.py, the one place it is declared.
       - uses: ./.github/actions/install-pkl
-        with:
-          version: ${{ env.PKL_VERSION }}
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:

@@ -49,8 +49,12 @@ inputs:
       the configmaps and the root YAMLs. See FND-1777.
   pkl-version:
     required: false
-    default: "0.27.2"
-    description: pkl runtime version to download. Matches the contract-toolkit-* workflows.
+    default: ""
+    description: |
+      pkl runtime version to download. EMPTY (the default) means the SDK pin in
+      application_sdk/pkl_version.py, which is also what the contract-toolkit-*
+      workflows, the freshness gate and an app's own `poe generate` use. Pass an
+      explicit value only to diverge deliberately.
   working-directory:
     required: false
     default: "."
@@ -73,11 +77,30 @@ runs:
       shell: bash
       run: echo "present=${{ hashFiles(format('{0}/{1}/app.pkl', inputs.working-directory, inputs.contract-dir)) != '' }}" >> "$GITHUB_OUTPUT"
 
+    # "Empty input means the SDK pin" is conditional logic, so it lives in the
+    # tested driver rather than in the install shell below
+    # (docs/standards/ci.md). The driver reads the SoT out of THIS action's
+    # checkout — the SDK repo — not the caller's workspace, which is the
+    # connector repo and has no application_sdk/.
+    - name: Resolve pkl version
+      id: pkl
+      if: steps.guard.outputs.present == 'true'
+      shell: bash
+      env:
+        REQUESTED: ${{ inputs.pkl-version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        version="$(python3 "${ACTION_PATH}/../../scripts/pkl_version.py" \
+          --sot "${ACTION_PATH}/../../../application_sdk/pkl_version.py" \
+          resolve --requested "$REQUESTED")"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
     - name: Install pkl
       if: steps.guard.outputs.present == 'true'
       shell: bash
       env:
-        PKL_VERSION: ${{ inputs.pkl-version }}
+        PKL_VERSION: ${{ steps.pkl.outputs.version }}
         # Chosen from `runner.arch` in the expression layer rather than from
         # `uname -m` in the shell, so there is no inlined conditional
         # (docs/standards/ci.md) — same shape as the token fallbacks elsewhere.

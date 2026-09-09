@@ -27,10 +27,27 @@ No handler overrides needed. Just commit the generated files.
 
 ## Prerequisites
 
-Install `pkl`:
+Use the **pinned** `pkl` — the one CI renders contracts with — not whatever
+`brew` last shipped:
+
 ```bash
-brew install pkl
-pkl --version   # 0.27+ recommended
+python -m application_sdk.dev.pkl print-version   # the version CI uses
+PKL="$(python -m application_sdk.dev.pkl path)"   # download + cache that build
+"$PKL" --version
+```
+
+`pkl` is a language, not just a renderer, so versions disagree about what your
+contract *means*: backslash line-continuations inside a multi-line string are
+valid from 0.28 on and a hard `Invalid character escape sequence` before it. A
+clean render on a different version is therefore not evidence the
+`Generated Artifact Freshness` gate will pass — which is the whole reason that
+gate exists (FND-1864). The pin lives in one place,
+`application_sdk/pkl_version.py`.
+
+Already have a `pkl` you like? Keep it, but check it:
+
+```bash
+python -m application_sdk.dev.pkl check   # exit 1 if it has drifted from CI
 ```
 
 ## Project Structure
