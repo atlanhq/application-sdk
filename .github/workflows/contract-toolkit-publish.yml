@@ -31,7 +31,6 @@ permissions:
 
 env:
   PKG_NAME: app-contract-toolkit
-  PKL_VERSION: "0.27.2"
   PUBLISH_DIR: contracts
 
 jobs:
@@ -48,9 +47,9 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      # No version: — install-pkl resolves the SDK pin from
+      # application_sdk/pkl_version.py, the one place it is declared.
       - uses: ./.github/actions/install-pkl
-        with:
-          version: ${{ env.PKL_VERSION }}
 
       - name: Read release version
         id: meta

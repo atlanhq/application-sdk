@@ -189,6 +189,7 @@ def render(
     harness_sdk_ref: str = "",
     e2e_test_path: str = "",
     source_available: str = "",
+    source_available_overrides: str = "",
     dataforge_datasource: str = "",
     dataforge_mode: str = "",
     dataforge_env_tier: str = "",
@@ -252,8 +253,10 @@ def render(
       ``private_git_deps``, ``git_lfs_skip_smudge``,
       ``health_check_timeout_seconds``,
       ``container_health_timeout_seconds``, ``runtime_sdk_ref``,
-      ``harness_sdk_ref``, ``e2e_test_path``, ``source_available`` and the five
-      ``dataforge_*`` values.  All default ``""`` — no line, so the reusable's
+      ``harness_sdk_ref``, ``e2e_test_path``, ``source_available``,
+      ``source_available_overrides`` (FND-1865 — the per-suite overrides of
+      the repo-wide ``source-available``) and the five ``dataforge_*``
+      values.  All default ``""`` — no line, so the reusable's
       own default applies — and the chain emits nothing at all when every one
       of them is empty, which is what keeps the no-override render
       byte-identical to the pre-FND-1143 one for the whole bootstrapped fleet.
@@ -317,6 +320,7 @@ def render(
         harness_sdk_ref=harness_sdk_ref,
         e2e_test_path=e2e_test_path,
         source_available=source_available,
+        source_available_overrides=source_available_overrides,
         dataforge_datasource=dataforge_datasource,
         dataforge_mode=dataforge_mode,
         dataforge_env_tier=dataforge_env_tier,

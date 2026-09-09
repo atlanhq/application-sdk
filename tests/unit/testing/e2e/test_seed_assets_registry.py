@@ -139,6 +139,11 @@ def _harness(
     harness.run_id = 1787587123
     harness._ae = object()
     harness.connection_qualified_name = _RUN_QN
+    # A run that submitted its DAG, which is what every test here but
+    # ``TestTeardownSkipsAConnectionThatWasNeverCreated`` is about: the submit is
+    # what makes the run's own connection exist, and therefore what teardown
+    # keys its delete off (FND-1873).
+    harness._dag_submitted = True
     harness._seeded_connection_qns = []
     harness._seeded_prefixes = []
     harness._minter = SimpleNamespace(
@@ -454,6 +459,114 @@ class TestTeardownIncludesSeededConnections:
         )
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_RUN_QN, _SEED_QN]
+
+
+class TestTeardownSkipsAConnectionThatWasNeverCreated:
+    """FND-1873: a run that created nothing has nothing to reclaim.
+
+    ``setup_method`` mints ``connection_qualified_name`` before the test body
+    runs, so it is non-empty by teardown whatever happened in between — and
+    teardown used to read that non-emptiness as "there is a connection here".
+    A suite that skipped (no z/OS subsystem wired, no source provisioned) then
+    spent an AE workflow publish, a submit and a minute of polling PURGE-ing a
+    name under which, by construction, nothing exists — on every leg of every
+    push.
+
+    The gate is what actually creates one: the Atlas create ``seed_connection``
+    issues, or a DAG submit. Both are pinned here, because a gate that also
+    skipped those would trade a wasted minute for a connection leaked onto a
+    shared tenant — and both are recorded on the way *in* to the call, which is
+    pinned through the real paths in ``test_multi_dag_runs.py`` (a submit that
+    times out) and ``test_non_publishing_entrypoint.py`` (a create that
+    committed and then failed to become searchable).
+    """
+
+    def test_a_run_that_neither_seeded_nor_submitted_deletes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness, _seeded, purged, deleted = _harness(monkeypatch)
+        harness._dag_submitted = False
+        harness.teardown_method(method=None)
+        assert harness.deleted_connections == []
+        assert harness.recorded_delete_plans == []
+        # And no runner-side purge either: the fallback exists for a delete that
+        # did not complete, not for one that was never needed.
+        assert purged == []
+        assert deleted == []
+
+    def test_a_submitted_run_still_deletes_its_own_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control for the two above, on the helper's own preset.
+
+        That the flag is set *before* the POST — so a submit that timed out,
+        which is a run executing orphaned rather than one that never happened,
+        is still reclaimed — cannot be shown here: this harness never reaches
+        ``_run_full_dag_async``. It is pinned through the real submit path in
+        ``test_multi_dag_runs.py``.
+        """
+        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness.teardown_method(method=None)
+        assert harness.deleted_connections == [_RUN_QN]
+
+    def test_an_attempted_create_is_deleted_without_any_submit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A miner suite seeds the connection it enriches in
+        ``seed_prerequisites``; if the run then fails before submitting, that
+        connection is real and still has to go.
+
+        The gate is the create *attempt*, not ``_connection_seeded`` — which
+        lands only after the searchability poll, and so is false on exactly the
+        half-set-up seed that most needs reclaiming. Driven through the real
+        seed path in ``test_non_publishing_entrypoint.py``.
+        """
+        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness._dag_submitted = False
+        harness._connection_create_attempted = True
+        harness.teardown_method(method=None)
+        assert harness.deleted_connections == [_RUN_QN]
+
+    def test_a_seeded_lineage_parent_is_still_reclaimed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``seed_assets`` publishes a second connection through a real run, so
+        it exists whether or not the suite's own DAG was ever submitted — and
+        the ordinal its teardown workflow is named from does not shift when the
+        run's own connection is skipped."""
+        harness, _seeded, _purged, deleted = _harness(monkeypatch)
+        harness.seed_assets(_spec())
+        harness._dag_submitted = False
+        harness.teardown_method(method=None)
+        assert harness.deleted_connections == [_SEED_QN]
+        assert harness.recorded_delete_plans[0].ae_workflow_name.endswith("-teardown-2")
+        assert deleted == [_SEED_KEY]
+
+    def test_the_skipped_delete_is_logged_rather_than_silent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ "Nothing to clean up" and "cleanup did not run" look identical in a
+        CI log unless one of them says so.
+
+        The module's logger is substituted rather than captured with ``caplog``:
+        the SDK's adaptor is loguru-backed and does not propagate to stdlib
+        ``logging``, so ``caplog`` would assert against an empty record list and
+        read as "the code failed to log".
+        """
+        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness._dag_submitted = False
+        messages: list[str] = []
+
+        def _record(message: str, *args: object, **_kwargs: object) -> None:
+            messages.append(message % args if args else message)
+
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e.base.logger",
+            SimpleNamespace(info=_record, warning=_record, error=_record),
+        )
+        harness.teardown_method(method=None)
+        assert any(_RUN_QN in message for message in messages)
+        assert any("no cleanup needed" in message for message in messages)
 
 
 class TestPerRunConnection:
