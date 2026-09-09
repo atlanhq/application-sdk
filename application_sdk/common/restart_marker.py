@@ -70,7 +70,7 @@ def marker_dir() -> Path:
 
 def check_and_update_the_marker() -> int:
     """Read the marker left by earlier containers in this pod, then leave one for
-    this start. Returns how many started before this one.
+    this start. Returns how many times a container has already restarted here.
 
     0 means a fresh pod, or that the volume is missing and this cannot be known.
     Anything above 0 means an earlier container here started and did not return
@@ -95,7 +95,7 @@ def check_and_update_the_marker() -> int:
         return 0
 
     path = directory / MARKER_NAME
-    previous = 0
+    restarted_count = 0
     try:
         raw = path.read_text()
     except FileNotFoundError:
@@ -108,21 +108,21 @@ def check_and_update_the_marker() -> int:
 
     if raw:
         try:
-            previous = max(0, int(json.loads(raw).get("starts", 0)))
+            restarted_count = max(0, int(json.loads(raw).get("starts", 0)))
         except (ValueError, TypeError, AttributeError):
             # Truncated or hand-edited. The file existing is the signal; only the
             # count is lost, and one is the answer that changes behaviour.
             logger.warning(
                 "%s is not readable as a marker; treating it as one start", path
             )
-            previous = 1
+            restarted_count = 1
 
     try:
         path.write_text(
             json.dumps(
                 {
                     "pod": os.getenv("K8S_POD_NAME", ""),
-                    "starts": previous + 1,
+                    "starts": restarted_count + 1,
                     "started_at": time.time(),
                 }
             )
@@ -131,7 +131,7 @@ def check_and_update_the_marker() -> int:
         # Only the next start's count is lost, not any decision taken here.
         logger.warning("could not write %s", path, exc_info=True)
 
-    return previous
+    return restarted_count
 
 
 def clear() -> None:
@@ -161,8 +161,8 @@ async def wait_if_pod_restarted(shutdown_event: asyncio.Event) -> None:
     also returns; the caller sees it on ``shutdown_event`` as it would anywhere
     else.
     """
-    previous = check_and_update_the_marker()
-    if previous == 0:
+    restarted_count = check_and_update_the_marker()
+    if restarted_count == 0:
         logger.debug("clean container start in this pod")
         return
 
@@ -170,7 +170,7 @@ async def wait_if_pod_restarted(shutdown_event: asyncio.Event) -> None:
         "this is container start %d in this pod - an earlier one did not return cleanly. "
         "A container killed for memory restarts here on the same limit, so polling now "
         "would take work back onto a pod that cannot hold it.",
-        previous + 1,
+        restarted_count + 1,
     )
 
     budget = max(0, env_int(MAX_WAIT_SECONDS_ENV, 0))
