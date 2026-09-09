@@ -230,9 +230,7 @@ def _bundle_files() -> dict[str, str]:
     # ...and one copy per entrypoint instead.
     files["app/generated/crawler/manifest.json"] = "{}\n"
     files["app/generated/crawler/_input.py"] = _BANNER + "x = 1\n"
-    files["app/generated/crawler/_e2e_base.py"] = (
-        _BANNER + "class BaseE2E:\n    pass\n"
-    )
+    files["app/generated/crawler/_e2e_base.py"] = _BANNER + "class BaseE2E:\n    pass\n"
     files["app/generated/crawler/__init__.py"] = ""
     return files
 
