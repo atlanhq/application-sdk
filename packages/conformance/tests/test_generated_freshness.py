@@ -208,6 +208,74 @@ def test_k004_suppressed_via_pkl_directive(tmp_path: Path) -> None:
     assert findings[0].suppressed
 
 
+_BUNDLE_APP_PKL = dedent("""\
+    amends "@app-contract-toolkit/App.pkl"
+
+    name = "demo"
+
+    entrypoints {
+      ["crawler"] { name = "crawler" }
+    }
+""")
+
+
+def _bundle_files() -> dict[str, str]:
+    """A conformant BUNDLE tree: generated artifacts live per-entrypoint."""
+    files = _clean_files()
+    files["contract/app.pkl"] = _BUNDLE_APP_PKL
+    # A bundle emits nothing at the single-entrypoint paths...
+    del files["app/generated/manifest.json"]
+    del files["app/generated/_input.py"]
+    del files["app/generated/_e2e_base.py"]
+    # ...and one copy per entrypoint instead.
+    files["app/generated/crawler/manifest.json"] = "{}\n"
+    files["app/generated/crawler/_input.py"] = _BANNER + "x = 1\n"
+    files["app/generated/crawler/_e2e_base.py"] = (
+        _BANNER + "class BaseE2E:\n    pass\n"
+    )
+    files["app/generated/crawler/__init__.py"] = ""
+    return files
+
+
+def test_k004_bundle_per_entrypoint_outputs_no_finding(tmp_path: Path) -> None:
+    """A bundle emits manifest.json / _input.py per-entrypoint — no K004.
+
+    Regression: K004 hard-coded the single-entrypoint ``app/generated/`` prefix, so
+    every bundle carried two permanently unsatisfiable findings whose remedy
+    ("regenerate and commit") could not resolve them.
+    """
+    assert [f for f in _scan(tmp_path, _bundle_files()) if f.rule_id == "K004"] == []
+
+
+def test_k004_bundle_missing_from_both_layouts_fires(tmp_path: Path) -> None:
+    """Accepting either layout must not stop K004 firing on an ungenerated bundle."""
+    files = _bundle_files()
+    del files["app/generated/crawler/manifest.json"]
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(findings) == 1
+    assert findings[0].file == "contract/app.pkl"
+    # The remedy names the bundle path, not the single-entrypoint one.
+    assert "app/generated/<entrypoint>/manifest.json" in findings[0].message
+
+
+def test_k004_bundle_still_requires_atlan_yaml(tmp_path: Path) -> None:
+    """``atlan.yaml`` is emitted by a bundle root too, so it stays in scope."""
+    files = _bundle_files()
+    del files["atlan.yaml"]
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(findings) == 1
+    assert "atlan.yaml" in findings[0].message
+
+
+def test_k004_single_entrypoint_message_keeps_top_level_path(tmp_path: Path) -> None:
+    """A non-bundle contract still names the single-entrypoint path in its remedy."""
+    files = _clean_files()
+    del files["app/generated/manifest.json"]
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(findings) == 1
+    assert "'app/generated/manifest.json'" in findings[0].message
+
+
 # ---------------------------------------------------------------------------
 # K005 — stripped provenance banner
 # ---------------------------------------------------------------------------

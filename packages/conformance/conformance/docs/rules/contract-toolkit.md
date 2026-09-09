@@ -209,19 +209,35 @@ is justified.
 > contract/app.pkl exists but an expected generated artifact (atlan.yaml / manifest.json / _input.py) is missing — regenerate
 
 **Rationale:** An app that defines contract/app.pkl commits the pkl eval outputs (atlan.yaml,
-app/generated/manifest.json, app/generated/_input.py) so that deployment and CI consume
-them without a pkl toolchain.  When one of those outputs is absent while the contract
-exists, the app was never generated (or the artifact was deleted): the platform reads a
-manifest that does not exist, and the app fails to deploy or register.  File existence
-is a fully deterministic check that needs no pkl (BLDX-1414).
+manifest.json, _input.py) so that deployment and CI consume them without a pkl
+toolchain.  When one of those outputs is absent while the contract exists, the app was
+never generated (or the artifact was deleted): the platform reads a manifest that does
+not exist, and the app fails to deploy or register.  File existence is a fully
+deterministic check that needs no pkl (BLDX-1414).  The two app/generated artifacts are
+resolved against BOTH layouts — the single-entrypoint app/generated/ path and a bundle's
+per-entrypoint app/generated/<entrypoint>/ path — because hard-coding the
+single-entrypoint prefix made the rule unsatisfiable on every bundle: the finding named
+a path the contract never emits, and its remedy (regenerate and commit) could not clear
+it.
 
 The app defines `contract/app.pkl` but one or more of the artifacts `pkl eval` is
 expected to produce is absent:
 
-* `atlan.yaml` * `app/generated/manifest.json` * `app/generated/_input.py`
+* `atlan.yaml` * `manifest.json` * `_input.py`
 
 These are the outputs the deployment pipeline and the SDK read at runtime; a missing one
 means the contract was never generated (or an output was deleted).
+
+**Both contract layouts satisfy this rule.**  A single-entrypoint contract emits
+`manifest.json` and `_input.py` at `app/generated/`; a contract declaring an
+`entrypoints` block (a multi-entrypoint bundle) emits one copy per entrypoint at
+`app/generated/<entrypoint>/` and nothing at the top level.  The check accepts either
+path, so a correctly generated bundle does not fire.  `atlan.yaml` stays in scope for
+both — a bundle root emits it too.
+
+Unlike K010, which exempts bundles outright, this rule checks both layouts so its
+coverage is preserved: a bundle that was never generated has no per-entrypoint copy
+either, and still fires.
 
 **Fix:** regenerate from the contract —
 

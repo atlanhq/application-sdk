@@ -12,8 +12,9 @@ What each rule catches — all **deterministic, no pkl toolchain required**:
   exact ``@<version>`` that the resolved lock ``contract/PklProject.deps.json``
   does not match (or the lock is missing / lacks the dependency).
 * **K004 MissingGeneratedArtifact** — ``contract/app.pkl`` exists but an expected
-  output (``atlan.yaml``, ``app/generated/manifest.json``,
-  ``app/generated/_input.py``) is absent — the contract was never generated.
+  output (``atlan.yaml``, ``manifest.json``, ``_input.py``) is absent — the
+  contract was never generated.  The two ``app/generated/`` artifacts are accepted
+  at either layout's path, since a bundle emits them per-entrypoint.
 * **K005 GeneratedArtifactBannerStripped** — a generated text artifact is missing
   its ``… DO NOT EDIT …`` provenance banner — a heuristic hand-edit signal.
 * **K007 ToolkitVersionOutdated** — the app's ``app-contract-toolkit`` dependency
@@ -69,10 +70,18 @@ SERIES = "K"
 
 # Repo-relative paths of the artifacts every generated app is expected to ship
 # (K004). Kept to the outputs that both single- and multi-entrypoint apps emit.
-_EXPECTED_OUTPUTS: tuple[str, ...] = (
-    "atlan.yaml",
-    "app/generated/manifest.json",
-    "app/generated/_input.py",
+# K004 — repo-root outputs every contract emits, bundle root included.
+_EXPECTED_ROOT_OUTPUTS: tuple[str, ...] = ("atlan.yaml",)
+
+# K004 — outputs that live under ``app/generated/``.  A single-entrypoint contract
+# emits them at the top level; a bundle emits one copy per entrypoint under
+# ``app/generated/<entrypoint>/`` and nothing at the top level.  Both layouts
+# satisfy the rule, so the filenames are stored bare and resolved against either
+# path (see ``_generated_output_present``) rather than hard-coded to the
+# single-entrypoint prefix — hard-coding made K004 unsatisfiable on every bundle.
+_EXPECTED_GENERATED_OUTPUTS: tuple[str, ...] = (
+    "manifest.json",
+    "_input.py",
 )
 
 # The provenance banner the contract toolkit stamps into every text artifact it
@@ -511,6 +520,30 @@ def _amends_line(text: str) -> int:
     return 1
 
 
+def _generated_output_present(root: Path, filename: str) -> bool:
+    """True when *filename* exists at either ``app/generated/`` layout's path.
+
+    A single-entrypoint contract emits ``app/generated/<filename>``; a bundle emits
+    ``app/generated/<entrypoint>/<filename>`` once per entrypoint and nothing at the
+    top level.  Mirrors ``sdr._discover_manifests``: prefer the single-entrypoint
+    path, else accept the artifact one level down under any subdirectory.
+
+    Checking both layouts rather than exempting bundles outright (K010's approach)
+    keeps the rule's coverage: a bundle that was genuinely never generated has no
+    per-entrypoint copy either, so it still fires.
+    """
+    generated = root / "app" / "generated"
+    if (generated / filename).is_file():
+        return True
+    if not generated.is_dir():
+        return False
+    return any(
+        (child / filename).is_file()
+        for child in sorted(generated.iterdir())
+        if child.is_dir()
+    )
+
+
 def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
     """K004 — flag expected generated outputs that are absent while the contract
     exists."""
@@ -525,11 +558,10 @@ def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
     directives = _parse_pkl_directives(text)
     anchor = _amends_line(text)
     rel = "contract/app.pkl"
+    is_bundle = _ENTRYPOINTS_RE.search(text) is not None
     findings: list[Finding] = []
 
-    for expected in _EXPECTED_OUTPUTS:
-        if (root / expected).is_file():
-            continue
+    def _missing(expected: str) -> None:
         suppressed, justification = _make_pkl_finding_suppressed(
             rule_id="K004", line=anchor, directives=directives
         )
@@ -550,6 +582,22 @@ def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
                 suppression_justification=justification,
             )
         )
+
+    for expected in _EXPECTED_ROOT_OUTPUTS:
+        if not (root / expected).is_file():
+            _missing(expected)
+
+    for filename in _EXPECTED_GENERATED_OUTPUTS:
+        if _generated_output_present(root, filename):
+            continue
+        # Name the path the app is actually expected to carry, so the remedy is
+        # actionable for whichever layout the contract declares.
+        _missing(
+            f"app/generated/<entrypoint>/{filename}"
+            if is_bundle
+            else f"app/generated/{filename}"
+        )
+
     return findings
 
 
