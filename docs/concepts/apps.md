@@ -625,11 +625,52 @@ that this proves nothing about the artifact being semantically what the reader e
 |---|---|---|
 | An entry point's `input` / return contract | **Required** | Public by definition — another app or the platform DAG reads it |
 | An internal `@task` contract | Optional | App-internal processing; the app decides whether it wants the check |
+| A field marked `AssetArtifact` | n/a | Already declared — by an executable model. See below |
 
 There is no special case for `run()`. The default `run()` method is registered as an *implicit*
 entry point carrying the same metadata as an explicit `@entrypoint`, so "every entry point's
 contracts" already means "every public boundary". `@task` contracts never become entry points, so
 they are exempt by construction — not by a list that could drift.
+
+#### Fields whose declaration is a model, not a field map
+
+Some artifacts cannot usefully be described by a field list, and the Atlas asset hand-off is the
+case that proves it: 500+ types and 4000+ properties with diamond inheritance, where the nested
+format omits every unset attribute, so nothing beyond pyatlan's mandatory set (`type_name`, `name`,
+`qualified_name`) is guaranteed per record. Any envelope you hand-write for one is a partial
+restatement of `Asset` — and if you pick `required` from what your connector happens to emit, you
+have encoded a connector-local observation as a cross-app boundary contract.
+
+So those fields are declared by the model instead, with the `AssetArtifact` marker:
+
+```python
+from typing import Annotated
+
+from application_sdk.contracts.types import AssetArtifact, FileReference
+
+class ExtractionOutput(Output):
+    transformed_files: Annotated[list[FileReference], AssetArtifact()] = []
+```
+
+The marker does two things at once, and neither of them is "turn the check off":
+
+* The interceptor validates a marked field against **the whole `pyatlan_v9` `Asset` backbone** —
+  every record decoded and `.validate()`d, plus the referential/orphan pass — instead of against a
+  field map. The outcome row reads `artifact_schema_source=model`.
+* The registration-time guard and conformance **K016** treat a marked field as declared, so you are
+  not asked to hand-author an envelope for it. That matters most at **v4.0**, when a missing
+  boundary declaration stops being a warning.
+
+**You almost certainly do not need to write this.** `ExtractionOutput.transformed_files` is the
+SDK's own field — declared by the SDK, populated by `SqlApp.run()`, written by
+`SqlApp._transform_entity` — so every SQL connector inherits the marker and needs no
+`artifactSchemas` entry for it. `Annotated` metadata resolves through the MRO, so your
+`MyExtractionOutput(ExtractionOutput)` is covered with no change. Mark a field of your own only when
+its bytes really are one Atlas entity per line in the nested format.
+
+A leftover `artifactSchemas` entry for a marked field is **ignored** — a field cannot have two
+declarations, and of the two the model is the stronger. Deleting the entry changes nothing at
+runtime, which is what makes it safe to remove.
 
 Declare it keyed by the **contract field name**, never by a storage path (a path-shaped key fails
 generation, by design — path-shape inference is what let an earlier upload-time hook match nothing

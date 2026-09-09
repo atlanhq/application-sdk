@@ -1,11 +1,19 @@
 """Unit tests for application_sdk.contracts.types."""
 
 from pathlib import Path
+from typing import Annotated
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from application_sdk.contracts.types import FileReference, MaxItems, StorageTier
+from application_sdk.contracts.types import (
+    AssetArtifact,
+    FileReference,
+    MaxItems,
+    StorageTier,
+    asset_artifact_fields,
+    asset_artifact_marker,
+)
 
 # =============================================================================
 # MaxItems
@@ -245,3 +253,91 @@ class TestStorageTier:
         assert StorageTier("transient") is StorageTier.TRANSIENT
         assert StorageTier("retained") is StorageTier.RETAINED
         assert StorageTier("persistent") is StorageTier.PERSISTENT
+
+
+# =============================================================================
+# AssetArtifact — the one reader both enforcement points share (FND-1863)
+# =============================================================================
+
+
+class _Marked(BaseModel):
+    transformed: Annotated[FileReference | None, AssetArtifact()] = None
+    bounded_and_marked: Annotated[
+        list[FileReference], MaxItems(10), AssetArtifact()
+    ] = []
+    plain: FileReference | None = None
+    count: int = 0
+
+
+class _Inherited(_Marked):
+    extra: int = 0
+
+
+class _NotAModel:
+    transformed = None
+
+
+class TestAssetArtifactMarker:
+    """The marker, and the single reader the guard and the interceptor share.
+
+    Two callers act on this answer and they have to act on the *same* one: a
+    field the guard exempts from hand-declaration but the interceptor does not
+    model-validate would be a boundary nothing checks at all.  These tests are
+    on the reader for that reason — there is deliberately only one.
+    """
+
+    def test_reads_the_marker_off_the_annotation(self) -> None:
+        assert isinstance(asset_artifact_marker(_Marked, "transformed"), AssetArtifact)
+
+    def test_coexists_with_other_annotated_metadata(self) -> None:
+        """``MaxItems`` and the marker sit side by side, as they do on the SDK's own field."""
+        assert asset_artifact_marker(_Marked, "bounded_and_marked") is not None
+
+    def test_an_unmarked_field_reads_as_none(self) -> None:
+        assert asset_artifact_marker(_Marked, "plain") is None
+        assert asset_artifact_marker(_Marked, "count") is None
+
+    def test_an_unknown_field_reads_as_none(self) -> None:
+        assert asset_artifact_marker(_Marked, "nope") is None
+
+    def test_no_owner_reads_as_none(self) -> None:
+        """A bare reference has no annotation, so it can carry no marker."""
+        assert asset_artifact_marker(None, "transformed") is None
+
+    def test_a_non_pydantic_class_reads_as_none(self) -> None:
+        assert asset_artifact_marker(_NotAModel, "transformed") is None
+
+    def test_a_subclass_inherits_the_marker(self) -> None:
+        """``model_fields`` resolves the MRO — this is what exempts the fleet.
+
+        Every SQL connector's output contract subclasses the SDK's, and none of
+        them marks anything of its own.
+        """
+        assert asset_artifact_marker(_Inherited, "transformed") is not None
+
+    def test_the_field_set_is_every_marked_field(self) -> None:
+        assert asset_artifact_fields(_Marked) == frozenset(
+            {"transformed", "bounded_and_marked"}
+        )
+        assert asset_artifact_fields(_Inherited) == frozenset(
+            {"transformed", "bounded_and_marked"}
+        )
+        assert asset_artifact_fields(_NotAModel) == frozenset()
+
+    def test_the_model_is_the_atlas_asset_backbone(self) -> None:
+        """The marker names its own model, so nothing else has to hardcode it."""
+        from pyatlan_v9.model.assets import Asset
+
+        assert AssetArtifact.model() is Asset
+
+    def test_the_sdks_own_transformed_files_field_is_marked(self) -> None:
+        """The fleet-wide fact this exists for, asserted on the real contract.
+
+        ``ExtractionOutput.transformed_files`` is declared by the SDK, populated
+        by ``SqlApp.run()`` and written by ``SqlApp._transform_entity``.  If this
+        marker were ever dropped, every SQL connector would be back to
+        hand-authoring an envelope for it — an error at v4.0.
+        """
+        from application_sdk.templates.contracts.sql_metadata import ExtractionOutput
+
+        assert "transformed_files" in asset_artifact_fields(ExtractionOutput)

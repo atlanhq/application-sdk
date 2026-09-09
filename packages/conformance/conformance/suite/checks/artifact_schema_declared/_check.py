@@ -9,6 +9,11 @@ A boundary artifact with no declaration is the defect this rule exists to catch
 independent beliefs, and nothing in either language's own tooling notices when
 they diverge.
 
+One field is exempt and it is not a hole: a field carrying the SDK's
+``AssetArtifact`` marker is already declared, by an executable model rather than
+by a field map, and is validated against the whole of it at runtime — see
+:func:`_is_model_declared` (FND-1863).
+
 Structure mirrors K006 (``manifest_contract``) closely, because the shape of the
 problem is the same — a committed generated artifact cross-referenced against a
 Python contract resolved through its MRO — and sharing that shape is what lets
@@ -31,7 +36,13 @@ from conformance.suite.checks._entrypoint_contract_classes import (
     EntrypointContract,
     scan_file_for_entrypoint_contracts,
 )
-from conformance.suite.checks._entrypoint_contract_fields import resolve_contract_fields
+from conformance.suite.checks._entrypoint_contract_fields import (
+    _FieldInfo,
+    resolve_contract_fields,
+)
+from conformance.suite.checks._sdk_contract_mixins import (
+    SDK_MODEL_BACKED_ARTIFACT_FIELDS,
+)
 from conformance.suite.checks.entrypoint_alignment._contract_entrypoints import (
     scan_contract as scan_contract_entrypoints,
 )
@@ -59,6 +70,44 @@ _RULE_ID = "K016"
 #: false negative on an unidiomatic import, which is the direction a WARN rule
 #: errs in — never a false positive on a field that is not an artifact.
 _FILE_REFERENCE_RE = re.compile(r"\bFileReference\b")
+
+#: Matches the SDK's ``AssetArtifact`` marker in a field's *raw* annotation.
+#:
+#: Read off the raw annotation rather than the canonical type on purpose:
+#: canonicalisation strips ``Annotated[...]``, which is exactly where the marker
+#: lives, so the canonical string can never carry it.
+_ASSET_ARTIFACT_RE = re.compile(r"\bAssetArtifact\b")
+
+
+def _is_model_declared(field: _FieldInfo) -> bool:
+    """Whether *field*'s declaration is a typed model rather than a field map.
+
+    The SDK's ``AssetArtifact`` marker (``application_sdk.contracts.types``) says
+    a ``FileReference`` field's artifact is Atlas assets the SDK itself writes,
+    so its declaration *is* ``pyatlan_v9``'s ``Asset`` and there is nothing for
+    the app to author. The SDK's registration-time guard exempts such a field and
+    its interceptor validates it against the whole model, so this rule exempts it
+    too — demanding an ``artifactSchemas`` entry here would be demanding a
+    partial restatement of a 500-type model (FND-1863).
+
+    Two cases, because a marker only survives where the annotation does:
+
+    * The app declared the field itself, so its own ``Annotated[...]`` is in the
+      AST and the marker is read straight off it. Precise: no name matching, and
+      an app marking its own asset-bearing field is exempt for free.
+    * The field is inherited (``node is None``) — from an SDK contract such as
+      ``ExtractionOutput``, whose source this scan cannot see. Nothing is left to
+      inspect, so the name is matched against
+      :data:`~conformance.suite.checks._sdk_contract_mixins.SDK_MODEL_BACKED_ARTIFACT_FIELDS`,
+      which mirrors the SDK's marked fields and is drift-tested against it.
+    """
+    if field.node is not None:
+        try:
+            annotation = ast.unparse(field.node.annotation)
+        except (AttributeError, ValueError):  # pragma: no cover — defensive
+            return False
+        return bool(_ASSET_ARTIFACT_RE.search(annotation))
+    return field.name in SDK_MODEL_BACKED_ARTIFACT_FIELDS
 
 
 def _boundary_contract_names(ep: EntrypointContract) -> list[tuple[str, str]]:
@@ -205,6 +254,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                 if not _FILE_REFERENCE_RE.search(field.canonical_type):
                     continue
                 if field.name in declared:
+                    continue
+                if _is_model_declared(field):
                     continue
                 findings.append(
                     make_finding(

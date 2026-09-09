@@ -654,3 +654,31 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("status", "OutputStatus", "active"),
     ),
 }
+
+# ── Model-declared artifact fields ────────────────────────────────────────────
+# A ``FileReference`` field can carry the SDK's ``AssetArtifact`` marker
+# (``application_sdk.contracts.types``), which says its declaration *is* an
+# executable model — ``pyatlan_v9``'s ``Asset`` — rather than a hand-authored
+# field map in ``artifactSchemas``. The SDK's registration-time guard exempts
+# such a field, and its activity interceptor validates it against the whole
+# model instead, so K016 must exempt it too: a rule demanding a declaration the
+# SDK does not want, for an artifact it already checks more strictly, would be
+# asking every app to author a partial restatement of ``Asset`` (FND-1863).
+#
+# Names, not a per-class map, and that is a deliberate accuracy trade. The
+# marker lives in ``Annotated`` metadata, which ``_canonical_type`` strips, so a
+# field *inherited* from an SDK contract arrives at the check as a bare name with
+# no annotation left to inspect — the same reason ``SDK_TEMPLATE_CONTRACT_FIELDS``
+# exists at all. A field an app declares itself is matched on its own annotation
+# instead (see ``artifact_schema_declared._check``), so the only case this set
+# answers is the inherited one, where the app has nothing of its own to mark.
+#
+# The residual false negative is an app declaring an unrelated boundary field
+# that happens to share one of these names *and* inheriting it from a base this
+# scan cannot see. K016 is a WARN-tier rule that errs toward a false negative by
+# design, and this gap is narrower than the import-alias one it already accepts.
+#
+# ``tests/test_sdk_contract_mixins.py`` rebuilds this set from an AST scan of the
+# installed SDK's contract modules, so a newly marked field cannot ship without
+# the rule learning about it.
+SDK_MODEL_BACKED_ARTIFACT_FIELDS: frozenset[str] = frozenset({"transformed_files"})

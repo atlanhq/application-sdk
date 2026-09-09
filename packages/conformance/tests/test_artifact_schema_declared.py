@@ -17,10 +17,16 @@ contract field names, shaped like the toolkit's real output.
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
+from conformance.suite.checks._entrypoint_contract_fields import _FieldInfo
+from conformance.suite.checks._sdk_contract_mixins import (
+    SDK_MODEL_BACKED_ARTIFACT_FIELDS,
+)
 from conformance.suite.checks.artifact_schema_declared import scan_all
+from conformance.suite.checks.artifact_schema_declared._check import _is_model_declared
 from conformance.suite.checks.artifact_schema_declared._declarations import (
     candidate_paths,
     read_declarations,
@@ -583,3 +589,163 @@ def test_candidate_paths_are_nested_first_and_empty_for_unplaceable_shapes(
     # multi mode needs a wire name to name the subdirectory.
     assert candidate_paths(tmp_path, "multi", None) == []
     assert candidate_paths(tmp_path, "absent", "extract-metadata") == []
+
+
+# ---------------------------------------------------------------------------
+# Model-declared fields are exempt (FND-1863)
+# ---------------------------------------------------------------------------
+
+_OWN_MARKER_APP = """
+from typing import Annotated
+
+from application_sdk.app import App
+from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import AssetArtifact, FileReference
+
+
+class ExtractInput(Input):
+    row_count: int = 0
+
+
+class ExtractOutput(Output):
+    transformed: Annotated[FileReference | None, AssetArtifact()] = None
+    residual_failures: FileReference | None = None
+
+
+class MyApp(App):
+    async def run(self, input: ExtractInput) -> ExtractOutput:
+        return ExtractOutput()
+"""
+
+
+def test_a_field_the_app_marks_itself_is_exempt(tmp_path: Path) -> None:
+    """The marker says the declaration *is* the model, so there is nothing to author.
+
+    Read off the app's own ``Annotated[...]``, which is where the marker lives —
+    the canonical type the rule matches ``FileReference`` against has it
+    stripped, so this is deliberately a second read of the raw annotation.
+    """
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+
+    findings = _run(tmp_path, {"app/main.py": _OWN_MARKER_APP})
+
+    assert _fields(findings) == {"residual_failures"}
+
+
+def test_the_predicate_reads_a_marked_annotation(tmp_path: Path) -> None:
+    """The first branch: the app's own ``Annotated[...]`` carries the marker."""
+    node = ast.parse("x: Annotated[list[FileReference], AssetArtifact()] = []").body[0]
+    assert isinstance(node, ast.AnnAssign)
+    assert _is_model_declared(
+        _FieldInfo(
+            name="x",
+            canonical_type="list[FileReference]",
+            status="active",
+            node=node,
+        )
+    )
+
+
+def test_the_predicate_reads_an_unmarked_annotation(tmp_path: Path) -> None:
+    node = ast.parse("x: list[FileReference] = []").body[0]
+    assert isinstance(node, ast.AnnAssign)
+    assert not _is_model_declared(
+        _FieldInfo(
+            name="x",
+            canonical_type="list[FileReference]",
+            status="active",
+            node=node,
+        )
+    )
+
+
+def test_the_predicate_falls_back_to_the_mirrored_name_set() -> None:
+    """The second branch: an inherited field has no annotation left to read.
+
+    This is the case the fleet actually hits — a connector's
+    ``ExtractionOutput`` subclass marks nothing of its own, and the SDK source
+    the marker lives in is not part of the scanned repo. ``node=None`` is how
+    ``resolve_contract_fields`` reports exactly that, for an in-repo base and an
+    SDK one alike.
+    """
+    inherited = _FieldInfo(
+        name="transformed_files",
+        canonical_type="list[FileReference]",
+        status="active",
+        node=None,
+    )
+    assert "transformed_files" in SDK_MODEL_BACKED_ARTIFACT_FIELDS
+    assert _is_model_declared(inherited)
+    assert not _is_model_declared(inherited._replace(name="residual_failures"))
+
+
+def test_an_inherited_model_declared_field_is_exempt_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """A boundary contract inheriting a mirrored field name reports nothing.
+
+    Uses an in-repo base rather than the SDK's ``ExtractionOutput``: the pinned
+    SDK this package tests against decides whether that class resolves any
+    fields at all, so an SDK-based fixture would pass while asserting nothing.
+    An in-repo base reaches the check the same way — ``node=None`` — and cannot
+    go quiet when the pin moves.
+    """
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    src = """
+from application_sdk.app import App
+from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import FileReference
+
+
+class ExtractInput(Input):
+    row_count: int = 0
+
+
+class TransformBase(Output):
+    transformed_files: list[FileReference] = []
+
+
+class ExtractOutput(TransformBase):
+    row_count: int = 0
+
+
+class MyApp(App):
+    async def run(self, input: ExtractInput) -> ExtractOutput:
+        return ExtractOutput()
+"""
+
+    assert _run(tmp_path, {"app/main.py": src}) == []
+
+
+def test_the_exempt_name_still_reports_when_the_app_declares_it_unmarked(
+    tmp_path: Path,
+) -> None:
+    """An app declaring the name itself, without the marker, is not exempt.
+
+    The name-based half of the exemption answers only the inherited case.  A
+    field the app writes in its own source is matched on its own annotation, so
+    borrowing an exempt name buys nothing.
+    """
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    src = """
+from application_sdk.app import App
+from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import FileReference
+
+
+class ExtractInput(Input):
+    row_count: int = 0
+
+
+class ExtractOutput(Output):
+    transformed_files: list[FileReference] = []
+
+
+class MyApp(App):
+    async def run(self, input: ExtractInput) -> ExtractOutput:
+        return ExtractOutput()
+"""
+
+    findings = _run(tmp_path, {"app/main.py": src})
+
+    assert _fields(findings) == {"transformed_files"}

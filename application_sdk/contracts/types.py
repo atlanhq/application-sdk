@@ -8,6 +8,8 @@ Key types:
 - ConnectionRef: Typed replacement for connection: dict[str, Any]
 - MaxItems: Constraint marker for bounded collections
 - BoundedList/BoundedDict: Type aliases with size bounds
+- Lazy: Marker for a FileReference field the interceptor must not auto-download
+- AssetArtifact: Marker for a FileReference field whose declaration is a typed model
 """
 
 from __future__ import annotations
@@ -218,6 +220,137 @@ class Lazy:
     """
 
     __slots__ = ()
+
+
+class AssetArtifact:
+    """Marker: this ``FileReference`` field's declaration **is** a typed model.
+
+    Use with ``Annotated`` on a ``FileReference``-bearing field whose artifact is
+    Atlas assets written by the SDK itself:
+
+        class ExtractionOutput(Output):
+            transformed_files: Annotated[
+                list[FileReference], MaxItems(1000), AssetArtifact()
+            ] = Field(default_factory=list)
+
+    An artifact declaration normally comes from the app's generated
+    ``artifact_schemas.json`` — a hand-authored field map, keyed by field name
+    (ADR-0020).  For an Atlas asset artifact that is the wrong instrument, and
+    :mod:`application_sdk.validation.sources` already says why: the asset case is
+    500+ types and 4000+ properties with diamond inheritance, so *the model
+    already is the declaration* and nothing should be authored at all.  The
+    generated envelope carries field maps only, so an app asked to declare one of
+    these fields can produce nothing better than a partial restatement of
+    ``Asset`` — strictly weaker than the check the SDK runs on the same bytes
+    elsewhere.
+
+    This marker is what tells the two readers of that declaration apart:
+
+    * :func:`~application_sdk.validation.interceptor.validate_artifacts` builds a
+      :class:`~application_sdk.validation.sources.ModelSource` for a marked field
+      instead of a
+      :class:`~application_sdk.validation.sources.ContractSource`, so the
+      hand-off is checked against the full ``pyatlan_v9`` ``Asset`` backbone.
+    * :func:`~application_sdk.app._artifact_schema_guard.warn_undeclared_artifact_schemas`
+      treats a marked field as declared, so the field it cannot usefully describe
+      is not one the app is asked to hand-write — including at v4.0, when a
+      missing boundary declaration becomes an error.
+
+    A marked field is therefore *more* strongly checked than a hand-declared one,
+    never less: the marker swaps a field map for an executable model, it never
+    turns a check off.  A ``ContractSource`` envelope that also exists for a
+    marked field is ignored at the boundary — the model wins, because it is the
+    stronger of the two and a field cannot have two declarations.
+
+    Marking is not restricted to SDK contracts: a connector whose own contract
+    field carries SDK-transformed Atlas assets can mark it and get the same
+    check.  What the marker asserts is a fact about the *bytes* — one Atlas
+    entity per line, in the nested format ``Asset.validate()`` reads.
+    """
+
+    __slots__ = ()
+
+    @staticmethod
+    def model() -> type:
+        """The typed model this field's records are validated against.
+
+        ``pyatlan_v9``'s ``Asset``, imported here rather than at module scope:
+        this module is on the import path of every contract in the SDK, and
+        ``pyatlan_v9`` must stay off the import path of an app that never
+        touches transformed assets (the same rule
+        :func:`application_sdk.app.base._warn_on_invalid_transformed_assets`
+        follows at the upload boundary).
+
+        Raises:
+            ImportError: ``pyatlan_v9`` is not installed.  Both readers treat
+                that as the SDK's own failure — a ``validator_broken`` outcome
+                that never blocks a hand-off — rather than as a finding against
+                the app.
+        """
+        from pyatlan_v9.model.assets import (  # noqa: PLC0415 — deferred: pyatlan_v9 stays off every contract's import path
+            Asset,
+        )
+
+        return Asset
+
+
+def asset_artifact_marker(contract: type | None, field: str) -> AssetArtifact | None:
+    """The :class:`AssetArtifact` marker on ``contract``'s *field*, or ``None``.
+
+    **One reader, two callers, on purpose.**  The activity interceptor and the
+    registration-time guard both act on this answer, and they have to act on the
+    *same* answer: a field the guard exempts from hand-declaration but the
+    interceptor does not model-validate is a boundary nobody checks at all.  Read
+    the same way ``Lazy`` is read in
+    :mod:`application_sdk.storage.file_ref_sync` — off the field's
+    ``Annotated`` metadata, which is where a contract records facts about a field
+    that Pydantic itself has no opinion about.
+
+    Args:
+        contract: The model class declaring *field*, or ``None`` for a bare
+            reference reached with no owning contract — which carries no
+            annotation and therefore no marker.
+        field: The field name.
+
+    Returns:
+        The marker instance, or ``None`` when the field is absent, unmarked, or
+        not a Pydantic field at all.  Never raises: this sits under two advisory
+        paths, neither of which may break a hand-off or a registration.
+    """
+    if contract is None:
+        return None
+    model_fields = getattr(contract, "model_fields", None)
+    if not isinstance(model_fields, dict):
+        return None
+    field_info = model_fields.get(field)
+    metadata = getattr(field_info, "metadata", None) or ()
+    for entry in metadata:
+        if isinstance(entry, AssetArtifact):
+            return entry
+    return None
+
+
+def asset_artifact_fields(contract: type) -> frozenset[str]:
+    """Every field on *contract* carrying the :class:`AssetArtifact` marker.
+
+    ``model_fields`` resolves the full MRO, so a field marked on an SDK base is
+    reported for every subclass that inherits it — which is what makes a
+    connector's ``MyExtractionOutput(ExtractionOutput)`` exempt without the
+    connector restating anything.
+
+    The set form exists for callers that need the whole picture rather than one
+    field: the conformance suite's static mirror of this fact is drift-tested
+    against it, so the rule that suppresses a review finding and the marker that
+    suppresses the runtime warning cannot come to disagree.
+    """
+    model_fields = getattr(contract, "model_fields", None)
+    if not isinstance(model_fields, dict):
+        return frozenset()
+    return frozenset(
+        name
+        for name in model_fields
+        if asset_artifact_marker(contract, name) is not None
+    )
 
 
 BoundedList = Annotated[list[T], MaxItems]
