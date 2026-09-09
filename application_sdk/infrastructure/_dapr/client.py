@@ -138,6 +138,42 @@ def is_dapr_transport_unavailable(exc: BaseException) -> bool:
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
 
 
+#: Upper bound on how much of a non-JSON Dapr error body is copied into a
+#: :class:`BindingError` message. Dapr's own bodies are one short JSON object;
+#: anything longer is an HTML error page from a proxy in front of the sidecar.
+_DAPR_ERROR_BODY_MAX_CHARS = 512
+
+
+def dapr_error_detail(exc: Exception) -> str | None:
+    """Best-effort extraction of the Dapr HTTP API's error body from *exc*.
+
+    Dapr answers a failed API call with a JSON body of the shape
+    ``{"errorCode": "ERR_INVOKE_OUTPUT_BINDING", "message": "error invoking
+    output binding eventstore: received status code 403"}`` — and logs that
+    same text only at *debug* level in the sidecar (``pkg/api/http/http.go``
+    in ``dapr/dapr``). The body is therefore the **only** place the real
+    cause of a binding failure is available at default log levels; httpx's
+    exception string carries just ``Server error '500 Internal Server Error'
+    for url ...``. Returns ``None`` when *exc* is not an
+    :class:`httpx.HTTPStatusError` or has an empty body; a non-JSON body is
+    returned verbatim, truncated to :data:`_DAPR_ERROR_BODY_MAX_CHARS`.
+    """
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    text = exc.response.text
+    if not text:
+        return None
+    try:
+        body = orjson.loads(text)
+    except Exception:
+        body = None
+    if isinstance(body, dict) and (body.get("errorCode") or body.get("message")):
+        code = body.get("errorCode") or "unknown"
+        message = body.get("message") or ""
+        return f"dapr errorCode={code}: {message}".rstrip(": ")
+    return text[:_DAPR_ERROR_BODY_MAX_CHARS]
+
+
 #: Dapr secrets-API JSON error body ``errorCode`` values that unambiguously
 #: mean "not ready yet" — as opposed to :data:`_ERR_SECRET_GET`, which Dapr
 #: also returns for a *genuinely missing* key. Verified against a live Dapr
@@ -472,8 +508,15 @@ class DaprBinding:
             raise
         # conformance: ignore[E004] re-raises as typed BindingError with cause chain; traceback preserved
         except Exception as e:
+            # The Dapr error body is the only place the real cause lives at
+            # default sidecar log levels; without it a customer's log shows a
+            # bare 500 with no way to tell a rejected request from a blocked one.
+            detail = dapr_error_detail(e)
+            message = f"Failed to invoke binding: {e}"
+            if detail:
+                message = f"{message} ({detail})"
             raise BindingError(
-                f"Failed to invoke binding: {e}",
+                message,
                 binding_name=self._binding_name,
                 operation=operation,
                 cause=e,
