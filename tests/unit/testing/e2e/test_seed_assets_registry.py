@@ -472,9 +472,13 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
     name under which, by construction, nothing exists — on every leg of every
     push.
 
-    The gate is what actually creates one: :meth:`seed_connection`, or a DAG
-    submit. Both are pinned here, because a gate that also skipped those would
-    trade a wasted minute for a connection leaked onto a shared tenant.
+    The gate is what actually creates one: the Atlas create ``seed_connection``
+    issues, or a DAG submit. Both are pinned here, because a gate that also
+    skipped those would trade a wasted minute for a connection leaked onto a
+    shared tenant — and both are recorded on the way *in* to the call, which is
+    pinned through the real paths in ``test_multi_dag_runs.py`` (a submit that
+    times out) and ``test_non_publishing_entrypoint.py`` (a create that
+    committed and then failed to become searchable).
     """
 
     def test_a_run_that_neither_seeded_nor_submitted_deletes_nothing(
@@ -493,22 +497,33 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
     def test_a_submitted_run_still_deletes_its_own_connection(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The submit is set *before* the POST, so a submit that timed out — a
-        run executing orphaned rather than one that never happened — still
-        gets reclaimed."""
+        """The control for the two above, on the helper's own preset.
+
+        That the flag is set *before* the POST — so a submit that timed out,
+        which is a run executing orphaned rather than one that never happened,
+        is still reclaimed — cannot be shown here: this harness never reaches
+        ``_run_full_dag_async``. It is pinned through the real submit path in
+        ``test_multi_dag_runs.py``.
+        """
         harness, _seeded, _purged, _deleted = _harness(monkeypatch)
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_RUN_QN]
 
-    def test_a_seeded_connection_is_deleted_without_any_submit(
+    def test_an_attempted_create_is_deleted_without_any_submit(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A miner suite seeds the connection it enriches in
         ``seed_prerequisites``; if the run then fails before submitting, that
-        connection is real and still has to go."""
+        connection is real and still has to go.
+
+        The gate is the create *attempt*, not ``_connection_seeded`` — which
+        lands only after the searchability poll, and so is false on exactly the
+        half-set-up seed that most needs reclaiming. Driven through the real
+        seed path in ``test_non_publishing_entrypoint.py``.
+        """
         harness, _seeded, _purged, _deleted = _harness(monkeypatch)
         harness._dag_submitted = False
-        harness._connection_seeded = True
+        harness._connection_create_attempted = True
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_RUN_QN]
 

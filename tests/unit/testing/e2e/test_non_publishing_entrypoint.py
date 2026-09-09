@@ -612,3 +612,23 @@ class TestSeededConnectionIsTornDown:
             f"seeded connection {seeded_qn} was not purged — a surviving "
             "connection breaks run isolation"
         )
+
+    def test_a_seed_whose_searchability_poll_timed_out_is_still_purged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The half-set-up left-over this class exists for, exactly.
+
+        The create committed; only the searchability poll gave up, so
+        ``seed_connection`` raised and ``_connection_seeded`` was never set.
+        The connection is nonetheless real. FND-1873's teardown gate therefore
+        keys off the create *attempt* rather than off the seed completing — a
+        gate on ``_connection_seeded`` would skip precisely this run and leak
+        the connection onto the shared tenant.
+        """
+        harness, calls = _seeding_harness(monkeypatch, connection_found=False)
+
+        with pytest.raises(SeededConnectionNotSearchableError):
+            harness.seed_connection()
+        harness.teardown_method(None)
+
+        assert calls.purged == ["default/miner-source/minted"]
