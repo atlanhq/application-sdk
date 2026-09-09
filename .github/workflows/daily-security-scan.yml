@@ -105,17 +105,22 @@ jobs:
     timeout-minutes: 20
     continue-on-error: true
     steps:
+      # Credential gate and tarball prep are the same tested script the fleet's
+      # build-and-scan.yaml uses (docs/standards/ci.md: no branching in inlined
+      # shell). This workflow runs in the SDK repo itself, so a sparse checkout
+      # of the current ref is enough -- no cross-repo pin needed.
+      - name: Fetch Endor scan prep script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts/endor_scan_prep.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Check Endor credentials
         id: creds
         env:
           ENDOR_KEY: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
-        run: |
-          if [ -z "$ENDOR_KEY" ]; then
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Endor scan skipped::ENDOR_API_CREDENTIALS_KEY is not set."
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 .github/scripts/endor_scan_prep.py credentials
 
       # Duplicates the sdk-trivy-scan composite's `target-image` default rather
       # than reading it: the composite is a docker-pull + trivy recipe and has no
@@ -125,14 +130,12 @@ jobs:
         id: image
         if: steps.creds.outputs.configured == 'true'
         env:
-          TARGET_IMAGE: registry.atlan.com/public/app-runtime-base:3
-        run: |
-          set -euo pipefail
-          docker pull --platform linux/amd64 "$TARGET_IMAGE"
-          # Explicit --platform: Docker 29 rejects `docker save` on a multi-arch
-          # reference without it, and endorctl shells out to `docker save`.
-          docker save --platform linux/amd64 -o /tmp/base-image.tar "$TARGET_IMAGE"
-          echo "ref=$TARGET_IMAGE" >> "$GITHUB_OUTPUT"
+          # The script's prebuilt path: pull + save with an explicit --platform
+          # (Docker 29 rejects `docker save` on a multi-arch reference without
+          # it, and endorctl shells out to `docker save`).
+          PREBUILT: registry.atlan.com/public/app-runtime-base:3
+          TARBALL: /tmp/base-image.tar
+        run: python3 .github/scripts/endor_scan_prep.py materialise
 
       # image-type / finding-tags travel as ENV, not as `additional_args`.
       # Verified on run 33856478534: the action ACCEPTS additional_args for a

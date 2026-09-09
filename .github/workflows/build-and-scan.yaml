@@ -338,27 +338,49 @@ jobs:
     timeout-minutes: 20
     continue-on-error: true
     steps:
+      # The two decisions this job makes -- "are Endor credentials present?" and
+      # "pull a published image, or use the tarball the build job uploaded?" --
+      # live in a tested script, not in inlined if/else (docs/standards/ci.md).
+      # This reusable runs in the CALLER's repo, whose checkout has no such
+      # script, so fetch it from the SDK at `job.workflow_sha`: the commit of
+      # THIS workflow file, at whatever ref the caller pinned. The script always
+      # matches the workflow running it, and no caller-supplied ref reaches a
+      # checkout whose payload is then executed (same pinning as
+      # tests-reusable.yaml; actionlint <=1.7.12 flags the property as unknown,
+      # see .github/actionlint.yaml). Own `path:` so it can never leave the
+      # workspace sparse for a later full checkout.
+      - name: Fetch Endor scan prep script from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/endor_scan_prep.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
       # Endor is opt-in per org secret. Without this guard every fork PR and
-      # every repo not yet licensed would show a red (if ignored) job.
+      # every repo not yet licensed would show a red (if ignored) job. The
+      # script tests presence only; the value is never printed.
       - name: Check Endor credentials
         id: creds
         env:
           ENDOR_KEY: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
-        run: |
-          if [ -z "$ENDOR_KEY" ]; then
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Endor scan skipped::ENDOR_API_CREDENTIALS_KEY is not available to this repo."
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 _sdk/.github/scripts/endor_scan_prep.py credentials
 
       # Same artifact the Trivy job consumes, so both scanners see byte-identical
       # image content and a disagreement is always the scanner, never the input.
+      # Glob + merge, not the bare name, for the reason the Trivy download above
+      # spells out: the build job's first upload is continue-on-error and its
+      # retry lands under `docker-image-retry`. With the bare name a successful
+      # retry left this job with no tarball -- and, being continue-on-error
+      # itself, it failed silently: Trivy still gated, Endor just never reported.
       - name: Download image artifact
         if: steps.creds.outputs.configured == 'true' && inputs.image == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: docker-image
+          pattern: docker-image*
+          merge-multiple: true
           path: /tmp
 
       - name: Log in to GHCR
@@ -378,25 +400,26 @@ jobs:
       # which on Docker 29 rejects a multi-arch reference without an explicit
       # platform ("both OS and Architecture must be provided"). Runners are on
       # ubuntu-24.04 / Docker API 1.48 today and unaffected, but they will move.
+      #
+      # On the PR path the build job tagged the local image `scan-target:<sha>`,
+      # which is meaningless in the Endor UI, so the script reports it under the
+      # name it will be published as (ghcr.io/atlanhq/<repo>:<sha7>) and PR
+      # scans line up with published images on one container.
+      #
+      # Every input travels through `env:` and the script reads it as data.
+      # `REF` is caller-supplied (`inputs.ref`) on a fleet reusable workflow;
+      # the previous inline form interpolated `${{ inputs.ref || github.sha }}`
+      # into the `run:` body, where a value carrying `$(...)` or a backtick
+      # executes as shell before bash ever sees the surrounding quotes.
       - name: Materialise image tarball
         id: image
         if: steps.creds.outputs.configured == 'true'
         env:
           PREBUILT: ${{ inputs.image }}
           REPO: ${{ github.event.repository.name }}
-        run: |
-          set -euo pipefail
-          if [ -n "$PREBUILT" ]; then
-            docker pull --platform linux/amd64 "$PREBUILT"
-            docker save --platform linux/amd64 -o /tmp/image.tar "$PREBUILT"
-            echo "ref=$PREBUILT" >> "$GITHUB_OUTPUT"
-          else
-            # The build job tags the local image `scan-target:<sha>`, which is
-            # meaningless in the Endor UI. Report it under the name it will be
-            # published as, so PR scans and published images line up on one
-            # container in the Containers view.
-            echo "ref=ghcr.io/atlanhq/${REPO}:$(echo "${{ inputs.ref || github.sha }}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
-          fi
+          REF: ${{ inputs.ref || github.sha }}
+          TARBALL: /tmp/image.tar
+        run: python3 _sdk/.github/scripts/endor_scan_prep.py materialise
 
       # Reachability has to RUN the image, so the daemon must hold it -- a
       # tarball alone is not enough. Gated on the input because `docker load` of
