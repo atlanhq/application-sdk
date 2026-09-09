@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from application_sdk.errors.base import (
     AppError,
     redact_secrets,
+    redact_wire_value,
     safe_traceback,
     sanitize_cause_repr,
 )
@@ -99,6 +100,7 @@ STORAGE_EMPTY_UPLOAD = ErrorCode("STR", 5)
 STORAGE_PREFLIGHT = ErrorCode("STR", 6)
 STORAGE_INTEGRITY = ErrorCode("STR", 7)
 STORAGE_RELOCATION = ErrorCode("STR", 8)
+STORAGE_HANDOFF_INCOMPLETE = ErrorCode("STR", 9)
 
 # CTR - Contract errors
 CONTRACT_VALIDATION = ErrorCode("CTR", 1)
@@ -178,6 +180,7 @@ __all__ = [
     "STORAGE_PREFLIGHT",
     "STORAGE_RELOCATION",
     "STORAGE_INTEGRITY",
+    "STORAGE_HANDOFF_INCOMPLETE",
     "CONTRACT_VALIDATION",
     "PAYLOAD_SAFETY",
     "HANDLER_ERROR",
@@ -199,6 +202,7 @@ __all__ = [
     "EVENT_BUS",
     "SEGMENT_ERROR",
     "redact_secrets",
+    "redact_wire_value",
     "safe_traceback",
     "sanitize_cause_repr",
 ]

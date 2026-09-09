@@ -16,6 +16,7 @@ from typing import ClassVar
 from application_sdk.errors import (
     STORAGE_CONFIG,
     STORAGE_EMPTY_UPLOAD,
+    STORAGE_HANDOFF_INCOMPLETE,
     STORAGE_INTEGRITY,
     STORAGE_NOT_FOUND,
     STORAGE_OPERATION,
@@ -35,6 +36,43 @@ from application_sdk.errors.leaves import (
 )
 
 
+def _init_storage_evidence(
+    err: StorageError,
+    *,
+    key: str | None = None,
+    target: str | None = None,
+    http_status: int | None = None,
+    provider_code: str | None = None,
+    error_code: ErrorCode | None = None,
+) -> None:
+    """Set the shared storage evidence fields on *err*.
+
+    Every ``Storage*`` class hand-writes its own ``__init__`` to keep the
+    positional-message signature its callers rely on, and that duplication is
+    exactly why ``service`` and ``target`` were never set on any of them: they
+    are fields of the categorical parent, so ``to_failure_details()`` emitted
+    them as ``null`` on every storage failure the SDK has ever reported.
+    Centralising the assignment means a field added here reaches every
+    subclass at once. (FND-957)
+
+    ``service`` is a constant for this whole module, matching the convention
+    :class:`~application_sdk.errors.leaves.ObjectStoreReadError` and
+    :class:`~application_sdk.errors.leaves.ObjectStoreDownloadError` already
+    use.
+
+    Note on ``target``: pass a store-and-key identity such as
+    ``gs://bucket/prefix/key``, never a raw request URL. ``redact_secrets``
+    strips ``X-Goog-Credential=`` but not ``X-Goog-Signature=``, so a signed
+    URL placed here would put bearer-equivalent material on the wire.
+    """
+    err.service = "object_store"
+    err.target = target
+    err.key = key
+    err.http_status = http_status
+    err.provider_code = provider_code
+    err._error_code = error_code
+
+
 @dataclass(kw_only=True)
 class StorageError(DependencyUnavailableError):
     """Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
@@ -43,6 +81,12 @@ class StorageError(DependencyUnavailableError):
     """
 
     key: str | None = None
+    # The backend's own verdict, parsed from the driver error by
+    # ``storage.ops._obstore_http_evidence``. Before FND-957 the status existed
+    # only inside the free-text cause, so no consumer could branch on it —
+    # and the cause was usually truncated before it arrived.
+    http_status: int | None = None
+    provider_code: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE"
@@ -55,10 +99,19 @@ class StorageError(DependencyUnavailableError):
         key: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
     ) -> None:
         DependencyUnavailableError.__init__(self, message=message, cause=cause)
-        self.key = key
-        self._error_code = error_code
+        _init_storage_evidence(
+            self,
+            key=key,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+            error_code=error_code,
+        )
 
     @property
     def error_code(self) -> ErrorCode:
@@ -72,6 +125,10 @@ class StorageError(DependencyUnavailableError):
         parts = [f"[{self.error_code.code}] {self.message}"]
         if self.key:
             parts.append(f"key={self.key}")
+        if self.http_status:
+            parts.append(f"http_status={self.http_status}")
+        if self.provider_code:
+            parts.append(f"provider_code={self.provider_code}")
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
@@ -102,8 +159,19 @@ class StorageBucketRelocationError(StorageError):
         key: str | None = None,
         cause: Exception | None = None,
         suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
     ) -> None:
-        StorageError.__init__(self, message, key=key, cause=cause)
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
         self.suggested_action = suggested_action
 
 
@@ -127,10 +195,19 @@ class StorageNotFoundError(NotFoundError, StorageError):
         key: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
     ) -> None:
         NotFoundError.__init__(self, message=message, cause=cause)
-        self.key = key
-        self._error_code = error_code
+        _init_storage_evidence(
+            self,
+            key=key,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+            error_code=error_code,
+        )
 
     @property
     def error_code(self) -> ErrorCode:
@@ -144,6 +221,10 @@ class StorageNotFoundError(NotFoundError, StorageError):
         parts = [f"[{self.error_code.code}] {self.message}"]
         if self.key:
             parts.append(f"key={self.key}")
+        if self.http_status:
+            parts.append(f"http_status={self.http_status}")
+        if self.provider_code:
+            parts.append(f"provider_code={self.provider_code}")
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
@@ -169,10 +250,19 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
         key: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
     ) -> None:
         AppPermissionDeniedError.__init__(self, message=message, cause=cause)
-        self.key = key
-        self._error_code = error_code
+        _init_storage_evidence(
+            self,
+            key=key,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+            error_code=error_code,
+        )
 
     @property
     def error_code(self) -> ErrorCode:
@@ -186,6 +276,10 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
         parts = [f"[{self.error_code.code}] {self.message}"]
         if self.key:
             parts.append(f"key={self.key}")
+        if self.http_status:
+            parts.append(f"http_status={self.http_status}")
+        if self.provider_code:
+            parts.append(f"provider_code={self.provider_code}")
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
@@ -211,10 +305,19 @@ class StorageConfigError(InvalidInputError, StorageError):
         key: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
     ) -> None:
         InvalidInputError.__init__(self, message=message, cause=cause)
-        self.key = key
-        self._error_code = error_code
+        _init_storage_evidence(
+            self,
+            key=key,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+            error_code=error_code,
+        )
 
     @property
     def error_code(self) -> ErrorCode:
@@ -228,6 +331,10 @@ class StorageConfigError(InvalidInputError, StorageError):
         parts = [f"[{self.error_code.code}] {self.message}"]
         if self.key:
             parts.append(f"key={self.key}")
+        if self.http_status:
+            parts.append(f"http_status={self.http_status}")
+        if self.provider_code:
+            parts.append(f"provider_code={self.provider_code}")
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
@@ -359,7 +466,7 @@ class StorageEmptyUploadError(DataIntegrityError, StorageError):
     ) -> None:
         DataIntegrityError.__init__(self, message=message, cause=cause)
         self.local_path = local_path
-        self._error_code = error_code
+        _init_storage_evidence(self, error_code=error_code)
 
     @property
     def error_code(self) -> ErrorCode:
@@ -440,10 +547,9 @@ class StorageIntegrityError(DataIntegrityError, StorageError):
             observed=observed,
             location=key,
         )
-        self.key = key
         self.local_path = local_path
         self.check = check
-        self._error_code = error_code
+        _init_storage_evidence(self, key=key, error_code=error_code)
 
     @property
     def error_code(self) -> ErrorCode:
@@ -509,4 +615,158 @@ class ObjectStorePreflightError(StorageError):
     def __str__(self) -> str:
         # The message already contains the full per-store report with newlines;
         # prepend the error code prefix for structured-log searchability.
+        return f"[{self.error_code.code}] {self.message}"
+
+
+@dataclass(kw_only=True)
+class StorageHandoffIncompleteError(DataIntegrityError, StorageError):
+    """A producer's declared outputs are not all present in the store (FND-1790).
+
+    Raised by :meth:`~application_sdk.app.base.App.verify_refs` when the
+    ``FileReference`` list a step declared does not check out against the
+    store: an object is missing, or it resolves outside the prefix the
+    step is about to hand downstream.
+
+    Why this is fatal rather than a warning: the prefix is what the next
+    stage walks, and a walk cannot tell a short tree from a small one.
+    Publishing a short ``transformed/`` tree does not fail — it diffs the
+    tenant against a subset and archives everything the walk missed. The
+    only place the shortfall is still visible is here, against the
+    producer's own declaration, so this is where the run has to stop.
+
+    Non-retryable: the objects were either written or they were not, and
+    a re-check finds the same store state. Re-running the *producing*
+    step is the remediation.
+
+    Categorical parent is ``DataIntegrityError`` (category=DATA_INTEGRITY,
+    audience=APP_OWNER, retryable=False); domain parent is ``StorageError``
+    so ``except StorageError:`` catch blocks still fire.
+
+    Attributes:
+        missing_keys: Declared keys with no object behind them in the
+            store.  A ref that carried no ``storage_path`` at all appears
+            here as ``"<no storage_path>"``.
+        outside_prefix_keys: Declared keys that exist but sit outside
+            *prefix*, so a consumer walking *prefix* would never reach
+            them.
+        prefix: The prefix the refs were checked against.
+        declared_count: How many refs the producer declared.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_HANDOFF_INCOMPLETE
+    code: ClassVar[str] = "DATA_INTEGRITY_STORAGE_HANDOFF_INCOMPLETE"
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+    missing_keys: list[str] | None = None
+    outside_prefix_keys: list[str] | None = None
+    declared_count: int = 0
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        missing_keys: list[str] | None = None,
+        outside_prefix_keys: list[str] | None = None,
+        prefix: str | None = None,
+        declared_count: int = 0,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        DataIntegrityError.__init__(
+            self,
+            message=message,
+            cause=cause,
+            expectation=f"{declared_count} declared object(s) present under {prefix or '<any prefix>'}",
+            observed=(
+                f"{len(missing_keys or [])} missing, "
+                f"{len(outside_prefix_keys or [])} outside prefix"
+            ),
+            location=prefix,
+        )
+        self.missing_keys = missing_keys or []
+        self.outside_prefix_keys = outside_prefix_keys or []
+        self.declared_count = declared_count
+        _init_storage_evidence(self, key=prefix, error_code=error_code)
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return (
+            self._error_code
+            if self._error_code is not None
+            else self.DEFAULT_ERROR_CODE
+        )
+
+    def __str__(self) -> str:
+        parts = [f"[{self.error_code.code}] {self.message}"]
+        if self.missing_keys:
+            parts.append(f"missing={self.missing_keys}")
+        if self.outside_prefix_keys:
+            parts.append(f"outside_prefix={self.outside_prefix_keys}")
+        if self.cause:
+            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+        return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
+class UnplaceableDeclaredFileError(InvalidInputError, StorageError):
+    """``upload_refs`` cannot work out where a declared file belongs (FND-1790).
+
+    The entry carries no ``label`` and its ``storage_path`` does not sit under
+    the ``source_prefix`` given, so there is nothing to name it by at the
+    destination.
+
+    ``InvalidInputError`` defaults to ``USER`` because bad input usually comes
+    from whoever supplied it. Here it does not: the declaration is assembled by
+    connector code, never by an end user, so this leaf picks ``APP_OWNER`` as
+    the base class docstring instructs. Nothing a customer can change fixes it.
+
+    Deliberately an error rather than a fallback. A rule that recovers the
+    entity segment from a four-ref declaration and drops it from a one-ref one
+    would deliver a differently-shaped tree on exactly the small runs nobody
+    inspects — the same class of silent reshaping ``upload_refs`` exists to
+    stop.
+
+    Attributes:
+        storage_path: The declared ref's key.
+        source_prefix: The prefix it was checked against.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
+    code: ClassVar[str] = "INVALID_INPUT_UNPLACEABLE_DECLARED_FILE"
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+    storage_path: str | None = None
+    source_prefix: str | None = None
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        storage_path: str | None = None,
+        source_prefix: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        InvalidInputError.__init__(
+            self,
+            message=message,
+            cause=cause,
+            field="files",
+            constraint="DeclaredFile.label or a matching UploadRefsInput.source_prefix",
+        )
+        self.storage_path = storage_path
+        self.source_prefix = source_prefix
+        _init_storage_evidence(self, key=storage_path, error_code=error_code)
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return (
+            self._error_code
+            if self._error_code is not None
+            else self.DEFAULT_ERROR_CODE
+        )
+
+    def __str__(self) -> str:
         return f"[{self.error_code.code}] {self.message}"

@@ -25,6 +25,7 @@ from application_sdk.execution.heartbeat import (
     NoopHeartbeatController,
     TemporalHeartbeatController,
     auto_heartbeat_loop,
+    stop_heartbeat_task,
 )
 from application_sdk.execution.progress import ProgressWatchdogMode
 
@@ -950,3 +951,50 @@ class TestStallWatchdogWiring:
             assert not stalls.calls, f"budget={bad_budget} enforced a stall"
             assert not run.stall_infos and not run.recorded
             assert run.beats == 3
+
+
+class TestStopHeartbeatTask:
+    """The shared shutdown: contain the task's own death, never the caller's."""
+
+    async def test_obedient_task_stops_gracefully(self) -> None:
+        stop = asyncio.Event()
+
+        async def obedient() -> None:
+            await stop.wait()
+
+        task = asyncio.ensure_future(obedient())
+        await stop_heartbeat_task(task, stop, "obedient")
+        assert task.done() and not task.cancelled()
+
+    async def test_stuck_task_is_cancelled_without_escaping(self) -> None:
+        stop = asyncio.Event()
+
+        async def stuck() -> None:
+            await asyncio.sleep(60)
+
+        task = asyncio.ensure_future(stuck())
+        await stop_heartbeat_task(task, stop, "stuck")
+        assert task.cancelled()
+
+    async def test_outer_cancellation_is_not_swallowed(self) -> None:
+        # A cancellation aimed at the CALLER while it waits here must
+        # propagate — swallowing it would make a cancelled activity report
+        # completion. The heartbeat task's own CancelledError (the other
+        # tests) must still be contained.
+        stop = asyncio.Event()
+
+        async def stuck() -> None:
+            await asyncio.sleep(60)
+
+        heartbeat = asyncio.ensure_future(stuck())
+
+        async def caller() -> str:
+            await stop_heartbeat_task(heartbeat, stop, "stuck")
+            return "completed"
+
+        caller_task = asyncio.ensure_future(caller())
+        await asyncio.sleep(0.05)
+        caller_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller_task
+        assert heartbeat.cancelled()

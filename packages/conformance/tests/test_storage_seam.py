@@ -108,6 +108,35 @@ def test_p008_fires_on_download_inside_task() -> None:
     assert fs[0].line == 3
 
 
+def test_p008_fires_on_upload_refs_inside_task() -> None:
+    """``App.upload_refs`` is a framework ``@task`` too, so nesting it nests one.
+
+    It is decorated ``@task`` and loops the same ``_upload_impl`` body
+    ``App.upload`` uses — the SDK exposes ``_upload_impl`` / ``_verify_refs_impl``
+    precisely because a task cannot call a task.  Covering ``upload`` but not
+    ``upload_refs`` would have let the wrong-location shape back in for every
+    app that migrates to the declaration hand-off.
+    """
+    src = (
+        "@task\n"
+        "async def transform(self, inp):\n"
+        "    delivered = await self.upload_refs(inp.declaration)\n"
+    )
+    fs = _rule(src, "P008")
+    assert len(fs) == 1
+    assert fs[0].line == 3
+    assert "upload_refs" in fs[0].message
+
+
+def test_p008_silent_when_upload_refs_called_from_run() -> None:
+    """The declaration hand-off belongs in ``run()`` — that location is correct."""
+    src = (
+        "async def run(self, inp):\n"
+        "    delivered = await self.upload_refs(inp.declaration)\n"
+    )
+    assert _rule(src, "P008") == []
+
+
 def test_p008_fires_on_attribute_task_decorator() -> None:
     # @app.task(...) form — attribute access on task
     src = (

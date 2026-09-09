@@ -12,7 +12,9 @@ the actual write-phase helpers (``_bootstrap_file``, the self-guard, and the
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import sys
 import tomllib
 from collections.abc import Callable
 
@@ -27,8 +29,10 @@ from conformance.bootstrap.extract import (
 )
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
+    MANAGED_CONNECTOR_REVIEW_FILES,
     MANAGED_WORKFLOWS,
-    RETIRED_WORKFLOWS,
+    RETIRED_CONNECTOR_REVIEW_FILES,
+    RETIRED_FILES,
     render,
 )
 
@@ -45,7 +49,9 @@ _TOUCHED_STATUSES = frozenset(
 )
 
 
-def _bootstrap_file(dest: pathlib.Path, content: str) -> str:
+def _bootstrap_file(
+    dest: pathlib.Path, content: str, *, executable: bool = False
+) -> str:
     """Write *content* to *dest*, creating parent directories as needed.
 
     Always-overwrite-managed — bootstrap owns these files and re-running is
@@ -64,19 +70,26 @@ def _bootstrap_file(dest: pathlib.Path, content: str) -> str:
     to fold into the ``--json`` touched-files manifest without a caller
     having to re-derive it from stdout text.
     """
+    expected_mode = 0o755
     if dest.exists():
         try:
             unchanged = dest.read_text(encoding="utf-8") == content
         except (OSError, UnicodeDecodeError):
             unchanged = False
-        if unchanged:
+        mode_matches = not executable or (dest.stat().st_mode & 0o777) == expected_mode
+        if unchanged and mode_matches:
             print(f"ok (up to date): {dest}")
             return "unchanged"
-        dest.write_text(content, encoding="utf-8")
+        if not unchanged:
+            dest.write_text(content, encoding="utf-8")
+        if executable:
+            os.chmod(dest, expected_mode)
         print(f"updated: {dest}")
         return "updated"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
+    if executable:
+        os.chmod(dest, expected_mode)
     print(f"installed: {dest}")
     return "installed"
 
@@ -97,7 +110,7 @@ def _retire_file(dest: pathlib.Path) -> str:
     if not dest.exists():
         return "absent"
     dest.unlink()
-    print(f"removed: {dest}  (retired workflow — no longer managed)")
+    print(f"removed: {dest}  (retired managed file)")
     return "removed"
 
 
@@ -390,6 +403,191 @@ def _sync_gitignore(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
     return [(gitignore_dest, "exists")]
 
 
+_CONNECTOR_REVIEW_BEGIN = "<!-- BEGIN APPLICATION SDK CONNECTOR REVIEW -->"
+_CONNECTOR_REVIEW_END = "<!-- END APPLICATION SDK CONNECTOR REVIEW -->"
+
+
+class ConnectorReviewMergeError(ValueError):
+    """A connector-review config cannot be safely merged."""
+
+    def __init__(self, dest: pathlib.Path, reason: str) -> None:
+        super().__init__(f"cannot safely merge {dest}: {reason}")
+
+
+_RETIRED_CONNECTOR_REVIEW_HOOK_COMMANDS = frozenset(
+    {
+        ".claude/hooks/check-review-before-commit.sh",
+        ".claude/hooks/review-rules-freshness.sh",
+    }
+)
+_CONNECTOR_REVIEW_REMINDER_COMMAND = ".claude/hooks/connector-review-reminder.sh"
+_KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK = """\
+## Mandatory pre-commit review (L1–L4)
+
+Before ANY `git commit`, the current changes MUST pass the `connector-review`
+skill: the L1 conformance suite plus every applicable L2/L3/L4 review rule.
+A PreToolUse hook blocks unreviewed commits; editing after a review invalidates
+it, so re-review after fixes.
+
+- L2/L4 rules: fetched from `atlanhq/application-sdk@main` into
+  `.mothership/.cache/review-rulesets/` by `scripts/fetch-review-rules.sh`.
+- L3 rules: `.mothership/review-rulesets/connector-app/` (this repo).
+- Never restate rule text in this file or in prompts — the rule files are the
+  only authority. If a rule seems wrong, change it in its source repo.
+- Local review is fast feedback. The PR-label CI review remains authoritative.
+- Emergency bypass (humans only, discouraged): `SKIP_CONNECTOR_REVIEW=1`.
+"""
+
+
+def _is_retired_connector_review_hook(command: object) -> bool:
+    """Match the old fixed hook paths, including project-directory prefixes."""
+    return isinstance(command, str) and any(
+        command == path or command.endswith(f"/{path}")
+        for path in _RETIRED_CONNECTOR_REVIEW_HOOK_COMMANDS
+    )
+
+
+def _merge_connector_review_settings(dest: pathlib.Path) -> str | None:
+    """Replace retired kit hooks with one non-blocking reminder."""
+    if not dest.exists():
+        settings: dict[str, object] = {}
+        original = ""
+    else:
+        try:
+            original = dest.read_text(encoding="utf-8")
+            loaded = json.loads(original)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ConnectorReviewMergeError(dest, str(error)) from error
+        if not isinstance(loaded, dict):
+            raise ConnectorReviewMergeError(dest, "root must be a JSON object")
+        settings = loaded
+
+    hooks = settings.get("hooks")
+    if hooks is None:
+        hooks = {}
+        settings["hooks"] = hooks
+    if not isinstance(hooks, dict):
+        raise ConnectorReviewMergeError(dest, "'hooks' must be a JSON object")
+    changed = False
+    for event, entries in hooks.items():
+        if not isinstance(entries, list):
+            raise ConnectorReviewMergeError(dest, f"hooks.{event} must be an array")
+        retained = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                retained.append(entry)
+                continue
+            entry_hooks = entry["hooks"]
+            kept_hooks = [
+                hook
+                for hook in entry_hooks
+                if not (
+                    isinstance(hook, dict)
+                    and _is_retired_connector_review_hook(hook.get("command"))
+                )
+            ]
+            if len(kept_hooks) == len(entry_hooks):
+                retained.append(entry)
+            elif kept_hooks:
+                retained.append({**entry, "hooks": kept_hooks})
+                changed = True
+            else:
+                changed = True
+        if retained != entries:
+            hooks[event] = retained
+    reminder_entries = hooks.setdefault("SessionStart", [])
+    if not isinstance(reminder_entries, list):
+        raise ConnectorReviewMergeError(dest, "hooks.SessionStart must be an array")
+    if not any(
+        isinstance(entry, dict)
+        and any(
+            isinstance(hook, dict)
+            and hook.get("command") == _CONNECTOR_REVIEW_REMINDER_COMMAND
+            for hook in entry.get("hooks", [])
+            if isinstance(entry.get("hooks"), list)
+        )
+        for entry in reminder_entries
+    ):
+        reminder_entries.append(
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": _CONNECTOR_REVIEW_REMINDER_COMMAND,
+                        "timeout": 10,
+                    }
+                ]
+            }
+        )
+        changed = True
+    return json.dumps(settings, indent=2) + "\n" if changed else original
+
+
+def _merge_connector_review_claude(dest: pathlib.Path) -> str:
+    """Return CLAUDE.md with one replaceable, centrally-owned review block."""
+    block = render("connector-review-claude.md")
+    if not dest.exists():
+        return block
+    try:
+        text = dest.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ConnectorReviewMergeError(dest, str(error)) from error
+
+    begin = text.find(_CONNECTOR_REVIEW_BEGIN)
+    end = text.find(_CONNECTOR_REVIEW_END)
+    if begin == -1 and end == -1:
+        if "## Mandatory pre-commit review" in text:
+            legacy_begin = text.index("## Mandatory pre-commit review")
+            if (
+                text[legacy_begin:].rstrip()
+                != _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK.rstrip()
+            ):
+                raise ConnectorReviewMergeError(
+                    dest, "unmarked connector-review block; migrate it manually first"
+                )
+            return f"{text[:legacy_begin].rstrip()}\n\n{block}"
+        return f"{text.rstrip()}\n\n{block}"
+    if begin == -1 or end == -1 or end < begin:
+        raise ConnectorReviewMergeError(dest, "malformed managed review block")
+    end += len(_CONNECTOR_REVIEW_END)
+    return f"{text[:begin]}{block.rstrip()}\n{text[end:].lstrip()}"
+
+
+def _sync_connector_review_kit(
+    root: pathlib.Path, settings: str | None, claude: str
+) -> list[tuple[pathlib.Path, str]]:
+    """Write the review kit after its merge targets were preflighted."""
+    changes: list[tuple[pathlib.Path, str]] = []
+    for dest_rel, template_name, executable in MANAGED_CONNECTOR_REVIEW_FILES:
+        dest = root / dest_rel
+        changes.append(
+            (dest, _bootstrap_file(dest, render(template_name), executable=executable))
+        )
+
+    for dest_rel in RETIRED_CONNECTOR_REVIEW_FILES:
+        dest = root / dest_rel
+        if _retire_file(dest) == "removed":
+            changes.append((dest, "removed"))
+
+    if settings is not None:
+        settings_dest = root / ".claude" / "settings.json"
+        changes.append((settings_dest, _bootstrap_file(settings_dest, settings)))
+
+    claude_dest = root / "CLAUDE.md"
+    changes.append((claude_dest, _bootstrap_file(claude_dest, claude)))
+
+    gitignore_dest = root / ".gitignore"
+    ignore_line = ".mothership/.cache/"
+    text = gitignore_dest.read_text(encoding="utf-8") if gitignore_dest.exists() else ""
+    if ignore_line in text.splitlines():
+        print(f"ok (exists): {gitignore_dest}  (connector-review cache ignored)")
+        changes.append((gitignore_dest, "exists"))
+    else:
+        updated = f"{text.rstrip()}\n{ignore_line}\n" if text else f"{ignore_line}\n"
+        changes.append((gitignore_dest, _bootstrap_file(gitignore_dest, updated)))
+    return changes
+
+
 def _sync_contract_ledger(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
     """contract_schema.lock.json — write-if-absent scaffold.
 
@@ -473,7 +671,44 @@ def main(argv: list[str]) -> int:
     # a write-mode toggle, not a template variable, and render() takes an exact
     # keyword set.
     resync = kwargs.pop("resync") == "true"
+    # --resync is "pull forward everything bootstrap owns that a bare re-run
+    # leaves alone", and the review kit is exactly that: centrally owned, and
+    # merged rather than clobbered, so it belongs to the same catch-up. The
+    # flag stays meaningful on its own for a repo adopting the kit without
+    # resyncing its scaffolds, and which of the two happened decides how an
+    # unmergeable target is reported below.
+    kit_requested = kwargs.pop("connector_review_kit") == "true"
+    connector_review_kit = kit_requested or resync
     apply_bootstrap_autodetection(kwargs, root)
+
+    # Validate shared config before bootstrap writes anything. The kit must
+    # never overwrite a hand-maintained review block or a malformed settings
+    # file during a fleet rollout.
+    connector_review_settings: str | None = None
+    connector_review_claude = ""
+    if connector_review_kit:
+        try:
+            connector_review_settings = _merge_connector_review_settings(
+                root / ".claude" / "settings.json"
+            )
+            connector_review_claude = _merge_connector_review_claude(root / "CLAUDE.md")
+        except ConnectorReviewMergeError as error:
+            # Asked for by name: the whole invocation was about the kit, so
+            # fail loudly and write nothing.
+            if kit_requested:
+                print(f"error: {error}", file=sys.stderr)
+                return 2
+            # Implied by --resync: the kit is one target among several
+            # independent ones, so skip it the way a scaffold whose values
+            # can't be read back is skipped (see _resync_scaffold) and let the
+            # rest of the resync land. Otherwise one hand-edited CLAUDE.md
+            # would block a repo's tests.yaml/renovate.json catch-up too.
+            print(
+                f"skipped: {error}; the connector review kit was left untouched"
+                " (migrate the block by hand, then re-run with"
+                " --connector-review-kit)"
+            )
+            connector_review_kit = False
 
     # Resolve the two 0-touch levers, each independently expressible:
     #
@@ -523,8 +758,8 @@ def main(argv: list[str]) -> int:
     # Only an actual deletion is recorded: a repo that never had the file (or
     # already dropped it) has no such path, and listing it under `unchanged`
     # would put a file that does not and will not exist into the manifest.
-    for name in RETIRED_WORKFLOWS:
-        dest = root / ".github" / "workflows" / name
+    for dest_rel in RETIRED_FILES:
+        dest = root / dest_rel
         if _retire_file(dest) == "removed":
             _record(dest, "removed")
 
@@ -547,6 +782,11 @@ def main(argv: list[str]) -> int:
         _record(path, status)
     for path, status in _sync_contract_ledger(root):
         _record(path, status)
+    if connector_review_kit:
+        for path, status in _sync_connector_review_kit(
+            root, connector_review_settings, connector_review_claude
+        ):
+            _record(path, status)
 
     if emit_json:
         print(

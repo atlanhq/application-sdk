@@ -1,4 +1,4 @@
-"""The three AE write endpoints, and the parsers that keep them forward-compatible.
+"""The AE write endpoints, and the parsers that keep them forward-compatible.
 
 These paths existed before FND-242 but were never counted: they lived in
 ``testing/e2e/client.py``, which coverage omits because it only runs against a
@@ -22,18 +22,22 @@ import pytest
 
 from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.automation_engine._errors import (
+    AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
     AtlanApiTimeoutError,
+    RequestDelivery,
 )
 from application_sdk.testing.harness.automation_engine.client import AEClient
 from application_sdk.testing.harness.automation_engine.retry import (
+    RunLookup,
     parse_run_timestamp,
     rotate_submit_credential_name,
 )
 from application_sdk.testing.harness.automation_engine.wire import (
     DAGNodeStatus,
     DAGRunStatus,
+    PublishedVersion,
     safe_int,
     safe_node_status,
     safe_run_status,
@@ -389,3 +393,165 @@ class TestDefensiveParsers:
             {"payload": [{"body": {}}]},
         ):
             rotate_submit_credential_name(body)  # type: ignore[arg-type]
+
+
+class TestSubmitPublishedVersion:
+    """The AE-native submit: our graph, or a named refusal — never an app's."""
+
+    async def test_it_posts_to_aes_own_route_with_no_envelope(self) -> None:
+        """The whole point of this endpoint. A Heracles submit carries an
+        envelope naming an app, and Heracles re-derives the graph from that
+        app's manifest and publishes it over ours; there is nothing here to
+        name an app with (FND-1766)."""
+        client = _client()
+        with patch.object(
+            client, "_request", return_value=(200, {"data": {"guid": "run-9"}})
+        ) as req:
+            assert await client.submit_published_version("slug-1") == "run-9"
+        (method, path), kwargs = req.call_args
+        assert method == "POST"
+        assert path == "/automation/api/v1/workflows/slug-1/submit"
+        assert kwargs["body"] == {"is_test_run": False}
+
+    async def test_the_slug_is_percent_encoded(self) -> None:
+        """A slug is AE-minted, but it reaches this call as a string and a
+        stray ``/`` would silently address a different route."""
+        client = _client()
+        with patch.object(
+            client, "_request", return_value=(200, {"data": {"guid": "r"}})
+        ) as req:
+            await client.submit_published_version("a/b?c")
+        assert req.call_args[0][1] == ("/automation/api/v1/workflows/a%2Fb%3Fc/submit")
+
+    async def test_it_never_submits_a_test_run(self) -> None:
+        """``is_test_run`` is a different thing: AE triggers it as
+        ``TriggeredBy.TEST`` and writes the workflow to the StateStore eagerly.
+        A harness run must never accidentally be one."""
+        client = _client()
+        with patch.object(
+            client, "_request", return_value=(200, {"data": {"guid": "r"}})
+        ) as req:
+            await client.submit_published_version("s")
+        assert req.call_args[1]["body"]["is_test_run"] is False
+
+    async def test_a_404_is_retried_because_the_publish_may_not_have_replicated(
+        self,
+    ) -> None:
+        """AE resolves the published version *at submit time*, and a version
+        published seconds earlier answers 404 until it replicates — the same
+        lag Heracles' own AE client budgets for on this endpoint."""
+        client = _client()
+        answers = [
+            (404, {"error": "no published version"}),
+            (200, {"data": {"guid": "run-late"}}),
+        ]
+        with (
+            patch.object(client, "_request", side_effect=answers),
+            patch(_SLEEP),
+        ):
+            assert await client.submit_published_version("s") == "run-late"
+
+    async def test_an_exhausted_404_says_nothing_was_published(self) -> None:
+        """The two causes are "the caller published nothing" and "the publish
+        never replicated", and a bare HTTP 404 names neither."""
+        client = _client()
+        with (
+            patch.object(client, "_request", return_value=(404, {"error": "nope"})),
+            patch(_SLEEP),
+            pytest.raises(AtlanApiHttpError) as caught,
+        ):
+            await client.submit_published_version("s", retries=1)
+        assert "no published version for slug s" in str(caught.value)
+
+    async def test_an_already_active_run_is_terminal(self) -> None:
+        """A retry would spawn a duplicate AE marks ``Skipped`` and returns
+        under a fresh id, so the harness would poll a phantom."""
+        client = _client()
+        body = {"error": "AE-WF-409-03 run already active"}
+        with (
+            patch.object(client, "_request", return_value=(409, body)) as req,
+            patch(_SLEEP),
+            pytest.raises(AtlanAEWorkflowAlreadyActiveError),
+        ):
+            await client.submit_published_version("s")
+        assert req.call_count == 1
+
+    async def test_a_2xx_without_a_guid_is_an_invariant_failure(self) -> None:
+        """AE answered, and the answer was unusable. Naming it here stops it
+        surfacing as a poll against the empty string."""
+        client = _client()
+        with (
+            patch.object(client, "_request", return_value=(200, {"data": {}})),
+            pytest.raises(AtlanApiResponseInvariantError, match="no run guid"),
+        ):
+            await client.submit_published_version("s")
+
+    async def test_an_ambiguous_failure_adopts_aes_own_record(self) -> None:
+        """Same discipline as ``submit_workflow``: this write is not idempotent,
+        so an ambiguous transport failure is resolved by asking AE what landed
+        rather than by re-POSTing on a guess."""
+        client = _client()
+        timeout = AtlanApiTimeoutError(
+            message="lost", operation="submit", delivery=RequestDelivery.AMBIGUOUS
+        )
+        with (
+            patch.object(client, "_request", side_effect=timeout),
+            patch.object(
+                client,
+                "find_run_created_since",
+                return_value=RunLookup(run_id="run-adopted", conclusive=True),
+            ),
+            patch(_SLEEP),
+        ):
+            assert await client.submit_published_version("s") == "run-adopted"
+
+
+class TestForeignPublishedDag:
+    """Which graph AE will run, read back by node name rather than by version."""
+
+    async def test_our_own_nodes_are_not_foreign(self) -> None:
+        client = _client()
+        published = PublishedVersion(version=3, dag={"seed-publish": {}})
+        with patch.object(client, "get_published_version", return_value=published):
+            assert (
+                await client.foreign_published_dag("s", expected=("seed-publish",))
+                == ""
+            )
+
+    async def test_another_apps_nodes_are_described(self) -> None:
+        client = _client()
+        published = PublishedVersion(version=4, dag={"extract": {}, "publish": {}})
+        with patch.object(client, "get_published_version", return_value=published):
+            described = await client.foreign_published_dag(
+                "s", expected=("seed-publish",)
+            )
+        assert "extract, publish" in described
+        assert "4" in described
+
+    async def test_expected_may_name_more_than_one_node(self) -> None:
+        """The policy parameter is what lets one implementation serve both
+        callers: teardown's node id is the delete app's own, so a republish of
+        that manifest is the *other correct* outcome rather than a foreign
+        graph."""
+        client = _client()
+        published = PublishedVersion(version=1, dag={"b": {}, "a": {}})
+        with patch.object(client, "get_published_version", return_value=published):
+            assert await client.foreign_published_dag("s", expected=("a", "b")) == ""
+
+    async def test_an_unanswered_read_is_not_a_foreign_graph(self) -> None:
+        """``None`` means "no answer", which is not "no match" — a caller must
+        go on to poll exactly as it would without this check, and the run's own
+        node names are what cover the case."""
+        client = _client()
+        for answer in (None, PublishedVersion(version=1, dag={})):
+            with patch.object(client, "get_published_version", return_value=answer):
+                assert await client.foreign_published_dag("s", expected=("x",)) == ""
+
+    async def test_a_read_that_raised_degrades_to_unanswered(self) -> None:
+        """A guard that cannot read AE must never replace the caller's verdict
+        with its own read error."""
+        client = _client()
+        with patch.object(
+            client, "get_published_version", side_effect=RuntimeError("boom")
+        ):
+            assert await client.foreign_published_dag("s", expected=("x",)) == ""

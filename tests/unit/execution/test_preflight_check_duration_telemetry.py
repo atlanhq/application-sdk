@@ -129,3 +129,24 @@ class TestSelfReportedDurationsAreUnvalidated:
         assert elapsed_seconds < GATE_TIMEOUT_DEFAULT_SECONDS
         reported_seconds = _matrix(m)[0]["duration_ms"] / 1000
         assert reported_seconds > GATE_TIMEOUT_DEFAULT_SECONDS
+
+
+class TestUnsetDurationDefault:
+    """CONNECT-1170 gap 4: the unset default reads as a plausible instant check.
+
+    ``duration_ms`` is app-authored; a handler that never sets it publishes
+    ``0.0``, which is indistinguishable from a genuine sub-millisecond check.
+    The agreed shape is a ``-1.0`` sentinel (not ``None`` — the key must
+    survive ``exclude_none`` and the type stays non-optional).
+    """
+
+    def test_unset_duration_is_distinguishable_from_an_instant_check(self) -> None:
+        # Behavioural form: what matters is that an unset duration and a
+        # genuinely instant check produce different wire values, and that the
+        # unset one can never read as elapsed time.
+        unset = PreflightCheck(name="tablesCheck", passed=True).duration_ms
+        instant = PreflightCheck(
+            name="tablesCheck", passed=True, duration_ms=0.0
+        ).duration_ms
+        assert unset != instant
+        assert unset < 0

@@ -1703,12 +1703,21 @@ class TestProgressStallDiagnostics:
 
 
 # ---------------------------------------------------------------------------
-# teardown_method — batched purge (FND-779)
+# teardown_method — the runner-side fallback (FND-779, FND-1724)
 # ---------------------------------------------------------------------------
 
 
-class TestTeardownDelegatesToTheHarnessPurge:
-    """``teardown_method`` decides *what* to purge; the harness decides *how*.
+class TestTeardownFallsBackToTheHarnessPurge:
+    """``teardown_method`` decides *what* to reclaim; the harness decides *how*.
+
+    Since FND-1724 the "how" is the ``connection-delete`` app, and the
+    ``pyatlan`` purge these tests drive is the degraded path — reached here
+    because none of these harnesses has a usable AE client to submit a delete
+    through. That is deliberate rather than incidental: it is the path a tenant
+    without the app installed takes on every run, and the worker-up-only tier
+    takes always, so it is worth pinning on its own. The app path and the
+    hand-off between the two are pinned in
+    ``tests/unit/testing/e2e/test_seed_assets_registry.py``.
 
     The purge mechanics that used to live on this class — batching under httpx's
     URL ceiling, reading the whole listing before deleting anything, the two

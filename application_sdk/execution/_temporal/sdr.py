@@ -44,6 +44,7 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.execution._temporal.preflight_gate import (
         PreflightSurface,
         emit_preflight_check_outcome,
+        emit_preflight_crash_outcome,
     )
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
@@ -609,6 +610,24 @@ def build_sdr_activities(
 
     @activity.defn(name=SDR_PREFLIGHT_ACTIVITY)
     async def preflight_check(input: PreflightInput) -> PreflightOutput:
+        # One crash boundary for the whole surface: a raise anywhere on this
+        # path — the secret-store probe, credential resolution, or the handler
+        # itself — must reach the funnel's denominator, not only the handler
+        # call. emit_preflight_crash_outcome declines typed client-input
+        # errors itself, so a wrong credential stays a verdict, not a crash.
+        try:
+            return await _preflight_check_body(input)
+        except Exception as e:
+            emit_preflight_crash_outcome(
+                logger,
+                binding.app_name,
+                e,
+                surface=PreflightSurface.SDR,
+                entrypoint=input.entrypoint,
+            )
+            raise
+
+    async def _preflight_check_body(input: PreflightInput) -> PreflightOutput:
         secret_row: PreflightCheck | None = None
         if input.agent_json is not None and input.agent_json.is_populated():
             # SDR-only: verify the customer secret store first. A failure is

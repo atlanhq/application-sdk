@@ -193,7 +193,7 @@ BUDGET
    - `.mothership/review-policy.md`
    - `.mothership/review.yaml`
 
-   **`references/*.md` is NOT read here.** It is ~125 KB — over half
+   **The rules corpus (`.mothership/rules/*.md`) is NOT read here.** It is ~108 KB — over half
    everything this step would otherwise load — and it is consumed by the
    Phase 2 agents, which receive their reference rules when dispatched
    (§2a). Reading it up front pays for it twice, and pays for it at all on
@@ -283,7 +283,7 @@ BUDGET
     changed" — skip delta scoping and run the full review. Only
     `DELTA_KNOWN=1` activates step 11b.
 
-6d. **Do NOT read `references/*.md`. The agents that use them read them.**
+6d. **Do NOT read `.mothership/rules/*.md`. The agents that use them read them.**
 
     Each Phase 2 agent now names the reference files it owns, at the top of
     its own `agents/*.md`, and reads them itself:

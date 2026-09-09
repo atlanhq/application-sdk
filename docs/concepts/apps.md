@@ -499,8 +499,11 @@ window of a bucket relocation, a condition a production RCA traced under multi-h
 dying at their final upload. The probe is deliberately stricter than a small-artifact-only
 workload's real writes; an app whose artifacts never exceed the part size should weigh that
 before opting in. A mid-run relocation (starting after the gate passed) is covered separately:
-the upload path itself classifies the rejection as `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION` with a
-platform-attributed hint instead of a generic storage failure.
+both object-store write paths — `upload_file` and `_put`, so `put_json` and friends too —
+classify the rejection as `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION` with a platform-attributed
+hint instead of a generic storage failure. The failure also carries the backend's own verdict as
+evidence (`http_status`, `provider_code`, and a credential-free `target`); see
+[Common — Wire envelope](common.md#wire-envelope).
 
 ```python
 class MyConnector(App):
@@ -546,7 +549,8 @@ sizing probes to that field is sizing to the real deadline. Three rules follow:
 - **Size from the p99 of successful runs**, read off the SDK-measured `gate_duration_ms` on the
   outcome event. Sizing to the worst observed run makes the timeout decorative; sizing to p95
   blocks 5% of runs. Per-check `duration_ms` inside `check_matrix` is handler-authored and is not
-  a substitute.
+  a substitute — and a handler that never sets it publishes `-1.0`, the "not measured" sentinel,
+  never a plausible elapsed time.
 - **Pair a large budget with one attempt.** A retry rescues a transient by trying *again*, not by
   trying *longer*; at the 300s ceiling two attempts reserve a ~10 minute `schedule_to_close`.
 - **Keep probes awaitable.** Cancellation lands at an `await`; blocking synchronous I/O on the

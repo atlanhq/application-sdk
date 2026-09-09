@@ -1,0 +1,54 @@
+/// Fixture: the cross-connection-enricher shape in full — an
+/// `extraNodes["publish"]` override that both nulls the connection-cache /
+/// current-state flags out of the manifest AND declares a zero-out spec.
+///
+/// This is the case that forces the design: inside one args block, the four
+/// flags rely on the manifest renderer STRIPPING nulls (publish rejects
+/// `Process` entities when the keys are present at all), while
+/// `zero_out_config.attrs` needs its nulls PRESERVED (they are the zero values
+/// being written). One `omitNullProperties` setting cannot serve both, so the
+/// spec is serialized through a `RenderDirective` with its own null-preserving
+/// renderer scoped to that single value.
+amends "../../src/App.pkl"
+
+name = "publish-zero-out-override"
+displayName = "Publish Zero Out Override"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = new PublishStep {}
+}
+
+extraNodes {
+  ["publish"] = new PublishNode {
+    zeroOutConfig = new ZeroOutSpec {
+      exclude { "Process"; "ColumnProcess" }
+      attrs {
+        ["sqlCoalesceNodeStatus"] = null
+        ["sqlCoalesceProjectId"] = null
+      }
+    }
+    args {
+      // Must be ABSENT, not false: publish's lineage-type handling morphs
+      // Process entities into rejected PartialObjects when these keys are
+      // present, and it defaults an absent current_state_enabled to true.
+      ["connection_cache_enabled"] = null
+      ["connection_cache_via_app_enabled"] = null
+      ["current_state_enabled"] = null
+      ["current_state_via_app_enabled"] = null
+    }
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

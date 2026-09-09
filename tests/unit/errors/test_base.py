@@ -120,11 +120,165 @@ def test_cause_repr_redacts_query_param_secrets() -> None:
 
 
 def test_cause_repr_truncates_long_messages() -> None:
-    cause = ValueError("x" * 600)
+    cause = ValueError("x" * 2600)
     e = AuthError(message="x", cause=cause)
     fd = e.to_failure_details()
     assert fd.cause_repr is not None
-    assert len(fd.cause_repr) <= len("ValueError: ") + 500 + len("…")
+    # 1200 head + 700 tail + the elision marker, under the type-name prefix.
+    assert len(fd.cause_repr) < len("ValueError: ") + 2000 + len(
+        "…[9999 chars elided]…"
+    )
+
+
+def test_redacts_presigned_url_signature_params() -> None:
+    """Every cloud store's presigned-URL signature is bearer-equivalent material.
+
+    None of these matched the keyword list before, so a signed URL embedded in
+    a driver error survived redaction intact -- while the ``X-Goog-Credential``
+    sitting next to it *was* redacted, purely because it happens to end in
+    ``credential``. That inconsistency is what made the logged copy of a driver
+    error unsafe. (FND-957 review)
+    """
+    from application_sdk.errors import redact_secrets
+
+    gcs = redact_secrets(
+        "https://storage.googleapis.com/b/k"
+        "?X-Goog-Credential=svc%40p.iam&X-Goog-Signature=deadbeefcafe0123"
+    )
+    assert "deadbeefcafe0123" not in gcs
+    assert "X-Goog-Signature=***" in gcs
+
+    s3 = redact_secrets(
+        "https://b.s3.amazonaws.com/k"
+        "?X-Amz-Credential=AKIA%2F20260831&X-Amz-Signature=abc123def456"
+    )
+    assert "abc123def456" not in s3
+    assert "X-Amz-Signature=***" in s3
+
+    # Azure SAS names the signature ``sig``, which no longer-form keyword covers.
+    azure = redact_secrets(
+        "https://acct.blob.core.windows.net/c/k?sv=2021&sig=Zm9vYmFyc2ln%3D&se=2026"
+    )
+    assert "Zm9vYmFyc2ln" not in azure
+    assert "sig=***" in azure
+    # Non-secret SAS params stay readable -- they say which container and window.
+    assert "sv=2021" in azure
+    assert "se=2026" in azure
+
+
+def test_signature_redaction_does_not_eat_pagination_cursors() -> None:
+    """The keyword list is an enumeration, not a wildcard, and must stay one.
+
+    A generic ``token`` would redact the pagination cursors an on-call needs,
+    which is the same reason ``uid`` is deliberately absent. This pins the line.
+    """
+    from application_sdk.errors import redact_secrets
+
+    for diagnostic in (
+        "next_token=abc123&page_token=xyz",
+        "continuation_token=deadbeef",
+        "run_guid=01a0-sig-99",
+        "config=prod&design=v2&assign=me",
+        "uid=svc_account",
+    ):
+        assert redact_secrets(diagnostic) == diagnostic
+
+
+def test_logged_cause_of_a_signed_url_error_carries_no_signature() -> None:
+    """The log copy of a driver error is uncapped-ish (8000) and indexed.
+
+    ``storage.ops`` passes ``redact_secrets(str(exc))`` as the ``error_message``
+    log field, so whatever survives redaction is what gets indexed. A signed
+    URL in the driver string must not.
+    """
+    from application_sdk.errors import redact_secrets
+
+    driver_error = (
+        "Generic GCS error: Error performing PUT "
+        "https://storage.googleapis.com/bkt/artifacts%2Ft.json"
+        "?X-Goog-Signature=1a2b3c4d5e6f7890 in 53ms - "
+        "Server returned non-2xx status code: 500 Internal Server Error"
+    )
+    out = redact_secrets(driver_error)
+    assert "1a2b3c4d5e6f7890" not in out
+    # The rest of the diagnostic survives -- redaction must not cost the reason.
+    assert "500 Internal Server Error" in out
+    assert "artifacts%2Ft.json" in out
+
+
+def test_cause_repr_keeps_both_ends_of_a_long_message() -> None:
+    """A backend error puts the request URL at the head and the reason at the tail.
+
+    Head-only truncation spent the whole budget on the URL and deleted the
+    provider's explanation — the failure mode FND-957 was filed for. Both ends
+    must survive, with an explicit marker for what was dropped in between.
+    """
+    cause = ValueError("HEAD_MARKER" + "x" * 2600 + "TAIL_MARKER")
+    fd = AuthError(message="x", cause=cause).to_failure_details()
+    assert fd.cause_repr is not None
+    assert "HEAD_MARKER" in fd.cause_repr
+    assert "TAIL_MARKER" in fd.cause_repr
+    assert "chars elided" in fd.cause_repr
+
+
+def test_cause_repr_keeps_a_full_provider_body_uncut() -> None:
+    """The reported GCS envelope must survive the cap intact.
+
+    Shape and sizes are taken from the real failure: a percent-encoded request
+    URL, the status line, the provider's XML body, then obstore's Rust debug
+    dump. At the old 500-char cap the URL alone consumed 374 and the cut landed
+    inside ``<Message>``. (FND-957)
+    """
+    key = (
+        "artifacts/apps/example-app/workflows/09f02b09-898f-482f-a018-c8a0bb6c6e96/"
+        "runs/01a04040-1c14-7591-b735-b9bde93b9560/transformed/table/chunk-part0000.json"
+    )
+    url = f"https://storage.googleapis.com/example-bucket/{key.replace('/', '%2F')}"
+    body = (
+        "<?xml version='1.0' encoding='UTF-8'?><Error><Code>PreconditionFailed</Code>"
+        "<Message>Invalid precondition during the request: at least one of the "
+        "pre-conditions you specified did not hold.</Message></Error>"
+    )
+    cause = ValueError(
+        f"Generic GCS error: Error performing POST {url}?uploads= in 53.300492ms - "
+        f"Server returned non-2xx status code: 400 Bad Request: {body}"
+        '\n\nDebug source:\nGeneric {\n    store: "GCS",\n}'
+    )
+    fd = AuthError(message="x", cause=cause).to_failure_details()
+    assert fd.cause_repr is not None
+    assert body in fd.cause_repr
+    assert "chars elided" not in fd.cause_repr
+
+
+def test_cause_repr_strips_the_obstore_debug_dump() -> None:
+    """obstore appends a Rust ``Debug source:`` dump after the provider body.
+
+    It is low-density text that competes with the diagnostic for the cap, and
+    keeping it would make a tail-preserving truncation retain the dump instead
+    of the provider's reason.
+    """
+    cause = ValueError(
+        "Generic GCS error: the part that matters"
+        '\n\nDebug source:\nGeneric {\n    store: "GCS",\n    source: Status,\n}'
+    )
+    fd = AuthError(message="x", cause=cause).to_failure_details()
+    assert fd.cause_repr is not None
+    assert "the part that matters" in fd.cause_repr
+    assert "Debug source" not in fd.cause_repr
+
+
+def test_cause_repr_redacts_before_truncating_so_the_tail_is_safe() -> None:
+    """Retaining a tail must not be able to expose an unredacted secret."""
+    cause = ValueError(
+        "connect https://user:hunter2@host/x "
+        + "PAD" * 900
+        + " retry_with api_key=sk-secret123"
+    )
+    fd = AuthError(message="x", cause=cause).to_failure_details()
+    assert fd.cause_repr is not None
+    assert "hunter2" not in fd.cause_repr
+    assert "sk-secret123" not in fd.cause_repr
+    assert "api_key=***" in fd.cause_repr
 
 
 def test_failure_details_json_round_trip() -> None:

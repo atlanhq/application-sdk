@@ -85,6 +85,12 @@
       "type": "str"
     },
     {
+      "contract": "ExtractionInput",
+      "field": "workflow_slug",
+      "status": "active",
+      "type": "str"
+    },
+    {
       "contract": "ExtractionOutput",
       "field": "artifacts",
       "status": "active",
@@ -197,6 +203,12 @@
       "field": "transformed_data_prefix",
       "status": "active",
       "type": "str"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "transformed_files",
+      "status": "active",
+      "type": "list[FileReference]"
     },
     {
       "contract": "ExtractionOutput",
@@ -333,6 +345,12 @@
     {
       "contract": "IncrementalExtractionInput",
       "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "workflow_slug",
       "status": "active",
       "type": "str"
     },
@@ -488,6 +506,12 @@
     },
     {
       "contract": "IncrementalExtractionOutput",
+      "field": "transformed_files",
+      "status": "active",
+      "type": "list[FileReference]"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
       "field": "views_extracted",
       "status": "active",
       "type": "int"
@@ -561,6 +585,12 @@
     {
       "contract": "QueryExtractionInput",
       "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "workflow_slug",
       "status": "active",
       "type": "str"
     },

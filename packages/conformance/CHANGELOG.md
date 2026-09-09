@@ -2,6 +2,35 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.28.0] - 2026-09-08
+
+### Features
+
+- add K021 filter-string-acceptance rule (CONNECT-1333/1389) (#3653) ([3161bed](https://github.com/atlanhq/application-sdk/commit/3161bed))
+
+### Bug fixes
+
+- give upload retries their own artifact name (#3711) ([8cecc5d](https://github.com/atlanhq/application-sdk/commit/8cecc5d))
+- K018 resolves ambiguous contract names as a union (#3712) ([8e52778](https://github.com/atlanhq/application-sdk/commit/8e52778))
+- recognise App.upload_refs() as a sanctioned SDR upload path (#3707) ([130cd95](https://github.com/atlanhq/application-sdk/commit/130cd95))
+- register workflow_slug on the SDK contract field mirrors (#3705) ([b2cfcdc](https://github.com/atlanhq/application-sdk/commit/b2cfcdc))
+- update dependency ruff to v0.16.6 (#3672) ([17baed0](https://github.com/atlanhq/application-sdk/commit/17baed0))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.25.1 (#3692) ([61610c1](https://github.com/atlanhq/application-sdk/commit/61610c1))
+- chore(contract-toolkit): release v0.25.0 (#3622) ([a145c58](https://github.com/atlanhq/application-sdk/commit/a145c58))
+
+## [0.27.0] - 2026-09-03
+
+### Features
+
+- centralize connector review kit (#3644) ([82f8687](https://github.com/atlanhq/application-sdk/commit/82f8687))
+
+### Bug fixes
+
+- P001 also catches the opt-out removed from a contract that needs it (#3630) ([8fd12e7](https://github.com/atlanhq/application-sdk/commit/8fd12e7))
+
 ## [0.26.0] - 2026-09-02
 
 ### Features

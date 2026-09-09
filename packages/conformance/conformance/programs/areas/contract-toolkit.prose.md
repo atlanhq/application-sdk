@@ -31,15 +31,19 @@ description: >
   declaring the shape in contract/app.pkl and regenerating; K017 is fixed on
   whichever side is wrong -- the declaration or the writer.
   K018 (the extract node sends a flat arg the entrypoint's Input contract cannot
-  receive), K019 (a uiConfig form key with no matching {{...}} placeholder) and
-  K020 (the extract node still nests args under a legacy metadata envelope) are
-  the inbound-config trio, all remediable.  K018 is fixed on the Python side by
-  declaring the field or mixing in ExtractionInput -- never by folding flat keys
-  back into a metadata dict -- and verified by the test-suite gate.  K019 is fixed
-  by wiring the form key into contract/app.pkl and regenerating.  K020 is fixed by
-  removing a flatManifestArgs = false override, or simply regenerating a stale
-  manifest; the edit is small but it flips the wire shape for live published
-  workflows, so it always routes to residue as well.
+  receive), K019 (a uiConfig form key with no matching {{...}} placeholder),
+  K020 (the extract node still nests args under a legacy metadata envelope) and
+  K021 (an include_*/exclude_* field typed as a strict dict that rejects the AE's
+  flat JSON string) are the inbound-config set, all remediable.  K018 is fixed on
+  the Python side by declaring the field or mixing in ExtractionInput -- never by
+  folding flat keys back into a metadata dict -- and verified by the test-suite
+  gate.  K019 is fixed by wiring the form key into contract/app.pkl and
+  regenerating.  K020 is fixed by removing a flatManifestArgs = false override, or
+  simply regenerating a stale manifest; the edit is small but it flips the wire
+  shape for live published workflows, so it always routes to residue as well.
+  K021 is a Python edit -- union the field with str, mix in ExtractionInput
+  without redeclaring a strict dict, or add a mode="before" validator -- verified
+  by the test-suite gate.
   K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
@@ -61,10 +65,10 @@ K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
 finding is present — those are FAILING results
 that fail the gate and must be remediated in default mode.  In **strict** mode
 the fingerprint-set also includes the unsuppressed WARNING results
-(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020), which is where the rest
+(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020/K021), which is where the rest
 of K-series remediation runs.
 
-The active scope decides which rules can appear: K001–K020 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K021 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -138,6 +142,7 @@ additionally whenever the applied fix touched a `.pkl` or a generated artifact.
 **K017 is either too**: its declared `orthogonal_gate` is `pkl-eval` because the
 contract edit is the usual fix, but the writer-side fix is plain Python — use the
 test-suite gate additionally whenever the applied fix touched only `.py`.
+**K018 and K021 are Python edits**, verified by the test-suite gate.
 
 The freshness rules (K003/K004/K005) are remediated by running a pkl command
 (`pkl project resolve` and/or `pkl eval -m . contract/app.pkl`), so they are
@@ -902,12 +907,56 @@ necessary; it must not happen as a side effect of an automated sweep.
 
 ---
 
+**K021 FilterFieldRejectsAeString** — an `include_*` / `exclude_*` field on the
+entrypoint's Python `Input` contract is typed as a (possibly `Annotated`) strict
+`dict` with no `str` union and no `mode="before"` validator, so Pydantic rejects
+the flat JSON string the Automation Engine sends (`'{}'`, `'{"^db$": ["^schema$"]}'`)
+and the workflow crashes at validation (CONNECT-1333 / CONNECT-1389).
+`classification = "mechanical"` when the fix is a `str` union or mixing in
+`ExtractionInput` without redeclaring the field; `"judgment"` when an app-local
+before-validator is the right shape. **Does not require `pkl`** — a pure Python
+edit, verified by the test-suite gate.
+
+`finding.discriminator` is the field name; `finding.message` names the Input
+class. Read the actual class at `finding.line` in `finding.file` before proposing
+an edit.
+
+*Procedure:*
+
+1. **Union the annotation with `str`** — `include_filter: FilterMap | str` (or
+   `dict[str, list[str]] | str`). Pydantic then tries the `str` arm and the JSON
+   string validates. `classification = "mechanical"`.
+2. **Mix in `ExtractionInput` without redeclaring a strict dict.**
+   `application_sdk.templates.contracts.sql_metadata.ExtractionInput` already
+   types `include_filter` / `exclude_filter` as `FilterMap | str`. A *bare*
+   subclass is silent. A type override (`include_filter: dict[str, Any]`) drops
+   the SDK `json_schema_extra` the live `_coerce_filter` keys on, so the inherited
+   validator returns the AE string unchanged and Pydantic rejects `'{}'` — that
+   override is the CONNECT-1333 shape, not a fix. Prefer deleting the redeclared
+   field (inherit the union) or adding `| str` to it.
+3. **Otherwise add a `mode="before"` validator** —
+   `@field_validator("<field>", mode="before")` (or a `mode="before"`
+   `@model_validator`) that coerces the string yourself. An `after`-mode
+   validator does **not** count: it runs after field validation, so the string is
+   already rejected. `classification = "judgment"`.
+4. **Do not edit `app/generated/manifest.json`.** The crash is on the Python
+   contract, not the wire shape.
+5. **Verification is the standard test-suite gate**, not `pkl-eval`. Re-running
+   `atlan-application-sdk-conformance detect --series K` re-checks the field now
+   unions with `str` or has a before-validator.
+6. If the mismatch is understood and deliberately deferred, suppress with
+   `# conformance: ignore[K021] <reason>` on the `Input` class definition and
+   route to residue. There is **no per-field form** — one suppression covers
+   every filter field on that class.
+
+---
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
 (K001–K005, K007, K008, K010; `//` comments) or `# conformance: ignore[Kxxx]
 <8–40 word justification>` for the artifact/Python-anchored rules (K006, K016 and
-K017 Python,
+K017 Python, K018, K021,
 K009 text artifact, K014 `atlan.yaml`; `#` comments) — on the violating line or
 the comment-only
 line directly above it when a legitimate exception exists (e.g. a K001 finding on

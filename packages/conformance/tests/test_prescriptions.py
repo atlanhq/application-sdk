@@ -2753,3 +2753,106 @@ def test_p013_still_fires_on_a_resolvable_unrelated_base(tmp_path: Path) -> None
     }
     findings = _scan_files(tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id == "P013"] == ["P013"]
+
+
+# ── P001: the inverse — an Any field with no opt-out cannot be imported ───────
+
+
+def test_p001_fires_when_an_any_field_has_no_optout(tmp_path: Path) -> None:
+    """The exact shape a well-meaning remediation produces.
+
+    Drop the opt-out, wrap the Any in MaxItems: the old rule went silent, B005
+    stayed silent because the canonical type is unchanged, and the app stopped
+    importing. Nine apps were broken this way.
+    """
+    src = (
+        "from typing import Annotated, Any\n"
+        "class MyInput(Input):\n"
+        "    credentials: Annotated[dict[str, Any], MaxItems(50)] = {}\n"
+    )
+    findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
+    assert len(findings) == 1
+    assert "PayloadSafetyError" in findings[0].message
+    assert "MaxItems does not help" in findings[0].message
+
+
+def test_p001_fires_on_a_bare_any_field_with_no_optout(tmp_path: Path) -> None:
+    src = "from typing import Any\nclass MyOutput(Output):\n    payload: Any = None\n"
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == [
+        "P001"
+    ]
+
+
+def test_p001_silent_on_a_properly_bounded_contract(tmp_path: Path) -> None:
+    """No Any anywhere, no opt-out — the compliant shape must stay quiet."""
+    src = (
+        "from typing import Annotated\n"
+        "class MyInput(Input):\n"
+        "    include_filter: Annotated[dict[str, list[str]], MaxItems(100)] = {}\n"
+        "    name: str = ''\n"
+    )
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == []
+
+
+def test_p001_reports_the_optout_once_not_twice(tmp_path: Path) -> None:
+    """A class WITH the opt-out and an Any field is the normal, sanctioned
+    escape hatch — it gets the opt-out finding only, never both."""
+    src = (
+        "from typing import Any\n"
+        "class MyInput(Input, allow_unbounded_fields=True):\n"
+        "    payload: dict[str, Any] = {}\n"
+    )
+    findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
+    assert len(findings) == 1
+    assert "opts out of payload-safety" in findings[0].message
+
+
+def test_p001_ignores_an_any_field_on_a_non_contract_class(tmp_path: Path) -> None:
+    """Payload safety only governs Input/Output subclasses."""
+    src = "from typing import Any\nclass Helper:\n    cache: dict[str, Any] = {}\n"
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == []
+
+
+def test_p001_ignores_private_any_fields(tmp_path: Path) -> None:
+    """Underscore-prefixed class attrs are not contract fields."""
+    src = (
+        "from typing import Any, ClassVar\n"
+        "class MyInput(Input):\n"
+        "    _config_hash_exclude: ClassVar[Any] = None\n"
+        "    name: str = ''\n"
+    )
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == []
+
+
+def test_p001_ignores_public_classvar_any(tmp_path: Path) -> None:
+    """Runtime skips ClassVar regardless of the field name — not a payload field."""
+    src = (
+        "from typing import Any, ClassVar\n"
+        "class MyInput(Input):\n"
+        "    schema_marker: ClassVar[Any] = None\n"
+        "    name: str = ''\n"
+    )
+    assert [f.rule_id for f in _scan_one(tmp_path, src) if f.rule_id == "P001"] == []
+
+
+def test_p001_fires_on_falsy_optout_with_any_field(tmp_path: Path) -> None:
+    """A falsy keyword is an opt-back-in: runtime still validates and raises."""
+    src = (
+        "from typing import Any\n"
+        "class MyInput(Input, allow_unbounded_fields=False):\n"
+        "    payload: dict[str, Any] = {}\n"
+    )
+    findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
+    assert len(findings) == 1
+    assert "PayloadSafetyError" in findings[0].message
+
+
+def test_p001_fires_on_none_optout_with_any_field(tmp_path: Path) -> None:
+    src = (
+        "from typing import Any\n"
+        "class MyInput(Input, allow_unbounded_fields=None):\n"
+        "    payload: Any = None\n"
+    )
+    findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
+    assert len(findings) == 1
+    assert "does NOT set" in findings[0].message

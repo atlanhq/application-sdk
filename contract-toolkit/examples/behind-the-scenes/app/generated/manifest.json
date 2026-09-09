@@ -15,6 +15,7 @@
           "app_name": "behind-the-scenes",
           "credential": "{{credential}}",
           "agent_json": "{{agent-json}}",
+          "extraction_method": "{{extraction-method}}",
           "target": "{{target}}"
         }
       },

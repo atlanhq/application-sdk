@@ -5,11 +5,21 @@ The AE half of ``testing/e2e/client.py``, lifted here and converted to
 
 * ``POST /automation/api/v1/workflows`` and its ``/versions`` children — create
   the workflow and publish the seed DAG.
-* ``POST /api/service/package-workflows?submit=true`` — the submit. The one
-  non-idempotent write in the harness, and the reason
+* two submits, and which one a caller wants depends on whose graph must run.
+  Both are non-idempotent, which is the reason
   :mod:`application_sdk.testing.harness.automation_engine.retry` exists.
+
+  * ``POST /api/service/package-workflows?submit=true`` — through Heracles, for
+    the app under test. Heracles re-derives the graph from the app's served
+    manifest and publishes it over whatever the harness published, which is
+    the point when the graph being tested is the app's own.
+  * ``POST /automation/api/v1/workflows/<slug>/submit`` — straight to AE, for a
+    graph the harness wrote itself. AE runs its currently published version
+    with no manifest fetch, so a harness DAG cannot be replaced by an app's
+    (FND-1766).
 * ``GET /api/service/package-workflows/native-status/<run_id>`` — the DAG run's
-  per-node breakdown, and the poll over it.
+  per-node breakdown, and the poll over it. A pass-through over AE's own run
+  record, so it reads a run from either submit identically.
 
 **Why async.** Decision D1: everything below the pytest boundary is ``async``,
 and the one bridge back to blocking code is
@@ -34,7 +44,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
@@ -185,6 +195,17 @@ _RESUBMIT_WHEN_AE_REPORTS_NO_RUN = False
 # a slower-than-usual index actually gets to use.
 _SLUG_INDEX_TIMEOUT_SECONDS = 30
 _SLUG_INDEX_INTERVAL_SECONDS = 1
+
+# Attempts ``submit_published_version`` gives AE to serve a version that was
+# published seconds earlier. AE resolves the published version *at submit time*
+# and answers 404 until the write has replicated through the metastore —
+# Heracles' own AE client budgets 5 retries at 5/10/15/15/15s for exactly this,
+# on exactly this endpoint (``pkg/ae/client.go``, ``SubmitWorkflow``). Matched
+# rather than re-derived: one origin, one lag, and a second number here would be
+# a second answer to the same question. 6 x 12s covers the same ~60s in the
+# fixed-gap shape ``_post_with_retry`` takes.
+_PUBLISH_REPLICATION_ATTEMPTS = 6
+_PUBLISH_REPLICATION_SLEEP_SECONDS = 12
 
 # ``_HEARTBEAT_SECONDS`` (imported from ``_poll``) is the cadence for "still
 # polling" heartbeat log lines in ``poll_native_status`` — lineage stages take
@@ -1110,6 +1131,66 @@ class AEClient:
             dag=dag if isinstance(dag, dict) else {},
         )
 
+    async def foreign_published_dag(
+        self, slug: str, *, expected: Collection[str]
+    ) -> str:
+        """Describe the DAG AE serves for *slug* when its nodes are not *expected*.
+
+        The read half of the invariant a harness-published DAG relies on. A
+        submit through Heracles re-derives the graph from an app's served
+        manifest and publishes it over whatever the harness published; this
+        cannot see that write, but it can see the version AE serves afterwards
+        — the same read
+        :meth:`~application_sdk.testing.e2e.base.BaseE2ETest._assert_deployed_manifest_matches`
+        uses for the mirror-image assertion.
+
+        **Node names, not version numbers.** A version number only says AE
+        published something, which it always does. The names say *whose graph*
+        it is, which is the question — and it is the reason a harness node id
+        is chosen deliberately: teardown's is the delete app's own, so a
+        republish of that app's manifest is the *other correct* outcome rather
+        than a foreign graph, while the seed's is unique to the seed, so any
+        other name at all is foreign.
+
+        Never raises, and never guesses. :meth:`get_published_version` answers
+        ``None`` for a read that did not get through, and an empty DAG says
+        nothing either; both mean "unanswered" and return ``""``, so a caller
+        goes on to poll exactly as it would without this check. A post-poll
+        check on the run's own node names is what covers those.
+
+        Args:
+            slug: The workflow slug the caller published its DAG under.
+            expected: Every node name the caller's own graph carries — and, where
+                a republish of a *known* app's manifest is an acceptable
+                outcome, that manifest's node names too.
+
+        Returns:
+            A one-line description of the foreign graph, or ``""`` when the
+            graph is the caller's or the question went unanswered.
+        """
+        try:
+            published = await self.get_published_version(slug)
+        # conformance: ignore[E004] guard boundary — a check that cannot read AE must degrade to "unanswered", never replace the caller's verdict with a read error
+        except Exception:
+            logger.warning(
+                "published-DAG guard for slug %s could not read AE, so whether "
+                "the %s node(s) are what runs stays unverified until the run's "
+                "own node names come back",
+                slug,
+                ", ".join(sorted(expected)) or "(none)",
+                exc_info=True,
+            )
+            return ""
+        if published is None or not published.dag:
+            return ""
+        nodes = sorted(name for name in published.dag if isinstance(name, str))
+        if nodes == sorted(expected):
+            return ""
+        return (
+            f"AE serves version {published.version!r} with node(s) "
+            f"{', '.join(nodes) or '(none)'}"
+        )
+
     async def find_run_created_since(
         self,
         slug: str,
@@ -1501,6 +1582,161 @@ class AEClient:
             ", ".join(
                 f"{name} -> {{{{{token}}}}}" for name, token in sorted(leftover.items())
             ),
+        )
+
+    async def submit_published_version(
+        self,
+        slug: str,
+        *,
+        retries: int = _PUBLISH_REPLICATION_ATTEMPTS - 1,
+        retry_sleep_seconds: int = _PUBLISH_REPLICATION_SLEEP_SECONDS,
+    ) -> str:
+        """POST ``/automation/api/v1/workflows/<slug>/submit`` — run *our* DAG.
+
+        The submit for a DAG the harness published itself, and the one place a
+        caller can be sure the graph that runs is the graph it wrote.
+        :meth:`submit_workflow` cannot promise that: it goes through Heracles'
+        ``/api/service/package-workflows``, whose native path *always*
+        re-derives the graph from an app's served manifest —
+        ``GetManifest`` → ``CreateVersion`` → ``PublishVersion`` → submit — so
+        the harness's published version is superseded on every call. Which
+        graph then executes depends only on whether AE's submit has seen the
+        new published version yet, and that is a metastore replication lag, not
+        a decision anything here makes. FND-1766.
+
+        This endpoint takes AE's *currently published* version and starts it.
+        There is no manifest fetch, so there is no envelope, no app identity to
+        pick, and no app under test in the path at all — the whole class of
+        "which app's manifest wins" cannot arise. Three consequences worth
+        stating, because they are what makes this a smaller call rather than a
+        parallel one:
+
+        * **Nothing Heracles injects is load-bearing for a harness DAG.**
+          ``user-id``, ``app_id``, ``argo_workflow_slug``, the flat
+          ``connection.*`` rows and the mustache substitution pass all exist to
+          fill placeholders in a manifest graph. A harness DAG's arguments are
+          literals (see
+          :func:`~application_sdk.testing.harness.seed.build_seed_publish_dag`),
+          so there is nothing to substitute and no payload to carry.
+        * **No cold-start budget.** The only tenant pod Heracles touched at
+          submit was the app under test's — ``GetManifest`` against :8000, which
+          is what :class:`AppNotReadyError` names. Nothing on this path calls an
+          app, so a caller that submits a harness DAG no longer waits on a pod
+          it is not testing. Whether the *worker* is up is a different question,
+          and :meth:`poll_native_status`'s start-grace latch is where it is
+          asked.
+        * **Same poll, same run.** ``native-status?execution_mode=automation-engine``
+          is a pass-through over AE's own run record, so the GUID returned here
+          polls identically to one from :meth:`submit_workflow`.
+
+        Retries mirror :meth:`submit_workflow`'s discipline exactly, because
+        this is the same kind of write — non-idempotent, and a blind re-POST
+        spawns a duplicate run:
+
+        * ``retry_network_errors=False``, so an ambiguous failure is never
+          re-sent on a guess;
+        * ``recover_ambiguous``, so it is resolved by asking AE what landed;
+        * the ``already active`` conflict is terminal rather than a retryable
+          5xx.
+
+        The one addition is **404**, which is retryable here and nowhere else:
+        AE resolves the published version at submit time, and a version
+        published seconds ago has not necessarily replicated
+        (:data:`_PUBLISH_REPLICATION_ATTEMPTS`).
+
+        Args:
+            slug: The workflow slug whose published version to run. The caller
+                must already have published a version under it — see
+                :func:`~application_sdk.testing.harness.starters.publish_seed_version`.
+            retries: Retries on top of the initial attempt.
+            retry_sleep_seconds: Fixed gap between attempts.
+
+        Returns:
+            The run GUID AE assigned.
+
+        Raises:
+            AtlanAEWorkflowAlreadyActiveError: A run of this workflow is
+                already active. Terminal — a retry would spawn a duplicate.
+            AtlanApiResponseInvariantError: AE accepted the submit but named no
+                run GUID.
+            AtlanApiHttpError: AE rejected the submit.
+        """
+        submitted_at = datetime.now(UTC)
+
+        async def _recover_from_ae() -> WriteRecovery:
+            """Ask AE whether the submit whose response we lost took effect."""
+            lookup = await self.find_run_created_since(slug, submitted_at)
+            if lookup.run_id is not None:
+                logger.warning(
+                    "submit_published_version: the response was lost but AE "
+                    "has run %s under slug %s — adopting it rather than "
+                    "re-submitting",
+                    lookup.run_id,
+                    slug,
+                )
+                # Shaped as AE's own envelope so the extraction below has one
+                # path rather than one per origin.
+                return WriteRecovery(body={"data": {"guid": lookup.run_id}})
+            return WriteRecovery(
+                proven_absent=lookup.conclusive and _RESUBMIT_WHEN_AE_REPORTS_NO_RUN
+            )
+
+        status, body = await self._post_with_retry(
+            f"/automation/api/v1/workflows/{quote(slug, safe='')}/submit",
+            # Both fields default server-side, so an empty body would be
+            # accepted — stated anyway because a test run is a different thing
+            # (it publishes to the StateStore eagerly and is triggered as
+            # ``TriggeredBy.TEST``) and the harness must never accidentally be
+            # one.
+            body={"is_test_run": False},
+            total_attempts=retries + 1,
+            sleep_seconds=retry_sleep_seconds,
+            retryable=lambda s, b: (
+                s == 404 or (s >= 500 and not is_already_active_run(s, b))
+            ),
+            op_name="submit_published_version",
+            retry_network_errors=False,
+            recover_ambiguous=_recover_from_ae,
+        )
+        if is_already_active_run(status, body):
+            raise AtlanAEWorkflowAlreadyActiveError(
+                message=(
+                    "AE rejected the submit to POST /automation/api/v1/"
+                    f"workflows/{slug}/submit: a run for this workflow is "
+                    "already active (AE-WF-409-03). A run IS executing, but "
+                    "its run_id is unrecoverable from this response. Not "
+                    "retrying — a retry would spawn a duplicate Skipped run.\n"
+                    f"response={body!r}"
+                ),
+            )
+        if status < 300 and isinstance(body, dict):
+            data = body.get("data") if isinstance(body.get("data"), dict) else body
+            # AE names its run ``guid``; Heracles' submit response renames it
+            # ``run_id``. Both are read so a caller cannot be broken by which
+            # origin answered a recovery.
+            run_id = None
+            if isinstance(data, dict):
+                run_id = data.get("guid") or data.get("run_id")
+            if run_id:
+                return str(run_id)
+            raise AtlanApiResponseInvariantError(
+                message=f"AE submit returned no run guid\nresponse={body!r}",
+                expectation="data.guid present in submit response",
+            )
+        raise AtlanApiHttpError(
+            message=(
+                f"AE submit failed: HTTP {status}\nresponse={body!r}"
+                if status != 404
+                else (
+                    f"AE has no published version for slug {slug} after "
+                    f"{retries + 1} attempt(s) over ~"
+                    f"{retries * retry_sleep_seconds}s. Either nothing was "
+                    "published under it, or the publish never replicated.\n"
+                    f"response={body!r}"
+                )
+            ),
+            target=(f"POST /automation/api/v1/workflows/{slug}/submit HTTP {status}"),
+            retry_after_seconds=requested_retry_after(body),
         )
 
     async def get_native_status(self, run_id: str) -> DAGRunResult:

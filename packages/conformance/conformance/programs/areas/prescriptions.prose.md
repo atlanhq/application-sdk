@@ -187,26 +187,44 @@ Drafts a **proposed** fix for human review.  This area is suggest-only: the
 proposal is recorded in residue and **never applied** — see **Why suggest-only**
 above.  `classification` is always `"judgment"` for all P-series rules.
 
-- **P001 UnboundedContractFields** — the contract opts out of payload safety
-  via the `allow_unbounded_fields=True` class keyword.  Read the contract's
-  fields around `finding.line`, then draft, in order of preference:
+- **P001 UnboundedContractFields** — two shapes, same rule.  Read the
+  contract's fields around `finding.line` first, then decide.
 
-  1. **The real fix (preferred)** — remove `allow_unbounded_fields=True` and
-     bound each field the payload-safety validator would reject: wrap an
-     unbounded `list[T]` as `Annotated[list[T], MaxItems(N)]` and an unbounded
-     `dict[K, V]` as `Annotated[dict[K, V], MaxItems(N)]`, choosing `N` from
-     the field's realistic cardinality and **stating that assumption** in the
-     proposal (e.g. ~10000 ≈ ~1MB JSON, well under Temporal's 2MB limit).  A
-     scalar-only contract needs only the opt-out removed.  Add
-     `from typing import Annotated` and
-     `from application_sdk.contracts.types import MaxItems` if missing.
+  **Inspect for `Any` before touching the opt-out.**  Runtime
+  `validate_payload_safety` refuses `Any` unconditionally — wrapping it in
+  `MaxItems` does not make it acceptable.  Dropping `allow_unbounded_fields`
+  while an `Any`-typed field remains raises `PayloadSafetyError` at
+  class-definition time and the app will not import.  That is the edit that
+  broke nine apps; do not draft it.
+
+  Then draft, in order of preference:
+
+  1. **Type the field concretely (preferred)** — replace `Any` (and
+     `dict[str, Any]` / `list[Any]`) with a concrete bounded type.  For
+     filter maps use `FilterMap` from
+     `application_sdk.templates.contracts` (a bounded
+     `dict[str, list[str]]`).  Only after every field would pass
+     `validate_payload_safety`, remove `allow_unbounded_fields=True`.
      Return `outcome = "fix"`.
 
-  2. **Fallback** — if a field is genuinely unbounded with no sensible cap,
-     draft an inline `# conformance: ignore[P001] <concise justification>` on
+  2. **Bound an otherwise-legal unbounded collection** — wrap an unbounded
+     `list[T]` as `Annotated[list[T], MaxItems(N)]` and an unbounded
+     `dict[K, V]` as `Annotated[dict[K, V], MaxItems(N)]` **only when `T` /
+     `V` is already a legal payload type** (not `Any`).  Choose `N` from
+     the field's realistic cardinality and **state that assumption** in the
+     proposal (e.g. ~10000 ≈ ~1MB JSON, well under Temporal's 2MB limit).
+     A scalar-only contract needs only the opt-out removed.  Add
+     `from typing import Annotated` and
+     `from application_sdk.contracts.types import MaxItems` if missing.
+     Remove the opt-out last.  Return `outcome = "fix"`.
+
+  3. **Keep the opt-out with a justified suppression** — if a field cannot
+     be concretely typed (an `@entrypoint` contract field: B005 forbids
+     changing its recorded type and `ledger-guard` is append-only), draft
+     an inline `# conformance: ignore[P001] <concise justification>` on
      the declaration line, where the justification explains *why* unbounded
      fields are unavoidable here (not merely that the rule is suppressed).
-     Return `outcome = "suppress"`.
+     Do **not** remove `allow_unbounded_fields`.  Return `outcome = "suppress"`.
 
 - **P002 CategoryFieldOverride** — a non-canonical subclass of `AppError` (or
   any of its 15 categorical leaves) redeclares the `category` ClassVar in its
@@ -522,7 +540,8 @@ say so.
   manifest.  Draft the required `app.pkl` addition and route to residue for the
   developer to apply.
 
-- **P030 SdrUploadNotCalled** (BLOCK) — no real `self.upload(...)` **call**
+- **P030 SdrUploadNotCalled** (BLOCK) — no real `self.upload(...)` or
+  `self.upload_refs(...)` **call**
   exists in any app source file outside `tests/` (matched on the AST, so a
   comment or docstring merely *mentioning* it does not clear the finding),
   making the `ENABLE_ATLAN_UPLOAD` gate structurally unreachable — OR a custom
@@ -554,8 +573,22 @@ say so.
   method or `run()` method, after extraction completes.  Route to residue for
   human confirmation.
 
+  **Which call to draft.**  `App.upload_refs(...)` (SDK 3.33.2) satisfies this
+  rule too, and is the one to propose whenever the hand-off is a *declaration*
+  — a `FileReference` list a fanned-out step produced — rather than one
+  directory this pod wrote.  It is a peer framework task over the same
+  `_upload_impl` body (same `ENABLE_ATLAN_UPLOAD` gate, same ADR-0014
+  dual-write routing) that lands every declared ref under one destination
+  prefix by reference and verifies the delivered tree against the declaration.
+  A `self.upload(local_path)` drafted where the transforms fanned out uploads
+  only the subset of files this pod happened to hold — green in a
+  single-container e2e, zero-to-partial in distributed production.  If the app
+  already calls `upload_refs`, there is no P030 finding to remedy: do not
+  propose a second upload.
+
 - **P042 SdrHandRolledUploadBridge** (WARN) — a custom `upload_to_atlan` that
-  **does** perform a real storage transfer, with no `self.upload(` anywhere in
+  **does** perform a real storage transfer, with neither `self.upload(` nor
+  `self.upload_refs(` anywhere in
   the app.  Anchored at the bridge definition.  Distinguish it from P030
   carefully: nothing is silently dropped here, so P030's silent-zero-asset
   language is wrong and the urgency is lower — the app works today.  What is
@@ -574,7 +607,10 @@ say so.
   Do **not** force a rewrite in the remediation loop: on v3 connectors whose
   transform outputs live in the deployment store at handoff, a naive swap to
   `self.upload(local_path)` passes single-container e2e and regresses
-  distributed production.  Draft the migration to `await self.upload(...)` and
+  distributed production.  `await self.upload_refs(...)` over the transforms'
+  declaration is the swap that does not — it streams from the deployment store
+  for the files this pod never held — so draft that where the app has a
+  declaration to hand it, and `await self.upload(...)` otherwise.  Either way
   route to residue for a human to sequence against a distributed e2e.  If the
   bridge exists because `App.upload()` cannot express something the app needs,
   record that in the residue as an SDK gap rather than a suppression.

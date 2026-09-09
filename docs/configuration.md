@@ -33,6 +33,20 @@ Injected by the Local Marketplace into the Helm release at deploy time, and expo
 | `ATLAN_SDK_VERSION` | _(empty)_ | SDK version used to build this app image. |
 | `ATLAN_APP_TYPE` | _(empty)_ | App type from Global Marketplace (e.g. `connector`, `system`). |
 | `ATLAN_PUBLISHED_AT` | _(empty)_ | Release publication timestamp (ISO 8601). |
+| `ATLAN_APP_ID` | _(empty)_ | Global Marketplace's id for this app — the card's `installation_id`. One per app and stable across releases and tenants, unlike `ATLAN_RELEASE_ID`. Not yet stamped by any deployment, so every reader must tolerate an empty value and send nothing rather than a substitute. |
+
+---
+
+## Preflight results store
+
+Where the injected preflight gate appends its verdict. The route is served by another
+repo — see [`standards/cross-repo-contracts.md`](standards/cross-repo-contracts.md#the-preflight-results-write-route)
+before changing either value.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_PREFLIGHT_RESULTS_ENDPOINT` | `http://system-workflows.system-workflows-app.svc.cluster.local:8000/continuous-preflight/check-results` | The whole write URL, path included — never composed from parts. Override to point at a stub off-cluster. |
+| `ATLAN_PREFLIGHT_RESULTS_TIMEOUT_SECONDS` | `30` | Bound on that POST. Generous because the receiving app opens a Polaris catalog, may create the table and commits a Parquet file. Nothing waits on it. |
 
 ---
 

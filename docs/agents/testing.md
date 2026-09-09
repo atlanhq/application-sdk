@@ -4,7 +4,37 @@
 - New code should target 85% coverage per `docs/standards/review-checklist.md` (the tooling threshold in `pyproject.toml` is 85% — CI fails below it).
 - Current tests live in `tests/unit/`; follow existing structure when adding new tests.
 - For how a *consumer app's* tests should be laid out, read `docs/agents/canonical-apps.md` and then the app itself — not an arbitrary `atlan-*-app`, which may be mid-migration or carry deprecated patterns.
+- When a fixture stands in for a **generated artifact** (`app/generated/**`, `atlan.yaml`, a served API envelope), build it from a real one and say in a comment which repo it was read from. A fixture with the shape inverted still passes — for a reason unrelated to its claim — and it flatters the code under test, which is APP-TESTS-001's self-certifying PR arriving through the fixture rather than the assertion. FND-1667 shipped one: a credential template written as `{"id": ...}` with no `config`, where the toolkit emits `config` and no `id`. Nothing caught it until someone ran the selector against a real tree.
 - For consumer apps built on this SDK, the conformance suite's T-series (`packages/conformance/conformance/docs/rules/tests.md`) enforces the agreed per-connector testing-tier architecture (unit + integration required, e2e recommended, UI optional except for top connectors) plus test-quality checks — assertion-free tests, uncollectable test files, disabled coverage gates, and more. Run it with `/remediate` or `uv run atlan-application-sdk-conformance detect --series T`.
+
+## Asserting a Preflight Gate Verdict
+
+The gate emits one `Preflight gate outcome` row per invocation and picks the log
+level from the verdict (FND-901): `error` for a block or an unverifiable source,
+`warning` when it proceeded with a failed advisory check, `info` otherwise. Read
+the row through the shared capture rather than patching
+`preflight_gate.logger` by hand — a reader that watches `info` alone returns an
+empty list on exactly the runs it was written to pin, and keeps passing:
+
+```python
+from application_sdk.testing import capture_preflight_outcomes  # in conftest.py
+
+
+async def test_block_names_the_failing_check(capture_preflight_outcomes):
+    ...
+    assert capture_preflight_outcomes.level == "error"
+    assert capture_preflight_outcomes.matrix[0]["name"] == "credentialScopes"
+```
+
+Suites that patch the logger with a `MagicMock` themselves can use
+`outcome_rows` / `outcome_level` / `single_outcome` over the mock instead. Both
+paths assert *exactly one* row, because returning the first match hides a double
+emission.
+
+Boundary: the capture covers rows the gate **activity** emits. The workflow
+wrapper's `skipped` / `no_verdict` rows go through Temporal's `workflow.logger`
+(`app/base.py`), which the capture does not patch — pin those paths against
+`workflow.logger` directly.
 
 ## What SDK Review Checks for Tests
 

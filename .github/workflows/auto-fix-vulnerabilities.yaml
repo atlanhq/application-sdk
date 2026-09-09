@@ -122,8 +122,18 @@ jobs:
             exit 1
           fi
 
-          echo "Downloading scan results from run $RUN_ID"
-          gh run download "$RUN_ID" --name trivy-results --dir /tmp/scan-artifacts || echo "No trivy results"
+          # `trivy-results` or `trivy-results-retry`: build-and-scan's upload
+          # retry cannot reuse the first attempt's name (a failed
+          # FinalizeArtifact holds it for the whole run and CreateArtifact then
+          # 409s), so a scan whose artifact landed on the second attempt is
+          # only reachable under the retry name. Newest match wins, so a later
+          # attempt's artifact is preferred over an earlier one's leftover.
+          ARTIFACT_NAME=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '[.artifacts[] | select(.expired == false) | select(.name == "trivy-results" or .name == "trivy-results-retry")] | sort_by(.created_at) | last | .name // ""')
+
+          echo "Downloading scan results from run $RUN_ID (artifact: ${ARTIFACT_NAME:-none live})"
+          gh run download "$RUN_ID" --name "${ARTIFACT_NAME:-trivy-results}" --dir /tmp/scan-artifacts || echo "No trivy results"
 
       - name: Identify fixable vulnerabilities
         id: identify
@@ -197,7 +207,7 @@ jobs:
         if: steps.identify.outputs.count > 0
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.9"
+          version: "0.12.11"
 
       - name: Fix vulnerable packages
         if: steps.identify.outputs.count > 0

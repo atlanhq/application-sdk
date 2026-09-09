@@ -102,6 +102,26 @@ category), so every opt-out is reported every single time. This rule is `BLOCK`
 (suppress-only): an unsuppressed declaration fails the conformance gate — the only
 sanctioned use is the justified inline suppression above — see BLDX-1428.
 
+**The inverse is also a finding.** A contract that declares an `Any`-typed field and
+does NOT set `allow_unbounded_fields` raises `PayloadSafetyError` at class-definition
+time, so the app does not import at all.  `Any` is refused unconditionally: wrapping it
+in `MaxItems` does not make it acceptable.  Removing the opt-out is a real fix only when
+every field is concretely typed.
+
+**Deciding what to do.** Three outcomes, in order of preference:
+
+1. *Type the field concretely.*  For filter maps the SDK already ships `FilterMap`
+(`application_sdk.templates.contracts`), a bounded `dict[str, list[str]]` — see the
+`mysql` reference app, whose generated contract needs no opt-out at all.
+
+2. *Add a new, bounded field* and mark the old one `deprecated` in the ledger.
+Additions and status changes are always allowed.
+
+3. *Keep the opt-out with a justified suppression.*  This is the right answer, not a
+failure, when the field is an `@entrypoint` contract field: B005 forbids changing its
+recorded type and `ledger-guard` is append-only, so options 1 and 2 are closed and the
+carve-out is genuinely unavoidable.  Say that in the reason.
+
 ---
 
 ## P002 — `CategoryFieldOverride` {#p002}
@@ -280,28 +300,35 @@ Suppress a reviewed exception with `# conformance: ignore[P007] <reason>`.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
-> App calls self.upload()/self.download() inside a @task method
+> App calls self.upload()/self.download()/self.upload_refs() inside a @task method
 
-**Rationale:** App.upload/App.download are themselves @task methods. Calling
-self.upload(...)/self.download(...) inside another @task-decorated method nests one
-activity inside another, which violates Temporal's single-activity-per-call contract and
-bypasses the SDK's store routing (upstream vs deployment). For task-to-task data, return
-a FileReference on the contract instead and let the activity interceptor move the bytes
-(BLDX-1398).
+**Rationale:** App.upload/App.download/App.upload_refs are themselves @task methods. Calling
+self.upload(...)/self.download(...)/self.upload_refs(...) inside another @task-decorated
+method nests one activity inside another, which violates Temporal's
+single-activity-per-call contract and bypasses the SDK's store routing (upstream vs
+deployment). For task-to-task data, return a FileReference on the contract instead and
+let the activity interceptor move the bytes (BLDX-1398).
 
-An `App` subclass calls `self.upload(...)` or `self.download(...)` from within a
-`@task`-decorated method.  `App.upload` and `App.download` are themselves `@task`
-methods, so this nests an activity inside an activity — Temporal expects a single
-activity per call, and the nested transfer also bypasses the SDK's store routing
-(upstream store vs deployment store).
+An `App` subclass calls `self.upload(...)`, `self.download(...)` or
+`self.upload_refs(...)` from within a `@task`-decorated method.  `App.upload`,
+`App.download` and `App.upload_refs` are themselves `@task` methods, so this nests an
+activity inside an activity — Temporal expects a single activity per call, and the
+nested transfer also bypasses the SDK's store routing (upstream store vs deployment
+store).
 
 The SDK has two data-flow paths and this is the wrong one for in-task data.
 **Task-to-task** data should travel as a `FileReference` on the contract: the task
 writes a local file, returns `FileReference.from_local(path, tier=...)`, and the
 activity interceptor persists and materialises it across the boundary. **App-to-app**
-data is the only sanctioned use of `App.upload()` — called from `run()`, not from inside
-a task.  Nesting the transfer in a task breaks the activity contract and routes bytes
-through the wrong store — see BLDX-1398.
+data is the only sanctioned use of `App.upload()` / `App.upload_refs()` — called from
+`run()`, not from inside a task.  Nesting the transfer in a task breaks the activity
+contract and routes bytes through the wrong store — see BLDX-1398.
+
+The method set is the framework tasks that move bytes across the store boundary.  `App`
+has other framework tasks — `verify_refs`, `cleanup_files`, `cleanup_storage` — and
+nesting one of those is the same task-within-a-task error, but it is not a transfer, so
+it is deliberately out of scope for this id rather than silently folded into a rule
+whose name and remediation are about the transfer seam.
 
 Land as `WARN`: a justified inline `# conformance: ignore[P008] <reason>` records any
 unavoidable exception and stays visible in SARIF.
@@ -1115,31 +1142,43 @@ alone does not clear the   runtime failure.
 
 **Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
-> SDR app has no self.upload() call in source — ENABLE_ATLAN_UPLOAD path unreachable
+> SDR app has no self.upload()/self.upload_refs() call in source — ENABLE_ATLAN_UPLOAD path unreachable
 
 **Rationale:** In SDR mode the ENABLE_ATLAN_UPLOAD env var gates whether extracted assets are
-transferred to the Atlan tenant bucket. If the app never calls self.upload(), the
-ENABLE_ATLAN_UPLOAD path is unreachable: extraction completes with status 'success' but
-no assets land in the bucket — a regression that slipped through status-only SDR CI
-(DISTR-752). This rule detects the structural absence of the upload call in app source
-so the regression class is caught at static-analysis time rather than in a customer
-deployment. Fleet remediation confirmed the finding is REAL more often than assumed: 4
-of 15 swept connectors had a genuine silent-zero-asset publish behind a P030 finding
-that had been presumed a false positive. Customer impact: this is the worst
-customer-facing failure class — data loss disguised as success. The tenant reports a
-green run while zero assets reach the customer's catalog, so it is the customer who
-discovers the gap, after trusting the green status for however long it took them to
-look.
+transferred to the Atlan tenant bucket. If the app never calls self.upload() — or its
+peer framework task self.upload_refs(), which delivers a FileReference declaration
+through the same upload body — the ENABLE_ATLAN_UPLOAD path is unreachable: extraction
+completes with status 'success' but no assets land in the bucket — a regression that
+slipped through status-only SDR CI (DISTR-752). This rule detects the structural absence
+of the upload call in app source so the regression class is caught at static-analysis
+time rather than in a customer deployment. Fleet remediation confirmed the finding is
+REAL more often than assumed: 4 of 15 swept connectors had a genuine silent-zero-asset
+publish behind a P030 finding that had been presumed a false positive. Customer impact:
+this is the worst customer-facing failure class — data loss disguised as success. The
+tenant reports a green run while zero assets reach the customer's catalog, so it is the
+customer who discovers the gap, after trusting the green status for however long it took
+them to look.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one Python
-source file (outside `tests/`) must contain a `self.upload(` call.
+source file (outside `tests/`) must contain a `self.upload(` or `self.upload_refs(`
+call.
 
 `App.upload()` is the SDK's sanctioned way to transfer extracted assets to the Atlan
 tenant bucket (the upstream store) in SDR mode. It is gated by `ENABLE_ATLAN_UPLOAD`:
 when the env var is `true` the upload runs and assets land in the bucket; when false,
-the app runs in a local-only mode.  If `self.upload()` is never called anywhere in the
-app source, the gate is structurally unreachable — the workflow completes with status
-'success' regardless of the flag value, and no assets move to the bucket in production.
+the app runs in a local-only mode.  If neither call appears anywhere in the app source,
+the gate is structurally unreachable — the workflow completes with status 'success'
+regardless of the flag value, and no assets move to the bucket in production.
+
+**`App.upload_refs()` satisfies this rule** (SDK 3.33.2 and later). It is not a wrapper
+around `upload` but a peer framework task over the identical `_upload_impl` body: same
+`ENABLE_ATLAN_UPLOAD` gate, same ADR-0014 dual-write routing, same transformed-asset
+validation — and it additionally verifies the delivered tree against the declaration in
+the upstream store before returning.  It is the *stronger* hand-off for a fanned-out
+connector, which is the shape that matters here: a transfer that scans
+`<output>/transformed` from the calling pod sees only the subset of files that pod
+happened to write, and on a fully distributed run sees nothing at all.  Treating it as
+an absence would have penalised exactly the migration this rule wants.
 
 A *working* hand-rolled `upload_to_atlan` bridge is reported by **P042**, not here:
 bytes do move, so it is not this rule's silent-zero-asset shape.  It is not silence
@@ -1180,8 +1219,9 @@ held it at WARN no longer do. Preflight-only apps are now exempted structurally 
 base-class `upload` defined in the SDK template does not clear the finding on purpose —
 an inherited `upload` that nothing ever calls is exactly the unreachable-gate shape, and
 the specific case of deferring to it explicitly (`super().upload(...)`) IS accepted as a
-real call.  Fix by adding `await self.upload(...)` to the `run()` method or the relevant
-`@entrypoint` method.
+real call.  Fix by adding `await self.upload(...)` — or `await self.upload_refs(...)`
+where the hand-off is a declaration rather than one directory — to the `run()` method or
+the relevant `@entrypoint` method.
 
 One residual false-positive shape remains, and it is a *stub* finding, not an absence
 finding: a custom `upload_to_atlan` bridge whose transfer happens inside a helper
@@ -1193,20 +1233,21 @@ any `self.x(...)` would reopen the false negative the rule exists to close.
 objects directly and never parse `# conformance: ignore` directives, and the absence
 finding is anchored at line 1 of `atlan.yaml` where YAML has no comment the parser reads
 anyway.  At BLOCK that means the only exits are real ones: make the transfer visible
-where the checker can see it (call `self.upload(...)`, or `super().upload(...)`, or keep
-the delegated helper in the same class), or declare the app publish-less via
-`pipeline.publish = null` so the structural carve-out below applies.  Deliberately so —
-every shape on the not-satisfied list above was a real silent-zero-asset publish in
-fleet testing, and an easy opt-out is how this class stayed invisible.
+where the checker can see it (call `self.upload(...)`, `self.upload_refs(...)`, or
+`super().upload(...)`, or keep the delegated helper in the same class), or declare the
+app publish-less via `pipeline.publish = null` so the structural carve-out below
+applies.  Deliberately so — every shape on the not-satisfied list above was a real
+silent-zero-asset publish in fleet testing, and an easy opt-out is how this class stayed
+invisible.
 
-Note: P008 flags `self.upload()` *inside* `@task` methods (the wrong location); P030
-flags the *absence* of any upload call; P042 flags a hand-rolled bridge standing in for
-it.  All three should be clean for a correctly-wired SDR app.
+Note: P008 flags `self.upload()`/`self.upload_refs()` *inside* `@task` methods (the
+wrong location); P030 flags the *absence* of any upload call; P042 flags a hand-rolled
+bridge standing in for it.  All three should be clean for a correctly-wired SDR app.
 
 Exemption: this rule is skipped for apps whose `contract/app.pkl` sets `pipeline.publish
 = null` (no publish stage), which compiles to a generated manifest with no `dag.publish`
 node.  An extract-only app has nothing to hand the extracted assets off to, so the
-absence of `self.upload()` is by design, not a gap.
+absence of an upload call is by design, not a gap.
 
 ---
 
@@ -1633,11 +1674,11 @@ render identically, so the upgrade is the fix and the template edit is unnecessa
 > SDR app performs the tenant-bucket transfer through a hand-rolled upload_to_atlan bridge instead of App.upload()
 
 **Rationale:** An app that moves extracted assets to the tenant bucket through its own upload_to_atlan
-method, with no self.upload() anywhere, has reimplemented a contract the SDK owns — on a
-symbol the SDK has marked @deprecated with removal_version 4.0.0. Bytes do move, so this
-is not P030's silent-zero-asset shape and it should not carry P030's message; but it is
-not a false positive either. App.upload() does ADR-0014 dual-write routing,
-transformed-asset validation in a child process, the canonical
+method, with no self.upload() / self.upload_refs() anywhere, has reimplemented a
+contract the SDK owns — on a symbol the SDK has marked @deprecated with removal_version
+4.0.0. Bytes do move, so this is not P030's silent-zero-asset shape and it should not
+carry P030's message; but it is not a false positive either. App.upload() does ADR-0014
+dual-write routing, transformed-asset validation in a child process, the canonical
 artifacts/apps/{app}/workflows/{wf}/{run} prefix and @task retry/replay, and the
 transfer beneath it adds the cross-pod deployment-store fallback (a KEDA-scaled SDR
 worker where local_path does not exist on this pod), partial-local reconcile, and
@@ -1649,8 +1690,8 @@ repo would otherwise get a B001 finding alongside P-series silence.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, this rule fires when a
 custom `upload_to_atlan` method **does** perform a real storage/store transfer (in its
-own body or via same-class delegation) and no `self.upload(` call exists anywhere in the
-app source.
+own body or via same-class delegation) and neither `self.upload(` nor
+`self.upload_refs(` is called anywhere in the app source.
 
 It is the counterpart to P030, which owns the shapes where nothing moves at all: no
 upload path, or an `upload_to_atlan` stub whose body performs no transfer.  Here the
@@ -1678,10 +1719,17 @@ not show the bridge preserves the key layout under replay, survives a pod that n
 held the local files, or reconciles a partial local state — and it says nothing about
 v4.0.
 
-**Remediation:** replace the bridge body with `await self.upload(...)` in the `run()`
-method or the relevant `@entrypoint` method (crawler AND miner), and delete the bridge.
-If the bridge exists because `App.upload()` genuinely cannot express something the app
-needs, that is an SDK gap worth filing rather than a reason to suppress.
+**Remediation:** replace the bridge body with `await self.upload_refs(...)` where the
+hand-off is a `FileReference` declaration a fanned-out step produced, and `await
+self.upload(...)` otherwise — in the `run()` method or the relevant `@entrypoint` method
+(crawler AND miner) — and delete the bridge.  The choice matters on exactly the
+connectors this rule finds: a bridge that scans one directory is usually there *because*
+the transforms fanned out, and swapping it for a `self.upload(local_path)` over the same
+directory greens a single-container e2e while uploading only the subset of files the
+calling pod happened to write. `upload_refs` streams from the deployment store for the
+files this pod never held.  If the bridge exists because neither call can express
+something the app needs, that is an SDK gap worth filing rather than a reason to
+suppress.
 
 This is a WARN, and deliberately a *lower*-urgency one than P030: the app is working
 today.  The deadline is v4.0, not the next run — which is why the rule carries
@@ -1775,6 +1823,12 @@ routing, the canonical artifact prefix, and `@task` retry/replay.
 task, so calling it where the prefix call used to sit — inside a `@task` — trades this
 finding for a **P008** violation. Move the transfer to `run()` / the `@entrypoint`, one
 call per phase, and let the tasks below it read and write local paths.
+
+Where the prefix call was moving a *whole tree* a fanned-out step produced,
+`App.upload_refs()` (SDK 3.33.2) is the hoist that keeps the shape: it takes the
+`FileReference` declaration and lands every entry under one destination prefix, by
+reference rather than by scanning a directory — which is what makes it correct on a
+distributed run, where the calling pod holds only the subset of files it wrote itself.
 
 Not every prefix call is wrong. A genuine bulk transfer with no contract boundary to
 hang a reference on — a state directory synced wholesale, a one-off migration script —

@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**20 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
+**21 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -35,6 +35,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K018](#k018) | `ManifestArgNotDeclaredOnInputContract` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 | [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 | [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
+| [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | — | 0.26.0 |
 
 ---
 
@@ -1071,5 +1072,64 @@ eval` output and the next toolkit run reverts the edit.
 **Suppress** with `// conformance: ignore[K020] <reason>` in `contract/app.pkl` when an
 app is deliberately staying on the legacy envelope for now — a suppression here is a
 statement that the migration is scheduled, not that the shape is fine.
+
+---
+
+## K021 — `FilterFieldRejectsAeString` {#k021}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.26.0
+
+> An entrypoint Input contract types an include_*/exclude_* filter as a strict dict that rejects the flat JSON string the Automation Engine sends
+
+**Rationale:** K018 checks that an include_*/exclude_* arg is declared on the entrypoint's Input
+contract; it deliberately does not look at the field's type. That leaves the type half
+of the same hand-off unchecked, and the type is what breaks next. Since contract-toolkit
+0.9.0 the Automation Engine renders filters as flat top-level JSON strings — '{}' or
+'{"^db$": ["^schema$"]}' — not structured objects. A contract that types the field as a
+strict dict with no string-acceptance path rejects that string, and the run dies at
+Pydantic validation. Where K018's failure is fail-open (a dropped key silently defaults,
+and an empty include-filter crawls everything), K021's is fail-closed: the whole
+workflow crashes before it starts. Nothing else catches it statically — pkl compiles the
+manifest with no visibility into the Python model, and the model itself is well-formed;
+the mismatch only surfaces at runtime, on the tenant, as a crash the customer sees. It
+is the class atlan-looker-app and atlan-fabric-app hit (CONNECT-1333 / CONNECT-1389).
+The rule keys on two exact, structural acceptance conditions — a str union (including a
+bare ExtractionInput subclass that inherits FilterMap | str), or an app-local
+mode='before' validator — and stays silent whenever the contract chain cannot be fully
+resolved, so it prefers a false negative to a false positive. Redeclaring a strict dict
+under ExtractionInput is not safe: the live SDK coercer opts out when the type override
+drops json_schema_extra.
+
+An `include_*` / `exclude_*` filter field on the entrypoint's Python `Input` contract is
+typed as a (possibly `Annotated`) strict `dict` — with no `str` union and no
+`mode="before"` validator — so it cannot accept the value the Automation Engine actually
+sends.
+
+Since contract-toolkit 0.9.0 the AE renders include/exclude filters as flat top-level
+JSON **strings** (`'{}'`, `'{"^db$": ["^schema$"]}'`), not structured objects. Pydantic
+validates the incoming string against a strict `dict` field, the coercion fails, and the
+workflow crashes at validation before it does any work — the fail-closed sibling of
+K018's fail-open dropped-key case. This is the CONNECT-1333 / CONNECT-1389 class.
+
+**Fix** — make the field accept the string, any one of:
+
+* **union with `str`** — `include_filter: FilterMap | str` (or `dict[str, list[str]] |
+str`). Pydantic then tries the `str` arm and the JSON string validates; * **mix in
+`ExtractionInput` without redeclaring a strict dict** —
+`application_sdk.templates.contracts.sql_metadata.ExtractionInput` already types the
+fields as `FilterMap | str`. A type override (`include_filter: dict[str, Any]`) drops
+the SDK `json_schema_extra` the live `_coerce_filter` keys on, so the inherited
+validator does **not** coerce the AE string; or * **add your own before-validator** — a
+`@field_validator("<field>", mode="before")` (or a `mode="before"` `@model_validator`)
+on the contract that coerces the string yourself. An `after`-mode validator does **not**
+count: it runs after field validation, so the string is already rejected.
+
+This is the type half of the same hand-off K018 guards by field name; an app can pass
+K018 (the field is declared) and still fail K021 (the declared type is wrong). Both are
+WARN and app-scoped, and both no-op on any repo without `app/generated/`.
+
+**Suppress** with `# conformance: ignore[K021] <reason>` on the `Input` class definition
+(or the comment-only line directly above it) — for example when the string is genuinely
+coerced by a path the static check cannot follow.
 
 ---

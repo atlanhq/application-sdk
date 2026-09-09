@@ -117,8 +117,18 @@ jobs:
             exit 0
           fi
 
-          echo "Downloading artifacts from run $RUN_ID"
-          gh run download "$RUN_ID" --name trivy-results --dir /tmp/scan-artifacts || echo "No trivy results"
+          # `trivy-results` or `trivy-results-retry`, newest match wins: the
+          # scan's upload retry cannot reuse the first attempt's artifact name
+          # (a failed FinalizeArtifact holds it for the whole run and
+          # CreateArtifact then 409s), so a run whose results landed on the
+          # second attempt is only reachable under the retry name. Same
+          # discovery as the test-readiness job below.
+          ARTIFACT_NAME=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '[.artifacts[] | select(.expired == false) | select(.name == "trivy-results" or .name == "trivy-results-retry")] | sort_by(.created_at) | last | .name // ""')
+
+          echo "Downloading artifacts from run $RUN_ID (artifact: ${ARTIFACT_NAME:-none live})"
+          gh run download "$RUN_ID" --name "${ARTIFACT_NAME:-trivy-results}" --dir /tmp/scan-artifacts || echo "No trivy results"
 
           # If no scan results at all, skip dashboard update to avoid overwriting with zeros
           if [ ! -f /tmp/scan-artifacts/trivy_results.json ]; then
@@ -653,15 +663,24 @@ jobs:
             --json databaseId,conclusion \
             --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[].databaseId')
 
+          # Matches the retry name too. When the scorecard upload's first
+          # attempt hits the artifact service's finalize 403, the retry has to
+          # upload under `test-readiness-scorecard-retry` (a same-named retry
+          # 409s — see that step), so a run whose scorecard landed on the
+          # second attempt is only discoverable under that name. The name that
+          # actually matched is carried forward, so the download stays a
+          # single-artifact one and keeps its flat directory layout.
           RUN_ID=""
+          ARTIFACT_NAME=""
           for candidate in ${CANDIDATES}; do
-            HAS_SCORECARD=$(gh api \
+            FOUND_NAME=$(gh api \
               "repos/${{ github.repository }}/actions/runs/${candidate}/artifacts" \
-              --jq '[.artifacts[] | select(.expired == false) | select(.name == "test-readiness-scorecard")] | length' \
-              2>/dev/null || echo 0)
-            if [ "${HAS_SCORECARD:-0}" -gt 0 ]; then
+              --jq '[.artifacts[] | select(.expired == false) | select(.name == "test-readiness-scorecard" or .name == "test-readiness-scorecard-retry")] | sort_by(.created_at) | last | .name // ""' \
+              2>/dev/null || echo "")
+            if [ -n "${FOUND_NAME}" ]; then
               RUN_ID="${candidate}"
-              echo "Run ${candidate} has a live test-readiness-scorecard — using it"
+              ARTIFACT_NAME="${FOUND_NAME}"
+              echo "Run ${candidate} has a live ${FOUND_NAME} — using it"
               break
             fi
             echo "Run ${candidate} has no live scorecard — trying older"
@@ -671,12 +690,14 @@ jobs:
             echo "::warning::No Tests run with a live test-readiness-scorecard in the last 20 completed runs — skipping test-readiness dashboard update"
           fi
           echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Download test-readiness artifact
         if: steps.discover.outputs.run_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.discover.outputs.run_id }}
+          ARTIFACT_NAME: ${{ steps.discover.outputs.artifact_name }}
         run: |
           set -euo pipefail
           mkdir -p scorecard-dl
@@ -688,7 +709,7 @@ jobs:
           # upload into a green no-op.
           gh run download "$RUN_ID" \
             --repo "${{ github.repository }}" \
-            --name test-readiness-scorecard \
+            --name "$ARTIFACT_NAME" \
             --dir scorecard-dl
 
       - name: Build history entry

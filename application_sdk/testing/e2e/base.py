@@ -39,7 +39,7 @@ run is graded against. The plumbing it composes is
 :mod:`application_sdk.testing.harness`:
 
 * :mod:`~application_sdk.testing.harness.identity` mints the run id and the
-  ephemeral connection name — including the qualified name teardown purges,
+  ephemeral connection name — including the qualified name teardown deletes,
   which used to come back from ``Connection.creator`` at one-second resolution
   and could collide between two matrix legs;
 * :mod:`~application_sdk.testing.harness.starters` publishes the seed version;
@@ -50,7 +50,9 @@ run is graded against. The plumbing it composes is
   qualified-name depths;
 * :mod:`~application_sdk.testing.harness.preconditions` is the worker-health
   probe behind :meth:`BaseE2ETest.assert_worker_up`;
-* :mod:`~application_sdk.testing.harness.teardown` purges;
+* :mod:`~application_sdk.testing.harness.teardown` reclaims — through the
+  tenant's ``connection-delete`` app, which owns the byte-stores a runner
+  cannot reach, with the ``pyatlan`` purge as its fallback;
 * :mod:`~application_sdk.testing.harness.budgets` carries every timing this
   class' ``ClassVar`` declarations carry.
 
@@ -95,8 +97,10 @@ from application_sdk.common.task_queue import (
     derive_task_queue,
 )
 from application_sdk.contracts.types import ConnectionRef
-from application_sdk.errors.base import safe_traceback
+from application_sdk.errors.base import safe_traceback, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage.binding import create_store_from_binding_optional
+from application_sdk.storage.ops import delete as delete_object
 from application_sdk.testing.e2e._errors import (
     AmbiguousDAGRunError,
     AtlasReadIndeterminateError,
@@ -134,6 +138,7 @@ from application_sdk.testing.e2e.payload import (
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.harness import atlas
+from application_sdk.testing.harness import seed as harness_seed
 from application_sdk.testing.harness._errors import MissingTenantEnvError
 from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.bridge import run_sync
@@ -176,13 +181,30 @@ from application_sdk.testing.harness.starters import (
     SubmitRetry,
     publish_seed_version,
 )
-from application_sdk.testing.harness.teardown import purge_connection
+from application_sdk.testing.harness.teardown import (
+    ConnectionDeletePlan,
+    ConnectionDeleteReport,
+    DeleteType,
+    connection_delete_task_queue,
+    delete_connection,
+    purge_connection,
+)
 from application_sdk.testing.harness.waiting import poll_until
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; pyatlan is a lazy import
+    from obstore.store import ObjectStore
     from pyatlan.client.aio.client import AsyncAtlanClient
 
 logger = get_logger(__name__)
+
+# Where the sdr-e2e composite action selects the CI Dapr components, and the
+# name the atlan-configurator emits the tenant blobstorage binding under. Both
+# are the CI convention rather than a rule, which is why each has an env
+# override (``E2E_SEED_COMPONENTS_DIR`` / ``E2E_SEED_STORE_BINDING``) and the
+# whole resolution sits behind an overridable method — a leg whose layout
+# differs is a per-leg env var, not an edit here.
+_DEFAULT_SEED_COMPONENTS_DIR = "ci-deploy/components"
+_DEFAULT_SEED_STORE_BINDING = "atlan-objectstore"
 
 # Version that drops the deprecated ``DatabaseSpec.connector_config_name``
 # fallback in :meth:`BaseE2ETest.resolved_connector_config_name`. Every
@@ -490,6 +512,16 @@ class DAGSpec:
         expected_exact_counts: Per-type exact-count parity.
         expected_asset_qn_depth: Per-type qualifiedName depth below the
             connection.
+        connection_qualified_name: The connection this run is submitted and
+            graded against. ``None`` — the default, and what every run did
+            before FND-1648 — means the suite's own minted connection, which is
+            still the right answer whenever the runs are sequenced *because they
+            share state on one connection*. Set it when they are sequenced for
+            the opposite reason: a run that prepares a **different** connection
+            for a later one to reference (a lineage parent another source owns).
+            The QN is registered for teardown when this run activates, so a
+            connection named here is purged with the rest even if the run that
+            was to consume it never got that far.
         label: Short name for this run, used in logs, in the failure evidence
             bundle and — for any run that is not the suite's own default — in
             the AE workflow name, so N runs in one leg stay N distinguishable
@@ -506,6 +538,7 @@ class DAGSpec:
     expected_min_asset_counts: Mapping[str, int] | None = None
     expected_exact_counts: Mapping[str, int] | None = None
     expected_asset_qn_depth: Mapping[str, int] | None = None
+    connection_qualified_name: str | None = None
     label: str = ""
 
 
@@ -531,6 +564,7 @@ class ResolvedDAG:
     expected_min_asset_counts: Mapping[str, int]
     expected_exact_counts: Mapping[str, int]
     expected_asset_qn_depth: Mapping[str, int]
+    connection_qualified_name: str = ""
 
 
 class BaseE2ETest:
@@ -772,12 +806,18 @@ class BaseE2ETest:
     # assert different things, and a single "did the suite pass" boolean is
     # exactly the shape that lets one of them stop meaning anything.
     #
-    # All runs share this suite's minted ``connection_qualified_name`` — that
-    # sharing is the point, and it is why this is a list on one suite rather
-    # than two ordered CI legs, which would have to move teardown out of
-    # ``teardown_method`` (guaranteed on pass, fail AND error) into an
-    # ``if: always()`` job a cancelled workflow can still skip, on a leased
-    # shared tenant. Teardown stays one purge here however many runs there are.
+    # By default all runs share this suite's minted
+    # ``connection_qualified_name`` — that sharing is the point, and it is why
+    # this is a list on one suite rather than two ordered CI legs, which would
+    # have to move teardown out of ``teardown_method`` (guaranteed on pass, fail
+    # AND error) into an ``if: always()`` job a cancelled workflow can still
+    # skip, on a leased shared tenant.
+    #
+    # A run that prepares a *different* connection for a later one to reference
+    # — a lineage parent another source owns — names it on
+    # ``DAGSpec.connection_qualified_name``. That QN joins the same teardown
+    # registry ``seed_assets`` writes to, so however many connections the suite
+    # touches, ``teardown_method`` still reclaims all of them.
     #
     # Cost: the runs are serial by nature, so each one adds its own wall clock
     # to the leg (a crawl is minutes, a miner plus its lineage poll is minutes
@@ -862,6 +902,39 @@ class BaseE2ETest:
     # int to pin the window; setup_method rejects a pinned value that is not
     # strictly below ae_poll_timeout_seconds.
     dag_progress_stall_seconds: ClassVar[int | None] = None
+    # ---- Teardown, which runs through the ``connection-delete`` app --------
+    #
+    # Teardown submits one ``connection-delete`` DAG per connection the run
+    # touched (see :mod:`application_sdk.testing.harness.teardown`), so it needs
+    # its own two budgets rather than the run's. Both are deliberately smaller
+    # than the DAG budgets above: teardown is post-verdict, its failures never
+    # red a leg, and a leg that sits in cleanup is a leg holding a CI runner for
+    # nothing.
+    #
+    # Ceiling on one connection's delete. Wide enough for the app to drain a
+    # crawl's worth of assets (its own search-and-delete loop is budgeted in
+    # tens of thousands per call), narrow enough that a wedged delete does not
+    # outlast the run that created it. The DAG-progress watchdog is NOT armed on
+    # this poll — connection-delete is a single node that legitimately sits
+    # Running while it drains, which a glyph comparison cannot tell from a wedge
+    # — so this ceiling is the only bound.
+    connection_delete_poll_timeout_seconds: ClassVar[int] = 900
+    # How long to wait for the delete node to be picked up before concluding
+    # that nothing polls the connection-delete queue, and why it is far shorter
+    # than ae_stall_grace_seconds: when nothing does — a scale-to-zero worker
+    # that will not wake, or a tenant without the app installed — EVERY
+    # connection would otherwise burn the full ceiling above before the pyatlan
+    # fallback gets to reclaim the Atlas half. It still has to clear a cold
+    # start: connection-delete's atlan.yaml sets ``keda.minReplicaCount: 0``, so
+    # its queue is legitimately unpolled between runs and KEDA has to scale it
+    # up on queue depth. 0 disables the latch, which means an unpolled queue
+    # waits out the ceiling instead.
+    connection_delete_stall_grace_seconds: ClassVar[int] = 120
+    # How thoroughly teardown deletes. PURGE because that is what the pyatlan
+    # purge this replaced did, and an ephemeral connection is never coming back;
+    # the app's own default is SOFT, which would leave every run's assets
+    # recoverable-and-still-indexed on a shared tenant.
+    connection_delete_type: ClassVar[DeleteType] = DeleteType.PURGE
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
     # Probe errors that can never heal by retrying: a deterministic bug in the
@@ -1004,6 +1077,8 @@ class BaseE2ETest:
         self._active_dag = None
         self.dag_outcomes = []
         self._connection_seeded = False
+        self._seeded_connection_qns: list[str] = []
+        self._seeded_prefixes: list[str] = []
         self._validate_dag_runs()
 
         # A pinned progress-stall window that is not strictly below the poll
@@ -1399,42 +1474,286 @@ class BaseE2ETest:
         run_sync(self._teardown_method_async(method))
 
     async def _teardown_method_async(self, method: Any) -> None:
-        """Purge this run's connection, then close the clients it opened.
+        """Reclaim this run's connections, then close the clients it opened.
 
-        The purge itself is
-        :func:`~application_sdk.testing.harness.teardown.purge_connection`, which
-        reports rather than raises: the batching that is a correctness bound
-        (``purge_by_guid`` puts one ``guid=`` parameter per asset into one
-        DELETE, and httpx refuses a URL whose query exceeds 64 KiB, so an
-        unbatched purge deletes *nothing*), the read-everything-before-deleting
-        order that offset pagination makes mandatory, and the two independently
-        guarded phases all live there now.
+        The reclaim itself is
+        :func:`~application_sdk.testing.harness.teardown.delete_connection`,
+        which submits a one-node ``connection-delete`` DAG the same way
+        :meth:`seed_assets` submits its publish node — because the app owns the
+        artifacts and runs *on the tenant*, where the byte-stores the harness
+        cannot reach through the s3proxy are ordinary object-store keys. What
+        the harness still deletes itself is the seed NDJSON it wrote, which is
+        no app's to clean up.
+
+        Nothing here raises. Every step reports, and the module those two
+        functions live in explains why that is a stronger guarantee than
+        remembering to wrap the call.
 
         Args:
             method: The test method pytest just ran. Unused; part of the xunit
                 signature.
         """
         try:
-            await self._purge_this_run()
+            await self._delete_connections()
+            await self._delete_seed_objects()
         finally:
             await self._close_clients()
 
-    async def _purge_this_run(self) -> None:
-        """Delete the ephemeral connection this run minted, if there is one."""
+    async def _delete_connections(self) -> None:
+        """Delete every ephemeral connection this run touched, if there are any.
+
+        The run's own connection first, then every lineage-parent connection
+        :meth:`seed_assets` registered — in that order because the run's assets
+        hold lineage *references* into the seeded skeletons, and deleting the
+        referrer before the referent is the direction that cannot strand an
+        edge. That ordering is also why each connection gets its own single-node
+        run rather than all of them sharing one graph: chained ``depends_on``
+        nodes would keep the order and let one stuck delete orphan every later
+        one, parallel nodes would keep them independent and lose the order, and
+        one run per connection keeps both.
+
+        A delete that does not complete falls back to
+        :func:`~application_sdk.testing.harness.teardown.purge_connection`,
+        which reclaims the Atlas half from the runner and nothing else. The
+        fallback is transitional — see the teardown module's docstring for the
+        two silences it covers (a tier with no AE client, and a scale-to-zero
+        worker that does not wake) and for when it should go.
+        """
         conn_qn = getattr(self, "connection_qualified_name", "")
-        if not conn_qn:
+        seeded = tuple(getattr(self, "_seeded_connection_qns", ()))
+        for ordinal, target in enumerate((conn_qn, *seeded), start=1):
+            if not target:
+                continue
+            report = await self._delete_connection_via_app(target, ordinal=ordinal)
+            if report is not None and report.complete:
+                continue
+            self._warn_connection_delete_incomplete(target, report)
+            await self._purge_connection_from_runner(target)
+
+    async def _delete_connection_via_app(
+        self, qualified_name: str, *, ordinal: int
+    ) -> ConnectionDeleteReport | None:
+        """Run the ``connection-delete`` node for one connection.
+
+        Args:
+            qualified_name: The connection to delete.
+            ordinal: Its position in this run's teardown, which is what keeps
+                two teardown runs' AE workflow names apart — see
+                :meth:`_connection_delete_plan`.
+
+        Returns:
+            The report, or ``None`` when this tier has no AE client to submit
+            through at all. ``None`` is a distinct answer from a failed report:
+            there is no missing app to name and nothing to link to, only the
+            fallback.
+        """
+        ae = getattr(self, "_ae", None)
+        if ae is None:
+            # The worker-up-only tier (source_available=False) wires no AE
+            # client. A run there still mints a connection name, and a suite
+            # that created one by other means still needs it reclaimed.
+            return None
+        try:
+            plan = self._connection_delete_plan(ordinal=ordinal)
+        # conformance: ignore[E004] teardown boundary — resolving the plan reads the suite's own class attrs and can raise on a suite that never finished setup; a cleanup failure must never replace the run's verdict
+        except Exception as error:
+            # Reported as a failed delete rather than as "no AE client": the
+            # client is there, and saying otherwise would send a reader looking
+            # at the wrong tier. Logged here for the traceback, which the
+            # report's redacted one-liner cannot carry.
+            logger.warning(
+                "e2e cleanup: could not resolve how to address the "
+                "connection-delete app for %s",
+                qualified_name,
+                exc_info=True,
+            )
+            return ConnectionDeleteReport(
+                qualified_name=qualified_name,
+                errors=(
+                    "could not resolve how to address the connection-delete "
+                    f"app: {sanitize_cause_repr(error)}",
+                ),
+            )
+        return await delete_connection(qualified_name, ae=ae, plan=plan)
+
+    def _warn_connection_delete_incomplete(
+        self, qualified_name: str, report: ConnectionDeleteReport | None
+    ) -> None:
+        """Say what the app did not clean up, and — when it can — why.
+
+        A missing ``connection-delete`` app is called out by name rather than
+        folded into a generic cleanup warning, because it is the failure mode
+        that otherwise reads exactly like a passing run: the leg is green, the
+        assets are gone (the fallback took them), and the byte-stores quietly
+        accumulate on a shared tenant forever. A *superseded* DAG
+        (:attr:`~application_sdk.testing.harness.teardown.ConnectionDeleteReport.dag_superseded`)
+        gets the same treatment for a sharper reason: it reads like a tenant
+        problem while being an SDK one, and since FND-1775 it should not be
+        reachable at all. It stays a warning all the same —
+        tenant cleanliness is not what the test is asserting, and a cleanup
+        failure must never become the run's verdict.
+
+        Args:
+            qualified_name: The connection whose delete did not complete.
+            report: What the delete managed, or ``None`` when no AE client
+                existed to run it.
+        """
+        if report is None:
+            logger.warning(
+                "e2e cleanup: no AE client on this tier, so %s could not be "
+                "deleted through the connection-delete app. Falling back to the "
+                "runner-side purge, which reclaims the Atlas assets and leaves "
+                "the connection's byte-stores (connection-cache/%s.sqlite and "
+                "persistent-artifacts/apps/atlan-publish-app/state/%s/) behind",
+                qualified_name,
+                qualified_name,
+                qualified_name,
+            )
             return
+        if report.app_absent:
+            logger.warning(
+                "e2e cleanup: nothing polled %s, so %s could not be deleted "
+                "through the connection-delete app — either its scale-to-zero "
+                "worker did not wake (keda.minReplicaCount is 0) or the app is "
+                "not installed on this tenant (Global Marketplace app_id "
+                "019ef7f4-de9a-77c3-bad1-7f201fc97052). Falling back to the "
+                "runner-side purge, which reclaims the Atlas assets and leaves "
+                "connection-cache/%s.sqlite and "
+                "persistent-artifacts/apps/atlan-publish-app/state/%s/ behind — "
+                "publish never cleans up its own cache, so those grow without "
+                "bound on a shared tenant. Details: %s",
+                self._connection_delete_task_queue(),
+                qualified_name,
+                qualified_name,
+                qualified_name,
+                "; ".join(report.errors),
+            )
+            return
+        if report.dag_superseded:
+            logger.warning(
+                "e2e cleanup: %s was not deleted through the connection-delete "
+                "app because the graph AE ran was not the delete node the "
+                "teardown published (slug=%s run_id=%s). The teardown submits "
+                "its own published version straight to AE, which fetches no "
+                "manifest, so something republished over that version — an "
+                "SDK-side or AE-side problem, not a tenant one, and one that "
+                "should be impossible. Until it is understood this leg falls "
+                "back to the runner-side purge and leaks "
+                "connection-cache/%s.sqlite and "
+                "persistent-artifacts/apps/atlan-publish-app/state/%s/. "
+                "Details: %s",
+                qualified_name,
+                report.ae_workflow_slug or "<none>",
+                report.ae_run_id or "<none>",
+                qualified_name,
+                qualified_name,
+                "; ".join(report.errors),
+            )
+            return
+        logger.warning(
+            "e2e cleanup: the connection-delete run for %s did not complete "
+            "(slug=%s run_id=%s), so its byte-stores may remain. Falling back to "
+            "the runner-side purge. Details: %s",
+            qualified_name,
+            report.ae_workflow_slug or "<none>",
+            report.ae_run_id or "<none>",
+            "; ".join(report.errors),
+        )
+
+    async def _purge_connection_from_runner(self, qualified_name: str) -> None:
+        """Reclaim the Atlas half of one connection with ``pyatlan``.
+
+        The degraded path, run only when the app could not. Independently
+        guarded, for the same reason the two phases inside
+        :func:`~application_sdk.testing.harness.teardown.purge_connection` are:
+        one connection that will not purge must not orphan the others.
+
+        Args:
+            qualified_name: The connection to purge.
+        """
         try:
             async with self._atlas_client() as client:
-                await purge_connection(client, conn_qn)
+                await purge_connection(client, qualified_name)
         # conformance: ignore[E004] teardown boundary — this runs after the assertions have decided the verdict, so a cleanup failure must never replace a real one; it is logged at WARNING with exc_info
         except Exception:
             logger.warning(
                 "e2e cleanup: could not reach the tenant to purge %s — manual "
                 "purge may be needed",
-                conn_qn,
+                qualified_name,
                 exc_info=True,
             )
+
+    async def _delete_seed_objects(self) -> None:
+        """Delete the object-store keys each :meth:`seed_assets` call wrote.
+
+        The one artifact ``connection-delete`` does not cover: its
+        ``archive_storage`` clears the *app-owned* per-connection stores
+        (``connection-cache/``, ``argo-artifacts/``, ``delta/``, publish's
+        state root), and the seed NDJSON under ``artifacts/apps/<app>/e2e-seed/``
+        is harness-specific — nothing on the tenant knows it exists.
+
+        **By key, never by prefix** — though on current evidence neither
+        reaches the store. ``delete_prefix`` is a LIST plus a bulk
+        ``POST ?delete``, both *bucket-level* URLs, and the tenant's Kong
+        s3proxy path-matches against an allowlist it cannot apply to a URL
+        whose keys live in the request body, so it came back
+        ``403 code 1009``. The per-key DELETE was the fix for that — the
+        allowlist can read a path — and a live e2e run on 2026-09-07
+        (FND-1766's three-cloud A/B) came back ``403`` on it too. The
+        allowlist does not grant DELETE under ``/artifacts/apps/`` to a runner
+        in any request shape.
+
+        This method therefore expects to fail, and is written to fail
+        harmlessly: each key is attempted, a refusal is logged with the key
+        named, and the run's verdict is untouched. Keeping it is still worth
+        more than deleting it — it will start working the moment the allowlist
+        or the store binding changes, and its log line is what names the
+        leftover.
+
+        **The actual fix is on the tenant, not here.** ``connection-delete``'s
+        ``archive_storage`` already clears the app-owned per-connection stores
+        from inside the cluster, where no proxy sits in front of the bucket;
+        bringing the seed root into its scope deletes these keys and publish's
+        own state under the same root (``.../publish-state/``,
+        ``.../current-state/``) in one go. Both are bounded per seed. A third
+        URL shape from the runner is not the answer.
+
+        Run after the connections, on the same ordering rule as before: the
+        entities are what a stranded run trips over, the NDJSON is only bytes,
+        and a store the harness cannot reach must not stop the deletes.
+        """
+        prefixes = tuple(getattr(self, "_seeded_prefixes", ()))
+        if not prefixes:
+            return
+        try:
+            store = self.seed_object_store()
+        # conformance: ignore[E004] teardown boundary — see _purge_connection_from_runner; a store the harness cannot resolve leaves bytes behind, which is strictly less harmful than replacing the run's verdict
+        except Exception:
+            logger.warning(
+                "e2e cleanup: no usable seed object store, so the seed NDJSON "
+                "under %s was left behind — manual cleanup may be needed",
+                ", ".join(prefixes),
+                exc_info=True,
+            )
+            return
+        for prefix in prefixes:
+            for key in harness_seed.seed_object_keys(root=prefix):
+                try:
+                    deleted = await delete_object(key, store)
+                # conformance: ignore[E004] teardown boundary — see above
+                except Exception:
+                    logger.warning(
+                        "e2e cleanup: could not delete the seed object %s — "
+                        "manual cleanup may be needed",
+                        key,
+                        exc_info=True,
+                    )
+                    continue
+                logger.info(
+                    "e2e cleanup: %s seed object %s",
+                    "deleted" if deleted else "found no",
+                    key,
+                )
 
     async def _close_clients(self) -> None:
         """Release the AE pool this test opened, on the loop that opened it.
@@ -1804,6 +2123,397 @@ class BaseE2ETest:
             cause=cause,
         )
 
+    def seed_assets(self, spec: harness_seed.SeedSpec) -> harness_seed.SeededConnection:
+        """Seed a lineage parent another *source* owns, through a real publish run.
+
+        For the ``ATLAS-404-00-00A`` class of failure (FND-402 / FND-1648): a
+        lineage-only connector (coalesce, adf, mode) publishes Process /
+        ColumnProcess entities whose refs name *another source's* assets, and on
+        a connector-scoped e2e tenant nothing has ever crawled that source. Call
+        this from :meth:`seed_prerequisites` with the exact tree the connector's
+        refs will name.
+
+        **Use it only when that source is not reachable inside the leg.** When it
+        is — the postgres miner's warehouse is the same app's other entrypoint,
+        with a hermetic container already in the job — declare a real crawl in
+        :attr:`dag_runs` instead. A crawl seeds from the real producer and its QN
+        parity holds by construction; this does not.
+
+        The seed writes transformed NDJSON and submits one ``PublishWorkflow``
+        node, so publish owns both the entities *and* the connection cache the
+        consuming connector resolves its refs against — see
+        :mod:`application_sdk.testing.harness.seed` for why seeding Atlas
+        directly cannot produce the second half.
+
+        Unlike :meth:`seed_connection`, which seeds *this run's own* connection,
+        the tree here hangs under a **second** ephemeral connection for the
+        referenced source. When ``spec.qualified_name`` is ``None`` this run's
+        minter names it, exactly as it named the run's own — same uniqueness,
+        same predictability. Either way the QN lands on
+        ``self._seeded_connection_qns`` and the object-store prefix on
+        ``self._seeded_prefixes``, both of which :meth:`teardown_method` cleans
+        up after the run's own connection — closing the gap where a suite that
+        seeded a second connection had nothing that would ever tear it down.
+
+        Args:
+            spec: What to seed. When its ``qualified_name`` is ``None``, one is
+                minted from ``spec.connector_type`` (the display name follows
+                unless the spec pinned its own). The admin ACL defaults to the
+                one ``setup_method`` resolved when the spec declares none.
+
+        Returns:
+            The :class:`~application_sdk.testing.harness.seed.SeededConnection`,
+            whose ``qualified_name`` is the prefix to rebase the connector's refs
+            onto.
+
+        Raises:
+            UnknownConnectorTypeError: ``spec.connector_type`` is not a pyatlan
+                ``AtlanConnectorType``.
+            SeedSegmentInvalidError: A segment cannot compose the qualified name
+                the spec declares.
+            SeedStoreUnavailableError: No object-store binding the tenant's
+                publish app reads — see :meth:`seed_object_store`.
+            SeedTreeInvalidError: The serialised batch would not survive publish.
+            SeedPublishFailedError: The seed's publish run did not succeed.
+            SeedPublishEmptyError: The publish run succeeded and Atlas holds
+                nothing under the seeded connection. Publish is handed a
+                *prefix*, and one it cannot read is an empty batch rather than
+                an error — so this is the shape a node-status check cannot see,
+                and the read-back is what turns it into a failure here instead
+                of the connector's ``ATLAS-404`` cascade minutes later.
+        """
+        return run_sync(self._seed_assets_async(spec))
+
+    async def _seed_assets_async(
+        self, spec: harness_seed.SeedSpec
+    ) -> harness_seed.SeededConnection:
+        """Resolve the identity, register what teardown must reclaim, then hand off.
+
+        Both registrations happen *before* the seed runs, not after: a seed that
+        uploads its NDJSON and then fails in publish has left a prefix and
+        (possibly) a connection behind, and registering on success would leave
+        exactly those half-set-up artifacts on a shared tenant.
+        """
+        identity = self._minter.connection_identity(spec.connector_type)
+        # ``is None``, not ``or``. ``SeedSpec`` documents ``None`` as the one
+        # omission sentinel, so ``""`` is a *supplied* value — and one
+        # ``validate_resolved_spec`` rejects. Falling back on it would mint a
+        # valid QN over the caller's mistake, and the seed would then publish
+        # under a connection nobody asked for while the refs still named the
+        # empty one. The empty-as-omitted collapse is the shape this spec
+        # dropped its ``""`` sentinels to avoid.
+        resolved = spec.resolve(
+            qualified_name=(
+                identity.qualified_name
+                if spec.qualified_name is None
+                else spec.qualified_name
+            ),
+            display_name=(
+                identity.display_name
+                if spec.display_name is None
+                else spec.display_name
+            ),
+        )
+        if not (resolved.admin_users or resolved.admin_groups or resolved.admin_roles):
+            resolved = resolved.with_admins(
+                admin_users=tuple(
+                    self.connection_admin_users or self._auto_admin_users
+                ),
+                admin_groups=tuple(self.connection_admin_groups),
+                admin_roles=tuple(
+                    self.connection_admin_roles or self._auto_admin_roles
+                ),
+            )
+
+        # What keeps two seeds' AE workflow names apart — see
+        # :meth:`_seed_publish_plan`. It is the teardown registry's length, so
+        # it counts every connection this run touched (a ``DAGSpec``-named one
+        # included), not only the seeds. That is deliberate and sufficient: the
+        # registry is append-only within a run, so the value is strictly
+        # increasing and no two seeds can ever read the same one.
+        plan = self._seed_publish_plan(
+            resolved, ordinal=len(self._seeded_connection_qns) + 1
+        )
+        self._seeded_connection_qns.append(resolved.qualified_name)
+        self._seeded_prefixes.append(
+            harness_seed.seed_prefix_root(
+                app_name=plan.app_name, qualified_name=resolved.qualified_name
+            )
+        )
+        return await harness_seed.seed_assets(
+            resolved,
+            store=self.seed_object_store(),
+            ae=self._ae,
+            plan=plan,
+            verify=self._count_seeded_assets,
+        )
+
+    async def _count_seeded_assets(
+        self, qualified_name: str, expected: int
+    ) -> int | None:
+        """Poll Atlas until *expected* assets are visible under the seeded connection.
+
+        The read-back that turns "the publish node succeeded" into "the seed
+        landed". Two things it must not do, and both were wrong when this waited
+        on the run's own short inventory budget:
+
+        * **Give up in seconds.** The trees this exists for run to thousands of
+          entities (the coalesce seed is ~130), and Elasticsearch does not index
+          them instantly. ``atlas_asset_poll_timeout_seconds`` is 15s because a
+          *crawl's* assets are already indexed by the time the DAG reports
+          success; a seed's are not. This uses
+          :meth:`_seed_readback_budget` instead.
+        * **Report "ran out of time" as "found zero".** The wait's verdict and
+          the last reading are different facts. Returning the reading alone let
+          an expired poll whose last count was 0 raise ``SeedPublishEmptyError``
+          — failing a large seed for being slow, as the unreadable-prefix
+          failure it is not.
+
+        Waiting for the full count rather than for "more than zero" is what
+        makes the returned number worth grading: a partial answer is reported as
+        partial rather than rounded up to success.
+
+        Args:
+            qualified_name: The seeded connection's QN.
+            expected: How many assets the seed published; the poll exits as soon
+                as the count reaches it.
+
+        Returns:
+            The last count read, or ``None`` when no probe ever produced a
+            readable one — which the caller grades as unverified, never as zero.
+        """
+        last: int | None = None
+
+        async def _probe() -> int | None:
+            nonlocal last
+            async with self._atlas_client() as client:
+                reading = await atlas.count_total_assets(client, qualified_name)
+            # An unreadable search leaves ``last`` at its previous value rather
+            # than overwriting it with None: one blip late in the wait must not
+            # erase a count the earlier probes did read.
+            if isinstance(reading, Settled):
+                last = reading.value
+            return last
+
+        await poll_until(
+            _probe,
+            settled=lambda count: count is not None and count >= expected,
+            budget=self._seed_readback_budget(),
+            label=f"{expected} seeded asset(s) under {qualified_name}",
+        )
+        return last
+
+    def _seed_readback_budget(self) -> Budget:
+        """Allowance for a seed's published assets to become countable.
+
+        The connection poll's timings rather than the inventory poll's: this
+        waits for Elasticsearch to index a batch that was written moments ago,
+        which is minutes-scale for a large tree, not the seconds the run's own
+        inventory needs. The wait exits as soon as the expected count is
+        reached, so a small seed pays nothing for the wider ceiling.
+
+        Returns:
+            The budget.
+        """
+        return Budget(
+            timeout=timedelta(seconds=self.atlas_poll_timeout_seconds),
+            poll_interval=timedelta(seconds=self.atlas_asset_poll_interval_seconds),
+            # The probe returns a reading rather than raising, and a count that
+            # is still climbing is the expected answer here — spending a
+            # transient streak on it would end the wait early on exactly the
+            # large seed the wider ceiling exists for.
+            heartbeat=None,
+        )
+
+    def _seed_publish_plan(
+        self, spec: harness_seed.ResolvedSeedSpec, *, ordinal: int
+    ) -> harness_seed.SeedPublishPlan:
+        """Resolve how this leg dispatches and waits on a seed's publish run.
+
+        Every value is the one this suite's own run uses, so a seed cannot be
+        polled on a different budget or dispatched to a different tenant than the
+        run it exists to unblock. The AE workflow name is the exception, and it
+        has to be unique twice over, because ``create_workflow`` is idempotent on
+        the name:
+
+        * against **the suite's own run** — sharing that name would publish the
+          seed's one-node graph over the connector's DAG. Hence ``-seed-``.
+        * against **another seed in the same run** — a suite that seeds two
+          connections of the same type (two warehouses, two accounts) would
+          otherwise reuse one slug, publish each graph over the other, and leave
+          an AE run list in which the two are indistinguishable. This is the
+          collision :meth:`_ae_workflow_name_suffix` already had to solve for
+          multi-``DAGSpec`` runs.
+
+        *ordinal* rather than a rendering of the QN: AE's own constraints on
+        workflow names are not ours to guess, and a QN's segments are
+        caller-supplied, so any flattening of them into a name is a second
+        encoding that can collide (``a/b`` and ``a-b`` both read as ``a-b``).
+        The position in the run is unique by construction and needs no escaping.
+        The QN is not lost — it is on the workflow's description, and on the
+        ``SeededConnection`` the call returns.
+
+        Args:
+            spec: The resolved spec, whose connector type names the workflow.
+            ordinal: A number unique to this seed within the run. The caller
+                takes it from the teardown registry's length, which counts every
+                connection the run touched rather than only its seeds — the
+                values are not contiguous, and do not need to be.
+
+        Returns:
+            The plan.
+        """
+        return harness_seed.SeedPublishPlan(
+            app_name=self.connector_short_name,
+            publish_task_queue=self._publish_task_queue(),
+            ae_workflow_name=(
+                f"{self.connector_short_name}-{self.connection_name_prefix}-"
+                f"{self.run_id}-seed-{ordinal}-{spec.connector_type}"
+            ),
+            run_id=self.run_id,
+            # No cold-start budget and no app address. Since FND-1766 the seed
+            # submits straight to AE and calls no app pod, so there is nothing
+            # to cold-start-wait on — the suite's own submit still carries
+            # ``_submit_retry()``, which is where waiting on the app under test
+            # belongs. Leaving ``submit_retry`` unset takes
+            # ``submit_published_version``'s publish-replication budget, which
+            # is the only wait this submit actually has.
+            poll_interval_seconds=self.ae_poll_interval_seconds,
+            poll_timeout_seconds=self.ae_poll_timeout_seconds,
+            progress_stall_seconds=self._resolved_progress_stall_seconds(),
+            minter=self._minter,
+        )
+
+    def _publish_task_queue(self) -> str:
+        """Task queue the tenant's ``publish`` app polls.
+
+        Derived from :meth:`resolved_tenant_deployment_name` rather than pinned,
+        for the reason that method exists: which deployment the system apps are
+        registered under is a property of the tenant, and one suite runs against
+        several tenants in one CI run.
+        """
+        return f"atlan-publish-{self.resolved_tenant_deployment_name()}"
+
+    def _connection_delete_task_queue(self) -> str:
+        """Task queue the tenant's ``connection-delete`` app polls.
+
+        Derived from :meth:`resolved_tenant_deployment_name` on the same rule as
+        :meth:`_publish_task_queue`: which deployment the tenant registers its
+        apps under is a property of the tenant, and one suite runs against
+        several tenants in one CI run. Resolves to
+        ``atlan-connection-delete-production`` on a standard tenant, mirroring
+        ``atlan-publish-production``.
+
+        Returns:
+            The queue name.
+        """
+        return connection_delete_task_queue(self.resolved_tenant_deployment_name())
+
+    def _connection_delete_plan(self, *, ordinal: int) -> ConnectionDeletePlan:
+        """Resolve how this leg dispatches and waits on one connection's delete.
+
+        Every value is the one this suite's own run uses, so teardown cannot be
+        dispatched to a different tenant than the run it is cleaning up after.
+        The envelope names the delete app
+        (:mod:`application_sdk.testing.harness.teardown._dag`), so whichever
+        graph wins Heracles' submit-time republish is a delete; ``app_service_url``
+        stays omitted because a teardown submit has no service URL to name. Of
+        what the plan does carry, two values are deliberately not the run's:
+
+        * **The budgets** are teardown's own
+          (:attr:`connection_delete_poll_timeout_seconds`,
+          :attr:`connection_delete_stall_grace_seconds`) rather than the run's.
+          Teardown is post-verdict, so a leg that sits in cleanup is holding a
+          CI runner for nothing — and the stall grace here is the app-absent
+          detector, which has to be short for exactly that reason.
+        * **The AE workflow name** has to be unique twice over, because
+          ``create_workflow`` is idempotent on the name: against the suite's own
+          run (hence ``-teardown-``) and against the other connections this same
+          teardown deletes (hence *ordinal*). It is the same collision
+          :meth:`_seed_publish_plan` solves, for the same reason, and *ordinal*
+          is used there too rather than a rendering of the QN: a QN's segments
+          are caller-supplied, so any flattening of them into a name is a second
+          encoding that can collide. The QN is not lost — it is on the
+          workflow's description.
+
+        Args:
+            ordinal: This connection's position in the run's teardown, counting
+                from one.
+
+        Returns:
+            The plan.
+        """
+        return ConnectionDeletePlan(
+            connector_short_name=self.connector_short_name,
+            task_queue=self._connection_delete_task_queue(),
+            ae_workflow_name=(
+                f"{self.connector_short_name}-{self.connection_name_prefix}-"
+                f"{self.run_id}-teardown-{ordinal}"
+            ),
+            run_id=self.run_id,
+            delete_type=self.connection_delete_type,
+            # No cold-start budget. Since FND-1775 the teardown submits straight
+            # to AE and calls no app pod, so there is nothing to cold-start-wait
+            # on — whether the delete app's worker is up is asked by
+            # ``stall_grace_seconds`` below, and leaving ``submit_retry`` unset
+            # takes ``submit_published_version``'s publish-replication budget,
+            # which is the only wait this submit actually has. Same reasoning as
+            # ``_seed_publish_plan``.
+            poll_interval_seconds=self.ae_poll_interval_seconds,
+            poll_timeout_seconds=self.connection_delete_poll_timeout_seconds,
+            stall_grace_seconds=self.connection_delete_stall_grace_seconds,
+            minter=getattr(self, "_minter", None),
+        )
+
+    def seed_object_store(self) -> ObjectStore:
+        """The object store a seed writes its transformed NDJSON into.
+
+        Must be a store the **tenant's** ``publish`` app reads, not the
+        connector's deployment store: publish is handed a prefix, and a prefix in
+        a bucket it cannot see fails as an empty batch rather than as a missing
+        file. In CI that store is the configurator-emitted ``atlan-objectstore``
+        Dapr component — the tenant blobstorage binding the sdr-e2e action
+        selects into ``ci-deploy/components`` and mounts into the worker — so the
+        default resolves exactly that, from the runner's own copy.
+
+        Override on a suite whose leg names the binding differently or has to
+        supply secrets explicitly; :envvar:`E2E_SEED_COMPONENTS_DIR` and
+        :envvar:`E2E_SEED_STORE_BINDING` cover the common cases without a code
+        change.
+
+        Returns:
+            An obstore-compatible store.
+
+        Raises:
+            SeedStoreUnavailableError: The named component is absent or
+                unusable, so there is nowhere to point publish at.
+        """
+        components_dir = (
+            os.environ.get("E2E_SEED_COMPONENTS_DIR", "").strip()
+            or _DEFAULT_SEED_COMPONENTS_DIR
+        )
+        binding = (
+            os.environ.get("E2E_SEED_STORE_BINDING", "").strip()
+            or _DEFAULT_SEED_STORE_BINDING
+        )
+        store = create_store_from_binding_optional(
+            binding, components_dir=components_dir
+        )
+        if store is None:
+            raise harness_seed.SeedStoreUnavailableError(
+                message=(
+                    f"no usable Dapr component {binding!r} under {components_dir!r}, "
+                    "so a lineage-parent seed has nowhere to write the transformed "
+                    "NDJSON the tenant's publish app reads. On the CI path this is "
+                    "the configurator-emitted tenant blobstorage binding; point "
+                    "E2E_SEED_COMPONENTS_DIR / E2E_SEED_STORE_BINDING at it, or "
+                    "override seed_object_store() on this suite"
+                ),
+                resource=f"{components_dir}/{binding}",
+                actual_state="component absent or unusable",
+            )
+        return store
+
     # ------------------------------------------------------------------
     # Subclass hooks — override these
     # ------------------------------------------------------------------
@@ -2072,6 +2782,17 @@ class BaseE2ETest:
                 if spec.expected_asset_qn_depth is None
                 else spec.expected_asset_qn_depth
             ),
+            # ``getattr`` rather than the attribute: ``_validate_dag_runs``
+            # resolves every declared run inside ``setup_method``, *before* the
+            # minter has named this run's connection. Both sides of the
+            # comparisons it makes see the same empty string, so the check is
+            # unaffected — and by the time a run is submitted the attribute is
+            # set.
+            connection_qualified_name=(
+                getattr(self, "connection_qualified_name", "")
+                if spec.connection_qualified_name is None
+                else spec.connection_qualified_name
+            ),
         )
 
     @property
@@ -2093,6 +2814,16 @@ class BaseE2ETest:
         ``run_full_dag()`` called with no spec from inside an outer block runs
         that block's DAG rather than resetting to the class's.
 
+        A run that names its own ``connection_qualified_name`` also *rebinds*
+        ``self.connection_qualified_name`` for the block, and restores it after.
+        Rebinding the attribute rather than threading the resolved value through
+        every reader is deliberate: the connection is read at two dozen sites
+        (the submit payload, every Atlas probe, the outcome, the evidence
+        bundle), they all mean "the connection this run is about", and a
+        parameter added to each is a parameter the next site can forget to
+        forward. The QN is registered for teardown on the way in, so a run that
+        prepares a different connection cannot leave one behind.
+
         Args:
             spec: The run to activate, or ``None`` to leave the active one
                 alone.
@@ -2104,11 +2835,18 @@ class BaseE2ETest:
             yield self._dag
             return
         previous = getattr(self, "_active_dag", None)
+        previous_qn = getattr(self, "connection_qualified_name", "")
         self._active_dag = self.resolve_dag(spec)
+        run_qn = self._active_dag.connection_qualified_name
+        if run_qn and run_qn != previous_qn:
+            self.connection_qualified_name = run_qn
+            if run_qn not in self._seeded_connection_qns:
+                self._seeded_connection_qns.append(run_qn)
         try:
             yield self._active_dag
         finally:
             self._active_dag = previous
+            self.connection_qualified_name = previous_qn
 
     def _resolved_entrypoint(self) -> str:
         """App-entrypoint for AE's manifest fetch: explicit ``entrypoint`` if set,
