@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.25.2] - 2026-09-09
+
+### Bug fixes
+
+- make the pkl pin one readable value so a local eval predicts CI (#3726) ([8532754](https://github.com/atlanhq/application-sdk/commit/8532754))
+
 ## [0.25.1] - 2026-09-08
 
 ### Bug fixes
