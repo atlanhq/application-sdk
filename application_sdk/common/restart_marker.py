@@ -54,36 +54,38 @@ MARKER_NAME = "worker.json"
 RELEASE_NAME = "resume"
 
 #: How long a restarted worker waits before polling anyway. 0 disables waiting.
-IDLE_MAX_SECONDS_ENV = "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS"
+MAX_WAIT_SECONDS_ENV = "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS"
 
 #: One row a minute while waiting, so a waiting pod is visible in logs without
 #: the wait itself becoming log volume.
-IDLE_HEARTBEAT_SECONDS = 60
+HEARTBEAT_SECONDS = 60
 
 #: How often the wait re-checks the release file.
-_IDLE_POLL_SECONDS = 5
+RECHECK_SECONDS = 5
 
 
 def marker_dir() -> Path:
     return Path(os.getenv(MARKER_DIR_ENV) or DEFAULT_MARKER_DIR)
 
 
-def idle_max_seconds() -> int:
-    """Seconds a restarted worker waits before polling anyway. 0 disables it."""
-    return max(0, env_int(IDLE_MAX_SECONDS_ENV, 0))
+def check_and_update_the_marker() -> int:
+    """Read the marker left by earlier containers in this pod, then leave one for
+    this start. Returns how many started before this one.
 
+    0 means a fresh pod, or that the volume is missing and this cannot be known.
+    Anything above 0 means an earlier container here started and did not return
+    cleanly, because a clean return removes the marker.
 
-def begin() -> int:
-    """Record this container start; return how many started before it in this pod.
-
-    0 means a clean pod, or that detection is inert. Anything above 0 means an
-    earlier container here started and did not return cleanly.
+    Reading and writing are one operation on purpose: the read has to happen
+    first, and doing them separately makes it possible to write first, after
+    which every start looks clean - silently, and forever.
     """
     directory = marker_dir()
     if not directory.is_dir():
-        # Saying so is the whole point of this branch: without the volume the
-        # writes below fail anyway and detection is inert either way, but
-        # silently. This is the only thing that says why.
+        # Nothing here creates it. Its absence means the volume is not mounted,
+        # and a marker on the container filesystem would be discarded with every
+        # restart - detecting nothing, forever. The writes below would fail
+        # anyway; this is the only thing that says why.
         logger.warning(
             "%s is not a directory, so a restarted worker cannot be told apart from a "
             "fresh one and this worker will always poll immediately. Mount a small "
@@ -93,11 +95,11 @@ def begin() -> int:
         return 0
 
     path = directory / MARKER_NAME
-    starts = 0
+    previous = 0
     try:
         raw = path.read_text()
     except FileNotFoundError:
-        raw = ""
+        raw = ""  # a fresh pod, not an error - and it still needs its marker
     except OSError:
         logger.warning(
             "could not read %s, so this start is treated as clean", path, exc_info=True
@@ -106,40 +108,39 @@ def begin() -> int:
 
     if raw:
         try:
-            starts = max(0, int(json.loads(raw).get("starts", 0)))
+            previous = max(0, int(json.loads(raw).get("starts", 0)))
         except (ValueError, TypeError, AttributeError):
-            # Truncated or hand-edited. Its existence is the signal; only the
+            # Truncated or hand-edited. The file existing is the signal; only the
             # count is lost, and one is the answer that changes behaviour.
             logger.warning(
                 "%s is not readable as a marker; treating it as one start", path
             )
-            starts = 1
+            previous = 1
 
     try:
         path.write_text(
             json.dumps(
                 {
                     "pod": os.getenv("K8S_POD_NAME", ""),
-                    "starts": starts + 1,
+                    "starts": previous + 1,
                     "started_at": time.time(),
                 }
             )
         )
     except OSError:
-        # The count is already known; losing the write costs the next start's
-        # count, not this decision.
+        # Only the next start's count is lost, not any decision taken here.
         logger.warning("could not write %s", path, exc_info=True)
 
-    return starts
+    return previous
 
 
-def end() -> None:
-    """Clear the marker after a clean return, so the next start is not a restart."""
+def clear() -> None:
+    """Remove the marker after a clean return, so the next start is not a restart."""
     path = marker_dir() / MARKER_NAME
     try:
         path.unlink()
     except FileNotFoundError:
-        pass
+        pass  # the worker may return before ever writing one
     except OSError:
         logger.warning(
             "could not remove %s, so the next container start in this pod will be "
@@ -149,8 +150,8 @@ def end() -> None:
         )
 
 
-async def wait_if_restarted(shutdown_event: asyncio.Event) -> None:
-    """Hold a restarted worker back before it starts polling.
+async def wait_if_pod_restarted(shutdown_event: asyncio.Event) -> None:
+    """Wait before polling if an earlier container already ran in this pod.
 
     Call this after the health server is serving and signal handlers are
     installed, and before anything builds a worker: the process is up and
@@ -160,8 +161,8 @@ async def wait_if_restarted(shutdown_event: asyncio.Event) -> None:
     also returns; the caller sees it on ``shutdown_event`` as it would anywhere
     else.
     """
-    starts = begin()
-    if starts == 0:
+    previous = check_and_update_the_marker()
+    if previous == 0:
         logger.debug("clean container start in this pod")
         return
 
@@ -169,25 +170,29 @@ async def wait_if_restarted(shutdown_event: asyncio.Event) -> None:
         "this is container start %d in this pod - an earlier one did not return cleanly. "
         "A container killed for memory restarts here on the same limit, so polling now "
         "would take work back onto a pod that cannot hold it.",
-        starts + 1,
+        previous + 1,
     )
 
-    budget = idle_max_seconds()
+    budget = max(0, env_int(MAX_WAIT_SECONDS_ENV, 0))
     if budget <= 0:
         # A zero budget would fall straight through the wait below, but silently
         # and after announcing a wait of 0s. Say which knob is unset instead.
         logger.warning(
-            "%s is not set, so this worker starts polling anyway", IDLE_MAX_SECONDS_ENV
+            "%s is not set, so this worker starts polling anyway", MAX_WAIT_SECONDS_ENV
         )
         return
 
     try:
-        await _wait(shutdown_event, budget)
+        await wait_for_pod_to_get_replaced(shutdown_event, budget)
     except Exception:
+        # The worst outcome of this whole feature has to be a worker that starts
+        # normally, so nothing raised in here reaches the caller.
         logger.exception("could not hold this worker back; starting it normally")
 
 
-async def _wait(shutdown_event: asyncio.Event, budget: int) -> None:
+async def wait_for_pod_to_get_replaced(
+    shutdown_event: asyncio.Event, budget: int
+) -> None:
     """The bounded wait. Three exits: released, shutdown, or the budget spent."""
     release = marker_dir() / RELEASE_NAME
     deadline = time.monotonic() + budget
@@ -211,18 +216,20 @@ async def _wait(shutdown_event: asyncio.Event, budget: int) -> None:
             logger.warning("released by %s; starting the worker", release)
             return
         try:
+            # One await does three jobs: it is the sleep, it is the shutdown
+            # listener, and the min() lands the last pass exactly on the deadline.
             await asyncio.wait_for(
-                shutdown_event.wait(), timeout=min(_IDLE_POLL_SECONDS, remaining)
+                shutdown_event.wait(), timeout=min(RECHECK_SECONDS, remaining)
             )
         except TimeoutError:
-            pass
+            pass  # nobody asked us to stop; keep waiting
         else:
             logger.info(
                 "shutdown requested while waiting, which is this pod being replaced"
             )
             return
         now = time.monotonic()
-        if now - last_beat >= IDLE_HEARTBEAT_SECONDS:
+        if now - last_beat >= HEARTBEAT_SECONDS:
             last_beat = now
             # conformance: ignore[L006] one row a minute, not a tight loop: this is
             # the only signal that a pod is deliberately idle rather than wedged,
