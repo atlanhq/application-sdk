@@ -250,13 +250,44 @@ on:
         default: true
         description: |
           Whether an extraction source is provisioned for this connector in
-          CI — forwarded to the sdr-e2e action's `source-available` input.
+          CI — resolved per suite by discovery and forwarded from the matrix to
+          the sdr-e2e action's `source-available` input.
           Sourcing is the app owner's responsibility. Default true: the
           full-DAG e2e runs unchanged. Set false for apps with no free
           container / no wired credentials — the e2e then degrades to a
           worker-up-only check (assert the worker deploys + serves
           /server/health) and skips extraction/publish/Atlas assertions,
           until the owner provisions a source.
+
+          Repo-WIDE: the default every discovered suite takes. A connector whose
+          entrypoints differ in source provisioning overrides the odd one out
+          with `source-available-overrides` below.
+      source-available-overrides:
+        required: false
+        type: string
+        default: ""
+        description: |
+          Per-suite overrides of `source-available` (FND-1865), as
+          comma-separated `<suite>=true|false` keyed off the discovered suite
+          name (`tests/e2e/test_db2zos_e2e.py` -> `db2zos-e2e`) — the same key
+          `artifact-suffix` and the derived ATLAN_DEPLOYMENT_NAME already use.
+
+          The e2e job has fanned out one leg per suite since FND-6, but
+          `source-available` was one value for the whole repo, and a
+          multi-entrypoint connector whose entrypoints are not equally testable
+          cannot say so with one boolean: db2's LUW flavour has a community
+          container, its z/OS flavour cannot have one at all (container images
+          are architecture AND OS specific — z/OS needs a real subsystem). The
+          app-side workarounds do not work either: the harness's class attribute
+          loses to E2E_SOURCE_AVAILABLE on every CI run, and a module-level
+          `pytest.skip` exits 5, which the composite propagates verbatim, so the
+          leg reds instead of skipping.
+
+          An override naming a suite discovery did not find FAILS the discovery
+          job rather than being ignored — an inert override leaves the leg on
+          the repo-wide default, which is the silent full-DAG-on-a-sourceless-leg
+          the input exists to prevent. Empty (the default) means every suite
+          takes `source-available`, so existing callers are unaffected.
       dataforge-datasource:
         required: false
         type: string
@@ -1180,6 +1211,21 @@ jobs:
           # into "none" and quietly disables the matrix on every un-customised
           # caller. The negated form never evaluates the input for truthiness.
           clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          # ── The per-suite dimensions (FND-1865) ─────────────────────────────
+          # Resolved here, once, and carried in the matrix — so a leg's source
+          # availability and compose overlay arrive the same way its artifact
+          # suffix and ATLAN_DEPLOYMENT_NAME already do. This job checks out the
+          # CALLER's tree, which is what lets the overlay be a convention
+          # (`.github/e2e/<suite>-docker-compose.yaml`) rather than an input:
+          # discovery can see whether the file exists.
+          source-available: ${{ inputs.source-available }}
+          source-available-overrides: ${{ inputs.source-available-overrides }}
+          # The repo-wide FALLBACK every leg without its own file keeps using,
+          # and the directory the per-suite convention is derived from. Pinned
+          # here rather than at the e2e job's sdr-e2e step (where it used to
+          # live) so the path is written once: the e2e job forwards whatever
+          # discovery resolved for that leg.
+          compose-overlay: .github/e2e/e2e-full-docker-compose.yaml
 
       # The same fan-out, cloud dimension only, for prepare-tenant. A second
       # invocation rather than deriving the unique clouds out of the matrix above:
@@ -2230,7 +2276,14 @@ jobs:
           # falls back to the SDR component/compose set (wrong stack).
           secrets-script: .github/e2e/make-secrets-e2e-full.py
           components-dir: .github/e2e/e2e-full-components
-          compose-overlay: .github/e2e/e2e-full-docker-compose.yaml
+          # Per-suite (FND-1865), resolved by discovery against the caller's
+          # tree: `.github/e2e/<suite>-docker-compose.yaml` when that file
+          # exists, else the repo-wide path discovery was given. One pinned
+          # overlay for every leg meant a multi-entrypoint connector started
+          # EVERY source container on EVERY leg — and the worker's
+          # `depends_on: service_healthy` made the legs that cannot use one wait
+          # for it before failing.
+          compose-overlay: ${{ matrix.compose-overlay }}
           # Force the full-DAG config dir even when the repo also has a
           # .github/sdr-e2e/ (testcontainer) setup, which the action would
           # otherwise prefer — see the action's `config-dir` input.
@@ -2263,7 +2316,12 @@ jobs:
           harness-sdk-ref: ${{ inputs.harness-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
           enable-two-store: ${{ inputs.two-store }}
-          source-available: ${{ inputs.source-available }}
+          # Per-suite (FND-1865): the repo-wide input narrowed by
+          # `source-available-overrides` for this leg's suite, resolved in
+          # discovery. Reaches the harness as E2E_SOURCE_AVAILABLE, which is
+          # per-run and therefore per-leg — which is why this had to move into
+          # the matrix rather than be expressible in the suite itself.
+          source-available: ${{ matrix.source-available }}
           # Push the test image with the org PAT (same identity build-and-publish
           # uses) so it can write PAT-published connector packages — a plain
           # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here

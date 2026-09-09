@@ -1175,6 +1175,79 @@ entrypoint's `pipeline` — `expect_connection`, `require_nonempty_assets`,
 `expect_lineage`, `required_dag_nodes`. A miner therefore is not graded against
 crawler-shaped assertions: with no `publish` step its pass criterion is its DAG.
 
+### When the entrypoints are not equally testable (FND-1865)
+
+One leg per suite, but for a long time two of the values a leg ran with were
+resolved **once for the whole repo**: `source-available`, and the compose
+overlay the worker's stack is layered from. A connector whose entrypoints differ
+in source provisioning could not say so, and had no app-side workaround.
+
+`atlan-db2-app` is the case that surfaced it. `luw` (Db2 LUW) is containerisable
+today — `icr.io/db2_community/db2`, port 50000, seeded sibling container, full
+DAG. `zos` (Db2 for z/OS) **cannot be**: container images are architecture *and*
+OS specific, and IBM's own `IBM-Z-zOS` guidance is explicit that multi-arch
+emulation is not available for the `zos/s390x` platform (the community image's
+`s390x` tag is Linux on IBM Z, not z/OS). It needs a real subsystem — Wazi as a
+Service, or zD&T. AS/400 is already anticipated as a third flavour.
+
+Both values are now resolved **per suite**, in the discovery job, and carried in
+the matrix — the same way `artifact-suffix` and the derived
+`ATLAN_DEPLOYMENT_NAME` already are:
+
+```yaml
+# .github/workflows/tests.yaml
+with:
+  source-available: true                       # the repo-wide default
+  source-available-overrides: "db2zos-e2e=false"
+```
+
+```
+.github/e2e/db2luw-e2e-docker-compose.yaml   → layered on the db2luw-e2e legs only
+.github/e2e/e2e-full-docker-compose.yaml     → the fallback for every other suite
+```
+
+* **`source-available-overrides`** is `<suite>=true|false`, comma-separated,
+  keyed off the discovered suite name (`tests/e2e/test_db2zos_e2e.py` →
+  `db2zos-e2e`). It overrides in **both** directions, so "most flavours
+  unsourced, one containerisable" is expressible too. It keys on the *suite*,
+  not the leg: source availability is a property of the entrypoint, not of the
+  CSP tenant, so an override applies on every cloud. An override naming a suite
+  discovery did not find **fails the discovery job** — an inert override would
+  leave that leg on the repo-wide default and green a run that tried to extract
+  from a source which cannot exist.
+* **The overlay is a convention**, not an input:
+  `.github/e2e/<suite>-docker-compose.yaml` wins when the file exists, and the
+  repo-wide `.github/e2e/e2e-full-docker-compose.yaml` is the fallback for every
+  suite that ships none — so a single-flavour connector is untouched. To keep a
+  container off the legs that cannot use it, move the shared overlay's contents
+  into the per-suite files that want them and stop shipping the shared path;
+  absence of a per-suite file means "nothing suite-specific here", never "layer
+  nothing".
+
+This matters beyond tidiness, in both directions. With one pinned overlay the
+LUW container also started on the three `db2zos-e2e` legs, and the worker's
+`depends_on: service_healthy` made those legs *wait* for it. With one repo-wide
+boolean, setting it `true` for `luw` also told the `zos` suite a source existed.
+
+**None of the app-side workarounds work**, which is why this had to move into the
+matrix:
+
+| Workaround | What happens |
+| -- | -- |
+| `source_available = False` class attribute | Overridden by `E2E_SOURCE_AVAILABLE` on every CI run — `BaseE2ETest` resolves it per run, and the env value wins whenever it is set. |
+| Module-level `pytest.skip` in the sourceless suite | pytest exits **5** ("no tests collected"), which the composite propagates verbatim (`exit "${TEST_EXIT_CODE}"`), so the leg goes **red**, not skipped. |
+| In-test skip from `seed_prerequisites()` | Works (exit 0, reports skipped) but costs the worker-up assertion, and the suite still burns the read-only tenant-resolution phase before reaching the hook. |
+
+With the per-leg value, the sourceless leg keeps the tier it should have: the
+worker-up-only check (assert the worker deploys and serves `/server/health`,
+skip extraction/publish/Atlas), and `setup_method` returns before the AE/tenant
+wiring it does not need.
+
+`e2e-full-reusable.yaml` still takes a single `compose-overlay` and a single
+`source-available`: it targets a whole directory rather than fanning out per
+suite (`--clouds-only` discovery), so there is no suite dimension to key either
+off.
+
 ### Seeding state a dependent entrypoint consumes
 
 A miner enriches a connection it does **not** create. The harness mints an
@@ -1547,7 +1620,7 @@ Three `ClassVar`s tune it, and the defaults suit every connector:
 
 1. **Action manifest**: `app.yaml` at repo root (3 lines).
 2. **Unified workflow**: copy `.github/workflows/tests.yaml` from mysql-app; swap connector references. This single file covers unit + integration tests (always) and full-DAG e2e (on the `e2e` label or `run_e2e=true` dispatch input).
-3. **Config dir**: create `.github/sdr-e2e/` (new) or `.github/e2e/` (legacy). Files: `docker-compose.ci.yml`, `e2e-full-docker-compose.yaml`, `e2e-full-components/`, `seed.sql`, `make-secrets.py`, `make-secrets-e2e-full.py`.
+3. **Config dir**: create `.github/sdr-e2e/` (new) or `.github/e2e/` (legacy). Files: `docker-compose.ci.yml`, `e2e-full-docker-compose.yaml`, `e2e-full-components/`, `seed.sql`, `make-secrets.py`, `make-secrets-e2e-full.py`. On a bundle app whose entrypoints need different source containers, name the overlay per suite instead — `.github/e2e/<suite>-docker-compose.yaml`, see [When the entrypoints are not equally testable](#when-the-entrypoints-are-not-equally-testable-fnd-1865).
 4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2ETest` subclass for SQL connectors, otherwise the generated `BaseE2ETest` subclass — see [Which harness](#which-harness)). On a bundle app, one `tests/e2e/test_*.py` **per entrypoint** — see [Multi-entrypoint (bundle) apps](#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).
 5. **Repo secrets**: set the 7 entries from the table above.
 6. **SDK matrix**: add `<connector>-app` to the `DEFAULT_MATRIX` in apps-sdk's `matrix-builder` job (`pull_request.yaml`) so `connector-tests` fans out to your connector automatically.

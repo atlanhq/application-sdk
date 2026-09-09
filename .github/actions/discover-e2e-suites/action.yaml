@@ -10,6 +10,13 @@ description: |
   suite runs once per CSP tenant. Leaving it empty keeps the single-tenant
   shape, which is what a caller without the tenant-matrix secret wants.
 
+  `source-available` / `source-available-overrides` / `compose-overlay` make
+  the two per-suite dimensions the legs need (FND-1865): each leg carries its
+  own source-availability tier and its own compose overlay, so a connector
+  whose entrypoints are not equally testable can say so. Resolution runs
+  against the caller's checked-out tree, which is what lets the overlay be a
+  convention (`<dir>/<suite>-docker-compose.yaml`) rather than an input.
+
 inputs:
   test-dir:
     description: Directory to glob for test_*.py e2e suites.
@@ -54,10 +61,59 @@ inputs:
       per suite (e2e-full-reusable.yaml). `test-dir` is unused in that mode.
     required: false
     default: "false"
+  source-available:
+    description: |
+      The repo-wide source-availability default every discovered suite takes
+      unless `source-available-overrides` names it. Emitted per leg as the
+      matrix's `source-available`, which the caller forwards to the sdr-e2e
+      action (and thence to the harness's E2E_SOURCE_AVAILABLE). "true" runs
+      the full DAG; "false" degrades every leg to a worker-up-only check.
+    required: false
+    default: "true"
+  source-available-overrides:
+    description: |
+      Per-suite overrides of `source-available` (FND-1865), as comma-separated
+      `<suite>=true|false` — keyed off the DISCOVERED suite name
+      (`test_db2zos_e2e.py` -> `db2zos-e2e`), the same key `artifact-suffix`
+      and the derived ATLAN_DEPLOYMENT_NAME already use.
+
+      For a multi-entrypoint connector whose entrypoints are not equally
+      testable: db2's LUW flavour has a community container, its z/OS flavour
+      cannot have one at all (container images are architecture AND OS
+      specific), so one repo-wide boolean could only be wrong for one of them.
+
+      An override that names an undiscovered suite FAILS discovery rather than
+      being ignored — an inert override leaves the leg on the repo-wide
+      default, which is the silent full-DAG-on-a-sourceless-leg this input
+      exists to prevent. Empty (the default) means no overrides.
+    required: false
+    default: ""
+  compose-overlay:
+    description: |
+      The repo-wide compose overlay each leg falls back to. When set, each
+      leg's overlay is resolved PER SUITE — `<dir>/<suite>-docker-compose.yaml`
+      when that file exists in the caller's checked-out tree, else this path —
+      and emitted as the matrix's `compose-overlay` for the caller to forward
+      to the sdr-e2e action.
+
+      The convention is what makes a per-suite source container possible: with
+      one pinned path, a multi-entrypoint connector started every container on
+      every leg, and the worker's `depends_on: service_healthy` made the legs
+      that cannot use one wait for it.
+
+      Empty (the default) omits the matrix key entirely: there is no sane
+      default overlay path to derive the convention from (the SDR and full-DAG
+      pipelines use different ones), and forwarding an empty value would send
+      the sdr-e2e action to its own SDR convention on the full-DAG pipeline.
+    required: false
+    default: ""
 
 outputs:
   matrix:
-    description: JSON include-list for strategy.matrix; each entry has file and name (plus suite and cloud when `clouds` is set).
+    description: |
+      JSON include-list for strategy.matrix; each entry has file and name (plus
+      suite and cloud when `clouds` is set, source-available always in suite
+      mode, and compose-overlay when `compose-overlay` is set).
     value: ${{ steps.discover.outputs.matrix }}
   count:
     description: Number of discovered suites (0 means the e2e job should skip). Independent of the cloud fan-out.
@@ -89,6 +145,9 @@ runs:
         TEST_DIR: ${{ inputs.test-dir }}
         CLOUDS: ${{ inputs.clouds }}
         AVAILABLE_CLOUDS: ${{ inputs.available-clouds }}
+        SOURCE_AVAILABLE: ${{ inputs.source-available }}
+        SOURCE_AVAILABLE_OVERRIDES: ${{ inputs.source-available-overrides }}
+        COMPOSE_OVERLAY: ${{ inputs.compose-overlay }}
         CLOUDS_ONLY_FLAG: ${{ inputs.clouds-only == 'true' && '--clouds-only' || '' }}
       run: |
         set -euo pipefail
@@ -96,4 +155,7 @@ runs:
           --test-dir "$TEST_DIR" \
           --clouds "$CLOUDS" \
           --available-clouds "$AVAILABLE_CLOUDS" \
+          --source-available "$SOURCE_AVAILABLE" \
+          --source-available-overrides "$SOURCE_AVAILABLE_OVERRIDES" \
+          --compose-overlay "$COMPOSE_OVERLAY" \
           ${CLOUDS_ONLY_FLAG} >> "$GITHUB_OUTPUT"

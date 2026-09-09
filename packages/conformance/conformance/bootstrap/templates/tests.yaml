@@ -157,6 +157,7 @@ jobs:
 <% endif %><% if harness_sdk_ref %>      harness-sdk-ref: "<< harness_sdk_ref >>"
 <% endif %><% if e2e_test_path %>      e2e-test-path: "<< e2e_test_path >>"
 <% endif %><% if source_available %>      source-available: << source_available >>
+<% endif %><% if source_available_overrides %>      source-available-overrides: "<< source_available_overrides >>"
 <% endif %><% if dataforge_datasource %>      dataforge-datasource: "<< dataforge_datasource >>"
 <% endif %><% if dataforge_mode %>      dataforge-mode: "<< dataforge_mode >>"
 <% endif %><% if dataforge_env_tier %>      dataforge-env-tier: "<< dataforge_env_tier >>"
