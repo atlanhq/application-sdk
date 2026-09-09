@@ -13,8 +13,9 @@ What each rule catches — all **deterministic, no pkl toolchain required**:
   does not match (or the lock is missing / lacks the dependency).
 * **K004 MissingGeneratedArtifact** — ``contract/app.pkl`` exists but an expected
   output (``atlan.yaml``, ``manifest.json``, ``_input.py``) is absent — the
-  contract was never generated.  The two ``app/generated/`` artifacts are accepted
-  at either layout's path, since a bundle emits them per-entrypoint.
+  contract was never generated.  The two ``app/generated/`` artifacts are resolved
+  against the layout the contract declares: top-level for a single-entrypoint app,
+  and under every declared entrypoint for a bundle.
 * **K005 GeneratedArtifactBannerStripped** — a generated text artifact is missing
   its ``… DO NOT EDIT …`` provenance banner — a heuristic hand-edit signal.
 * **K007 ToolkitVersionOutdated** — the app's ``app-contract-toolkit`` dependency
@@ -75,10 +76,10 @@ _EXPECTED_ROOT_OUTPUTS: tuple[str, ...] = ("atlan.yaml",)
 
 # K004 — outputs that live under ``app/generated/``.  A single-entrypoint contract
 # emits them at the top level; a bundle emits one copy per entrypoint under
-# ``app/generated/<entrypoint>/`` and nothing at the top level.  Both layouts
-# satisfy the rule, so the filenames are stored bare and resolved against either
-# path (see ``_generated_output_present``) rather than hard-coded to the
-# single-entrypoint prefix — hard-coding made K004 unsatisfiable on every bundle.
+# ``app/generated/<entrypoint>/`` and nothing at the top level.  Filenames are
+# stored bare and resolved against the layout the contract declares (see
+# ``_missing_generated_outputs``) rather than hard-coded to the single-entrypoint
+# prefix — hard-coding made K004 unsatisfiable on every bundle.
 _EXPECTED_GENERATED_OUTPUTS: tuple[str, ...] = (
     "manifest.json",
     "_input.py",
@@ -166,7 +167,9 @@ def _yaml_comment_start(line: str) -> int:
 
 # A contract that declares an ``entrypoints`` block is a multi-entrypoint bundle;
 # its E2E scaffolding lands in per-entrypoint subfolders, so K010 (which requires
-# the single-entrypoint _e2e_base.py path) does not apply.
+# the single-entrypoint _e2e_base.py path) does not apply.  K004 uses the same
+# predicate, then reads the mapping keys so it can require a copy per entrypoint
+# instead of accepting any subdirectory.
 _ENTRYPOINTS_RE = re.compile(r"(?m)^\s*entrypoints\b")
 
 
@@ -520,28 +523,63 @@ def _amends_line(text: str) -> int:
     return 1
 
 
-def _generated_output_present(root: Path, filename: str) -> bool:
-    """True when *filename* exists at either ``app/generated/`` layout's path.
+def _declared_entrypoints(text: str) -> tuple[str, ...] | None:
+    """Mapping keys of the contract's ``entrypoints { ["crawler"] { … } }`` block.
 
-    A single-entrypoint contract emits ``app/generated/<filename>``; a bundle emits
-    ``app/generated/<entrypoint>/<filename>`` once per entrypoint and nothing at the
-    top level.  Mirrors ``sdr._discover_manifests``: prefer the single-entrypoint
-    path, else accept the artifact one level down under any subdirectory.
+    ``None`` when the contract has no ``entrypoints`` block (single-entrypoint
+    layout).  An empty tuple means a bundle was declared but no keys could be
+    read — still not a single-entrypoint app.  The keys are the directory names
+    under ``app/generated/`` that a bundle emits.
+    """
+    match = _ENTRYPOINTS_RE.search(text)
+    if match is None:
+        return None
+    rest = text[match.end() :]
+    open_at = rest.find("{")
+    if open_at < 0:
+        return ()
+    depth = 0
+    end: int | None = None
+    for i, ch in enumerate(rest[open_at:]):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = open_at + i
+                break
+    block = rest[: end + 1] if end is not None else rest
+    return tuple(_DEP_KEY_RE.findall(block))
 
-    Checking both layouts rather than exempting bundles outright (K010's approach)
-    keeps the rule's coverage: a bundle that was genuinely never generated has no
-    per-entrypoint copy either, so it still fires.
+
+def _missing_generated_outputs(
+    root: Path, filename: str, entrypoints: tuple[str, ...] | None
+) -> list[str]:
+    """Repo-relative paths of *filename* this contract's layout requires but lacks.
+
+    A single-entrypoint contract (no ``entrypoints`` block) requires
+    ``app/generated/<filename>`` and nothing else — a same-named file in a
+    subdirectory does not count.
+
+    A bundle requires ``app/generated/<entrypoint>/<filename>`` for every
+    declared entrypoint.  One generated copy does not cover the rest.
+
+    Checking the declared layout rather than exempting bundles outright (K010's
+    approach) keeps the rule's coverage: a bundle that was genuinely never
+    generated has no per-entrypoint copy either, so it still fires.
     """
     generated = root / "app" / "generated"
-    if (generated / filename).is_file():
-        return True
-    if not generated.is_dir():
-        return False
-    return any(
-        (child / filename).is_file()
-        for child in sorted(generated.iterdir())
-        if child.is_dir()
-    )
+    if entrypoints is None:
+        expected = f"app/generated/{filename}"
+        return [] if (generated / filename).is_file() else [expected]
+    if not entrypoints:
+        expected = f"app/generated/<entrypoint>/{filename}"
+        return [expected]
+    return [
+        f"app/generated/{key}/{filename}"
+        for key in entrypoints
+        if not (generated / key / filename).is_file()
+    ]
 
 
 def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
@@ -558,7 +596,7 @@ def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
     directives = _parse_pkl_directives(text)
     anchor = _amends_line(text)
     rel = "contract/app.pkl"
-    is_bundle = _ENTRYPOINTS_RE.search(text) is not None
+    entrypoints = _declared_entrypoints(text)
     findings: list[Finding] = []
 
     def _missing(expected: str) -> None:
@@ -588,15 +626,11 @@ def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
             _missing(expected)
 
     for filename in _EXPECTED_GENERATED_OUTPUTS:
-        if _generated_output_present(root, filename):
-            continue
         # Name the path the app is actually expected to carry, so the remedy is
-        # actionable for whichever layout the contract declares.
-        _missing(
-            f"app/generated/<entrypoint>/{filename}"
-            if is_bundle
-            else f"app/generated/{filename}"
-        )
+        # actionable for whichever layout the contract declares — and, for a
+        # bundle, names the entrypoint that is actually missing.
+        for path in _missing_generated_outputs(root, filename, entrypoints):
+            _missing(path)
 
     return findings
 

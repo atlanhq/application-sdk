@@ -231,11 +231,13 @@ means the contract was never generated (or an output was deleted).
 **Both contract layouts satisfy this rule.**  A single-entrypoint contract emits
 `manifest.json` and `_input.py` at `app/generated/`; a contract declaring an
 `entrypoints` block (a multi-entrypoint bundle) emits one copy per entrypoint at
-`app/generated/<entrypoint>/` and nothing at the top level.  The check accepts either
-path, so a correctly generated bundle does not fire.  `atlan.yaml` stays in scope for
-both — a bundle root emits it too.
+`app/generated/<entrypoint>/` and nothing at the top level.  The check requires the path
+the contract actually declares: a non-bundle must carry the top-level file (a same-named
+file in a subdirectory does not count), and a bundle must carry a copy under *every*
+declared entrypoint (one generated copy does not cover the rest).  `atlan.yaml` stays in
+scope for both — a bundle root emits it too.
 
-Unlike K010, which exempts bundles outright, this rule checks both layouts so its
+Unlike K010, which exempts bundles outright, this rule checks the declared layout so its
 coverage is preserved: a bundle that was never generated has no per-entrypoint copy
 either, and still fires.
 

@@ -252,8 +252,54 @@ def test_k004_bundle_missing_from_both_layouts_fires(tmp_path: Path) -> None:
     findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
     assert len(findings) == 1
     assert findings[0].file == "contract/app.pkl"
-    # The remedy names the bundle path, not the single-entrypoint one.
-    assert "app/generated/<entrypoint>/manifest.json" in findings[0].message
+    # The remedy names the missing entrypoint, not a placeholder or the
+    # single-entrypoint path.
+    assert "app/generated/crawler/manifest.json" in findings[0].message
+
+
+_TWO_ENTRYPOINT_APP_PKL = dedent("""\
+    amends "@app-contract-toolkit/App.pkl"
+
+    name = "demo"
+
+    entrypoints {
+      ["crawler"] { name = "crawler" }
+      ["miner"] { name = "miner" }
+    }
+""")
+
+
+def test_k004_partial_bundle_fires_for_ungenerated_entrypoint(tmp_path: Path) -> None:
+    """One generated entrypoint does not satisfy K004 for the rest of the bundle.
+
+    Regression: the unscoped ``any()`` fallback treated a same-named file under
+    *any* subdirectory as enough, so adding an entrypoint and forgetting to
+    regenerate produced zero findings.
+    """
+    files = _bundle_files()
+    files["contract/app.pkl"] = _TWO_ENTRYPOINT_APP_PKL
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    messages = [f.message for f in findings]
+    assert any("app/generated/miner/manifest.json" in m for m in messages)
+    assert any("app/generated/miner/_input.py" in m for m in messages)
+    assert not any("app/generated/crawler/" in m for m in messages)
+
+
+def test_k004_stray_subdirectory_does_not_satisfy_single_entrypoint(
+    tmp_path: Path,
+) -> None:
+    """A non-bundle contract requires the top-level file, not a same-named stray.
+
+    Regression: the one-level-down fallback was applied unconditionally, so a
+    single-entrypoint app that lost ``app/generated/manifest.json`` still passed
+    if any unrelated subdirectory held a copy.
+    """
+    files = _clean_files()
+    del files["app/generated/manifest.json"]
+    files["app/generated/backup_old/manifest.json"] = "{}\n"
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(findings) == 1
+    assert "'app/generated/manifest.json'" in findings[0].message
 
 
 def test_k004_bundle_still_requires_atlan_yaml(tmp_path: Path) -> None:
