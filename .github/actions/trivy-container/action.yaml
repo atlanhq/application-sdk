@@ -62,7 +62,8 @@ runs:
         load: true
         tags: trivy-scan-target:latest
         cache-from: type=gha
-        cache-to: type=gha,mode=max
+        # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
+        cache-to: type=gha,mode=max,ignore-error=true
         secrets: |
           "PRIVATE_REPO_ACCESS_TOKEN=${{ inputs.github-token }}"
 

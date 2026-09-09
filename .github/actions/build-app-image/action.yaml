@@ -358,12 +358,15 @@ runs:
         # compose file as a pull target). --load would conflict with
         # --push under the standard buildx driver, and we don't need
         # the image in the local daemon since compose handles the pull.
+        #
+        # `ignore-error=true` on the cache export: see build-and-scan.yaml — a
+        # cache-service hiccup must not fail a build.
         docker buildx build \
           --tag "${IMAGE}" \
           --push \
           "${BUILD_ARGS[@]}" \
           --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}" \
-          --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}" \
+          --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }},ignore-error=true" \
           .
         echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
         echo "image_base=${IMAGE_BASE}" >> "$GITHUB_OUTPUT"
