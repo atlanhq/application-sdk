@@ -24,11 +24,12 @@ absent one is reported rather than worked around: on a container filesystem the
 marker would be discarded with every restart, so nothing would ever be detected
 and nothing would say why.
 
-Detection always runs and always logs. Waiting happens only when
-``ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS`` is a positive number, so a fleet can be
-observed before its behaviour changes. Every failure path falls through to a
-normal start: an absent or unreadable directory, a corrupt marker, anything
-raised while setting up the wait.
+The volume is the switch. Without it nothing is detected and nothing waits, so
+the behaviour arrives with the deployment that mounts it rather than with an
+upgrade of this package. ``ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS`` sizes the wait
+and ``0`` turns it off where the volume is mounted. Every failure path falls
+through to a normal start: an absent or unreadable directory, a corrupt marker,
+anything raised while setting up the wait.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ import os
 import time
 from pathlib import Path
 
-from application_sdk.common._env import env_int
+from application_sdk.constants import DIRTY_RESTART_IDLE_MAX_SECONDS
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -52,9 +53,6 @@ MARKER_NAME = "worker.json"
 #: Creating this file ends a wait early, for an operator who knows the pod is
 #: not going to be replaced.
 RELEASE_NAME = "resume"
-
-#: How long a restarted worker waits before polling anyway. 0 disables waiting.
-MAX_WAIT_SECONDS_ENV = "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS"
 
 #: One row a minute while waiting, so a waiting pod is visible in logs without
 #: the wait itself becoming log volume.
@@ -173,12 +171,13 @@ async def wait_if_pod_restarted(shutdown_event: asyncio.Event) -> None:
         restarted_count + 1,
     )
 
-    budget = max(0, env_int(MAX_WAIT_SECONDS_ENV, 0))
+    budget = DIRTY_RESTART_IDLE_MAX_SECONDS
     if budget <= 0:
         # A zero budget would fall straight through the wait below, but silently
-        # and after announcing a wait of 0s. Say which knob is unset instead.
+        # and after announcing a wait of 0s. Say it is switched off instead.
         logger.warning(
-            "%s is not set, so this worker starts polling anyway", MAX_WAIT_SECONDS_ENV
+            "waiting is switched off (ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS=0), so this "
+            "worker starts polling anyway"
         )
         return
 

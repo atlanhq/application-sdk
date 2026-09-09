@@ -12,7 +12,8 @@ from application_sdk.common import restart_marker as rm
 def marker_dir(tmp_path, monkeypatch):
     """Point the marker at a real directory, as the mounted volume would be."""
     monkeypatch.setenv(rm.MARKER_DIR_ENV, str(tmp_path))
-    monkeypatch.delenv(rm.MAX_WAIT_SECONDS_ENV, raising=False)
+    # The shipped default is a positive number; switch it off unless a test asks.
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 0)
     return tmp_path
 
 
@@ -104,15 +105,15 @@ def test_an_unparsable_start_count_still_counts_as_a_restart(marker_dir):
 
 
 async def test_a_clean_start_does_not_wait(marker_dir, monkeypatch):
-    monkeypatch.setenv(rm.MAX_WAIT_SECONDS_ENV, "300")
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
 
 
-async def test_a_restart_does_not_wait_while_the_budget_is_unset(marker_dir, logs):
+async def test_a_restart_does_not_wait_while_waiting_is_switched_off(marker_dir, logs):
     rm.check_and_update_the_marker()
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
-    assert logs.says("warning", rm.MAX_WAIT_SECONDS_ENV), (
-        f"must name the unset knob rather than announce a 0s wait: {logs.rows}"
+    assert logs.says("warning", "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS=0"), (
+        f"must say it is switched off rather than announce a 0s wait: {logs.rows}"
     )
     assert not logs.says("warning", "not polling for up to"), (
         f"must not announce a wait it is not doing: {logs.rows}"
@@ -123,7 +124,7 @@ async def test_a_restart_waits_out_the_budget_then_proceeds(
     marker_dir, monkeypatch, prompt_polling
 ):
     rm.check_and_update_the_marker()
-    monkeypatch.setenv(rm.MAX_WAIT_SECONDS_ENV, "1")
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 1)
     loop = asyncio.get_running_loop()
     started = loop.time()
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=5)
@@ -136,7 +137,7 @@ async def test_the_wait_holds_until_something_ends_it(
     """The point of the wait: with a long budget and nothing to release it, the
     worker is still not polling."""
     rm.check_and_update_the_marker()
-    monkeypatch.setenv(rm.MAX_WAIT_SECONDS_ENV, "300")
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     task = asyncio.ensure_future(rm.wait_if_pod_restarted(asyncio.Event()))
     await asyncio.sleep(0.1)
     assert not task.done(), "the wait returned without being released"
@@ -147,7 +148,7 @@ async def test_the_release_file_ends_the_wait_early(
     marker_dir, monkeypatch, prompt_polling
 ):
     rm.check_and_update_the_marker()
-    monkeypatch.setenv(rm.MAX_WAIT_SECONDS_ENV, "300")
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     task = asyncio.ensure_future(rm.wait_if_pod_restarted(asyncio.Event()))
     await asyncio.sleep(0.05)
     assert not task.done()
@@ -157,7 +158,7 @@ async def test_the_release_file_ends_the_wait_early(
 
 async def test_shutdown_ends_the_wait(marker_dir, monkeypatch, prompt_polling):
     rm.check_and_update_the_marker()
-    monkeypatch.setenv(rm.MAX_WAIT_SECONDS_ENV, "300")
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     shutdown = asyncio.Event()
     task = asyncio.ensure_future(rm.wait_if_pod_restarted(shutdown))
     await asyncio.sleep(0.05)
@@ -170,7 +171,7 @@ async def test_a_failure_setting_up_the_wait_starts_the_worker_anyway(
     marker_dir, monkeypatch
 ):
     rm.check_and_update_the_marker()
-    monkeypatch.setenv(rm.MAX_WAIT_SECONDS_ENV, "300")
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
 
     async def boom(*_args, **_kwargs):
         raise RuntimeError("no clock")

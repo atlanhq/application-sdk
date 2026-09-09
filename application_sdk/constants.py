@@ -505,6 +505,44 @@ WORKER_EVICTION_MAX_RETRIES = _load_worker_eviction_max_retries()
 #: activity is recorded and a positive window would kill a healthy worker.
 #: Malformed or non-finite values (e.g. ``"abc"``, ``"inf"``, ``"nan"``) fall
 #: back to 0.
+#: How long a worker whose pod already restarted waits before it starts polling.
+#:
+#: A container killed for exceeding its memory limit restarts inside the same
+#: pod, whose resource spec cannot change, so it returns on the limit that just
+#: killed it. Waiting gives whatever replaces the pod time to do so before the
+#: worker takes work it cannot finish.
+#:
+#: This only sizes the wait; it does not enable the behaviour. The marker's
+#: volume does that, and without it nothing is ever detected and nothing waits
+#: (see ``application_sdk.common.restart_marker``). ``0`` disables waiting even
+#: where the volume is mounted, which is the kill switch. Malformed values fall
+#: back to the default rather than failing startup, because a typo in a
+#: deployment must not stop a worker from running at all.
+#:
+#: The default has to exceed however long the slowest thing that replaces a pod
+#: takes to do it. Waiting too long costs bounded wall-clock on a pod that was
+#: going to be replaced anyway; waiting too little is worse than not waiting,
+#: because the worker resumes on the limit that already failed, takes work, and
+#: dies - moments before it would have been rescued. Nothing is charged to the
+#: activity meanwhile: the attempt that was running when the container died has
+#: already timed out, and a queued retry neither heartbeats nor expires
+#: (schedule-to-start defaults to infinity, and does not retry even when set).
+def _load_dirty_restart_max_wait_seconds() -> int:
+    raw = os.getenv("ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS", "600")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        warnings.warn(
+            f"ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS={raw!r} is not a valid integer; "
+            "falling back to 600",
+            stacklevel=2,
+        )
+        return 600
+
+
+DIRTY_RESTART_IDLE_MAX_SECONDS = _load_dirty_restart_max_wait_seconds()
+
+
 def _load_worker_liveness_max_idle_seconds() -> float:
     raw = os.getenv("ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS", "0")
     try:
