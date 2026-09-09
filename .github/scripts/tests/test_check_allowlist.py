@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -259,7 +260,12 @@ class TestMissingResultsReason:
 
     def test_two_green_upstream_jobs_point_at_the_artifact_service(self) -> None:
         """Both jobs green and no results means the download failed twice —
-        the one case where re-running this job alone is the right move."""
+        the one case where re-running this job alone is the right move.
+
+        Load-bearing premise: a green upstream job proves the artifact was
+        published. That holds only while neither upload can fail silently, which
+        `TestUpstreamResultsAreTruthful` below pins in the workflow itself.
+        """
         reason = check_allowlist.missing_results_reason("success", "success")
         assert "artifact service" in reason
         assert "re-run" in reason
@@ -293,3 +299,57 @@ class TestMissingResultsReason:
                 check_allowlist.main()
         assert exc.value.code != 0
         assert "image build" in capsys.readouterr().out
+
+
+class TestUpstreamResultsAreTruthful:
+    """Cross-file: the workflow must not hand this script a lying job result.
+
+    `missing_results_reason` reads a green upstream job as proof that job
+    published its artifact, and says so — "the results were produced and the
+    download of them failed twice … re-run this job." An upload retry marked
+    `continue-on-error` breaks that: a double finalize-403 leaves the producing
+    job green with nothing published, and the gate then blames the download and
+    advises re-running itself, which can never find an artifact the run never
+    created. A fourth transient failure, wearing a confidently wrong name, in
+    the function written to stop exactly that.
+
+    `trivy-scan` shipped that way, on the reasoning that the gate downloads with
+    `continue-on-error` so nothing needed to fail at the upload. The gate fails
+    regardless when the results are absent; all the tolerance bought was the
+    wrong diagnosis.
+    """
+
+    GATING_JOBS = ("build", "trivy-scan")
+
+    def _upload_retries(self, job_id: str) -> list[dict[str, Any]]:
+        workflow = (
+            Path(__file__).resolve().parents[2] / "workflows" / "build-and-scan.yaml"
+        )
+        job = yaml.safe_load(workflow.read_text())["jobs"][job_id]
+        return [
+            step
+            for step in job["steps"]
+            if "actions/upload-artifact" in str(step.get("uses", ""))
+            and "outcome" in str(step.get("if", ""))
+        ]
+
+    @pytest.mark.parametrize("job_id", GATING_JOBS)
+    def test_the_guard_finds_the_retry_it_is_meant_to_check(self, job_id: str) -> None:
+        assert self._upload_retries(job_id), (
+            f"no upload retry found in `{job_id}` — the discovery below matched "
+            "nothing and would pass vacuously"
+        )
+
+    @pytest.mark.parametrize("job_id", GATING_JOBS)
+    def test_no_gating_upload_retry_swallows_its_own_failure(self, job_id: str) -> None:
+        swallowed = [
+            step.get("name")
+            for step in self._upload_retries(job_id)
+            if step.get("continue-on-error") is True
+        ]
+        assert not swallowed, (
+            f"`{job_id}` would stay green with no artifact published: {swallowed}. "
+            "Its result is read as proof the artifact exists — either drop "
+            "`continue-on-error`, or stop `missing_results_reason` treating this "
+            "job's success as publication."
+        )
