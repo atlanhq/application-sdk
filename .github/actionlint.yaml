@@ -42,6 +42,9 @@ paths:
   .github/workflows/e2e-full-reusable.yaml:
     ignore:
       - 'property "workflow_sha" is not defined'
+  .github/workflows/build-and-scan.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
 
   # FALSE POSITIVE — actionlint only knows secrets declared under
   # `workflow_call.secrets`, but a caller using `secrets: inherit` passes
