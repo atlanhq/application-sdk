@@ -136,3 +136,34 @@ def test_sync_helper_blocks_loop(tmp_path):
             tmp_path, "probe()", "import time\ndef probe():\n    time.sleep(5)\n"
         )
     }
+
+
+@pytest.mark.parametrize(
+    "prefix", ['token = "synthetic"', 'def unused():\n    token = "synthetic"']
+)
+def test_unrelated_credential_names_do_not_flag_traceback(tmp_path, prefix):
+    rows = findings(
+        tmp_path,
+        prefix
+        + '\ntry:\n    await probe()\nexcept Exception as exc:\n    logger.exception("failed")',
+    )
+    assert "P060" not in {row.rule_id for row in rows}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'token = "synthetic"\ntry:\n    await probe(token)\nexcept Exception as exc:\n    logger.exception("failed")',
+        'try:\n    await probe()\nexcept Exception as exc:\n    logger.exception("failed: %s", token)',
+    ],
+)
+def test_traceback_credential_reads_remain_visible(tmp_path, body):
+    assert "P060" in {row.rule_id for row in findings(tmp_path, body)}
+
+
+def test_other_except_branch_does_not_taint_traceback(tmp_path):
+    rows = findings(
+        tmp_path,
+        'try:\n    await probe()\nexcept ValueError:\n    consume(token)\nexcept Exception as exc:\n    logger.exception("failed")',
+    )
+    assert "P060" not in {row.rule_id for row in rows}

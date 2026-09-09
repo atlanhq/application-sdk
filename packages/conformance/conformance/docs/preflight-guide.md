@@ -98,7 +98,7 @@ Retryability alone does not justify returning `READY` after a failed probe. Demo
 
 **Contract:** output fields and logs exclude raw secrets and unsafe exception representations.
 
-**Investigate:** follow values to serialized checks, aggregate errors and traceback locals without exposing real credentials. **Fix:** use safe messages and SDK sanitization at the relevant boundary; retain stable diagnostic codes. **Verify:** inject unique synthetic secrets into exceptions and inspect every output and log sink. Static matching cannot certify arbitrary sanitizers or every external logging sink.
+**Investigate:** follow values to serialized checks, aggregate errors and traceback locals without exposing real credentials. **Fix:** use safe messages and SDK sanitization at the relevant boundary; retain stable diagnostic codes. **Verify:** inject unique synthetic secrets into exceptions and inspect every output and log sink. Static matching cannot certify arbitrary sanitizers or every external logging sink. Traceback warnings consider credential reads in the associated try operations or log expression, excluding unrelated locals and nested definitions. They indicate potential exposure when diagnostic rendering is enabled, not proof that a configured sink emits secrets.
 
 ## P061
 

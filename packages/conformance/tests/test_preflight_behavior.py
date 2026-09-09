@@ -114,3 +114,31 @@ def test_lifetime_scenario_requires_lifetime_assertion(tmp_path):
     )
     result = run_behavior(tmp_path, {"P062"})
     assert result.summary["P062"]["passed"] == 0
+
+
+def test_failed_scenario_points_to_recorded_test_location(tmp_path):
+    write_test(
+        tmp_path,
+        '@pytest.mark.preflight_conformance(rule="P062", scenario="healthy")\ndef test_failure():\n    assert False\n',
+    )
+    result = run_behavior(tmp_path, {"P062"})
+    finding = next(row for row in result.findings if "is failed" in row.message)
+    assert finding.file == "test_contract.py"
+    lines = (tmp_path / finding.file).read_text().splitlines()
+    assert lines[finding.line - 1].startswith("@pytest.mark.preflight_conformance")
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {},
+        {"file": "../outside.py", "line": 2},
+        {"file": "test_contract.py", "line": 0},
+        {"file": "test_contract.py", "line": True},
+        {"file": "test_contract.py", "line": "2"},
+    ],
+)
+def test_invalid_scenario_location_uses_fallback(tmp_path, record):
+    from conformance.suite.checks.preflight._behavior import _record_location
+
+    assert _record_location(record, tmp_path) == ("pyproject.toml", 1)

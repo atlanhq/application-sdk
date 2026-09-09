@@ -22,6 +22,17 @@ class BehaviorResult:
     summary: dict[str, Any]
 
 
+def _record_location(record: dict[str, Any], root: Path) -> tuple[str, int]:
+    filename, line = record.get("file"), record.get("line")
+    if isinstance(filename, str) and filename and type(line) is int and line > 0:
+        try:
+            path = (root / filename).resolve().relative_to(root.resolve())
+            return path.as_posix(), line
+        except (ValueError, OSError):
+            pass
+    return "pyproject.toml", 1
+
+
 def _stop(process: subprocess.Popen) -> None:
     try:
         if os.name == "posix":
@@ -153,11 +164,12 @@ def run_behavior(
                         if not valid
                         else "failed, skipped, or incomplete"
                     )
+                    filename, line = _record_location(record, root)
                     findings.append(
                         Finding(
                             rule_id=rule,
-                            file="pyproject.toml",
-                            line=1,
+                            file=filename,
+                            line=line,
                             column=1,
                             discriminator=str(key),
                             message=f"Preflight scenario {key[1]} for entrypoint {key[0]} is {reason}; it does not establish behavioral conformance.",

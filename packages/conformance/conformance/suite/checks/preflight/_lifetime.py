@@ -214,10 +214,23 @@ def scan(reg: Registry) -> list[Finding]:
                 "error",
                 "warning",
             }:
+                handler = next(
+                    (a for a in ancestors if isinstance(a, ast.ExceptHandler)), None
+                )
+                protected = parents.get(handler) if handler is not None else None
+                expressions = [node]
+                if isinstance(protected, (ast.Try, ast.TryStar)):
+                    expressions.extend(protected.body)
                 credential_values = any(
                     isinstance(n, ast.Name)
+                    and isinstance(n.ctx, ast.Load)
                     and n.id.lower() in {"credentials", "creds", "password", "token"}
-                    for n in ast.walk(func)
+                    for expression in expressions
+                    for n in (expression, *iter_function_nodes(expression))
+                    if not isinstance(
+                        expression,
+                        (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+                    )
                 )
                 traceback = node.func.attr == "exception" or any(
                     kw.arg == "exc_info"
@@ -230,7 +243,7 @@ def scan(reg: Registry) -> list[Finding]:
                         src,
                         node,
                         "P060",
-                        "Traceback logging in a credential-bearing preflight frame can expose locals. Disable diagnostic-local rendering and verify that synthetic secrets do not reach the log sink.",
+                        "Traceback logging accompanies credential reads in the protected operation or log expression and may expose values when diagnostic rendering is enabled. Disable diagnostic-local rendering and verify that synthetic secrets do not reach the log sink.",
                     )
     for src in reg.sources:
         for node in ast.walk(src.tree):
