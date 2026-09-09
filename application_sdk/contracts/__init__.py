@@ -38,6 +38,7 @@ from application_sdk.contracts.storage import (
     VerifyRefsOutput,
 )
 from application_sdk.contracts.types import (
+    AssetArtifact,
     BoundedDict,
     BoundedList,
     ConnectionRef,
@@ -47,9 +48,12 @@ from application_sdk.contracts.types import (
     MaxItems,
     StorageTier,
     StoreTarget,
+    asset_artifact_fields,
+    asset_artifact_marker,
 )
 
 __all__ = [
+    "AssetArtifact",
     "BoundedDict",
     "BoundedList",
     "ConnectionRef",
@@ -79,6 +83,8 @@ __all__ = [
     "UploadRefsOutput",
     "VerifyRefsInput",
     "VerifyRefsOutput",
+    "asset_artifact_fields",
+    "asset_artifact_marker",
     "get_contract_fields",
     "has_default",
     "is_backwards_compatible",

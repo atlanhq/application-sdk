@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import warnings
 from pathlib import Path, PureWindowsPath
+from typing import Annotated
 
 import pytest
 
@@ -29,7 +30,7 @@ from application_sdk.app.entrypoint import entrypoint
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.types import AssetArtifact, FileReference
 
 
 class DeclaredInput(Input, allow_unbounded_fields=True):
@@ -562,3 +563,90 @@ class TestFileReferenceDetection:
             pass
 
         assert _mentions_file_reference(TypedArtifact | None) is True
+
+
+class ModelDeclaredOutput(Output, allow_unbounded_fields=True):
+    """Boundary output whose artifact is declared by a model, not a field map."""
+
+    transformed_files: Annotated[list[FileReference], AssetArtifact()] = []
+    row_count: int = 0
+
+
+class MixedOutput(Output, allow_unbounded_fields=True):
+    """One model-declared artifact and one the app really does have to declare."""
+
+    transformed_files: Annotated[list[FileReference], AssetArtifact()] = []
+    residual_failures: FileReference | None = None
+
+
+class TestModelDeclaredFieldsAreExempt:
+    """FND-1863: a marked field is already declared, by the model itself.
+
+    The guard exists to stop an artifact crossing a public boundary
+    undescribed.  A field carrying
+    :class:`~application_sdk.contracts.types.AssetArtifact` is described — by
+    ``pyatlan_v9``'s ``Asset``, which the interceptor validates it against in
+    full.  Asking for an ``artifactSchemas`` entry as well would be asking every
+    SQL connector to hand-author a partial restatement of a 500-type model, and
+    at 4.0 it would be asking on pain of an error.
+    """
+
+    def test_a_marked_boundary_field_does_not_warn(self, tmp_path: Path) -> None:
+        _write_manifest(tmp_path / "app" / "generated")
+
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+
+            class ModelDeclaredApp(App):
+                name = "model-declared-app"
+
+                async def run(self, input: PlainInput) -> ModelDeclaredOutput:
+                    return ModelDeclaredOutput()
+
+        assert _boundary_warnings(recorded) == []
+
+    def test_the_exemption_is_per_field_not_per_contract(self, tmp_path: Path) -> None:
+        """A marked field is exempt; its neighbour still has to be declared.
+
+        The failure mode worth pinning is a blanket exemption: one model-declared
+        field silencing the guard for the app-owned artifact next to it would
+        turn this fix into the hole it is not.
+        """
+        _write_manifest(tmp_path / "app" / "generated")
+
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+
+            class MixedApp(App):
+                name = "mixed-app"
+
+                async def run(self, input: PlainInput) -> MixedOutput:
+                    return MixedOutput()
+
+        messages = _boundary_warnings(recorded)
+        assert len(messages) == 1, messages
+        assert "'residual_failures'" in messages[0]
+        assert "transformed_files" not in messages[0]
+
+    def test_an_inherited_marker_exempts_the_subclass(self, tmp_path: Path) -> None:
+        """A connector subclassing an SDK contract marks nothing of its own.
+
+        ``model_fields`` resolves the MRO, which is what makes every
+        ``MyExtractionOutput(ExtractionOutput)`` in the fleet exempt without one
+        line of connector change — the whole point of fixing this in the SDK.
+        """
+        _write_manifest(tmp_path / "app" / "generated")
+
+        class ConnectorOutput(ModelDeclaredOutput):
+            extra_count: int = 0
+
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+
+            class SubclassApp(App):
+                name = "subclass-app"
+
+                async def run(self, input: PlainInput) -> ConnectorOutput:
+                    return ConnectorOutput()
+
+        assert _boundary_warnings(recorded) == []
