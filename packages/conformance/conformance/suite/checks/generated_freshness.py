@@ -168,8 +168,8 @@ def _yaml_comment_start(line: str) -> int:
 # A contract that declares an ``entrypoints`` block is a multi-entrypoint bundle;
 # its E2E scaffolding lands in per-entrypoint subfolders, so K010 (which requires
 # the single-entrypoint _e2e_base.py path) does not apply.  K004 uses the same
-# predicate, then reads the mapping keys so it can require a copy per entrypoint
-# instead of accepting any subdirectory.
+# predicate, then reads each listing element's ``name`` (or mapping key) so it
+# can require a copy per declared entrypoint instead of accepting any subdirectory.
 _ENTRYPOINTS_RE = re.compile(r"(?m)^\s*entrypoints\b")
 
 
@@ -523,33 +523,92 @@ def _amends_line(text: str) -> int:
     return 1
 
 
-def _declared_entrypoints(text: str) -> tuple[str, ...] | None:
-    """Mapping keys of the contract's ``entrypoints { ["crawler"] { … } }`` block.
+# App.pkl ``Entrypoint.name`` on its own line inside a listing element
+# (``new Entrypoint { name = "crawler" }`` / ``new App.Entrypoint { … }``).
+# Anchored so ``username =`` / ``displayName =`` cannot match.
+_ENTRYPOINT_NAME_RE = re.compile(r'(?m)^\s*name\s*=\s*"([^"]+)"')
+_MAPPING_KEY_BEFORE_BRACE_RE = re.compile(r'\["([^"]+)"\]\s*$')
 
-    ``None`` when the contract has no ``entrypoints`` block (single-entrypoint
-    layout).  An empty tuple means a bundle was declared but no keys could be
-    read — still not a single-entrypoint app.  The keys are the directory names
-    under ``app/generated/`` that a bundle emits.
-    """
+
+def _matching_brace_end(text: str, open_at: int) -> int | None:
+    """Index of the ``}`` that closes the ``{`` at *open_at*, or ``None``."""
+    depth = 0
+    for i, ch in enumerate(text[open_at:]):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return open_at + i
+    return None
+
+
+def _entrypoints_block(text: str) -> str | None:
+    """Body of the contract's ``entrypoints { … }`` block, or ``None`` if absent."""
     match = _ENTRYPOINTS_RE.search(text)
     if match is None:
         return None
     rest = text[match.end() :]
     open_at = rest.find("{")
     if open_at < 0:
-        return ()
+        return ""
+    end = _matching_brace_end(rest, open_at)
+    return rest[: end + 1] if end is not None else rest
+
+
+def _declared_entrypoints(text: str) -> tuple[str, ...] | None:
+    """Entrypoint names the contract's ``entrypoints { … }`` block declares.
+
+    App.pkl types ``entrypoints`` as ``Listing<Entrypoint>``, so real bundles
+    write ``new Entrypoint { name = "crawler" }`` (or ``new App.Entrypoint``,
+    or a typed ``new { name = "crawler" }``).  Mapping keys
+    (``["crawler"] { … }``) are accepted too.  Only top-level listing
+    elements are read, so a nested ``metadata { ["foo"] = … }`` is not an
+    entrypoint.
+
+    ``None`` when the contract has no ``entrypoints`` keyword, or the block
+    is empty — App.pkl's default ``new Listing {}`` is single-entrypoint,
+    not a bundle with missing keys.  Returned names are the directory names
+    under ``app/generated/``.
+    """
+    block = _entrypoints_block(text)
+    if block is None:
+        return None
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def _add(name: str) -> None:
+        if name not in seen:
+            seen.add(name)
+            names.append(name)
+
     depth = 0
-    end: int | None = None
-    for i, ch in enumerate(rest[open_at:]):
+    for i, ch in enumerate(block):
         if ch == "{":
+            if depth == 1:
+                close = _matching_brace_end(block, i)
+                body = block[i + 1 : (close if close is not None else len(block))]
+                # Only the object's own fields, not nested Mapping/Listing bodies.
+                own = []
+                nested = 0
+                for line in body.splitlines():
+                    nested += line.count("{") - line.count("}")
+                    if nested > 0:
+                        continue
+                    named = _ENTRYPOINT_NAME_RE.match(line)
+                    if named:
+                        own.append(named.group(1))
+                keyed = _MAPPING_KEY_BEFORE_BRACE_RE.search(block[:i])
+                # Prefer ``name =`` (the directory App.pkl actually emits)
+                # and fall back to a mapping key when the body has no name.
+                if own:
+                    _add(own[0])
+                elif keyed:
+                    _add(keyed.group(1))
             depth += 1
         elif ch == "}":
             depth -= 1
-            if depth == 0:
-                end = open_at + i
-                break
-    block = rest[: end + 1] if end is not None else rest
-    return tuple(_DEP_KEY_RE.findall(block))
+    return tuple(names) or None
 
 
 def _missing_generated_outputs(
@@ -557,7 +616,7 @@ def _missing_generated_outputs(
 ) -> list[str]:
     """Repo-relative paths of *filename* this contract's layout requires but lacks.
 
-    A single-entrypoint contract (no ``entrypoints`` block) requires
+    A single-entrypoint contract (no ``entrypoints`` names) requires
     ``app/generated/<filename>`` and nothing else — a same-named file in a
     subdirectory does not count.
 
@@ -569,12 +628,9 @@ def _missing_generated_outputs(
     generated has no per-entrypoint copy either, so it still fires.
     """
     generated = root / "app" / "generated"
-    if entrypoints is None:
+    if not entrypoints:
         expected = f"app/generated/{filename}"
         return [] if (generated / filename).is_file() else [expected]
-    if not entrypoints:
-        expected = f"app/generated/<entrypoint>/{filename}"
-        return [expected]
     return [
         f"app/generated/{key}/{filename}"
         for key in entrypoints

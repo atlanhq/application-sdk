@@ -12,7 +12,11 @@ from pathlib import Path
 from textwrap import dedent
 
 from conformance.suite.checks._toolkit_baseline import load_baseline
-from conformance.suite.checks.generated_freshness import discover, scan_all
+from conformance.suite.checks.generated_freshness import (
+    _declared_entrypoints,
+    discover,
+    scan_all,
+)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
@@ -214,7 +218,9 @@ _BUNDLE_APP_PKL = dedent("""\
     name = "demo"
 
     entrypoints {
-      ["crawler"] { name = "crawler" }
+      new Entrypoint {
+        name = "crawler"
+      }
     }
 """)
 
@@ -263,10 +269,61 @@ _TWO_ENTRYPOINT_APP_PKL = dedent("""\
     name = "demo"
 
     entrypoints {
-      ["crawler"] { name = "crawler" }
-      ["miner"] { name = "miner" }
+      new Entrypoint {
+        name = "crawler"
+      }
+      new Entrypoint {
+        name = "miner"
+      }
     }
 """)
+
+
+def test_declared_entrypoints_reads_toolkit_bundle_example() -> None:
+    """The parser must read App.pkl Listing syntax used by every toolkit example."""
+    example = (
+        Path(__file__).resolve().parents[3]
+        / "contract-toolkit"
+        / "examples"
+        / "bundle"
+        / "app.pkl"
+    )
+    assert _declared_entrypoints(example.read_text(encoding="utf-8")) == (
+        "crawler",
+        "miner",
+    )
+
+
+def test_k004_mapping_syntax_bundle_still_resolves(tmp_path: Path) -> None:
+    """Mapping-key bundles still resolve, even though App.pkl uses Listing form."""
+    files = _bundle_files()
+    files["contract/app.pkl"] = dedent("""\
+        amends "@app-contract-toolkit/App.pkl"
+
+        name = "demo"
+
+        entrypoints {
+          ["crawler"] { name = "crawler" }
+        }
+    """)
+    assert [f for f in _scan(tmp_path, files) if f.rule_id == "K004"] == []
+
+
+def test_k004_listing_bundle_fully_generated_no_finding(tmp_path: Path) -> None:
+    """A Listing-syntax crawler+miner tree with both copies present is clean.
+
+    Regression: ``_declared_entrypoints`` only read ``["key"]`` mapping keys, so
+    App.pkl's ``new Entrypoint { name = "…" }`` form (every toolkit example)
+    parsed as empty and K004 fired unsatisfiable ``<entrypoint>`` placeholders
+    even when the files were on disk.
+    """
+    files = _bundle_files()
+    files["contract/app.pkl"] = _TWO_ENTRYPOINT_APP_PKL
+    files["app/generated/miner/manifest.json"] = "{}\n"
+    files["app/generated/miner/_input.py"] = _BANNER + "x = 1\n"
+    files["app/generated/miner/_e2e_base.py"] = _BANNER + "class BaseE2E:\n    pass\n"
+    files["app/generated/miner/__init__.py"] = ""
+    assert [f for f in _scan(tmp_path, files) if f.rule_id == "K004"] == []
 
 
 def test_k004_partial_bundle_fires_for_ungenerated_entrypoint(tmp_path: Path) -> None:
@@ -283,6 +340,22 @@ def test_k004_partial_bundle_fires_for_ungenerated_entrypoint(tmp_path: Path) ->
     assert any("app/generated/miner/manifest.json" in m for m in messages)
     assert any("app/generated/miner/_input.py" in m for m in messages)
     assert not any("app/generated/crawler/" in m for m in messages)
+
+
+def test_k004_empty_entrypoints_block_uses_top_level(tmp_path: Path) -> None:
+    """``entrypoints { }`` is App.pkl's default Listing — single-entrypoint layout."""
+    files = _clean_files()
+    files["contract/app.pkl"] = dedent("""\
+        amends "@app-contract-toolkit/App.pkl"
+
+        name = "demo"
+
+        entrypoints {}
+    """)
+    del files["app/generated/manifest.json"]
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(findings) == 1
+    assert "'app/generated/manifest.json'" in findings[0].message
 
 
 def test_k004_stray_subdirectory_does_not_satisfy_single_entrypoint(
@@ -624,7 +697,9 @@ def test_k010_multi_entrypoint_bundle_skipped(tmp_path: Path) -> None:
         'amends "@app-contract-toolkit/App.pkl"\n\n'
         'name = "demo"\n\n'
         "entrypoints {\n"
-        '  ["crawler"] { name = "crawler" }\n'
+        "  new Entrypoint {\n"
+        '    name = "crawler"\n'
+        "  }\n"
         "}\n"
     )
     assert [f for f in _scan(tmp_path, files) if f.rule_id == "K010"] == []
