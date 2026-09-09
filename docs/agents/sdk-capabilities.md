@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.33.2
-source-sha:    eb3f58581f82399f32e701c4743a5bca879b2a89
-source-date:   2026-09-09T14:22:00+01:00
+source-sha:    db271b97113c2e576921dfdd1eb1d0929b671bf3
+source-date:   2026-09-09T17:23:43+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -21,7 +21,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 46 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 27 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 40 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 66 |
@@ -680,6 +680,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 
 ### Classes
 
+#### `AssetArtifact`
+
+- **Import:** `from application_sdk.contracts import AssetArtifact`
+- **Signature:** `class AssetArtifact`
+- **Summary:** Marker: this ``FileReference`` field's declaration **is** a typed model.
+- **Defined in:** `application_sdk/contracts/types.py`
+
 #### `CompatibilityError`
 
 - **Import:** `from application_sdk.contracts.compat import CompatibilityError`
@@ -891,6 +898,20 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Signature:** `assert_backwards_compatible(old_cls: type, new_cls: type) -> None`
 - **Summary:** Assert *new_cls* is backwards-compatible with *old_cls*, raising on failure.
 - **Defined in:** `application_sdk/contracts/compat.py`
+
+#### `asset_artifact_fields`
+
+- **Import:** `from application_sdk.contracts import asset_artifact_fields`
+- **Signature:** `asset_artifact_fields(contract: type)`
+- **Summary:** Every field on *contract* carrying the :class:`AssetArtifact` marker.
+- **Defined in:** `application_sdk/contracts/types.py`
+
+#### `asset_artifact_marker`
+
+- **Import:** `from application_sdk.contracts import asset_artifact_marker`
+- **Signature:** `asset_artifact_marker(contract: type | None, field: str)`
+- **Summary:** The :class:`AssetArtifact` marker on ``contract``'s *field*, or ``None``.
+- **Defined in:** `application_sdk/contracts/types.py`
 
 #### `canonical_type_str`
 
@@ -7158,7 +7179,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `records_uploaded: int` `= 0`
   - `error: str` `= ''`
   - `output_path: str` `= ''` — Resolved local base path used during extraction. Subclasses that need
-  - `transformed_files: Annotated[list[FileReference], MaxItems(1000)]` `= Field(default_factory=list)` — The producer's declaration of what the transform step actually wrote.
+  - `transformed_files: Annotated[list[FileReference], MaxItems(1000), AssetArtifact()]` `= Field(default_factory=list)` — The producer's declaration of what the transform step actually wrote.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `ExtractionTaskInput`

@@ -808,6 +808,16 @@ model, so a key there could not name a real field.
 Never hand-edit the generated `artifact_schemas.json`: it is a pkl eval output and the
 next toolkit run reverts the edit.
 
+**Model-declared fields are exempt, and need no suppression.** A `FileReference` field
+carrying the SDK's `AssetArtifact` marker is already declared -- by `pyatlan_v9`'s
+`Asset` rather than by a field map -- and the SDK's interceptor validates it against the
+whole model. The asset hand-off is 500+ types and 4000+ properties, so any envelope
+authored for one is a partial restatement of `Asset`, and picking `required` from what
+one connector happens to emit encodes a connector-local observation as a cross-app
+contract. The commonest case needs nothing from the app at all:
+`ExtractionOutput.transformed_files` is the SDK's own field, so every subclass of it
+inherits the exemption (FND-1863).
+
 **Suppress** with `# conformance: ignore[K016] <reason>` on the field declaration, or on
 the contract class definition for a field inherited from a base. Suppressing states that
 this hand-off is deliberately unchecked -- which is a defensible call for an artifact no
