@@ -274,6 +274,7 @@ class TestDepFileAllowlist:
             "app/generated/nested/deep.pkl",
             "atlan.yaml",
             "app.yaml",
+            "contract_schema.lock.json",
         ],
     )
     def test_dependency_paths_are_allowed(self, path):
@@ -299,13 +300,27 @@ class TestDepFileAllowlist:
         assert gate.non_dep_files([path]) == [path]
 
     @pytest.mark.parametrize(
-        "path", ["sub/atlan.yaml", "sub/app.yaml", "x/app/generated/a.pkl"]
+        "path",
+        [
+            "sub/atlan.yaml",
+            "sub/app.yaml",
+            "x/app/generated/a.pkl",
+            "sub/contract_schema.lock.json",
+        ],
     )
     def test_generated_artifacts_are_root_only(self, path):
-        # renovate-pkl-sync only ever writes these at the repo root. An
-        # unrelated app.yaml/atlan.yaml elsewhere in a consumer tree is ordinary
-        # source and must not ride this gate.
+        # renovate-pkl-sync and renovate-contract-ledger only ever write these
+        # at the repo root. An unrelated app.yaml/atlan.yaml/ledger elsewhere in
+        # a consumer tree is ordinary source and must not ride this gate.
         assert gate.non_dep_files([path]) == [path]
+
+    def test_conformance_lane_diff_is_dep_only(self):
+        # The exact shape the conformance-package lane produces: the lock plus
+        # the ledger its own postUpgradeTask regenerates (FND-607). Before
+        # contract_schema.lock.json joined the allowlist this read as
+        # non-dependency-only, so the lane never earned its atlan-ci approval.
+        files = ["uv.lock", "contract_schema.lock.json"]
+        assert gate.non_dep_files(files) == []
 
     def test_one_bad_file_among_many_good_ones_is_reported(self):
         files = ["uv.lock", "pyproject.toml", "application_sdk/foo.py"]
