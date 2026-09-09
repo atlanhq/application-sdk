@@ -63,5 +63,11 @@ one line, or the custom manager silently stops matching.
 from __future__ import annotations
 
 PKL_VERSION: str = "0.32.1"
+"""The pkl version CI renders every contract with.
+
+Read it from an app rather than assuming a floor:
+``python -m application_sdk.dev.pkl print-version``, or
+``python -m application_sdk.dev.pkl path`` for the cached binary itself.
+"""
 
 __all__ = ["PKL_VERSION"]
