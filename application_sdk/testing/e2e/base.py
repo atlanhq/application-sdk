@@ -416,6 +416,28 @@ class QueuePollerReading:
         return not self.pollers
 
     @property
+    def held_halves(self) -> str:
+        """Which halves of the queue have pollers, as a clause.
+
+        A task-queue *name* addresses two queues — workflow tasks and activity
+        tasks — and the read covers both, so a non-empty result can mean either
+        is held. Naming which is what makes the half-polling zombie legible: a
+        worker whose workflow poll loop died while its activity loop lives holds
+        one half, and a union count reports that as "1 poller" exactly as a
+        healthy worker does. See :class:`TaskQueueType`.
+
+        Returns:
+            ``both halves`` when every half is held, else ``the <Half> half
+            only``. Empty when :attr:`unclaimed`.
+        """
+        halves = {poller.task_queue_type for poller in self.pollers}
+        if not halves:
+            return ""
+        if len(halves) > 1:
+            return "both halves"
+        return f"the {next(iter(halves)).value} half only"
+
+    @property
     def identities(self) -> str:
         """The pollers as ``identity (Workflow, build X)``, comma-separated.
 
@@ -3519,9 +3541,12 @@ class BaseE2ETest:
         read as evidence against that hypothesis — costing a round trip in the
         extraction path before it was reconsidered.
 
-        The two cases are *distinguishable*, so when Temporal can be read this
-        says which rather than hedging: a queue with no pollers is the observed
-        form of "nothing ever claimed it". Without that read — the default, and
+        Only the *negative* is decidable from a poller read: a queue with no
+        pollers is the observed form of "nothing ever claimed it". The converse
+        is not — ``DescribeTaskQueue`` answers who is holding the queue name
+        now, not whether this node's task was ever claimed, so a non-empty read
+        rules the mismatch out and stops there rather than repeating this
+        method's own bug on the measured path. Without that read — the default, and
         what a connector CI leg always gets, since the runner has no route into
         the tenant vcluster — it hedges honestly and names the one check that
         settled FND-1284: the dispatched queue against the queue the owning
@@ -3563,11 +3588,16 @@ class BaseE2ETest:
                 "The activity's own code is not implicated."
             )
         return (
-            "A worker claimed it and stopped making progress (or died holding it): "
-            f"Temporal reports {len(reading.pollers)} poller(s) on "
-            f"{reading.task_queue!r} in namespace {reading.namespace!r} "
-            f"({reading.identities}). Read the child workflow {child} on the "
-            "tenant's Temporal for what it is stuck on."
+            f"Something IS holding {reading.task_queue!r} in namespace "
+            f"{reading.namespace!r}: Temporal reports {len(reading.pollers)} "
+            f"poller(s), {reading.held_halves} ({reading.identities}). That rules "
+            "out a queue-name mismatch, but a poller on the queue is not proof "
+            "THIS task was claimed — the read answers who is holding the queue "
+            f"now. Read the child workflow {child} on the tenant's Temporal: a "
+            "history that stopped growing is a worker that took it and stopped "
+            "making progress (or died holding it); a workflow task still pending "
+            "means nothing has picked it up, which is what a worker polling only "
+            "the other half of the queue looks like."
         )
 
     def _describe_dag_nodes(self, ae_result: DAGRunResult) -> str:
@@ -4034,10 +4064,11 @@ class BaseE2ETest:
             )
         return (
             f"Temporal reports {len(reading.pollers)} poller(s) on "
-            f"{reading.task_queue!r} in namespace {reading.namespace!r}: "
-            f"{reading.identities}. Something IS holding that queue, so "
-            "the node was not picked up for another reason — read the child "
-            "workflow's history rather than hunting a queue-name mismatch."
+            f"{reading.task_queue!r} in namespace {reading.namespace!r}, "
+            f"{reading.held_halves}: {reading.identities}. Something IS holding "
+            "that queue, so the node was not picked up for another reason — read "
+            "the child workflow's history rather than hunting a queue-name "
+            "mismatch."
         )
 
     async def _read_queue_pollers(self, queue: str) -> QueuePollerReading | None:

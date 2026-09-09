@@ -1328,11 +1328,15 @@ def _reading(
     return QueuePollerReading(task_queue=queue, namespace=namespace, pollers=pollers)
 
 
-def _poller(identity: str, build_id: str | None = None) -> PollerInfo:
+def _poller(
+    identity: str,
+    build_id: str | None = None,
+    task_queue_type: TaskQueueType = TaskQueueType.WORKFLOW,
+) -> PollerInfo:
     return PollerInfo(
         identity=identity,
         last_access=datetime(2026, 9, 9, tzinfo=UTC),
-        task_queue_type=TaskQueueType.WORKFLOW,
+        task_queue_type=task_queue_type,
         build_id=build_id,
     )
 
@@ -1593,22 +1597,48 @@ class TestDescribeDagNodes:
         assert "does not match the dispatched one" in line
         assert "so this does not say which" not in line
 
-    def test_a_polled_queue_reports_the_stall_as_measured(self) -> None:
-        """The other verdict, and the only case in which the original sentence
-        was true. It now arrives with the pollers that make it a measurement."""
+    def test_a_polled_queue_rules_out_the_mismatch_and_claims_no_more(self) -> None:
+        """Only the negative is decidable from a poller read. ``DescribeTaskQueue``
+        answers who is holding the queue *name* now, not whether this node's task
+        was ever claimed — so a non-empty read must not repeat, on the measured
+        path, the assertion this whole change removes."""
         harness = self._harness()
         harness._queue_pollers = {
             "atlan-publish-production": _reading(
-                pollers=(_poller("1@worker-a", "build-7"),)
+                pollers=(
+                    _poller("1@worker-a", "build-7", TaskQueueType.WORKFLOW),
+                    _poller("1@worker-a", "build-7", TaskQueueType.ACTIVITY),
+                )
             )
         }
         line = harness._describe_dag_nodes(
             _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
         )
-        assert "A worker claimed it and stopped making progress" in line
-        assert "1 poller(s) on 'atlan-publish-production'" in line
+        assert "Something IS holding 'atlan-publish-production'" in line
+        assert "rules out a queue-name mismatch" in line
+        assert "not proof THIS task was claimed" in line
+        assert "2 poller(s), both halves" in line
         assert "1@worker-a (Workflow, build build-7)" in line
         assert "'run-1-publish'" in line
+        # The bug on the unmeasured path, not to be reintroduced on this one.
+        assert "A worker claimed it and stopped making progress" not in line
+
+    def test_a_half_polled_queue_names_the_half_it_holds(self) -> None:
+        """The zombie shape: a worker whose workflow poll loop died while its
+        activity loop lives holds one half, and a union count reports that as
+        "1 poller" exactly as a healthy worker does."""
+        harness = self._harness()
+        harness._queue_pollers = {
+            "atlan-publish-production": _reading(
+                pollers=(_poller("1@worker-a", "build-7", TaskQueueType.WORKFLOW),)
+            )
+        }
+        line = harness._describe_dag_nodes(
+            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+        )
+        assert "1 poller(s), the Workflow half only" in line
+        assert "polling only the other half of the queue" in line
+        assert "A worker claimed it and stopped making progress" not in line
 
     def test_a_reading_for_another_queue_does_not_answer_for_this_node(
         self,
