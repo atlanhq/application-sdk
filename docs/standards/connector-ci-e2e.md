@@ -1528,6 +1528,20 @@ tier (`source_available=false`) wires no AE client to submit a delete through at
 all, and a scale-to-zero worker that fails to wake is indistinguishable from a
 missing install. Drop it once neither is true.
 
+**A run that created nothing submits nothing.** `setup_method` mints
+`connection_qualified_name` before the test body runs, so it is non-empty by
+teardown whatever happened in between — non-emptiness is no evidence that a
+connection exists under it. Teardown therefore gates the run's own delete on
+what actually creates one: `seed_connection`, or a DAG submit (recorded *before*
+the POST, since a submit that times out is a run executing orphaned rather than
+one that never happened). A suite that skipped — no source provisioned, no
+subsystem wired, a `seed_prerequisites` that bailed — logs `no cleanup needed`
+at `INFO` and submits nothing. Before FND-1873 it published an AE workflow,
+submitted it and waited ~60s to `PURGE` a name under which, by construction,
+nothing could exist, on every leg of every push. Connections `seed_assets` or a
+`DAGSpec` registered are unaffected: those exist because something published
+them.
+
 **None of this can red a leg.** Teardown runs after the assertions have decided
 the verdict, so every step reports rather than raises — a missing app, an
 unreachable tenant and a store with no binding are all `WARNING` lines. Tenant

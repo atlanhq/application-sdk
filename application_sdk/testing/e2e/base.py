@@ -1077,6 +1077,11 @@ class BaseE2ETest:
         self._active_dag = None
         self.dag_outcomes = []
         self._connection_seeded = False
+        # Whether a DAG was ever submitted under this run's own connection.
+        # Together with ``_connection_seeded`` it is what tells teardown that
+        # the minted QN names something that can exist — see
+        # :meth:`_own_connection_may_exist`.
+        self._dag_submitted = False
         self._seeded_connection_qns: list[str] = []
         self._seeded_prefixes: list[str] = []
         self._validate_dag_runs()
@@ -1520,6 +1525,17 @@ class BaseE2ETest:
         worker that does not wake) and for when it should go.
         """
         conn_qn = getattr(self, "connection_qualified_name", "")
+        if conn_qn and not self._own_connection_may_exist():
+            logger.info(
+                "e2e cleanup: no cleanup needed for %s — this run seeded no "
+                "connection and submitted no DAG, so nothing was ever created "
+                "under that name",
+                conn_qn,
+            )
+            # Emptied rather than filtered out of the loop below, so the
+            # ordinals a seeding suite's teardown workflow names are built from
+            # do not shift when the run's own connection is skipped.
+            conn_qn = ""
         seeded = tuple(getattr(self, "_seeded_connection_qns", ()))
         for ordinal, target in enumerate((conn_qn, *seeded), start=1):
             if not target:
@@ -1529,6 +1545,38 @@ class BaseE2ETest:
                 continue
             self._warn_connection_delete_incomplete(target, report)
             await self._purge_connection_from_runner(target)
+
+    def _own_connection_may_exist(self) -> bool:
+        """Whether anything this run did could have created its own connection.
+
+        ``setup_method`` mints ``connection_qualified_name`` before the test
+        body runs, so by teardown it is always non-empty — non-emptiness is
+        therefore no evidence that a connection exists under it. Two things
+        create one, and nothing else does:
+
+        * :meth:`seed_connection`, which writes it to Atlas directly and sets
+          ``_connection_seeded``;
+        * a DAG submit, whose run mints the Connection on the tenant.
+
+        A run that did neither holds a freshly minted name under which, by
+        construction, nothing can exist — a suite that skipped in
+        :meth:`seed_prerequisites`, a leg where the source-availability tier
+        wired no AE client at all, or a test that errored before it submitted.
+        Deleting that name costs an AE workflow publish, a submit and a
+        minute of polling to reclaim nothing, on every leg of every push
+        (FND-1873).
+
+        The submit flag is set *before* the submit rather than after, because a
+        submit that times out is a run executing orphaned rather than one that
+        never happened — and that run creates the connection.
+
+        Returns:
+            Whether teardown has anything to reclaim under
+            ``self.connection_qualified_name``.
+        """
+        return bool(getattr(self, "_connection_seeded", False)) or bool(
+            getattr(self, "_dag_submitted", False)
+        )
 
     async def _delete_connection_via_app(
         self, qualified_name: str, *, ordinal: int
@@ -3652,6 +3700,11 @@ class BaseE2ETest:
             self.mode.value,
             self.connection_qualified_name,
         )
+        # Set before the submit, not after: a submit that times out is a run
+        # executing orphaned rather than one that never happened, and that run
+        # creates the connection teardown has to reclaim. See
+        # :meth:`_own_connection_may_exist`.
+        self._dag_submitted = True
         run_id = await self._submit(payload, slug=slug)
         logger.info("AE submit returned run_id=%s", run_id)
 
