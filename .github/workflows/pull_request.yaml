@@ -335,7 +335,8 @@ jobs:
           # legs just go cold forever. Same trap tag-suffix closes for the app
           # image build.
           cache-from: type=gha,scope=sdk-base-${{ matrix.arch }}
-          cache-to: type=gha,mode=min,scope=sdk-base-${{ matrix.arch }}
+          # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
+          cache-to: type=gha,mode=min,scope=sdk-base-${{ matrix.arch }},ignore-error=true
           github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600

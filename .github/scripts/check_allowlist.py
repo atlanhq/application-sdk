@@ -6,6 +6,9 @@ Usage:
 
 Environment:
     FAIL_ON_FINDINGS  "true" (default) to exit 1 on blockers; "false" for warning only.
+    BUILD_RESULT      Result of the upstream image-build job, for diagnosing a
+                      missing results file. Optional.
+    SCAN_RESULT       Result of the upstream scan job, same purpose. Optional.
 """
 
 import argparse
@@ -13,6 +16,35 @@ import json
 import os
 import sys
 from datetime import datetime
+
+
+def missing_results_reason(build_result: str, scan_result: str) -> str:
+    """Name the upstream job that actually caused a missing results file.
+
+    This gate is the required check, so its log is where anyone debugging a red
+    PR lands first — and on its own it can only report that the file is absent,
+    which reads as a scanner problem no matter what really broke. Three
+    different transient failures (a build-cache write, a deleted PR merge ref,
+    an artifact-service 403) have all surfaced here as the same line. So the
+    upstream outcomes are passed in, and the cause is named.
+    """
+    if not build_result and not scan_result:
+        return "Cause: unknown — no upstream job results were passed to this check."
+    if build_result not in ("", "success", "skipped"):
+        return (
+            f"Cause: the image build did not succeed (result: {build_result}), so "
+            "nothing was ever scanned. Read that job's log, not this one."
+        )
+    if scan_result not in ("", "success"):
+        return (
+            f"Cause: the scan job did not succeed (result: {scan_result}). Read "
+            "that job's log, not this one."
+        )
+    return (
+        "Cause: every upstream job succeeded, so the results were produced and "
+        "the download of them failed twice. That is the artifact service, not "
+        "this change — re-run this job."
+    )
 
 
 def main() -> None:
@@ -67,8 +99,12 @@ def main() -> None:
                     }
                     trivy_count += 1
     except FileNotFoundError:
+        print(f"Error: Trivy results not found at {args.trivy_results}")
         print(
-            f"Error: Trivy results not found at {args.trivy_results} — scan may have failed"
+            missing_results_reason(
+                os.environ.get("BUILD_RESULT", ""),
+                os.environ.get("SCAN_RESULT", ""),
+            )
         )
         sys.exit(1)
     except json.JSONDecodeError as e:

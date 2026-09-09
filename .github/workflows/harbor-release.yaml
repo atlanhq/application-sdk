@@ -153,7 +153,8 @@ jobs:
           # time. `mode=min` matches the action's own default: this change is
           # about where the build runs, not about how much of it is cached.
           cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=min,scope=${{ matrix.platform }}
+          # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
+          cache-to: type=gha,mode=min,scope=${{ matrix.platform }},ignore-error=true
           tags: ${{ needs.prepare.outputs.staging_base }}:sha-${{ needs.prepare.outputs.sha }}-${{ matrix.arch }}
           github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         env:

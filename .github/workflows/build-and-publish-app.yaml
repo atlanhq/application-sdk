@@ -1273,7 +1273,8 @@ jobs:
           build-contexts: ${{ needs.prepare.outputs.base_build_contexts }}
           tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }},ignore-error=true
           provenance: false
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
