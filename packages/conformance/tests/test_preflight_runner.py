@@ -45,7 +45,7 @@ def test_full_run_reports_missing_behavior_scenarios(tmp_path: Path):
                 str(output),
             ]
         )
-        == 0
+        == 1
     )
     report = json.loads(output.read_text())
     assert report["runs"][0]["results"]
@@ -97,3 +97,16 @@ def test_preflight_selection_does_not_run_unrelated_p_checks(tmp_path, monkeypat
             str(tmp_path / "report.sarif"),
         ]
     )
+
+
+def test_typed_failure_errors_preserve_soft_exit_mode(tmp_path):
+    (tmp_path / "handler.py").write_text(
+        'from application_sdk.handler import PreflightCheck\ndef check():\n return PreflightCheck(name="probe", passed=False)\n'
+    )
+    output = tmp_path / "report.sarif"
+    args = ["--repo", str(tmp_path), "--rule", "P034", "--output", str(output)]
+    assert main(args) == 1
+    assert main([*args, "--exit-zero"]) == 0
+    run = json.loads(output.read_text())["runs"][0]
+    assert run["results"][0]["level"] == "error"
+    assert run["invocations"][0]["exitCode"] == 1

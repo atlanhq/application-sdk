@@ -50,17 +50,14 @@ def test_rule_metadata() -> None:
     for rid in ("P033", "P034", "P035", "P047"):
         rule = get_rule(rid)
         assert rule.scope is RuleScope.APP
-        assert rule.tier is EnforcementTier.WARN
+        assert rule.tier is (
+            EnforcementTier.BLOCK if rid == "P034" else EnforcementTier.WARN
+        )
         assert rule.mechanism is RuleMechanism.STATIC
 
 
 def test_p032_is_block_tier() -> None:
-    """P032 is the one BLOCK-tier preflight rule (FND-311).
-
-    Its siblings describe preflight *quality* — drift, UX, parity — which
-    degrades messages. P032 describes a worker that never boots, so every
-    workflow in the tenant is down from the moment the release deploys.
-    """
+    """Reserved gate collisions prevent worker startup."""
     rule = get_rule("P032")
     assert rule.scope is RuleScope.APP
     assert rule.tier is EnforcementTier.BLOCK

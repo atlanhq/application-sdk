@@ -56,7 +56,7 @@ reassigned.
 | [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | — | 0.13.0 |
 | [P032](#p032) | `ReservedPreflightActivityName` | `block` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P033](#p033) | `DuplicateInWorkflowPreflight` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
-| [P034](#p034) | `UntypedPreflightCheckFailure` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P034](#p034) | `UntypedPreflightCheckFailure` | `block` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P035](#p035) | `PreflightMetadataContractParity` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | — | 0.15.0 |
 | [P037](#p037) | `SdrAgentJsonNotConsumed` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
@@ -73,8 +73,8 @@ reassigned.
 | [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
-| [P052](#p052) | `PreflightHandlerContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
-| [P053](#p053) | `PreflightFailureAction` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P052](#p052) | `PreflightHandlerContract` | `block` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P053](#p053) | `PreflightFailureAction` | `block` | `app` | `preflight-gate` | — | 0.27.0 |
 | [P054](#p054) | `PreflightExpectedFailureRaised` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [P055](#p055) | `PreflightVerdictAggregation` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [P056](#p056) | `PreflightGateInputParity` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
@@ -83,9 +83,9 @@ reassigned.
 | [P059](#p059) | `PreflightCancellationCleanup` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [P060](#p060) | `PreflightFailureExposure` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [P061](#p061) | `PreflightRemovedGateContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
-| [P062](#p062) | `PreflightBehaviorContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
-| [P063](#p063) | `PreflightWorkflowEnforcement` | `warn` | `sdk` | `preflight-gate` | — | 0.27.0 |
-| [P064](#p064) | `PreflightExitEvidence` | `warn` | `sdk` | `preflight-gate` | — | 0.27.0 |
+| [P062](#p062) | `PreflightBehaviorContract` | `block` | `app` | `preflight-gate` | — | 0.27.0 |
+| [P063](#p063) | `PreflightWorkflowEnforcement` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
+| [P064](#p064) | `PreflightExitEvidence` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [P065](#p065) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 
 ---
@@ -1354,14 +1354,14 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## P034 — `UntypedPreflightCheckFailure` {#p034}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > PreflightCheck(passed=False) constructed without a typed error= — untyped failure
 
 **Rationale:** A failed PreflightCheck constructed without a typed error= falls back to the generic
 PREFLIGHT_CHECK_FAILED code, so the Automation Engine and the UI lose the
-category/code/audience/suggested_action the typed form carries on the wire. This points
-at the exact lines to migrate to typed failures.
+category/code/audience/suggested_action the typed form carries on the wire. Customer
+impact: failed workflows lose actionable typed failure details.
 
 A `PreflightCheck` with proven or default `passed=False` and no typed `error=` (absent,
 or the literal `None`) is an untyped failure: the gate falls back to the generic
@@ -2245,12 +2245,12 @@ the filter widget.
 
 ## P052 — `PreflightHandlerContract` {#p052}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
 > Declare SDK PreflightInput and PreflightOutput on every supported handler.
 
-**Rationale:** Missing types and legacy output dictionaries hide contract drift from both UI and
-workflow consumers.
+**Rationale:** Customer impact: Missing types and legacy output dictionaries hide contract drift from
+both UI and workflow consumers.
 
 Declare SDK PreflightInput and PreflightOutput on every supported handler.
 
@@ -2261,11 +2261,12 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## P053 — `PreflightFailureAction` {#p053}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
 > Provide nonblank failure messages and audience-appropriate suggested actions.
 
-**Rationale:** A typed error with no action still leaves a blocked workflow without a usable next step.
+**Rationale:** Customer impact: A typed error with no action still leaves a blocked workflow without a
+usable next step.
 
 Provide nonblank failure messages and audience-appropriate suggested actions.
 
@@ -2403,12 +2404,12 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## P062 — `PreflightBehaviorContract` {#p062}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
 > Execute registered real-handler scenarios for each applicable entrypoint.
 
-**Rationale:** Static shape checks cannot prove verdict semantics, probe coverage, recovery, or
-resource lifetime. Missing and skipped scenarios are incomplete evidence.
+**Rationale:** Customer impact: Static shape checks cannot prove verdict semantics, probe coverage,
+recovery, or resource lifetime. Missing and skipped scenarios are incomplete evidence.
 
 Execute registered real-handler scenarios for each applicable entrypoint.
 
@@ -2419,12 +2420,12 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## P063 — `PreflightWorkflowEnforcement` {#p063}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+**Tier:** `block` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
 > Verify gate enforcement through real Temporal workflow histories.
 
-**Rationale:** Only execution history can prove extraction was never scheduled after a hard gate
-failure, including activity death.
+**Rationale:** Customer impact: Only execution history can prove extraction was never scheduled after a
+hard gate failure, including activity death.
 
 Verify gate enforcement through real Temporal workflow histories.
 
@@ -2435,12 +2436,12 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## P064 — `PreflightExitEvidence` {#p064}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+**Tier:** `block` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
 > Verify typed verdicts, outcome fields and safe evidence handoff on every exit.
 
-**Rationale:** Activity and workflow failures must preserve cause and status, and logging must not
-silently discard the evidence.
+**Rationale:** Customer impact: Activity and workflow failures must preserve cause and status, and
+logging must not silently discard the evidence.
 
 Verify typed verdicts, outcome fields and safe evidence handoff on every exit.
 

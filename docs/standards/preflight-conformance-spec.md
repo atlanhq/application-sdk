@@ -1,6 +1,6 @@
 # Preflight conformance specification
 
-Status: conformance implementation and remaining acceptance requirements, 2026-09-08. P052–P065 are registered as WARN rules. Static checks run by default; behavioral checks require `--with-tests` and app/SDK scenario adapters. SDK production behavior is unchanged.
+Status: conformance implementation and remaining acceptance requirements, 2026-09-08. P034, P052, P053, and P062–P064 now join P032 at BLOCK; other preflight rules remain WARN. Static checks run by default; behavioral checks require `--with-tests` and app/SDK scenario adapters. SDK production behavior is unchanged.
 
 The implementation uses bounded static analysis, not general Python execution analysis. It follows direct module helpers, imported helpers, same-class methods, and imported error inheritance. Dynamic factories, arbitrary client instances, decorator wrappers, and semantic recovery still require behavioral adapters. The full acceptance criteria below describe the intended coverage; registration of a TEST rule is not proof that every SDK or app scenario has been implemented or executed.
 
@@ -57,7 +57,7 @@ A Temporal timeout type is evidence about execution, not proof of a source root 
 | --- | --- | --- |
 | P032, reserved preflight activity | STATIC, BLOCK | Retain; cover supported decorator aliases and wrappers without treating an unrelated decorator as SDK `task`. |
 | P033, duplicate workflow preflight | STATIC, WARN | Retain; relate the duplicate to the selected workflow. Removal requires a cold-source scenario because a duplicate may have been providing warm-up. |
-| P034, untyped failed check | STATIC, WARN | Extend beyond literal `passed=False` where local data flow proves failure. Runtime assertions cover dynamic expressions, factories, and keyword expansion. |
+| P034, untyped failed check | STATIC, BLOCK | Extend beyond literal `passed=False` where local data flow proves failure. Runtime assertions cover dynamic expressions, factories, and keyword expansion. |
 | P035, metadata/input parity | STATIC, WARN | Compare the selected entrypoint's contract, not the union of all contracts. Unresolved contracts must report incomplete analysis. |
 | P047, handler warning logs | STATIC, WARN | Retain its existing identity. A log statement cannot substitute for a typed result. Apply safe reachable-helper discovery. |
 | Preflight discovery | Primarily class async methods | Include runtime-supported entrypoint functions, aliases, inherited handlers, and reachable helpers. Report unsupported dynamic dispatch. |
@@ -77,7 +77,7 @@ Implementation references:
 
 P043 through P049 from the latest comment are already occupied. The inspected catalog allocates P050 and P051 as well. P052 through P065 below are allocated in the executable catalog. Catalog tests enforce uniqueness.
 
-Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level corresponding to BLOCK. All new rules start at WARN for a measured adoption period. BLOCK targets require the graduation criteria below. Do not promote heuristic findings merely because a rollout deadline arrives.
+Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level corresponding to BLOCK. P032, P034, P052, P053, and P062–P064 use BLOCK (SARIF `error`). P034/P052/P053 enforce typed failures, handler contracts, and definite missing failure guidance. Behavioral rules require complete passing scenarios when explicitly run with `--with-tests`; missing or skipped scenarios are errors. Static-only runs still report behavioral checks as not evaluated. Other preflight rules remain WARN because their findings include heuristics, unresolved analysis, or SDK-version-dependent advice. `--exit-zero` preserves error findings while returning a successful process exit for soft enforcement. Further BLOCK promotions require the graduation criteria below. Do not promote heuristic findings merely because a rollout deadline arrives.
 
 | ID and name | Scope / mechanism | Detects or requires | Target tier |
 | --- | --- | --- | --- |

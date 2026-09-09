@@ -1,6 +1,6 @@
 # Preflight conformance
 
-P052–P061 and P065 add static diagnostics for handler types, actionable errors, raised expected failures, verdict consistency, entrypoint inputs, blocking probes, budgets, cleanup, sensitive failure text, removed gate configuration, and incomplete analysis. Existing P032–P035 and P047 continue to apply. The new rules initially warn.
+P052–P061 and P065 add static diagnostics for handler types, actionable errors, raised expected failures, verdict consistency, entrypoint inputs, blocking probes, budgets, cleanup, sensitive failure text, removed gate configuration, and incomplete analysis. Existing P032–P035 and P047 continue to apply. P032, P034, P052, P053, and P062–P064 use BLOCK (SARIF `error`). P034/P052/P053 enforce typed failures, handler contracts, and definite missing failure guidance. Behavioral rules require complete passing scenarios when explicitly run with `--with-tests`; missing or skipped scenarios are errors. Static-only runs still report behavioral checks as not evaluated. Other preflight rules remain WARN because their findings include heuristics, unresolved analysis, or SDK-version-dependent advice. `--exit-zero` preserves error findings while returning a successful process exit for soft enforcement.
 
 Run static checks:
 

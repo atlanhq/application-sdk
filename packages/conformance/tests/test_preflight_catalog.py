@@ -6,10 +6,14 @@ from conformance.suite.schema.disposition import (
 )
 
 
-def test_preflight_contract_rules_are_registered_as_adoption_warnings():
+def test_preflight_contract_rules_have_evidence_based_enforcement():
     for number in range(52, 66):
         rule = get_rule(f"P{number:03}")
-        assert rule.tier is EnforcementTier.WARN
+        assert rule.tier is (
+            EnforcementTier.BLOCK
+            if number in {52, 53, 62, 63, 64}
+            else EnforcementTier.WARN
+        )
         assert rule.scope is (RuleScope.SDK if number in {63, 64} else RuleScope.APP)
         assert rule.mechanism is (
             RuleMechanism.TEST if number in {62, 63, 64} else RuleMechanism.STATIC
