@@ -155,6 +155,18 @@ jobs:
               # in the sdk-refine step below instead.
             toolkit:
               - 'contract-toolkit/**'
+              # The pkl pin (FND-1864). A bump here changes the renderer every
+              # contract in the fleet is evaluated with, so it must run the
+              # toolkit suite — whose "Verify generated output" job regenerates
+              # every examples/ tree with the new pkl and fails on any diff.
+              # That is the only check that can prove a pin bump is
+              # output-neutral, and without this entry a bump would be a
+              # single-line Python change that matches no filter and merges
+              # unverified. Listed as its own file rather than folded into
+              # application_sdk/version.py precisely so this filter stays
+              # precise: an ordinary SDK release bump must not drag the toolkit
+              # suite along with it.
+              - 'application_sdk/pkl_version.py'
               - 'application_sdk/contracts/**'
               - 'application_sdk/credentials/**'
               - 'application_sdk/handler/**'

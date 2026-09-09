@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.33.1
-source-sha:    e1969b393147b3e27c3d148c489f9f3e694f1a4c
-source-date:   2026-09-08T00:15:38+01:00
+sdk-version:   3.33.2
+source-sha:    eb3f58581f82399f32e701c4743a5bca879b2a89
+source-date:   2026-09-09T14:22:00+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -31,6 +31,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
+| `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
@@ -2831,6 +2832,19 @@ Output collectors and record models for Automation Engine
 - **Signature:** `get_outputs() -> OutputCollector`
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
+
+## `application_sdk.pkl_version`
+
+The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate
+
+### Constants and Enums
+
+#### `PKL_VERSION`
+
+- **Import:** `from application_sdk.pkl_version import PKL_VERSION`
+- **Signature:** `PKL_VERSION: str`
+- **Summary:** The pkl version CI renders every contract with.
+- **Defined in:** `application_sdk/pkl_version.py`
 
 ## `application_sdk.server`
 

@@ -693,7 +693,15 @@ Releases are **automatic** — no manual trigger required.
 
 ## Requirements
 
-- [PKL](https://pkl-lang.org/) >= 0.25.1 (`brew install pkl` on macOS)
+- [PKL](https://pkl-lang.org/) at the **pinned** version declared in
+  `application_sdk/pkl_version.py` — a floor is not enough. pkl is a language, so a
+  contract that renders under one release can be rejected outright by another
+  (backslash line-continuations inside a multi-line string are valid from 0.28 on and
+  an `Invalid character escape sequence` before it), which means a clean local render
+  on some other version is not evidence CI will agree (FND-1864). Get the exact build
+  the CI workflows use with `python -m application_sdk.dev.pkl path`, check the one on
+  your `PATH` with `python -m application_sdk.dev.pkl check`, or `brew install pkl` for
+  exploration only.
 - Python 3 for invariant checks and SDK import validation
 - `ruff` or `uvx` for formatting generated `_input.py` files during `./scripts/regenerate-all.sh`
 - Application SDK import dependencies for `python scripts/test-sdk-import.py`

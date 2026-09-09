@@ -509,6 +509,63 @@ call the private reusable it wired up, so it had never produced a check run at
 all — and the App offers no `lockfile-globs` equivalent to scope, only a `security`
 label bypass. The App's check run is a separate thing and was never affected.
 
+## A toolchain pin is declared once, in a file consumers can read
+
+**Rule:** a tool version that CI installs gets exactly **one** literal in the
+repo, in a file that is *also* reachable by whoever has to reproduce what CI
+did. Every workflow, action and script derives it from there; none restates it.
+Two pins exist today and both follow this:
+
+| Tool | Declared in | Read by CI via |
+|---|---|---|
+| Container Python | the golden base tag in `Dockerfile` | `.github/scripts/container_python_version.py` |
+| `pkl` | `PKL_VERSION` in `application_sdk/pkl_version.py` | `.github/scripts/pkl_version.py` |
+
+**Why one literal.** `pkl` was pinned in six places at once — `install-pkl`, the
+`regenerate-contract` action, the freshness gate, and three
+`contract-toolkit-*` workflows — with nothing keeping them in agreement. Six
+copies of a value is six chances to bump five.
+
+**Why *readable* matters more.** The freshness gate's whole value is that a
+local `uv run poe generate` predicts it. `pkl` is a language, so a contract can
+render cleanly on a developer's 0.32.x and be structurally incapable of
+rendering on CI's 0.27.2 (`Invalid character escape sequence` on a backslash
+line-continuation inside a multi-line string, valid from 0.28 on). With the pin
+buried in a reusable workflow, "it evals locally" was not evidence, the failure
+surfaced only after push, and the gate's message blamed stale artifacts —
+FND-1864. No app could even fix it; the version was not theirs to see.
+
+So the pin lives in the *shipped package*, which every connector already
+depends on, and the SDK hands out the exact build:
+
+```bash
+python -m application_sdk.dev.pkl print-version   # what CI renders with
+python -m application_sdk.dev.pkl path            # download + cache that build
+python -m application_sdk.dev.pkl check           # has my PATH pkl drifted?
+```
+
+**The mechanics, when you add the next pin.**
+
+1. Declare the literal in one file, on one line, plainly enough for a regex to
+   read (a Renovate custom manager rewrites it in place).
+2. Add a `.github/scripts/<tool>_version.py` with a `resolve --requested`
+   subcommand, and default every workflow/action input to `""` rather than to
+   the version. "Empty means the pin" is conditional logic, so it belongs in the
+   tested script, not the install shell — see the first section of this file.
+3. Resolve from the **action's own** checkout, not the caller's workspace: a
+   composite that runs in a consumer repo has no copy of this repo's source.
+   `${{ github.action_path }}/../../..` is this repo's root in both places.
+4. Put the declaring file in whichever `sdk-gate.yaml` path filter runs the job
+   that would *catch a bad bump*. For `pkl` that is the `toolkit` filter, whose
+   suite regenerates every `contract-toolkit/examples/` tree and fails on any
+   diff — the only check that can prove a pin bump is output-neutral. Skip this
+   and the bump is a one-line change that matches no filter and merges
+   unverified.
+5. Guard it: `.github/scripts/tests/test_pkl_version.py` fails the build if any
+   workflow, action or script spells a `pkl` version out, if a call site pins
+   one, if the textual and imported reads disagree, or if the declaring file
+   falls out of that path filter.
+
 ## Reusing scripts from a reusable workflow
 
 A `uses:` reusable workflow does **not** bring its own repo's files into the
