@@ -233,3 +233,63 @@ class TestGateEdgeCases:
                 check_allowlist.main()
             except SystemExit:
                 pass  # exit code behaviour with LOW is acceptable either way
+
+
+class TestMissingResultsReason:
+    """The gate is the required check, so its log is where anyone debugging a
+    red PR lands. Three unrelated transient failures — a build-cache write, a
+    deleted PR merge ref, an artifact-service 403 — all surface here as the same
+    absent file, so the message has to name which upstream job caused it."""
+
+    def test_a_failed_build_is_named_rather_than_the_scanner(self) -> None:
+        reason = check_allowlist.missing_results_reason("failure", "skipped")
+        assert "image build" in reason
+        assert "failure" in reason
+
+    def test_a_skipped_build_is_not_treated_as_the_cause(self) -> None:
+        """`build` is skipped whenever a prebuilt image is supplied. That is the
+        normal path, not a failure, so it must not shadow the real cause."""
+        reason = check_allowlist.missing_results_reason("skipped", "failure")
+        assert "scan job" in reason
+        assert "image build" not in reason
+
+    def test_a_failed_scan_is_named_when_the_build_succeeded(self) -> None:
+        reason = check_allowlist.missing_results_reason("success", "failure")
+        assert "scan job" in reason
+
+    def test_two_green_upstream_jobs_point_at_the_artifact_service(self) -> None:
+        """Both jobs green and no results means the download failed twice —
+        the one case where re-running this job alone is the right move."""
+        reason = check_allowlist.missing_results_reason("success", "success")
+        assert "artifact service" in reason
+        assert "re-run" in reason
+
+    def test_absent_env_does_not_claim_the_upstream_was_green(self) -> None:
+        """Run outside CI the outcomes are unset, and guessing 'everything
+        succeeded' would send the reader to the artifact service for a cause
+        this check cannot see."""
+        reason = check_allowlist.missing_results_reason("", "")
+        assert "unknown" in reason
+        assert "artifact service" not in reason
+
+    def test_the_reason_is_printed_when_results_are_missing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """End to end: the env the workflow sets reaches the printed message."""
+        sdk_sec = tmp_path / "_sdk" / ".security"
+        sdk_sec.mkdir(parents=True)
+        (sdk_sec / "base-allowlist.json").write_text(json.dumps({}))
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("BUILD_RESULT", "failure")
+        monkeypatch.setenv("SCAN_RESULT", "skipped")
+        with patch(
+            "sys.argv",
+            ["check_allowlist.py", "--trivy-results", str(tmp_path / "missing.json")],
+        ):
+            with pytest.raises(SystemExit) as exc:
+                check_allowlist.main()
+        assert exc.value.code != 0
+        assert "image build" in capsys.readouterr().out
