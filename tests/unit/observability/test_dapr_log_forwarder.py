@@ -106,67 +106,6 @@ class TestMakeEmitter:
         assert complete is None
         assert "still visible" in capsys.readouterr().err
 
-    def test_promotes_below_threshold_lines_when_dapr_more_verbose(self, monkeypatch):
-        """DAPR_LOG_LEVEL=debug with the app at INFO: the SDK logger and its sinks
-        are gated at INFO, so a daprd debug line emitted via ``logger.debug``
-        would vanish. It must be emitted at INFO with the real level in the text."""
-        monkeypatch.setenv("DAPR_LOG_LEVEL", "debug")
-        fake_logger = MagicMock()
-        with (
-            patch("application_sdk.constants.LOG_LEVEL", "INFO"),
-            patch(
-                "application_sdk.observability.logger_adaptor.get_logger",
-                return_value=fake_logger,
-            ),
-        ):
-            emit, _complete = dlf._make_emitter()
-            emit(
-                "debug",
-                "error invoking output binding eventstore: dial tcp: i/o timeout",
-            )
-            emit("warning", "already above threshold")
-        fake_logger.info.assert_called_once_with(
-            "[daprd debug] error invoking output binding eventstore: dial tcp: i/o timeout"
-        )
-        fake_logger.debug.assert_not_called()
-        fake_logger.warning.assert_called_once_with("already above threshold")
-
-    def test_default_dapr_level_does_not_promote(self, monkeypatch):
-        """Defaults (daprd warn, app INFO): behaviour unchanged — a debug line is
-        still routed to ``logger.debug`` (daprd would not emit one anyway)."""
-        monkeypatch.setenv("DAPR_LOG_LEVEL", "warn")
-        fake_logger = MagicMock()
-        with (
-            patch("application_sdk.constants.LOG_LEVEL", "INFO"),
-            patch(
-                "application_sdk.observability.logger_adaptor.get_logger",
-                return_value=fake_logger,
-            ),
-        ):
-            emit, _complete = dlf._make_emitter()
-            emit("debug", "quiet")
-        fake_logger.debug.assert_called_once_with("quiet")
-        fake_logger.info.assert_not_called()
-
-    def test_no_promotion_when_app_already_at_debug(self, monkeypatch):
-        monkeypatch.setenv("DAPR_LOG_LEVEL", "debug")
-        fake_logger = MagicMock()
-        with (
-            patch("application_sdk.constants.LOG_LEVEL", "DEBUG"),
-            patch(
-                "application_sdk.observability.logger_adaptor.get_logger",
-                return_value=fake_logger,
-            ),
-        ):
-            emit, _complete = dlf._make_emitter()
-            emit("debug", "kept as debug")
-        fake_logger.debug.assert_called_once_with("kept as debug")
-
-    def test_bad_level_names_never_raise(self, monkeypatch):
-        monkeypatch.setenv("DAPR_LOG_LEVEL", "verbose")
-        with patch("application_sdk.constants.LOG_LEVEL", "NOT_A_LEVEL"):
-            assert dlf._promotion_floor() is None
-
     def test_emit_failure_falls_back_to_stderr(self, capsys):
         fake_logger = MagicMock()
         fake_logger.warning.side_effect = RuntimeError("sink down")
@@ -213,7 +152,115 @@ class _FakeProc:
         return self._rc
 
 
+class TestForwarderLogLevel:
+    """The forwarder gates at the more verbose of LOG_LEVEL and DAPR_LOG_LEVEL."""
+
+    def test_dapr_debug_lowers_an_info_app(self, monkeypatch):
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "debug")
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
+        assert dlf._forwarder_log_level() == "DEBUG"
+
+    def test_image_default_info_never_raises_a_quieter_app_to_error(self, monkeypatch):
+        """LOG_LEVEL=ERROR with the image default DAPR_LOG_LEVEL=info: the process
+        gates at INFO so daprd info lines pass *as INFO* — nothing is promoted."""
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "info")
+        monkeypatch.setenv("LOG_LEVEL", "ERROR")
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
+        assert dlf._forwarder_log_level() == "INFO"
+
+    def test_atlan_log_level_takes_precedence_over_log_level(self, monkeypatch):
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "warn")
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        monkeypatch.setenv("ATLAN_LOG_LEVEL", "DEBUG")
+        assert dlf._forwarder_log_level() == "DEBUG"
+
+    def test_unknown_level_names_return_none(self, monkeypatch):
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "verbose")
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
+        assert dlf._forwarder_log_level() is None
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "debug")
+        monkeypatch.setenv("LOG_LEVEL", "NOT_A_LEVEL")
+        assert dlf._forwarder_log_level() is None
+
+
 class TestMain:
+    def test_reexecs_once_with_atlan_log_level_when_daprd_more_verbose(
+        self, monkeypatch
+    ):
+        """SDR mode, DAPR_LOG_LEVEL=debug, app at INFO: main() must re-exec itself
+        with ATLAN_LOG_LEVEL=DEBUG before running the forwarder, since the SDK
+        sinks were already built at INFO by the package import."""
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "debug")
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
+        argv = ["dapr_log_forwarder", "--", "daprd", "--app-id", "app"]
+        with (
+            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
+            patch.object(dlf.os, "execve", side_effect=SystemExit(0)) as execve,
+            patch.object(dlf, "_run") as run_mock,
+            pytest.raises(SystemExit),
+        ):
+            dlf.main(argv)
+        run_mock.assert_not_called()
+        (exe, cmd, env), _ = execve.call_args
+        assert exe == dlf.sys.executable
+        assert cmd[:2] == [dlf.sys.executable, "-m"]
+        assert cmd[2].endswith("dapr_log_forwarder")
+        assert cmd[3:] == ["--", "daprd", "--app-id", "app"]
+        assert env["ATLAN_LOG_LEVEL"] == "DEBUG"
+
+    def test_no_reexec_once_level_already_matches(self, monkeypatch):
+        """The re-exec'd process (ATLAN_LOG_LEVEL already DEBUG) must fall straight
+        through to the forwarder — no exec loop."""
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "debug")
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        monkeypatch.setenv("ATLAN_LOG_LEVEL", "DEBUG")
+
+        async def _fake_run(child_cmd: list[str]) -> int:
+            return 0
+
+        with (
+            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
+            patch.object(dlf.os, "execve") as execve,
+            patch.object(dlf, "_run", _fake_run),
+        ):
+            assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
+        execve.assert_not_called()
+
+    def test_no_reexec_at_image_defaults(self, monkeypatch):
+        """DAPR_LOG_LEVEL=info (Dockerfile ENV) with LOG_LEVEL=INFO: nothing to do."""
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "info")
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
+
+        async def _fake_run(child_cmd: list[str]) -> int:
+            return 0
+
+        with (
+            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
+            patch.object(dlf.os, "execve") as execve,
+            patch.object(dlf, "_run", _fake_run),
+        ):
+            assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
+        execve.assert_not_called()
+
+    def test_exec_failure_falls_back_to_forwarding_at_current_level(self, monkeypatch):
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "debug")
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
+
+        async def _fake_run(child_cmd: list[str]) -> int:
+            return 3
+
+        with (
+            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
+            patch.object(dlf.os, "execve", side_effect=OSError("no exec")),
+            patch.object(dlf, "_run", _fake_run),
+        ):
+            assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 3
+
     def test_no_child_command_returns_error_code(self):
         assert dlf.main(["dapr_log_forwarder", "--"]) == 2
 
@@ -231,10 +278,13 @@ class TestMain:
             dlf.main(["dapr_log_forwarder", "--", "daprd", "--app-id", "app"])
         exec_mock.assert_called_once_with(["daprd", "--app-id", "app"])
 
-    def test_active_forwarding_path_when_sdr_mode(self):
+    def test_active_forwarding_path_when_sdr_mode(self, monkeypatch):
         # In SDR mode (ENABLE_ATLAN_UPLOAD=true) main() must NOT exec daprd
         # transparently; it runs the forwarder via asyncio.run(_run(child_cmd))
         # and returns daprd's exit code.
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "info")
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
         captured: dict[str, list[str]] = {}
 
         async def _fake_run(child_cmd: list[str]) -> int:

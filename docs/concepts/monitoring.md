@@ -734,13 +734,13 @@ So in SDR mode the SDK **automatically** forwards daprd's logs through its own p
 daprd is chatty, so control the volume at the source with its log level:
 
 ```bash
-DAPR_LOG_LEVEL=warn   # forward warn + error (and above); raise to error to drop the rest
+DAPR_LOG_LEVEL=info   # the base image default; raise to warn or error to drop the rest
 ```
 
-`DAPR_LOG_LEVEL` is a minimum-severity floor — `warn` captures both warnings **and** errors. It's the recommended knob for controlling daprd log volume reaching the lakehouse.
+`DAPR_LOG_LEVEL` is a minimum-severity floor — `warn` captures both warnings **and** errors. It's the recommended knob for controlling daprd log volume reaching the lakehouse. The base image sets it to `info` (`ENV DAPR_LOG_LEVEL=info` in the SDK Dockerfile); the entrypoint's own `warn` fallback only applies when the variable has been unset.
 
-Setting it **below** the app's `LOG_LEVEL` also works, and is the way to see why a Dapr API call failed — the Dapr HTTP API logs the reason for a failed output-binding invoke (upstream status code, dial/TLS error) only at `debug`. The SDK logger and its sinks are gated at `LOG_LEVEL` (`INFO` by default, and the Helm chart pins it), so the forwarder re-emits any daprd line below that gate **at** the gate level with the real daprd level folded into the text, e.g. `[INFO] ... dapr.runtime - [daprd debug] [dapr.runtime.http] error invoking output binding eventstore: ...`. A line daprd was configured to emit is therefore never dropped by the app's level:
+Setting it **below** the app's `LOG_LEVEL` also works, and is how to see why a Dapr API call failed — the Dapr HTTP API logs the reason for a failed output-binding invoke (upstream status code, dial/TLS error) only at `debug`. The forwarder runs as its own process and gates itself at the more verbose of `LOG_LEVEL` and `DAPR_LOG_LEVEL`, so a daprd `debug` line arrives as a real `DEBUG` record in the container log, in OTel `severity_number`, and in the lakehouse `level` column. The app process is a sibling and keeps its own `LOG_LEVEL`:
 
 ```bash
-DAPR_LOG_LEVEL=debug  # daprd debug lines surface as INFO records tagged "[daprd debug]"
+DAPR_LOG_LEVEL=debug  # daprd debug lines reach kubectl logs and the lakehouse at DEBUG
 ```
