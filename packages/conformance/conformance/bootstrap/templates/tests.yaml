@@ -145,7 +145,24 @@ jobs:
 <% endif %><% if force_external_runtime %>      force-external-runtime: << force_external_runtime >>
 <% endif %>      app-name: "<< app_name >>"
       app-image-name: "<< app_image_name >>"
-<% if enable_e2e != 'true' %>
+<% if test_paths_block %><< test_paths_block >>
+<% endif %><% if pytest_args_block %><< pytest_args_block >>
+<% endif %><% if timeout_minutes %>      timeout-minutes: << timeout_minutes >>
+<% endif %><% if apt_packages %>      apt-packages: "<< apt_packages >>"
+<% endif %><% if private_git_deps %>      private-git-deps: << private_git_deps >>
+<% endif %><% if git_lfs_skip_smudge %>      git-lfs-skip-smudge: << git_lfs_skip_smudge >>
+<% endif %><% if health_check_timeout_seconds %>      health-check-timeout-seconds: "<< health_check_timeout_seconds >>"
+<% endif %><% if container_health_timeout_seconds %>      container-health-timeout-seconds: "<< container_health_timeout_seconds >>"
+<% endif %><% if runtime_sdk_ref %>      runtime-sdk-ref: "<< runtime_sdk_ref >>"
+<% endif %><% if harness_sdk_ref %>      harness-sdk-ref: "<< harness_sdk_ref >>"
+<% endif %><% if e2e_test_path %>      e2e-test-path: "<< e2e_test_path >>"
+<% endif %><% if source_available %>      source-available: << source_available >>
+<% endif %><% if dataforge_datasource %>      dataforge-datasource: "<< dataforge_datasource >>"
+<% endif %><% if dataforge_mode %>      dataforge-mode: "<< dataforge_mode >>"
+<% endif %><% if dataforge_env_tier %>      dataforge-env-tier: "<< dataforge_env_tier >>"
+<% endif %><% if dataforge_output_prefix %>      dataforge-output-prefix: "<< dataforge_output_prefix >>"
+<% endif %><% if dataforge_hermetic_fallback %>      dataforge-hermetic-fallback: "<< dataforge_hermetic_fallback >>"
+<% endif %><% if enable_e2e != 'true' %>
       enable-e2e: << enable_e2e >>
 <% endif %>
 <% if services_script %>
