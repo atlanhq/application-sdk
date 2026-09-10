@@ -7,16 +7,5 @@
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
-  "CVE-2026-84445": {
-    "package": "dapr-daprd-1.18",
-    "severity": "HIGH",
-    "reason": "Case 4: base-image CVE (Chainguard dapr-daprd-1.18 1.18.3-r8 apk in app-runtime-base:3, not a uv.lock dependency); clears on a base-image rebuild onto dapr-daprd-1.18 1.18.3-r9 or later.",
-    "expires": "2026-10-10",
-    "added_by": "@vaibhavatlan",
-    "case": 4,
-    "ticket": "BLDX-1647",
-    "re_evaluation_trigger": "fix_released",
-    "fix_available_date": "2026-09-10"
-  }
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
 }
