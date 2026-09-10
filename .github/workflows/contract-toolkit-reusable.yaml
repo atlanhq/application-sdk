@@ -23,9 +23,6 @@ on:
 permissions:
   contents: read
 
-env:
-  PKL_VERSION: "0.27.2"
-
 jobs:
   generated-output:
     name: Verify generated output
@@ -35,11 +32,11 @@ jobs:
 
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.10"
+          version: "0.12.12"
 
+      # No version: — install-pkl resolves the SDK pin from
+      # application_sdk/pkl_version.py, the one place it is declared.
       - uses: ./.github/actions/install-pkl
-        with:
-          version: ${{ env.PKL_VERSION }}
 
       - name: Regenerate all examples
         run: contract-toolkit/scripts/regenerate-all.sh
@@ -76,9 +73,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # No version: — install-pkl resolves the SDK pin from
+      # application_sdk/pkl_version.py, the one place it is declared.
       - uses: ./.github/actions/install-pkl
-        with:
-          version: ${{ env.PKL_VERSION }}
 
       - name: Check generated output invariants
         run: contract-toolkit/scripts/check-invariants.sh
@@ -100,7 +97,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.10"
+          version: "0.12.12"
 
       - name: Check generated Python formatting
         run: |

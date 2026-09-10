@@ -1,13 +1,19 @@
-"""Contracts for the App.upload and App.download framework tasks."""
+"""Contracts for the App.upload, App.download and App.verify_refs framework tasks."""
 
 from __future__ import annotations
 
 from pathlib import PurePosixPath
+from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from application_sdk.contracts.base import Input, Output
-from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.contracts.types import (
+    FileReference,
+    MaxItems,
+    StorageTier,
+    StoreTarget,
+)
 
 
 class UploadInput(Input):
@@ -142,3 +148,141 @@ class DownloadOutput(Output):
     ref: FileReference = Field(default_factory=FileReference)
     synced: bool = False
     reason: str = ""
+
+
+class VerifyRefsInput(Input):
+    """Input for ``App.verify_refs``.
+
+    Carries the producer's declaration of what a step wrote — the
+    ``FileReference`` list its tasks actually returned — so the producer
+    can assert the handoff is whole before naming a prefix downstream.
+
+    A prefix scan cannot tell "absent" from "lost": listing
+    ``transformed/`` and finding three of four entities looks exactly
+    like a run that legitimately produced three.  Checking the declared
+    refs distinguishes the two, which is what ``APP-CORRECTNESS-001``
+    requires of every cross-activity handoff.
+
+    Args:
+        refs: The refs the producing tasks returned.  Each is looked up
+            by its ``storage_path``; a ref with no ``storage_path``
+            counts as missing, because a producer that could not say
+            where it wrote has declared nothing.  Refs whose
+            ``file_count`` exceeds 1 are treated as directory refs and
+            verified by listing the prefix.
+        prefix: Optional object-store prefix the refs are expected to
+            live under — typically the prefix about to be handed
+            downstream.  When set, a ref that resolves outside it fails
+            verification: the prefix would not cover it, so a consumer
+            walking the prefix would never see the data.
+        store: Which store to check.  Defaults to
+            :attr:`~application_sdk.contracts.types.StoreTarget.DEPLOYMENT`,
+            the store the activity interceptor persists refs to.
+    """
+
+    refs: Annotated[list[FileReference], MaxItems(10000)] = Field(default_factory=list)
+    prefix: str = ""
+    store: StoreTarget = StoreTarget.DEPLOYMENT
+
+
+class VerifyRefsOutput(Output):
+    """Output from ``App.verify_refs``.
+
+    Only ever returned on success — a hole raises
+    :class:`~application_sdk.storage.errors.StorageHandoffIncompleteError`
+    rather than reporting itself in a field a caller can forget to read.
+
+    Args:
+        verified_count: Number of refs confirmed present in the store.
+        verified_file_count: Sum of ``file_count`` across the verified
+            refs — the number of objects the declaration covers.
+        prefix: The prefix every verified ref was confirmed to sit under,
+            echoed back so the caller can log what it asserted.
+    """
+
+    verified_count: int = 0
+    verified_file_count: int = 0
+    prefix: str = ""
+
+
+class DeclaredFile(BaseModel, frozen=True):
+    """One entry in a producer's declaration of what it wrote.
+
+    A bare ``FileReference`` says *where the bytes are*; it does not say what
+    the file **is**.  When a fan-in delivery has to reshape keys — a per-entity
+    tree under a new prefix — the identity is what decides the destination, and
+    losing it is how a four-entity tree becomes four opaque blobs.
+
+    Args:
+        ref: The ``FileReference`` the producing task returned.
+        label: What this file is (typically a typename or entity name), used as
+            its leaf under the destination prefix.  Leave empty to derive the
+            leaf from the ref's own key instead — see
+            :meth:`~application_sdk.app.base.App.upload_refs`.
+    """
+
+    ref: FileReference
+    label: str = ""
+
+    model_config = ConfigDict(frozen=True)
+
+    @field_validator("label")
+    @classmethod
+    def _validate_label(cls, v: str) -> str:
+        cleaned = v.strip("/")
+        if cleaned and (".." in PurePosixPath(cleaned).parts or "\x00" in v):
+            raise ValueError(  # stdlib-interop: pydantic field_validator requires ValueError
+                f"label must not contain path traversal segments: {v!r}"
+            )
+        return cleaned
+
+
+class UploadRefsInput(Input):
+    """Input for ``App.upload_refs``.
+
+    Args:
+        files: The producer's declaration — one entry per file the fanned-out
+            step produced.  An empty list is meaningful: it says the step
+            produced nothing, and ``upload_refs`` answers with an empty prefix
+            rather than one naming an empty tree.
+        prefix: Destination prefix every declared file lands under.  This is
+            the prefix the caller then hands downstream.
+        source_prefix: Prefix to strip from each ref's own key to get its leaf
+            under *prefix*, for declarations whose keys already carry the shape
+            the destination should keep (``<run>/transformed/<entity>/x.json``
+            → ``<entity>/x.json``).  Ignored for any entry that carries a
+            ``label``.  One of the two must yield a leaf for every entry — the
+            SDK does not guess, because a guess that works for four entities
+            and flattens one is worse than an error.
+        tier: Storage lifecycle tier for the delivered copies.  Defaults to
+            ``RETAINED`` — a handoff artifact must survive the producing run's
+            cleanup.
+        verify: When ``True`` (default), the delivery is checked back against
+            the declaration before the task returns.  Turn it off only when a
+            separate ``verify_refs`` call already covers the same objects.
+    """
+
+    files: Annotated[list[DeclaredFile], MaxItems(10000)] = Field(default_factory=list)
+    prefix: str = ""
+    source_prefix: str = ""
+    tier: StorageTier = StorageTier.RETAINED
+    verify: bool = True
+
+
+class UploadRefsOutput(Output):
+    """Output from ``App.upload_refs``.
+
+    Args:
+        prefix: The prefix the declaration was delivered to — **empty when the
+            declaration was empty**.  Hand this downstream rather than the
+            prefix you asked for: a consumer that diffs against an empty tree
+            reads it as "delete everything", so an empty declaration must
+            surface as an absent prefix, not a present-but-empty one.
+        refs: Durable ``FileReference`` per delivered file, in declaration
+            order.
+        file_count: Total objects delivered across all refs.
+    """
+
+    prefix: str = ""
+    refs: Annotated[list[FileReference], MaxItems(10000)] = Field(default_factory=list)
+    file_count: int = 0

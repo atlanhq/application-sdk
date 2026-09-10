@@ -58,6 +58,62 @@ failure mode. Because it now concludes on every PR, it can be added to branch
 protection directly, without the always-concluding-gate wrapper that
 path-filtered required checks need (see `sdk-gate.yaml` for that pattern).
 
+## An artifact upload retry must use a DIFFERENT artifact name
+
+`actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403
+as non-retryable and fails the step, so every upload on a gating path is paired
+with a retry (first attempt `continue-on-error: true`, companion step guarded on
+`steps.<id>.outcome == 'failure'`). Three rules the pairing has to follow:
+
+1. **The retry uploads under `<first attempt's name>-retry`.** A failed finalize
+   leaves an artifact record that holds the name for the rest of the run but
+   never becomes visible: it is absent from `GET /actions/runs/<id>/artifacts`,
+   and `overwrite: true` deletes by looking the name up in that same listing —
+   so it finds nothing, skips (on a `core.debug` line, invisible in the log),
+   and `CreateArtifact` then 409s on the record it could not see:
+
+   ```
+   Upload test results          FinalizeArtifact -> (403) Forbidden   [warning]
+   Upload test results (retry)  CreateArtifact   -> (409) Conflict:
+                                an artifact with this name already exists
+   ```
+
+   A same-named retry can therefore never absorb the one failure it exists for,
+   and on a fatal path it turns a warning into a red job after all the expensive
+   work has passed. `overwrite: true` stays on the retry for the case it does
+   handle: re-running a failed job inside a run that already holds the artifact.
+
+2. **A backoff step sits between the two attempts** (`run: sleep 20`, guarded on
+   the same outcome). The 403 comes from an intermediary having a moment; an
+   immediate retry lands in the same window and both attempts fail together.
+
+3. **Both attempts set `overwrite: true`** — the first attempt is the
+   load-bearing one. Artifacts survive across attempts of a run, so without it
+   re-running a failed job 409s on the *first* attempt, hands the upload to the
+   retry, and leaves both `<name>` (from the earlier attempt) and
+   `<name>-retry` live. A `merge-multiple` consumer then flattens two files of
+   the same inner name in undefined order — for `docker-image` that means
+   scanning the previous attempt's image. Overwrite is what keeps **at most one
+   live artifact per name**, which is the invariant the globs below rest on.
+
+4. **Consumers accept the retry name.** Three shapes, pick per call site:
+   - same-run `download-artifact`: `pattern: <name>*` + `merge-multiple: true`,
+     never an exact `name:`;
+   - cross-run `gh run download`: resolve the name from the run's artifact
+     listing first (newest live match of `<name>` or `<name>-retry`) and pass
+     that — a hard-coded `--name <name>` silently no-ops on a retried upload;
+   - a jq/regex selector: match either name explicitly.
+
+   Note that with `pattern:` (unlike `name:`) `download-artifact` treats
+   "nothing matched" as **success**, so any step gated on
+   `steps.<download>.outcome` has to move onto `hashFiles(...)`.
+
+`.github/scripts/tests/test_artifact_upload_retry.py` enforces all four over
+every workflow, composite action and script in this repo — including a
+cross-file check that no consumer addresses a retried artifact by its base name
+alone — and `EXEMPT` there carries the reason for each upload that does not need
+the hardening.
+
 ## Label gates must be event-aware
 
 **Rule:** if a workflow can receive a `labeled` event, every job gated on a
@@ -452,6 +508,63 @@ this repo. `dep-cooldown.yml` was removed in FND-373 because a public repo canno
 call the private reusable it wired up, so it had never produced a check run at
 all — and the App offers no `lockfile-globs` equivalent to scope, only a `security`
 label bypass. The App's check run is a separate thing and was never affected.
+
+## A toolchain pin is declared once, in a file consumers can read
+
+**Rule:** a tool version that CI installs gets exactly **one** literal in the
+repo, in a file that is *also* reachable by whoever has to reproduce what CI
+did. Every workflow, action and script derives it from there; none restates it.
+Two pins exist today and both follow this:
+
+| Tool | Declared in | Read by CI via |
+|---|---|---|
+| Container Python | the golden base tag in `Dockerfile` | `.github/scripts/container_python_version.py` |
+| `pkl` | `PKL_VERSION` in `application_sdk/pkl_version.py` | `.github/scripts/pkl_version.py` |
+
+**Why one literal.** `pkl` was pinned in six places at once — `install-pkl`, the
+`regenerate-contract` action, the freshness gate, and three
+`contract-toolkit-*` workflows — with nothing keeping them in agreement. Six
+copies of a value is six chances to bump five.
+
+**Why *readable* matters more.** The freshness gate's whole value is that a
+local `uv run poe generate` predicts it. `pkl` is a language, so a contract can
+render cleanly on a developer's 0.32.x and be structurally incapable of
+rendering on CI's 0.27.2 (`Invalid character escape sequence` on a backslash
+line-continuation inside a multi-line string, valid from 0.28 on). With the pin
+buried in a reusable workflow, "it evals locally" was not evidence, the failure
+surfaced only after push, and the gate's message blamed stale artifacts —
+FND-1864. No app could even fix it; the version was not theirs to see.
+
+So the pin lives in the *shipped package*, which every connector already
+depends on, and the SDK hands out the exact build:
+
+```bash
+python -m application_sdk.dev.pkl print-version   # what CI renders with
+python -m application_sdk.dev.pkl path            # download + cache that build
+python -m application_sdk.dev.pkl check           # has my PATH pkl drifted?
+```
+
+**The mechanics, when you add the next pin.**
+
+1. Declare the literal in one file, on one line, plainly enough for a regex to
+   read (a Renovate custom manager rewrites it in place).
+2. Add a `.github/scripts/<tool>_version.py` with a `resolve --requested`
+   subcommand, and default every workflow/action input to `""` rather than to
+   the version. "Empty means the pin" is conditional logic, so it belongs in the
+   tested script, not the install shell — see the first section of this file.
+3. Resolve from the **action's own** checkout, not the caller's workspace: a
+   composite that runs in a consumer repo has no copy of this repo's source.
+   `${{ github.action_path }}/../../..` is this repo's root in both places.
+4. Put the declaring file in whichever `sdk-gate.yaml` path filter runs the job
+   that would *catch a bad bump*. For `pkl` that is the `toolkit` filter, whose
+   suite regenerates every `contract-toolkit/examples/` tree and fails on any
+   diff — the only check that can prove a pin bump is output-neutral. Skip this
+   and the bump is a one-line change that matches no filter and merges
+   unverified.
+5. Guard it: `.github/scripts/tests/test_pkl_version.py` fails the build if any
+   workflow, action or script spells a `pkl` version out, if a call site pins
+   one, if the textual and imported reads disagree, or if the declaring file
+   falls out of that path filter.
 
 ## Reusing scripts from a reusable workflow
 

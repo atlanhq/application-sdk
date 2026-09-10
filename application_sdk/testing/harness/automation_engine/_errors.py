@@ -246,11 +246,18 @@ class DAGProgressStalledError(PreconditionError):
 
     Distinct from :class:`NoWorkerOnTaskQueueError`, which guards the *start*
     (no node ever leaves ``Pending``). This guards *forward progress*: a node
-    that has begun but sits ``Running`` — with no node in the DAG changing state
-    — for ``dag_progress_stall_seconds`` almost always means it is wedged (e.g.
-    an extract stuck on a slow/failing upload). Rather than let the harness poll
-    the full ``ae_poll_timeout_seconds`` (often 90 min) and require a manual
-    cancel, we fail fast with the last-seen node states so the wedge is visible.
+    that sits ``Running`` — with no node in the DAG changing state — for
+    ``dag_progress_stall_seconds`` is wedged, in one of two ways AE's status
+    does not separate. Either a worker claimed the task and stopped making
+    progress (an extract stuck on a slow/failing upload), or the task was
+    dispatched to a queue nothing is polling and no worker ever claimed it —
+    Temporal accepts a start on an unpolled queue, so that execution also sits
+    ``Running`` indefinitely (FND-1880). Rather than let the harness poll the
+    full ``ae_poll_timeout_seconds`` (often 90 min) and require a manual cancel,
+    we fail fast with the last-seen node states so the wedge is visible; which
+    of the two it was is
+    :meth:`~application_sdk.testing.e2e.base.BaseE2ETest._claim_clause`'s to
+    report, from a poller read where one is available.
     The window is set comfortably above legitimately slow single nodes (lineage
     on deep queues can sit Running for many minutes), so a healthy run never
     trips it.

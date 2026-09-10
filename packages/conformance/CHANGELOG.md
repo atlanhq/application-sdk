@@ -2,6 +2,39 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.29.0] - 2026-09-09
+
+### Features
+
+- declare SDK-owned asset artifacts with the model, not a hand-written envelope (#3725) ([2d85710](https://github.com/atlanhq/application-sdk/commit/2d85710))
+- resolve source-available and compose-overlay per e2e suite (#3724) ([ab6dd7f](https://github.com/atlanhq/application-sdk/commit/ab6dd7f))
+
+### Bug fixes
+
+- resolve K004 outputs against both contract layouts (#3733) ([2ec12d3](https://github.com/atlanhq/application-sdk/commit/2ec12d3))
+- update github/codeql-action digest to b96794f (#3728) ([2c3f759](https://github.com/atlanhq/application-sdk/commit/2c3f759))
+- slot every tests-reusable input in the bootstrap template (#3718) ([ac9f2fa](https://github.com/atlanhq/application-sdk/commit/ac9f2fa))
+- accept the GHCR base mirror in I001 (#3686) ([d1b5c90](https://github.com/atlanhq/application-sdk/commit/d1b5c90))
+
+## [0.28.0] - 2026-09-08
+
+### Features
+
+- add K021 filter-string-acceptance rule (CONNECT-1333/1389) (#3653) ([3161bed](https://github.com/atlanhq/application-sdk/commit/3161bed))
+
+### Bug fixes
+
+- give upload retries their own artifact name (#3711) ([8cecc5d](https://github.com/atlanhq/application-sdk/commit/8cecc5d))
+- K018 resolves ambiguous contract names as a union (#3712) ([8e52778](https://github.com/atlanhq/application-sdk/commit/8e52778))
+- recognise App.upload_refs() as a sanctioned SDR upload path (#3707) ([130cd95](https://github.com/atlanhq/application-sdk/commit/130cd95))
+- register workflow_slug on the SDK contract field mirrors (#3705) ([b2cfcdc](https://github.com/atlanhq/application-sdk/commit/b2cfcdc))
+- update dependency ruff to v0.16.6 (#3672) ([17baed0](https://github.com/atlanhq/application-sdk/commit/17baed0))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.25.1 (#3692) ([61610c1](https://github.com/atlanhq/application-sdk/commit/61610c1))
+- chore(contract-toolkit): release v0.25.0 (#3622) ([a145c58](https://github.com/atlanhq/application-sdk/commit/a145c58))
+
 ## [0.27.0] - 2026-09-03
 
 ### Features

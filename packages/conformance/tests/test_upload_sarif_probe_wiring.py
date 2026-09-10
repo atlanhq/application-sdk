@@ -167,6 +167,74 @@ def test_upload_is_gated_on_the_probe_output(label: str, source: str) -> None:
 
 
 @pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
+def test_sarif_download_globs_so_a_retried_upload_is_found(
+    label: str, source: str
+) -> None:
+    """The suite's upload retry publishes `conformance-<slug>-sarif-retry`.
+
+    It has to: a failed `FinalizeArtifact` holds the first attempt's name for
+    the rest of the run — invisible to the artifact listing, so `overwrite`
+    cannot clear it — and `CreateArtifact` then 409s. An exact `name:` here
+    therefore misses every series whose SARIF landed on the second attempt,
+    silently, on the same code path FND-1149 was about keeping green.
+
+    `merge-multiple` is what keeps the file at `<slug>.sarif` in the working
+    directory rather than under a per-artifact subdirectory, which is where
+    the strip step below reads it.
+    """
+    download = _step_by_id(_steps(source), "download")
+    with_ = download.get("with", {})
+    pattern = str(with_.get("pattern", ""))
+    assert pattern.startswith("conformance-") and pattern.endswith("-sarif*"), (
+        f"[{label}] the SARIF download's `pattern:` is {pattern!r}; it must glob "
+        f"`conformance-<slug>-sarif*` so the `-retry` artifact is in scope"
+    )
+    assert "name" not in with_, (
+        f"[{label}] the SARIF download still passes `name: {with_.get('name')!r}`, "
+        f"which reads only the first attempt's artifact"
+    )
+    assert with_.get("merge-multiple") is True, (
+        f"[{label}] `merge-multiple: true` is missing, so a matched artifact "
+        f"lands under its own directory and the strip step's `<slug>.sarif` is "
+        f"not there"
+    )
+
+
+@pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
+def test_the_empty_sarif_gate_reads_the_file_not_the_download_outcome(
+    label: str, source: str
+) -> None:
+    """With `pattern:` a download that matched NOTHING succeeds.
+
+    Confirmed in the pinned action: only the single-artifact `name:` path
+    throws when the artifact is absent. So `steps.download.outcome` no longer
+    separates "this series published SARIF" from "this series had no relevant
+    changes" — it is `success` either way, and a gate reading it would hand
+    `upload-sarif` a file that does not exist (or, before that, `jq` a missing
+    input) on every skipped series.
+    """
+    steps = _steps(source)
+    gated = [
+        step
+        for step in steps
+        if "codeql-action/upload-sarif" in str(step.get("uses", ""))
+        or "jq" in str(step.get("run", ""))
+    ]
+    assert gated, f"[{label}] neither the strip nor the upload step was found"
+    for step in gated:
+        condition = str(step.get("if", ""))
+        assert "steps.download.outcome" not in condition, (
+            f"[{label}] step {step.get('name')!r} gates on "
+            f"`steps.download.outcome`, which is `success` even when the "
+            f"pattern matched no artifact"
+        )
+        assert "hashFiles(" in condition, (
+            f"[{label}] step {step.get('name')!r} has `if: {condition!r}`, which "
+            f"does not test for the SARIF file's presence"
+        )
+
+
+@pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
 def test_probe_invokes_the_vendored_script(label: str, source: str) -> None:
     """The probe runs the script, and the script is one bootstrap vendors."""
     probe = _step_by_id(_steps(source), "probe")

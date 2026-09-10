@@ -38,9 +38,14 @@ on:
   workflow_call:
     inputs:
       pkl-version:
-        description: Pkl toolchain version to use.
+        description: >
+          Pkl toolchain version to render with. Empty (the default) means the
+          SDK pin in application_sdk/pkl_version.py — the same version an app's
+          `python -m application_sdk.dev.pkl path` hands its `poe generate`, so
+          a local render predicts this gate. Overriding it here reintroduces
+          exactly the skew FND-1864 removed; do it only deliberately.
         required: false
-        default: "0.27.2"
+        default: ""
         type: string
       check-freshness:
         description: >
@@ -88,12 +93,13 @@ jobs:
       # were committed).
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.10"
+          version: "0.12.12"
 
       # Absolute ref, not `./…`: this is a reusable workflow, so a relative
       # action path would resolve against the CONSUMER repo's workspace, which
       # has no copy of the SDK's actions.
-      - uses: atlanhq/application-sdk/.github/actions/install-pkl@main
+      - id: pkl
+        uses: atlanhq/application-sdk/.github/actions/install-pkl@main
         with:
           version: ${{ inputs.pkl-version }}
 
@@ -137,10 +143,20 @@ jobs:
               artifacts are stale or were hand-edited.
             - **Broken contract** — `contract/app.pkl` exists but `pkl eval` failed, so it
               does not regenerate at all (a toolkit bump likely merged without regenerating).
+            - **Version skew** — the contract uses syntax your local pkl accepts and this
+              one does not. pkl is a language, not just a renderer: backslash
+              line-continuations inside a multi-line string, for instance, are valid from
+              0.28 on and a hard `Invalid character escape sequence` before it. This job
+              rendered with **pkl `${{ steps.pkl.outputs.version }}`**.
 
             **To resolve, pick one:**
-            - Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) locally, fix any
-              eval error, and push the refreshed output.
+            - Render with the version this gate uses, so a clean local run is actual
+              evidence — `python -m application_sdk.dev.pkl run -- eval --project-dir
+              contract -m . contract/app.pkl` downloads and caches that exact build.
+              `python -m application_sdk.dev.pkl check` just reports whether the pkl on
+              your `PATH` has drifted from it.
+            - Run `uv run poe generate` locally, fix any eval error, and push the refreshed
+              output.
             - If this app **intentionally** hand-maintains its generated config, opt out by
               setting `check-freshness: false` on the caller workflow.
 

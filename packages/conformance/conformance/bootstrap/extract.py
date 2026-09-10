@@ -191,6 +191,84 @@ _BLOCK_SCALAR_RE = re.compile(
 # only decides whether a per-app value is a preserved choice or drift.
 SDK_UNIT_COVERAGE_FLOOR = 0
 
+# ``tests-reusable.yaml``'s ``install-app-to-tenant`` default. Copied here for
+# the same reason as the coverage floor above — this package ships standalone —
+# and pinned against the real input default by ``test_bootstrap``, which is what
+# makes the policy drop below safe: if the SDK ever flips this default, that test
+# fails in the monorepo instead of nine repos silently losing their install.
+SDK_INSTALL_APP_TO_TENANT_DEFAULT = "true"
+
+# A single-token value: no whitespace, no quote, no ``#``. The shape every
+# path/name/ref-valued input below is checked against before it is read back,
+# because the template re-emits these inside double quotes — a value carrying a
+# quote would render invalid YAML, and one carrying a ``#`` or a space would
+# either truncate or change meaning. A value this rejects reads as *absent*, so
+# it reaches ``unpreserved_declarations`` and refuses the resync rather than
+# being silently rewritten into something else.
+_PLAIN_VALUE_RE = re.compile(r"^[A-Za-z0-9_.,/:@+*=-]+$")
+
+# Every remaining input of ``tests-reusable.yaml`` that the canonical
+# ``tests.yaml`` now has a slot for, as ``(render param, input, value shape)``.
+#
+# FND-1143: an input with no slot is not merely unsupported, it *freezes* any
+# repo that passes it — ``--resync`` refuses the whole file rather than delete
+# the declaration (FND-604), so every structural update the template carries is
+# withheld too. That cost 25 of the fleet's 80 ``tests.yaml`` repos, across 13
+# inputs; ``install-app-to-tenant`` is handled by the policy drop below instead,
+# and ``test-paths`` / ``pytest-args`` by the block-scalar splice, because both
+# are written as folded scalars in the wild.
+#
+# The shape is what the value must parse as to be read back. Anything else is
+# left to the round-trip guard: a bare ``timeout-minutes: soon`` must refuse the
+# resync, not be re-rendered as a number nobody wrote.
+_TESTS_YAML_VALUE_INPUTS: tuple[tuple[str, str, str], ...] = (
+    ("timeout_minutes", "timeout-minutes", "int"),
+    ("apt_packages", "apt-packages", "apt"),
+    ("private_git_deps", "private-git-deps", "bool"),
+    ("git_lfs_skip_smudge", "git-lfs-skip-smudge", "bool"),
+    ("health_check_timeout_seconds", "health-check-timeout-seconds", "int"),
+    ("container_health_timeout_seconds", "container-health-timeout-seconds", "int"),
+    ("runtime_sdk_ref", "runtime-sdk-ref", "plain"),
+    ("harness_sdk_ref", "harness-sdk-ref", "plain"),
+    ("e2e_test_path", "e2e-test-path", "plain"),
+    ("source_available", "source-available", "bool"),
+    ("source_available_overrides", "source-available-overrides", "plain"),
+    ("dataforge_datasource", "dataforge-datasource", "plain"),
+    ("dataforge_mode", "dataforge-mode", "plain"),
+    ("dataforge_env_tier", "dataforge-env-tier", "plain"),
+    ("dataforge_output_prefix", "dataforge-output-prefix", "plain"),
+    ("dataforge_hermetic_fallback", "dataforge-hermetic-fallback", "bool"),
+)
+
+# The two inputs whose real-world spelling is a ``>-`` folded scalar — a list of
+# pytest target paths, and an argument line — so they are spliced verbatim like
+# ``secrets_block`` rather than read as values. A value-shaped read of these
+# returns the scalar *header* (``>-``), which is the silent-corruption class
+# ``extract_field``'s single-quote arm was fixed for, one dimension over.
+_TESTS_YAML_BLOCK_INPUTS: tuple[tuple[str, str], ...] = (
+    ("test_paths_block", "test-paths"),
+    ("pytest_args_block", "pytest-args"),
+)
+
+
+def _reads_back(value: str, shape: str) -> bool:
+    """True when *value* parses as *shape*, so it can be re-rendered as written.
+
+    The gate on every value read by ``_TESTS_YAML_VALUE_INPUTS``. Returning
+    False means "treat the declaration as unreadable", which routes it to the
+    round-trip guard's refusal — the safe direction, and the one FND-604
+    established for an ``unit-coverage-fail-under: ninety``.
+    """
+    if not value:
+        return False
+    if shape == "bool":
+        return value in ("true", "false")
+    if shape == "int":
+        return value.isdigit()
+    if shape == "apt":
+        return all(APT_PACKAGE_RE.match(token) for token in value.split())
+    return bool(_PLAIN_VALUE_RE.match(value))
+
 
 def strip_action_pins(text: str) -> str:
     """Return *text* with every pinned action SHA normalised to ``@<pinned>``.
@@ -234,6 +312,22 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
     removing the line so the app inherits the SDK floor again). A value equal
     to the floor is kept rather than flagged: it weakens nothing, and deleting
     a redundant-but-honest declaration is churn, not remediation.
+
+    FND-1143 added the rest of ``tests-reusable.yaml``'s inputs
+    (``_TESTS_YAML_VALUE_INPUTS`` and ``_TESTS_YAML_BLOCK_INPUTS``). Not because
+    each is individually load-bearing, but because an input with no slot
+    *freezes* the repo that passes it: since FND-604 ``--resync`` refuses the
+    whole file rather than delete a declaration it cannot carry, so one
+    unslotted line withholds every structural update the template carries. On
+    ``atlan-postgres-app`` that was ``merge_group:`` and the ``labeled`` trigger
+    type — and a required check that never dispatches for ``merge_group`` leaves
+    the merge-queue entry pending until it times out. 25 of the 80 connector
+    repos with a ``tests.yaml`` were in that state, across 13 inputs, when this
+    landed.
+
+    Each value is gated on ``_reads_back``: a declaration whose value the
+    template cannot re-emit faithfully reads as absent, which routes it to the
+    round-trip guard's refusal rather than re-rendering a value nobody wrote.
     """
     params: dict[str, str] = {}
     # Inputs of the reusable job, so read from its own `with:` block through the
@@ -260,6 +354,23 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
         services_script = extract_field(with_block, "services-script")
         if services_script:
             params["services_script"] = services_script
+        # FND-1143's slots. Read through the same quote-tolerant `extract_field`
+        # for the same reason, and gated on `_reads_back` so a value the template
+        # cannot re-emit faithfully reads as absent and refuses the resync
+        # instead of being rewritten. A declaration written as a block scalar is
+        # skipped here for the same reason: `extract_field` would return the
+        # scalar's header (`>-`) as the value.
+        for param, field, shape in _TESTS_YAML_VALUE_INPUTS:
+            declaration = extract_with_declaration(text, field)
+            if not declaration or _BLOCK_SCALAR_RE.search(declaration.splitlines()[0]):
+                continue
+            value = extract_field(declaration, field)
+            if _reads_back(value, shape):
+                params[param] = value
+        for param, field in _TESTS_YAML_BLOCK_INPUTS:
+            declaration = extract_with_declaration(text, field)
+            if declaration:
+                params[param] = declaration
     declared = extract_declared_unit_coverage_fail_under(text)
     if declared and int(declared) >= SDK_UNIT_COVERAGE_FLOOR:
         params["unit_coverage_fail_under"] = declared
@@ -421,6 +532,82 @@ def reusable_job_with_block(text: str) -> str:
     while body_end < len(lines) and not _outdents(lines, body_end, key_indent + 1):
         body_end += 1
     return "\n".join(lines[with_at + 1 : body_end])
+
+
+def _reusable_with_key_line(text: str, key: str) -> tuple[list[str], int, int] | None:
+    """Find *key* among the *direct children* of the reusable job's ``with:``.
+
+    Returns ``(structural_lines, index, indent)`` for the first match, or
+    ``None``. The ``with:``-block counterpart of ``_reusable_job_key_line``,
+    which finds siblings of ``uses:``.
+
+    Direct children only, measured against the first child's own indentation: a
+    key nested *deeper* than the input level belongs to a value, not to the
+    inputs the job passes, and hoisting one into the rendered ``with:`` would
+    fabricate an input nobody declared — the same class
+    ``_reusable_job_scope``'s narrowing exists to prevent, one level down.
+    """
+    found = _reusable_job_key_line(text, "with")
+    if found is None:
+        return None
+    structural, with_at, key_indent = found
+    child_indent: int | None = None
+    for i in range(with_at + 1, len(structural)):
+        if _outdents(structural, i, key_indent + 1):
+            break
+        line = structural[i]
+        if not line.strip():
+            continue
+        m = _KEY_LINE_RE.match(line)
+        if m is None:
+            continue
+        indent = len(m.group("indent"))
+        if child_indent is None:
+            child_indent = indent
+        if indent != child_indent:
+            continue
+        if _yaml_key(m.group("key")) == key:
+            return structural, i, indent
+    return None
+
+
+def extract_with_declaration(text: str, key: str) -> str:
+    """Return the reusable job's ``with: <key>`` declaration verbatim, or ``""``.
+
+    *text* is a tests.yaml. The return value is the declaration exactly as
+    written — its key line plus, when that line opens a block scalar
+    (``key: >-``), every line of the scalar's body — with no trailing newline,
+    so it drops into the template's slot the way ``extract_secrets_block``'s
+    return value does.
+
+    Used for the two inputs whose real-world form is a folded scalar
+    (``test-paths``, ``pytest-args``), and by the value reads to *detect* that
+    form: a value-shaped read of a block scalar returns its header, so the
+    header check has to happen on the verbatim line.
+
+    Boundaries come off the structural view (so a key quoted inside another
+    input's scalar body is not mistaken for a declaration) while the returned
+    bytes come off the original, because a scalar body is blank in the
+    structural view by construction.
+    """
+    found = _reusable_with_key_line(text, key)
+    if found is None:
+        return ""
+    _, start, indent = found
+    lines = text.splitlines()
+    end = start + 1
+    if _BLOCK_SCALAR_RE.search(lines[start]):
+        while end < len(lines):
+            line = lines[end]
+            if line.strip() and len(line) - len(line.lstrip()) <= indent:
+                break
+            end += 1
+        # Trailing blank lines separate this declaration from the next; a
+        # folded scalar that swallowed them would re-render extra blank lines
+        # into the block on every resync.
+        while end > start + 1 and not lines[end - 1].strip():
+            end -= 1
+    return "\n".join(lines[start:end])
 
 
 def extract_force_external_runtime(text: str) -> str:
@@ -655,6 +842,10 @@ def unpreserved_tests_yaml_declarations(existing: str, rerendered: str) -> list[
     parse (``unit-coverage-fail-under: ninety``) is not a decision anyone made,
     so it still counts as unpreserved and still stops the resync.
 
+    ``install-app-to-tenant: true`` is the second such drop (FND-1143), on the
+    same value-conditioned terms — see ``redundant_install_app_to_tenant`` for
+    why that one input gets a policy drop where the rest got slots.
+
     ``secrets`` is added in the other direction, because for that key alone a
     shared name is *not* evidence of preservation: an inline mapping and the
     canonical ``inherit`` both spell the key ``secrets``, so the key-set
@@ -666,6 +857,8 @@ def unpreserved_tests_yaml_declarations(existing: str, rerendered: str) -> list[
     dropped = unpreserved_declarations(existing, rerendered)
     if rejected_unit_coverage_fail_under(existing):
         dropped = [key for key in dropped if key != "unit-coverage-fail-under"]
+    if redundant_install_app_to_tenant(existing):
+        dropped = [key for key in dropped if key != "install-app-to-tenant"]
     if unpreservable_secrets_form(existing) and "secrets" not in dropped:
         dropped.append("secrets")
     return dropped
@@ -702,6 +895,37 @@ def rejected_unit_coverage_fail_under(text: str) -> str:
     declared = extract_declared_unit_coverage_fail_under(text)
     if declared and int(declared) < SDK_UNIT_COVERAGE_FLOOR:
         return declared
+    return ""
+
+
+def redundant_install_app_to_tenant(text: str) -> str:
+    """Return *text*'s ``install-app-to-tenant`` when it merely restates the
+    reusable's own default, else ``""``.
+
+    The second declaration this module drops on purpose rather than preserves —
+    ``unit-coverage-fail-under`` below the floor being the first. Deliberately
+    *not* given a slot (FND-1143): all nine repos that declared it passed
+    ``true``, which is ``SDK_INSTALL_APP_TO_TENANT_DEFAULT``, so a slot would
+    bake a no-op line into nine canonical files forever while a refusal keeps
+    those repos frozen out of every structural update. Dropping it changes no
+    behaviour and un-freezes them in one resync.
+
+    Conditioned on the value, not the key: an explicit ``false`` is a real
+    opt-out with no slot to carry it, so it still reaches the refusal and the
+    repo keeps its declaration. Same for a value neither boolean — not a
+    decision anyone made, so not one to act on.
+
+    The safety of the drop rests on the copied default being right, which
+    ``test_bootstrap`` pins against ``tests-reusable.yaml``'s own input default
+    in the monorepo. If the SDK flips it to ``false``, that test fails there
+    rather than nine repos silently losing their pre-e2e install.
+    """
+    declaration = extract_with_declaration(text, "install-app-to-tenant")
+    if not declaration:
+        return ""
+    value = extract_field(declaration, "install-app-to-tenant")
+    if value == SDK_INSTALL_APP_TO_TENANT_DEFAULT:
+        return value
     return ""
 
 

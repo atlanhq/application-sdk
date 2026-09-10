@@ -32,6 +32,21 @@ on:
         required: false
         type: boolean
         default: true
+      endor_os_reachability:
+        description: >-
+          Run the Endor container scan with OS reachability (--os-reachability).
+          Default false, and that default is measured rather than cautious: basic
+          reachability profiles by actually RUNNING the image, and app images
+          that need their Dapr components and a Temporal endpoint to start will
+          not run unattended on a CI runner. Endor's qualification check then
+          reports "image is not suitable for dynamic profiling", skips profiling
+          and completes the scan without reachability -- roughly a minute of
+          extra runtime for no data. Turn it on per-repo for images that do run
+          standalone. Reachability for service images needs INSTRUMENTED
+          reachability against a real deployment, which is separate work.
+        required: false
+        type: boolean
+        default: false
       lfs:
         description: "Check out git-LFS objects before building the image (default false). Set true for apps that vendor LFS-tracked assets (e.g. large parser jars) into the Docker build context — without it the build copies the LFS pointer, not the real file. Mirrors the same input on build-and-publish-app.yaml; only applied to the image-build checkout."
         required: false
@@ -47,6 +62,19 @@ on:
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
+      ENDOR_API_CREDENTIALS_KEY:
+        required: false
+        description: >-
+          Endor Labs API key (org secret). Optional: when unset the endor-scan job
+          no-ops, so repos and forks without Endor access are unaffected. API-key
+          auth is used rather than Endor's preferred keyless OIDC because keyless
+          needs `id-token: write`, and a reusable workflow's permissions are capped
+          by the CALLER's token -- every app repo would have to add a permissions
+          block, which is exactly the per-repo configuration this workflow exists to
+          avoid. Auto-available here via the callers' `secrets: inherit`.
+      ENDOR_API_CREDENTIALS_SECRET:
+        required: false
+        description: "Endor Labs API secret (org secret). Same availability as ENDOR_API_CREDENTIALS_KEY above."
 
 permissions:
   contents: read
@@ -66,7 +94,28 @@ jobs:
     outputs:
       scan_image: ${{ steps.meta.outputs.scan_image }}
     steps:
+      # On a pull_request `github.ref` is `refs/pull/N/merge`, a ref GitHub
+      # DELETES and recreates every time it recomputes mergeability — which the
+      # base branch merely moving is enough to trigger. Checkout's own three
+      # attempts span about 30s and can sit entirely inside that window, so the
+      # job dies with `couldn't find remote ref refs/pull/N/merge`, and the gate
+      # then reports a missing scan rather than the checkout that caused it.
+      # Every observed instance has been on a Renovate branch, where the base
+      # moves constantly. So: absorb one recompute.
       - name: Checkout
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          lfs: ${{ inputs.lfs }}
+
+      - name: Wait before the checkout retry
+        if: steps.checkout.outcome == 'failure'
+        run: sleep 20
+
+      - name: Checkout (retry)
+        if: steps.checkout.outcome == 'failure'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
@@ -103,7 +152,11 @@ jobs:
           tags: ${{ steps.meta.outputs.scan_image }}
           outputs: type=docker,dest=/tmp/image.tar
           cache-from: type=gha,scope=scan
-          cache-to: type=gha,mode=max,scope=scan
+          # `ignore-error=true` because the cache is an optimisation and this
+          # is a gate. Without it a transient `failed to reserve cache` from the
+          # Actions cache service fails the export, fails the build, and fails
+          # the required check on a change that never touched the image.
+          cache-to: type=gha,mode=max,scope=scan,ignore-error=true
           provenance: false
           # The org PAT reaches the build ONLY as a BuildKit secret, never as a
           # build arg. Build args are recorded in image config and are readable
@@ -137,12 +190,30 @@ jobs:
           name: docker-image
           path: /tmp/image.tar
           retention-days: 7
+          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
+          # a run, so re-running a failed job would otherwise 409 here and burn the
+          # retry on a conflict that has nothing to do with a finalize failure. It is
+          # also what holds the invariant every consumer of this upload globs on:
+          # at most ONE live artifact ever matches `<name>*`.
+          overwrite: true
+
+      # A finalize 403 comes from an intermediary having a moment, and the
+      # retry runs about a second later — well inside the same window. Wait
+      # it out, so the two attempts fail independently or not at all.
+      - name: Wait before the upload retry
+        if: steps.upload-image.outcome == 'failure'
+        run: sleep 20
 
       - name: Upload image artifact (retry)
         if: steps.upload-image.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: docker-image
+          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
+          # failure leaves an unfinalized record holding that name for the whole
+          # run. The list API cannot see it, so `overwrite` cannot clear it and
+          # CreateArtifact 409s — a same-named retry could never have worked.
+          # Consumers resolve this artifact by `<name>*` glob, not exact name.
+          name: docker-image-retry
           path: /tmp/image.tar
           retention-days: 7
           overwrite: true
@@ -155,11 +226,44 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Retried for the same reason the uploads are, one layer down: the
+      # artifact service answers `ListArtifacts` with a 403 from an intermediary
+      # often enough to matter, `download-artifact` classifies that as
+      # non-retryable and gives up on the first occurrence, and the bytes are
+      # sitting there intact the whole time. Unlike an upload retry this one can
+      # reuse the first attempt's pattern — a failed download burns no name.
       - name: Download image artifact
+        id: download-image
+        continue-on-error: true
         if: inputs.image == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: docker-image
+          # `pattern` + merge-multiple, not the bare name: the upload's retry
+          # attempt lands under `docker-image-retry` (it has to — see that
+          # step), so the glob is what finds a retried upload at all.
+          #
+          # It resolves to ONE artifact because both upload attempts set
+          # `overwrite: true`. Without that on the first attempt, re-running a
+          # failed job in a run that already carried `docker-image` would 409
+          # there, publish `docker-image-retry`, and leave two live image.tars
+          # for merge-multiple to flatten in undefined order — Trivy could then
+          # scan the previous attempt's image.
+          pattern: docker-image*
+          merge-multiple: true
+          path: /tmp
+
+      - name: Wait before the download retry
+        if: steps.download-image.outcome == 'failure'
+        run: sleep 20
+
+      # No continue-on-error: if the image cannot be fetched twice there is
+      # nothing to scan, and failing here says exactly that.
+      - name: Download image artifact (retry)
+        if: steps.download-image.outcome == 'failure'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: docker-image*
+          merge-multiple: true
           path: /tmp
 
       - name: Load local image
@@ -220,8 +324,16 @@ jobs:
       # non-retryable and fails on the first occurrence, even though the bytes
       # already landed and the next attempt normally succeeds. That failed the
       # job, which failed the aggregate gate, which ejected the merge-queue
-      # entry. So: retry once, and never fail the gate on it:
-      # the consumer already downloads this with continue-on-error.
+      # entry. So: retry once.
+      #
+      # The retry is NOT continue-on-error, matching the build job above. It was,
+      # on the reasoning that the gate downloads with continue-on-error so
+      # nothing needed to fail here. But the gate fails anyway when the results
+      # are absent, and a green `trivy-scan` then told it the artifact HAD been
+      # published — so it blamed the download and advised re-running itself,
+      # which could never find an artifact this run never created. This job's
+      # result has to be a truthful proxy for "the results exist", because
+      # `check_allowlist.py` reads it as exactly that.
       - name: Upload Trivy results
         id: upload-trivy
         continue-on-error: true
@@ -230,21 +342,210 @@ jobs:
           name: trivy-results
           path: /tmp/trivy_results.json
           retention-days: 7
+          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
+          # a run, so re-running a failed job would otherwise 409 here and burn the
+          # retry on a conflict that has nothing to do with a finalize failure. It is
+          # also what holds the invariant every consumer of this upload globs on:
+          # at most ONE live artifact ever matches `<name>*`.
+          overwrite: true
+
+      # A finalize 403 comes from an intermediary having a moment, and the
+      # retry runs about a second later — well inside the same window. Wait
+      # it out, so the two attempts fail independently or not at all.
+      - name: Wait before the upload retry
+        if: steps.upload-trivy.outcome == 'failure'
+        run: sleep 20
 
       - name: Upload Trivy results (retry)
         if: steps.upload-trivy.outcome == 'failure'
-        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: trivy-results
+          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
+          # failure leaves an unfinalized record holding that name for the whole
+          # run. The list API cannot see it, so `overwrite` cannot clear it and
+          # CreateArtifact 409s — a same-named retry could never have worked.
+          # Consumers resolve this artifact by `<name>*` glob, not exact name.
+          name: trivy-results-retry
           path: /tmp/trivy_results.json
           retention-days: 7
           overwrite: true
 
+  # ── Endor Labs container scan (report-only) ─────────────────────────────────
+  #
+  # Runs ALONGSIDE Trivy, not instead of it. The two enumerate packages
+  # differently -- Endor reads package-manager manifests per layer, Trivy/Syft
+  # fingerprint the filesystem -- so each sees things the other misses,
+  # measurably so on our images. What Endor adds is OVAL-based distro severity
+  # (fewer false highs on Wolfi), base-image attribution, and OS reachability.
+  # So: collect both, compare, and decide later what gates.
+  #
+  # Deliberately NOT in security-gate's `needs`, and `continue-on-error: true`:
+  # during the rollout an Endor outage, licence issue, or false positive must not
+  # be able to wedge the merge queue for the whole fleet. Promoting this to a gate
+  # is a separate, conscious PR — flip continue-on-error off and add `endor-scan`
+  # to security-gate.needs.
+  endor-scan:
+    name: Endor Container Scan
+    needs: build
+    if: always() && (needs.build.result == 'success' || inputs.image != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      # The two decisions this job makes -- "are Endor credentials present?" and
+      # "pull a published image, or use the tarball the build job uploaded?" --
+      # live in a tested script, not in inlined if/else (docs/standards/ci.md).
+      # This reusable runs in the CALLER's repo, whose checkout has no such
+      # script, so fetch it from the SDK at `job.workflow_sha`: the commit of
+      # THIS workflow file, at whatever ref the caller pinned. The script always
+      # matches the workflow running it, and no caller-supplied ref reaches a
+      # checkout whose payload is then executed (same pinning as
+      # tests-reusable.yaml; actionlint <=1.7.12 flags the property as unknown,
+      # see .github/actionlint.yaml). Own `path:` so it can never leave the
+      # workspace sparse for a later full checkout.
+      - name: Fetch Endor scan prep script from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/endor_scan_prep.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
+      # Endor is opt-in per org secret. Without this guard every fork PR and
+      # every repo not yet licensed would show a red (if ignored) job. The
+      # script tests presence only; the value is never printed.
+      - name: Check Endor credentials
+        id: creds
+        env:
+          ENDOR_KEY: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
+        run: python3 _sdk/.github/scripts/endor_scan_prep.py credentials
+
+      # Same artifact the Trivy job consumes, so both scanners see byte-identical
+      # image content and a disagreement is always the scanner, never the input.
+      # Glob + merge, not the bare name, for the reason the Trivy download above
+      # spells out: the build job's first upload is continue-on-error and its
+      # retry lands under `docker-image-retry`. With the bare name a successful
+      # retry left this job with no tarball -- and, being continue-on-error
+      # itself, it failed silently: Trivy still gated, Endor just never reported.
+      - name: Download image artifact
+        id: download-image
+        continue-on-error: true
+        if: steps.creds.outputs.configured == 'true' && inputs.image == ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: docker-image*
+          merge-multiple: true
+          path: /tmp
+
+      - name: Wait before the download retry
+        if: steps.download-image.outcome == 'failure'
+        run: sleep 20
+
+      - name: Download image artifact (retry)
+        if: steps.download-image.outcome == 'failure'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: docker-image*
+          merge-multiple: true
+          path: /tmp
+
+      - name: Log in to GHCR
+        if: steps.creds.outputs.configured == 'true' && inputs.image != ''
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      # Normalise both paths onto /tmp/image.tar. The tarball is the primary
+      # interface because on the PR path the image is built locally and never
+      # pushed -- there is nothing for endorctl to pull -- and the build job's
+      # buildx `outputs: type=docker,dest=/tmp/image.tar` hands us one for free.
+      #
+      # It is also the more durable choice: endorctl shells out to `docker save`,
+      # which on Docker 29 rejects a multi-arch reference without an explicit
+      # platform ("both OS and Architecture must be provided"). Runners are on
+      # ubuntu-24.04 / Docker API 1.48 today and unaffected, but they will move.
+      #
+      # On the PR path the build job tagged the local image `scan-target:<sha>`,
+      # which is meaningless in the Endor UI, so the script reports it under the
+      # name it will be published as (ghcr.io/atlanhq/<repo>:<sha7>) and PR
+      # scans line up with published images on one container.
+      #
+      # Every input travels through `env:` and the script reads it as data.
+      # `REF` is caller-supplied (`inputs.ref`) on a fleet reusable workflow;
+      # the previous inline form interpolated `${{ inputs.ref || github.sha }}`
+      # into the `run:` body, where a value carrying `$(...)` or a backtick
+      # executes as shell before bash ever sees the surrounding quotes.
+      - name: Materialise image tarball
+        id: image
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          PREBUILT: ${{ inputs.image }}
+          REPO: ${{ github.event.repository.name }}
+          REF: ${{ inputs.ref || github.sha }}
+          TARBALL: /tmp/image.tar
+        run: python3 _sdk/.github/scripts/endor_scan_prep.py materialise
+
+      # Reachability has to RUN the image, so the daemon must hold it -- a
+      # tarball alone is not enough. Gated on the input because `docker load` of
+      # a 0.5-2.5 GB image is dead weight for a metadata-only scan.
+      - name: Load image into the daemon (reachability only)
+        if: steps.creds.outputs.configured == 'true' && inputs.endor_os_reachability
+        run: docker load -i /tmp/image.tar
+
+      # `pr: true` keeps PR scans out of the monitored-version history; the merge
+      # path (build-and-publish-app.yaml, fail_on_findings=false) records a
+      # monitored version instead. Without this Endor fragments the project and
+      # the dashboards stop meaning anything.
+      # image-type / finding-tags travel as ENV, not as `additional_args`.
+      # Verified on run 33856478534: the action ACCEPTS additional_args for a
+      # container scan and then drops it -- the endorctl command it actually
+      # ran carried no --image-type and no --finding-tags. The consequence is
+      # not cosmetic: without image-type nothing is classified app-vs-base, so
+      # container_metadata.base_image stays empty and the Containers view has
+      # nothing to group or filter on. endorctl reads every flag from its own
+      # ENDOR_* variable, and the action does not strip those, so this is the
+      # reliable channel. Re-verify by grepping a run log for the printed
+      # `endorctl container scan ...` line, not by trusting the `with:` block.
+      - name: Endor Labs container scan
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          ENDOR_CONTAINER_SCAN_IMAGE_TYPE: app
+          ENDOR_CONTAINER_SCAN_FINDING_TAGS: ${{ steps.image.outputs.ref }}
+        uses: endorlabs/github-action@f46ffb04c928a9c9c356f9627bd60b710ed0963e # v1.1.13
+        with:
+          namespace: atlan
+          api_key: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
+          api_secret: ${{ secrets.ENDOR_API_CREDENTIALS_SECRET }}
+          enable_github_action_token: false
+          scan_dependencies: false
+          scan_container: true
+          image: ${{ steps.image.outputs.ref }}
+          image_tar: /tmp/image.tar
+          os_reachability: ${{ inputs.endor_os_reachability }}
+          project_name: ${{ github.event.repository.name }}
+          # as_ref stays FALSE. It looked right -- keep every tag as its own
+          # version -- but --as-ref files the scan under CONTEXT_TYPE_REF, and
+          # Endor's inventory views (Containers, dashboards) read the monitored
+          # CONTEXT_TYPE_MAIN. Verified directly: the same image scanned with
+          # --as-ref lands as CONTEXT_TYPE_REF id=<tag>, without it as
+          # CONTEXT_TYPE_MAIN id=default. Every scan we had done was invisible in
+          # the Containers list for exactly this reason. Version history is worth
+          # less than the fleet being able to see its own scan results.
+          as_ref: false
+          pr: ${{ github.event_name == 'pull_request' }}
+          scan_summary_output_type: table
+
   # ── Security Gate — check Trivy results against allowlist ───────────────────
   security-gate:
     name: Security Gate
-    needs: [trivy-scan]
+    # `build` is in `needs` only so the gate can name which upstream job failed
+    # when there are no results to gate on. It is skipped when `image` is
+    # supplied, which the `always()` below tolerates.
+    needs: [build, trivy-scan]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -270,16 +571,46 @@ jobs:
           path: _sdk
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
+      # Both attempts stay continue-on-error: this job is the required check, so
+      # a raw `Unable to download artifact(s)` here would be the whole story a
+      # reader gets. Let the allowlist check below fail instead — it is handed
+      # the upstream outcomes and can say which job actually broke.
       - name: Download Trivy results
+        id: download-trivy
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
-          name: trivy-results
+          # Glob, not the bare name: the upload's retry attempt lands under
+          # `trivy-results-retry`. One live match only, for the reason the
+          # image download above spells out — both attempts overwrite.
+          pattern: trivy-results*
+          merge-multiple: true
+          path: /tmp
+
+      # Also gated on the scan having succeeded. Absent results are the NORMAL
+      # outcome when it did not, and there the first attempt has already told
+      # the truth — retrying would only add 20s of sleep to every genuinely
+      # broken run before the gate gets to say what broke.
+      - name: Wait before the download retry
+        if: steps.download-trivy.outcome == 'failure' && needs['trivy-scan'].result == 'success'
+        run: sleep 20
+
+      - name: Download Trivy results (retry)
+        if: steps.download-trivy.outcome == 'failure' && needs['trivy-scan'].result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true
+        with:
+          pattern: trivy-results*
+          merge-multiple: true
           path: /tmp
 
       - name: Check against allowlist
         env:
           FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
+          # So a missing results file can name the job that caused it instead of
+          # sending every reader to the scanner.
+          BUILD_RESULT: ${{ needs.build.result }}
+          SCAN_RESULT: ${{ needs['trivy-scan'].result }}
         run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --write-comment
 
       - name: Comment on PR

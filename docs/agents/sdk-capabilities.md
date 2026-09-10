@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.33.0
-source-sha:    3c3a651a421692823eb320baff6bdb78542db197
-source-date:   2026-09-07T15:10:25+01:00
+sdk-version:   3.33.2
+source-sha:    db271b97113c2e576921dfdd1eb1d0929b671bf3
+source-date:   2026-09-09T17:23:43+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -21,16 +21,17 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 46 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 27 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 65 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 66 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
+| `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
@@ -679,6 +680,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 
 ### Classes
 
+#### `AssetArtifact`
+
+- **Import:** `from application_sdk.contracts import AssetArtifact`
+- **Signature:** `class AssetArtifact`
+- **Summary:** Marker: this ``FileReference`` field's declaration **is** a typed model.
+- **Defined in:** `application_sdk/contracts/types.py`
+
 #### `CompatibilityError`
 
 - **Import:** `from application_sdk.contracts.compat import CompatibilityError`
@@ -706,6 +714,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Signature:** `class ContractValidationError(message: str, ...)`
 - **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
 - **Defined in:** `application_sdk/contracts/base.py`
+
+#### `DeclaredFile`
+
+- **Import:** `from application_sdk.contracts import DeclaredFile`
+- **Signature:** `class DeclaredFile`
+- **Summary:** One entry in a producer's declaration of what it wrote.
+- **Defined in:** `application_sdk/contracts/storage.py`
 
 #### `DownloadInput`
 
@@ -826,6 +841,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Storage lifecycle tier for a ``FileReference``.
 - **Defined in:** `application_sdk/contracts/types.py`
 
+#### `StoreTarget`
+
+- **Import:** `from application_sdk.contracts import StoreTarget`
+- **Signature:** `class StoreTarget`
+- **Summary:** Which object store an operation addresses.
+- **Defined in:** `application_sdk/contracts/types.py`
+
 #### `UploadInput`
 
 - **Import:** `from application_sdk.contracts import UploadInput`
@@ -840,6 +862,34 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Output from ``App.upload``.
 - **Defined in:** `application_sdk/contracts/storage.py`
 
+#### `UploadRefsInput`
+
+- **Import:** `from application_sdk.contracts import UploadRefsInput`
+- **Signature:** `class UploadRefsInput`
+- **Summary:** Input for ``App.upload_refs``.
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `UploadRefsOutput`
+
+- **Import:** `from application_sdk.contracts import UploadRefsOutput`
+- **Signature:** `class UploadRefsOutput`
+- **Summary:** Output from ``App.upload_refs``.
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `VerifyRefsInput`
+
+- **Import:** `from application_sdk.contracts import VerifyRefsInput`
+- **Signature:** `class VerifyRefsInput`
+- **Summary:** Input for ``App.verify_refs``.
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `VerifyRefsOutput`
+
+- **Import:** `from application_sdk.contracts import VerifyRefsOutput`
+- **Signature:** `class VerifyRefsOutput`
+- **Summary:** Output from ``App.verify_refs``.
+- **Defined in:** `application_sdk/contracts/storage.py`
+
 ### Functions
 
 #### `assert_backwards_compatible`
@@ -848,6 +898,20 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Signature:** `assert_backwards_compatible(old_cls: type, new_cls: type) -> None`
 - **Summary:** Assert *new_cls* is backwards-compatible with *old_cls*, raising on failure.
 - **Defined in:** `application_sdk/contracts/compat.py`
+
+#### `asset_artifact_fields`
+
+- **Import:** `from application_sdk.contracts import asset_artifact_fields`
+- **Signature:** `asset_artifact_fields(contract: type)`
+- **Summary:** Every field on *contract* carrying the :class:`AssetArtifact` marker.
+- **Defined in:** `application_sdk/contracts/types.py`
+
+#### `asset_artifact_marker`
+
+- **Import:** `from application_sdk.contracts import asset_artifact_marker`
+- **Signature:** `asset_artifact_marker(contract: type | None, field: str)`
+- **Summary:** The :class:`AssetArtifact` marker on ``contract``'s *field*, or ``None``.
+- **Defined in:** `application_sdk/contracts/types.py`
 
 #### `canonical_type_str`
 
@@ -1688,6 +1752,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
 - **Signature:** `STORAGE_EMPTY_UPLOAD`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_HANDOFF_INCOMPLETE`
+
+- **Import:** `from application_sdk.errors import STORAGE_HANDOFF_INCOMPLETE`
+- **Signature:** `STORAGE_HANDOFF_INCOMPLETE`
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
@@ -2782,6 +2853,19 @@ Output collectors and record models for Automation Engine
 - **Signature:** `get_outputs() -> OutputCollector`
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
+
+## `application_sdk.pkl_version`
+
+The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate
+
+### Constants and Enums
+
+#### `PKL_VERSION`
+
+- **Import:** `from application_sdk.pkl_version import PKL_VERSION`
+- **Signature:** `PKL_VERSION: str`
+- **Summary:** The pkl version CI renders every contract with.
+- **Defined in:** `application_sdk/pkl_version.py`
 
 ## `application_sdk.server`
 
@@ -6614,6 +6698,15 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `error_code: ErrorCode`
 - **Defined in:** `application_sdk/contracts/base.py`
 
+#### `DeclaredFile`
+
+- **Import:** `from application_sdk.contracts import DeclaredFile`
+- **Summary:** One entry in a producer's declaration of what it wrote.
+- **Fields:**
+  - `ref: FileReference`
+  - `label: str` `= ''`
+- **Defined in:** `application_sdk/contracts/storage.py`
+
 #### `DownloadInput`
 
 - **Import:** `from application_sdk.contracts import DownloadInput`
@@ -6735,6 +6828,48 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `ref: FileReference` `= Field(default_factory=FileReference)`
   - `synced: bool` `= False`
   - `reason: str` `= ''`
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `UploadRefsInput`
+
+- **Import:** `from application_sdk.contracts import UploadRefsInput`
+- **Summary:** Input for ``App.upload_refs``.
+- **Fields:**
+  - `files: Annotated[list[DeclaredFile], MaxItems(10000)]` `= Field(default_factory=list)`
+  - `prefix: str` `= ''`
+  - `source_prefix: str` `= ''`
+  - `tier: StorageTier` `= StorageTier.RETAINED`
+  - `verify: bool` `= True`
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `UploadRefsOutput`
+
+- **Import:** `from application_sdk.contracts import UploadRefsOutput`
+- **Summary:** Output from ``App.upload_refs``.
+- **Fields:**
+  - `prefix: str` `= ''`
+  - `refs: Annotated[list[FileReference], MaxItems(10000)]` `= Field(default_factory=list)`
+  - `file_count: int` `= 0`
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `VerifyRefsInput`
+
+- **Import:** `from application_sdk.contracts import VerifyRefsInput`
+- **Summary:** Input for ``App.verify_refs``.
+- **Fields:**
+  - `refs: Annotated[list[FileReference], MaxItems(10000)]` `= Field(default_factory=list)`
+  - `prefix: str` `= ''`
+  - `store: StoreTarget` `= StoreTarget.DEPLOYMENT`
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `VerifyRefsOutput`
+
+- **Import:** `from application_sdk.contracts import VerifyRefsOutput`
+- **Summary:** Output from ``App.verify_refs``.
+- **Fields:**
+  - `verified_count: int` `= 0`
+  - `verified_file_count: int` `= 0`
+  - `prefix: str` `= ''`
 - **Defined in:** `application_sdk/contracts/storage.py`
 
 ### `application_sdk.handler.contracts`
@@ -7044,6 +7179,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `records_uploaded: int` `= 0`
   - `error: str` `= ''`
   - `output_path: str` `= ''` — Resolved local base path used during extraction. Subclasses that need
+  - `transformed_files: Annotated[list[FileReference], MaxItems(1000), AssetArtifact()]` `= Field(default_factory=list)` — The producer's declaration of what the transform step actually wrote.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `ExtractionTaskInput`

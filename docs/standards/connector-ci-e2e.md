@@ -1017,9 +1017,18 @@ DAG nodes:
 
 The child workflow ID is `{ae_run_id}-{node_id}`, and both halves are already in the failure, so that next click needs nothing the message does not carry.
 
-Three states used to render identically as `status=<X> error=None`, which read as a node failure and named no queue: AE-reports-not-started (`Pending` / `Scheduled`), dispatched and then frozen (`Running` at the ceiling), and ran-and-failed. Only the third is a node failure. The queue name comes from the harness's seed DAG, which is the only place it is knowable locally — `native-status` reports statuses, not routing — so the line says "per the seed DAG" rather than claiming to know what the tenant dispatched.
+Three states used to render identically as `status=<X> error=None`, which read as a node failure and named no queue: AE-reports-not-started (`Pending` / `Scheduled`), dispatched and still `Running` where the poll stopped, and ran-and-failed. Only the third is a node failure. The queue name comes from the harness's seed DAG, which is the only place it is knowable locally — `native-status` reports statuses, not routing — so the line says "per the seed DAG" rather than claiming to know what the tenant dispatched.
 
 **The watchdog must stay reachable.** `dag_progress_stall_seconds` fires when `elapsed - last_progress_elapsed` reaches the window, and the poll returns as soon as `elapsed` reaches `ae_poll_timeout_seconds`. A window that is not *strictly* below the ceiling can therefore only ever close on a run that stalls at t=0 — for every real stall the poll exits first. It used to default to an absolute 1800s, which silently disabled it on every suite with a ceiling of 1800s or lower; those suites burned the full 30 minutes on a wedge and then reported the ceiling. It now defaults to `None` = derived from the ceiling (a third of it, floored at 300s and capped at 1800s), so raising the ceiling widens the watchdog instead of putting it out of reach, and `setup_method` rejects a pinned value that is not below the ceiling. Set `0` to opt out deliberately.
+
+**A still-`Running` node does not say a worker ever claimed it (FND-1880).** The line for that node used to end by asserting one of the two causes as fact — "A worker took it and stopped making progress (or died holding it)" — on the strength of AE reporting `Running`. AE reports `Running` for a task that was dispatched and never claimed by any poller just as it does for one a worker picked up and stalled on: Temporal accepts a start on a queue nothing is polling, and that execution then sits `Running` indefinitely. The two need opposite investigations — "the worker/queue wiring is wrong" against "the activity is hanging" — and on the run this was written from the real cause was the first (the worker polled `atlan-<app>-<deployment>` while the harness dispatched to `atlan-<app_with_underscores>-<deployment>`), with the assertion read as evidence against it.
+
+So the line now reports the cause only where it was measured:
+
+* with no route to a Temporal frontend — the default, and what a connector CI leg always gets — it hedges and names the check that settled the real incident: the dispatched queue against the queue the owning app's worker prints in its own startup line, with the child workflow's history as the second step;
+* with `temporal_address` / `E2E_TEMPORAL_ADDRESS` set, the harness reads `DescribeTaskQueue` for each still-`Running` node's own queue at the stop point. Only the *negative* is decidable that way, and it is the strong one: `NO poller has claimed it: Temporal reports 0 pollers on '<queue>'… The activity's own code is not implicated.` A non-empty read rules the mismatch out and stops there — `Something IS holding '<queue>'… That rules out a queue-name mismatch, but a poller on the queue is not proof THIS task was claimed` — because `DescribeTaskQueue` answers who is holding the queue *name* now, and a queue name addresses two queues (workflow tasks and activity tasks). It names which halves are held for that reason: a worker whose workflow poll loop has died while its activity loop lives holds one half, and a union count reports that as "1 poller" exactly as a healthy worker does. Asserting the stall from a non-empty union would put this section's own bug back on the measured path.
+
+The reads are scoped to the distinct queues of the nodes AE still reports `Running`, so a healthy run pays nothing, and a read that fails is never recorded — an unreachable frontend leaves the hedge standing rather than manufacturing the zero-poller finding.
 
 Because a reachable watchdog closes *before* the ceiling, it — not the ceiling — is now the exit a stall actually takes on any suite whose ceiling is 1800s or lower. It raises `DAGProgressStalledError` rather than returning, so the same per-node breakdown is rendered onto that exception: the error carries the last observation (`DAGRunResult.progress_stalled_after_seconds`, alongside the ceiling's `timed_out_after_seconds`) and `run_full_dag` re-raises it through the one renderer above. The only difference in the output is the clause naming which exit closed — `AE reports Pending when the 600s progress watchdog closed` instead of `at the 1800s poll ceiling`. A node wedged `Running` reads the same way rather than falling back to `status=Running error=None`.
 
@@ -1174,6 +1183,79 @@ available"), the bundle's own identity fields, and expectations derived from tha
 entrypoint's `pipeline` — `expect_connection`, `require_nonempty_assets`,
 `expect_lineage`, `required_dag_nodes`. A miner therefore is not graded against
 crawler-shaped assertions: with no `publish` step its pass criterion is its DAG.
+
+### When the entrypoints are not equally testable (FND-1865)
+
+One leg per suite, but for a long time two of the values a leg ran with were
+resolved **once for the whole repo**: `source-available`, and the compose
+overlay the worker's stack is layered from. A connector whose entrypoints differ
+in source provisioning could not say so, and had no app-side workaround.
+
+`atlan-db2-app` is the case that surfaced it. `luw` (Db2 LUW) is containerisable
+today — `icr.io/db2_community/db2`, port 50000, seeded sibling container, full
+DAG. `zos` (Db2 for z/OS) **cannot be**: container images are architecture *and*
+OS specific, and IBM's own `IBM-Z-zOS` guidance is explicit that multi-arch
+emulation is not available for the `zos/s390x` platform (the community image's
+`s390x` tag is Linux on IBM Z, not z/OS). It needs a real subsystem — Wazi as a
+Service, or zD&T. AS/400 is already anticipated as a third flavour.
+
+Both values are now resolved **per suite**, in the discovery job, and carried in
+the matrix — the same way `artifact-suffix` and the derived
+`ATLAN_DEPLOYMENT_NAME` already are:
+
+```yaml
+# .github/workflows/tests.yaml
+with:
+  source-available: true                       # the repo-wide default
+  source-available-overrides: "db2zos-e2e=false"
+```
+
+```
+.github/e2e/db2luw-e2e-docker-compose.yaml   → layered on the db2luw-e2e legs only
+.github/e2e/e2e-full-docker-compose.yaml     → the fallback for every other suite
+```
+
+* **`source-available-overrides`** is `<suite>=true|false`, comma-separated,
+  keyed off the discovered suite name (`tests/e2e/test_db2zos_e2e.py` →
+  `db2zos-e2e`). It overrides in **both** directions, so "most flavours
+  unsourced, one containerisable" is expressible too. It keys on the *suite*,
+  not the leg: source availability is a property of the entrypoint, not of the
+  CSP tenant, so an override applies on every cloud. An override naming a suite
+  discovery did not find **fails the discovery job** — an inert override would
+  leave that leg on the repo-wide default and green a run that tried to extract
+  from a source which cannot exist.
+* **The overlay is a convention**, not an input:
+  `.github/e2e/<suite>-docker-compose.yaml` wins when the file exists, and the
+  repo-wide `.github/e2e/e2e-full-docker-compose.yaml` is the fallback for every
+  suite that ships none — so a single-flavour connector is untouched. To keep a
+  container off the legs that cannot use it, move the shared overlay's contents
+  into the per-suite files that want them and stop shipping the shared path;
+  absence of a per-suite file means "nothing suite-specific here", never "layer
+  nothing".
+
+This matters beyond tidiness, in both directions. With one pinned overlay the
+LUW container also started on the three `db2zos-e2e` legs, and the worker's
+`depends_on: service_healthy` made those legs *wait* for it. With one repo-wide
+boolean, setting it `true` for `luw` also told the `zos` suite a source existed.
+
+**None of the app-side workarounds work**, which is why this had to move into the
+matrix:
+
+| Workaround | What happens |
+| -- | -- |
+| `source_available = False` class attribute | Overridden by `E2E_SOURCE_AVAILABLE` on every CI run — `BaseE2ETest` resolves it per run, and the env value wins whenever it is set. |
+| Module-level `pytest.skip` in the sourceless suite | pytest exits **5** ("no tests collected"), which the composite propagates verbatim (`exit "${TEST_EXIT_CODE}"`), so the leg goes **red**, not skipped. |
+| In-test skip from `seed_prerequisites()` | Works (exit 0, reports skipped) but costs the worker-up assertion, and the suite still burns the read-only tenant-resolution phase before reaching the hook. |
+
+With the per-leg value, the sourceless leg keeps the tier it should have: the
+worker-up-only check (assert the worker deploys and serves `/server/health`,
+skip extraction/publish/Atlas), and `setup_method` returns before the AE/tenant
+wiring it does not need.
+
+`e2e-full-reusable.yaml` still takes a single `compose-overlay` and a single
+`source-available`: it targets a whole directory rather than fanning out per
+suite (`--clouds-only` discovery), so there is no suite dimension to key either
+off.
 
 ### Seeding state a dependent entrypoint consumes
 
@@ -1528,6 +1610,26 @@ tier (`source_available=false`) wires no AE client to submit a delete through at
 all, and a scale-to-zero worker that fails to wake is indistinguishable from a
 missing install. Drop it once neither is true.
 
+**A run that created nothing submits nothing.** `setup_method` mints
+`connection_qualified_name` before the test body runs, so it is non-empty by
+teardown whatever happened in between — non-emptiness is no evidence that a
+connection exists under it. Teardown therefore gates the run's own delete on the
+two calls that actually create one: the Atlas create `seed_connection` issues,
+and a DAG submit. Both are recorded on the way **in** to the call rather than on
+its way out — a submit that times out is a run executing orphaned, and a create
+whose reply is lost may still have committed, so recording success instead would
+leave exactly those connections unreclaimed. (For the same reason the gate does
+*not* read `_connection_seeded`: that flag lands only after the searchability
+poll, so a seed that created its connection and then raised
+`SeededConnectionNotSearchableError` would read as having created nothing.) A
+suite that skipped — no source provisioned, no subsystem wired, a
+`seed_prerequisites` that bailed — logs `no cleanup needed` at `INFO` and
+submits nothing. Before FND-1873 it published an AE workflow,
+submitted it and waited ~60s to `PURGE` a name under which, by construction,
+nothing could exist, on every leg of every push. Connections `seed_assets` or a
+`DAGSpec` registered are unaffected: those exist because something published
+them.
+
 **None of this can red a leg.** Teardown runs after the assertions have decided
 the verdict, so every step reports rather than raises — a missing app, an
 unreachable tenant and a store with no binding are all `WARNING` lines. Tenant
@@ -1547,7 +1649,7 @@ Three `ClassVar`s tune it, and the defaults suit every connector:
 
 1. **Action manifest**: `app.yaml` at repo root (3 lines).
 2. **Unified workflow**: copy `.github/workflows/tests.yaml` from mysql-app; swap connector references. This single file covers unit + integration tests (always) and full-DAG e2e (on the `e2e` label or `run_e2e=true` dispatch input).
-3. **Config dir**: create `.github/sdr-e2e/` (new) or `.github/e2e/` (legacy). Files: `docker-compose.ci.yml`, `e2e-full-docker-compose.yaml`, `e2e-full-components/`, `seed.sql`, `make-secrets.py`, `make-secrets-e2e-full.py`.
+3. **Config dir**: create `.github/sdr-e2e/` (new) or `.github/e2e/` (legacy). Files: `docker-compose.ci.yml`, `e2e-full-docker-compose.yaml`, `e2e-full-components/`, `seed.sql`, `make-secrets.py`, `make-secrets-e2e-full.py`. On a bundle app whose entrypoints need different source containers, name the overlay per suite instead — `.github/e2e/<suite>-docker-compose.yaml`, see [When the entrypoints are not equally testable](#when-the-entrypoints-are-not-equally-testable-fnd-1865).
 4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2ETest` subclass for SQL connectors, otherwise the generated `BaseE2ETest` subclass — see [Which harness](#which-harness)). On a bundle app, one `tests/e2e/test_*.py` **per entrypoint** — see [Multi-entrypoint (bundle) apps](#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).
 5. **Repo secrets**: set the 7 entries from the table above.
 6. **SDK matrix**: add `<connector>-app` to the `DEFAULT_MATRIX` in apps-sdk's `matrix-builder` job (`pull_request.yaml`) so `connector-tests` fans out to your connector automatically.

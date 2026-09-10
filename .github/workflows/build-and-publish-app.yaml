@@ -88,10 +88,10 @@ on:
         type: boolean
         default: false
       use_ghcr_base:
-        description: "Resolve the SDK base image from GHCR instead of Harbor during the image build. Opt-in while the GHCR path is being rolled out; the default will flip to true once canary apps have soaked, and the flag will then be removed. Setting this runs a preflight that fails the build if the redirect cannot apply to this Dockerfile, or if the two registries have drifted apart on the base tag — see the 'Resolve GHCR base redirect' step for the mechanics and docs/standards/build-security.md for why the mirror exists. Default false — every caller builds from Harbor exactly as before."
+        description: "Resolve the SDK base image from GHCR instead of Harbor during the image build. Default TRUE — the soak is over and the fleet now pulls the base from GHCR, which is free from GitHub-hosted runners where Harbor's S3-backed blobs are not. The base itself is unchanged: harbor-release.yaml publishes both registries at one digest and the preflight verifies that parity per build, failing closed on skew. A Dockerfile the redirect cannot rewrite (a pinned patch tag, a digest-pinned base) is not an error — it warns and builds from Harbor as before, so turning this on fleet-wide cannot fail a build merely because the base is spelled differently. Pass false to pin an app to Harbor. See the 'Resolve GHCR base redirect' step for the mechanics and docs/standards/build-security.md for the two-registry layout."
         required: false
         type: boolean
-        default: false
+        default: true
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -448,7 +448,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.10"
+          version: "0.12.12"
 
       # ── 1. v3 shape ─────────────────────────────────────────────────────────
       - name: Install SDK (migration tooling)
@@ -1273,7 +1273,8 @@ jobs:
           build-contexts: ${{ needs.prepare.outputs.base_build_contexts }}
           tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }},ignore-error=true
           provenance: false
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

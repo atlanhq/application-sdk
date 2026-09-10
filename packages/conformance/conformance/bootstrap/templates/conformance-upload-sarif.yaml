@@ -95,13 +95,24 @@ jobs:
         id: download
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: conformance-${{ matrix.slug }}-sarif
+          # Glob + merge-multiple, not the bare name: the suite's upload retry
+          # cannot reuse the first attempt's artifact name (a failed
+          # FinalizeArtifact holds that name for the whole run and
+          # CreateArtifact then 409s), so it publishes `…-sarif-retry`.
+          # merge-multiple flattens whichever of the two landed into the working
+          # directory as `<slug>.sarif`, which is what the strip step reads.
+          pattern: conformance-${{ matrix.slug }}-sarif*
+          merge-multiple: true
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
         continue-on-error: true  # absent when series had no relevant changes
 
+      # Gated on the FILE, not on `steps.download.outcome`: with `pattern:`
+      # (unlike `name:`) download-artifact treats "nothing matched" as success,
+      # so the outcome no longer distinguishes a series that uploaded SARIF
+      # from one that had no relevant changes. hashFiles does.
       - name: "Strip suppressed results"
-        if: steps.download.outcome == 'success'
+        if: hashFiles(format('{0}.sarif', matrix.slug)) != ''
         env:
           SARIF_SLUG: ${{ matrix.slug }}
         run: |
@@ -109,8 +120,8 @@ jobs:
             "$SARIF_SLUG.sarif" > "$SARIF_SLUG-upload.sarif"
 
       - name: "Upload SARIF to Security tab"
-        if: steps.download.outcome == 'success' && steps.probe.outputs.available == 'true'
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        if: hashFiles(format('{0}-upload.sarif', matrix.slug)) != '' && steps.probe.outputs.available == 'true'
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
         with:
           sarif_file: ${{ matrix.slug }}-upload.sarif
           ref: refs/heads/${{ github.event.workflow_run.head_branch }}

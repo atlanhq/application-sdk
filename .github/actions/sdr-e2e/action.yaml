@@ -180,6 +180,12 @@ inputs:
       (e.g. mysql-app's `.github/e2e/e2e-full-docker-compose.yaml`
       which propagates AWS_* env vars to the worker and sets a unique
       agent-name so the worker registers on its own Temporal queue).
+
+      tests-reusable.yaml passes a PER-LEG value here (FND-1865): its
+      discovery job resolves `.github/e2e/<suite>-docker-compose.yaml`
+      when the caller's tree has one and falls back to the repo-wide
+      path otherwise, so a multi-entrypoint connector no longer starts
+      every source container on every leg.
     required: false
     default: ""
   git-token:
@@ -227,6 +233,12 @@ inputs:
       BaseE2ETest.setup_method via the E2E_SOURCE_AVAILABLE env var). Apps
       with no free container / no wired credentials set this false until they
       provision a source.
+
+      tests-reusable.yaml passes a PER-LEG value here (FND-1865): the env var
+      is resolved per run and therefore per leg, so a connector whose
+      entrypoints are not equally testable narrows the repo-wide input with
+      `source-available-overrides` and only the sourceless suite's legs
+      degrade to the worker-up tier.
     required: false
     default: "true"
   full-dag:
@@ -444,7 +456,7 @@ runs:
     # contracts, BaseSDRIntegrationTest — is import-compatible with the code
     # under test, and the whole E2E job runs one interpreter end to end.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.33.1
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.33.2
       with:
         python-version: ${{ inputs.expected-python-version }}
 
@@ -1439,6 +1451,20 @@ runs:
         name: sdr-integration-tests-${{ inputs.app-name }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}-results
         path: results/
         retention-days: 14
+        # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
+        # a run, so re-running a failed job would otherwise 409 here and burn the
+        # retry on a conflict that has nothing to do with a finalize failure. It is
+        # also what holds the invariant every consumer of this upload globs on:
+        # at most ONE live artifact ever matches `<name>*`.
+        overwrite: true
+
+    # A finalize 403 comes from an intermediary having a moment, and the
+    # retry runs about a second later — well inside the same window. Wait
+    # it out, so the two attempts fail independently or not at all.
+    - name: Wait before the upload retry
+      if: steps.upload-e2e-results.outcome == 'failure'
+      shell: bash
+      run: sleep 20
 
     - name: Upload test results (retry)
       if: steps.upload-e2e-results.outcome == 'failure'
@@ -1447,7 +1473,12 @@ runs:
         # artifact-suffix keeps parallel matrix legs from colliding on this
         # name (upload-artifact rejects duplicate names within a run); empty
         # suffix preserves the historical single-artifact name.
-        name: sdr-integration-tests-${{ inputs.app-name }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}-results
+        # A DISTINCT name, never the first attempt's: a FinalizeArtifact
+        # failure leaves an unfinalized record holding that name for the whole
+        # run. The list API cannot see it, so `overwrite` cannot clear it and
+        # CreateArtifact 409s — a same-named retry could never have worked.
+        # Consumers resolve this artifact by `<name>*` glob, not exact name.
+        name: sdr-integration-tests-${{ inputs.app-name }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}-results-retry
         path: results/
         retention-days: 14
         overwrite: true

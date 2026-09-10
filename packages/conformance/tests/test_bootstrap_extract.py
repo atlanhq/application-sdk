@@ -1120,3 +1120,269 @@ def test_tagged_and_indent_first_scalar_bodies_are_not_mined(header: str) -> Non
     )
     assert declared_keys(text) == ["jobs", "tests", "steps", "run"]
     assert extract_force_external_runtime(text) == ""
+
+
+# ---------------------------------------------------------------------------
+# FND-1143: a slot for every remaining tests-reusable.yaml input
+#
+# The point of these is not that any one input is precious. It is that an input
+# with NO slot freezes the repo that passes it: since FND-604 ``--resync``
+# refuses the whole file rather than delete a declaration it cannot carry, so
+# one unslotted line withholds every structural update the template carries. 25
+# of the fleet's 82 tests.yaml files were in that state, across 13 inputs.
+# ---------------------------------------------------------------------------
+
+
+_FND1143_VALUES: dict[str, tuple[str, str]] = {
+    # param: (the input line as an app hand-wrote it, expected read-back)
+    "timeout_minutes": ("      timeout-minutes: 150", "150"),
+    "apt_packages": (
+        '      apt-packages: "libkrb5-dev gcc python3-dev"',
+        "libkrb5-dev gcc python3-dev",
+    ),
+    "private_git_deps": ("      private-git-deps: true", "true"),
+    "git_lfs_skip_smudge": ("      git-lfs-skip-smudge: true", "true"),
+    "health_check_timeout_seconds": (
+        '      health-check-timeout-seconds: "180"',
+        "180",
+    ),
+    "container_health_timeout_seconds": (
+        '      container-health-timeout-seconds: "240"',
+        "240",
+    ),
+    "runtime_sdk_ref": ('      runtime-sdk-ref: "v3.1.0"', "v3.1.0"),
+    "harness_sdk_ref": ('      harness-sdk-ref: "main"', "main"),
+    "e2e_test_path": (
+        '      e2e-test-path: "tests/e2e/full_dag/"',
+        "tests/e2e/full_dag/",
+    ),
+    "source_available": ("      source-available: false", "false"),
+    "source_available_overrides": (
+        '      source-available-overrides: "db2zos-e2e=false"',
+        "db2zos-e2e=false",
+    ),
+    "dataforge_datasource": (
+        '      dataforge-datasource: "cosmosnosql"',
+        "cosmosnosql",
+    ),
+    "dataforge_mode": ('      dataforge-mode: "managed"', "managed"),
+    "dataforge_env_tier": ('      dataforge-env-tier: "dev"', "dev"),
+    "dataforge_output_prefix": (
+        '      dataforge-output-prefix: "COSMOSNOSQL"',
+        "COSMOSNOSQL",
+    ),
+    "dataforge_hermetic_fallback": (
+        '      dataforge-hermetic-fallback: "false"',
+        "false",
+    ),
+}
+
+
+def _with_inputs(*lines: str) -> str:
+    """A minimal tests.yaml whose reusable job passes *lines* as its inputs."""
+    body = "".join(f"{line}\n" for line in lines)
+    return f"jobs:\n  tests:\n{_REUSABLE_USES}\n    with:\n{body}"
+
+
+@pytest.mark.parametrize("param", sorted(_FND1143_VALUES))
+def test_fnd1143_value_inputs_read_back(param: str) -> None:
+    """Each new slot's value survives the read the re-render feeds from.
+
+    Written the way an app wrote it — in the quoting the fleet used — rather
+    than by rendering the template back at itself: a fixture rendered from the
+    template would pass on a read-back that only works for the exact bytes it
+    emits, which is the FND-604 ``services-script`` trap.
+    """
+    line, expected = _FND1143_VALUES[param]
+    assert extract_tests_yaml_params(_with_inputs(line))[param] == expected
+
+
+@pytest.mark.parametrize("param", sorted(_FND1143_VALUES))
+def test_fnd1143_value_inputs_round_trip_through_render(param: str) -> None:
+    """Render → read → render must be a fixed point, or the fleet churns a
+    ``.bak`` on every resync."""
+    _, value = _FND1143_VALUES[param]
+    once = render("tests.yaml", app_name="widget", **{param: value})
+    params = extract_tests_yaml_params(once)
+    assert params[param] == value
+    assert render("tests.yaml", **params) == once
+    assert unpreserved_tests_yaml_declarations(once, once) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '      dataforge-datasource: "oracle"',
+        "      dataforge-datasource: oracle",
+        "      dataforge-datasource: 'oracle'",
+    ],
+    ids=["double", "bare", "single"],
+)
+def test_fnd1143_reads_quoted_and_bare(line: str) -> None:
+    """The fleet hand-wrote these before any slot existed, in whichever
+    spelling — and a read-back that knows one spelling deletes the others
+    (FND-604's third gotcha). The re-render normalises to the canonical
+    quoting: one-time C002 drift, against losing the value.
+    """
+    assert (
+        extract_tests_yaml_params(_with_inputs(line))["dataforge_datasource"]
+        == "oracle"
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "      timeout-minutes: soon",
+        "      private-git-deps: yes",
+        '      apt-packages: "libkrb5-dev && reboot"',
+        '      e2e-test-path: "tests/e2e/a b"',
+    ],
+    ids=["non-numeric", "non-boolean", "shell-operator", "space"],
+)
+def test_fnd1143_unreadable_values_refuse_rather_than_rewrite(line: str) -> None:
+    """A value the template cannot re-emit faithfully must read as ABSENT.
+
+    Absent routes the declaration to the round-trip guard, which refuses the
+    resync and names it — the safe direction FND-604 established for
+    ``unit-coverage-fail-under: ninety``. The unsafe direction is re-rendering
+    it as some other value: a shell operator carried into an interpolated
+    ``run:`` step, or a path truncated at the first space, neither of which
+    anybody wrote.
+    """
+    text = _with_inputs(line)
+    params = extract_tests_yaml_params(text)
+    key = line.strip().split(":", 1)[0]
+    assert key.replace("-", "_") not in params
+    assert key in unpreserved_tests_yaml_declarations(
+        text, render("tests.yaml", **params)
+    )
+
+
+def test_fnd1143_block_scalar_inputs_are_spliced_verbatim() -> None:
+    """``test-paths`` and ``pytest-args`` are folded scalars in the wild.
+
+    A value-shaped read of one returns the scalar HEADER (``>-``), so both are
+    spliced whole like ``secrets_block``. The folded form is not hypothetical:
+    it is how the repos that scope their integration run wrote it.
+    """
+    test_paths = (
+        "      test-paths: >-\n"
+        "        tests/integration\n"
+        "        tests/e2e/test_miner_extraction"
+    )
+    pytest_args = (
+        "      pytest-args: >-\n"
+        "        -n auto --dist=loadfile --tb=short -m integration"
+    )
+    text = (
+        f"jobs:\n  tests:\n{_REUSABLE_USES}\n    with:\n{test_paths}\n{pytest_args}\n"
+    )
+    params = extract_tests_yaml_params(text)
+    assert params["test_paths_block"] == test_paths
+    assert params["pytest_args_block"] == pytest_args
+    rendered = render("tests.yaml", **params)
+    assert test_paths in rendered
+    assert pytest_args in rendered
+    assert unpreserved_tests_yaml_declarations(text, rendered) == []
+
+
+def test_fnd1143_single_line_test_paths_is_spliced_too() -> None:
+    """One repo wrote the same input as a plain quoted scalar.
+
+    The splice is whole-declaration either way, so both forms are preservable
+    and neither is normalised into the other.
+    """
+    line = '      test-paths: "tests/unit"'
+    params = extract_tests_yaml_params(_with_inputs(line))
+    assert params["test_paths_block"] == line
+    assert line in render("tests.yaml", **params)
+
+
+def test_fnd1143_a_value_input_written_as_a_block_scalar_refuses() -> None:
+    """The header-as-value corruption, guarded on the inputs that are NOT
+    spliced: reading ``>-`` back as the value would render
+    ``apt-packages: ">-"``, which the job's own package-name allowlist then
+    fails on."""
+    text = _with_inputs("      apt-packages: >-", "        libkrb5-dev gcc")
+    params = extract_tests_yaml_params(text)
+    assert "apt_packages" not in params
+    assert "apt-packages" in unpreserved_tests_yaml_declarations(
+        text, render("tests.yaml", **params)
+    )
+
+
+def test_fnd1143_ignores_an_input_of_another_job() -> None:
+    """Same scoping as ``force-external-runtime``: hoisting a match from an
+    unrelated job into the rendered ``with:`` passes an input nobody declared —
+    here a dataforge fetch, and with it a VPN dial, on a repo that never asked
+    for one."""
+    text = (
+        "jobs:\n"
+        "  docs:\n"
+        "    uses: ./.github/workflows/docs.yaml\n"
+        "    with:\n"
+        '      dataforge-datasource: "oracle"\n'
+        f"  tests:\n{_REUSABLE_USES}\n"
+        "    with:\n"
+        '      app-name: "widget"\n'
+    )
+    assert "dataforge_datasource" not in extract_tests_yaml_params(text)
+
+
+def test_fnd1143_ignores_a_nested_key_of_the_same_name() -> None:
+    """Only DIRECT children of ``with:`` are inputs the job passes. A key
+    nested inside another input's value is part of that value."""
+    text = _with_inputs(
+        '      app-name: "widget"',
+        "      some-mapping:",
+        "        timeout-minutes: 999",
+    )
+    assert "timeout_minutes" not in extract_tests_yaml_params(text)
+
+
+def test_fnd1143_ignores_a_commented_input() -> None:
+    """A commented line is documentation. Reading it back activates an input
+    the repo deliberately left off — and for ``dataforge-datasource`` that
+    means dialling the VPN on every e2e leg."""
+    text = _with_inputs(
+        '      app-name: "widget"',
+        '      # dataforge-datasource: "oracle"',
+    )
+    assert "dataforge_datasource" not in extract_tests_yaml_params(text)
+
+
+# --- install-app-to-tenant: the one input that got a policy drop, not a slot -
+
+
+def test_redundant_install_app_to_tenant_is_dropped_not_refused() -> None:
+    """All nine repos that declared it passed ``true``, which is the reusable's
+    own default — so a slot would bake a no-op line into nine canonical files
+    while a refusal keeps them frozen out of every structural update. Dropping
+    it changes no behaviour and un-freezes them in one resync."""
+    text = _with_inputs('      app-name: "widget"', "      install-app-to-tenant: true")
+    assert extract_mod.redundant_install_app_to_tenant(text) == "true"
+    params = extract_tests_yaml_params(text)
+    rendered = render("tests.yaml", **params)
+    assert "install-app-to-tenant" not in rendered
+    assert unpreserved_tests_yaml_declarations(text, rendered) == []
+
+
+@pytest.mark.parametrize(
+    "value", ["false", "TRUE", "maybe"], ids=["opt-out", "shouting", "garbage"]
+)
+def test_non_default_install_app_to_tenant_still_refuses(value: str) -> None:
+    """The drop is conditioned on the VALUE, not the key.
+
+    An explicit ``false`` is a real opt-out with no slot to carry it, so it must
+    reach the refusal and keep its declaration; a value that is not a boolean at
+    all is not a decision anyone made.
+    """
+    text = _with_inputs(
+        '      app-name: "widget"', f"      install-app-to-tenant: {value}"
+    )
+    assert extract_mod.redundant_install_app_to_tenant(text) == ""
+    rendered = render("tests.yaml", **extract_tests_yaml_params(text))
+    assert "install-app-to-tenant" in unpreserved_tests_yaml_declarations(
+        text, rendered
+    )

@@ -125,6 +125,73 @@ def test_i001_silent_on_correct_base_with_platform() -> None:
     assert "I001" not in _ids(src)
 
 
+# ── I001 — the GHCR mirror is equally approved ───────────────────────────────
+#
+# harbor-release.yaml publishes the base to both registries at one digest, so
+# naming the mirror directly is the same image. Before this, a Dockerfile moved
+# to GHCR failed I001 and remediation put the Harbor pin back -- the migration
+# reverted itself. These pin the acceptance so it cannot regress silently.
+
+_GHCR_BASE = "ghcr.io/atlanhq/app-runtime-base:3"
+
+
+def test_i001_silent_on_ghcr_mirror_base() -> None:
+    src = f"FROM {_GHCR_BASE}\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    assert "I001" not in _ids(src)
+
+
+def test_i001_silent_on_ghcr_mirror_digest_pinned() -> None:
+    digest = "c" * 64
+    src = f"FROM {_GHCR_BASE}@sha256:{digest}\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    assert "I001" not in _ids(src)
+
+
+def test_i001_silent_on_ghcr_mirror_with_platform_and_alias() -> None:
+    src = f"FROM --platform=linux/arm64 {_GHCR_BASE} AS app\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    assert "I001" not in _ids(src)
+
+
+def test_i001_silent_on_arg_base_image_with_ghcr_default() -> None:
+    src = (
+        f"ARG BASE_IMAGE={_GHCR_BASE}\n"
+        "FROM ${BASE_IMAGE}\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I001" not in _ids(src)
+
+
+def test_i001_fires_on_ghcr_mirror_wrong_tag() -> None:
+    # Same tag policy as Harbor: v3 major only.
+    for tag in ("latest", "3.2.1", "2", "main"):
+        src = f"FROM ghcr.io/atlanhq/app-runtime-base:{tag}\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
+        findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I001"]
+        assert len(findings) == 1, tag
+        assert "v3 major" in findings[0].message, tag
+
+
+def test_i001_fires_on_app_runtime_base_from_unapproved_registry() -> None:
+    # Only the two published locations are approved; a lookalike path is not.
+    for image in (
+        "ghcr.io/someone-else/app-runtime-base:3",
+        "docker.io/atlanhq/app-runtime-base:3",
+        "ghcr.io/atlanhq/public/app-runtime-base:3",
+    ):
+        src = f"FROM {image}\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
+        findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I001"]
+        assert len(findings) == 1, image
+        assert "wrong registry or path" in findings[0].message, image
+
+
+def test_i001_message_names_both_approved_images() -> None:
+    # A remediator (human or bot) reads the message to know what to write; it
+    # must learn that either registry is acceptable, not just Harbor.
+    src = "FROM python:3.11\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I001"]
+    assert len(findings) == 1
+    assert "registry.atlan.com/public/app-runtime-base:3" in findings[0].message
+    assert _GHCR_BASE in findings[0].message
+
+
 def test_i001_checks_final_from_in_multistage() -> None:
     # Intermediate builder stage may use any image; final stage must be correct.
     src = (

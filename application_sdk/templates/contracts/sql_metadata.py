@@ -17,7 +17,12 @@ from application_sdk.common.sql_filters import (
     validate_filter_no_sql_injection,
 )
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
-from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
+from application_sdk.contracts.types import (
+    AssetArtifact,
+    ConnectionRef,
+    FileReference,
+    MaxItems,
+)
 from application_sdk.credentials.ingress import (
     declared_agent_spec_type,
     normalize_agent_json,
@@ -312,6 +317,47 @@ class ExtractionOutput(Output, PublishInputMixin):
     """Resolved local base path used during extraction. Subclasses that need
     additional output prefixes (e.g. lineage-specific dirs) can derive them
     from this field instead of re-calling workflow.info()."""
+
+    transformed_files: Annotated[
+        list[FileReference], MaxItems(1000), AssetArtifact()
+    ] = Field(default_factory=list)
+    """The producer's declaration of what the transform step actually wrote.
+
+    One durable ``FileReference`` per entity that transformed at least one
+    record, exactly as the matching ``transform_*`` task returned it —
+    ``transformed/<entity>/entities.json`` for the v3 ``SqlApp`` template.
+    Entities that transformed zero rows contribute nothing.
+
+    Populated by ``SqlApp.run()``. A ``run()`` that does not set it — a
+    connector override, or one of the deprecated v2 extractor templates —
+    leaves it empty, so read an empty list as "this run declared nothing",
+    not as "this run produced nothing". From ``SqlApp.run()`` the two
+    coincide.
+
+    Why this exists alongside :attr:`transformed_data_prefix` (FND-1790):
+    the prefix is publish's contract and is walked, and a walk cannot tell a
+    short tree from a small one — three of four entities present looks
+    identical to a run that only had three.  These refs are the expected set
+    the prefix can be checked against.  ``SqlApp.run()`` checks them itself
+    via ``App.verify_refs`` before returning; they are surfaced here so a
+    connector's own Atlan bridge can hand each ref to ``App.upload(ref=...)``
+    instead of scanning a directory that, on a fanned-out run, was written by
+    pods this one never shared a filesystem with.
+
+    ``transformed_data_prefix`` is unchanged and remains the field publish
+    reads — these refs supplement it, they do not replace it.
+
+    **Declared by the model, not by the app** (FND-1863).  This field is the
+    SDK's own: it is declared here, populated by ``SqlApp.run()``, and written
+    by ``SqlApp._transform_entity`` — no connector authors any part of it.  The
+    :class:`~application_sdk.contracts.types.AssetArtifact` marker says so, and
+    it is what keeps every SQL connector from having to hand-write an
+    ``artifactSchemas`` envelope for an artifact the SDK already validates
+    against the full ``pyatlan_v9`` ``Asset`` backbone on the upload path.  The
+    marker upgrades the boundary check to that same model rather than turning it
+    off; see the marker's own docstring for why a field map is the wrong
+    instrument here.
+    """
 
 
 class ExtractionTaskInput(Input):
