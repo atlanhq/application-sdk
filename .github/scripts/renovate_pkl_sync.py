@@ -209,9 +209,7 @@ def regenerate_multi_root(
             target = f"{GENERATED_DIR}/{root.stem}"
             base_out = None
             if preserve_overrides:
-                base_out, base_work = _baseline_output_for_root(
-                    contract_dir, root.name
-                )
+                base_out, base_work = _baseline_output_for_root(contract_dir, root.name)
             if swap_outputs(tmp, generated_dir=target, baseline_dir=base_out):
                 placed = True
                 print(f"Regenerated {target} from {root.name}.")
