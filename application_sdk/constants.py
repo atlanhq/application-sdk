@@ -559,6 +559,89 @@ def _load_dirty_restart_max_wait_seconds() -> int:
 
 DIRTY_RESTART_IDLE_MAX_SECONDS = _load_dirty_restart_max_wait_seconds()
 
+
+def _one_of(name: str, allowed: tuple[str, ...], default: str) -> str:
+    """Read a switch whose value is one of a fixed set of words.
+
+    An unrecognised word falls back to the default and says so, rather than
+    reaching the code that branches on it: a typo there would otherwise select
+    whichever branch happens to be the ``else``, silently and fleet-wide.
+    """
+    raw = os.getenv(name, default).strip().lower()
+    if raw in allowed:
+        return raw
+    warnings.warn(
+        f"{name}={raw!r} is not one of {allowed}; falling back to {default!r}",
+        stacklevel=2,
+    )
+    return default
+
+
+#: Where a restarted worker learns why the earlier container in its pod ended.
+#:
+#: ``api`` reads this pod's own last termination reason from the apiserver, which
+#: costs one point GET per restart from every restarting pod and lets a restart
+#: that was not an out-of-memory kill resume immediately. ``none`` never calls the
+#: apiserver, so every restart is treated as if it could have been an
+#: out-of-memory one - cheaper on the apiserver, and it makes a crash-looping
+#: worker wait out its budget on every loop.
+#:
+#: ``none`` is the default because it is the behaviour that needs nothing granted:
+#: reading a pod requires RBAC the worker's service account does not have by
+#: default, and a worker that cannot read its own pod under ``api`` waits rather
+#: than resuming, which is the more expensive way to be wrong.
+def _load_oom_restart_check() -> str:
+    return _one_of("ATLAN_OOM_RESTART_CHECK", ("api", "none"), default="none")
+
+
+OOM_RESTART_CHECK = _load_oom_restart_check()
+
+
+#: What a worker does about a restart it has established was an out-of-memory
+#: kill. Only read when ``ATLAN_OOM_RESTART_CHECK`` is ``api``.
+#:
+#: ``park`` idles and leaves the replacing to whatever watches pods from outside.
+#: ``delete`` idles for the settle window and then deletes this pod itself, so a
+#: deployment with nothing watching still gets a replacement - at the price of one
+#: more verb on the service account and of bypassing the eviction API, and so any
+#: PodDisruptionBudget over these pods. ``eject`` gets the same replacement out of
+#: the node instead, by overflowing a small disk-backed volume until the kubelet's
+#: eviction manager acts - no apiserver call and nothing granted, and the same
+#: PodDisruptionBudget is bypassed because the node is not asking anybody.
+def _load_oom_restart_action() -> str:
+    return _one_of(
+        "ATLAN_OOM_RESTART_ACTION", ("park", "delete", "eject"), default="park"
+    )
+
+
+OOM_RESTART_ACTION = _load_oom_restart_action()
+
+
+#: How long a worker idles before deleting its own pod under
+#: ``ATLAN_OOM_RESTART_ACTION=delete``.
+#:
+#: This wait is the whole reason the delete is not immediate. A pod's resources
+#: are fixed for its lifetime, so the replacement's size is whatever the
+#: recommendation says at the moment it is admitted, and the recommendation only
+#: rises seconds after the kill is observed. Deleting sooner replaces the pod with
+#: another one of the same size, which is the failure this is meant to prevent.
+#: The wait is bounded by ``ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS`` like every
+#: other part of the idle, so a value above the budget just spends the budget.
+def _load_oom_restart_settle_seconds() -> int:
+    raw = os.getenv("ATLAN_OOM_RESTART_SETTLE_SECONDS", "90")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        warnings.warn(
+            f"ATLAN_OOM_RESTART_SETTLE_SECONDS={raw!r} is not a valid integer; "
+            "falling back to 90",
+            stacklevel=2,
+        )
+        return 90
+
+
+OOM_RESTART_SETTLE_SECONDS = _load_oom_restart_settle_seconds()
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations.
 #: Enabled by default; set ATLAN_SQL_USE_SERVER_SIDE_CURSOR to any value other

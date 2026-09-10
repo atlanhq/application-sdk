@@ -3,6 +3,7 @@
 import asyncio
 import json
 
+import httpx
 import pytest
 
 from application_sdk.common import restart_marker as rm
@@ -191,3 +192,481 @@ async def test_a_failure_setting_up_the_wait_starts_the_worker_anyway(
 
     monkeypatch.setattr(rm, "wait_for_pod_to_get_replaced", boom)
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+
+
+# ------------------------------------------------- why the container restarted
+
+
+class _Apiserver:
+    """A stand-in for the in-cluster apiserver that records every call.
+
+    Recording is the point as much as answering: the cost of asking why a
+    container restarted is exactly the number of these calls, and a test that
+    only checked the decision would not notice a second read creeping in.
+    """
+
+    def __init__(self):
+        self.calls: list[tuple[str, str]] = []
+        self.tokens: list[str | None] = []
+        self.client_kwargs: list[dict] = []
+        self.pod: dict = {}
+        self.refuse: dict[str, int] = {}
+
+    def respond(self, method: str, url: str, headers: dict) -> httpx.Response:
+        self.calls.append((method, url))
+        self.tokens.append(headers.get("Authorization"))
+        return httpx.Response(
+            self.refuse.get(method, 200),
+            json=self.pod,
+            request=httpx.Request(method, url),
+        )
+
+    def methods(self) -> list[str]:
+        return [method for method, _ in self.calls]
+
+
+class _FakeClient:
+    def __init__(self, server: _Apiserver, **kwargs):
+        self._server = server
+        server.client_kwargs.append(kwargs)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def request(self, method, url, headers=None):
+        return self._server.respond(method, str(url), headers or {})
+
+
+def _pod(*containers: tuple[str, str | None]) -> dict:
+    """A pod status carrying one container status per ``(name, reason)``, where a
+    reason of ``None`` is a container with no earlier termination recorded."""
+    return {
+        "status": {
+            "containerStatuses": [
+                {
+                    "name": name,
+                    "lastState": ({"terminated": {"reason": reason}} if reason else {}),
+                }
+                for name, reason in containers
+            ]
+        }
+    }
+
+
+@pytest.fixture
+def apiserver(monkeypatch, tmp_path):
+    """The mounted service account and an apiserver that answers about this pod."""
+    account = tmp_path / "serviceaccount"
+    account.mkdir()
+    (account / "token").write_text("this-pods-token\n")
+    (account / "namespace").write_text("oomtest\n")
+    (account / "ca.crt").write_text("-----BEGIN CERTIFICATE-----\n")
+    monkeypatch.setattr(rm, "SERVICE_ACCOUNT_DIR", account)
+    monkeypatch.setenv(rm.POD_NAME_ENV, "probe-worker-7f9")
+    monkeypatch.delenv(rm.CONTAINER_NAME_ENV, raising=False)
+    monkeypatch.setattr(rm, "OOM_RESTART_CHECK", rm.CHECK_API)
+    monkeypatch.setattr(rm, "OOM_RESTART_ACTION", "park")
+    server = _Apiserver()
+    monkeypatch.setattr(rm.httpx, "AsyncClient", lambda **kw: _FakeClient(server, **kw))
+    return server
+
+
+async def _still_idle(coro, seconds: float = 0.15):
+    """Run the restart handling, and assert it has not resumed polling.
+
+    Returns the task so a test can go on to release, cancel or await it.
+    """
+    task = asyncio.ensure_future(coro)
+    await asyncio.sleep(seconds)
+    assert not task.done(), "this worker resumed polling instead of idling"
+    return task
+
+
+async def _cancel(task) -> None:
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+def test_every_start_says_which_handling_it_is_running(marker_dir, logs):
+    """Two deployments of one image differ only in this configuration, so a pod's
+    own log is the only place to read back which one it got."""
+    asyncio.run(rm.wait_if_pod_restarted(asyncio.Event()))
+    assert logs.says(
+        "info", "restart handling:", "check=", "action="
+    ), f"a pod must say which restart handling it is running: {logs.rows}"
+
+
+async def test_without_the_api_check_a_restart_idles_without_asking_why(
+    marker_dir, monkeypatch, apiserver, prompt_polling
+):
+    """The cheap topology: no apiserver call at all, so no RBAC and no per-pod
+    cost - and a restart of any cause is handled as if memory caused it."""
+    monkeypatch.setattr(rm, "OOM_RESTART_CHECK", "none")
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()
+    task = await _still_idle(rm.wait_if_pod_restarted(asyncio.Event()))
+    assert (
+        apiserver.calls == []
+    ), f"the none check must not call the apiserver: {apiserver.calls}"
+    await _cancel(task)
+
+
+async def test_an_out_of_memory_restart_idles_under_park(
+    marker_dir, monkeypatch, apiserver, prompt_polling
+):
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    rm.check_and_update_the_marker()
+    task = await _still_idle(rm.wait_if_pod_restarted(asyncio.Event()))
+    assert apiserver.methods() == [
+        "GET"
+    ], f"one restart must cost one read, and park must not delete: {apiserver.calls}"
+    await _cancel(task)
+
+
+async def test_a_restart_that_was_not_out_of_memory_polls_immediately(
+    marker_dir, monkeypatch, apiserver, prompt_polling, logs
+):
+    """R3: a container that merely crashed comes back on a limit that was never
+    the problem, so making it wait costs availability for nothing."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", "Error"))
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+    assert not logs.says(
+        "warning", "not polling for up to"
+    ), f"a non-memory restart must not be made to wait: {logs.rows}"
+    assert apiserver.methods() == ["GET"]
+
+
+async def test_a_refused_read_idles_rather_than_resuming(
+    marker_dir, monkeypatch, apiserver, prompt_polling, logs
+):
+    """Fail closed. "We could not find out, so we assume it is fine" puts the work
+    straight back onto a pod that cannot hold it."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.refuse["GET"] = 403
+    rm.check_and_update_the_marker()
+    task = await _still_idle(rm.wait_if_pod_restarted(asyncio.Event()))
+    assert logs.says(
+        "warning", "could not read why the earlier container"
+    ), f"a refused read must say so, not pass for a clean answer: {logs.rows}"
+    await _cancel(task)
+
+
+async def test_a_pod_that_cannot_name_itself_idles(
+    marker_dir, monkeypatch, apiserver, prompt_polling
+):
+    """Without the downward API the read cannot even be addressed. That is a
+    deployment fault, and guessing a pod name would read someone else's."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    monkeypatch.delenv(rm.POD_NAME_ENV, raising=False)
+    rm.check_and_update_the_marker()
+    task = await _still_idle(rm.wait_if_pod_restarted(asyncio.Event()))
+    assert apiserver.calls == []
+    await _cancel(task)
+
+
+async def test_a_status_with_no_earlier_termination_idles(
+    marker_dir, monkeypatch, apiserver, prompt_polling
+):
+    """The marker says a container already ran here, so a status that carries no
+    termination is an unanswered question, not a clean bill of health."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", None))
+    rm.check_and_update_the_marker()
+    task = await _still_idle(rm.wait_if_pod_restarted(asyncio.Event()))
+    await _cancel(task)
+
+
+async def test_a_sidecars_kill_is_not_read_as_this_containers(
+    marker_dir, monkeypatch, apiserver, prompt_polling, logs
+):
+    """A sidecar that ran out of memory says nothing about the worker's limit, and
+    replacing the pod over it would replace a pod that was sized fine."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    monkeypatch.setenv(rm.CONTAINER_NAME_ENV, "worker")
+    apiserver.pod = _pod(("daemon", rm.OOM_REASON), ("worker", "Error"))
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+    assert not logs.says(
+        "warning", "not polling for up to"
+    ), f"the sidecar's reason was read as this container's: {logs.rows}"
+
+
+async def test_a_status_named_for_another_container_idles(
+    marker_dir, monkeypatch, apiserver, prompt_polling, logs
+):
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    monkeypatch.setenv(rm.CONTAINER_NAME_ENV, "worker")
+    apiserver.pod = _pod(("renamed-worker", "Error"))
+    rm.check_and_update_the_marker()
+    task = await _still_idle(rm.wait_if_pod_restarted(asyncio.Event()))
+    assert logs.says("warning", "has no container named worker")
+    await _cancel(task)
+
+
+async def test_a_multi_container_pod_without_the_container_name_idles(
+    marker_dir, monkeypatch, apiserver, prompt_polling, logs
+):
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", "Error"), ("daemon", "Error"))
+    rm.check_and_update_the_marker()
+    task = await _still_idle(rm.wait_if_pod_restarted(asyncio.Event()))
+    assert logs.says(
+        "warning", rm.CONTAINER_NAME_ENV, "2 containers"
+    ), f"an unidentifiable container must say so: {logs.rows}"
+    await _cancel(task)
+
+
+async def test_a_single_container_pod_needs_no_container_name(
+    marker_dir, monkeypatch, apiserver, prompt_polling, logs
+):
+    """The one case where which container this is has no ambiguity to resolve."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("anything", "Error"))
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+    assert not logs.says("warning", "not polling for up to")
+
+
+async def test_the_read_is_this_pod_authenticated_with_its_mounted_token(apiserver):
+    """The URL is built from this pod's own name, which is what keeps the grant a
+    Role over one namespace rather than a cluster-wide read."""
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    assert await rm.last_termination_reason() == rm.OOM_REASON
+    method, url = apiserver.calls[0]
+    assert method == "GET"
+    assert url == (
+        "https://kubernetes.default.svc/api/v1/namespaces/oomtest/pods/probe-worker-7f9"
+    )
+    assert apiserver.tokens == [
+        "Bearer this-pods-token"
+    ], "the call must carry the pod's own mounted token"
+    assert apiserver.client_kwargs[0]["verify"].endswith(
+        "/ca.crt"
+    ), "the apiserver must be verified against the mounted CA"
+
+
+# ----------------------------------------------------------- deleting this pod
+
+
+@pytest.fixture
+def delete_action(monkeypatch):
+    monkeypatch.setattr(rm, "OOM_RESTART_ACTION", rm.ACTION_DELETE)
+    monkeypatch.setattr(rm, "OOM_RESTART_SETTLE_SECONDS", 0.3)
+
+
+async def test_the_delete_waits_out_the_settle_window(
+    marker_dir, monkeypatch, apiserver, prompt_polling, delete_action
+):
+    """A pod's size is fixed when it is admitted and the recommendation rises only
+    after the kill, so deleting immediately buys another pod of the size that
+    just died."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    rm.check_and_update_the_marker()
+    task = asyncio.ensure_future(rm.wait_if_pod_restarted(asyncio.Event()))
+    await asyncio.sleep(0.1)
+    assert apiserver.methods() == [
+        "GET"
+    ], f"deleted before the settle window elapsed: {apiserver.calls}"
+    await asyncio.sleep(0.4)
+    assert apiserver.methods() == [
+        "GET",
+        "DELETE",
+    ], f"the settle window elapsed and nothing was deleted: {apiserver.calls}"
+    assert (
+        apiserver.calls[1][1] == apiserver.calls[0][1]
+    ), "the delete must address the same pod the read did"
+    assert (
+        not task.done()
+    ), "polling resumed instead of waiting for the shutdown the delete brings"
+    await _cancel(task)
+
+
+async def test_nothing_is_deleted_when_the_pod_is_already_being_replaced(
+    marker_dir, monkeypatch, apiserver, prompt_polling, delete_action
+):
+    """A shutdown during the settle window means something else owns this pod, and
+    deleting on top of it would take out the replacement instead."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    rm.check_and_update_the_marker()
+    shutdown = asyncio.Event()
+    task = asyncio.ensure_future(rm.wait_if_pod_restarted(shutdown))
+    await asyncio.sleep(0.05)
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert apiserver.methods() == [
+        "GET"
+    ], f"deleted a pod that was already being replaced: {apiserver.calls}"
+
+
+async def test_a_refused_delete_idles_out_the_budget_instead_of_polling(
+    marker_dir, monkeypatch, apiserver, prompt_polling, delete_action, logs
+):
+    """A service account without the verb is the expected refusal. Resuming on it
+    would be a worker polling on the limit that already killed it, having
+    reported that it handled the kill."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.refuse["DELETE"] = 403
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    rm.check_and_update_the_marker()
+    task = await _still_idle(rm.wait_if_pod_restarted(asyncio.Event()), seconds=0.5)
+    assert apiserver.methods() == ["GET", "DELETE"]
+    assert logs.says(
+        "warning", "could not get this pod replaced"
+    ), f"a refused delete must say so rather than read as done: {logs.rows}"
+    await _cancel(task)
+
+
+async def test_the_settle_window_cannot_outlast_the_budget(
+    marker_dir, monkeypatch, apiserver, prompt_polling, delete_action
+):
+    """Both phases come out of the one budget, so deleting can never idle a worker
+    for longer than parking would."""
+    monkeypatch.setattr(rm, "OOM_RESTART_SETTLE_SECONDS", 300)
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 1)
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    rm.check_and_update_the_marker()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=5)
+    assert loop.time() - started < 3, "the settle window outlasted the budget"
+    assert apiserver.methods() == ["GET", "DELETE"]
+
+
+async def test_a_restart_that_was_not_out_of_memory_is_never_deleted(
+    marker_dir, monkeypatch, apiserver, prompt_polling, delete_action
+):
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", "Error"))
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+    assert apiserver.methods() == [
+        "GET"
+    ], f"deleted a pod over a restart memory did not cause: {apiserver.calls}"
+
+
+# ------------------------------------------------------------ ejecting this pod
+
+
+@pytest.fixture
+def eject_action(monkeypatch, tmp_path):
+    """The disk-backed volume the node watches, and the action that overflows it."""
+    volume = tmp_path / "eject"
+    volume.mkdir()
+    monkeypatch.setenv(rm.EJECT_DIR_ENV, str(volume))
+    monkeypatch.setattr(rm, "OOM_RESTART_ACTION", rm.ACTION_EJECT)
+    monkeypatch.setattr(rm, "OOM_RESTART_SETTLE_SECONDS", 0.3)
+    return volume
+
+
+async def test_the_eject_waits_out_the_settle_window(
+    marker_dir, monkeypatch, apiserver, prompt_polling, eject_action
+):
+    """Same reason the delete waits: a pod admitted before the recommendation
+    rises is another pod of the size that just died."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    rm.check_and_update_the_marker()
+    ballast = eject_action / rm.EJECT_NAME
+    task = asyncio.ensure_future(rm.wait_if_pod_restarted(asyncio.Event()))
+    await asyncio.sleep(0.1)
+    assert not ballast.exists(), "overflowed the volume before the settle window"
+    await asyncio.sleep(0.4)
+    assert (
+        ballast.stat().st_size == rm.EJECT_BYTES
+    ), "the settle window elapsed and the volume was not overflowed"
+    assert (
+        not task.done()
+    ), "polling resumed instead of waiting for the eviction the overflow brings"
+    await _cancel(task)
+
+
+async def test_the_eject_asks_nothing_of_the_apiserver(
+    marker_dir, monkeypatch, apiserver, prompt_polling, eject_action
+):
+    """The whole point of this arm: the replacement costs no write verb anywhere.
+    Only the read that established the cause is spent."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    rm.check_and_update_the_marker()
+    task = asyncio.ensure_future(rm.wait_if_pod_restarted(asyncio.Event()))
+    await asyncio.sleep(0.5)
+    assert apiserver.methods() == [
+        "GET"
+    ], f"the eject must not call the apiserver to replace the pod: {apiserver.calls}"
+    await _cancel(task)
+
+
+async def test_nothing_is_ejected_when_the_pod_is_already_being_replaced(
+    marker_dir, monkeypatch, apiserver, prompt_polling, eject_action
+):
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    rm.check_and_update_the_marker()
+    shutdown = asyncio.Event()
+    task = asyncio.ensure_future(rm.wait_if_pod_restarted(shutdown))
+    await asyncio.sleep(0.05)
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert not (
+        eject_action / rm.EJECT_NAME
+    ).exists(), "overflowed the volume of a pod that was already being replaced"
+
+
+async def test_a_missing_eject_volume_idles_instead_of_polling(
+    marker_dir, monkeypatch, apiserver, prompt_polling, eject_action, logs
+):
+    """Without the volume there is nothing of this pod's own to overflow. Writing
+    to the container filesystem instead would charge the node's disk and get
+    somebody else's pod evicted, so this arm is inert without its volume - and
+    says so, because otherwise it is indistinguishable from one that worked."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    monkeypatch.setenv(rm.EJECT_DIR_ENV, str(eject_action / "not-mounted"))
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    rm.check_and_update_the_marker()
+    task = await _still_idle(rm.wait_if_pod_restarted(asyncio.Event()), seconds=0.5)
+    assert logs.says(
+        "warning", "not-mounted", "sizeLimit"
+    ), f"an absent eject volume must be reported: {logs.rows}"
+    assert logs.says("warning", "could not get this pod replaced")
+    await _cancel(task)
+
+
+async def test_an_unwritable_eject_volume_idles_instead_of_polling(
+    marker_dir, monkeypatch, apiserver, prompt_polling, eject_action, logs
+):
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    eject_action.chmod(0o500)
+    apiserver.pod = _pod(("worker", rm.OOM_REASON))
+    rm.check_and_update_the_marker()
+    try:
+        task = await _still_idle(rm.wait_if_pod_restarted(asyncio.Event()), seconds=0.5)
+        assert logs.says(
+            "warning", "could not write"
+        ), f"a failed overflow must say so: {logs.rows}"
+        assert logs.says(
+            "warning", "could not get this pod replaced"
+        ), f"a write that did not happen must not read as a pod on its way out: {logs.rows}"
+        await _cancel(task)
+    finally:
+        eject_action.chmod(0o700)
+
+
+async def test_a_restart_that_was_not_out_of_memory_is_never_ejected(
+    marker_dir, monkeypatch, apiserver, prompt_polling, eject_action
+):
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    apiserver.pod = _pod(("worker", "Error"))
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+    assert not (
+        eject_action / rm.EJECT_NAME
+    ).exists(), "ejected a pod over a restart memory did not cause"
