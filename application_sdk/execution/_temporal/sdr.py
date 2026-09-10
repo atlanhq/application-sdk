@@ -694,6 +694,11 @@ def build_sdr_activities(
     async def fetch_metadata(input: MetadataInput) -> MetadataOutput:
         if input.agent_json is not None and input.agent_json.is_populated():
             input.credentials = await _resolve_agent_credentials(input.agent_json)
+        # Mirror the widget routing key onto object_filter when that's empty, matching
+        # the HTTP /metadata route, so per-entrypoint hooks reading the legacy field
+        # keep working over SDR (e.g. the warehouse-vs-schema-tree metadata widget).
+        if not input.object_filter and input.metadata_template_key:
+            input.object_filter = input.metadata_template_key
         with bind_invocation_context(binding.app_name, input.credentials):
             return await binding.handler.fetch_metadata(input)
 
