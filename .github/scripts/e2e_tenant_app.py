@@ -2402,6 +2402,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         app_configs=args.app_configs,
         release_model=args.release_model,
         created_by=args.created_by,
+        commit_sha=args.commit_sha,
     )
     version_id, release_id = _publish(
         publish_client, request, retry_seconds=args.publish_retry_seconds
@@ -2734,6 +2735,16 @@ def main(argv: list[str] | None = None) -> int:
     p_install.add_argument("--app-configs", default="")
     p_install.add_argument("--release-model", default="")
     p_install.add_argument("--created-by", default="")
+    p_install.add_argument(
+        "--commit-sha",
+        default="",
+        help=(
+            "Full git SHA the image was built from. Forwarded to GM so a "
+            "worker's baked commit_sha resolves to this version. Omit when "
+            "unknown — the field is absent rather than blank, matching the "
+            "release workflow."
+        ),
+    )
     p_install.add_argument(
         "--scan-wait-seconds",
         type=int,
