@@ -583,8 +583,11 @@ ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true
 #: handshake (seen in production with a Go 1.27-built daprd behind a Palo Alto
 #: firewall) otherwise leaves the agent permanently unregistered while every
 #: other client in the same pod reaches Atlan fine. The fallback reuses the
-#: same payload, the same bearer token and the same URL the binding would have
-#: used, and logs loudly that it is in effect. Set to ``false`` to disable.
+#: same payload, the same bearer token and the URL of the ``bindings.http``
+#: component daprd loaded (no guessing), fires only for errors that prove the
+#: event got no response (so nothing is double-delivered), backs off for 60 s
+#: after a failed attempt, and logs loudly that it is in effect. Set to
+#: ``false`` to disable.
 EVENT_INGRESS_DIRECT_FALLBACK = (
     os.getenv("ATLAN_EVENT_INGRESS_DIRECT_FALLBACK", "true").lower() == "true"
 )

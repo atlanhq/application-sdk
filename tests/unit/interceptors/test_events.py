@@ -672,17 +672,56 @@ class TestEventWorkflowInboundInterceptor:
 # Direct-HTTPS fallback when the Dapr eventstore binding fails
 # ---------------------------------------------------------------------------
 
-
 from application_sdk.infrastructure.bindings import (  # noqa: E402 — test-section import
     BindingError,
 )
 
+_NON_DELIVERY = 'Failed to invoke binding: 500 (dapr errorCode=ERR_INVOKE_OUTPUT_BINDING: Post "https://t/api/eventingress/": EOF)'
+_AMBIGUOUS = "Failed to invoke binding: 500 (dapr errorCode=ERR_INVOKE_OUTPUT_BINDING: received status code 502)"
+
+
+def _component(
+    tmp_path,
+    *,
+    name="eventstore",
+    type_="bindings.http",
+    url="https://tenant.example/api/eventingress/",
+):
+    meta = (
+        f"  - name: url\n    value: {url}\n"
+        if url
+        else "  - name: rootPath\n    value: /tmp/x\n"
+    )
+    (tmp_path / f"{name}.yaml").write_text(
+        f"apiVersion: dapr.io/v1alpha1\nkind: Component\nmetadata:\n  name: {name}\n"
+        f"spec:\n  type: {type_}\n  version: v1\n  metadata:\n{meta}"
+    )
+    return tmp_path
+
+
+def _http_client(post_side_effect=None):
+    client = mock.AsyncMock()
+    client.__aenter__.return_value = client
+    response = mock.MagicMock()
+    response.raise_for_status = mock.MagicMock()
+    client.post = mock.AsyncMock(return_value=response, side_effect=post_side_effect)
+    return client
+
 
 class TestDirectHttpFallback:
-    """When daprd cannot deliver an event, the SDK posts it to Event Ingress
-    itself, reusing the payload, headers and URL the binding would have used,
-    and says so loudly. Motivated by a Go-1.27 daprd whose TLS handshake a
-    customer firewall closed while every other client in the pod passed."""
+    """When daprd cannot deliver an event and the error proves nothing reached
+    Event Ingress, the SDK posts it there itself — same payload, headers and
+    URL the binding used — and says so loudly. Motivated by a Go-1.27 daprd
+    whose TLS handshake a customer firewall closed while every other client in
+    the pod passed."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_state(self, monkeypatch, tmp_path):
+        events_module._reset_direct_publish_state()
+        monkeypatch.setenv("DAPR_COMPONENTS_PATH", str(tmp_path))
+        monkeypatch.chdir(tmp_path)  # so ./components does not exist either
+        yield
+        events_module._reset_direct_publish_state()
 
     def _event(self):
         return Event(
@@ -698,68 +737,8 @@ class TestDirectHttpFallback:
         infra.event_binding = binding
         return infra
 
-    def _components_dir(self, tmp_path, url):
-        (tmp_path / "eventstore.yaml").write_text(
-            "apiVersion: dapr.io/v1alpha1\nkind: Component\nmetadata:\n  name: eventstore\n"
-            "spec:\n  type: bindings.http\n  version: v1\n  metadata:\n"
-            f"  - name: url\n    value: {url}\n"
-        )
-        return tmp_path
-
-    @pytest.mark.asyncio
-    async def test_binding_success_never_touches_http(self, monkeypatch, tmp_path):
-        infra = self._infra(None)
-        monkeypatch.setenv(
-            "DAPR_COMPONENTS_PATH",
-            str(self._components_dir(tmp_path, "https://t/api/eventingress/")),
-        )
-        with (
-            mock.patch(
-                "application_sdk.infrastructure.context.get_infrastructure",
-                return_value=infra,
-            ),
-            mock.patch.object(
-                events_module,
-                "_get_event_token_service",
-                mock.AsyncMock(return_value=None),
-            ),
-            mock.patch("httpx.AsyncClient") as http_client,
-        ):
-            await _publish_event_via_binding(self._event())
-        infra.event_binding.invoke.assert_awaited_once()
-        http_client.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_binding_failure_posts_directly_with_same_payload_and_headers(
-        self, monkeypatch, tmp_path
-    ):
-        infra = self._infra(
-            BindingError(
-                "Failed to invoke binding: 500 (dapr errorCode=ERR_INVOKE_OUTPUT_BINDING: EOF)",
-                binding_name="eventstore",
-                operation="create",
-            )
-        )
-        monkeypatch.setenv(
-            "DAPR_COMPONENTS_PATH",
-            str(
-                self._components_dir(
-                    tmp_path, "https://tenant.example/api/eventingress/"
-                )
-            ),
-        )
-        token_service = mock.MagicMock()
-        token_service.get_headers = mock.AsyncMock(
-            return_value={"Authorization": "Bearer t0k"}
-        )
-
-        client = mock.AsyncMock()
-        client.__aenter__.return_value = client
-        response = mock.MagicMock()
-        response.raise_for_status = mock.MagicMock()
-        client.post = mock.AsyncMock(return_value=response)
-
-        with (
+    def _patches(self, infra, client, token_service=None, enabled=True):
+        return (
             mock.patch(
                 "application_sdk.infrastructure.context.get_infrastructure",
                 return_value=infra,
@@ -769,117 +748,253 @@ class TestDirectHttpFallback:
                 "_get_event_token_service",
                 mock.AsyncMock(return_value=token_service),
             ),
-            mock.patch("application_sdk.constants.EVENT_INGRESS_DIRECT_FALLBACK", True),
+            mock.patch(
+                "application_sdk.constants.EVENT_INGRESS_DIRECT_FALLBACK", enabled
+            ),
+            mock.patch("httpx.AsyncClient", return_value=client),
+            mock.patch.object(events_module, "logger"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_binding_success_never_touches_http(self, tmp_path):
+        _component(tmp_path)
+        infra, client = self._infra(None), _http_client()
+        p = self._patches(infra, client)
+        with (
+            p[0],
+            p[1],
+            p[2],
             mock.patch("httpx.AsyncClient", return_value=client) as http_client,
-            mock.patch.object(events_module, "logger") as log,
+            p[4] as log,
+        ):
+            await _publish_event_via_binding(self._event())
+        http_client.assert_not_called()
+        log.info.assert_called_once()
+        log.warning.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_delivery_error_posts_same_payload_headers_url_and_timeout(
+        self, tmp_path
+    ):
+        _component(tmp_path)
+        infra = self._infra(
+            BindingError(_NON_DELIVERY, binding_name="eventstore", operation="create")
+        )
+        client = _http_client()
+        token_service = mock.MagicMock()
+        token_service.get_headers = mock.AsyncMock(
+            return_value={"Authorization": "Bearer t0k"}
+        )
+        p = self._patches(infra, client, token_service)
+        with (
+            p[0],
+            p[1],
+            p[2],
+            mock.patch("httpx.AsyncClient", return_value=client) as http_client,
+            p[4] as log,
         ):
             await _publish_event_via_binding(self._event())
 
         http_client.assert_called_once()
-        client.post.assert_awaited_once()
+        assert (
+            http_client.call_args.kwargs["timeout"]
+            == events_module._DIRECT_PUBLISH_TIMEOUT_SECONDS
+        )
         (url,), kwargs = client.post.call_args
         assert url == "https://tenant.example/api/eventingress/"
-        # same body and headers the binding was given
         assert kwargs["content"] == infra.event_binding.invoke.call_args.kwargs["data"]
         assert (
             kwargs["headers"] == infra.event_binding.invoke.call_args.kwargs["metadata"]
         )
         assert kwargs["headers"]["Authorization"] == "Bearer t0k"
-        assert kwargs["headers"]["content-type"] == "application/json"
-        # loud, greppable logs on both sides of the fallback
-        warnings = " | ".join(str(c.args[0]) for c in log.warning.call_args_list)
-        assert "FALLBACK ACTIVE" in warnings
-        assert "Published event via direct HTTPS fallback" in warnings
+        warnings = [str(c.args[0]) for c in log.warning.call_args_list]
+        assert any(w.startswith("FALLBACK ACTIVE") for w in warnings)
+        assert any(
+            w.startswith("Published event via direct HTTPS fallback") for w in warnings
+        )
+        # the success line must not carry a traceback
+        success = next(
+            c
+            for c in log.warning.call_args_list
+            if str(c.args[0]).startswith("Published event via direct")
+        )
+        assert "exc_info" not in success.kwargs
         log.info.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_fallback_disabled_reraises_binding_error(
-        self, monkeypatch, tmp_path
-    ):
+    async def test_worker_start_budget_is_passed_through(self, tmp_path):
+        _component(tmp_path)
         infra = self._infra(
-            BindingError("boom", binding_name="eventstore", operation="create")
+            BindingError(_NON_DELIVERY, binding_name="eventstore", operation="create")
         )
-        monkeypatch.setenv(
-            "DAPR_COMPONENTS_PATH",
-            str(self._components_dir(tmp_path, "https://t/api/eventingress/")),
-        )
+        client = _http_client()
+        p = self._patches(infra, client)
         with (
-            mock.patch(
-                "application_sdk.infrastructure.context.get_infrastructure",
-                return_value=infra,
-            ),
-            mock.patch.object(
-                events_module,
-                "_get_event_token_service",
-                mock.AsyncMock(return_value=None),
-            ),
-            mock.patch(
-                "application_sdk.constants.EVENT_INGRESS_DIRECT_FALLBACK", False
-            ),
-            mock.patch("httpx.AsyncClient") as http_client,
+            p[0],
+            p[1],
+            p[2],
+            mock.patch("httpx.AsyncClient", return_value=client) as http_client,
+            p[4],
+        ):
+            await _publish_event_via_binding(
+                self._event(),
+                direct_publish_timeout=events_module.WORKER_START_DIRECT_PUBLISH_TIMEOUT_SECONDS,
+            )
+        assert http_client.call_args.kwargs["timeout"] == 20.0
+        # the default must fit inside the 30 s publish_event activity budget
+        assert events_module._DIRECT_PUBLISH_TIMEOUT_SECONDS < 30
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_error_is_not_resent(self, tmp_path):
+        """An upstream HTTP status means the far side answered; re-sending could
+        double-deliver, so the fallback must not fire."""
+        _component(tmp_path)
+        infra = self._infra(
+            BindingError(_AMBIGUOUS, binding_name="eventstore", operation="create")
+        )
+        client = _http_client()
+        p = self._patches(infra, client)
+        with (
+            p[0],
+            p[1],
+            p[2],
+            mock.patch("httpx.AsyncClient", return_value=client) as http_client,
+            p[4] as log,
+        ):
+            with pytest.raises(BindingError):
+                await _publish_event_via_binding(self._event())
+        http_client.assert_not_called()
+        assert any(
+            str(c.args[0]).startswith("FALLBACK SKIPPED")
+            for c in log.warning.call_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_fallback_disabled_reraises(self, tmp_path):
+        _component(tmp_path)
+        infra = self._infra(
+            BindingError(_NON_DELIVERY, binding_name="eventstore", operation="create")
+        )
+        client = _http_client()
+        p = self._patches(infra, client, enabled=False)
+        with (
+            p[0],
+            p[1],
+            p[2],
+            mock.patch("httpx.AsyncClient", return_value=client) as http_client,
+            p[4],
         ):
             with pytest.raises(BindingError):
                 await _publish_event_via_binding(self._event())
         http_client.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_fallback_failure_reraises_original_binding_error(
-        self, monkeypatch, tmp_path
-    ):
-        infra = self._infra(
-            BindingError("boom", binding_name="eventstore", operation="create")
+    async def test_fallback_failure_keeps_dapr_cause_and_suspends(self, tmp_path):
+        _component(tmp_path)
+        dapr_cause = RuntimeError("EOF from daprd")
+        err = BindingError(
+            _NON_DELIVERY,
+            binding_name="eventstore",
+            operation="create",
+            cause=dapr_cause,
         )
-        monkeypatch.setenv(
-            "DAPR_COMPONENTS_PATH",
-            str(self._components_dir(tmp_path, "https://t/api/eventingress/")),
-        )
-        client = mock.AsyncMock()
-        client.__aenter__.return_value = client
-        client.post = mock.AsyncMock(side_effect=ConnectionError("tunnel closed"))
+        err.__cause__ = dapr_cause
+        infra = self._infra(err)
+        client = _http_client(post_side_effect=ConnectionError("tunnel closed"))
+        p = self._patches(infra, client)
         with (
-            mock.patch(
-                "application_sdk.infrastructure.context.get_infrastructure",
-                return_value=infra,
-            ),
-            mock.patch.object(
-                events_module,
-                "_get_event_token_service",
-                mock.AsyncMock(return_value=None),
-            ),
-            mock.patch("application_sdk.constants.EVENT_INGRESS_DIRECT_FALLBACK", True),
-            mock.patch("httpx.AsyncClient", return_value=client),
-            mock.patch.object(events_module, "logger") as log,
+            p[0],
+            p[1],
+            p[2],
+            mock.patch("httpx.AsyncClient", return_value=client) as http_client,
+            p[4] as log,
         ):
             with pytest.raises(BindingError) as exc:
                 await _publish_event_via_binding(self._event())
-        assert isinstance(exc.value.__cause__, ConnectionError)
-        errors = " | ".join(str(c.args[0]) for c in log.exception.call_args_list)
-        assert "FALLBACK FAILED" in errors
-
-    def test_url_from_component_beats_base_url(self, monkeypatch, tmp_path):
-        monkeypatch.setenv(
-            "DAPR_COMPONENTS_PATH",
-            str(
-                self._components_dir(
-                    tmp_path, "https://from-component/api/eventingress/"
-                )
-            ),
+            # second event during the backoff: no HTTP attempt, logged as suspended
+            with pytest.raises(BindingError):
+                await _publish_event_via_binding(self._event())
+        assert exc.value.__cause__ is dapr_cause  # original Dapr cause preserved
+        assert any("tunnel closed" in n for n in getattr(exc.value, "__notes__", []))
+        assert http_client.call_count == 1  # breaker stopped the second attempt
+        log.exception.assert_called_once()
+        assert str(log.exception.call_args.args[0]).startswith("FALLBACK FAILED")
+        assert any(
+            str(c.args[0]).startswith("FALLBACK SUSPENDED")
+            for c in log.info.call_args_list
         )
-        with mock.patch("application_sdk.constants.ATLAN_BASE_URL", "https://from-env"):
+
+    @pytest.mark.asyncio
+    async def test_non_http_component_means_no_fallback(self, tmp_path):
+        """The SDK's local-dev eventstore is bindings.localstorage with no url:
+        never guess a URL for it."""
+        _component(tmp_path, type_="bindings.localstorage", url=None)
+        infra = self._infra(
+            BindingError(_NON_DELIVERY, binding_name="eventstore", operation="create")
+        )
+        client = _http_client()
+        p = self._patches(infra, client)
+        with (
+            p[0],
+            p[1],
+            p[2],
+            mock.patch("httpx.AsyncClient", return_value=client) as http_client,
+            p[4] as log,
+            mock.patch(
+                "application_sdk.constants.ATLAN_BASE_URL", "https://should-not-be-used"
+            ),
+        ):
+            with pytest.raises(BindingError):
+                await _publish_event_via_binding(self._event())
+        http_client.assert_not_called()
+        assert str(log.error.call_args.args[0]).startswith("FALLBACK UNAVAILABLE")
+
+    def test_url_resolution_honours_event_store_name_and_ignores_bad_siblings(
+        self, tmp_path
+    ):
+        (tmp_path / "aaa-broken.yaml").write_text("this: [is: not: yaml")  # sorts first
+        _component(tmp_path, name="events", url="https://named/api/eventingress/")
+        with mock.patch("application_sdk.constants.EVENT_STORE_NAME", "events"):
             assert (
                 events_module._resolve_event_ingress_url()
-                == "https://from-component/api/eventingress/"
+                == "https://named/api/eventingress/"
             )
 
-    def test_url_falls_back_to_base_url_then_none(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("DAPR_COMPONENTS_PATH", str(tmp_path / "missing"))
-        monkeypatch.chdir(tmp_path)  # no ./components either
+    def test_url_resolution_has_no_base_url_guess(self, tmp_path):
         with mock.patch(
-            "application_sdk.constants.ATLAN_BASE_URL", "https://tenant.example/"
+            "application_sdk.constants.ATLAN_BASE_URL", "https://tenant.example"
         ):
-            assert (
-                events_module._resolve_event_ingress_url()
-                == "https://tenant.example/api/eventingress/"
-            )
-        with mock.patch("application_sdk.constants.ATLAN_BASE_URL", None):
             assert events_module._resolve_event_ingress_url() is None
+
+    def test_url_is_resolved_once_then_cached(self, tmp_path):
+        _component(tmp_path)
+        assert (
+            events_module._resolve_event_ingress_url()
+            == "https://tenant.example/api/eventingress/"
+        )
+        (tmp_path / "eventstore.yaml").unlink()
+        assert (
+            events_module._resolve_event_ingress_url()
+            == "https://tenant.example/api/eventingress/"
+        )
+
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            (_NON_DELIVERY, True),
+            (
+                'Post "https://t/": dial tcp 1.2.3.4:443: connect: connection refused',
+                True,
+            ),
+            ("tls: handshake failure", True),
+            ("couldn't find output binding eventstore", True),
+            (_AMBIGUOUS, False),
+            ("received status code 401", False),
+            (
+                "context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+                False,
+            ),
+        ],
+    )
+    def test_non_delivery_classifier(self, text, expected):
+        assert events_module._proves_non_delivery(BindingError(text)) is expected
