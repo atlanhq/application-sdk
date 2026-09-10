@@ -58,7 +58,7 @@ repos:
     # Parity is enforced by .github/scripts/tests/test_renovate_validator_pin.py.
     # language_version is `lts` upstream, so pre-commit provisions its own node
     # rather than depending on whatever the runner image ships.
-    rev: 43.265.3
+    rev: 44.3.1
     hooks:
       - id: renovate-config-validator
         # Why this hook exists: nothing validated these files until FND-359, and
