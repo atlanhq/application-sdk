@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.34.1 (September 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.0...v3.34.1
+
+### Bug Fixes
+
+- mirror metadata_template_key onto object_filter in sdr:fetch_metadata (#3748) (by @Lalit3716-atlan in [e55bf3b](https://github.com/atlanhq/application-sdk/commit/e55bf3b))
+- publish directly to Event Ingress when the Dapr eventstore binding fails (#3745) (by @Lalit3716-atlan in [8abf16c](https://github.com/atlanhq/application-sdk/commit/8abf16c))
+
+
 ## v3.34.0 (September 10, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.33.2...v3.34.0
