@@ -127,3 +127,16 @@ jobs:
 | Release (pre-release, e.g. rc) | All push-to-main tags + `:VERSION`, `:sha-{SHA7}` |
 
 Apps opting out of explicit versioning can pin the mutable `:{branch}` tag (e.g. `:main`) in deployment manifests — it always tracks the latest build on that branch without requiring manual SHA updates.
+
+## Single-app SDR manifest is dispatched by GM, not by this workflow
+
+The public SDR manifest (`s3://atlan-public/apps/<app>-app.yaml`, the
+configurator's input for single-app docker installs) and the single-app OCI
+Helm chart are produced by `atlan-apps-deployment` on a
+`dispatch_app_builder_workflow` repository dispatch. That dispatch used to be a
+job in `build-and-publish-app.yaml` that fired on every main push, independent
+of GM approval — a second, ungated release channel: a fresh single-app install
+could pick up a build GM had not approved or had already superseded. Global
+Marketplace now fires the dispatch when a release to channel `all` becomes
+ACTIVE (`core/sdr_manifest/service.py` in global-marketplace), so the manifest
+follows the approved release exactly.

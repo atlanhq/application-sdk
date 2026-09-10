@@ -95,7 +95,7 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org-level PAT for GHCR login (the fleet App only has repo-level Packages permission; these packages are org-level) and, in the build job specifically, everything else that job needs too (the private-dependency git_token BuildKit secret) since it's already using the PAT for GHCR anyway. Also a fallback if the App token can't be minted elsewhere. Cross-repo checkout/dispatch steps in jobs that never touch GHCR (certify, leak-scan, app-deployment-dispatcher) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
+        description: "Org-level PAT for GHCR login (the fleet App only has repo-level Packages permission; these packages are org-level) and, in the build job specifically, everything else that job needs too (the private-dependency git_token BuildKit secret) since it's already using the PAT for GHCR anyway. Also a fallback if the App token can't be minted elsewhere. Cross-repo checkout steps in jobs that never touch GHCR (certify, leak-scan) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
       FLEET_APP_ID:
         required: false
         description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit', which every caller already uses. Declared here so the contract is self-documenting; a caller using explicit named secrets instead of inherit would need to list this too."
@@ -399,9 +399,10 @@ jobs:
   # semver a merge to main sets publish=false, and gating on publish alone made
   # this job — the only place unit tests and contract drift run at all, since
   # `unit-tests-gate` is permanently `if: false` — skip on every merge. The
-  # image still went to GHCR, and for SDR apps still shipped to Docker Hub via
-  # app-deployment-dispatcher below, uncertified. Main pushes ran this job under
-  # the legacy model (publish was true there); this keeps that property.
+  # image still went to GHCR uncertified (and, before GM took over the
+  # single-app manifest dispatch, straight into the public SDR manifest). Main
+  # pushes ran this job under the legacy model (publish was true there); this
+  # keeps that property.
   certify:
     name: Certify app
     if: ${{ inputs.publish || github.ref == 'refs/heads/main' }}
@@ -930,9 +931,9 @@ jobs:
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
     # Build runs CONCURRENTLY with certify (not after it): certify no longer
-    # gates prepare/build, it gates the terminal side-effecting jobs instead:
-    # publish AND app-deployment-dispatcher (see their needs/if). leak-scan +
-    # validate-channel stay as pre-build gates.
+    # gates prepare/build, it gates the terminal side-effecting job instead:
+    # publish (see its needs/if). leak-scan + validate-channel stay as
+    # pre-build gates.
     needs: [validate-channel, unit-tests-gate, leak-scan]
     # `needs: [...]` only enforces ordering when those jobs run. When
     # publish=false off main, all of them are skipped via their `if:`
@@ -1463,47 +1464,15 @@ jobs:
     secrets: inherit
 
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
-  app-deployment-dispatcher:
-    name: Dispatch App Deployment
-    needs: [prepare, merge, security-scan, certify]
-    # Requires certify to have actually SUCCEEDED, not merely "not failed".
-    # This job pushes the image the public SDR manifest resolves
-    # (s3://atlan-public/apps/<app>.yaml), so it is a tenant-reachable release
-    # channel and must carry the same certification as the GM publish path.
-    #
-    # `!= 'failure'` used to be necessary because certify only ran on
-    # publish=true while this job fires on every main push, so skipped had to
-    # pass or deploy-on-merge SDR apps would stop deploying. That is no longer
-    # true: certify now also runs on main pushes (see its `if:`), which is
-    # exactly when this job can fire, so 'success' is always reachable and
-    # 'skipped' no longer means "never checked".
-    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true' }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        repo: ['atlanhq/atlan-apps-deployment']
-    steps:
-      - name: Mint fleet App token
-        id: app-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          repositories: atlan-apps-deployment
-
-      - name: Repository Dispatch
-        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
-        with:
-          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-          repository: ${{ matrix.repo }}
-          event-type: dispatch_app_builder_workflow
-          client-payload: |-
-            {
-                "app_name": "${{ needs.prepare.outputs.app_name }}",
-                "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
-            }
+  # The single-app SDR artifact channel — s3://atlan-public/apps/<app>-app.yaml
+  # (configurator input) and the OCI Helm chart, both produced by
+  # atlan-apps-deployment on `dispatch_app_builder_workflow` — is no longer
+  # dispatched from this workflow. It used to fire on every main push,
+  # independent of GM approval, which made it a second, ungated release
+  # channel: a fresh single-app install could pick up a build GM had not
+  # approved or had already superseded. Global Marketplace now fires the same
+  # repository_dispatch when a release to channel=all becomes ACTIVE, so the
+  # manifest follows the approved release exactly.
 
   # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
   publish:
