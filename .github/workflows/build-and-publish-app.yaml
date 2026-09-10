@@ -1249,6 +1249,14 @@ jobs:
         # no version env vars and only ever bump the tag, so this is the only
         # identity that survives their upgrades. See
         # docs/standards/release-flow.md#image-identity.
+        #
+        # `build_id` is the publish path's half of the identity FND-1684
+        # established for the e2e path as the ATLAN_BUILD_ID image ENV. That ENV
+        # is stamped by .github/actions/build-app-image, which builds only the
+        # e2e image and never runs here, so a released image could not answer
+        # the build-identity route at all. Same value shape, same single reader
+        # (application_sdk.app.build_identity), so an e2e check and a released
+        # pod answer the same question the same way.
         env:
           GM_VERSION: ${{ needs.prepare.outputs.gm_version }}
           COMMIT_SHA: ${{ needs.prepare.outputs.commit_sha }}
@@ -1257,10 +1265,18 @@ jobs:
           mkdir -p app
           python3 - <<'PYEOF'
           import datetime, json, os
+          image = os.environ["GHCR_IMAGE"]
+          # The immutable tag `{branch}-{sha7}`, taken from the image ref rather
+          # than recomposed from branch + image_tag so it cannot drift from the
+          # `image` field written beside it. Arch-independent: the per-arch
+          # suffix is applied to the build's `tags:` input, never to ghcr_image,
+          # and the tenant pulls the merged manifest — a suffixed value would
+          # make each arch report a different identity.
           info = {
               "app_version": os.environ["GM_VERSION"],
               "commit_sha": os.environ["COMMIT_SHA"],
-              "image": os.environ["GHCR_IMAGE"],
+              "build_id": image.rsplit(":", 1)[-1],
+              "image": image,
               "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
           }
           with open("app/atlan_build.json", "w", encoding="utf-8") as fh:
@@ -1318,9 +1334,17 @@ jobs:
           # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }},ignore-error=true
           provenance: false
+          # `revision` is the SHA `prepare` resolved from the checked-out HEAD,
+          # not `github.sha`. The two differ whenever the caller passes a `ref`:
+          # `github.sha` is the SHA of the branch the workflow was triggered on
+          # (see the 'Compute image tags' step, which resolves its own for the
+          # same reason), so on an entrypoint_dispatch build this label named a
+          # commit the image was NOT built from. It is the same value baked into
+          # app/atlan_build.json, so the label a puller reads and the identity
+          # the pod reports cannot disagree.
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.commit_sha }}
           # The org PAT reaches the build ONLY as a BuildKit secret, never as a
           # build arg. Build args are recorded in image config and are readable
           # via `docker history` by anyone who can pull the image, so the
