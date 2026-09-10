@@ -82,6 +82,16 @@ def build_payload(
         "repositories": ["atlanhq/application-sdk"],
         "base_branch": "main",
         "snapshot": "_base",
+        # Mothership refuses to fall back to a shared, un-attributed AI Gateway
+        # key: without this the sandbox dies with `code=internal ... No
+        # attributed AI Gateway key for this run (channel=None, snapshot=None)`
+        # before the rover runs a single step. `_base` carries no key of its
+        # own, so the alias has to come from the payload. Reusing the
+        # `sdk_review` alias rather than minting `vuln_triage` keeps this lane
+        # on a key that is already provisioned and mounted (same call as
+        # sdk_resolve_dispatch.py); the trade is that vuln-triage spend is
+        # attributed to the review lane.
+        "ai_gateway_key_name": "sdk_review",
         "prompt": build_prompt(ticket, severity, run_date, gha_run_url),
         "max_timeout_seconds": 7200,
         "idle_timeout_seconds": 1800,

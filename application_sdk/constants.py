@@ -575,6 +575,23 @@ _HTTP_POOL_TIMEOUT_SECONDS = 30.0
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 
+#: When the Dapr ``eventstore`` output binding fails, publish lifecycle events
+#: (``worker_start``, ``token_refresh``, workflow/activity start/end) to Event
+#: Ingress directly over HTTPS from this process instead of giving up. On by
+#: default. The Dapr sidecar is the only process in an SDR pod whose outbound
+#: TLS handshake is made by a Go client; a customer middlebox that rejects that
+#: handshake (seen in production with a Go 1.27-built daprd behind a Palo Alto
+#: firewall) otherwise leaves the agent permanently unregistered while every
+#: other client in the same pod reaches Atlan fine. The fallback reuses the
+#: same payload, the same bearer token and the URL of the ``bindings.http``
+#: component daprd loaded (no guessing), fires only for errors that prove the
+#: event got no response (so nothing is double-delivered), backs off for 60 s
+#: after a failed attempt, and logs loudly that it is in effect. Set to
+#: ``false`` to disable.
+EVENT_INGRESS_DIRECT_FALLBACK = (
+    os.getenv("ATLAN_EVENT_INGRESS_DIRECT_FALLBACK", "true").lower() == "true"
+)
+
 # Dual-write — BLDX-1464: when both stores are configured (SDR), App.upload writes
 # to the deployment (customer) store first, then to upstream (Atlan), at the same
 # run-scoped key.  See ADR-0014 §"App.upload() — dual-write when both stores are
