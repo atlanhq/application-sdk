@@ -970,6 +970,8 @@ jobs:
       ghcr_branch_tag:  ${{ steps.tags.outputs.ghcr_branch_tag }}
       dockerhub_image:  ${{ steps.tags.outputs.dockerhub_image }}
       release_tags:     ${{ steps.tags.outputs.release_tags }}
+      gm_version:       ${{ steps.tags.outputs.gm_version }}
+      commit_sha:       ${{ steps.tags.outputs.commit_sha }}
       # Empty unless use_ghcr_base is set AND the preflight below proved the
       # redirect both fires and resolves the same digest Harbor serves.
       base_build_contexts: ${{ steps.base_redirect.outputs.build_contexts }}
@@ -1182,7 +1184,18 @@ jobs:
           DELIM=$(openssl rand -hex 8)
           { echo "release_tags<<${DELIM}"; printf '%s\n' "${RELEASE_TAGS}"; echo "${DELIM}"; } >> "$GITHUB_OUTPUT"
 
+          # Identity the image carries and reports back (baked into
+          # app/atlan_build.json by the build job, sent as `version` by
+          # publish). gm_version is the exact string GM stores in
+          # versions.version, so a worker's self-report matches byte for byte:
+          # the release tag for semver apps, the sha7 for CD apps.
+          GM_VERSION="${RELEASE_TAG_EARLY:-${IMAGE_TAG}}"
+          echo "gm_version=${GM_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${SHA}" >> "$GITHUB_OUTPUT"
+
           echo "Branch: ${BRANCH}"
+          echo "GM version: ${GM_VERSION}"
+          echo "Commit: ${SHA}"
           echo "Immutable image: ${GHCR_IMAGE}"
           echo "Mutable branch tag: ${GHCR_BRANCH_TAG}"
           echo "DockerHub image: ${DOCKERHUB_IMAGE}"
@@ -1226,6 +1239,35 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Bake build identity into the image
+        # Written into the build context so the template Dockerfile's
+        # `COPY app/ app/` carries it into the image with no Dockerfile change.
+        # The SDK reads it at startup and reports app_version + commit_sha on
+        # worker_start / token_refresh, so a worker can say exactly which build
+        # it is regardless of how it was deployed. Single-app SDR customers set
+        # no version env vars and only ever bump the tag, so this is the only
+        # identity that survives their upgrades. See
+        # docs/standards/release-flow.md#image-identity.
+        env:
+          GM_VERSION: ${{ needs.prepare.outputs.gm_version }}
+          COMMIT_SHA: ${{ needs.prepare.outputs.commit_sha }}
+          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr_image }}
+        run: |
+          mkdir -p app
+          python3 - <<'PYEOF'
+          import datetime, json, os
+          info = {
+              "app_version": os.environ["GM_VERSION"],
+              "commit_sha": os.environ["COMMIT_SHA"],
+              "image": os.environ["GHCR_IMAGE"],
+              "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+          }
+          with open("app/atlan_build.json", "w", encoding="utf-8") as fh:
+              json.dump(info, fh, indent=2)
+              fh.write("\n")
+          print(json.dumps(info))
+          PYEOF
 
       - name: Build and push arch image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
@@ -1570,6 +1612,8 @@ jobs:
           TENANTS: ${{ inputs.tenants }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_MODEL: ${{ needs.prepare.outputs.release_model }}
+          GM_VERSION: ${{ needs.prepare.outputs.gm_version }}
+          COMMIT_SHA: ${{ needs.prepare.outputs.commit_sha }}
           APP_CONFIGS: ${{ needs.prepare.outputs.app_configs }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           # Who GM shows as "Created by:" — resolved by the step above, which
@@ -1617,7 +1661,11 @@ jobs:
           # Prefer release_tag (e.g. v0.3.0) over commit SHA for the GM version.
           # Backward compatible: apps that don't pass release_tag get SHA as before.
           release_tag = os.environ.get("RELEASE_TAG", "").strip()
-          version = release_tag if release_tag else os.environ["IMAGE_TAG"]
+          # Same string the build job baked into the image (app/atlan_build.json),
+          # so the worker's self-reported app_version equals versions.version.
+          version = os.environ.get("GM_VERSION", "").strip() or (
+              release_tag if release_tag else os.environ["IMAGE_TAG"]
+          )
 
           # Semver apps send the plain version tag (e.g. :0.3.0) as the image
           # so the GM's semver gate accepts it. The release ladder strips the
@@ -1641,6 +1689,13 @@ jobs:
               "repo": os.environ["REPO_URL"],
               "source": "ci_publish",
           }
+
+          # Full git SHA the image was built from. GM stores it on the version so
+          # a worker's baked commit_sha resolves to a release even for semver apps,
+          # whose `version`/`image` carry no SHA.
+          commit_sha = os.environ.get("COMMIT_SHA", "").strip()
+          if commit_sha:
+              body["commit_sha"] = commit_sha
 
           config = os.environ.get("DEPLOY_CONFIG", "").strip()
           # SDR capability rides inside the opaque config YAML — GM stores

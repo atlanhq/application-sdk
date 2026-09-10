@@ -127,3 +127,36 @@ jobs:
 | Release (pre-release, e.g. rc) | All push-to-main tags + `:VERSION`, `:sha-{SHA7}` |
 
 Apps opting out of explicit versioning can pin the mutable `:{branch}` tag (e.g. `:main`) in deployment manifests — it always tracks the latest build on that branch without requiring manual SHA updates.
+
+## Image identity
+
+Every image built by `build-and-publish-app.yaml` carries its own identity so a
+running worker can say exactly which build it is, however it was deployed.
+
+The build job writes `app/atlan_build.json` into the build context before the
+image build, and the template Dockerfile's `COPY app/ app/` bakes it in — no
+Dockerfile change per app:
+
+```json
+{
+  "app_version": "0.3.0",
+  "commit_sha": "<full git sha>",
+  "image": "ghcr.io/atlanhq/atlan-foo-app:0.3.0",
+  "built_at": "2026-09-10T12:00:00+00:00"
+}
+```
+
+`app_version` is the exact string the publish job sends to Global Marketplace as
+`version` (the release tag for semver apps, the 7-char SHA for CD apps), so a
+worker's self-report matches `versions.version` byte for byte. The publish job
+also sends `commit_sha`, which GM stores on the version — the only handle that
+resolves a semver image to its release, since `:0.3.0` carries no SHA.
+
+The SDK reads the file at startup (`application_sdk.constants._load_build_info`)
+and reports `app_version` and `commit_sha` on `worker_start` and on every
+`token_refresh`. The baked file wins over `ATLAN_APPLICATION_VERSION`: the env
+var describes what a deployer thinks it deployed, the file describes the image.
+Single-app SDR customers set no version env vars and only bump the tag when
+they upgrade, so the file is the one identity that survives their upgrades.
+Apps with a non-template Dockerfile that does not copy `app/` can point the SDK
+at the file with `ATLAN_BUILD_INFO_PATH`.
