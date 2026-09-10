@@ -169,6 +169,21 @@ ARTIFACT_VALIDATION_MODE_ENV = "ATLAN_ARTIFACT_VALIDATION_MODE"
 # In Docker (WORKDIR=/app, app code at /app/app/) this resolves to /app/app/generated.
 CONTRACT_GENERATED_DIR = os.environ.get("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
 
+# Enforcement mode for the credential config.json write guard, which refuses to
+# let POST /workflows/v1/config/{guid}?type=credentials drop a required,
+# non-secret field the stored record already carries (authType, host, port).
+# See application_sdk.handler.credential_config.
+#
+#   "repair" (default) — restore the dropped fields from the stored record, log
+#       a warning, return 200. Chosen as the default because it preserves the
+#       record without changing any caller's success/failure contract: a client
+#       that treats a 4xx here as fatal cannot be broken by it.
+#   "reject"           — return 422 naming the dropped fields. Prevents the bad
+#       write and surfaces the offending caller, but a client that treats the
+#       failure as fatal will fail the enclosing operation.
+#   "off"              — legacy behaviour, blind overwrite.
+CREDENTIAL_CONFIG_GUARD = os.getenv("ATLAN_CREDENTIAL_CONFIG_GUARD", "repair").lower()
+
 # Cleanup Paths (custom paths for cleanup operations, supports multiple paths separated by comma)
 # If empty, cleanup activities will default to workflow-specific paths at runtime
 CLEANUP_BASE_PATHS = [
