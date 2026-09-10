@@ -3,6 +3,14 @@
 Publishes lifecycle events (workflow/activity start/end, worker start) via
 the v3 infrastructure event binding. Falls back silently when no event
 binding is configured.
+
+When the binding *is* configured but the Dapr call fails, the event is
+re-sent directly to Event Ingress over HTTPS from this process (see
+:func:`_publish_event_direct`), with a WARNING that names the fallback. The
+Dapr sidecar is the only Go TLS client in an SDR pod and has been seen
+rejected by customer middleboxes that pass every other client; without the
+fallback that leaves the agent unregistered. ``ATLAN_EVENT_INGRESS_DIRECT_FALLBACK=false``
+turns it off.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -264,17 +272,143 @@ async def _publish_event_via_binding(event: Event) -> None:
             exc_info=True,
         )
 
-    await infra.event_binding.invoke(
-        operation="create",
-        data=payload,
-        metadata=binding_metadata,
+    from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+        BindingError,
     )
+
+    try:
+        await infra.event_binding.invoke(
+            operation="create",
+            data=payload,
+            metadata=binding_metadata,
+        )
+    except BindingError as binding_error:
+        from application_sdk.constants import (  # noqa: PLC0415 — read at call time so the switch is env-fresh/patchable
+            EVENT_INGRESS_DIRECT_FALLBACK,
+        )
+
+        if not EVENT_INGRESS_DIRECT_FALLBACK:
+            raise
+        url = _resolve_event_ingress_url()
+        if url is None:
+            logger.error(
+                "Dapr eventstore binding failed for event %s and no Event Ingress URL "
+                "could be resolved for the direct HTTP fallback (no eventstore component "
+                "on disk and ATLAN_BASE_URL unset); event not published. dapr_error=%s",
+                event.event_name,
+                binding_error,
+            )
+            raise
+        logger.warning(
+            "FALLBACK ACTIVE: Dapr eventstore binding failed for event %s; publishing "
+            "directly to Event Ingress over HTTPS from this process instead. url=%s "
+            "dapr_error=%s",
+            event.event_name,
+            url,
+            binding_error,
+        )
+        try:
+            await _publish_event_direct(url, payload, binding_metadata)
+        # conformance: ignore[E004] both channels failed; the original BindingError is re-raised so callers' handling is unchanged, and the fallback failure is logged with its own cause
+        except Exception as direct_error:
+            logger.error(
+                "FALLBACK FAILED: direct HTTPS publish of event %s to %s also failed; "
+                "event not published. direct_error=%s: %s dapr_error=%s",
+                event.event_name,
+                url,
+                type(direct_error).__name__,
+                direct_error,
+                binding_error,
+            )
+            raise binding_error from direct_error
+        logger.warning(
+            "Published event via direct HTTPS fallback (Dapr eventstore binding "
+            "unavailable): name=%s type=%s topic=%s url=%s",
+            event.event_name,
+            event.event_type,
+            event.get_topic_name(),
+            url,
+        )
+        return
+
     logger.info(
         "Published event via binding: name=%s type=%s topic=%s",
         event.event_name,
         event.event_type,
         event.get_topic_name(),
     )
+
+
+def _resolve_event_ingress_url() -> str | None:
+    """Return the Event Ingress URL the ``eventstore`` binding posts to.
+
+    Prefers the ``url`` metadata of the ``eventstore`` Dapr component on disk —
+    the same file daprd loaded, so the fallback hits exactly the endpoint the
+    binding would have. Looks in ``DAPR_COMPONENTS_PATH`` (the entrypoint sets
+    it; ``/app/components`` in the shipped image) and then ``./components``.
+    Falls back to ``ATLAN_BASE_URL`` + ``/api/eventingress/``, which is how the
+    Helm charts render that component. ``None`` when neither is available.
+    """
+    import os  # noqa: PLC0415 — cold path: only after a binding failure
+    from pathlib import Path  # noqa: PLC0415 — cold path
+
+    from application_sdk.storage.binding import (  # noqa: PLC0415 — circular: storage imports infrastructure
+        _find_component,
+    )
+
+    candidates = [
+        os.environ.get("DAPR_COMPONENTS_PATH", "/app/components"),
+        "./components",
+    ]
+    for components_dir in candidates:
+        try:
+            if not Path(components_dir).is_dir():
+                continue
+            component = _find_component("eventstore", components_dir)
+        # conformance: ignore[E004] an unreadable components dir must not mask the fallback; the next candidate or ATLAN_BASE_URL is tried
+        except Exception:
+            logger.debug(
+                "Could not read Dapr components from %s", components_dir, exc_info=True
+            )
+            continue
+        if not component:
+            continue
+        for item in component.get("spec", {}).get("metadata", []) or []:
+            if item.get("name") == "url" and item.get("value"):
+                return str(item["value"])
+
+    from application_sdk.constants import ATLAN_BASE_URL  # noqa: PLC0415 — cold path
+
+    if ATLAN_BASE_URL:
+        return ATLAN_BASE_URL.rstrip("/") + "/api/eventingress/"
+    return None
+
+
+#: Bound on the direct publish. Generous on purpose: ``worker_start`` is sent
+#: once per boot and never retried, so completing it matters more than latency.
+_DIRECT_PUBLISH_TIMEOUT_SECONDS = 60.0
+
+
+async def _publish_event_direct(
+    url: str, payload: bytes, headers: dict[str, str]
+) -> None:
+    """POST *payload* to Event Ingress with *headers*, as the Dapr binding would.
+
+    Uses the SDK's shared SSL context so a mounted custom CA
+    (``SSL_CERT_DIR``) is honoured exactly as it is for every other outbound
+    call this process makes. Raises on transport errors and non-2xx responses.
+    """
+    import httpx  # noqa: PLC0415 — cold path: only after a binding failure
+
+    from application_sdk.clients.ssl_utils import (  # noqa: PLC0415 — cold path
+        get_ssl_context,
+    )
+
+    async with httpx.AsyncClient(
+        verify=get_ssl_context(), timeout=_DIRECT_PUBLISH_TIMEOUT_SECONDS
+    ) as client:
+        response = await client.post(url, content=payload, headers=headers)
+        response.raise_for_status()
 
 
 # Activity for publishing events (runs outside sandbox)

@@ -160,6 +160,7 @@ Dapr component names are read at module-import time (not at runtime) because the
 | `DEPLOYMENT_OBJECT_STORE_NAME` | `objectstore` | Dapr object store for workflow outputs and artifacts. |
 | `UPSTREAM_OBJECT_STORE_NAME` | `atlan-objectstore` | Dapr object store for uploading data to the Atlan platform (SDR deployments only). If the named component is absent, `upstream_storage` is `None` and `App.upload()`/`App.download()` fall back to the deployment store. See [ADR-0014](adr/0014-two-store-storage-architecture.md). |
 | `EVENT_STORE_NAME` | `eventstore` | Dapr pub/sub component name. |
+| `ATLAN_EVENT_INGRESS_DIRECT_FALLBACK` | `true` | When the Dapr `eventstore` binding fails, publish lifecycle events (`worker_start`, `token_refresh`, workflow/activity start/end) directly to Event Ingress over HTTPS from the app process, reusing the same payload, bearer token and URL. Logged as `FALLBACK ACTIVE` / `Published event via direct HTTPS fallback` at WARNING. Set `false` to disable. |
 | `DEPLOYMENT_SECRET_STORE_NAME` | `deployment-secret-store` | Dapr secret store holding deployment-scoped secrets (auth credentials, etc.). |
 | `DAPR_MAX_GRPC_MESSAGE_LENGTH` | `104857600` (100 MB) | Maximum gRPC message size in bytes for Dapr client calls. Increase for apps that move large payloads through Dapr state or bindings. |
 
