@@ -171,7 +171,7 @@ jobs:
       - name: Install Renovate CLI
         # Exact pin for reproducibility; bump deliberately (Renovate releases
         # multiple times a week). Keep in step with the setup-node version above.
-        run: npm install -g renovate@43.265.3
+        run: npm install -g renovate@44.3.2
 
       # Reap a lock-maintenance branch whose refusal will clear itself, so this
       # pass rebuilds it. Ordered immediately before Renovate on purpose: the
