@@ -16,11 +16,14 @@
 # (tested) rather than inlined here — see docs/standards/ci.md.
 #
 # Required configuration (shared with sdk-evolution-cron.yml):
-#   secrets.HARNESS_TOKEN           Bearer token for /api/sandbox/execute.
-#   secrets.GLOBALPROTECT_USERNAME  VPN auth.
-#   secrets.GLOBALPROTECT_PASSWORD  VPN auth.
-#   vars.GLOBALPROTECT_PORTAL_URL   VPN portal URL.
-#   vars.MOTHERSHIP_URL             e.g. https://mothership.atlan.dev
+#   secrets.HARNESS_TOKEN            Bearer token for /api/sandbox/execute.
+#   secrets.TWINGATE_SERVICE_KEY     Twingate service-account key. Primary
+#                                    path to mothership.atlan.dev, which is
+#                                    on the private network.
+#   secrets.GLOBALPROTECT_USERNAME   Fallback VPN auth, used only if the
+#   secrets.GLOBALPROTECT_PASSWORD   Twingate step fails. Remove both once
+#   vars.GLOBALPROTECT_PORTAL_URL    Twingate is proven here.
+#   vars.MOTHERSHIP_URL              e.g. https://mothership.atlan.dev
 
 name: Vuln Triage (Rover)
 
@@ -47,11 +50,30 @@ jobs:
     # dispatch script's stream timeout matches.
     timeout-minutes: 130
     steps:
-      - name: Checkout repo (for local globalprotect-connect action)
+      - name: Checkout repo (for the local VPN actions)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Twingate is the primary path, matching sdk-review.yml. GlobalProtect
+      # authenticates CI as a *human* against a /24 DHCP pool shared with every
+      # engineer on the VPN, so runs fail with `Assign private IP address
+      # failed` whenever the pool is full — unrelated to the triage itself.
+      #
+      # GlobalProtect stays below as an automatic fallback: if this step fails
+      # for any reason, vpn1-vpn3 run exactly as they do today and behaviour is
+      # unchanged. Once Twingate has proven itself here, delete vpn1-vpn3 and
+      # the GLOBALPROTECT_* secrets.
+      - name: Connect to Twingate
+        id: twingate
+        uses: ./.github/actions/twingate-connect
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          service-key: ${{ secrets.TWINGATE_SERVICE_KEY }}
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
 
       - name: Connect to VPN (attempt 1/3)
         id: vpn1
+        if: steps.twingate.outcome == 'failure'
         uses: ./.github/actions/globalprotect-connect
         continue-on-error: true
         with:
