@@ -1091,3 +1091,48 @@ def test_the_replay_never_touches_the_working_tree(repo, monkeypatch):
     assert seen, "the replay never ran"
     assert all(not d.is_relative_to(repo.resolve()) for d in seen)
     assert Path.cwd().resolve() == repo.resolve()  # cwd restored
+
+
+# ── preserve_overrides=False (the freshness gate's mode) ─────────────────────
+
+
+def _regenerate_with_stubs(monkeypatch, tmp_path, seen: list[str], **kwargs) -> bool:
+    """Drive regenerate() with everything past the baseline decision stubbed
+    out, recording whether the baseline eval was asked for."""
+    monkeypatch.setattr(
+        mod, "_baseline_output", lambda d: (seen.append(d), (None, None))[1]
+    )
+    monkeypatch.setattr(
+        mod, "run", lambda *a, **kw: subprocess.CompletedProcess([], 0, "", "")
+    )
+    monkeypatch.setattr(mod, "swap_outputs", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "run_post_generate", lambda *a, **kw: None)
+    monkeypatch.setattr(mod, "_format_generated", lambda *a, **kw: None)
+
+    contract = tmp_path / "contract"
+    contract.mkdir()
+    (contract / "app.pkl").write_text('amends "@app-contract-toolkit/App.pkl"\n')
+    monkeypatch.chdir(tmp_path)
+
+    return mod.regenerate("contract", **kwargs)
+
+
+def test_preserve_overrides_false_skips_the_baseline_entirely(monkeypatch, tmp_path):
+    """With preservation off there is nothing to protect, so the second
+    ``pkl eval`` against the older toolkit package must not run at all — the
+    freshness gate gets correctness and a saved eval from the same flag."""
+    seen: list[str] = []
+    assert (
+        _regenerate_with_stubs(monkeypatch, tmp_path, seen, preserve_overrides=False)
+        is True
+    )
+    assert seen == []
+
+
+def test_preserve_overrides_defaults_to_on_for_the_renovate_sync(monkeypatch, tmp_path):
+    """The default must stay True: Renovate's output is a commit a human
+    reviews, and silently reverting an app's post-processing is the failure
+    override detection exists to prevent."""
+    seen: list[str] = []
+    assert _regenerate_with_stubs(monkeypatch, tmp_path, seen) is True
+    assert seen == ["contract"]

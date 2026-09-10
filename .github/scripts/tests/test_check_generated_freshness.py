@@ -224,7 +224,7 @@ def test_multi_root_app_is_checked_not_skipped(repo, monkeypatch):
     )
     called: list[str] = []
 
-    def fake_regenerate(contract_dir):
+    def fake_regenerate(contract_dir, preserve_overrides=True):
         called.append(contract_dir)
         (repo / "app" / "generated" / "crawler").mkdir(parents=True, exist_ok=True)
         (repo / "app" / "generated" / "crawler" / "_input.py").write_text("drifted\n")
@@ -241,5 +241,57 @@ def test_no_evaluable_root_is_still_na(repo, monkeypatch):
     """An imported module is not a root: nothing to generate, still a pass."""
     (repo / "contract" / "app.pkl").unlink()
     (repo / "contract" / "credentials.pkl").write_text('name = "creds"\n')
-    monkeypatch.setattr(mod, "regenerate", lambda d: pytest.fail("must not regenerate"))
+    monkeypatch.setattr(
+        mod, "regenerate", lambda d, **kw: pytest.fail("must not regenerate")
+    )
     assert mod.check_freshness("contract") == ("na", [])
+
+
+# ── the gate must never preserve app-maintained files ────────────────────────
+
+
+def test_gate_regenerates_with_override_preservation_off(repo, monkeypatch):
+    """The one place this gate must NOT behave like the Renovate sync.
+
+    Renovate preserves app-maintained generated files because its output is a
+    commit a human reviews. This gate asks whether the committed tree matches a
+    fresh generation: preserving a file makes it compare that file against
+    itself, so stale content reads clean and the drift check certifies the
+    drift.
+    """
+    seen: dict = {}
+
+    def fake_regenerate(contract_dir, preserve_overrides=True):
+        seen["preserve_overrides"] = preserve_overrides
+        return True
+
+    monkeypatch.setattr(mod, "regenerate", fake_regenerate)
+    mod.check_freshness("contract")
+
+    assert seen["preserve_overrides"] is False
+
+
+def test_gate_reports_drift_on_a_stale_app_maintained_file(repo, monkeypatch):
+    """Regression for the trap this flag closes.
+
+    With preservation on, a file that override detection classifies as
+    app-maintained is written back unchanged, the diff sees nothing, and the
+    gate reports clean over an artifact that does not regenerate. It must
+    report drift instead.
+    """
+    committed = repo / "app" / "generated" / "manifest.json"
+    committed.write_text('{"app_name": "hand-maintained"}\n')
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "committed artifacts")
+
+    def fake_regenerate(contract_dir, preserve_overrides=True):
+        # What the toolkit emits now. Under preservation this never lands.
+        if not preserve_overrides:
+            committed.write_text('{"app_name": "freshly-generated"}\n')
+        return True
+
+    monkeypatch.setattr(mod, "regenerate", fake_regenerate)
+    status, changed = mod.check_freshness("contract")
+
+    assert status == "drift"
+    assert any("manifest.json" in c for c in changed)

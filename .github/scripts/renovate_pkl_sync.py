@@ -173,7 +173,9 @@ def _eval_root(root: Path, contract_dir: str, out: Path) -> bool:
     return result.returncode == 0
 
 
-def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
+def regenerate_multi_root(
+    contract_dir: str, roots: list[Path], preserve_overrides: bool = True
+) -> bool:
     """Regenerate an app whose contract has ONE ROOT PER ENTRYPOINT.
 
     Some apps (synapse: ``crawler.pkl`` + ``miner.pkl``) have no single
@@ -205,7 +207,11 @@ def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
                 )
                 continue
             target = f"{GENERATED_DIR}/{root.stem}"
-            base_out, base_work = _baseline_output_for_root(contract_dir, root.name)
+            base_out = None
+            if preserve_overrides:
+                base_out, base_work = _baseline_output_for_root(
+                    contract_dir, root.name
+                )
             if swap_outputs(tmp, generated_dir=target, baseline_dir=base_out):
                 placed = True
                 print(f"Regenerated {target} from {root.name}.")
@@ -221,7 +227,7 @@ def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
     return placed
 
 
-def regenerate(contract_dir: str) -> bool:
+def regenerate(contract_dir: str, preserve_overrides: bool = True) -> bool:
     """Regenerate contract artifacts; swap gated on eval+format success.
 
     Eval runs into a temp dir; the working tree is only touched once eval (and
@@ -231,6 +237,23 @@ def regenerate(contract_dir: str) -> bool:
 
     An app shipping ``contract/post-generate.sh`` gets it run after the swap and
     before formatting — see ``pkl_contract_layout.run_post_generate``.
+
+    ``preserve_overrides`` decides whether app-maintained generated files survive
+    the swap. It must stay True for the Renovate sync, whose output is a commit a
+    human reviews: silently reverting an app's own post-processing is the failure
+    this protection exists to prevent.
+
+    It must be False for the freshness gate, which asks "does the committed tree
+    match a fresh generation?". Preserving anything makes the gate compare a file
+    against itself and report clean over stale content — so a check that exists to
+    catch drift would certify it instead. That is not hypothetical: the gate is
+    correct today only because CI checks out at depth 1, so ``baseline_contract_ref``
+    finds no parent commit, returns None, and preservation never engages. Nothing
+    said so; raise the checkout depth for any unrelated reason and the gate starts
+    passing stale artifacts. This flag makes that independent of checkout depth.
+
+    False also skips the baseline eval entirely — a second ``pkl eval`` against an
+    older toolkit package — so the gate gets faster as well as correct.
 
     Returns True only when the working tree was actually updated with fresh
     artifacts. Returns False when there is no contract to generate from, when
@@ -247,7 +270,7 @@ def regenerate(contract_dir: str) -> bool:
                 f"::notice::No {app_pkl}; regenerating {len(roots)} per-entrypoint "
                 f"root(s): {', '.join(r.name for r in roots)}."
             )
-            return regenerate_multi_root(contract_dir, roots)
+            return regenerate_multi_root(contract_dir, roots, preserve_overrides)
         print(
             f"::notice::No {app_pkl} — skipping artifact regeneration (re-resolve only)."
         )
@@ -288,7 +311,9 @@ def regenerate(contract_dir: str) -> bool:
             )
             return False
 
-        baseline_out, baseline_work = _baseline_output(contract_dir)
+        baseline_out = None
+        if preserve_overrides:
+            baseline_out, baseline_work = _baseline_output(contract_dir)
         if not swap_outputs(tmp, baseline_dir=baseline_out):
             # swap_outputs already warned with the specific reason.
             return False

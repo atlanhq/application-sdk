@@ -141,7 +141,21 @@ def check_freshness(contract_dir: str = "contract") -> tuple[str, list[str]]:
         # so this gate and the renovate sync agree on what "freshly generated"
         # means; without it an app that installs a hand-maintained artifact over
         # the toolkit output would read as permanently drifted.
-        regenerated = regenerate(contract_dir)
+        #
+        # preserve_overrides=False is load-bearing, and the one place this gate
+        # must NOT agree with the sync. Renovate preserves app-maintained files
+        # because it is writing a commit a human reviews. This gate is asking
+        # whether the committed tree matches a fresh generation — preserve a file
+        # and it gets compared against itself, so stale content reads clean and a
+        # drift check certifies the drift.
+        #
+        # Today that never bites, but only by accident: CI checks out at depth 1,
+        # so baseline_contract_ref() cannot name a parent commit, returns None,
+        # and preservation never engages. Nothing declared that; raising the
+        # checkout depth for any unrelated reason would silently switch this gate
+        # from red to green over an artifact that does not regenerate. Say it
+        # explicitly instead of depending on clone depth.
+        regenerated = regenerate(contract_dir, preserve_overrides=False)
     except OSError as exc:
         # pkl / uvx not installed or not runnable — an infra gap, not a broken
         # contract. Inconclusive, never block.
