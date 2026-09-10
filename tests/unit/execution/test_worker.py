@@ -843,6 +843,44 @@ class TestAppWorker:
         mock_inner.run.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_emit_worker_start_event_passes_direct_publish_timeout(
+        self,
+    ) -> None:
+        """worker_start opts into the 20s direct-publish budget, not the 5s default."""
+        from application_sdk.execution._temporal.interceptors.events import (
+            WORKER_START_DIRECT_PUBLISH_TIMEOUT_SECONDS,
+        )
+
+        mock_inner = mock.AsyncMock()
+        mock_inner.run = mock.AsyncMock(return_value=None)
+
+        app_worker = AppWorker(
+            mock_inner,
+            start_event_params={
+                "task_queue": "test-queue",
+                "app_name": "test-app",
+                "workflow_count": 1,
+                "activity_count": 2,
+                "max_concurrent_activities": 100,
+                "host": "localhost:7233",
+                "namespace": "default",
+            },
+        )
+
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
+            new=mock.AsyncMock(),
+        ) as mock_publish:
+            await app_worker.run()
+
+        mock_publish.assert_called_once()
+        assert (
+            mock_publish.call_args.kwargs["direct_publish_timeout"]
+            == WORKER_START_DIRECT_PUBLISH_TIMEOUT_SECONDS
+        )
+        mock_inner.run.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_emit_worker_start_event_suppresses_unexpected_errors(
         self,
     ) -> None:
