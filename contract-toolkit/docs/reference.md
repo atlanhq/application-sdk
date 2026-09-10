@@ -1323,6 +1323,7 @@ class FieldSpec {
   message: String?                       // Inline validation message below field
   validationRules: Listing<Dynamic>?     // Validation rules (e.g., required, min, max)
   byocDisabled: Boolean?                 // Emit BYOCdisabled for frontend credential UIs
+  addonBefore: String?                   // Immutable badge inside the input, before the typed value
   includeUiWidget: Boolean = true
   includeUiLabel: Boolean = true
   includeUiHidden: Boolean = true
@@ -1343,6 +1344,32 @@ The `rows` option is emitted under `ui.rows` when non-null. Use it with
 `fieldType = "textarea"` for compact multiline-capable fields, for example
 `rows = 1` for certificate or key inputs that should remain visually short while
 still accepting pasted newlines.
+
+`addonBefore` puts fixed, immutable text inside the input box ahead of what the
+user types — most often a scheme badge, so the form states the protocol rather
+than asking every user to type it:
+
+```pkl
+new FieldSpec {
+  name = "host"
+  displayName = "Library URL"
+  placeholder = "mstr.example.com/Library"
+  addonBefore = "https://"
+}
+```
+
+Unset by default, in which case no `addonBefore` key is emitted. It renders
+verbatim as `ui.addonBefore`, immediately before `ui.rules`. Three things it
+does *not* change: the badge is not part of the submitted value, so the
+credential is unchanged; the generated e2e credential model keeps the field at
+the same type; and validation is untouched — a field that must reject a
+typed-in `https://` still needs its own `validationRegex` / `validationRules`.
+
+`AdvancedJDBCUrlGroup.urlAddonBefore` is the equivalent for the URL input that
+group renders. Reach for `addonBefore` when the badge belongs on a plain
+`FieldSpec`; a `Widgets.TextInput` with `prepend` renders the same UI, but
+`NamedWidget` entries are invisible to the e2e credential-model generator, so
+the field would silently vanish from the typed model.
 
 The `includeUi*`, `uiClass`, `uiRequired`, and `includeRequiredWhenFalse`
 controls are exact-parity escape hatches for existing hand-authored

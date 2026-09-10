@@ -153,6 +153,17 @@ credentialAuthOptions {
     fields {
       new FieldSpec { name = "token"; sensitive = true; displayName = "API Token"; width = 8 }
       new FieldSpec {
+        name = "console_url"
+        displayName = "Console URL"
+        placeholder = "console.example.com"
+        helpText = "REST console this token also authenticates against."
+        // Scheme badge on a plain FieldSpec — the counterpart to the URL
+        // group's `urlAddonBefore`, rendered as `ui.addonBefore`.
+        addonBefore = "https://"
+        required = false
+        width = 8
+      }
+      new FieldSpec {
         name = "ca_cert-file"
         displayName = "CA Certificate File"
         fieldType = "fileUpload"

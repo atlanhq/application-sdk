@@ -604,6 +604,23 @@ class FieldSpec {
   validationRules: Listing<Dynamic>?
 
   byocDisabled: Boolean?
+
+  /// Fixed, immutable text shown inside the input box before the value the user
+  /// types — a scheme badge such as `https://` on a hostname field, so the form
+  /// states the protocol instead of asking every user to type it.
+  ///
+  /// Unset by default, in which case no `addonBefore` key is emitted at all.
+  ///
+  /// Renders verbatim as `ui.addonBefore` on this field in the credential
+  /// config. It is a *display* affordance only: the badge is not part of the
+  /// submitted value, so the credential this field produces is unchanged and
+  /// the generated e2e credential model keeps the same type. Validation is
+  /// likewise untouched — a field that must reject a typed-in `https://` still
+  /// needs its own `validationRegex` / `validationRules`.
+  ///
+  /// `AdvancedJDBCUrlGroup.urlAddonBefore` is the equivalent for the URL input
+  /// that group renders; this property badges a plain `FieldSpec`.
+  addonBefore: String?
 }
 
 /// A credential field whose visibility/label/placeholder is driven by a compound boolean filter.
@@ -1923,6 +1940,10 @@ local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
       when (f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") { ["fileMetadata"] = f.fileMetadata }
       when ((f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") && f.removeBeforeUpload) { ["removeBeforeUpload"] = true }
     }
+    // Emitted last before `rules` deliberately: apps that carry this badge as a
+    // post-`pkl eval` patch today have it sitting between `grid` and `rules`, so
+    // this position lets them adopt the property with a no-op regeneration diff.
+    when (f.addonBefore != null) { ["addonBefore"] = f.addonBefore }
     when (f.validationRules != null) {
       ["rules"] = f.validationRules
     }

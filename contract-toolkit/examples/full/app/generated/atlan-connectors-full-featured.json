@@ -464,6 +464,16 @@
                   "grid": 8
                 }
               },
+              "console_url": {
+                "type": "string",
+                "ui": {
+                  "label": "Console URL",
+                  "help": "REST console this token also authenticates against.",
+                  "placeholder": "console.example.com",
+                  "grid": 8,
+                  "addonBefore": "https://"
+                }
+              },
               "ca_cert-file": {
                 "type": "string",
                 "ui": {
@@ -616,6 +626,16 @@
               "widget": "password",
               "label": "API Token",
               "grid": 8
+            }
+          },
+          "console_url": {
+            "type": "string",
+            "ui": {
+              "label": "Console URL",
+              "help": "REST console this token also authenticates against.",
+              "placeholder": "console.example.com",
+              "grid": 8,
+              "addonBefore": "https://"
             }
           },
           "ca_cert-file": {

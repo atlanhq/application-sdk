@@ -137,7 +137,12 @@ For frontend's credential file-reference input, use
 references, while typed reference values (for example secret-store keys or
 `objectstore://` paths) remain plain strings. The generated JSON emits the
 selected upload widget plus `ui.accept`, `ui.fileMetadata`, and opt-in
-`ui.removeBeforeUpload` when the widget is emitted. When
+`ui.removeBeforeUpload` when the widget is emitted. To badge a field with fixed,
+immutable text inside the input box — a `https://` scheme on a hostname, say —
+set `addonBefore` on the `FieldSpec`; it renders as `ui.addonBefore` and leaves
+the submitted value, the generated e2e credential model, and validation
+untouched (`AdvancedJDBCUrlGroup.urlAddonBefore` is the equivalent for that
+group's URL input). When
 `credentialAuthOptions` has a single entry, the auth-type radio is auto-hidden —
 the generated default is still emitted, so no form input is required.
 For `credentialUrlGroup` forms, the visible auth panes live inside
