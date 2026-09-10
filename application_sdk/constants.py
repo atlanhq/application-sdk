@@ -100,18 +100,34 @@ DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
 # only bumps the tag when upgrading, so the baked file is the one identity that
 # survives their upgrades — it wins whenever present.
 # Env-var naming aligned with Anuj's LM-integration PR so they merge cleanly.
+#
+# The file is the *publish* path's half of the build identity FND-1684 already
+# established for the e2e path as the ``ATLAN_BUILD_ID`` image ENV. Both answer
+# "which build is this pod running?", so they are deliberately one contract with
+# one reader (:func:`application_sdk.app.build_identity.build_identity`) rather
+# than two: the file carries a ``build_id`` key holding the same immutable image
+# tag the ENV carries, and the reader prefers the ENV so an e2e build stamped by
+# ``.github/actions/build-app-image`` keeps reporting exactly what it reports
+# today. What the file adds is that a *released* image — which that action never
+# touches — can now answer the same question.
 
 
-def _load_build_info(path: str | None = None) -> dict[str, str]:
+def load_build_info(path: str | None = None) -> dict[str, str]:
     """Read the build-identity file the reusable CI bakes into the image.
 
     ``build-and-publish-app.yaml`` writes ``app/atlan_build.json`` into the
     build context and the template Dockerfile's ``COPY app/ app/`` carries it
     into the image. Keys: ``app_version`` (the exact string Global Marketplace
-    stores as ``versions.version``), ``commit_sha``, ``image``, ``built_at``.
+    stores as ``versions.version``), ``commit_sha``, ``build_id`` (the immutable
+    image tag, the same value ``ATLAN_BUILD_ID`` carries on the e2e path),
+    ``image``, ``built_at``.
 
     Missing or malformed file → ``{}``; callers fall back to the env vars.
     ``ATLAN_BUILD_INFO_PATH`` overrides the lookup for non-template layouts.
+
+    Public because :mod:`application_sdk.app.build_identity` reads the same file
+    through it. A second parser there would be a second place for the key names
+    to drift from what CI writes.
     """
     if path:
         candidates = [path]
@@ -144,7 +160,7 @@ def _load_build_info(path: str | None = None) -> dict[str, str]:
     return {}
 
 
-_BUILD_INFO = _load_build_info()
+_BUILD_INFO = load_build_info()
 
 #: Version of the app release exactly as Global Marketplace stores it
 #: (release tag for semver apps, sha7 for CD apps). Baked value first.

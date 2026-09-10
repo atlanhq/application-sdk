@@ -787,6 +787,16 @@ minted after every committed artifact exists. So it enters at image build time:
    already-proxied configmap route, *ahead* of the generated-file scan, so a
    committed file cannot answer in the pod's place.
 
+The stamp above covers the **e2e** image, which is the only one this action
+builds. A released image comes from `build-and-publish-app.yaml`, which never
+calls this action; it carries the same identity in the `build_id` key of the
+`app/atlan_build.json` it bakes into the build context, and
+`application_sdk.app.build_identity` falls back to it when the ENV is absent.
+Same reader, same value shape — see
+[`release-flow.md`](release-flow.md#build_id-and-its-relationship-to-atlan_build_id).
+The ENV keeps precedence, so nothing on this path changes: an e2e build derives
+that exact string and compares against it.
+
 **During the transition.** The stamp arrives fleet-wide with the action
 (`@main`), but the route is served by the **connector's own pinned SDK**. Until
 an app bumps, its pod 404s and `verify` falls back to the record layers with a

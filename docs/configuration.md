@@ -30,6 +30,7 @@ Two sources, baked first. `build-and-publish-app.yaml` writes `app/atlan_build.j
 | `ATLAN_APPLICATION_VERSION` | _(empty)_ | Version of the app release as Global Marketplace stores it (release tag for semver apps, sha7 for CD apps). Used only when the baked file is absent or has no `app_version`. |
 | `ATLAN_COMMIT_SHA` | _(empty)_ | Git commit the image was built from. Used only when the baked file is absent or has no `commit_sha`. Deployers do not normally stamp this. |
 | `ATLAN_BUILD_INFO_PATH` | `app/atlan_build.json` | Override the baked-identity lookup for non-template layouts whose Dockerfile does not copy `app/`. When unset, the SDK also tries `<parent of ATLAN_CONTRACT_GENERATED_DIR>/atlan_build.json`. |
+| `ATLAN_BUILD_ID` | _(empty)_ | Immutable image tag, stamped as an image `ENV` by the e2e build action. Takes precedence over the baked file's `build_id`; both are read by `application_sdk.app.build_identity.build_identity()`. Not set on released images, which carry the value in the file instead. |
 | `ATLAN_RELEASE_ID` | _(empty)_ | Release UUID from Global Marketplace. Injected by the deployer. |
 | `ATLAN_RELEASE_CHANNEL` | _(empty)_ | Release channel (`all`, `beta`, `staging`, `specific`). |
 | `ATLAN_SDK_VERSION` | _(empty)_ | SDK version used to build this app image. |
