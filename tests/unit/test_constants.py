@@ -5,7 +5,10 @@ import importlib
 import pytest
 
 import application_sdk.constants as constants
-from application_sdk.constants import _load_worker_liveness_max_idle_seconds
+from application_sdk.constants import (
+    _load_dirty_restart_max_wait_seconds,
+    _load_worker_liveness_max_idle_seconds,
+)
 
 
 class TestLoadWorkerLivenessMaxIdleSeconds:
@@ -215,3 +218,33 @@ class TestStorageLockWaitProgressSeconds:
     async def _hold_briefly(registry, path: str) -> None:
         async with registry.guard(path):
             pass
+
+
+class TestLoadDirtyRestartMaxWaitSeconds:
+    """Cover the ``ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS`` loader."""
+
+    ENV = "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS"
+
+    def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv(self.ENV, raising=False)
+        assert _load_dirty_restart_max_wait_seconds() == 600
+
+    def test_valid_positive_value(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(self.ENV, "900")
+        assert _load_dirty_restart_max_wait_seconds() == 900
+
+    def test_zero_is_the_kill_switch(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(self.ENV, "0")
+        assert _load_dirty_restart_max_wait_seconds() == 0
+
+    def test_negative_clamped_to_zero(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(self.ENV, "-30")
+        assert _load_dirty_restart_max_wait_seconds() == 0
+
+    def test_non_numeric_falls_back_to_the_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A typo in a deployment must not stop a worker from running at all."""
+        monkeypatch.setenv(self.ENV, "abc")
+        with pytest.warns(UserWarning, match="not a valid integer"):
+            assert _load_dirty_restart_max_wait_seconds() == 600

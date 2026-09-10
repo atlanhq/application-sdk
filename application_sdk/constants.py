@@ -531,6 +531,34 @@ def _load_worker_liveness_max_idle_seconds() -> float:
 
 WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 
+
+#: How long a worker whose pod already restarted waits before it starts polling.
+#: The mechanism is in ``application_sdk.common.restart_marker``.
+#:
+#: This sizes the wait, it does not enable it: the marker's volume does that, so
+#: with no volume mounted the value is never read. ``0`` is the kill switch for a
+#: deployment that mounts the volume and wants the old behaviour.
+#:
+#: The default has to outlast whatever replaces the pod. Over-waiting only costs
+#: wall-clock on a pod that was going to be replaced anyway; under-waiting is
+#: worse than not waiting, because the worker resumes on the limit that already
+#: failed moments before it would have been rescued. An unparsable value (an
+#: unset Helm value renders as "") falls back rather than failing every worker.
+def _load_dirty_restart_max_wait_seconds() -> int:
+    raw = os.getenv("ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS", "600")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        warnings.warn(
+            f"ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS={raw!r} is not a valid integer; "
+            "falling back to 600",
+            stacklevel=2,
+        )
+        return 600
+
+
+DIRTY_RESTART_IDLE_MAX_SECONDS = _load_dirty_restart_max_wait_seconds()
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations.
 #: Enabled by default; set ATLAN_SQL_USE_SERVER_SIDE_CURSOR to any value other
