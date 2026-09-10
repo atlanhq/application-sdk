@@ -291,12 +291,11 @@ async def _publish_event_via_binding(event: Event) -> None:
             raise
         url = _resolve_event_ingress_url()
         if url is None:
-            logger.error(
+            logger.exception(
                 "Dapr eventstore binding failed for event %s and no Event Ingress URL "
                 "could be resolved for the direct HTTP fallback (no eventstore component "
-                "on disk and ATLAN_BASE_URL unset); event not published. dapr_error=%s",
+                "on disk and ATLAN_BASE_URL unset); event not published",
                 event.event_name,
-                binding_error,
             )
             raise
         logger.warning(
@@ -306,19 +305,17 @@ async def _publish_event_via_binding(event: Event) -> None:
             event.event_name,
             url,
             binding_error,
+            exc_info=True,
         )
         try:
             await _publish_event_direct(url, payload, binding_metadata)
         # conformance: ignore[E004] both channels failed; the original BindingError is re-raised so callers' handling is unchanged, and the fallback failure is logged with its own cause
         except Exception as direct_error:
-            logger.error(
+            logger.exception(
                 "FALLBACK FAILED: direct HTTPS publish of event %s to %s also failed; "
-                "event not published. direct_error=%s: %s dapr_error=%s",
+                "event not published",
                 event.event_name,
                 url,
-                type(direct_error).__name__,
-                direct_error,
-                binding_error,
             )
             raise binding_error from direct_error
         logger.warning(
@@ -328,6 +325,7 @@ async def _publish_event_via_binding(event: Event) -> None:
             event.event_type,
             event.get_topic_name(),
             url,
+            exc_info=True,
         )
         return
 

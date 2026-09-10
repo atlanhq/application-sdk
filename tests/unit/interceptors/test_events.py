@@ -853,7 +853,7 @@ class TestDirectHttpFallback:
             with pytest.raises(BindingError) as exc:
                 await _publish_event_via_binding(self._event())
         assert isinstance(exc.value.__cause__, ConnectionError)
-        errors = " | ".join(str(c.args[0]) for c in log.error.call_args_list)
+        errors = " | ".join(str(c.args[0]) for c in log.exception.call_args_list)
         assert "FALLBACK FAILED" in errors
 
     def test_url_from_component_beats_base_url(self, monkeypatch, tmp_path):
