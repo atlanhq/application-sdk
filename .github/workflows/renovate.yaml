@@ -155,7 +155,7 @@ jobs:
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.12.12"
+          version: "0.12.13"
 
       # Version omitted deliberately — as it now is at every call site: the
       # action resolves the single pin in application_sdk/pkl_version.py, so no
