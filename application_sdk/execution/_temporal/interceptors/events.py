@@ -510,10 +510,12 @@ def _read_http_binding_url(components_dir: str, name: str) -> str | None:
                 "Skipping unreadable Dapr component file %s", yaml_file, exc_info=True
             )
             continue
+        metadata = doc.get("metadata") if isinstance(doc, dict) else None
         if not (
             isinstance(doc, dict)
             and doc.get("kind") == "Component"
-            and doc.get("metadata", {}).get("name") == name
+            and isinstance(metadata, dict)
+            and metadata.get("name") == name
         ):
             continue
         spec = doc.get("spec") or {}

@@ -960,6 +960,25 @@ class TestDirectHttpFallback:
                 == "https://named/api/eventingress/"
             )
 
+    @pytest.mark.parametrize(
+        "sibling_yaml",
+        [
+            "apiVersion: dapr.io/v1alpha1\nkind: Component\nmetadata:\n",
+            "apiVersion: dapr.io/v1alpha1\nkind: Component\nmetadata: []\n",
+        ],
+        ids=["null-metadata", "list-metadata"],
+    )
+    def test_url_resolution_skips_shapeless_metadata_siblings(
+        self, tmp_path, sibling_yaml
+    ):
+        """A sibling that parses but has non-dict metadata must not abort the scan."""
+        (tmp_path / "aaa-shapeless.yaml").write_text(sibling_yaml)
+        _component(tmp_path)
+        assert (
+            events_module._resolve_event_ingress_url()
+            == "https://tenant.example/api/eventingress/"
+        )
+
     def test_url_resolution_has_no_base_url_guess(self, tmp_path):
         with mock.patch(
             "application_sdk.constants.ATLAN_BASE_URL", "https://tenant.example"
