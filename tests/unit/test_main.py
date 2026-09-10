@@ -14,6 +14,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.main import (
+    DEFAULT_WORKFLOW_MAX_TIMEOUT_HOURS,
     AppConfig,
     _create_infrastructure,
     _derive_service_name,
@@ -386,7 +387,7 @@ class TestParseWorkflowMaxTimeoutHours:
         assert _parse_workflow_max_timeout_hours() == 4
 
     def test_zero_returns_none_silently(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Zero is treated as unset — returns None without a warning."""
+        """Zero is the documented opt-out — returns None without a warning."""
         monkeypatch.setenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "0")
         with patch("application_sdk.main.logger") as mock_log:
             result = _parse_workflow_max_timeout_hours()
@@ -404,10 +405,16 @@ class TestParseWorkflowMaxTimeoutHours:
         mock_log.warning.assert_called_once()
         assert "ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS" in mock_log.warning.call_args[0][0]
 
-    def test_unset_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Unset env var returns None."""
+    def test_unset_returns_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unset env var falls back to the 72-hour default cap."""
         monkeypatch.delenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", raising=False)
-        assert _parse_workflow_max_timeout_hours() is None
+        assert _parse_workflow_max_timeout_hours() == DEFAULT_WORKFLOW_MAX_TIMEOUT_HOURS
+        assert DEFAULT_WORKFLOW_MAX_TIMEOUT_HOURS == 72
+
+    def test_appconfig_default_matches_constant(self) -> None:
+        """A directly-constructed AppConfig carries the same default cap."""
+        config = AppConfig(mode="worker", app_module="pkg.apps:MyApp")
+        assert config.workflow_max_timeout_hours == DEFAULT_WORKFLOW_MAX_TIMEOUT_HOURS
 
 
 class TestRunMain:

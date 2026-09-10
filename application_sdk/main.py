@@ -62,6 +62,15 @@ faulthandler.enable()
 # Used by the SIGUSR1 debug handler to snapshot asyncio tasks.
 _worker_event_loop: asyncio.AbstractEventLoop | None = None
 
+#: Default ceiling on workflow execution time, in hours, when
+#: ``ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS`` is unset. Previously unset meant "no
+#: SDK-level cap", which left the Temporal namespace ceiling as the only
+#: backstop — a hung workflow could sit in RUNNING indefinitely. 72 hours is
+#: generous enough for the longest whale-tenant crawl + transform + miner run
+#: while still guaranteeing every workflow eventually reaches a terminal
+#: state. Set the env var to ``0`` to opt out and restore "no SDK cap".
+DEFAULT_WORKFLOW_MAX_TIMEOUT_HOURS = 72
+
 
 def _debug_dump_handler(signum: int, frame: object) -> None:
     """Dump thread stacks and asyncio tasks to /tmp/debug-dump-<pid>.txt on SIGUSR1."""
@@ -221,11 +230,13 @@ class AppConfig:
     """Maximum concurrent object-store uploads/downloads.
     Reads same env var as constants.MAX_CONCURRENT_STORAGE_TRANSFERS."""
 
-    workflow_max_timeout_hours: int | None = None
+    workflow_max_timeout_hours: int | None = DEFAULT_WORKFLOW_MAX_TIMEOUT_HOURS
     """Maximum workflow execution timeout in hours. When set, passed as
     execution_timeout to Temporal on every /workflows/v1/start call.
-    Reads env var ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS. None means no SDK-level
-    ceiling (Temporal namespace default applies)."""
+    Reads env var ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS, defaulting to
+    DEFAULT_WORKFLOW_MAX_TIMEOUT_HOURS (72) when unset. None means no
+    SDK-level ceiling (Temporal namespace default applies) — set the env var
+    to 0 to opt out."""
 
     def __post_init__(self) -> None:
         """Derive task_queue from app_module when not explicitly set."""
@@ -770,8 +781,15 @@ def _derive_task_queue(app_module: str) -> str:
 
 
 def _parse_workflow_max_timeout_hours() -> int | None:
-    """Parse ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS, returning None for unset or non-positive values."""
-    hours = _env_int("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", 0)
+    """Parse ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS.
+
+    Unset falls back to ``DEFAULT_WORKFLOW_MAX_TIMEOUT_HOURS`` (72). Explicit
+    non-positive values return None, i.e. no SDK-level cap — ``0`` is the
+    documented opt-out and stays silent, negatives warn.
+    """
+    hours = _env_int(
+        "ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", DEFAULT_WORKFLOW_MAX_TIMEOUT_HOURS
+    )
     if hours <= 0:
         if hours < 0:
             logger.warning(
