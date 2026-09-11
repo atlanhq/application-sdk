@@ -215,3 +215,65 @@ class TestStorageLockWaitProgressSeconds:
     async def _hold_briefly(registry, path: str) -> None:
         async with registry.guard(path):
             pass
+
+
+class TestLoadBuildInfo:
+    """Cover the baked ``app/atlan_build.json`` identity loader."""
+
+    def test_reads_baked_identity(self, tmp_path):
+        p = tmp_path / "atlan_build.json"
+        p.write_text(
+            '{"app_version": "1.4.0", "commit_sha": "abc1234def", '
+            '"image": "ghcr.io/atlanhq/x:1.4.0", "built_at": "2026-09-10T00:00:00+00:00"}'
+        )
+        info = constants.load_build_info(str(p))
+        assert info["app_version"] == "1.4.0"
+        assert info["commit_sha"] == "abc1234def"
+        assert info["image"] == "ghcr.io/atlanhq/x:1.4.0"
+
+    def test_missing_file_is_empty(self, tmp_path):
+        assert constants.load_build_info(str(tmp_path / "nope.json")) == {}
+
+    def test_malformed_file_is_empty(self, tmp_path):
+        p = tmp_path / "atlan_build.json"
+        p.write_text("{not json")
+        assert constants.load_build_info(str(p)) == {}
+
+    def test_non_object_is_empty(self, tmp_path):
+        p = tmp_path / "atlan_build.json"
+        p.write_text('["a", "b"]')
+        assert constants.load_build_info(str(p)) == {}
+
+    def test_env_override_path(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
+        p = tmp_path / "custom.json"
+        p.write_text('{"app_version": "9.9.9", "commit_sha": "feedface"}')
+        monkeypatch.setenv("ATLAN_BUILD_INFO_PATH", str(p))
+        assert constants.load_build_info()["app_version"] == "9.9.9"
+
+    def test_baked_wins_over_env(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
+        """The file describes the image; the env var describes what the deployer
+        thinks it deployed. When both exist the image is the truth."""
+        p = tmp_path / "atlan_build.json"
+        p.write_text('{"app_version": "1.4.0", "commit_sha": "abc1234"}')
+        monkeypatch.setenv("ATLAN_BUILD_INFO_PATH", str(p))
+        monkeypatch.setenv("ATLAN_APPLICATION_VERSION", "1.3.0")
+        importlib.reload(constants)
+        try:
+            assert constants.APPLICATION_VERSION == "1.4.0"
+            assert constants.COMMIT_SHA == "abc1234"
+        finally:
+            monkeypatch.delenv("ATLAN_BUILD_INFO_PATH")
+            monkeypatch.delenv("ATLAN_APPLICATION_VERSION")
+            importlib.reload(constants)
+
+    def test_env_fallback_when_no_file(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ATLAN_BUILD_INFO_PATH", str(tmp_path / "absent.json"))
+        monkeypatch.setenv("ATLAN_APPLICATION_VERSION", "1.3.0")
+        importlib.reload(constants)
+        try:
+            assert constants.APPLICATION_VERSION == "1.3.0"
+            assert constants.COMMIT_SHA == ""
+        finally:
+            monkeypatch.delenv("ATLAN_BUILD_INFO_PATH")
+            monkeypatch.delenv("ATLAN_APPLICATION_VERSION")
+            importlib.reload(constants)

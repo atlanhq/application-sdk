@@ -127,3 +127,77 @@ jobs:
 | Release (pre-release, e.g. rc) | All push-to-main tags + `:VERSION`, `:sha-{SHA7}` |
 
 Apps opting out of explicit versioning can pin the mutable `:{branch}` tag (e.g. `:main`) in deployment manifests — it always tracks the latest build on that branch without requiring manual SHA updates.
+
+## Image identity
+
+Every image built by `build-and-publish-app.yaml` carries its own identity so a
+running worker can say exactly which build it is, however it was deployed.
+
+The build job writes `app/atlan_build.json` into the build context before the
+image build, and the template Dockerfile's `COPY app/ app/` bakes it in — no
+Dockerfile change per app:
+
+```json
+{
+  "app_version": "0.3.0",
+  "commit_sha": "<full git sha>",
+  "build_id": "main-abc1234",
+  "image": "ghcr.io/atlanhq/atlan-foo-app:0.3.0",
+  "built_at": "2026-09-10T12:00:00+00:00"
+}
+```
+
+`app_version` is the exact string the publish job sends to Global Marketplace as
+`version` (the release tag for semver apps, the 7-char SHA for CD apps), so a
+worker's self-report matches `versions.version` byte for byte. The publish job
+also sends `commit_sha`, which GM stores on the version — the only handle that
+resolves a semver image to its release, since `:0.3.0` carries no SHA.
+
+The SDK reads the file at startup (`application_sdk.constants.load_build_info`)
+and reports `app_version` and `commit_sha` on `worker_start` and on every
+`token_refresh`. The baked file wins over `ATLAN_APPLICATION_VERSION`: the env
+var describes what a deployer thinks it deployed, the file describes the image.
+Single-app SDR customers set no version env vars and only bump the tag when
+they upgrade, so the file is the one identity that survives their upgrades.
+Apps with a non-template Dockerfile that does not copy `app/` can point the SDK
+at the file with `ATLAN_BUILD_INFO_PATH`.
+
+### `build_id`, and its relationship to `ATLAN_BUILD_ID`
+
+`build_id` is the immutable image tag (`{branch}-{sha7}`), and it is the same
+identity FND-1684 already established for the e2e path as the `ATLAN_BUILD_ID`
+image ENV — see [`connector-ci-e2e.md`](connector-ci-e2e.md). That ENV is stamped
+by the `build-app-image` action, which builds only the e2e image and is never
+called by `build-and-publish-app.yaml`, so a **released** image carried no build
+identity at all and answered the build-identity route with `""`.
+
+There is one reader for both carriers,
+`application_sdk.app.build_identity.build_identity()`, which prefers the ENV:
+
+| Built by | Carrier | Reported by |
+|---|---|---|
+| `build-app-image` action (e2e) | `ATLAN_BUILD_ID` ENV | `build_identity()`, unchanged |
+| `build-and-publish-app.yaml` (release) | `build_id` in `app/atlan_build.json` | `build_identity()`, new |
+
+The ENV wins because an e2e build derives that exact string and compares against
+it. A second env var and a second reader would make "which build is this?" a
+question with two answers that can disagree.
+
+### What existing consumers see change
+
+The baked file wins over the env var for **new images only** — an image built
+before CI started baking it has no file and behaves exactly as it does today.
+On a new image, every reader of `APPLICATION_VERSION` now sees the value CI
+baked rather than the one the deployer stamped:
+
+| Reader | Field | Effect |
+|---|---|---|
+| `worker_start` / `token_refresh` events | `app_version`, `commit_sha` | The point of the change. |
+| OTel `target_info` gauge (`observability/utils.py`) | `app.version` | Now the GM `version` string by construction, rather than whatever the deployer stamped. |
+| Preflight results store (`preflight_persist`) | `app_version` | Same. Its "as its catalog card carries it" contract holds more tightly, not less: `gm_version` **is** the string publish sends as `version`. |
+
+The two can only disagree when a deployer stamps something other than the GM
+version it deployed — which is the case this change exists to correct. A
+deployment that needs the deployer's value to win should stop baking the file
+(`ATLAN_BUILD_INFO_PATH` pointed at a path that does not exist), not reorder the
+precedence: the file is the only source a single-app SDR customer has.

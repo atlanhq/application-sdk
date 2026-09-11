@@ -85,6 +85,7 @@ def test_channel_used_when_no_tenants() -> None:
         ("release_model", "release_model"),
         ("created_by", "created_by"),
         ("entrypoints", "entrypoints"),
+        ("commit_sha", "commit_sha"),
     ],
 )
 def test_empty_optional_is_omitted_not_blanked(field: str, wire_key: str) -> None:
@@ -118,6 +119,12 @@ def test_sdr_capability_alone_still_produces_a_config() -> None:
 
 def test_source_marks_the_registration_as_ci() -> None:
     assert build(_minimal())["source"] == "ci_publish"
+
+
+def test_commit_sha_is_sent_when_present() -> None:
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    body = build(_minimal(commit_sha=sha))
+    assert body["commit_sha"] == sha
 
 
 # ── Drift guard against the release path ─────────────────────────────────────
@@ -161,6 +168,7 @@ def test_field_set_matches_the_release_workflow() -> None:
                 app_configs="e30=",
                 release_model="semver",
                 created_by="someone",
+                commit_sha="0123456789abcdef0123456789abcdef01234567",
             )
         )
     )
