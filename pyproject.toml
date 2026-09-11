@@ -448,3 +448,29 @@ atlan-application-sdk-conformance = { path = "packages/conformance" }
 # url = "https://test.pypi.org/simple/"
 # publish-url = "https://test.pypi.org/legacy/"
 # explicit = true
+
+# Pin the resolver's default index to PyPI explicitly (FND-1928).
+#
+# Atlan IT installs the Endor Labs package firewall as a machine-wide uv default index in
+# `~/.config/uv/uv.toml` (`[[index]] … default = true`, credentials inline). With that in
+# effect and no project-level override, every `uv run` / `uv sync` / `uv lock` silently
+# rewrites all ~3,600 package URLs in `uv.lock` from `files.pythonhosted.org` to
+# `factory.endorlabs.com/...`. Nothing surfaces in the command output — the command prints
+# its usual result and leaves the tree dirty with a diff carrying zero version or hash
+# changes. Committing that lock points CI at a credentialed host it cannot reach, and every
+# job then fails at dependency install with `401 Unauthorized`, on a different package each
+# run, looking exactly like an outage in someone else's infrastructure.
+#
+# A project-level default index takes precedence over the user-level one, so this stanza
+# makes local resolution agree with CI (which has no Endor config and always resolved from
+# PyPI) and keeps `uv.lock` portable. Adding it does not change resolution: same versions,
+# same hashes, only the URLs stay put.
+#
+# This scopes the firewall bypass to this repo's Python resolution only; the machine-wide
+# Endor config still governs npm, Maven, and every other project. Conformance rules D012
+# (this pin is present) and D013 (no non-PyPI host reached `uv.lock`) enforce both halves
+# fleet-wide.
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
