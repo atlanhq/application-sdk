@@ -17,8 +17,8 @@ findings in the working tree, as reported by `suite.runner --series D`.
 #### violations-dependency
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
-include WARNING results in strict mode — D002/D003/D004/D006/D007/D008 are
-WARN-tier, so they are processed in strict mode; D001, D005, D009, D010 and
+include WARNING results in strict mode — D002/D003/D004/D006/D007/D008/D012/D013
+are WARN-tier, so they are processed in strict mode; D001, D005, D009, D010 and
 D011 are BLOCK-tier and processed in both modes.
 
 This facet's fingerprint moves when any D-series finding is resolved (fixed or
@@ -219,6 +219,56 @@ fix.  The re-detection gate is authoritative for this area — see
   Preserve the task's existing name; only its body changes. This is BLOCK-tier
   and has no suppress path in default mode, same as D001.
 
+- **D012 UnpinnedPackageIndex** (`classification = "mechanical"`) — the root
+  `pyproject.toml` does not pin PyPI as uv's default index, so the repo
+  inherits whatever default index the machine supplies.  Two branches; read the
+  message to tell them apart.
+
+  1. **No default index** — append the stanza.  It is a fixed block, identical
+     in every repo:
+
+     ```toml
+     [[tool.uv.index]]
+     name = "pypi"
+     url = "https://pypi.org/simple"
+     default = true
+     ```
+
+  2. **Default index is not PyPI** — `finding.line` points at the offending
+     `url =` line inside the `[[tool.uv.index]]` table that carries
+     `default = true`.  Replace **only that value** with
+     `"https://pypi.org/simple"`.  Leave the entry's `name` and every other
+     index table alone: a non-default (`explicit = true`) internal index is
+     legitimate and must survive the edit.
+
+  Two constraints on the edit, both of which have already caused an incident
+  elsewhere:
+
+  - **Write it into `pyproject.toml`, never into a project-level `uv.toml`.**
+    A `uv.toml` does override the user-level config, but it also suppresses
+    `[tool.uv]` in `pyproject.toml` entirely — silently dropping any
+    `constraint-dependencies` CVE floors declared there.  uv warns about this,
+    but names only `constraint-dependencies`, so the rest goes unremarked.
+  - **Do not regenerate `uv.lock` as part of this fix.**  Adding the index does
+    not change resolution — same versions, same hashes — so the lock must come
+    out of the edit byte-identical.  If the working tree's lock is *already*
+    rewritten, that is D013's finding, not this one; fix D012 first so the
+    repair does not immediately undo itself.
+
+  **Before editing, check whether D013 also fired on this repo.**  It matters
+  for the gates, not just for the ordering advice above: the orthogonal gate
+  runs `uv run poe test`, which is itself a `uv` invocation, so in a repo whose
+  lock is poisoned the gate can rewrite `uv.lock` while validating the edit —
+  the loop's own verification step becomes the thing that changes a file it
+  never touched.  With the pin now in place that rewrite moves the URLs back
+  *toward* PyPI, which is the desired end state, but it is still an unexpected
+  diff.  Record it in the edit description so the reviewer sees the lock change
+  came from the gate rather than from the prescription.
+
+  If the repo is genuinely mandated onto an internal mirror, do not edit: propose
+  `# conformance: ignore[D012] <reason>` on the finding's line and name the
+  mandate in the justification.
+
 **Advisory rules** (`autofixable = false`, `classification = "judgment"`;
 WARN-tier — route to residue for human decision):
 
@@ -242,6 +292,35 @@ WARN-tier — route to residue for human decision):
   Never auto-delete without reading the codebase context — dynamic imports,
   `__import__`, `importlib.import_module`, entry-point declarations in
   `[project.entry-points.*]`, and `console_scripts` are all legitimate uses.
+
+- **D013 NonPyPILockfileIndex** (`classification = "judgment"`,
+  `not_remediable = true`) — **always route to residue; never edit a file for
+  this finding.**  The lock records a non-PyPI host, or embeds an index
+  credential.
+
+  This is deliberate, not a gap.  The repair is not a text edit: rewriting hosts
+  inside `uv.lock` by hand would produce a lock whose URLs no longer match the
+  resolution that generated it, which is a worse failure than the one being
+  fixed, and the loop's write scope cannot run `uv` to regenerate it properly.
+
+  Emit a residue entry carrying the recovery recipe, and lead with which branch
+  fired:
+
+  - **Credential branch** (message says *rotate the credential*) — this outranks
+    everything else in the area: an index credential is in version control.
+    The residue entry must say so plainly, and must say to rotate the credential
+    **before** the lock is regenerated.  Do not reproduce the offending values in
+    the residue entry — the finding deliberately does not quote them, and residue
+    is written to a file that gets read and shared.
+  - **Host branch** — restore the committed lock from version control (the diff
+    is the giveaway: N insertions, N deletions, no version and no hash changed).
+    If a dependency genuinely did change, re-lock with
+    `uv lock --default-index https://pypi.org/simple`.
+
+  In both cases, check whether D012 also fired.  If it did, the pin is missing
+  and the rewrite will recur on the contributor's next `uv` command — say so in
+  the residue entry, because fixing only the lock is a repair with a known
+  expiry date.
 
 - **D010 QueryTransformerWithoutDuckdb** — the app imports the SDK query
   transformer (`application_sdk.transformers.query`; the finding message names

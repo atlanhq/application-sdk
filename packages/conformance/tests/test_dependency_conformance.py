@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from conformance.suite.checks._ast_common import _is_suppressed, parse_toml_suppressions
 from conformance.suite.checks.dependency_conformance import (
+    _LOCK_URL_RE,
     _REMOTE_COMPONENT_FETCH_RE,
     SDK_PYTHON_FLOOR,
     _collect_dialect_drivers,
@@ -26,6 +27,15 @@ from conformance.suite.checks.dependency_conformance import (
 )
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition
+
+#: The ``[[tool.uv.index]]`` stanza D012 requires. Fixtures that assert an
+#: exact rule-id set append it, because D012 fires on its *absence* and would
+#: otherwise appear in every one of them.
+_PINNED_INDEX = (
+    '\n[[tool.uv.index]]\nname = "pypi"\n'
+    'url = "https://pypi.org/simple"\ndefault = true\n'
+)
+
 
 # ── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -940,13 +950,16 @@ def test_main_sarif_output_validates(tmp_path: Path) -> None:
     # Use an unresolvable dependency name so D003 (which inspects installed
     # metadata) treats it as unanalysable and stays silent — keeping this an
     # exactly-one-D001 scenario regardless of what is installed in the test env.
-    # The conformance dev group keeps D011 quiet for the same reason.
+    # The conformance dev group keeps D011 quiet for the same reason, and the
+    # pinned index keeps D012 quiet: all three fire on an *absence*, so every
+    # fixture asserting an exact rule-id set has to satisfy them explicitly.
     _scratch_pyproject(
         tmp_path,
         '[project]\nname = "x"\nversion = "0"\n'
         'dependencies = ["nonexistent-fixture-pkg-zzz>=1,<2"]\n'
         "\n[dependency-groups]\n"
-        'dev = [\n    "atlan-application-sdk-conformance>=0.17.0,<1.0.0",\n]\n',
+        'dev = [\n    "atlan-application-sdk-conformance>=0.17.0,<1.0.0",\n]\n'
+        + _PINNED_INDEX,
     )
     sarif_file = tmp_path / "out.sarif"
     main(
@@ -974,12 +987,13 @@ def test_self_check_passes_via_main(tmp_path: Path) -> None:
 
     D001/D002 are app-only and exempt the SDK. D003 is scope=both and does apply
     to the SDK, but the declared dependency here is unresolvable, so D003 skips
-    it — leaving zero findings overall.
+    it. D012 is scope=both too and fires on an absence, so the fixture pins the
+    index explicitly — leaving zero findings overall.
     """
     _scratch_pyproject(
         tmp_path,
         '[project]\nname = "atlan-application-sdk"\nversion = "3.17.2"\n'
-        'dependencies = ["nonexistent-fixture-pkg-zzz>=1,<2"]\n',
+        'dependencies = ["nonexistent-fixture-pkg-zzz>=1,<2"]\n' + _PINNED_INDEX,
     )
     sarif_file = tmp_path / "out.sarif"
     main(
@@ -1168,7 +1182,7 @@ def test_d003_runs_on_sdk_but_d001_d002_do_not(tmp_path: Path) -> None:
     pp = tmp_path / "pyproject.toml"
     pp.write_text(
         '[project]\nname = "atlan-application-sdk"\nversion = "3.17.2"\n'
-        'dependencies = [\n    "requests>=2,<3",\n]\n',
+        'dependencies = [\n    "requests>=2,<3",\n]\n' + _PINNED_INDEX,
         encoding="utf-8",
     )
     findings = scan_all(
@@ -2243,3 +2257,293 @@ def test_is_floating_range_and_is_bounded_specifier_disagree_both_ways() -> None
 
     assert _is_bounded_specifier("<1.0.0") is False
     assert _is_floating_range("<1.0.0") is True
+
+
+# ── D012 / D013 — package-index pinning (FND-1928) ───────────────────────────
+
+
+_D012_HEAD = (
+    '[project]\nname = "demo-app"\nversion = "0.1.0"\n'
+    'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n]\n'
+)
+
+_CLEAN_LOCK = (
+    "version = 1\nrevision = 2\n\n"
+    '[[package]]\nname = "idna"\nversion = "3.10"\n'
+    'source = { registry = "https://pypi.org/simple" }\n'
+    'sdist = { url = "https://files.pythonhosted.org/packages/aa/idna.tar.gz", '
+    'hash = "sha256:dead" }\n'
+    'wheels = [\n    { url = "https://files.pythonhosted.org/packages/bb/'
+    'idna-py3-none-any.whl", hash = "sha256:beef" },\n]\n'
+)
+
+
+def _index_scan(
+    tmp_path: Path, body: str, *, lock: str | None = None, rule: str = "D012"
+) -> list:
+    """Write a root pyproject (and optionally a lock); return that rule's findings.
+
+    D012/D013 live in ``scan_all`` rather than ``scan_text`` for two reasons:
+    they are repo-level (a monorepo must not collect one finding per member),
+    and they are ``scope=both``, so they have to run outside the self-check
+    guard that exempts the SDK from the per-file D rules.
+    """
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(body, encoding="utf-8")
+    if lock is not None:
+        (tmp_path / "uv.lock").write_text(lock, encoding="utf-8")
+    findings = scan_all(
+        [pp],
+        tmp_path,
+        imported_modules=set(),
+        dist_import_map={},
+        dialect_drivers=set(),
+    )
+    return [f for f in findings if f.rule_id == rule]
+
+
+# ── D012 ─────────────────────────────────────────────────────────────────────
+
+
+def test_d012_clean_when_pypi_is_pinned_as_default(tmp_path: Path) -> None:
+    assert _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX) == []
+
+
+def test_d012_accepts_a_trailing_slash_on_the_pypi_url(tmp_path: Path) -> None:
+    """``https://pypi.org/simple/`` is the same index; a slash is not a violation."""
+    body = _D012_HEAD + _PINNED_INDEX.replace(
+        "https://pypi.org/simple", "https://pypi.org/simple/"
+    )
+    assert _index_scan(tmp_path, body) == []
+
+
+def test_d012_fires_when_no_index_is_declared(tmp_path: Path) -> None:
+    findings = _index_scan(tmp_path, _D012_HEAD)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule_id == "D012"
+    assert "default = true" in f.message
+    assert not f.suppressed
+
+
+def test_d012_fires_when_every_index_is_explicit(tmp_path: Path) -> None:
+    """An ``explicit = true`` index is additive: it never replaces the default."""
+    body = (
+        _D012_HEAD + '\n[[tool.uv.index]]\nname = "testpypi"\n'
+        'url = "https://test.pypi.org/simple/"\nexplicit = true\n'
+    )
+    findings = _index_scan(tmp_path, body)
+    assert len(findings) == 1
+    # anchored on the index table, not line 1, so the suppression directive has
+    # somewhere sensible to live
+    assert findings[0].line == 8
+
+
+def test_d012_fires_when_the_default_index_is_not_pypi(tmp_path: Path) -> None:
+    """The committed-proxy case: a default index is declared, but not PyPI's."""
+    body = (
+        _D012_HEAD + '\n[[tool.uv.index]]\nname = "mirror"\n'
+        'url = "https://mirror.internal/simple"\ndefault = true\n'
+    )
+    findings = _index_scan(tmp_path, body)
+    assert len(findings) == 1
+    assert "mirror.internal" in findings[0].message
+    # anchored on the offending ``url =`` line
+    assert findings[0].line == 10
+
+
+def test_d012_anchors_on_the_tool_uv_table_when_there_is_no_index(
+    tmp_path: Path,
+) -> None:
+    body = _D012_HEAD + '\n[tool.uv]\ndefault-groups = ["dev"]\n'
+    findings = _index_scan(tmp_path, body)
+    assert len(findings) == 1
+    assert findings[0].line == 8
+
+
+def test_d012_grades_the_sdk_too(tmp_path: Path) -> None:
+    """scope=both: the SDK inherits a machine-wide index exactly as an app does.
+
+    This is the one D-series behaviour that must survive ``_is_self_check``,
+    which exempts the SDK from every per-file D rule.
+    """
+    body = (
+        '[project]\nname = "atlan-application-sdk"\nversion = "0.1.0"\n'
+        "dependencies = []\n"
+    )
+    findings = _index_scan(tmp_path, body)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "D012"
+
+
+def test_d012_suppressed_by_inline_directive(tmp_path: Path) -> None:
+    body = (
+        _D012_HEAD + '\n[[tool.uv.index]]\nname = "mirror"\n'
+        "# conformance: ignore[D012] this repo is mandated onto the internal mirror\n"
+        'url = "https://mirror.internal/simple"\ndefault = true\n'
+    )
+    findings = _index_scan(tmp_path, body)
+    assert len(findings) == 1
+    assert findings[0].suppressed
+
+
+def test_d012_reported_once_for_a_monorepo(tmp_path: Path) -> None:
+    """Repo-level: sub-package pyprojects must not each contribute a finding."""
+    sub = tmp_path / "packages" / "inner"
+    sub.mkdir(parents=True)
+    (sub / "pyproject.toml").write_text(_D012_HEAD, encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(_D012_HEAD, encoding="utf-8")
+    findings = [
+        f
+        for f in scan_all(
+            [tmp_path / "pyproject.toml", sub / "pyproject.toml"],
+            tmp_path,
+            imported_modules=set(),
+            dist_import_map={},
+            dialect_drivers=set(),
+        )
+        if f.rule_id == "D012"
+    ]
+    assert len(findings) == 1
+
+
+def test_d012_grades_the_first_default_index_when_several_are_marked(
+    tmp_path: Path,
+) -> None:
+    """uv uses the first default index, so that is the one graded."""
+    body = (
+        _D012_HEAD + '\n[[tool.uv.index]]\nname = "mirror"\n'
+        'url = "https://mirror.internal/simple"\ndefault = true\n'
+        '\n[[tool.uv.index]]\nname = "pypi"\n'
+        'url = "https://pypi.org/simple"\ndefault = true\n'
+    )
+    findings = _index_scan(tmp_path, body)
+    assert len(findings) == 1
+    assert "mirror.internal" in findings[0].message
+
+
+# ── D013 ─────────────────────────────────────────────────────────────────────
+
+
+def test_d013_clean_when_the_lock_resolves_from_pypi(tmp_path: Path) -> None:
+    assert (
+        _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=_CLEAN_LOCK, rule="D013")
+        == []
+    )
+
+
+def test_d013_silent_without_a_lockfile(tmp_path: Path) -> None:
+    """A repo with no uv.lock must never manufacture a finding."""
+    assert _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, rule="D013") == []
+
+
+def test_d013_fires_on_a_proxy_host(tmp_path: Path) -> None:
+    lock = _CLEAN_LOCK.replace("files.pythonhosted.org", "factory.endorlabs.com")
+    findings = _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013")
+    assert len(findings) == 1
+    f = findings[0]
+    # anchored on pyproject.toml, not uv.lock: a lockfile is regenerated
+    # wholesale, so an ignore directive written into it would not survive
+    assert f.file == "pyproject.toml"
+    assert "factory.endorlabs.com (2)" in f.message
+
+
+def test_d013_message_never_quotes_a_lock_url(tmp_path: Path) -> None:
+    """Findings reach SARIF, code scanning, CI logs and the remediation runs.
+
+    A message that interpolated the offending URL would copy an index
+    credential into all four, so only the host and a count are ever reported.
+    """
+    lock = _CLEAN_LOCK.replace(
+        "https://files.pythonhosted.org", "https://secret-token@factory.endorlabs.com"
+    )
+    findings = _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013")
+    assert len(findings) == 1
+    message = findings[0].message
+    assert "secret-token" not in message
+    assert findings[0].snippet is None
+    # the only URL a D013 message may contain is the PyPI one in its fix recipe
+    urls = [w for w in message.split() if w.startswith(("http://", "https://"))]
+    assert all("pypi.org/simple" in u for u in urls), urls
+
+
+def test_d013_credential_branch_takes_precedence_over_the_host_branch(
+    tmp_path: Path,
+) -> None:
+    """A secret in version control outranks a broken build; report it alone."""
+    lock = _CLEAN_LOCK.replace(
+        "https://files.pythonhosted.org", "https://endr%2Bkey@factory.endorlabs.com"
+    )
+    findings = _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013")
+    assert len(findings) == 1
+    assert "rotate the credential" in findings[0].message
+    assert "401" not in findings[0].message
+
+
+def test_d013_reports_zero_urls_as_undetermined_not_clean(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An inert matcher must not read as a clean result.
+
+    A line-anchored URL pattern matches nothing in a real uv.lock (uv writes
+    its URLs inside inline tables), and without this guard that mistake passes
+    silently on every repo in the fleet.
+    """
+    lock = (
+        'version = 1\nrevision = 2\n\n[[package]]\nname = "demo-app"\n'
+        'version = "0.1.0"\nsource = { editable = "." }\n'
+    )
+    findings = _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013")
+    assert findings == []
+    assert "no download URLs" in capsys.readouterr().err
+
+
+def test_d013_url_pattern_matches_inline_table_urls() -> None:
+    """Artifact URLs only: sdist/wheels, not ``source = { url }`` or ``direct_url``."""
+    sdist_line = 'sdist = { url = "https://files.pythonhosted.org/a.tar.gz" }'
+    assert _LOCK_URL_RE.findall(sdist_line) == [
+        "https://files.pythonhosted.org/a.tar.gz"
+    ]
+    wheel_line = (
+        '    { url = "https://files.pythonhosted.org/a.whl", hash = "sha256:x" }'
+    )
+    assert _LOCK_URL_RE.findall(wheel_line) == ["https://files.pythonhosted.org/a.whl"]
+    assert (
+        _LOCK_URL_RE.findall('source = { url = "https://example.com/pkg.whl" }') == []
+    )
+    assert _LOCK_URL_RE.findall('direct_url = "https://example.invalid/x"') == []
+
+
+def test_d013_ignores_a_direct_source_url(tmp_path: Path) -> None:
+    """A legitimate ``source = { url = ... }`` is not an index rewrite."""
+    lock = (
+        _CLEAN_LOCK + '\n[[package]]\nname = "local-wheel"\nversion = "1.0.0"\n'
+        'source = { url = "https://example.com/pkg.whl" }\n'
+    )
+    assert (
+        _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013") == []
+    )
+
+
+def test_d013_grades_the_sdk_too(tmp_path: Path) -> None:
+    """scope=both, same as D012."""
+    lock = _CLEAN_LOCK.replace("files.pythonhosted.org", "factory.endorlabs.com")
+    body = (
+        '[project]\nname = "atlan-application-sdk"\nversion = "0.1.0"\n'
+        "dependencies = []\n" + _PINNED_INDEX
+    )
+    findings = _index_scan(tmp_path, body, lock=lock, rule="D013")
+    assert len(findings) == 1
+
+
+def test_d013_suppressed_by_inline_directive(tmp_path: Path) -> None:
+    lock = _CLEAN_LOCK.replace("files.pythonhosted.org", "mirror.internal")
+    body = (
+        _D012_HEAD
+        + "\n# conformance: ignore[D013] lock is intentionally mirror-resolved here\n"
+        '[[tool.uv.index]]\nname = "pypi"\n'
+        'url = "https://pypi.org/simple"\ndefault = true\n'
+    )
+    findings = _index_scan(tmp_path, body, lock=lock, rule="D013")
+    assert len(findings) == 1
+    assert findings[0].suppressed
