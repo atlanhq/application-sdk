@@ -201,6 +201,17 @@ class TaskContext:
     inherit the fleet-wide one. Resolved alongside
     :attr:`progress_watchdog`, for the same reasons."""
 
+    evicted_heartbeat_details: list[Any] | None = None
+    """Heartbeat details the previous attempt last sent before a worker eviction.
+
+    Set by the workflow-side eviction retry loop when it re-dispatches this task
+    as a new activity execution. Temporal scopes heartbeat details to an
+    execution, so the new execution's ``activity.info().heartbeat_details`` is
+    empty; the heartbeat controller falls back to these so
+    ``get_heartbeat_details()`` keeps resuming from the last checkpoint across
+    pod shutdowns. ``None`` (the default, and for runs dispatched by a workflow
+    that predates this field) means nothing to carry."""
+
 
 def _current_workflow_type() -> str:
     """The run's workflow type, or ``""`` outside an activity context.
@@ -342,12 +353,15 @@ def create_activity_from_task(
         app_instance._context = app_context
 
         # Create heartbeat controller based on configuration
+        carried_details = tuple(context.evicted_heartbeat_details or ())
         if context.heartbeat_timeout_seconds is not None:
             heartbeat_controller: (
                 TemporalHeartbeatController | NoopHeartbeatController
-            ) = TemporalHeartbeatController()
+            ) = TemporalHeartbeatController(fallback_details=carried_details)
         else:
-            heartbeat_controller = NoopHeartbeatController()
+            heartbeat_controller = NoopHeartbeatController(
+                fallback_details=carried_details
+            )
 
         task_exec_context = TaskExecutionContext(
             app_context=app_context,
@@ -647,8 +661,18 @@ def create_activity_from_task(
                     )
 
                     _sever_cause_chain(e)
+                    # Carry this attempt's last heartbeat details on the failure:
+                    # the workflow-side eviction loop re-dispatches the task as a
+                    # NEW activity execution, and Temporal does not carry
+                    # heartbeat details across executions. Fall back to what the
+                    # previous attempt left behind when this one never beat.
+                    evicted_details = (
+                        heartbeat_controller.last_sent_details()
+                        or heartbeat_controller.get_last_heartbeat_details()
+                    )
                     raise ApplicationError(
                         "Activity terminated because the worker pod is shutting down",
+                        *evicted_details,
                         type=WORKER_EVICTED_TYPE,
                         non_retryable=True,
                     ) from e

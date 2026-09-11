@@ -14,9 +14,11 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest import mock
 
 import pytest
+from pydantic import Field
 
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
@@ -308,3 +310,168 @@ class TestRetryPolicyWiresWorkerEvicted:
         opts = get_activity_options(meta)
         types = opts["retry_policy"].non_retryable_error_types or []
         assert WORKER_EVICTED_TYPE in types
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat details survive the eviction re-dispatch
+# ---------------------------------------------------------------------------
+#
+# The eviction loop re-dispatches the task as a NEW activity execution, and
+# Temporal scopes heartbeat details to an execution — so, without help, the
+# documented resume-on-retry pattern (``get_heartbeat_details()``) sees nothing
+# after a pod shutdown and the task silently restarts from zero. The activity
+# wrapper knows the attempt's last details when it raises ``WorkerEvicted``;
+# they ride on that failure, the loop hands them to the re-dispatched
+# ``TaskContext``, and the heartbeat controller falls back to them.
+
+
+class _CarryIn(Input, allow_unbounded_fields=True):
+    name: str
+
+
+class _CarryOut(Output, allow_unbounded_fields=True):
+    carried: list[Any] = Field(default_factory=list)
+
+
+class TestEvictionCarriesHeartbeatDetails:
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+        shutdown_module.reset_worker_shutting_down()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+        shutdown_module.reset_worker_shutting_down()
+
+    @staticmethod
+    def _activity(app_key: str, task_name: str) -> object:
+        t = next(
+            t
+            for t in TaskRegistry.get_instance().get_tasks_for_app(app_key)
+            if t.name == task_name
+        )
+        return create_activity_from_task(t)
+
+    async def test_worker_evicted_failure_carries_last_heartbeat_details(self) -> None:
+        class _CarryApp(App):
+            @task(timeout_seconds=60)
+            async def boom(self, input: _CarryIn) -> _CarryOut:
+                self.heartbeat({"position": 7})
+                raise asyncio.CancelledError()
+
+            async def run(self, input: _CarryIn) -> _CarryOut:
+                return await self.boom(input)
+
+        activity_fn = self._activity("_carry-app", "boom")
+        ctx = TaskContext(
+            app_name="_carry-app",
+            task_name="boom",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+        shutdown_module.mark_worker_shutting_down()
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-carry"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+            pytest.raises(ApplicationError) as exc_info,
+        ):
+            await activity_fn(ctx, _CarryIn(name="x"))
+        assert exc_info.value.type == WORKER_EVICTED_TYPE
+        assert tuple(exc_info.value.details) == ({"position": 7},)
+
+    async def test_redispatched_execution_reads_carried_details(self) -> None:
+        class _ResumeApp(App):
+            @task(timeout_seconds=60)
+            async def resume(self, input: _CarryIn) -> _CarryOut:
+                return _CarryOut(carried=list(self.get_last_heartbeat_details()))
+
+            async def run(self, input: _CarryIn) -> _CarryOut:
+                return await self.resume(input)
+
+        activity_fn = self._activity("_resume-app", "resume")
+        ctx = TaskContext(
+            app_name="_resume-app",
+            task_name="resume",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+            evicted_heartbeat_details=[{"position": 7}],
+        )
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-resume"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+        ):
+            out = await activity_fn(ctx, _CarryIn(name="x"))
+        assert out.carried == [{"position": 7}]
+
+
+def _evicted_with_details(*details: object) -> Exception:
+    from temporalio.exceptions import ActivityError
+
+    cause = ApplicationError(
+        "evicted", *details, type=WORKER_EVICTED_TYPE, non_retryable=True
+    )
+    err = ActivityError(
+        "Activity task failed",
+        scheduled_event_id=1,
+        started_event_id=2,
+        identity="test",
+        activity_type="dummy",
+        activity_id="dummy-1",
+        retry_state=None,
+    )
+    err.__cause__ = cause
+    return err
+
+
+class TestEvictionRetryCarriesDetails:
+    _patch_workflow = TestEvictionRetryHelper._patch_workflow
+
+    async def test_redispatch_hands_details_to_the_task_context(self) -> None:
+        evict = _evicted_with_details({"position": 7})
+        exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, "ok"])
+        ctx = TaskContext(app_name="a", task_name="t", run_id="r")
+        with exec_patch, logger_patch:
+            result = await execute_activity_with_eviction_retry(
+                "act-name", args=[ctx, "input"], max_eviction_retries=3
+            )
+        assert result == "ok"
+        first, second = exec_mock.await_args_list
+        assert first.kwargs["args"][0].evicted_heartbeat_details is None
+        assert second.kwargs["args"][0].evicted_heartbeat_details == [{"position": 7}]
+        assert second.kwargs["args"][1] == "input"  # the rest of args untouched
+        assert ctx.evicted_heartbeat_details is None  # caller's object not mutated
+
+    async def test_redispatch_without_details_leaves_context_alone(self) -> None:
+        evict = _evicted_with_details()
+        exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, "ok"])
+        ctx = TaskContext(app_name="a", task_name="t", run_id="r")
+        with exec_patch, logger_patch:
+            await execute_activity_with_eviction_retry("act-name", args=[ctx])
+        assert (
+            exec_mock.await_args_list[1].kwargs["args"][0].evicted_heartbeat_details
+            is None
+        )
+
+    async def test_redispatch_with_non_task_context_args_is_unchanged(self) -> None:
+        evict = _evicted_with_details({"position": 7})
+        exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, "ok"])
+        with exec_patch, logger_patch:
+            await execute_activity_with_eviction_retry("act-name", args=["plain", 1])
+        assert exec_mock.await_args_list[1].kwargs["args"] == ["plain", 1]

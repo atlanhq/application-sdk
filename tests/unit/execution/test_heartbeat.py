@@ -998,3 +998,40 @@ class TestStopHeartbeatTask:
         with pytest.raises(asyncio.CancelledError):
             await caller_task
         assert heartbeat.cancelled()
+
+
+# ---------------------------------------------------------------------------
+# Fallback details carried across a worker-eviction re-dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestCarriedHeartbeatDetails:
+    """A re-dispatched execution has no Temporal heartbeat details of its own;
+    the controller falls back to the details the evicted attempt last sent."""
+
+    def test_temporal_controller_falls_back_when_temporal_has_none(
+        self, fake_temporalio
+    ) -> None:
+        fake_temporalio.info.return_value.heartbeat_details = ()
+        ctl = TemporalHeartbeatController(fallback_details=({"position": 7},))
+        assert ctl.get_last_heartbeat_details() == ({"position": 7},)
+
+    def test_temporal_details_win_over_fallback(self, fake_temporalio) -> None:
+        # Same-execution retry: Temporal's own details are fresher than anything carried.
+        ctl = TemporalHeartbeatController(fallback_details=("stale",))
+        assert ctl.get_last_heartbeat_details() == ("resumed", 42)
+
+    def test_temporal_last_sent_details_tracks_this_attempt(
+        self, fake_temporalio
+    ) -> None:
+        ctl = TemporalHeartbeatController()
+        assert ctl.last_sent_details() == ()
+        ctl.heartbeat("p", 1)
+        assert ctl.last_sent_details() == ("p", 1)
+
+    def test_noop_controller_fallback_and_last_sent(self) -> None:
+        ctl = NoopHeartbeatController(fallback_details=("carried",))
+        assert ctl.get_last_heartbeat_details() == ("carried",)
+        ctl.heartbeat("x")
+        assert ctl.get_last_heartbeat_details() == ("x",)
+        assert ctl.last_sent_details() == ("x",)

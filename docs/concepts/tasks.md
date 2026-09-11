@@ -309,6 +309,12 @@ class MyConnector(App):
             )
 ```
 
+The details survive a worker eviction too: when a pod is shut down mid-task
+(KEDA scale-down, spot reclaim, rolling deploy) the SDK re-dispatches the task
+as a new activity execution, and the last details the evicted attempt sent are
+carried across, so `get_heartbeat_details()` still returns them. Details that
+were never sent cannot be carried — beat at every safe resume point.
+
 A manual beat also **marks progress** for the stall watchdog, under the label
 `task.heartbeat` — so a custom loop that beats once per iteration is observable and
 needs no hold. It is the third of the three progress mechanisms in

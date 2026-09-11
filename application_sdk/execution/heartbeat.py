@@ -151,8 +151,14 @@ class HeartbeatController(Protocol):
 class TemporalHeartbeatController:
     """HeartbeatController that uses Temporal's activity.heartbeat()."""
 
-    def __init__(self) -> None:
+    def __init__(self, fallback_details: tuple[Any, ...] = ()) -> None:
         self._last_details: tuple[Any, ...] = ()
+        # Details the evicted attempt last sent, handed over by the eviction
+        # retry loop (see ``_temporal/eviction_retry.py``). Temporal scopes
+        # heartbeat details to an activity *execution*, and an eviction
+        # re-dispatch is a new execution — so without this fallback
+        # ``get_last_heartbeat_details()`` returns nothing after a pod shutdown.
+        self._fallback_details: tuple[Any, ...] = tuple(fallback_details)
 
     def heartbeat(self, *details: Any) -> None:
         """Send a heartbeat to Temporal with optional progress details."""
@@ -177,15 +183,27 @@ class TemporalHeartbeatController:
             activity,
         )
 
-        return tuple(activity.info().heartbeat_details)
+        details = tuple(activity.info().heartbeat_details)
+        return details or self._fallback_details
+
+    def last_sent_details(self) -> tuple[Any, ...]:
+        """Details of the most recent heartbeat *this attempt* sent (or ``()``).
+
+        Distinct from :meth:`get_last_heartbeat_details`, which is what the
+        *previous* attempt left behind. Read by the activity wrapper when it
+        raises ``WorkerEvicted``, so the progress can ride on the failure to
+        the re-dispatched execution.
+        """
+        return self._last_details
 
 
 class NoopHeartbeatController:
     """No-op HeartbeatController for local execution and testing."""
 
-    def __init__(self) -> None:
+    def __init__(self, fallback_details: tuple[Any, ...] = ()) -> None:
         self._details: tuple[Any, ...] = ()
         self._heartbeat_calls: list[tuple[Any, ...]] = []
+        self._fallback_details: tuple[Any, ...] = tuple(fallback_details)
 
     def heartbeat(self, *details: Any) -> None:
         """Record a heartbeat call."""
@@ -197,7 +215,11 @@ class NoopHeartbeatController:
         self._heartbeat_calls.append(self._details)
 
     def get_last_heartbeat_details(self) -> tuple[Any, ...]:
-        """Get the details from the last heartbeat call."""
+        """Get the details from the last heartbeat call, else the carried fallback."""
+        return self._details or self._fallback_details
+
+    def last_sent_details(self) -> tuple[Any, ...]:
+        """Details of the most recent heartbeat call (or ``()``)."""
         return self._details
 
 
