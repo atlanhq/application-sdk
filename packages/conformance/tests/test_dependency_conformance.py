@@ -2268,7 +2268,7 @@ _D012_HEAD = (
 )
 
 _CLEAN_LOCK = (
-    'version = 1\nrevision = 2\n\n'
+    "version = 1\nrevision = 2\n\n"
     '[[package]]\nname = "idna"\nversion = "3.10"\n'
     'source = { registry = "https://pypi.org/simple" }\n'
     'sdist = { url = "https://files.pythonhosted.org/packages/aa/idna.tar.gz", '
@@ -2439,9 +2439,7 @@ def test_d013_silent_without_a_lockfile(tmp_path: Path) -> None:
 
 def test_d013_fires_on_a_proxy_host(tmp_path: Path) -> None:
     lock = _CLEAN_LOCK.replace("files.pythonhosted.org", "factory.endorlabs.com")
-    findings = _index_scan(
-        tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013"
-    )
+    findings = _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013")
     assert len(findings) == 1
     f = findings[0]
     # anchored on pyproject.toml, not uv.lock: a lockfile is regenerated
@@ -2459,9 +2457,7 @@ def test_d013_message_never_quotes_a_lock_url(tmp_path: Path) -> None:
     lock = _CLEAN_LOCK.replace(
         "https://files.pythonhosted.org", "https://secret-token@factory.endorlabs.com"
     )
-    findings = _index_scan(
-        tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013"
-    )
+    findings = _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013")
     assert len(findings) == 1
     message = findings[0].message
     assert "secret-token" not in message
@@ -2478,9 +2474,7 @@ def test_d013_credential_branch_takes_precedence_over_the_host_branch(
     lock = _CLEAN_LOCK.replace(
         "https://files.pythonhosted.org", "https://endr%2Bkey@factory.endorlabs.com"
     )
-    findings = _index_scan(
-        tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013"
-    )
+    findings = _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013")
     assert len(findings) == 1
     assert "rotate the credential" in findings[0].message
     assert "401" not in findings[0].message
@@ -2499,9 +2493,7 @@ def test_d013_reports_zero_urls_as_undetermined_not_clean(
         'version = 1\nrevision = 2\n\n[[package]]\nname = "demo-app"\n'
         'version = "0.1.0"\nsource = { editable = "." }\n'
     )
-    findings = _index_scan(
-        tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013"
-    )
+    findings = _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013")
     assert findings == []
     assert "no download URLs" in capsys.readouterr().err
 
