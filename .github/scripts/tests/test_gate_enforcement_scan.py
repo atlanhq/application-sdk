@@ -32,6 +32,7 @@ from gate_enforcement_scan import (  # noqa: E402
     FINDING_NOT_REQUIRED,
     FINDING_UNPRODUCIBLE,
     FINDING_UNREADABLE,
+    MAX_CONTEXT_PAGES,
     STATUS_GATED,
     STATUS_NOT_GATED,
     STATUS_UNKNOWN,
@@ -39,8 +40,10 @@ from gate_enforcement_scan import (  # noqa: E402
     build_fleet,
     classify_arrival,
     evaluate_repo,
+    fetch_arrival_samples,
     list_fleet_repos,
     parse_arrival_nodes,
+    parse_contexts_response,
     required_contexts,
     scan_repo,
     write_outputs,
@@ -412,7 +415,15 @@ def test_parse_arrival_nodes_reads_both_context_shapes():
         }
     }
     assert parse_arrival_nodes(payload, GATE) == [
-        {"number": 1, "found": True, "truncated": False}
+        {
+            "number": 1,
+            "found": True,
+            "truncated": False,
+            # Paging handles: absent from this fixture, and stripped again by
+            # `fetch_arrival_samples` before the sample reaches the record.
+            "oid": None,
+            "cursor": None,
+        }
     ]
 
 
@@ -829,6 +840,231 @@ def test_scan_repo_reads_a_gated_repo_end_to_end():
     # this token and is not consulted at all. Probing it would spend an API call
     # per repo to learn nothing.
     assert not any(str(c).endswith("/protection") for c in calls)
+
+
+# --- FND-1947: sampled population + context paging -------------------------
+
+
+def _ctx(name: str) -> dict:
+    return {"__typename": "CheckRun", "name": name}
+
+
+def _contexts(names, *, total=None, has_next=False, cursor=None) -> dict:
+    nodes = [_ctx(n) for n in names]
+    return {
+        "totalCount": len(nodes) if total is None else total,
+        "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+        "nodes": nodes,
+    }
+
+
+def _arrival_with(contexts: dict, *, number=1, oid="c0ffee") -> dict:
+    return _arrival_payload(
+        {
+            "number": number,
+            "commits": {
+                "nodes": [
+                    {
+                        "commit": {
+                            "oid": oid,
+                            "statusCheckRollup": {"contexts": contexts},
+                        }
+                    }
+                ]
+            },
+        }
+    )
+
+
+def _page(contexts: dict) -> dict:
+    return {
+        "data": {
+            "repository": {"object": {"statusCheckRollup": {"contexts": contexts}}}
+        }
+    }
+
+
+def _is_page_query(args: list) -> bool:
+    """The paging query is the one that does not select `pullRequests`."""
+    return "pullRequests" not in args[3]
+
+
+def test_the_arrival_query_excludes_pull_requests_closed_without_merge():
+    """Bug 1. An abandoned branch almost always carries an incomplete check set
+    — CI cancelled, or never started for the final SHA — so it reads as a
+    conclusive *miss*. And because the sort key is UPDATED_AT and closing a PR
+    updates it, abandoning a stale branch actively promotes it into the window
+    and evicts a real sample: the verdict became a function of PR hygiene, and
+    flapped as the window moved.
+
+    The filter is applied server-side, so the observable surface is the query
+    this script sends. Asserting it here is what stops the `states:` clause
+    being dropped in a future edit."""
+    sent: list = []
+
+    def run(args: list) -> str:
+        sent.append(args[3])
+        return json.dumps(_arrival_with(_contexts([GATE])))
+
+    fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert "states: [OPEN, MERGED]" in sent[0]
+
+
+def test_a_truncated_sample_is_resolved_by_paging_not_discarded():
+    """Bug 2. The gate sitting past context 100 used to discard the sample
+    outright. Both `atlan-application-sdk` bump PRs — the highest-signal PRs in
+    a connector repo — carry ~136 contexts, so the highest-signal evidence was
+    exactly the evidence being thrown away."""
+    calls: list = []
+
+    def run(args: list) -> str:
+        calls.append(args)
+        if _is_page_query(args):
+            return json.dumps(_page(_contexts([GATE, "suite / D001"])))
+        return json.dumps(
+            _arrival_with(
+                _contexts(
+                    [f"suite / D{i:03d}" for i in range(100)],
+                    total=136,
+                    has_next=True,
+                    cursor="Y3Vyc29yOjEwMA==",
+                )
+            )
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": True, "truncated": False}]
+    assert sum(1 for a in calls if _is_page_query(a)) == 1
+
+
+def test_paging_to_exhaustion_turns_truncation_into_a_conclusive_miss():
+    """The other half of the same fix: once every page has been read and the
+    gate is in none of them, that is real evidence of non-arrival — not an
+    unreadable sample. Without this the denominator only ever shrinks."""
+
+    def run(args: list) -> str:
+        if _is_page_query(args):
+            return json.dumps(_page(_contexts(["suite / D101"], has_next=False)))
+        return json.dumps(
+            _arrival_with(
+                _contexts(["suite / D001"], total=101, has_next=True, cursor="cur")
+            )
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": False, "truncated": False}]
+    # …and that miss now reaches the verdict, instead of leaving the denominator.
+    assert classify_arrival(samples)[:3] == (ARRIVAL_NEVER, 1, 0)
+
+
+def test_paging_is_bounded_and_an_unfinished_walk_stays_truncated():
+    """A connection that never reports exhaustion must not stall the fleet
+    sweep. Hitting the cap degrades to the pre-paging behaviour — the sample
+    leaves the denominator — rather than to a false miss."""
+    pages = 0
+
+    def run(args: list) -> str:
+        nonlocal pages
+        if _is_page_query(args):
+            pages += 1
+            return json.dumps(_page(_contexts(["x"], has_next=True, cursor="more")))
+        return json.dumps(
+            _arrival_with(_contexts(["y"], total=9999, has_next=True, cursor="cur"))
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert pages == MAX_CONTEXT_PAGES
+    assert samples == [{"number": 1, "found": False, "truncated": True}]
+    assert classify_arrival(samples)[0] == ARRIVAL_UNKNOWN
+
+
+def test_a_gate_found_on_the_first_page_is_never_paged():
+    """Paging is a repair path, not a cost every repo pays. A commit whose first
+    page already contains the gate spends no extra API call even when the
+    connection is truncated."""
+    calls: list = []
+
+    def run(args: list) -> str:
+        calls.append(args)
+        return json.dumps(
+            _arrival_with(_contexts([GATE], total=136, has_next=True, cursor="cur"))
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": True, "truncated": True}]
+    assert not any(_is_page_query(a) for a in calls)
+    # A truncated sample that found the gate was always conclusive; paging does
+    # not change that.
+    assert classify_arrival(samples)[:3] == (ARRIVAL_REPORTING, 1, 1)
+
+
+def test_paging_stops_when_the_commit_can_no_longer_be_resolved():
+    """A force-pushed or GC'd head returns `object: null`. That is a legitimate
+    skip — an empty, exhausted page — not schema drift, so it must not raise and
+    must not loop."""
+    assert parse_contexts_response({"data": {"repository": {"object": None}}}) == {
+        "names": set(),
+        "count": 0,
+        "hasNextPage": False,
+        "cursor": None,
+    }
+
+
+def test_a_missing_cursor_leaves_the_sample_truncated_rather_than_paging_blind():
+    """`hasNextPage` without an `endCursor` gives nothing to page with. The
+    sample keeps the old treatment — excluded, never a false miss."""
+
+    def run(args: list) -> str:
+        assert not _is_page_query(args), "must not page without a cursor"
+        return json.dumps(
+            _arrival_with(_contexts(["x"], total=136, has_next=True, cursor=None))
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": False, "truncated": True}]
+
+
+def test_page_info_outranks_the_count_comparison_but_the_fallback_survives():
+    """`pageInfo.hasNextPage` is the authoritative answer; the totalCount
+    comparison remains for a payload that did not select it, so the repeated-
+    context reasoning above still holds."""
+    with_page_info = parse_arrival_nodes(
+        _arrival_with(_contexts([GATE] * 3, total=99, has_next=True, cursor="c")), GATE
+    )[0]
+    assert with_page_info["truncated"] is True  # despite 3 < 99 being unread
+
+    no_page_info = parse_arrival_nodes(
+        _arrival_with({"totalCount": 140, "nodes": [_ctx("x")]}), GATE
+    )[0]
+    assert no_page_info["truncated"] is True
+    assert no_page_info["cursor"] is None
+
+
+@pytest.mark.parametrize(
+    "bad,match",
+    [
+        pytest.param({"hasNextPage": "yes"}, "hasNextPage", id="hasNextPage"),
+        pytest.param(
+            {"hasNextPage": True, "endCursor": 7}, "endCursor", id="endCursor"
+        ),
+    ],
+)
+def test_a_wrong_typed_page_info_leaf_raises_rather_than_guessing(bad, match):
+    """Same fail-loud contract as the other leaves: a wrong-typed paging field
+    must reach `scan_repo` as a GhError (arrival `unknown`), never be coerced
+    into "nothing more to read" — which would read as a clean conclusive miss."""
+    payload = _arrival_with({"totalCount": 136, "pageInfo": bad, "nodes": [_ctx("x")]})
+    with pytest.raises(GhError, match=match):
+        parse_arrival_nodes(payload, GATE)
+
+
+def test_an_oid_that_is_not_a_string_raises_rather_than_paging_on_it():
+    payload = _arrival_with(_contexts(["x"], total=136, has_next=True, cursor="c"))
+    payload["data"]["repository"]["pullRequests"]["nodes"][0]["commits"]["nodes"][0][
+        "commit"
+    ]["oid"] = 12345
+    with pytest.raises(GhError, match="oid"):
+        parse_arrival_nodes(payload, GATE)
 
 
 # --- discovery + rollup ----------------------------------------------------
