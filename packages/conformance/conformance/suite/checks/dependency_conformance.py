@@ -41,10 +41,12 @@ Rules in this check module:
   Labs package firewall Atlan IT installs into ``~/.config/uv/uv.toml`` — is
   inherited, and every ``uv`` command silently rewrites every URL in
   ``uv.lock`` to that proxy.
-* **D013 NonPyPILockfileIndex** — every download URL in ``uv.lock`` must name
-  a PyPI host, and none may embed an index credential.  This is D012's damage
-  once it has been committed: CI holds no credential for the proxy and fails
-  at dependency install with ``401 Unauthorized``.
+* **D013 NonPyPILockfileIndex** — every *artifact* download URL in
+  ``uv.lock`` (``sdist`` / ``wheels``) must name a PyPI host, and none may
+  embed an index credential.  Direct ``source = { url = ... }`` archives are
+  not an index rewrite and are not graded.  This is D012's damage once it has
+  been committed: CI holds no credential for the proxy and fails at
+  dependency install with ``401 Unauthorized``.
 
 D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008/D009
 are pure-text.  D010 is cross-file (source imports + lock/pyproject) and runs in
@@ -116,16 +118,17 @@ HATCHLING_BACKEND = "hatchling.build"
 PYPI_SIMPLE_URL = "https://pypi.org/simple"
 PYPI_LOCK_HOSTS = frozenset({"files.pythonhosted.org", "pypi.org"})
 
-# Every ``url = "..."`` in a uv.lock (D013).
+# Artifact download URLs in a uv.lock (D013): ``sdist = { url = "..." }`` and
+# wheel entries ``{ url = "..." }`` inside a ``wheels`` array.
 #
 # Matched with a regex rather than a TOML parser because the lockfile schema
 # changes between uv versions while the URL spelling is stable.  Deliberately
-# *not* line-anchored: uv writes these inside inline tables
-# (``sdist = { url = "...", hash = ... }`` and a ``wheels`` array of the same),
-# so a line-anchored pattern matches nothing at all.  The leading ``[\s{]``
-# stops it matching a longer key that ends in ``url``, such as a future
-# ``direct_url``.
-_LOCK_URL_RE = re.compile(r'[\s{]url = "([^"]+)"')
+# *not* line-anchored: uv writes these inside inline tables, so a line-anchored
+# pattern matches nothing at all.  The negative lookbehind excludes
+# ``source = { url = "..." }`` — that is a direct archive dependency, not an
+# index rewrite — and a longer key that ends in ``url`` (e.g. a future
+# ``direct_url``) never matches because the pattern requires ``{ url``.
+_LOCK_URL_RE = re.compile(r'(?:sdist\s*=\s*)?(?<!source = )\{\s*url = "([^"]+)"')
 
 # Substrings that mean an index credential rode into a committed lockfile
 # (D013): Endor's API-key prefix, raw and url-encoded, and userinfo attached to

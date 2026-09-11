@@ -289,6 +289,10 @@ WARN-tier — route to residue for human decision):
      optional backend, server process), propose a `# conformance: ignore[D003]
      <reason>` comment on the entry line and explain the load mechanism.
 
+  Never auto-delete without reading the codebase context — dynamic imports,
+  `__import__`, `importlib.import_module`, entry-point declarations in
+  `[project.entry-points.*]`, and `console_scripts` are all legitimate uses.
+
 - **D013 NonPyPILockfileIndex** (`classification = "judgment"`,
   `not_remediable = true`) — **always route to residue; never edit a file for
   this finding.**  The lock records a non-PyPI host, or embeds an index
@@ -317,10 +321,6 @@ WARN-tier — route to residue for human decision):
   and the rewrite will recur on the contributor's next `uv` command — say so in
   the residue entry, because fixing only the lock is a repair with a known
   expiry date.
-
-  Never auto-delete without reading the codebase context — dynamic imports,
-  `__import__`, `importlib.import_module`, entry-point declarations in
-  `[project.entry-points.*]`, and `console_scripts` are all legitimate uses.
 
 - **D010 QueryTransformerWithoutDuckdb** — the app imports the SDK query
   transformer (`application_sdk.transformers.query`; the finding message names

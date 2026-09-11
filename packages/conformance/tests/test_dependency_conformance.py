@@ -2499,12 +2499,30 @@ def test_d013_reports_zero_urls_as_undetermined_not_clean(
 
 
 def test_d013_url_pattern_matches_inline_table_urls() -> None:
-    """The regex must not be line-anchored, and must not match ``direct_url``."""
+    """Artifact URLs only: sdist/wheels, not ``source = { url }`` or ``direct_url``."""
     sdist_line = 'sdist = { url = "https://files.pythonhosted.org/a.tar.gz" }'
     assert _LOCK_URL_RE.findall(sdist_line) == [
         "https://files.pythonhosted.org/a.tar.gz"
     ]
+    wheel_line = (
+        '    { url = "https://files.pythonhosted.org/a.whl", hash = "sha256:x" }'
+    )
+    assert _LOCK_URL_RE.findall(wheel_line) == ["https://files.pythonhosted.org/a.whl"]
+    assert (
+        _LOCK_URL_RE.findall('source = { url = "https://example.com/pkg.whl" }') == []
+    )
     assert _LOCK_URL_RE.findall('direct_url = "https://example.invalid/x"') == []
+
+
+def test_d013_ignores_a_direct_source_url(tmp_path: Path) -> None:
+    """A legitimate ``source = { url = ... }`` is not an index rewrite."""
+    lock = (
+        _CLEAN_LOCK + '\n[[package]]\nname = "local-wheel"\nversion = "1.0.0"\n'
+        'source = { url = "https://example.com/pkg.whl" }\n'
+    )
+    assert (
+        _index_scan(tmp_path, _D012_HEAD + _PINNED_INDEX, lock=lock, rule="D013") == []
+    )
 
 
 def test_d013_grades_the_sdk_too(tmp_path: Path) -> None:
