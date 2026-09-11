@@ -255,6 +255,16 @@ fix.  The re-detection gate is authoritative for this area — see
     rewritten, that is D013's finding, not this one; fix D012 first so the
     repair does not immediately undo itself.
 
+  **Before editing, check whether D013 also fired on this repo.**  It matters
+  for the gates, not just for the ordering advice above: the orthogonal gate
+  runs `uv run poe test`, which is itself a `uv` invocation, so in a repo whose
+  lock is poisoned the gate can rewrite `uv.lock` while validating the edit —
+  the loop's own verification step becomes the thing that changes a file it
+  never touched.  With the pin now in place that rewrite moves the URLs back
+  *toward* PyPI, which is the desired end state, but it is still an unexpected
+  diff.  Record it in the edit description so the reviewer sees the lock change
+  came from the gate rather than from the prescription.
+
   If the repo is genuinely mandated onto an internal mirror, do not edit: propose
   `# conformance: ignore[D012] <reason>` on the finding's line and name the
   mandate in the justification.
