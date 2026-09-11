@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.34.0
-source-sha:    db8bf144f841aae7ec38ee7ba76bfab6adf13c14
-source-date:   2026-09-10T22:22:11+01:00
+sdk-version:   3.34.1
+source-sha:    ccf53bff8017832a7352c380e475aa988feaba77
+source-date:   2026-09-11T10:25:22+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -1875,7 +1875,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `NoopHeartbeatController`
 
 - **Import:** `from application_sdk.execution.heartbeat import NoopHeartbeatController`
-- **Signature:** `class NoopHeartbeatController() -> None`
+- **Signature:** `class NoopHeartbeatController(fallback_details: tuple[Any, ...] = ()) -> None`
 - **Summary:** No-op HeartbeatController for local execution and testing.
 - **Defined in:** `application_sdk/execution/heartbeat.py`
 
@@ -1957,7 +1957,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `TemporalHeartbeatController`
 
 - **Import:** `from application_sdk.execution.heartbeat import TemporalHeartbeatController`
-- **Signature:** `class TemporalHeartbeatController() -> None`
+- **Signature:** `class TemporalHeartbeatController(fallback_details: tuple[Any, ...] = ()) -> None`
 - **Summary:** HeartbeatController that uses Temporal's activity.heartbeat().
 - **Defined in:** `application_sdk/execution/heartbeat.py`
 

@@ -309,6 +309,25 @@ class MyConnector(App):
             )
 ```
 
+The details survive a worker eviction too: when a pod is shut down mid-task
+(KEDA scale-down, spot reclaim, rolling deploy) the SDK re-dispatches the task
+as a new activity execution, and the last details the evicted attempt sent are
+carried across, so `get_heartbeat_details()` still returns them. Details that
+were never sent cannot be carried — beat at every safe resume point.
+
+Two things bound the carry, both deliberate:
+
+- **A beat with no details clears the checkpoint.** `self.heartbeat()` with no
+  arguments says *this attempt has moved past whatever was carried in*, so
+  nothing is carried out of it. That is what you want when the work is done;
+  it is not a keepalive. To beat without changing the checkpoint, pass the
+  same details again, or rely on the automatic heartbeat.
+- **Details must be encodable by the Temporal data converter.** They ride to
+  the next execution on the eviction failure itself, so anything that cannot
+  be serialised is dropped with a `WARNING` rather than carried. Beat with a
+  `HeartbeatDetails` model or plain JSON-native values — the eviction is still
+  re-dispatched either way, but an unserialisable checkpoint is lost.
+
 A manual beat also **marks progress** for the stall watchdog, under the label
 `task.heartbeat` — so a custom loop that beats once per iteration is observable and
 needs no hold. It is the third of the three progress mechanisms in
