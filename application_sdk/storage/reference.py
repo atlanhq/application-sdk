@@ -392,6 +392,36 @@ async def materialize_file_reference(
                 store, ref, data_objects, local_directory
             )
 
+    # An empty listing is ambiguous: it is what a single object at an exact key
+    # looks like, AND what a directory prefix holding nothing looks like. The
+    # local path is what tells them apart. A directory-backed ref over an empty
+    # prefix — which is exactly what ``download()`` hands back for a prefix with
+    # no objects (``local_path`` a fresh empty temp dir, ``file_count`` 0, see
+    # transfer.py "Directory / prefix" branch) — must NOT fall through to the
+    # single-file branch: that branch hashes ``local_path`` to decide whether it
+    # can skip the download, and hashing a directory raises ``IsADirectoryError``
+    # from ``open(path, "rb")``.
+    #
+    # Routing on the local path rather than on ``ref.file_count`` is deliberate.
+    # Every SDK producer populates ``file_count``, but it is a value carried on
+    # the reference, so a ref built by any other caller may not; ``is_dir()`` is
+    # observable at this call site whatever produced the ref.
+    #
+    # Returning the ref unchanged hands back the empty directory it already
+    # names. The SDK does not decide what an empty hand-off MEANS — an empty
+    # upstream is legitimate for one caller and a lost hand-off for the next —
+    # so the consumer keeps that judgement, and gets an empty directory to make
+    # it with instead of an exception from the storage layer.
+    if ref.local_path is not None and Path(ref.local_path).is_dir():
+        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
+        logger.debug(
+            "file_ref.materialize.empty_prefix",
+            storage_path=ref.storage_path,
+            local_path=ref.local_path,
+            file_count=0,
+        )
+        return ref
+
     if ref.local_path is None:
         return await _materialize_single_file(store, ref, local_dir)
     async with _materialize_guard(ref.local_path):
@@ -433,8 +463,13 @@ async def _materialize_single_file(
 
     # ── Single file ────────────────────────────────────────────────────
     # Fast path: local file exists — validate before deciding to download.
+    #
+    # ``is_file()``, not ``exists()``: a directory also exists, and the very
+    # next line opens this path to hash it. The caller already routes a
+    # directory-backed ref away from here, so this is the second line of
+    # defence for a ref that reaches this helper by another path.
     stored_hash: str | None = None
-    if ref.local_path is not None and Path(ref.local_path).exists():
+    if ref.local_path is not None and Path(ref.local_path).is_file():
         local_hash = await integrity.sha256_file(Path(ref.local_path))
         stored_hash = await integrity.read_expected_digest(store, ref.storage_path)
 

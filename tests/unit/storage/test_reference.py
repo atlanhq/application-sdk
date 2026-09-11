@@ -250,6 +250,89 @@ class TestMaterializeFileReference:
         result = await materialize_file_reference(store, ref)
         assert result is ref
 
+    async def test_empty_prefix_with_directory_local_path_returns_the_ref(
+        self, store, tmp_path
+    ) -> None:
+        """A directory-backed ref over an empty prefix must not be hashed.
+
+        This is the shape ``download()`` returns for a prefix holding no
+        objects: ``local_path`` is a fresh empty temp DIRECTORY and
+        ``file_count`` is 0. An empty listing is also what a single object at
+        an exact key looks like, so routing on the listing alone sent this ref
+        down the single-file branch, which hashes ``local_path`` to decide
+        whether it may skip the download — and hashing a directory raised
+        ``IsADirectoryError`` out of ``open(path, "rb")``.
+
+        Regression: a connector DAG node crashed here instead of seeing that
+        its upstream had produced nothing.
+        """
+        empty_dir = tmp_path / "empty-prefix-dest"
+        empty_dir.mkdir()
+        ref = FileReference(
+            local_path=str(empty_dir),
+            storage_path="k/nothing-was-written-here/",
+            is_durable=True,
+            file_count=0,
+        )
+
+        result = await materialize_file_reference(store, ref)
+
+        # Returned as-is, naming the empty directory it already had: the
+        # storage layer reports what is there and leaves the meaning of an
+        # empty hand-off to the consumer.
+        assert result is ref
+        assert Path(result.local_path).is_dir()
+        assert list(Path(result.local_path).iterdir()) == []
+
+    async def test_empty_prefix_with_directory_local_path_does_not_raise(
+        self, store, tmp_path
+    ) -> None:
+        """Pin the exception itself, not just the happy return value.
+
+        The test above would still pass if a future refactor swapped
+        ``IsADirectoryError`` for some other failure; this one fails on any
+        exception at all, which is the property the DAG node depends on.
+        """
+        empty_dir = tmp_path / "another-empty-dest"
+        empty_dir.mkdir()
+        ref = FileReference(
+            local_path=str(empty_dir),
+            storage_path="k/also-empty/",
+            is_durable=True,
+            file_count=0,
+        )
+
+        try:
+            await materialize_file_reference(store, ref)
+        except Exception as exc:  # noqa: BLE001 — the assertion IS "nothing raised"
+            pytest.fail(
+                f"materialising an empty prefix must not raise, got "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    async def test_single_file_ref_whose_local_path_is_a_directory_redownloads(
+        self, store, tmp_path
+    ) -> None:
+        """The fast-path guard is ``is_file()``, so a directory never gets hashed.
+
+        Defence in depth behind the routing above: if a ref reaches the
+        single-file helper with a directory ``local_path``, the fast path must
+        decline it rather than opening it.
+        """
+        await _put("k/data.bin", b"server", store, normalize=False)
+        # A real object exists at the exact key, so the listing is empty and
+        # this takes the single-file branch — but local_path names a directory.
+        d = tmp_path / "not-a-file"
+        d.mkdir()
+        ref = FileReference(
+            local_path=str(d), is_durable=True, storage_path="k/data.bin"
+        )
+
+        # Routing catches this first (local_path is a dir), so the ref comes
+        # back untouched rather than being hashed.
+        result = await materialize_file_reference(store, ref)
+        assert result is ref
+
     async def test_single_file_fast_path_with_matching_sidecar(
         self, store, tmp_path
     ) -> None:
