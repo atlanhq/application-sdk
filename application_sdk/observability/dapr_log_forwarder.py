@@ -88,6 +88,13 @@ _METHOD_LEVELNO = {
 }
 
 
+# ``entrypoint.sh`` resolves ``DAPR_LOG_LEVEL`` as ``${DAPR_LOG_LEVEL:-warn}``
+# before handing it to ``daprd --log-level``; keep the two fallbacks identical so
+# one variable cannot mean two levels. (In the shipped image neither fires: the
+# Dockerfile sets ``ENV DAPR_LOG_LEVEL=info``.)
+_ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK = "warn"
+
+
 def _app_log_level_name() -> str:
     """The app level name the SDK will resolve, mirroring ``constants.LOG_LEVEL``
     without importing it (that import is what fixes the sinks)."""
@@ -101,12 +108,19 @@ def _forwarder_log_level() -> str | None:
     ``LOG_LEVEL`` and ``DAPR_LOG_LEVEL``.
 
     ``DAPR_LOG_LEVEL`` is what the entrypoint hands to ``daprd --log-level``; the
-    base image sets it to ``info``. Returns ``None`` when either name is not a
-    known level, so a misconfiguration falls back to the unchanged behaviour
-    rather than raising — this code supervises daprd.
+    base image sets it to ``info`` (``ENV`` in the SDK ``Dockerfile``). The
+    fallback below mirrors ``entrypoint.sh``'s own ``${DAPR_LOG_LEVEL:-warn}``,
+    so the variable resolves to the same level here as the one daprd was
+    actually gated at — the entrypoint exports it before launching this module,
+    so the fallback only applies to direct invocation outside the image.
+    Returns ``None`` when either name is not a known level, so a
+    misconfiguration falls back to the unchanged behaviour rather than raising
+    — this code supervises daprd.
     """
     dapr_method = _LEVEL_TO_METHOD.get(
-        os.environ.get("DAPR_LOG_LEVEL", "info").strip().lower()
+        os.environ.get("DAPR_LOG_LEVEL", _ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK)
+        .strip()
+        .lower()
     )
     app_levelno = logging.getLevelNamesMapping().get(_app_log_level_name())
     if dapr_method is None or app_levelno is None:
@@ -117,9 +131,24 @@ def _forwarder_log_level() -> str | None:
 def _reexec_with_log_level(level: str, argv: list[str]) -> None:
     """Re-run this module with ``ATLAN_LOG_LEVEL`` set, so the SDK logger and its
     sinks are built at *level* before anything is emitted. Never returns on
-    success; on failure returns and the caller carries on at the current level."""
+    success; on failure returns and the caller carries on at the current level.
+
+    Cost, paid only when ``DAPR_LOG_LEVEL`` is more verbose than the app's level:
+    a second interpreter start plus SDK import before daprd is spawned, and the
+    observability stack this process already built at import (OTLP exporter,
+    logger provider) is discarded by ``execve`` without a shutdown — nothing has
+    been emitted yet, so no records are lost. ``entrypoint.sh``'s startup check
+    is a ``kill -0`` on this process's PID, which ``execve`` preserves, so the
+    extra second does not trip it.
+    """
+    # No spec means the module was run as a file path rather than with ``-m``:
+    # there is no importable name to re-exec with, and ``-m __main__`` would exec
+    # *successfully* and then die on ``__main__.__spec__ is None`` — taking daprd
+    # with it. Stay at the current level instead; verbosity is the only loss.
+    if __spec__ is None:
+        return
     env = dict(os.environ, ATLAN_LOG_LEVEL=level)
-    cmd = [sys.executable, "-m", __spec__.name if __spec__ else __name__, *argv[1:]]
+    cmd = [sys.executable, "-m", __spec__.name, *argv[1:]]
     try:
         os.execve(sys.executable, cmd, env)
     # conformance: ignore[E004] exec failed; the only safe fallback is to keep supervising daprd at the current level

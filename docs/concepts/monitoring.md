@@ -744,3 +744,5 @@ Setting it **below** the app's `LOG_LEVEL` also works, and is how to see why a D
 ```bash
 DAPR_LOG_LEVEL=debug  # daprd debug lines reach kubectl logs and the lakehouse at DEBUG
 ```
+
+"More verbose wins" applies to `ATLAN_LOG_LEVEL` too: if you have quietened the app with `ATLAN_LOG_LEVEL=ERROR` and left `DAPR_LOG_LEVEL=debug`, the forwarder process still gates itself at `DEBUG` for daprd's lines. The override is scoped to that one process — the app process is a sibling and stays at `ERROR`.

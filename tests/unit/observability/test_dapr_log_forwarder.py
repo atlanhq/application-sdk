@@ -175,6 +175,17 @@ class TestForwarderLogLevel:
         monkeypatch.setenv("ATLAN_LOG_LEVEL", "DEBUG")
         assert dlf._forwarder_log_level() == "DEBUG"
 
+    def test_unset_dapr_log_level_uses_the_entrypoint_warn_fallback(self, monkeypatch):
+        """With DAPR_LOG_LEVEL unset, entrypoint.sh gates daprd at ``warn``
+        (``${DAPR_LOG_LEVEL:-warn}``), so this process must resolve the same
+        level — not a second, more verbose default of its own."""
+        monkeypatch.delenv("DAPR_LOG_LEVEL", raising=False)
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
+        monkeypatch.setenv("LOG_LEVEL", "ERROR")
+        assert dlf._forwarder_log_level() == "WARNING"
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        assert dlf._forwarder_log_level() == "INFO"
+
     def test_unknown_level_names_return_none(self, monkeypatch):
         monkeypatch.setenv("DAPR_LOG_LEVEL", "verbose")
         monkeypatch.setenv("LOG_LEVEL", "INFO")
@@ -211,6 +222,27 @@ class TestMain:
         assert cmd[3:] == ["--", "daprd", "--app-id", "app"]
         assert env["ATLAN_LOG_LEVEL"] == "DEBUG"
 
+    def test_no_reexec_without_a_module_spec(self, monkeypatch):
+        """Run as a file path rather than with ``-m``, there is no importable name
+        to re-exec: ``python -m __main__`` would exec successfully and then die on
+        ``__main__.__spec__ is None``, taking daprd with it. Forward at the
+        current level instead."""
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "debug")
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
+        monkeypatch.setattr(dlf, "__spec__", None)
+
+        async def _fake_run(child_cmd: list[str]) -> int:
+            return 0
+
+        with (
+            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
+            patch.object(dlf.os, "execve") as execve,
+            patch.object(dlf, "_run", _fake_run),
+        ):
+            assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
+        assert execve.call_count == 0  # not assert_not_called: it repr's the env
+
     def test_no_reexec_once_level_already_matches(self, monkeypatch):
         """The re-exec'd process (ATLAN_LOG_LEVEL already DEBUG) must fall straight
         through to the forwarder — no exec loop."""
@@ -227,7 +259,7 @@ class TestMain:
             patch.object(dlf, "_run", _fake_run),
         ):
             assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
-        execve.assert_not_called()
+        assert execve.call_count == 0  # not assert_not_called: it repr's the env
 
     def test_no_reexec_at_image_defaults(self, monkeypatch):
         """DAPR_LOG_LEVEL=info (Dockerfile ENV) with LOG_LEVEL=INFO: nothing to do."""
@@ -244,7 +276,7 @@ class TestMain:
             patch.object(dlf, "_run", _fake_run),
         ):
             assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
-        execve.assert_not_called()
+        assert execve.call_count == 0  # not assert_not_called: it repr's the env
 
     def test_exec_failure_falls_back_to_forwarding_at_current_level(self, monkeypatch):
         monkeypatch.setenv("DAPR_LOG_LEVEL", "debug")
