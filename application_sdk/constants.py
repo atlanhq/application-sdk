@@ -51,6 +51,7 @@ Example:
     >>> print(f"Running application {APPLICATION_NAME}")
 """
 
+import json
 import math
 import os
 import warnings
@@ -89,10 +90,85 @@ APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
 # Domain Name of the tenant
 DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
 
-# App Vitals / Release metadata (injected by Local Marketplace into HelmRelease).
-# Naming aligned with Anuj's LM-integration PR so they merge cleanly.
-#: Semantic version of the app release (e.g., "1.2.3")
-APPLICATION_VERSION = os.getenv("ATLAN_APPLICATION_VERSION", "")
+# App Vitals / Release metadata.
+#
+# Two sources, baked first: ``app/atlan_build.json`` is written into the image
+# by the reusable CI workflow and describes the image itself; the
+# ``ATLAN_APPLICATION_VERSION`` / ``ATLAN_RELEASE_ID`` env vars are stamped by
+# whoever deploys the image (Local Marketplace into the HelmRelease, the SDR
+# orchestrator into the container). A single-app SDR customer sets neither and
+# only bumps the tag when upgrading, so the baked file is the one identity that
+# survives their upgrades — it wins whenever present.
+# Env-var naming aligned with Anuj's LM-integration PR so they merge cleanly.
+#
+# The file is the *publish* path's half of the build identity FND-1684 already
+# established for the e2e path as the ``ATLAN_BUILD_ID`` image ENV. Both answer
+# "which build is this pod running?", so they are deliberately one contract with
+# one reader (:func:`application_sdk.app.build_identity.build_identity`) rather
+# than two: the file carries a ``build_id`` key holding the same immutable image
+# tag the ENV carries, and the reader prefers the ENV so an e2e build stamped by
+# ``.github/actions/build-app-image`` keeps reporting exactly what it reports
+# today. What the file adds is that a *released* image — which that action never
+# touches — can now answer the same question.
+
+
+def load_build_info(path: str | None = None) -> dict[str, str]:
+    """Read the build-identity file the reusable CI bakes into the image.
+
+    ``build-and-publish-app.yaml`` writes ``app/atlan_build.json`` into the
+    build context and the template Dockerfile's ``COPY app/ app/`` carries it
+    into the image. Keys: ``app_version`` (the exact string Global Marketplace
+    stores as ``versions.version``), ``commit_sha``, ``build_id`` (the immutable
+    image tag, the same value ``ATLAN_BUILD_ID`` carries on the e2e path),
+    ``image``, ``built_at``.
+
+    Missing or malformed file → ``{}``; callers fall back to the env vars.
+    ``ATLAN_BUILD_INFO_PATH`` overrides the lookup for non-template layouts.
+
+    Public because :mod:`application_sdk.app.build_identity` reads the same file
+    through it. A second parser there would be a second place for the key names
+    to drift from what CI writes.
+    """
+    if path:
+        candidates = [path]
+    else:
+        override = os.getenv("ATLAN_BUILD_INFO_PATH", "")
+        generated_dir = os.environ.get("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
+        candidates = (
+            [override]
+            if override
+            else [
+                "app/atlan_build.json",
+                os.path.join(
+                    os.path.dirname(generated_dir.rstrip("/")) or ".",
+                    "atlan_build.json",
+                ),
+            ]
+        )
+    for candidate in candidates:
+        try:
+            with open(candidate, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return {
+                str(k): str(v)
+                for k, v in data.items()
+                if isinstance(v, (str, int, float)) and not isinstance(v, bool)
+            }
+    return {}
+
+
+_BUILD_INFO = load_build_info()
+
+#: Version of the app release exactly as Global Marketplace stores it
+#: (release tag for semver apps, sha7 for CD apps). Baked value first.
+APPLICATION_VERSION = _BUILD_INFO.get("app_version", "") or os.getenv(
+    "ATLAN_APPLICATION_VERSION", ""
+)
+#: Git commit the image was built from. Baked only — no deployer stamps it.
+COMMIT_SHA = _BUILD_INFO.get("commit_sha", "") or os.getenv("ATLAN_COMMIT_SHA", "")
 #: Release UUID from Global Marketplace
 RELEASE_ID = os.getenv("ATLAN_RELEASE_ID", "")
 #: Release channel (all, beta, staging, specific)

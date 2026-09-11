@@ -21,6 +21,7 @@ import pytest
 from application_sdk.app.build_identity import (
     BUILD_ID_ENV,
     BUILD_IDENTITY_CONFIGMAP_ID,
+    BUILD_INFO_BUILD_ID_KEY,
     build_identity,
 )
 from application_sdk.contracts.base import Input, Output
@@ -139,3 +140,94 @@ def test_the_reserved_configmap_id_is_not_a_plausible_generated_stem() -> None:
     ``atlan-`` prefix so it reads as a platform id rather than an app's file.
     """
     assert BUILD_IDENTITY_CONFIGMAP_ID == "atlan-build-identity"
+
+
+# ── The publish path's carrier: app/atlan_build.json ─────────────────────────
+#
+# .github/actions/build-app-image stamps ATLAN_BUILD_ID on the e2e image only.
+# A released image is built by build-and-publish-app.yaml, which never calls
+# that action, so it carries the same value in the baked identity file instead.
+
+
+def test_a_released_image_reports_the_baked_build_id(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The publish path carries no ENV, so the file has to answer.
+
+    Without this a released pod reports "" on the build-identity route, and the
+    e2e check cannot distinguish it from a stale one — the exact hole FND-1684
+    closed for the e2e path.
+    """
+    info = tmp_path / "atlan_build.json"
+    info.write_text('{"build_id": "main-abc1234", "commit_sha": "abc1234def"}')
+    monkeypatch.delenv(BUILD_ID_ENV, raising=False)
+    monkeypatch.setenv("ATLAN_BUILD_INFO_PATH", str(info))
+
+    assert build_identity() == "main-abc1234"
+
+
+def test_the_stamped_env_wins_over_the_baked_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An e2e build reports exactly what it reported before this fallback.
+
+    The e2e image is built from the same commit as a release could be, so both
+    carriers can be present at once. The ENV is the value the e2e check derived
+    and is comparing against, so it must be the one that answers.
+    """
+    info = tmp_path / "atlan_build.json"
+    info.write_text('{"build_id": "main-abc1234"}')
+    monkeypatch.setenv("ATLAN_BUILD_INFO_PATH", str(info))
+    monkeypatch.setenv(BUILD_ID_ENV, "sdr-test-abc12345")
+
+    assert build_identity() == "sdr-test-abc12345"
+
+
+def test_an_empty_env_falls_through_rather_than_shadowing_the_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank ENV is "unset", not "no identity".
+
+    A Helm chart that templates the var unconditionally sets it to "" on a
+    deployment that has no value for it, and treating that as an answer would
+    hide the file behind it.
+    """
+    info = tmp_path / "atlan_build.json"
+    info.write_text('{"build_id": "main-abc1234"}')
+    monkeypatch.setenv("ATLAN_BUILD_INFO_PATH", str(info))
+    monkeypatch.setenv(BUILD_ID_ENV, "   ")
+
+    assert build_identity() == "main-abc1234"
+
+
+def test_neither_carrier_is_still_empty_not_an_error(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(BUILD_ID_ENV, raising=False)
+    monkeypatch.setenv("ATLAN_BUILD_INFO_PATH", str(tmp_path / "absent.json"))
+
+    assert build_identity() == ""
+
+
+def test_the_baked_key_matches_what_ci_writes() -> None:
+    """Wiring guard: CI is the writer, this module is the reader.
+
+    A divergent spelling degrades the check to "the pod reports no build
+    identity" rather than failing loudly, which is the failure mode this repo
+    already guards for ATLAN_BUILD_ID between the stamp script and BUILD_ID_ENV.
+    """
+    from pathlib import Path
+
+    # Resolved from this file, not the CWD: the guard must read the repo's own
+    # workflow wherever pytest was invoked from.
+    repo = Path(__file__).resolve().parents[3]
+    workflow = (repo / ".github/workflows/build-and-publish-app.yaml").read_text(
+        encoding="utf-8"
+    )
+    bake = workflow.split("Bake build identity into the image", 1)
+    assert len(bake) == 2, "the bake step was renamed; this guard reads it by name"
+    step = bake[1].split("- name: Build and push arch image", 1)[0]
+    assert f'"{BUILD_INFO_BUILD_ID_KEY}":' in step, (
+        f"the bake step no longer writes a {BUILD_INFO_BUILD_ID_KEY!r} key, so "
+        "every released image would silently report no build identity"
+    )
