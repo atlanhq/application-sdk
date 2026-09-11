@@ -28,6 +28,7 @@ from gate_enforcement_scan import (  # noqa: E402
     ARRIVAL_UNKNOWN,
     DEFAULT_NAME_PATTERN,
     DEFAULT_REQUIRED_CONTEXT,
+    FINDING_ARRIVAL_UNREADABLE,
     FINDING_NOT_ARRIVING,
     FINDING_NOT_REQUIRED,
     FINDING_UNPRODUCIBLE,
@@ -996,6 +997,65 @@ def test_a_gate_found_on_the_first_page_is_never_paged():
     # A truncated sample that found the gate was always conclusive; paging does
     # not change that.
     assert classify_arrival(samples)[:3] == (ARRIVAL_REPORTING, 1, 1)
+
+
+def test_an_unreadable_arrival_probe_is_a_finding_not_an_empty_findings_list():
+    """The silence FND-1947 would otherwise have relocated rather than fixed.
+
+    Paging removes the routine cause of truncation — which also removes the only
+    place a human would have noticed truncation, since the dashboard card stops
+    mentioning it once the counter sits at zero. So an all-truncated sample now
+    reports itself. Without this, a scanner that had stopped working produced a
+    record indistinguishable from one with nothing to say: arrival `unknown`,
+    `findings: []`."""
+    record = _evaluate(
+        arrival_samples=[{"found": False, "truncated": True} for _ in range(3)]
+    )
+    assert record["arrival"]["status"] == ARRIVAL_UNKNOWN
+    assert record["arrival"]["prsSampled"] == 0
+    assert record["arrival"]["truncatedSamples"] == 3
+    assert FINDING_ARRIVAL_UNREADABLE in _finding_ids(record)
+    # It is a statement about the probe, never about the repo's CI — so it must
+    # not also claim the gate is not arriving.
+    assert FINDING_NOT_ARRIVING not in _finding_ids(record)
+
+
+def test_the_unreadable_probe_finding_is_a_warning_not_an_error():
+    """The severity field is what carries "the probe, not the repo", so this is
+    not cosmetic. connector-pulse renders an `error` pill red and everything
+    else amber (`pages/GateEnforcement.tsx`), and ranks a repo's headline across
+    `("error", "warning", "info")`. Emitting `error` here would make an
+    unreadable probe pixel-identical to a gate that genuinely never arrives, and
+    would promote the repo's headline severity to match — so no wording on
+    either side could recover the distinction."""
+    record = _evaluate(arrival_samples=[{"found": False, "truncated": True}])
+    finding = next(
+        f for f in record["findings"] if f["id"] == FINDING_ARRIVAL_UNREADABLE
+    )
+    assert finding["severity"] == "warning"
+    # Every finding that IS a claim about the repo stays `error`.
+    record = _evaluate(arrival_samples=[{"found": False, "truncated": False}])
+    assert [f["severity"] for f in record["findings"]] == ["error"]
+
+
+def test_no_arrival_data_at_all_is_not_reported_as_an_unreadable_probe():
+    """`no-data` (nothing sampled) and `unknown` (sampled but unreadable) are
+    different claims. A repo with no recent pull requests has not exposed a
+    scanner bug, and reporting one would fire on every quiet repo."""
+    record = _evaluate(arrival_samples=[])
+    assert record["arrival"]["status"] == ARRIVAL_NO_DATA
+    assert record["findings"] == []
+
+
+def test_the_unreadable_probe_finding_is_scoped_to_gated_repos():
+    """An ungated repo's arrival is moot — `gate-not-required` is the finding
+    that matters there, and stacking a probe complaint on top would double-count
+    it in the fleet rollup."""
+    record = _evaluate(
+        rulesets=[],
+        arrival_samples=[{"found": False, "truncated": True}],
+    )
+    assert _finding_ids(record) == {FINDING_NOT_REQUIRED}
 
 
 def test_paging_stops_when_the_commit_can_no_longer_be_resolved():

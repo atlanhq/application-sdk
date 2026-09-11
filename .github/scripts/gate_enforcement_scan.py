@@ -165,6 +165,21 @@ FINDING_NOT_REQUIRED = "gate-not-required"
 FINDING_NOT_ARRIVING = "gate-not-arriving"
 FINDING_UNPRODUCIBLE = "gate-context-unproducible"
 FINDING_UNREADABLE = "gate-state-unreadable"
+# The arrival-facet sibling of `gate-state-unreadable`, and the reason the
+# FND-1947 paging fix does not simply move the silence somewhere else. Before
+# paging, a commit with >100 contexts left the denominator and nothing was
+# reported; if every sample did that the repo landed on arrival `unknown` with
+# an EMPTY findings list, so a probe that had stopped working looked exactly
+# like a probe with nothing to say. Paging removes the routine cause of that,
+# which also removes the only place a human would have noticed it — truncation
+# counts going to ~0 means the dashboard card stops mentioning truncation at
+# all. So the residual case is reported explicitly instead: this fires only when
+# the scanner could not read ANY sample, i.e. a real paging regression, an
+# unresolvable head, or a commit past the page cap. It should be absent
+# fleet-wide, and its appearance is a fact about the scanner, not about the repo
+# — which is why it is the only finding here emitted at `warning` rather than
+# `error`. See the severity note at the emit site.
+FINDING_ARRIVAL_UNREADABLE = "gate-arrival-unreadable"
 
 # The SDK's standard location for the workflow that produces the gate context.
 #
@@ -419,6 +434,24 @@ def evaluate_repo(
                     f"required but observed on only {with_context}/{sampled} recent "
                     "pull requests — a required context that never reports blocks "
                     "every PR and creates pressure to drop the requirement",
+                )
+            )
+        if arrival_status == ARRIVAL_UNKNOWN:
+            findings.append(
+                _finding(
+                    FINDING_ARRIVAL_UNREADABLE,
+                    # `warning`, not `error` — the one finding here that is not
+                    # a claim about the repo. connector-pulse renders an error
+                    # pill red and everything else amber, and ranks headline
+                    # severity across error > warning > info, so `error` would
+                    # make an unreadable probe pixel-identical to a gate that is
+                    # genuinely not arriving and would promote the repo's
+                    # headline to match. The distinction this finding exists to
+                    # draw is exactly the one the severity field carries.
+                    "warning",
+                    f"gate arrival could not be determined: all {truncated} "
+                    "sampled pull requests had unreadable status contexts — the "
+                    "arrival probe, not the repo, is what needs looking at",
                 )
             )
         if arrival_status == ARRIVAL_NEVER and has_tests_workflow_file is False:
