@@ -334,15 +334,22 @@ async def materialize_file_reference(
 ) -> FileReference:
     """Download the file or directory referenced by *ref* from *store* locally.
 
-    Uses ``list_keys`` to determine whether *ref* is a single file or a
-    directory prefix, then downloads accordingly.
+    Lists sub-keys under the path to decide whether *ref* is a directory
+    prefix; on an empty listing — which a real single object at the exact key
+    also produces — a HEAD on that key decides single file vs empty prefix.
 
-    **Single file**: if ``ref.local_path`` already exists on disk AND the
-    stored sha256 sidecar confirms the file is intact, the local sidecar is
+    **Single file**: if ``ref.local_path`` is an existing *file* AND the
+    stored sha256 sidecar confirms it is intact, the local sidecar is
     (re-)written and the function returns without downloading.
 
     **Directory**: fast path is always skipped; all files under the prefix
     are re-listed and downloaded.
+
+    **Empty prefix**: nothing under the prefix and no object at the exact key.
+    A ref whose ``local_path`` is a directory is returned unchanged, naming
+    that (normally empty) directory — what an empty hand-off *means* is the
+    consumer's judgement, not the storage layer's. With no local directory to
+    hand back, ``StorageNotFoundError`` is raised as before.
 
     Args:
         store: Source obstore store.
@@ -355,7 +362,8 @@ async def materialize_file_reference(
         file or directory on the local filesystem.
 
     Raises:
-        StorageNotFoundError: If the key does not exist in the store.
+        StorageNotFoundError: If the key resolves to no objects and *ref* has
+            no local directory to hand back.
         StorageError: If the downloaded data does not match the stored sidecar.
 
     Concurrency: a stable destination — ``ref.local_path``, or the resolved
@@ -366,6 +374,9 @@ async def materialize_file_reference(
     """
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         list_data_objects,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        get_file_meta,
     )
 
     if not ref.is_durable or ref.storage_path is None:
@@ -392,40 +403,68 @@ async def materialize_file_reference(
                 store, ref, data_objects, local_directory
             )
 
-    # An empty listing is ambiguous: it is what a single object at an exact key
-    # looks like, AND what a directory prefix holding nothing looks like. The
-    # local path is what tells them apart. A directory-backed ref over an empty
-    # prefix — which is exactly what ``download()`` hands back for a prefix with
-    # no objects (``local_path`` a fresh empty temp dir, ``file_count`` 0, see
-    # transfer.py "Directory / prefix" branch) — must NOT fall through to the
-    # single-file branch: that branch hashes ``local_path`` to decide whether it
-    # can skip the download, and hashing a directory raises ``IsADirectoryError``
-    # from ``open(path, "rb")``.
+    # An empty listing does not mean "nothing is there". ``list_keys`` appends a
+    # trailing slash before listing, so a real single object at the exact key
+    # ALWAYS lists empty here; and some stores (notably GCS under conditional
+    # IAM) return an empty listing when the caller merely lacks list permission.
+    # The listing cannot tell either of those apart from a directory prefix
+    # holding nothing — only a HEAD on the exact key can, so resolve it here and
+    # route on that rather than on a local-filesystem guess. Routing on
+    # ``Path(ref.local_path).is_dir()`` alone would answer a question about the
+    # store with a fact about the local disk: a real single object whose
+    # ``local_path`` happened to be a directory would be handed back
+    # undownloaded.
     #
-    # Routing on the local path rather than on ``ref.file_count`` is deliberate.
-    # Every SDK producer populates ``file_count``, but it is a value carried on
-    # the reference, so a ref built by any other caller may not; ``is_dir()`` is
-    # observable at this call site whatever produced the ref.
-    #
-    # Returning the ref unchanged hands back the empty directory it already
-    # names. The SDK does not decide what an empty hand-off MEANS — an empty
-    # upstream is legitimate for one caller and a lost hand-off for the next —
-    # so the consumer keeps that judgement, and gets an empty directory to make
-    # it with instead of an exception from the storage layer.
-    if ref.local_path is not None and Path(ref.local_path).is_dir():
-        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
-        logger.debug(
-            "file_ref.materialize.empty_prefix",
-            storage_path=ref.storage_path,
-            local_path=ref.local_path,
-            file_count=0,
-        )
-        return ref
+    # The HEAD is not new work on the hot path. The single-file branch has always
+    # had to make it — the size picks chunked vs streaming, the etag version-pins
+    # the range GETs — so it is made once here and handed down. Only the
+    # empty-prefix path, which until now crashed, pays a round trip it did not
+    # pay before.
+    remote_meta = await get_file_meta(ref.storage_path, store, normalize=False)
+
+    if remote_meta is None:
+        # No objects under the prefix AND no object at the exact key. A ref whose
+        # ``local_path`` is a directory is a directory-backed ref over an empty
+        # prefix — exactly the shape ``download()`` hands back for a prefix with
+        # no objects (``local_path`` a fresh empty temp dir, ``file_count`` 0;
+        # see transfer.py "Directory / prefix" branch). It must not reach the
+        # single-file branch, which hashes ``local_path`` to decide whether it can
+        # skip the download: hashing a directory raises ``IsADirectoryError`` out
+        # of ``open(path, "rb")``.
+        #
+        # Returning the ref unchanged hands back the directory it already names.
+        # The SDK does not decide what an empty hand-off MEANS — an empty upstream
+        # is legitimate for one caller and a lost hand-off for the next — so the
+        # consumer keeps that judgement, and gets a directory to make it with
+        # instead of an exception from the storage layer.
+        #
+        # ``file_count`` is counted off the disk rather than assumed 0:
+        # ``_materialize_directory`` does not prune extraneous local files
+        # either, so a directory left behind by an earlier pass keeps its
+        # contents, and this log must not assert they are not there.
+        local = Path(ref.local_path) if ref.local_path is not None else None
+        if local is not None and local.is_dir():
+            # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
+            logger.debug(
+                "file_ref.materialize.empty_prefix",
+                storage_path=ref.storage_path,
+                local_path=ref.local_path,
+                file_count=sum(1 for _ in local.iterdir()),
+            )
+            return ref
+        # Nothing local to hand back either, so fall through and let the
+        # single-file branch raise StorageNotFoundError — its message names all
+        # three causes: the writer has not deposited yet, the path is wrong, or
+        # the credentials lack list/read permission here.
 
     if ref.local_path is None:
-        return await _materialize_single_file(store, ref, local_dir)
+        return await _materialize_single_file(
+            store, ref, local_dir, remote_meta=remote_meta
+        )
     async with _materialize_guard(ref.local_path):
-        return await _materialize_single_file(store, ref, local_dir)
+        return await _materialize_single_file(
+            store, ref, local_dir, remote_meta=remote_meta
+        )
 
 
 # Structured kwargs in the logger calls of the two helpers below are intentional: every key used
@@ -439,6 +478,8 @@ async def _materialize_single_file(
     store: ObjectStore,
     ref: FileReference,
     local_dir: str | None,
+    *,
+    remote_meta: tuple[int, str | None] | None = None,
 ) -> FileReference:
     """Materialise one durable single-file ref (see ``materialize_file_reference``).
 
@@ -446,6 +487,14 @@ async def _materialize_single_file(
     lock around this call; the fast-path re-check below is therefore the
     post-wait re-check that lets the second concurrent activity skip the
     duplicate download.
+
+    Args:
+        remote_meta: The ``(size, etag)`` HEAD on ``ref.storage_path`` that the
+            dispatcher already made to route here, handed down so the same
+            round trip is not made twice. ``None`` means "not supplied" and the
+            HEAD is made below — the dispatcher never passes ``None``, because
+            it only routes here once that HEAD has proved an object exists, so
+            ``None`` reaches this only from a direct caller.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         FILE_REF_CHUNK_CONCURRENCY,
@@ -507,7 +556,7 @@ async def _materialize_single_file(
             fd
         )  # close immediately; this only reserves the destination name — the download stages in .sdk-partial/ and publishes over it
 
-    # Use get_file_size (HEAD) for two purposes: existence check (avoids
+    # Use get_file_meta (HEAD) for two purposes: existence check (avoids
     # the ambiguous empty-listing → misleading 404 from download_file) and
     # threshold check for chunked vs streaming download.
     # list_keys() with empty result alone cannot distinguish "single
@@ -516,7 +565,11 @@ async def _materialize_single_file(
     # lists empty here, AND some stores (notably GCS with conditional
     # IAM) silently return an empty listing when the caller lacks
     # permission.
-    remote_meta = await get_file_meta(ref.storage_path, store, normalize=False)
+    #
+    # The dispatcher makes exactly this HEAD to decide it should route here at
+    # all, and hands the result down; only a direct caller leaves it unset.
+    if remote_meta is None:
+        remote_meta = await get_file_meta(ref.storage_path, store, normalize=False)
     remote_size, remote_etag = remote_meta if remote_meta is not None else (None, None)
     if remote_size is None:
         raise StorageNotFoundError(
