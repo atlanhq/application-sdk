@@ -147,6 +147,13 @@ def _reexec_with_log_level(level: str, argv: list[str]) -> None:
     # with it. Stay at the current level instead; verbosity is the only loss.
     if __spec__ is None:
         return
+    # POSIX only. Windows has no exec: ``os.execve`` there spawns a *copy* and
+    # exits this process, so the parent's pipes close under whoever is reading
+    # them and daprd ends up supervised by a process its caller never spawned.
+    # The forwarder ships only in the Linux container image (``entrypoint.sh``),
+    # so the same fallback as a failed exec is the honest behaviour here.
+    if os.name != "posix":
+        return
     env = dict(os.environ, ATLAN_LOG_LEVEL=level)
     cmd = [sys.executable, "-m", __spec__.name, *argv[1:]]
     try:

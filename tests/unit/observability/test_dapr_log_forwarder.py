@@ -247,6 +247,26 @@ class TestMain:
             assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
         assert execve.call_count == 0  # not assert_not_called: it repr's the env
 
+    def test_no_reexec_on_windows(self, monkeypatch):
+        """Windows has no exec: os.execve spawns a copy and exits this process,
+        which would drop daprd's supervisor out from under its caller. Forward at
+        the current level instead — the same fallback as a failed exec."""
+        monkeypatch.setenv("DAPR_LOG_LEVEL", "debug")
+        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
+
+        async def _fake_run(child_cmd: list[str]) -> int:
+            return 0
+
+        with (
+            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
+            patch.object(dlf.os, "name", "nt"),
+            patch.object(dlf.os, "execve") as execve,
+            patch.object(dlf, "_run", _fake_run),
+        ):
+            assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
+        assert execve.call_count == 0  # not assert_not_called: it repr's the env
+
     def test_no_reexec_once_level_already_matches(self, monkeypatch):
         """The re-exec'd process (ATLAN_LOG_LEVEL already DEBUG) must fall straight
         through to the forwarder — no exec loop."""
@@ -564,6 +584,12 @@ class TestForwardedLevelsObserved:
     def _line_for(out: str, canary: str) -> str:
         return next(line for line in out.splitlines() if canary in line)
 
+    @pytest.mark.skipif(
+        os.name != "posix",
+        reason="the re-exec is POSIX-only: Windows os.execve spawns a copy and "
+        "exits the parent, so the forwarded lines never reach this process's "
+        "pipes. The forwarder ships only in the Linux container image.",
+    )
     def test_dapr_debug_reaches_the_pipeline_as_a_debug_record(self, tmp_path: Path):
         """The original bug: with the app at INFO, a daprd debug line was gated
         out of the console *and* the lakehouse even though the operator had asked
@@ -581,6 +607,11 @@ class TestForwardedLevelsObserved:
         out = self._run_forwarder(tmp_path, {"DAPR_LOG_LEVEL": "info"})
         assert "CANARY-daprd-debug" not in out
 
+    @pytest.mark.skipif(
+        os.name != "posix",
+        reason="quietening the app to ERROR only forwards daprd's info line via "
+        "the POSIX-only re-exec; see the skip above.",
+    )
     def test_quieting_the_app_never_promotes_a_daprd_line(self, tmp_path: Path):
         """LOG_LEVEL=ERROR with the image default DAPR_LOG_LEVEL=info: daprd's
         info line passes *as INFO*. A regression that re-derived the emitted
