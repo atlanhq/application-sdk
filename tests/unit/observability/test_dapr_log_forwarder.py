@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -479,3 +483,112 @@ class TestRun:
 
 async def _async_noop(*_args, **_kwargs):
     return None
+
+
+# A stand-in for daprd: the forwarder's child is whatever follows ``--``, so the
+# real sidecar binary is not needed to exercise the level gate end to end. Emits
+# one line at each of the two levels that matter, tagged so the assertions cannot
+# match the SDK's own startup chatter.
+_FAKE_DAPRD = """
+import time
+
+print(
+    '{"level":"debug","msg":"CANARY-daprd-debug","scope":"dapr.runtime.http","time":"t"}',
+    flush=True,
+)
+print(
+    '{"level":"info","msg":"CANARY-daprd-info","scope":"dapr.runtime","time":"t"}',
+    flush=True,
+)
+time.sleep(0.05)
+"""
+
+
+class TestForwardedLevelsObserved:
+    """The gate observed, not computed.
+
+    Every other test here injects a ``MagicMock`` logger, so ``logger.debug()``
+    is always "called" whether or not the real sinks would admit the record —
+    the thing this feature exists to change. These run the forwarder as a real
+    process against a fake daprd and read what actually came out, so they fail
+    if the SDK stops honouring ``ATLAN_LOG_LEVEL``, if a sink starts reading a
+    different variable, or if the re-exec silently stops happening.
+
+    A subprocess because the level binds at import, before any test can patch it
+    — the same reason ``TestDiagnoseGating`` in ``test_logger_adaptor.py`` is
+    driven this way.
+    """
+
+    def _run_forwarder(self, tmp_path: Path, env_overrides: dict[str, str]) -> str:
+        fake_daprd = tmp_path / "fake_daprd.py"
+        fake_daprd.write_text(_FAKE_DAPRD, encoding="utf-8")
+        env = {
+            **os.environ,
+            # Console sinks only: no exporter, no object store, no network.
+            "ENABLE_OTLP_LOGS": "false",
+            "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK": "false",
+            # SDR mode — the forwarding path. Outside it main() execs daprd
+            # transparently and nothing reaches the SDK logger at all.
+            "ENABLE_ATLAN_UPLOAD": "true",
+        }
+        # An ambient level from the shell or image would decide the outcome
+        # instead of the case under test; ATLAN_LOG_LEVEL is popped rather than
+        # overwritten so LOG_LEVEL is the app level unless a case says otherwise.
+        env.pop("ATLAN_LOG_LEVEL", None)
+        env["LOG_LEVEL"] = "INFO"
+        env.update(env_overrides)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "application_sdk.observability.dapr_log_forwarder",
+                "--",
+                sys.executable,
+                str(fake_daprd),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(Path(__file__).resolve().parents[3]),
+            timeout=120,
+        )
+        out = result.stdout + result.stderr
+        # Control: the info line must always arrive, or a case below could pass
+        # for the wrong reason (forwarder never ran, fake daprd never spawned).
+        assert (
+            "CANARY-daprd-info" in out
+        ), f"forwarder produced no daprd lines at all:\n{out}"
+        return out
+
+    @staticmethod
+    def _line_for(out: str, canary: str) -> str:
+        return next(line for line in out.splitlines() if canary in line)
+
+    def test_dapr_debug_reaches_the_pipeline_as_a_debug_record(self, tmp_path: Path):
+        """The original bug: with the app at INFO, a daprd debug line was gated
+        out of the console *and* the lakehouse even though the operator had asked
+        for it. It must now arrive, and arrive at DEBUG — not folded into the
+        message or promoted to the app's level."""
+        out = self._run_forwarder(tmp_path, {"DAPR_LOG_LEVEL": "debug"})
+        assert "CANARY-daprd-debug" in out
+        assert "[DEBUG]" in self._line_for(out, "CANARY-daprd-debug")
+
+    def test_app_level_still_gates_when_daprd_is_not_more_verbose(self, tmp_path: Path):
+        """The two knobs stay independent in the other direction: DAPR_LOG_LEVEL
+        at the image default does not lower the gate, so a debug line below it is
+        still dropped. Without this, the test above would pass just as well if the
+        forwarder had stopped gating entirely."""
+        out = self._run_forwarder(tmp_path, {"DAPR_LOG_LEVEL": "info"})
+        assert "CANARY-daprd-debug" not in out
+
+    def test_quieting_the_app_never_promotes_a_daprd_line(self, tmp_path: Path):
+        """LOG_LEVEL=ERROR with the image default DAPR_LOG_LEVEL=info: daprd's
+        info line passes *as INFO*. A regression that re-derived the emitted
+        level from the app's level would manufacture ERROR records here, and
+        reach error-rate dashboards and alert rules keyed on SDK error volume."""
+        out = self._run_forwarder(
+            tmp_path, {"LOG_LEVEL": "ERROR", "DAPR_LOG_LEVEL": "info"}
+        )
+        line = self._line_for(out, "CANARY-daprd-info")
+        assert "[INFO]" in line
+        assert "[ERROR]" not in line
