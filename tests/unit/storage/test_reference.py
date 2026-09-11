@@ -359,7 +359,13 @@ class TestMaterializeFileReference:
             with pytest.raises(StorageError) as excinfo:
                 await materialize_file_reference(store, ref)
 
-        assert isinstance(excinfo.value.__cause__, IsADirectoryError), excinfo.value
+        # ``OSError``, not ``IsADirectoryError``: POSIX raises EISDIR publishing
+        # over a directory, Windows raises PermissionError (WinError 5) from the
+        # same ``os.replace``. The portable property is that the failure came
+        # from the filesystem write — hashing the directory instead would have
+        # come out of the spy above as an AssertionError, which is not an
+        # OSError and is not wrapped in StorageError either.
+        assert isinstance(excinfo.value.__cause__, OSError), excinfo.value
 
     async def test_single_file_helper_never_hashes_a_directory(
         self, store, tmp_path
@@ -392,7 +398,13 @@ class TestMaterializeFileReference:
                 await _materialize_single_file(store, ref, None)
 
         sha256_file.assert_not_called()
-        assert isinstance(excinfo.value.__cause__, IsADirectoryError), excinfo.value
+        # ``OSError``, not ``IsADirectoryError``: POSIX raises EISDIR publishing
+        # over a directory, Windows raises PermissionError (WinError 5) from the
+        # same ``os.replace``. The portable property is that the failure came
+        # from the filesystem write — hashing the directory instead would have
+        # come out of the spy above as an AssertionError, which is not an
+        # OSError and is not wrapped in StorageError either.
+        assert isinstance(excinfo.value.__cause__, OSError), excinfo.value
 
     async def test_single_file_helper_hashes_a_real_file(self, store, tmp_path) -> None:
         """Control for the guard test above: a real file DOES take the fast path."""
