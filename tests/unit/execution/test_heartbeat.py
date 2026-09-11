@@ -1025,13 +1025,42 @@ class TestCarriedHeartbeatDetails:
         self, fake_temporalio
     ) -> None:
         ctl = TemporalHeartbeatController()
-        assert ctl.last_sent_details() == ()
+        assert ctl.last_sent_details() is None
         ctl.heartbeat("p", 1)
         assert ctl.last_sent_details() == ("p", 1)
 
     def test_noop_controller_fallback_and_last_sent(self) -> None:
         ctl = NoopHeartbeatController(fallback_details=("carried",))
+        assert ctl.last_sent_details() is None
         assert ctl.get_last_heartbeat_details() == ("carried",)
         ctl.heartbeat("x")
         assert ctl.get_last_heartbeat_details() == ("x",)
         assert ctl.last_sent_details() == ("x",)
+
+    # "never beat" and "beat with no details" are different answers, and an
+    # empty tuple cannot hold both. Collapsing them lets an attempt that has
+    # already moved past the carried checkpoint re-carry it on the next
+    # eviction, so the execution after that redoes completed work.
+
+    def test_temporal_empty_beat_supersedes_the_carried_checkpoint(
+        self, fake_temporalio
+    ) -> None:
+        ctl = TemporalHeartbeatController(fallback_details=({"position": 7},))
+        ctl.heartbeat()
+        assert ctl.last_sent_details() == ()
+
+    def test_noop_empty_beat_supersedes_the_carried_checkpoint(self) -> None:
+        ctl = NoopHeartbeatController(fallback_details=({"position": 7},))
+        ctl.heartbeat()
+        assert ctl.last_sent_details() == ()
+        # get_last_heartbeat_details() still reads the carried value: like
+        # Temporal's own, it answers "what did the previous attempt leave",
+        # which an empty beat by this attempt does not change.
+        assert ctl.get_last_heartbeat_details() == ({"position": 7},)
+
+    def test_keepalive_alone_is_not_a_beat(self, fake_temporalio) -> None:
+        # heartbeat_keepalive() re-sends whatever heartbeat() last set; on its
+        # own it establishes nothing, so the carried checkpoint still stands.
+        ctl = TemporalHeartbeatController(fallback_details=({"position": 7},))
+        ctl.heartbeat_keepalive()
+        assert ctl.last_sent_details() is None

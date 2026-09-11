@@ -36,6 +36,10 @@ from application_sdk.observability.logger_adaptor import get_logger
 if TYPE_CHECKING:
     from application_sdk.errors.base import AppError
     from application_sdk.execution.errors import ApplicationError
+    from application_sdk.execution.heartbeat import (
+        NoopHeartbeatController,
+        TemporalHeartbeatController,
+    )
 
 logger = get_logger(__name__)
 
@@ -211,6 +215,67 @@ class TaskContext:
     ``get_heartbeat_details()`` keeps resuming from the last checkpoint across
     pod shutdowns. ``None`` (the default, and for runs dispatched by a workflow
     that predates this field) means nothing to carry."""
+
+
+def _evicted_heartbeat_details(
+    controller: TemporalHeartbeatController | NoopHeartbeatController,
+) -> tuple[Any, ...]:
+    """The heartbeat details to attach to this attempt's ``WorkerEvicted`` failure.
+
+    Best effort, and it has to be: these details ride on the failure so the
+    workflow-side eviction loop can hand them to the re-dispatched execution,
+    but the failure itself is what makes that re-dispatch happen. If attaching
+    them fails the eviction must still be reported cleanly, so every branch here
+    degrades to ``()`` rather than raising.
+
+    Two states, not one: ``last_sent_details()`` returns ``None`` when this
+    attempt never beat (carry forward what the previous one left) and ``()``
+    when it beat with no details (carry nothing — it superseded the checkpoint).
+
+    The encodability check is the load-bearing part. ``ApplicationError.details``
+    are serialised by the data converter at completion time, and temporalio
+    handles a converter failure by discarding the whole failure and substituting
+    a bare ``ApplicationFailureInfo`` with **no type** — which
+    ``_is_worker_evicted`` then does not recognise, so the eviction silently
+    stops being re-dispatched and burns the task's retry budget instead. That is
+    strictly worse than carrying nothing. Details are unvalidated on the
+    ``heartbeat_timeout_seconds=None`` path in particular, where a
+    ``NoopHeartbeatController`` holds values Temporal has never encoded.
+    """
+    try:
+        sent = controller.last_sent_details()
+        details = sent if sent is not None else controller.get_last_heartbeat_details()
+    except Exception:
+        logger.warning(
+            "Could not read heartbeat details while reporting a worker eviction; "
+            "the re-dispatched execution will restart from its last durable "
+            "checkpoint instead of resuming",
+            exc_info=True,
+        )
+        return ()
+
+    if not details:
+        return ()
+
+    try:
+        converter = activity.payload_converter()
+    except RuntimeError:  # not inside an activity context
+        return details  # conformance: ignore[E007] no activity context means no failure conversion ahead; there is nothing for the encodability check to guard
+
+    try:
+        converter.to_payloads(details)
+    except Exception:
+        logger.warning(
+            "Heartbeat details for task could not be serialised onto the worker-"
+            "eviction failure and were dropped; the re-dispatched execution will "
+            "restart from its last durable checkpoint. Heartbeat with values the "
+            "Temporal data converter can encode (a HeartbeatDetails model, or "
+            "plain JSON-native values)",
+            exc_info=True,
+        )
+        return ()
+
+    return details
 
 
 def _current_workflow_type() -> str:
@@ -666,10 +731,7 @@ def create_activity_from_task(
                     # NEW activity execution, and Temporal does not carry
                     # heartbeat details across executions. Fall back to what the
                     # previous attempt left behind when this one never beat.
-                    evicted_details = (
-                        heartbeat_controller.last_sent_details()
-                        or heartbeat_controller.get_last_heartbeat_details()
-                    )
+                    evicted_details = _evicted_heartbeat_details(heartbeat_controller)
                     raise ApplicationError(
                         "Activity terminated because the worker pod is shutting down",
                         *evicted_details,

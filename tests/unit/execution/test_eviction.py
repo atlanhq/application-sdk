@@ -25,6 +25,7 @@ from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
+from application_sdk.execution import heartbeat as heartbeat_module
 from application_sdk.execution import shutdown as shutdown_module
 from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
@@ -377,6 +378,175 @@ class TestEvictionCarriesHeartbeatDetails:
                 activities_module.activity,
                 "info",
                 return_value=mock.MagicMock(workflow_id="wf-carry"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+            pytest.raises(ApplicationError) as exc_info,
+        ):
+            await activity_fn(ctx, _CarryIn(name="x"))
+        assert exc_info.value.type == WORKER_EVICTED_TYPE
+        assert tuple(exc_info.value.details) == ({"position": 7},)
+
+    async def test_unencodable_details_are_dropped_not_raised(self) -> None:
+        # ``ApplicationError.details`` are serialised by the data converter at
+        # completion time. temporalio handles a converter failure by discarding
+        # the whole failure and substituting a bare ``ApplicationFailureInfo``
+        # with NO type — which ``_is_worker_evicted`` does not recognise, so the
+        # eviction stops being re-dispatched and burns the task's retry budget
+        # instead. Carrying nothing is strictly better than losing the type.
+        # Unvalidated on this path in particular: ``heartbeat_timeout_seconds=None``
+        # means a NoopHeartbeatController, whose details Temporal never encoded.
+        class _Unencodable:
+            pass
+
+        class _BadCarryApp(App):
+            @task(timeout_seconds=60)
+            async def boom(self, input: _CarryIn) -> _CarryOut:
+                self.heartbeat(_Unencodable())
+                raise asyncio.CancelledError()
+
+            async def run(self, input: _CarryIn) -> _CarryOut:
+                return await self.boom(input)
+
+        activity_fn = self._activity("_bad-carry-app", "boom")
+        ctx = TaskContext(
+            app_name="_bad-carry-app",
+            task_name="boom",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+        converter = mock.MagicMock()
+        converter.to_payloads.side_effect = TypeError("cannot encode _Unencodable")
+        shutdown_module.mark_worker_shutting_down()
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-bad"),
+            ),
+            mock.patch.object(
+                activities_module.activity,
+                "payload_converter",
+                return_value=converter,
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+            pytest.raises(ApplicationError) as exc_info,
+        ):
+            await activity_fn(ctx, _CarryIn(name="x"))
+        # The type is what makes the eviction loop re-dispatch at all.
+        assert exc_info.value.type == WORKER_EVICTED_TYPE
+        assert tuple(exc_info.value.details) == ()
+
+    async def test_controller_failure_does_not_mask_the_eviction(self) -> None:
+        class _RaisingCarryApp(App):
+            @task(timeout_seconds=60)
+            async def boom(self, input: _CarryIn) -> _CarryOut:
+                raise asyncio.CancelledError()
+
+            async def run(self, input: _CarryIn) -> _CarryOut:
+                return await self.boom(input)
+
+        activity_fn = self._activity("_raising-carry-app", "boom")
+        ctx = TaskContext(
+            app_name="_raising-carry-app",
+            task_name="boom",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+        shutdown_module.mark_worker_shutting_down()
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-raise"),
+            ),
+            mock.patch.object(
+                heartbeat_module.NoopHeartbeatController,
+                "last_sent_details",
+                side_effect=RuntimeError("controller is broken"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+            pytest.raises(ApplicationError) as exc_info,
+        ):
+            await activity_fn(ctx, _CarryIn(name="x"))
+        assert exc_info.value.type == WORKER_EVICTED_TYPE
+        assert tuple(exc_info.value.details) == ()
+
+    async def test_empty_beat_supersedes_the_carried_checkpoint(self) -> None:
+        # The attempt resumed at position 7, finished it, and beat with no
+        # details. Re-carrying position 7 would make the next execution redo
+        # work this one completed.
+        class _SupersedeApp(App):
+            @task(timeout_seconds=60)
+            async def boom(self, input: _CarryIn) -> _CarryOut:
+                self.heartbeat()
+                raise asyncio.CancelledError()
+
+            async def run(self, input: _CarryIn) -> _CarryOut:
+                return await self.boom(input)
+
+        activity_fn = self._activity("_supersede-app", "boom")
+        ctx = TaskContext(
+            app_name="_supersede-app",
+            task_name="boom",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+            evicted_heartbeat_details=[{"position": 7}],
+        )
+        shutdown_module.mark_worker_shutting_down()
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-supersede"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+            pytest.raises(ApplicationError) as exc_info,
+        ):
+            await activity_fn(ctx, _CarryIn(name="x"))
+        assert exc_info.value.type == WORKER_EVICTED_TYPE
+        assert tuple(exc_info.value.details) == ()
+
+    async def test_attempt_that_never_beat_recarries_the_previous_checkpoint(
+        self,
+    ) -> None:
+        class _RecarryApp(App):
+            @task(timeout_seconds=60)
+            async def boom(self, input: _CarryIn) -> _CarryOut:
+                raise asyncio.CancelledError()
+
+            async def run(self, input: _CarryIn) -> _CarryOut:
+                return await self.boom(input)
+
+        activity_fn = self._activity("_recarry-app", "boom")
+        ctx = TaskContext(
+            app_name="_recarry-app",
+            task_name="boom",
+            run_id="run-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+            evicted_heartbeat_details=[{"position": 7}],
+        )
+        shutdown_module.mark_worker_shutting_down()
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-recarry"),
             ),
             mock.patch(
                 "application_sdk.infrastructure.context.get_infrastructure",
