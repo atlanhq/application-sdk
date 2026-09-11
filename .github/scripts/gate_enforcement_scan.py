@@ -942,6 +942,13 @@ def parse_contexts_page(contexts: Optional[dict], where: str) -> dict:
         "count": len(context_nodes),
         "hasNextPage": has_next,
         "cursor": cursor,
+        # Whether the commit itself could not be read, as opposed to being read
+        # and found to hold no further contexts. The two are the same *shape* —
+        # no names, nothing more to fetch — and collapsing them makes an
+        # unreadable commit indistinguishable from a fully walked one, i.e. a
+        # false conclusive miss. Set by `parse_contexts_response`; a page that
+        # genuinely parsed is never unresolvable.
+        "unresolvable": False,
     }
 
 
@@ -953,11 +960,25 @@ def parse_contexts_response(payload: dict) -> dict:
         data.get("repository"), "data.repository", required=True
     )
     # `object` is null for an oid GitHub can no longer resolve (a force-pushed
-    # or GC'd commit). That is a legitimate skip, not drift: the page comes back
-    # empty and exhausted, so paging stops and the sample stays `truncated`.
+    # or GC'd commit). That is a legitimate skip, not drift — but it must not be
+    # reported as an exhausted page. Both produce no names and nothing more to
+    # fetch, so returning the plain page shape would let `_resolve_truncated`
+    # read "walked the whole connection, the gate was not in it" out of "could
+    # not read this commit at all" — turning an unreadable head into a false
+    # `never-arriving`, and on a gated repo into a `gate-not-arriving` error.
+    # That is a false claim about the repo, the failure this scanner's
+    # fail-loud contract exists to prevent, so it is flagged explicitly.
     commit = _expect_object(repository.get("object"), "data.repository.object")
+    if commit is None:
+        return {
+            "names": set(),
+            "count": 0,
+            "hasNextPage": False,
+            "cursor": None,
+            "unresolvable": True,
+        }
     rollup = _expect_object(
-        commit.get("statusCheckRollup") if commit else None,
+        commit.get("statusCheckRollup"),
         "data.repository.object.statusCheckRollup",
     )
     where = "data.repository.object.statusCheckRollup.contexts"
@@ -994,10 +1015,31 @@ def fetch_arrival_samples(
         raise GhError(f"unexpected arrival payload for {repo}")
     if payload.get("errors"):
         raise GhError(f"GraphQL errors for {repo}: {payload['errors']}")
-    return [
-        _resolve_truncated(repo, owner, name, sample, required_context, run=run)
-        for sample in parse_arrival_nodes(payload, required_context)
-    ]
+    # Resolved one at a time, NOT in a comprehension. Paging is the only part of
+    # this probe that issues a request per sample, so it is the only part where
+    # one transient failure can take the others with it: a comprehension lets a
+    # single 502 propagate out of `fetch_arrival_samples`, which `scan_repo`
+    # catches as `samples = None` — and an already-parsed, already-conclusive
+    # sibling sample is then discarded along with it. The repo lands on
+    # `no-data` with an empty findings list, which is the precise silence the
+    # `gate-arrival-unreadable` finding exists to close, reintroduced one layer
+    # below it. A failed page leaves *its own* sample truncated and nothing
+    # else; if that empties the denominator the verdict is `unknown` (reported),
+    # never `no-data` (silent).
+    samples: list = []
+    for sample in parse_arrival_nodes(payload, required_context):
+        try:
+            samples.append(
+                _resolve_truncated(repo, owner, name, sample, required_context, run=run)
+            )
+        except GhError as exc:
+            print(
+                f"::warning::{repo}: PR #{sample.get('number')}: context paging "
+                f"failed: {exc}",
+                file=sys.stderr,
+            )
+            samples.append(_public_sample({**sample, "truncated": True}))
+    return samples
 
 
 def fetch_context_page(
@@ -1076,6 +1118,11 @@ def _resolve_truncated(
         page = fetch_context_page(repo, owner, name, oid, cursor, run=run)
         if required_context in page["names"]:
             return _public_sample({**sample, "found": True, "truncated": False})
+        if page["unresolvable"]:
+            # The commit could not be read, so nothing was ruled out. Checked
+            # before the exhaustion branch below, which would otherwise read
+            # this identical shape as "walked it all, the gate was not there".
+            return _public_sample(sample)
         if not page["hasNextPage"] or not page["cursor"]:
             # The connection is exhausted and the gate was not anywhere in it.
             # That is now a *conclusive* miss — the whole point of paging.
