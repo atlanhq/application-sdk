@@ -628,7 +628,7 @@ class TestEvictionRetryCarriesDetails:
         assert second.kwargs["args"][1] == "input"  # the rest of args untouched
         assert ctx.evicted_heartbeat_details is None  # caller's object not mutated
 
-    async def test_redispatch_without_details_leaves_context_alone(self) -> None:
+    async def test_redispatch_without_details_carries_nothing(self) -> None:
         evict = _evicted_with_details()
         exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, "ok"])
         ctx = TaskContext(app_name="a", task_name="t", run_id="r")
@@ -638,6 +638,54 @@ class TestEvictionRetryCarriesDetails:
             exec_mock.await_args_list[1].kwargs["args"][0].evicted_heartbeat_details
             is None
         )
+
+    async def test_empty_beat_clears_a_previous_carry_across_three_dispatches(
+        self,
+    ) -> None:
+        """``kwargs`` is reused across iterations — an empty failure must clear it.
+
+        Three dispatches, because the bug only appears on the second re-dispatch:
+        #1 beats position 7 and is evicted, #2 resumes there, finishes it, beats
+        clean and is evicted, #3 must start from nothing. Skipping the write on an
+        empty failure would leave #1's carry in ``kwargs`` and hand position 7 to
+        #3, which would redo work #2 completed. The activity-level tests cover the
+        failure payload each attempt produces; only this one covers what the loop
+        does with two of them in sequence.
+        """
+        first = _evicted_with_details({"position": 7})
+        second = _evicted_with_details()  # the attempt beat with no details
+        exec_mock, exec_patch, logger_patch = self._patch_workflow(
+            [first, second, "ok"]
+        )
+        ctx = TaskContext(app_name="a", task_name="t", run_id="r")
+        with exec_patch, logger_patch:
+            result = await execute_activity_with_eviction_retry(
+                "act-name", args=[ctx, "input"], max_eviction_retries=3
+            )
+        assert result == "ok"
+        assert exec_mock.await_count == 3
+        d1, d2, d3 = exec_mock.await_args_list
+        assert d1.kwargs["args"][0].evicted_heartbeat_details is None
+        assert d2.kwargs["args"][0].evicted_heartbeat_details == [{"position": 7}]
+        assert d3.kwargs["args"][0].evicted_heartbeat_details is None
+        assert d3.kwargs["args"][1] == "input"  # the rest of args still untouched
+        assert ctx.evicted_heartbeat_details is None  # caller's object not mutated
+
+    async def test_successive_carries_replace_rather_than_accumulate(self) -> None:
+        first = _evicted_with_details({"position": 7})
+        second = _evicted_with_details({"position": 74610})
+        exec_mock, exec_patch, logger_patch = self._patch_workflow(
+            [first, second, "ok"]
+        )
+        ctx = TaskContext(app_name="a", task_name="t", run_id="r")
+        with exec_patch, logger_patch:
+            await execute_activity_with_eviction_retry(
+                "act-name", args=[ctx], max_eviction_retries=3
+            )
+        d1, d2, d3 = exec_mock.await_args_list
+        assert d1.kwargs["args"][0].evicted_heartbeat_details is None
+        assert d2.kwargs["args"][0].evicted_heartbeat_details == [{"position": 7}]
+        assert d3.kwargs["args"][0].evicted_heartbeat_details == [{"position": 74610}]
 
     async def test_redispatch_with_non_task_context_args_is_unchanged(self) -> None:
         evict = _evicted_with_details({"position": 7})

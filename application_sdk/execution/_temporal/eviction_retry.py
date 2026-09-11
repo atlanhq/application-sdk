@@ -71,18 +71,36 @@ def _carry_evicted_heartbeat_details(
     other than a dataclass with an ``evicted_heartbeat_details`` field as the
     first activity argument is left exactly as it was. Deterministic: pure data
     from the recorded failure, no clocks, no I/O.
+
+    The field is **always** rewritten once the first argument is recognised —
+    including to ``None`` when the failure carries no details. ``kwargs`` is
+    reused across iterations of the loop below, so returning it untouched on an
+    empty failure would leave a *previous* iteration's carry in place: an
+    attempt that resumed from position 7, finished it and beat clean would hand
+    position 7 to the execution after the next eviction and redo completed work.
+    Absent details are an answer ("carry nothing"), not a reason to skip the
+    write.
+
+    That also means a degraded attempt clears the carry rather than preserving
+    it: the activity wrapper reports no details when it could not read them, or
+    when they would not survive failure conversion, and both cases log that the
+    re-dispatched execution restarts from its last durable checkpoint. Carrying
+    nothing is the conservative answer — there is no way to tell a deliberate
+    empty beat from a failed read once both have crossed the wire as ``()``,
+    and re-carrying a checkpoint the attempt may have moved past is the worse
+    of the two mistakes.
     """
     cause = err.cause
     details = list(getattr(cause, "details", None) or ())
     args = kwargs.get("args")
-    if not details or not isinstance(args, list) or not args:
+    if not isinstance(args, list) or not args:
         return kwargs
     first = args[0]
     if not dataclasses.is_dataclass(first) or not hasattr(
         first, "evicted_heartbeat_details"
     ):
         return kwargs
-    carried = dataclasses.replace(first, evicted_heartbeat_details=details)
+    carried = dataclasses.replace(first, evicted_heartbeat_details=details or None)
     return {**kwargs, "args": [carried, *args[1:]]}
 
 
