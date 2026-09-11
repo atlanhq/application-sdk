@@ -171,6 +171,7 @@ def _install_args(**overrides: object) -> argparse.Namespace:
         "app_configs": "",
         "release_model": "",
         "created_by": "",
+        "commit_sha": "",
         "scan_wait_seconds": 0,
         # Both retry budgets default to 0 here, and every test that wants a retry
         # opts in. `time.sleep` is stubbed but `time.monotonic` is not, so a
@@ -271,6 +272,31 @@ def test_install_scopes_the_registration_to_the_one_tenant(
         "example-tenant"
     ], "a per-PR e2e version must be reachable only by its own e2e tenant"
     assert "target_channel" not in body
+    assert "commit_sha" not in body
+
+
+def test_install_forwards_commit_sha_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The release path always sends commit_sha; e2e must register the same shape."""
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({"version": "older"})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(commit_sha=sha))
+    assert transport.body_for("/marketplace/publish")["commit_sha"] == sha
 
 
 # ── The scan gate ────────────────────────────────────────────────────────────

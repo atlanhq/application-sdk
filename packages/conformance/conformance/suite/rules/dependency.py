@@ -588,4 +588,139 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/dependency.md#d011"
         ),
     ),
+    RuleDefinition(
+        id="D012",
+        scope=RuleScope.BOTH,
+        name="UnpinnedPackageIndex",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="supply-chain",
+        autofixable=True,
+        since="0.30.0",
+        rationale=(
+            "Atlan laptops carry a machine-wide uv default index — the Endor Labs "
+            "package firewall, installed into ~/.config/uv/uv.toml with 'default = true' "
+            "and credentials inline. A repo that does not pin its own default index "
+            "inherits it, and then every 'uv run', 'uv sync' and 'uv lock' rewrites every "
+            "package URL in uv.lock to the proxy host. The rewrite is silent in three ways "
+            "at once: it prints nothing, it changes no version and no hash, and it touches "
+            "a file the task at hand never mentioned — so it is noticed only by someone "
+            "who happens to read the diff. A project-level index takes precedence over the "
+            "machine-wide one and every uv subcommand reads it, so one stanza closes the "
+            "whole class. "
+            "Customer impact: the rewritten lock is committed and CI, which holds no "
+            "credential for the proxy, fails at dependency install with 401 Unauthorized "
+            "on a different package each run. The connector's release stalls behind a "
+            "failure that reads as an outage in someone else's infrastructure, and the "
+            "cause is invisible in the diff that produced it — no version moved, no "
+            "hash moved, only the URLs."
+        ),
+        short_description=(
+            "pyproject.toml does not pin PyPI as the default uv index, so a "
+            "machine-wide index can rewrite uv.lock"
+        ),
+        full_description=(
+            "The repo's root ``pyproject.toml`` must declare PyPI as the\n"
+            "resolver's default index::\n"
+            "\n"
+            "    [[tool.uv.index]]\n"
+            '    name = "pypi"\n'
+            '    url = "https://pypi.org/simple"\n'
+            "    default = true\n"
+            "\n"
+            "Two branches, reported at most once per repo:\n"
+            "\n"
+            "1. **No default index** — no ``[[tool.uv.index]]`` entry is\n"
+            "   marked ``default = true``, so whatever default the machine\n"
+            "   supplies is what resolves.\n"
+            "2. **Default index is not PyPI** — an entry is marked default\n"
+            "   but its URL names some other host, which is the proxy rewrite\n"
+            "   already committed into the pyproject.\n"
+            "\n"
+            "Anchored on the root ``pyproject.toml`` only: this is a property\n"
+            "of the repo's resolution, not of each sub-package, so a monorepo\n"
+            "gets one finding rather than one per member.\n"
+            "\n"
+            "The pin belongs in ``pyproject.toml``, **not** in a project-level\n"
+            "``uv.toml``.  A ``uv.toml`` does override the user-level file, but\n"
+            "it also suppresses ``[tool.uv]`` in ``pyproject.toml`` entirely —\n"
+            "silently dropping any ``constraint-dependencies`` CVE floors the\n"
+            "repo declares there.  uv warns about that, but names only\n"
+            "``constraint-dependencies``.\n"
+            "\n"
+            "Scope is ``both``: the SDK inherits the machine-wide index exactly\n"
+            "as an app does.  This rule pins the index; ``D013`` checks whether\n"
+            "a non-PyPI host has already reached ``uv.lock``.  Cite: FND-1928."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d012"
+        ),
+    ),
+    RuleDefinition(
+        id="D013",
+        scope=RuleScope.BOTH,
+        name="NonPyPILockfileIndex",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="supply-chain",
+        autofixable=False,
+        since="0.30.0",
+        rationale=(
+            "D012 is preventive; this is the damage. A uv.lock whose URLs name an internal "
+            "proxy pins the repo's resolution to a credentialed host that CI and every "
+            "contributor outside the firewall cannot reach, so dependency install fails "
+            "with 401 Unauthorized — on a different package each run, because "
+            "resolution order varies, which is what makes it read as someone else's outage "
+            "rather than as a committed file in this repository. Two Atlan repos have "
+            "already lost a debugging cycle to exactly this. The separate credential branch "
+            "exists because the two findings are not the same severity: a proxy host in the "
+            "lock is a broken build, an index credential in the lock is a secret in version "
+            "control that has to be rotated before anything else is done. "
+            "Customer impact: the connector cannot be built or released at all until the "
+            "lock is repaired, and the pre-release gates that would have caught real "
+            "defects never run, because they fail before reaching the code."
+        ),
+        short_description=(
+            "uv.lock resolves packages from a host that is not PyPI, or embeds "
+            "an index credential"
+        ),
+        full_description=(
+            "Every download URL in the repo's ``uv.lock`` must name a PyPI\n"
+            "host — ``files.pythonhosted.org`` or ``pypi.org``.  Two\n"
+            "branches:\n"
+            "\n"
+            "1. **Credentialed URL** — a URL carrying userinfo, or one of\n"
+            "   the known index-key markers.  Reported first and alone: this is\n"
+            "   a secret in version control, and the credential must be rotated\n"
+            "   before the lock is regenerated.\n"
+            "2. **Non-PyPI host** — the lock resolves from an internal\n"
+            "   mirror or proxy.  Restore the committed lock; if a dependency\n"
+            "   genuinely changed, re-lock with\n"
+            "   ``uv lock --default-index https://pypi.org/simple``.\n"
+            "\n"
+            "**Findings never quote a URL — only a host and a count.**  They\n"
+            "reach SARIF, GitHub code scanning, CI logs and the remediation run\n"
+            "artifacts, so interpolating a credentialed URL into a message would\n"
+            "copy the secret into all four.\n"
+            "\n"
+            "**The finding is anchored on** ``pyproject.toml``, not on\n"
+            "``uv.lock``, and names the lock in its message.  A lockfile is\n"
+            "regenerated wholesale on every lock, so a\n"
+            "``# conformance: ignore[D013]`` directive written into it would not\n"
+            "survive — anchoring there would leave the rule with no\n"
+            "suppression path at all.  ``D011``'s lock branch sets the same\n"
+            "precedent.\n"
+            "\n"
+            "A lock that is absent or unparseable never manufactures a finding.\n"
+            "A lock that parses but yields **no** URLs is reported on stderr as\n"
+            "undetermined rather than passing silently: the URL spelling is a uv\n"
+            "implementation detail, and a matcher that has gone inert must not\n"
+            "read as a clean result.  Cite: FND-1928."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d013"
+        ),
+    ),
 )

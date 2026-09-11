@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.33.2
-source-sha:    db271b97113c2e576921dfdd1eb1d0929b671bf3
-source-date:   2026-09-09T17:23:43+01:00
+sdk-version:   3.34.1
+source-sha:    ccf53bff8017832a7352c380e475aa988feaba77
+source-date:   2026-09-11T10:25:22+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 46 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 27 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
@@ -320,6 +320,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app.build_identity import BUILD_IDENTITY_CONFIGMAP_ID`
 - **Signature:** `BUILD_IDENTITY_CONFIGMAP_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/build_identity.py`
+
+#### `BUILD_INFO_BUILD_ID_KEY`
+
+- **Import:** `from application_sdk.app.build_identity import BUILD_INFO_BUILD_ID_KEY`
+- **Signature:** `BUILD_INFO_BUILD_ID_KEY`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/app/build_identity.py`
 
@@ -1868,7 +1875,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `NoopHeartbeatController`
 
 - **Import:** `from application_sdk.execution.heartbeat import NoopHeartbeatController`
-- **Signature:** `class NoopHeartbeatController() -> None`
+- **Signature:** `class NoopHeartbeatController(fallback_details: tuple[Any, ...] = ()) -> None`
 - **Summary:** No-op HeartbeatController for local execution and testing.
 - **Defined in:** `application_sdk/execution/heartbeat.py`
 
@@ -1950,7 +1957,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `TemporalHeartbeatController`
 
 - **Import:** `from application_sdk.execution.heartbeat import TemporalHeartbeatController`
-- **Signature:** `class TemporalHeartbeatController() -> None`
+- **Signature:** `class TemporalHeartbeatController(fallback_details: tuple[Any, ...] = ()) -> None`
 - **Summary:** HeartbeatController that uses Temporal's activity.heartbeat().
 - **Defined in:** `application_sdk/execution/heartbeat.py`
 

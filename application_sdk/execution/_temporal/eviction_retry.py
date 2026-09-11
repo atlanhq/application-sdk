@@ -15,6 +15,14 @@ The eviction counter is per call site (per activity invocation), not per
 workflow run, so an activity that survives one eviction starts fresh on its
 next call within the same workflow.
 
+Progress carry: Temporal scopes heartbeat details to an activity *execution*,
+and a re-dispatch is a new execution — so the documented resume-on-retry
+pattern (``get_heartbeat_details()``) would see nothing after an eviction. The
+activity wrapper attaches the attempt's last heartbeat details to the
+``WorkerEvicted`` failure; when the first activity argument is a ``TaskContext``
+(duck-typed on ``evicted_heartbeat_details``), the loop hands them to the
+re-dispatched execution, whose heartbeat controller falls back to them.
+
 Determinism note: every operation in this loop is deterministic for Temporal
 replay — a bounded integer counter incremented in workflow code and a
 deterministic string compare on ``ApplicationError.type``. No clocks, no
@@ -23,6 +31,7 @@ random, no I/O.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 from temporalio import workflow
@@ -49,6 +58,50 @@ def _is_worker_evicted(err: ActivityError) -> bool:
     """
     cause = err.cause
     return isinstance(cause, ApplicationError) and cause.type == WORKER_EVICTED_TYPE
+
+
+def _carry_evicted_heartbeat_details(
+    err: ActivityError, kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Return ``kwargs`` for the re-dispatch, carrying the evicted attempt's details.
+
+    The details ride on the ``WorkerEvicted`` ``ApplicationError`` (its
+    positional ``details``). They are copied onto a *new* ``TaskContext``
+    (``dataclasses.replace``) so the caller's object is never mutated. Anything
+    other than a dataclass with an ``evicted_heartbeat_details`` field as the
+    first activity argument is left exactly as it was. Deterministic: pure data
+    from the recorded failure, no clocks, no I/O.
+
+    The field is **always** rewritten once the first argument is recognised —
+    including to ``None`` when the failure carries no details. ``kwargs`` is
+    reused across iterations of the loop below, so returning it untouched on an
+    empty failure would leave a *previous* iteration's carry in place: an
+    attempt that resumed from position 7, finished it and beat clean would hand
+    position 7 to the execution after the next eviction and redo completed work.
+    Absent details are an answer ("carry nothing"), not a reason to skip the
+    write.
+
+    That also means a degraded attempt clears the carry rather than preserving
+    it: the activity wrapper reports no details when it could not read them, or
+    when they would not survive failure conversion, and both cases log that the
+    re-dispatched execution restarts from its last durable checkpoint. Carrying
+    nothing is the conservative answer — there is no way to tell a deliberate
+    empty beat from a failed read once both have crossed the wire as ``()``,
+    and re-carrying a checkpoint the attempt may have moved past is the worse
+    of the two mistakes.
+    """
+    cause = err.cause
+    details = list(getattr(cause, "details", None) or ())
+    args = kwargs.get("args")
+    if not isinstance(args, list) or not args:
+        return kwargs
+    first = args[0]
+    if not dataclasses.is_dataclass(first) or not hasattr(
+        first, "evicted_heartbeat_details"
+    ):
+        return kwargs
+    carried = dataclasses.replace(first, evicted_heartbeat_details=details or None)
+    return {**kwargs, "args": [carried, *args[1:]]}
 
 
 async def execute_activity_with_eviction_retry(
@@ -105,5 +158,6 @@ async def execute_activity_with_eviction_retry(
                         "max_eviction_retries": max_eviction_retries,
                     },
                 )
+                kwargs = _carry_evicted_heartbeat_details(err, kwargs)
                 continue
             raise
