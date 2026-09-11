@@ -13,7 +13,7 @@ from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.storage import ops
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
-from application_sdk.storage.ops import _get_bytes, _put
+from application_sdk.storage.ops import _get_bytes, _put, get_file_meta
 from application_sdk.storage.reference import (
     _materialize_single_file,
     _write_local_sidecar,
@@ -311,6 +311,88 @@ class TestMaterializeFileReference:
                 f"materialising an empty prefix must not raise, got "
                 f"{type(exc).__name__}: {exc}"
             )
+
+    async def test_zero_byte_directory_marker_returns_the_ref(
+        self, store, tmp_path
+    ) -> None:
+        """A 0-byte marker at the bare key is an empty directory, not a file.
+
+        Object stores have no directories, so an empty one is a 0-byte marker
+        object, and this SDK puts the marker for ``D/`` at the bare key ``D``
+        (``delete_prefix``'s ``root_marker``). obstore strips the trailing
+        delimiter when it parses a key, so ``HEAD("D/")`` and ``HEAD("D")`` are
+        the same request: the HEAD that resolves single-file vs empty prefix
+        finds the marker even though the listing under ``D/`` is empty.
+
+        Without the 0-byte check the ref is routed to the single-file branch and
+        dies publishing those zero bytes over its directory destination — the
+        very crash this whole path exists to prevent, on any store that writes
+        directory markers.
+        """
+        await _put("k/emptydir", b"", store, normalize=False)  # the marker
+        assert await get_file_meta("k/emptydir/", store, normalize=False) == (
+            0,
+            '"0"',
+        ), "premise: HEAD on the slash-terminated key finds the bare-key marker"
+
+        empty_dir = tmp_path / "marker-dest"
+        empty_dir.mkdir()
+        ref = FileReference(
+            local_path=str(empty_dir),
+            storage_path="k/emptydir/",
+            is_durable=True,
+            file_count=0,
+        )
+
+        result = await materialize_file_reference(store, ref)
+
+        assert result is ref
+        assert list(Path(result.local_path).iterdir()) == []
+
+    async def test_zero_byte_marker_without_trailing_slash_returns_the_ref(
+        self, store, tmp_path
+    ) -> None:
+        """The marker check cannot lean on the trailing slash alone.
+
+        ``_materialize_directory`` re-adds the delimiter itself
+        (``storage_path.rstrip("/") + "/"``), so a directory ref is not
+        guaranteed to carry one. A directory-backed ref is identified by its
+        ``local_path`` here, exactly as in the no-object case.
+        """
+        await _put("k/emptydir", b"", store, normalize=False)
+        empty_dir = tmp_path / "marker-dest-bare"
+        empty_dir.mkdir()
+        ref = FileReference(
+            local_path=str(empty_dir),
+            storage_path="k/emptydir",  # no trailing delimiter
+            is_durable=True,
+            file_count=0,
+        )
+
+        result = await materialize_file_reference(store, ref)
+
+        assert result is ref
+
+    async def test_zero_byte_single_file_still_materialises(
+        self, store, tmp_path
+    ) -> None:
+        """Guard against reading every 0-byte object as a directory marker.
+
+        An empty file is a legitimate artifact. Nothing about this ref is
+        directory-shaped — no trailing delimiter, and ``local_path`` names a
+        file — so the zero bytes are materialised, not handed back as an empty
+        directory.
+        """
+        await _put("k/zero.bin", b"", store, normalize=False)
+        out = tmp_path / "zero.bin"
+        ref = FileReference(
+            local_path=str(out), is_durable=True, storage_path="k/zero.bin"
+        )
+
+        result = await materialize_file_reference(store, ref)
+
+        assert Path(result.local_path).is_file()
+        assert Path(result.local_path).read_bytes() == b""
 
     async def test_empty_prefix_without_local_path_still_raises(self, store) -> None:
         """The empty-prefix branch must not swallow a genuinely missing key.

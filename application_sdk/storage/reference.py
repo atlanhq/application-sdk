@@ -345,11 +345,12 @@ async def materialize_file_reference(
     **Directory**: fast path is always skipped; all files under the prefix
     are re-listed and downloaded.
 
-    **Empty prefix**: nothing under the prefix and no object at the exact key.
-    A ref whose ``local_path`` is a directory is returned unchanged, naming
-    that (normally empty) directory — what an empty hand-off *means* is the
-    consumer's judgement, not the storage layer's. With no local directory to
-    hand back, ``StorageNotFoundError`` is raised as before.
+    **Empty prefix**: nothing under the prefix, and either no object at the
+    exact key or only a 0-byte directory marker. A ref whose ``local_path`` is
+    a directory is returned unchanged, naming that (normally empty) directory —
+    what an empty hand-off *means* is the consumer's judgement, not the storage
+    layer's. With no local directory to hand back, ``StorageNotFoundError`` is
+    raised as before.
 
     Args:
         store: Source obstore store.
@@ -422,10 +423,33 @@ async def materialize_file_reference(
     # pay before.
     remote_meta = await get_file_meta(ref.storage_path, store, normalize=False)
 
-    if remote_meta is None:
-        # No objects under the prefix AND no object at the exact key. A ref whose
-        # ``local_path`` is a directory is a directory-backed ref over an empty
-        # prefix — exactly the shape ``download()`` hands back for a prefix with
+    # A HEAD that finds 0 bytes does not prove a single file either. Object
+    # stores have no directories, so an empty one is represented by a 0-byte
+    # marker object, and this SDK puts the marker for ``D/`` at the bare key
+    # ``D`` — see ``delete_prefix``'s ``root_marker`` in batch.py. obstore strips
+    # the trailing delimiter when it parses a key, so ``HEAD("D/")`` and
+    # ``HEAD("D")`` are the same request and both find that marker, while the
+    # listing under ``D/`` stays empty. A real empty object and a directory
+    # marker are the same zero bytes at the same key, so no probe can separate
+    # them; what separates them is the ref itself, below — only a ref that
+    # already names a local directory is handed back.
+    #
+    # Note the asymmetry, which is the point of HEADing at all: a NON-empty
+    # object at the exact key is a single file whatever the local path looks
+    # like, and is downloaded. Only the 0-byte answer defers to the ref, and
+    # there the alternative is not a better outcome — publishing zero bytes over
+    # a directory destination can only fail.
+    #
+    # Keying on a trailing ``/`` in ``storage_path`` instead would miss half the
+    # directory refs: ``_materialize_directory`` re-adds the delimiter itself
+    # (``storage_path.rstrip("/") + "/"``), so a directory ref is not guaranteed
+    # to carry one.
+    local = Path(ref.local_path) if ref.local_path is not None else None
+
+    if remote_meta is None or remote_meta[0] == 0:
+        # Nothing under the prefix, and at the exact key either no object at all
+        # or only a marker's zero bytes. A ref whose ``local_path`` is a
+        # directory is a directory-backed ref over an empty prefix — exactly the shape ``download()`` hands back for a prefix with
         # no objects (``local_path`` a fresh empty temp dir, ``file_count`` 0;
         # see transfer.py "Directory / prefix" branch). It must not reach the
         # single-file branch, which hashes ``local_path`` to decide whether it can
@@ -442,7 +466,6 @@ async def materialize_file_reference(
         # ``_materialize_directory`` does not prune extraneous local files
         # either, so a directory left behind by an earlier pass keeps its
         # contents, and this log must not assert they are not there.
-        local = Path(ref.local_path) if ref.local_path is not None else None
         if local is not None and local.is_dir():
             # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
             logger.debug(
@@ -452,10 +475,11 @@ async def materialize_file_reference(
                 file_count=sum(1 for _ in local.iterdir()),
             )
             return ref
-        # Nothing local to hand back either, so fall through and let the
-        # single-file branch raise StorageNotFoundError — its message names all
-        # three causes: the writer has not deposited yet, the path is wrong, or
-        # the credentials lack list/read permission here.
+        # Nothing local to hand back, so fall through to the single-file
+        # branch: with no object at all it raises StorageNotFoundError, whose
+        # message names all three causes (the writer has not deposited yet, the
+        # path is wrong, or the credentials lack list/read permission here), and
+        # with a 0-byte object it materialises those zero bytes as before.
 
     if ref.local_path is None:
         return await _materialize_single_file(
