@@ -28,10 +28,12 @@ from gate_enforcement_scan import (  # noqa: E402
     ARRIVAL_UNKNOWN,
     DEFAULT_NAME_PATTERN,
     DEFAULT_REQUIRED_CONTEXT,
+    FINDING_ARRIVAL_UNREADABLE,
     FINDING_NOT_ARRIVING,
     FINDING_NOT_REQUIRED,
     FINDING_UNPRODUCIBLE,
     FINDING_UNREADABLE,
+    MAX_CONTEXT_PAGES,
     STATUS_GATED,
     STATUS_NOT_GATED,
     STATUS_UNKNOWN,
@@ -39,8 +41,10 @@ from gate_enforcement_scan import (  # noqa: E402
     build_fleet,
     classify_arrival,
     evaluate_repo,
+    fetch_arrival_samples,
     list_fleet_repos,
     parse_arrival_nodes,
+    parse_contexts_response,
     required_contexts,
     scan_repo,
     write_outputs,
@@ -412,7 +416,15 @@ def test_parse_arrival_nodes_reads_both_context_shapes():
         }
     }
     assert parse_arrival_nodes(payload, GATE) == [
-        {"number": 1, "found": True, "truncated": False}
+        {
+            "number": 1,
+            "found": True,
+            "truncated": False,
+            # Paging handles: absent from this fixture, and stripped again by
+            # `fetch_arrival_samples` before the sample reaches the record.
+            "oid": None,
+            "cursor": None,
+        }
     ]
 
 
@@ -829,6 +841,420 @@ def test_scan_repo_reads_a_gated_repo_end_to_end():
     # this token and is not consulted at all. Probing it would spend an API call
     # per repo to learn nothing.
     assert not any(str(c).endswith("/protection") for c in calls)
+
+
+# --- FND-1947: sampled population + context paging -------------------------
+
+
+def _ctx(name: str) -> dict:
+    return {"__typename": "CheckRun", "name": name}
+
+
+def _contexts(names, *, total=None, has_next=False, cursor=None) -> dict:
+    nodes = [_ctx(n) for n in names]
+    return {
+        "totalCount": len(nodes) if total is None else total,
+        "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+        "nodes": nodes,
+    }
+
+
+def _arrival_with(contexts: dict, *, number=1, oid="c0ffee") -> dict:
+    return _arrival_payload(
+        {
+            "number": number,
+            "commits": {
+                "nodes": [
+                    {
+                        "commit": {
+                            "oid": oid,
+                            "statusCheckRollup": {"contexts": contexts},
+                        }
+                    }
+                ]
+            },
+        }
+    )
+
+
+def _page(contexts: dict) -> dict:
+    return {
+        "data": {
+            "repository": {"object": {"statusCheckRollup": {"contexts": contexts}}}
+        }
+    }
+
+
+def _arrival_two_prs() -> str:
+    """Two samples: #1 conclusive on page one, #2 truncated and needing paging."""
+    return json.dumps(
+        {
+            "data": {
+                "repository": {
+                    "pullRequests": {
+                        "nodes": [
+                            {
+                                "number": 1,
+                                "commits": {
+                                    "nodes": [
+                                        {
+                                            "commit": {
+                                                "oid": "aaa",
+                                                "statusCheckRollup": {
+                                                    "contexts": _contexts([GATE])
+                                                },
+                                            }
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "number": 2,
+                                "commits": {
+                                    "nodes": [
+                                        {
+                                            "commit": {
+                                                "oid": "bbb",
+                                                "statusCheckRollup": {
+                                                    "contexts": _contexts(
+                                                        ["x"],
+                                                        total=136,
+                                                        has_next=True,
+                                                        cursor="cur",
+                                                    )
+                                                },
+                                            }
+                                        }
+                                    ]
+                                },
+                            },
+                        ]
+                    }
+                }
+            }
+        }
+    )
+
+
+def _is_page_query(args: list) -> bool:
+    """The paging query is the one that does not select `pullRequests`."""
+    return "pullRequests" not in args[3]
+
+
+def test_the_arrival_query_excludes_pull_requests_closed_without_merge():
+    """Bug 1. An abandoned branch almost always carries an incomplete check set
+    — CI cancelled, or never started for the final SHA — so it reads as a
+    conclusive *miss*. And because the sort key is UPDATED_AT and closing a PR
+    updates it, abandoning a stale branch actively promotes it into the window
+    and evicts a real sample: the verdict became a function of PR hygiene, and
+    flapped as the window moved.
+
+    The filter is applied server-side, so the observable surface is the query
+    this script sends. Asserting it here is what stops the `states:` clause
+    being dropped in a future edit."""
+    sent: list = []
+
+    def run(args: list) -> str:
+        sent.append(args[3])
+        return json.dumps(_arrival_with(_contexts([GATE])))
+
+    fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert "states: [OPEN, MERGED]" in sent[0]
+
+
+def test_a_truncated_sample_is_resolved_by_paging_not_discarded():
+    """Bug 2. The gate sitting past context 100 used to discard the sample
+    outright. Both `atlan-application-sdk` bump PRs — the highest-signal PRs in
+    a connector repo — carry ~136 contexts, so the highest-signal evidence was
+    exactly the evidence being thrown away."""
+    calls: list = []
+
+    def run(args: list) -> str:
+        calls.append(args)
+        if _is_page_query(args):
+            return json.dumps(_page(_contexts([GATE, "suite / D001"])))
+        return json.dumps(
+            _arrival_with(
+                _contexts(
+                    [f"suite / D{i:03d}" for i in range(100)],
+                    total=136,
+                    has_next=True,
+                    cursor="Y3Vyc29yOjEwMA==",
+                )
+            )
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": True, "truncated": False}]
+    assert sum(1 for a in calls if _is_page_query(a)) == 1
+
+
+def test_paging_to_exhaustion_turns_truncation_into_a_conclusive_miss():
+    """The other half of the same fix: once every page has been read and the
+    gate is in none of them, that is real evidence of non-arrival — not an
+    unreadable sample. Without this the denominator only ever shrinks."""
+
+    def run(args: list) -> str:
+        if _is_page_query(args):
+            return json.dumps(_page(_contexts(["suite / D101"], has_next=False)))
+        return json.dumps(
+            _arrival_with(
+                _contexts(["suite / D001"], total=101, has_next=True, cursor="cur")
+            )
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": False, "truncated": False}]
+    # …and that miss now reaches the verdict, instead of leaving the denominator.
+    assert classify_arrival(samples)[:3] == (ARRIVAL_NEVER, 1, 0)
+
+
+def test_paging_is_bounded_and_an_unfinished_walk_stays_truncated():
+    """A connection that never reports exhaustion must not stall the fleet
+    sweep. Hitting the cap degrades to the pre-paging behaviour — the sample
+    leaves the denominator — rather than to a false miss."""
+    pages = 0
+
+    def run(args: list) -> str:
+        nonlocal pages
+        if _is_page_query(args):
+            pages += 1
+            return json.dumps(_page(_contexts(["x"], has_next=True, cursor="more")))
+        return json.dumps(
+            _arrival_with(_contexts(["y"], total=9999, has_next=True, cursor="cur"))
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert pages == MAX_CONTEXT_PAGES
+    assert samples == [{"number": 1, "found": False, "truncated": True}]
+    assert classify_arrival(samples)[0] == ARRIVAL_UNKNOWN
+
+
+def test_a_gate_found_on_the_first_page_is_never_paged():
+    """Paging is a repair path, not a cost every repo pays. A commit whose first
+    page already contains the gate spends no extra API call even when the
+    connection is truncated."""
+    calls: list = []
+
+    def run(args: list) -> str:
+        calls.append(args)
+        return json.dumps(
+            _arrival_with(_contexts([GATE], total=136, has_next=True, cursor="cur"))
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": True, "truncated": True}]
+    assert not any(_is_page_query(a) for a in calls)
+    # A truncated sample that found the gate was always conclusive; paging does
+    # not change that.
+    assert classify_arrival(samples)[:3] == (ARRIVAL_REPORTING, 1, 1)
+
+
+def test_an_unreadable_arrival_probe_is_a_finding_not_an_empty_findings_list():
+    """The silence FND-1947 would otherwise have relocated rather than fixed.
+
+    Paging removes the routine cause of truncation — which also removes the only
+    place a human would have noticed truncation, since the dashboard card stops
+    mentioning it once the counter sits at zero. So an all-truncated sample now
+    reports itself. Without this, a scanner that had stopped working produced a
+    record indistinguishable from one with nothing to say: arrival `unknown`,
+    `findings: []`."""
+    record = _evaluate(
+        arrival_samples=[{"found": False, "truncated": True} for _ in range(3)]
+    )
+    assert record["arrival"]["status"] == ARRIVAL_UNKNOWN
+    assert record["arrival"]["prsSampled"] == 0
+    assert record["arrival"]["truncatedSamples"] == 3
+    assert FINDING_ARRIVAL_UNREADABLE in _finding_ids(record)
+    # It is a statement about the probe, never about the repo's CI — so it must
+    # not also claim the gate is not arriving.
+    assert FINDING_NOT_ARRIVING not in _finding_ids(record)
+
+
+def test_the_unreadable_probe_finding_is_a_warning_not_an_error():
+    """The severity field is what carries "the probe, not the repo", so this is
+    not cosmetic. connector-pulse renders an `error` pill red and everything
+    else amber (`pages/GateEnforcement.tsx`), and ranks a repo's headline across
+    `("error", "warning", "info")`. Emitting `error` here would make an
+    unreadable probe pixel-identical to a gate that genuinely never arrives, and
+    would promote the repo's headline severity to match — so no wording on
+    either side could recover the distinction."""
+    record = _evaluate(arrival_samples=[{"found": False, "truncated": True}])
+    finding = next(
+        f for f in record["findings"] if f["id"] == FINDING_ARRIVAL_UNREADABLE
+    )
+    assert finding["severity"] == "warning"
+    # Every finding that IS a claim about the repo stays `error`.
+    record = _evaluate(arrival_samples=[{"found": False, "truncated": False}])
+    assert [f["severity"] for f in record["findings"]] == ["error"]
+
+
+def test_no_arrival_data_at_all_is_not_reported_as_an_unreadable_probe():
+    """`no-data` (nothing sampled) and `unknown` (sampled but unreadable) are
+    different claims. A repo with no recent pull requests has not exposed a
+    scanner bug, and reporting one would fire on every quiet repo."""
+    record = _evaluate(arrival_samples=[])
+    assert record["arrival"]["status"] == ARRIVAL_NO_DATA
+    assert record["findings"] == []
+
+
+def test_the_unreadable_probe_finding_is_scoped_to_gated_repos():
+    """An ungated repo's arrival is moot — `gate-not-required` is the finding
+    that matters there, and stacking a probe complaint on top would double-count
+    it in the fleet rollup."""
+    record = _evaluate(
+        rulesets=[],
+        arrival_samples=[{"found": False, "truncated": True}],
+    )
+    assert _finding_ids(record) == {FINDING_NOT_REQUIRED}
+
+
+def test_paging_stops_when_the_commit_can_no_longer_be_resolved():
+    """A force-pushed or GC'd head returns `object: null`. That is a legitimate
+    skip, not schema drift, so it must not raise and must not loop — and it is
+    flagged `unresolvable` so it cannot be mistaken for an exhausted page."""
+    assert parse_contexts_response({"data": {"repository": {"object": None}}}) == {
+        "names": set(),
+        "count": 0,
+        "hasNextPage": False,
+        "cursor": None,
+        "unresolvable": True,
+    }
+
+
+def test_an_unresolvable_commit_is_not_recorded_as_a_conclusive_miss():
+    """An unreadable commit and a fully walked one have the same page shape —
+    no names, nothing more to fetch. Reading the second out of the first turns
+    a force-pushed head into `never-arriving`, and on a gated repo into a
+    `gate-not-arriving` error: a false claim about the repo, which is worse than
+    the silence this PR set out to fix.
+
+    Asserted through `fetch_arrival_samples` rather than on the page shape,
+    because the page-shape assertion above is exactly what let this through."""
+
+    def run(args: list) -> str:
+        if _is_page_query(args):
+            return json.dumps({"data": {"repository": {"object": None}}})
+        return json.dumps(
+            _arrival_with(_contexts(["x"], total=136, has_next=True, cursor="cur"))
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": False, "truncated": True}]
+    assert classify_arrival(samples)[0] == ARRIVAL_UNKNOWN
+    record = _evaluate(arrival_samples=samples)
+    assert FINDING_NOT_ARRIVING not in _finding_ids(record)
+    assert FINDING_ARRIVAL_UNREADABLE in _finding_ids(record)
+
+
+def test_one_failed_page_does_not_discard_the_other_samples():
+    """Paging is the only per-sample request in this probe, so it is the only
+    place one transient failure can take the others with it. Letting a `GhError`
+    escape `fetch_arrival_samples` sends `scan_repo` to `samples = None`, and a
+    sibling that had already conclusively found the gate dies with it — the repo
+    lands on `no-data` with no findings, which is the same silence
+    `gate-arrival-unreadable` exists to close, one layer below it."""
+
+    def run(args: list) -> str:
+        if _is_page_query(args):
+            raise GhError("gh api failed: HTTP 502", status=502)
+        return _arrival_two_prs()
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [
+        {"number": 1, "found": True, "truncated": False},
+        {"number": 2, "found": False, "truncated": True},
+    ]
+    # PR #1's evidence survives, so the repo still has a verdict.
+    assert classify_arrival(samples)[:3] == (ARRIVAL_REPORTING, 1, 1)
+
+
+def test_a_repo_whose_every_page_fails_is_unknown_and_reported_not_silent():
+    """The degenerate case of the above: nothing conclusive survives. That must
+    be `unknown` + a finding, never `no-data` + an empty findings list."""
+
+    def run(args: list) -> str:
+        if _is_page_query(args):
+            raise GhError("gh api failed: HTTP 502", status=502)
+        return json.dumps(
+            _arrival_with(_contexts(["x"], total=136, has_next=True, cursor="cur"))
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": False, "truncated": True}]
+    record = _evaluate(arrival_samples=samples)
+    assert record["arrival"]["status"] == ARRIVAL_UNKNOWN
+    assert FINDING_ARRIVAL_UNREADABLE in _finding_ids(record)
+
+
+def test_a_malformed_arrival_body_still_fails_the_whole_probe():
+    """Per-sample isolation is scoped to *paging*, which is a network call per
+    sample. A malformed top-level body is schema drift and must still reach
+    `scan_repo` as a GhError, so the repo degrades to `unknown` rather than
+    being evaluated on whatever parsed."""
+
+    def run(args: list) -> str:
+        return json.dumps({"data": {"repository": None}})
+
+    with pytest.raises(GhError, match="malformed arrival payload"):
+        fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+
+
+def test_a_missing_cursor_leaves_the_sample_truncated_rather_than_paging_blind():
+    """`hasNextPage` without an `endCursor` gives nothing to page with. The
+    sample keeps the old treatment — excluded, never a false miss."""
+
+    def run(args: list) -> str:
+        assert not _is_page_query(args), "must not page without a cursor"
+        return json.dumps(
+            _arrival_with(_contexts(["x"], total=136, has_next=True, cursor=None))
+        )
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": False, "truncated": True}]
+
+
+def test_page_info_outranks_the_count_comparison_but_the_fallback_survives():
+    """`pageInfo.hasNextPage` is the authoritative answer; the totalCount
+    comparison remains for a payload that did not select it, so the repeated-
+    context reasoning above still holds."""
+    with_page_info = parse_arrival_nodes(
+        _arrival_with(_contexts([GATE] * 3, total=99, has_next=True, cursor="c")), GATE
+    )[0]
+    assert with_page_info["truncated"] is True  # despite 3 < 99 being unread
+
+    no_page_info = parse_arrival_nodes(
+        _arrival_with({"totalCount": 140, "nodes": [_ctx("x")]}), GATE
+    )[0]
+    assert no_page_info["truncated"] is True
+    assert no_page_info["cursor"] is None
+
+
+@pytest.mark.parametrize(
+    "bad,match",
+    [
+        pytest.param({"hasNextPage": "yes"}, "hasNextPage", id="hasNextPage"),
+        pytest.param(
+            {"hasNextPage": True, "endCursor": 7}, "endCursor", id="endCursor"
+        ),
+    ],
+)
+def test_a_wrong_typed_page_info_leaf_raises_rather_than_guessing(bad, match):
+    """Same fail-loud contract as the other leaves: a wrong-typed paging field
+    must reach `scan_repo` as a GhError (arrival `unknown`), never be coerced
+    into "nothing more to read" — which would read as a clean conclusive miss."""
+    payload = _arrival_with({"totalCount": 136, "pageInfo": bad, "nodes": [_ctx("x")]})
+    with pytest.raises(GhError, match=match):
+        parse_arrival_nodes(payload, GATE)
+
+
+def test_an_oid_that_is_not_a_string_raises_rather_than_paging_on_it():
+    payload = _arrival_with(_contexts(["x"], total=136, has_next=True, cursor="c"))
+    payload["data"]["repository"]["pullRequests"]["nodes"][0]["commits"]["nodes"][0][
+        "commit"
+    ]["oid"] = 12345
+    with pytest.raises(GhError, match="oid"):
+        parse_arrival_nodes(payload, GATE)
 
 
 # --- discovery + rollup ----------------------------------------------------
