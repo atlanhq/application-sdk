@@ -1,4 +1,4 @@
-"""Preflight-gate checks (P032–P035, P047, BLDX-1545, FND-901).
+"""Preflight conformance static checks and optional behavioral scenarios.
 
 Cross-file only: ``scan_path`` is a no-op and ``scan_all`` builds one shared
 :class:`~._common.Registry` (single parse + import walk) then runs all rule
@@ -14,27 +14,37 @@ from pathlib import Path
 from conformance.suite.checks._ast_common import discover, make_cli_main
 from conformance.suite.schema.findings import Finding
 
-from . import _metadata_parity, _reserved_gate, _untyped_failure, _warning_log
-from ._common import build_registry
+from . import (
+    _contracts,
+    _lifetime,
+    _metadata_parity,
+    _reserved_gate,
+    _untyped_failure,
+    _warning_log,
+)
+from ._common import build_registry, coverage_findings
 
 SERIES = "P"
 
 __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
+def scan_path(path: Path, root: Path) -> list[Finding]:
     """No-op: the preflight checks need the whole repo; use :func:`scan_all`."""
     return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Run the P032–P035 + P047 preflight-gate passes over *paths*."""
+    """Run the static preflight passes over *paths*."""
     reg = build_registry(paths, root)
     findings: list[Finding] = []
     findings.extend(_reserved_gate.scan(reg))
     findings.extend(_untyped_failure.scan(reg))
     findings.extend(_metadata_parity.scan(reg))
     findings.extend(_warning_log.scan(reg))
+    findings.extend(_contracts.scan(reg))
+    findings.extend(_lifetime.scan(reg))
+    findings.extend(coverage_findings(reg))
     return findings
 
 

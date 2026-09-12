@@ -25,6 +25,8 @@ uv run atlan-application-sdk-conformance programs-dir
 uv run atlan-application-sdk-conformance gen-rule-docs
 ```
 
+See [preflight conformance](conformance/docs/preflight-testing.md) for static checks, opt-in behavior scenarios, and their coverage limits.
+
 ## Suppressing a finding
 
 Most findings are suppressed inline, next to the violating line:

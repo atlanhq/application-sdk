@@ -23,36 +23,29 @@ from conformance.suite.checks.prescriptions._typed_boundaries import (
 )
 from conformance.suite.schema.findings import Finding
 
-from ._common import (
-    Registry,
-    collect_entrypoint_input_contract_names,
-    find_preflight_check_sites,
-    norm_key,
-)
+from ._common import Registry, contracts_for_site, find_preflight_check_sites, norm_key
 
 _P035 = "P035"
 
 
 def scan(reg: Registry) -> list[Finding]:
-    input_contracts = collect_entrypoint_input_contract_names(reg)
-    if not input_contracts:
-        return []
-
-    allowed: set[str] = set()
-    for name in input_contracts:
-        rec = reg.by_name.get(name)
-        if rec is None:
-            # Entrypoint input is an external/generated type we cannot resolve —
-            # its field set is unknown, so we cannot make a parity claim.
-            return []
-        if _opts_into_extra_keys(name, reg, set()):
-            return []
-        aliases = reg.aliases_by_rel.get(rec.file, {})
-        for fi in resolve_contract_fields(rec.node, aliases, reg.by_name):
-            allowed.add(norm_key(fi.name))
-
     findings: list[Finding] = []
     for src, func in find_preflight_check_sites(reg):
+        input_contracts = contracts_for_site(reg, src)
+        if not input_contracts:
+            continue
+        allowed: set[str] = set()
+        unresolved = False
+        for name in input_contracts:
+            rec = reg.by_name.get(name)
+            if rec is None or _opts_into_extra_keys(name, reg, set()):
+                unresolved = True
+                break
+            aliases = reg.aliases_by_rel.get(rec.file, {})
+            for fi in resolve_contract_fields(rec.node, aliases, reg.by_name):
+                allowed.add(norm_key(fi.name))
+        if unresolved:
+            continue
         params = _get_non_self_params(func)
         if not params:
             continue

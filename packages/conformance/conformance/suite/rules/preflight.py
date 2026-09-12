@@ -30,7 +30,7 @@ _HELP_BASE = (
     "packages/conformance/conformance/docs/rules/prescriptions.md"
 )
 
-RULES: tuple[RuleDefinition, ...] = (
+_EXISTING_RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P032",
         scope=RuleScope.APP,
@@ -105,7 +105,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P034",
         scope=RuleScope.APP,
         name="UntypedPreflightCheckFailure",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         autofixable=False,
@@ -115,13 +115,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "A failed PreflightCheck constructed without a typed error= falls back to "
             "the generic PREFLIGHT_CHECK_FAILED code, so the Automation Engine and the "
             "UI lose the category/code/audience/suggested_action the typed form carries "
-            "on the wire. This points at the exact lines to migrate to typed failures."
+            "on the wire. Customer impact: failed workflows lose actionable typed failure details."
         ),
         short_description=(
             "PreflightCheck(passed=False) constructed without a typed error= — untyped failure"
         ),
         full_description=(
-            "A ``PreflightCheck`` with an explicit ``passed=False`` and no typed "
+            "A ``PreflightCheck`` with proven or default ``passed=False`` and no typed "
             "``error=`` (absent, or the literal ``None``) is an untyped failure: the "
             "gate falls back to the generic ``PREFLIGHT_CHECK_FAILED`` code and only the "
             "deprecated free-text ``message`` reaches the caller. The typed form "
@@ -129,10 +129,10 @@ RULES: tuple[RuleDefinition, ...] = (
             ".to_failure_details()`` carries category / code / audience / retryable / "
             "suggested_action to the Automation Engine and the UI.\n"
             "\n"
-            "Only an explicit ``passed=False`` literal is flagged; a failure expressed "
-            "purely by the default ``passed`` and a non-literal ``passed`` are left "
-            "alone to keep false positives near zero. A locally-defined, non-SDK class "
-            "named ``PreflightCheck`` is not flagged."
+            "Supported SDK public imports, literal values, local boolean bindings, "
+            "and the default false value are recognized. An unresolved dynamic "
+            "``passed`` without an error produces P065 instead of a proven violation. "
+            "A locally-defined non-SDK class named ``PreflightCheck`` is not flagged."
         ),
         help_uri=f"{_HELP_BASE}#p034",
     ),
@@ -162,11 +162,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "(``_config_from_snapshot``), so only fields declared on an entrypoint "
             "``Input`` contract survive. A key read inside ``preflight_check`` via "
             '``input.metadata.get("key", ...)`` or ``input.metadata["key"]`` that is '
-            "absent from the union of every entrypoint Input contract's fields is "
+            "absent from the selected convention-based entrypoint input contract is "
             "silently missing on the gate path, so a defensive ``.get(key, default)`` "
             "read passes vacuously with the wrong configuration (e.g. database scoping "
             "silently dropped).\n"
             "\n"
+            "When dispatch cannot be narrowed, the existing union fallback applies; "
+            "P065 reports unresolved contract definitions. "
             "Remediation: declare the key as a field on the extraction input contract "
             "(matching the UI form), or stop reading it in ``preflight_check``. Keys are "
             "compared to contract field names with underscore/hyphen normalization; field "
@@ -212,10 +214,240 @@ RULES: tuple[RuleDefinition, ...] = (
             "and delete the warning; use INFO/DEBUG for non-failure progress. "
             "``warning`` and the deprecated ``warn`` alias are both matched, on any "
             "receiver named like a logger (``logger``, ``log``, ``self._log``, "
-            "``logging``). Only class-method ``preflight_check`` overrides are "
-            "scanned: module-level per-entrypoint ``preflight_check`` functions are "
-            "not resolved, and helper functions the method calls are not followed."
+            "``logging``). Supported class handlers, module callbacks, and directly "
+            "resolvable helpers are scanned; dynamic dispatch requires behavioral evidence."
         ),
         help_uri=f"{_HELP_BASE}#p047",
     ),
+)
+
+
+_CONTRACT_RULES = (
+    RuleDefinition(
+        id="P052",
+        name="PreflightHandlerContract",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Declare SDK PreflightInput and PreflightOutput on every supported handler.",
+        full_description="Declare SDK PreflightInput and PreflightOutput on every supported handler.",
+        rationale="Customer impact: Missing types and legacy output dictionaries hide contract drift from both UI and workflow consumers.",
+        help_uri=f"{_HELP_BASE}#p052",
+    ),
+    RuleDefinition(
+        id="P053",
+        name="PreflightFailureAction",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Provide nonblank failure messages and audience-appropriate suggested actions.",
+        full_description="Provide nonblank failure messages and audience-appropriate suggested actions.",
+        rationale="Customer impact: A typed error with no action still leaves a blocked workflow without a usable next step.",
+        help_uri=f"{_HELP_BASE}#p053",
+    ),
+    RuleDefinition(
+        id="P054",
+        name="PreflightExpectedFailureRaised",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Return expected typed preflight failures rather than letting them escape.",
+        full_description="Return expected typed preflight failures rather than letting them escape.",
+        rationale="The target origin-based gate applies hard mode to handler raises; a raised transient is no longer a fail-open request.",
+        help_uri=f"{_HELP_BASE}#p054",
+    ),
+    RuleDefinition(
+        id="P055",
+        name="PreflightVerdictAggregation",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Keep READY, PARTIAL and NOT_READY consistent with check outcomes.",
+        full_description="Keep READY, PARTIAL and NOT_READY consistent with check outcomes.",
+        rationale="Advisory failures must not become mandatory blocks and a successful status must not hide failed checks.",
+        help_uri=f"{_HELP_BASE}#p055",
+    ),
+    RuleDefinition(
+        id="P056",
+        name="PreflightGateInputParity",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Preserve the selected entrypoint and supply routable credentials before the gate.",
+        full_description="Preserve the selected entrypoint and supply routable credentials before the gate.",
+        rationale="The injected gate runs before workflow-body normalization, so a UI check can succeed while the gate sees different inputs.",
+        help_uri=f"{_HELP_BASE}#p056",
+    ),
+    RuleDefinition(
+        id="P057",
+        name="PreflightBlockingProbe",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Keep source probes awaitable and bounded across every connection phase.",
+        full_description="Keep source probes awaitable and bounded across every connection phase.",
+        rationale="Blocking I/O or unbounded executor waits can outlive the gate and stall worker activities.",
+        help_uri=f"{_HELP_BASE}#p057",
+    ),
+    RuleDefinition(
+        id="P058",
+        name="PreflightBudgetOverride",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Keep probe and retry deadlines inside the remaining gate budget.",
+        full_description="Keep probe and retry deadlines inside the remaining gate budget.",
+        rationale="Floors, extra margins and equal nested timeout boundaries turn healthy probes into timeout races.",
+        help_uri=f"{_HELP_BASE}#p058",
+    ),
+    RuleDefinition(
+        id="P059",
+        name="PreflightCancellationCleanup",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Release owned preflight resources without blocking the event loop.",
+        full_description="Release owned preflight resources without blocking the event loop.",
+        rationale="Cancellation of an await does not terminate a driver thread or release its resources.",
+        help_uri=f"{_HELP_BASE}#p059",
+    ),
+    RuleDefinition(
+        id="P060",
+        name="PreflightFailureExposure",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Keep raw exception and credential values out of preflight outputs and logs.",
+        full_description="Keep raw exception and credential values out of preflight outputs and logs.",
+        rationale="Typed wire fields and traceback locals are independent channels through which secrets can escape.",
+        help_uri=f"{_HELP_BASE}#p060",
+    ),
+    RuleDefinition(
+        id="P061",
+        name="PreflightRemovedGateContract",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Migrate removed mode overrides and private gate-classification helpers.",
+        full_description="Migrate removed mode overrides and private gate-classification helpers.",
+        rationale="SDK PR #3685 removes the old gate contract. Until its release floor is established this is an upgrade advisory, not proof of current incompatibility.",
+        help_uri=f"{_HELP_BASE}#p061",
+    ),
+    RuleDefinition(
+        id="P062",
+        name="PreflightBehaviorContract",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.TEST,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Execute registered real-handler scenarios for each applicable entrypoint.",
+        full_description="Execute registered real-handler scenarios for each applicable entrypoint.",
+        rationale="Customer impact: Static shape checks cannot prove verdict semantics, probe coverage, recovery, or resource lifetime. Missing and skipped scenarios are incomplete evidence.",
+        help_uri=f"{_HELP_BASE}#p062",
+    ),
+    RuleDefinition(
+        id="P063",
+        name="PreflightWorkflowEnforcement",
+        scope=RuleScope.SDK,
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.TEST,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Verify gate enforcement through real Temporal workflow histories.",
+        full_description="Verify gate enforcement through real Temporal workflow histories.",
+        rationale="Customer impact: Only execution history can prove extraction was never scheduled after a hard gate failure, including activity death.",
+        help_uri=f"{_HELP_BASE}#p063",
+    ),
+    RuleDefinition(
+        id="P064",
+        name="PreflightExitEvidence",
+        scope=RuleScope.SDK,
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.TEST,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Verify typed verdicts, outcome fields and safe evidence handoff on every exit.",
+        full_description="Verify typed verdicts, outcome fields and safe evidence handoff on every exit.",
+        rationale="Customer impact: Activity and workflow failures must preserve cause and status, and logging must not silently discard the evidence.",
+        help_uri=f"{_HELP_BASE}#p064",
+    ),
+    RuleDefinition(
+        id="P065",
+        name="PreflightAnalysisCoverage",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Report unresolved preflight dispatch and contracts instead of a clean result.",
+        full_description="Report unresolved preflight dispatch and contracts instead of a clean result.",
+        rationale="An undiscovered handler or unresolved contract must not be mistaken for conforming code.",
+        help_uri=f"{_HELP_BASE}#p065",
+    ),
+    RuleDefinition(
+        id="P066",
+        name="DeprecatedPartialPreflight",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.27.0",
+        short_description="Replace deprecated PARTIAL preflight results with an explicit readiness decision.",
+        full_description="PARTIAL is deprecated for app preflight results. Return NOT_READY for blocking failures or READY when extraction can proceed, preserving truthful typed check evidence. Recognizes literal and enum values, conditional expressions, and single local assignments in supported handler paths. Dynamic construction requires behavioral validation.",
+        rationale="Customer impact: PARTIAL allows extraction to proceed and can conceal a blocking source failure behind a degraded verdict. Explicit readiness decisions prevent this ambiguity.",
+        help_uri=f"{_HELP_BASE}#p066",
+    ),
+)
+
+_GUIDE_BASE = (
+    "https://github.com/atlanhq/application-sdk/blob/main/"
+    "packages/conformance/conformance/docs/preflight-guide.md"
+)
+
+RULES = tuple(
+    rule.model_copy(
+        update={
+            "full_description": (
+                f"{rule.full_description}\n\n"
+                f"[Investigation, remediation and verification guide]({_GUIDE_BASE}#{rule.id.lower()})."
+            )
+        }
+    )
+    for rule in _EXISTING_RULES + _CONTRACT_RULES
 )

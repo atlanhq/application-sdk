@@ -50,17 +50,14 @@ def test_rule_metadata() -> None:
     for rid in ("P033", "P034", "P035", "P047"):
         rule = get_rule(rid)
         assert rule.scope is RuleScope.APP
-        assert rule.tier is EnforcementTier.WARN
+        assert rule.tier is (
+            EnforcementTier.BLOCK if rid == "P034" else EnforcementTier.WARN
+        )
         assert rule.mechanism is RuleMechanism.STATIC
 
 
 def test_p032_is_block_tier() -> None:
-    """P032 is the one BLOCK-tier preflight rule (FND-311).
-
-    Its siblings describe preflight *quality* — drift, UX, parity — which
-    degrades messages. P032 describes a worker that never boots, so every
-    workflow in the tenant is down from the moment the release deploys.
-    """
+    """Reserved gate collisions prevent worker startup."""
     rule = get_rule("P032")
     assert rule.scope is RuleScope.APP
     assert rule.tier is EnforcementTier.BLOCK
@@ -215,7 +212,7 @@ def test_p033_fires_via_transitive_handler_without_preflight_input_annotation(
         + "class A(App):\n    @task\n    async def run_preflight(self): ...\n"
     )
     ids = sorted(f.rule_id for f in _scan(tmp_path, {"app.py": app, "h.py": handler}))
-    assert ids == ["P033"]
+    assert ids == ["P033", "P052"]
 
 
 def test_p033_message_points_at_colocated_handler(tmp_path: Path) -> None:
@@ -292,18 +289,17 @@ def test_p034_silent_on_passed_true(tmp_path: Path) -> None:
     assert _ids(tmp_path, _pc('PreflightCheck(name="x", passed=True)')) == []
 
 
-def test_p034_silent_on_omitted_passed(tmp_path: Path) -> None:
-    # Deliberate false-negative: bare templates are the biggest FP source.
-    assert _ids(tmp_path, _pc('PreflightCheck(name="x")')) == []
+def test_p034_reports_default_failure(tmp_path: Path) -> None:
+    assert _ids(tmp_path, _pc('PreflightCheck(name="x")')) == ["P034"]
 
 
-def test_p034_silent_on_non_literal_passed(tmp_path: Path) -> None:
+def test_dynamic_passed_reports_incomplete_analysis(tmp_path: Path) -> None:
     src = (
         "from application_sdk.handler.contracts import PreflightCheck\n"
         "def make(ok):\n"
         '    return PreflightCheck(name="x", passed=ok)\n'
     )
-    assert _ids(tmp_path, src) == []
+    assert _ids(tmp_path, src) == ["P065"]
 
 
 def test_p034_silent_on_non_sdk_preflightcheck(tmp_path: Path) -> None:
