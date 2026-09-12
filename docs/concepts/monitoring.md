@@ -734,7 +734,15 @@ So in SDR mode the SDK **automatically** forwards daprd's logs through its own p
 daprd is chatty, so control the volume at the source with its log level:
 
 ```bash
-DAPR_LOG_LEVEL=warn   # forward warn + error (and above); raise to error to drop the rest
+DAPR_LOG_LEVEL=info   # the base image default; raise to warn or error to drop the rest
 ```
 
-`DAPR_LOG_LEVEL` is a minimum-severity floor — `warn` captures both warnings **and** errors. It's the recommended knob for controlling daprd log volume reaching the lakehouse.
+`DAPR_LOG_LEVEL` is a minimum-severity floor — `warn` captures both warnings **and** errors. It's the recommended knob for controlling daprd log volume reaching the lakehouse. The base image sets it to `info` (`ENV DAPR_LOG_LEVEL=info` in the SDK Dockerfile); the entrypoint's own `warn` fallback only applies when the variable has been unset.
+
+Setting it **below** the app's `LOG_LEVEL` also works, and is how to see why a Dapr API call failed — the Dapr HTTP API logs the reason for a failed output-binding invoke (upstream status code, dial/TLS error) only at `debug`. The forwarder runs as its own process and gates itself at the more verbose of `LOG_LEVEL` and `DAPR_LOG_LEVEL`, so a daprd `debug` line arrives as a real `DEBUG` record in the container log, in OTel `severity_number`, and in the lakehouse `level` column. The app process is a sibling and keeps its own `LOG_LEVEL`:
+
+```bash
+DAPR_LOG_LEVEL=debug  # daprd debug lines reach kubectl logs and the lakehouse at DEBUG
+```
+
+"More verbose wins" applies to `ATLAN_LOG_LEVEL` too: if you have quietened the app with `ATLAN_LOG_LEVEL=ERROR` and left `DAPR_LOG_LEVEL=debug`, the forwarder process still gates itself at `DEBUG` for daprd's lines. The override is scoped to that one process — the app process is a sibling and stays at `ERROR`.
