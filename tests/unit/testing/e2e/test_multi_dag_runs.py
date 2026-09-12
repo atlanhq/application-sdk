@@ -281,6 +281,8 @@ def _wire(
     harness._auto_admin_users = ()  # type: ignore[attr-defined]
     harness._active_dag = None  # type: ignore[attr-defined]
     harness._connection_seeded = False  # type: ignore[attr-defined]
+    harness._connection_create_attempted = False  # type: ignore[attr-defined]
+    harness._dag_submitted = False  # type: ignore[attr-defined]
     harness._seed_version = None  # type: ignore[attr-defined]
     harness._node_dispatch = {}  # type: ignore[attr-defined]
     harness._expected_node_identities = {}  # type: ignore[attr-defined]
@@ -625,6 +627,51 @@ class TestDeclaredRuns:
         # graph is the one the harness published, which is FND-1775.
         assert len(ae.submitted_versions) == 1
         assert [s.entrypoint for s in ae.submits] == ["crawler", "miner"]
+
+    def test_a_submit_that_times_out_still_gets_its_connection_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-1873's gate is recorded on the way *in* to the submit.
+
+        A submit whose response never arrives is a run executing orphaned, not
+        a run that never happened — so the connection it mints is real and has
+        to be reclaimed. Recording the flag after the ``await`` instead would
+        leave this leg's connection on a shared tenant, and this is the only
+        test that would notice: it drives ``_run_full_dag_async`` for real
+        rather than presetting the flag.
+        """
+        harness = _Crawler()
+        ae = _FakeAE(_succeeded(CONNECTION_DELETE_NODE_ID))
+
+        async def _times_out(_payload: dict[str, Any], **_kwargs: Any) -> str:
+            raise TimeoutError("read timeout on submit")
+
+        monkeypatch.setattr(ae, "submit_workflow", _times_out)
+        calls = _wire(harness, ae, monkeypatch)
+
+        with pytest.raises(TimeoutError):
+            harness.run_full_dag()
+        harness.teardown_method(None)
+
+        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        assert len(teardowns) == 1
+        assert calls.purged == []
+
+    def test_a_run_that_never_submitted_reclaims_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other side of the same gate, through the same real wiring: a
+        suite that skipped before ``run_full_dag`` submits no teardown DAG and
+        does not fall back to the runner purge either."""
+        harness = _Crawler()
+        ae = _FakeAE(_succeeded(CONNECTION_DELETE_NODE_ID))
+        calls = _wire(harness, ae, monkeypatch)
+
+        harness.teardown_method(None)
+
+        assert ae.created_names == []
+        assert ae.submitted_versions == []
+        assert calls.purged == []
 
     def test_a_failing_run_stops_the_sequence(
         self, monkeypatch: pytest.MonkeyPatch

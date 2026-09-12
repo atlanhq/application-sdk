@@ -180,6 +180,12 @@ inputs:
       (e.g. mysql-app's `.github/e2e/e2e-full-docker-compose.yaml`
       which propagates AWS_* env vars to the worker and sets a unique
       agent-name so the worker registers on its own Temporal queue).
+
+      tests-reusable.yaml passes a PER-LEG value here (FND-1865): its
+      discovery job resolves `.github/e2e/<suite>-docker-compose.yaml`
+      when the caller's tree has one and falls back to the repo-wide
+      path otherwise, so a multi-entrypoint connector no longer starts
+      every source container on every leg.
     required: false
     default: ""
   git-token:
@@ -227,6 +233,12 @@ inputs:
       BaseE2ETest.setup_method via the E2E_SOURCE_AVAILABLE env var). Apps
       with no free container / no wired credentials set this false until they
       provision a source.
+
+      tests-reusable.yaml passes a PER-LEG value here (FND-1865): the env var
+      is resolved per run and therefore per leg, so a connector whose
+      entrypoints are not equally testable narrows the repo-wide input with
+      `source-available-overrides` and only the sourceless suite's legs
+      degrade to the worker-up tier.
     required: false
     default: "true"
   full-dag:
@@ -444,7 +456,7 @@ runs:
     # contracts, BaseSDRIntegrationTest — is import-compatible with the code
     # under test, and the whole E2E job runs one interpreter end to end.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.33.2
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.34.1
       with:
         python-version: ${{ inputs.expected-python-version }}
 

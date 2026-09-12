@@ -309,6 +309,25 @@ class MyConnector(App):
             )
 ```
 
+The details survive a worker eviction too: when a pod is shut down mid-task
+(KEDA scale-down, spot reclaim, rolling deploy) the SDK re-dispatches the task
+as a new activity execution, and the last details the evicted attempt sent are
+carried across, so `get_heartbeat_details()` still returns them. Details that
+were never sent cannot be carried — beat at every safe resume point.
+
+Two things bound the carry, both deliberate:
+
+- **A beat with no details clears the checkpoint.** `self.heartbeat()` with no
+  arguments says *this attempt has moved past whatever was carried in*, so
+  nothing is carried out of it. That is what you want when the work is done;
+  it is not a keepalive. To beat without changing the checkpoint, pass the
+  same details again, or rely on the automatic heartbeat.
+- **Details must be encodable by the Temporal data converter.** They ride to
+  the next execution on the eviction failure itself, so anything that cannot
+  be serialised is dropped with a `WARNING` rather than carried. Beat with a
+  `HeartbeatDetails` model or plain JSON-native values — the eviction is still
+  re-dispatched either way, but an unserialisable checkpoint is lost.
+
 A manual beat also **marks progress** for the stall watchdog, under the label
 `task.heartbeat` — so a custom loop that beats once per iteration is observable and
 needs no hold. It is the third of the three progress mechanisms in
@@ -371,6 +390,34 @@ class MyConnector(App):
 interceptor). For hand-off to Atlan system apps (publish, lineage, quality), call
 `App.upload()` explicitly from `run()` — see [storage.md](storage.md) and
 [file-reference.md](file-reference.md) for the two-store routing details.
+
+### `ExtractionOutput.transformed_files` is model-declared
+
+A `FileReference` field on an **entry point's** boundary needs a declared shape —
+a warning today, an error in v4.0 (see
+[Apps — Declaring artifact schemas](apps.md#declaring-artifact-schemas)).
+`ExtractionOutput.transformed_files` is the one you inherit rather than write, and
+it needs **no `artifactSchemas` entry**:
+
+```python
+class MyExtractionOutput(ExtractionOutput):   # transformed_files comes with a declaration
+    row_count: int = 0
+```
+
+The field carries the `AssetArtifact` marker, which says its declaration *is* the
+`pyatlan_v9` `Asset` model. It is the SDK's field end to end — declared on
+`ExtractionOutput`, populated by `SqlApp.run()`, written by
+`SqlApp._transform_entity` — so no connector authors any part of it, and the only
+envelope a connector could hand-write for it would be a partial restatement of a
+500-type model.
+
+At the task boundary the interceptor therefore validates it against the whole
+`Asset` backbone (per-record decode plus `.validate()`, plus a referential/orphan
+pass) rather than against a field map, in an isolated child process. The marker
+resolves across the MRO, so narrowing the field or attaching your own `Field(...)`
+keeps the declaration. **If your pkl contract already declares this field, delete
+that entry** — it is ignored at runtime, because the model wins. See
+[Entry points — `AssetArtifact`](entry-points.md#assetartifact-a-field-whose-declaration-is-a-model).
 
 ## Auto-Discovery
 

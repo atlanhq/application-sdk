@@ -94,7 +94,28 @@ jobs:
     outputs:
       scan_image: ${{ steps.meta.outputs.scan_image }}
     steps:
+      # On a pull_request `github.ref` is `refs/pull/N/merge`, a ref GitHub
+      # DELETES and recreates every time it recomputes mergeability — which the
+      # base branch merely moving is enough to trigger. Checkout's own three
+      # attempts span about 30s and can sit entirely inside that window, so the
+      # job dies with `couldn't find remote ref refs/pull/N/merge`, and the gate
+      # then reports a missing scan rather than the checkout that caused it.
+      # Every observed instance has been on a Renovate branch, where the base
+      # moves constantly. So: absorb one recompute.
       - name: Checkout
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          lfs: ${{ inputs.lfs }}
+
+      - name: Wait before the checkout retry
+        if: steps.checkout.outcome == 'failure'
+        run: sleep 20
+
+      - name: Checkout (retry)
+        if: steps.checkout.outcome == 'failure'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
@@ -122,7 +143,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
+      # buildx resolves the Dockerfile's `# syntax=docker/dockerfile:1`
+      # frontend from Docker Hub ANONYMOUSLY on every build, before it looks at
+      # the base image, and `uv sync` reaches the package index from inside the
+      # build. Both are third-party endpoints that have moments:
+      # `auth.docker.io/token: 500` and a `401 Unauthorized` from the index are
+      # both observed, both clear on a re-run with no code change, and both fail
+      # the required check on a PR that never touched the image. So: absorb one.
+      #
+      # A blanket retry (rather than one gated on the error text, which the
+      # action does not expose as an output) is cheap here because the failures
+      # that are NOT transient — a stale `uv.lock` under `--locked`, an
+      # unsatisfiable resolution — fail one to three seconds into the step, and
+      # `cache-from: type=gha` means the second attempt replays every layer
+      # before the failing one. The cost of a wasted retry is the sleep, not a
+      # second build.
       - name: Build image
+        id: build-image
+        continue-on-error: true
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
@@ -131,7 +169,11 @@ jobs:
           tags: ${{ steps.meta.outputs.scan_image }}
           outputs: type=docker,dest=/tmp/image.tar
           cache-from: type=gha,scope=scan
-          cache-to: type=gha,mode=max,scope=scan
+          # `ignore-error=true` because the cache is an optimisation and this
+          # is a gate. Without it a transient `failed to reserve cache` from the
+          # Actions cache service fails the export, fails the build, and fails
+          # the required check on a change that never touched the image.
+          cache-to: type=gha,mode=max,scope=scan,ignore-error=true
           provenance: false
           # The org PAT reaches the build ONLY as a BuildKit secret, never as a
           # build arg. Build args are recorded in image config and are readable
@@ -147,6 +189,35 @@ jobs:
           # This job already logs into GHCR with the PAT above, so there's no
           # benefit to minting a separate App token just for this -- the PAT is
           # already in play.
+          secrets: |
+            git_token=${{ secrets.ORG_PAT_GITHUB }}
+
+      # Long enough for a registry or index having a moment to have passed, short
+      # enough that a genuinely broken build still reports inside the job's
+      # 15-minute budget.
+      - name: Wait before the build retry
+        if: steps.build-image.outcome == 'failure'
+        run: sleep 30
+
+      # Inputs restated verbatim, comments and all omitted — see the first attempt.
+      # A reusable workflow cannot `uses:` a composite action from its own
+      # repository without checking that repository out first, so the block is
+      # duplicated rather than factored out.
+      #
+      # NOT continue-on-error: if the image cannot be built twice there is nothing
+      # to scan, and the security gate reads a failed `build` as exactly that.
+      - name: Build image (retry)
+        if: steps.build-image.outcome == 'failure'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ${{ steps.meta.outputs.dockerfile }}
+          push: false
+          tags: ${{ steps.meta.outputs.scan_image }}
+          outputs: type=docker,dest=/tmp/image.tar
+          cache-from: type=gha,scope=scan
+          cache-to: type=gha,mode=max,scope=scan,ignore-error=true
+          provenance: false
           secrets: |
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 
@@ -201,7 +272,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Retried for the same reason the uploads are, one layer down: the
+      # artifact service answers `ListArtifacts` with a 403 from an intermediary
+      # often enough to matter, `download-artifact` classifies that as
+      # non-retryable and gives up on the first occurrence, and the bytes are
+      # sitting there intact the whole time. Unlike an upload retry this one can
+      # reuse the first attempt's pattern — a failed download burns no name.
       - name: Download image artifact
+        id: download-image
+        continue-on-error: true
         if: inputs.image == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -215,6 +294,20 @@ jobs:
           # there, publish `docker-image-retry`, and leave two live image.tars
           # for merge-multiple to flatten in undefined order — Trivy could then
           # scan the previous attempt's image.
+          pattern: docker-image*
+          merge-multiple: true
+          path: /tmp
+
+      - name: Wait before the download retry
+        if: steps.download-image.outcome == 'failure'
+        run: sleep 20
+
+      # No continue-on-error: if the image cannot be fetched twice there is
+      # nothing to scan, and failing here says exactly that.
+      - name: Download image artifact (retry)
+        if: steps.download-image.outcome == 'failure'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
           pattern: docker-image*
           merge-multiple: true
           path: /tmp
@@ -277,8 +370,16 @@ jobs:
       # non-retryable and fails on the first occurrence, even though the bytes
       # already landed and the next attempt normally succeeds. That failed the
       # job, which failed the aggregate gate, which ejected the merge-queue
-      # entry. So: retry once, and never fail the gate on it:
-      # the consumer already downloads this with continue-on-error.
+      # entry. So: retry once.
+      #
+      # The retry is NOT continue-on-error, matching the build job above. It was,
+      # on the reasoning that the gate downloads with continue-on-error so
+      # nothing needed to fail here. But the gate fails anyway when the results
+      # are absent, and a green `trivy-scan` then told it the artifact HAD been
+      # published — so it blamed the download and advised re-running itself,
+      # which could never find an artifact this run never created. This job's
+      # result has to be a truthful proxy for "the results exist", because
+      # `check_allowlist.py` reads it as exactly that.
       - name: Upload Trivy results
         id: upload-trivy
         continue-on-error: true
@@ -303,7 +404,6 @@ jobs:
 
       - name: Upload Trivy results (retry)
         if: steps.upload-trivy.outcome == 'failure'
-        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           # A DISTINCT name, never the first attempt's: a FinalizeArtifact
@@ -376,7 +476,21 @@ jobs:
       # retry left this job with no tarball -- and, being continue-on-error
       # itself, it failed silently: Trivy still gated, Endor just never reported.
       - name: Download image artifact
+        id: download-image
+        continue-on-error: true
         if: steps.creds.outputs.configured == 'true' && inputs.image == ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: docker-image*
+          merge-multiple: true
+          path: /tmp
+
+      - name: Wait before the download retry
+        if: steps.download-image.outcome == 'failure'
+        run: sleep 20
+
+      - name: Download image artifact (retry)
+        if: steps.download-image.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: docker-image*
@@ -474,7 +588,10 @@ jobs:
   # ── Security Gate — check Trivy results against allowlist ───────────────────
   security-gate:
     name: Security Gate
-    needs: [trivy-scan]
+    # `build` is in `needs` only so the gate can name which upstream job failed
+    # when there are no results to gate on. It is skipped when `image` is
+    # supplied, which the `always()` below tolerates.
+    needs: [build, trivy-scan]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -500,7 +617,12 @@ jobs:
           path: _sdk
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
+      # Both attempts stay continue-on-error: this job is the required check, so
+      # a raw `Unable to download artifact(s)` here would be the whole story a
+      # reader gets. Let the allowlist check below fail instead — it is handed
+      # the upstream outcomes and can say which job actually broke.
       - name: Download Trivy results
+        id: download-trivy
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
@@ -511,9 +633,30 @@ jobs:
           merge-multiple: true
           path: /tmp
 
+      # Also gated on the scan having succeeded. Absent results are the NORMAL
+      # outcome when it did not, and there the first attempt has already told
+      # the truth — retrying would only add 20s of sleep to every genuinely
+      # broken run before the gate gets to say what broke.
+      - name: Wait before the download retry
+        if: steps.download-trivy.outcome == 'failure' && needs['trivy-scan'].result == 'success'
+        run: sleep 20
+
+      - name: Download Trivy results (retry)
+        if: steps.download-trivy.outcome == 'failure' && needs['trivy-scan'].result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true
+        with:
+          pattern: trivy-results*
+          merge-multiple: true
+          path: /tmp
+
       - name: Check against allowlist
         env:
           FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
+          # So a missing results file can name the job that caused it instead of
+          # sending every reader to the scanner.
+          BUILD_RESULT: ${{ needs.build.result }}
+          SCAN_RESULT: ${{ needs['trivy-scan'].result }}
         run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --write-comment
 
       - name: Comment on PR

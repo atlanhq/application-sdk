@@ -153,13 +153,13 @@ jobs:
 
       # Provides `uv`/`uvx` — used by Renovate's native uv manager to refresh
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.12.11"
+          version: "0.12.13"
 
-      # Version omitted deliberately: this job has no pkl pin of its own, so it
-      # tracks the action's fleet-wide default rather than reintroducing a
-      # fourth literal "0.27.2" that drifts silently.
+      # Version omitted deliberately — as it now is at every call site: the
+      # action resolves the single pin in application_sdk/pkl_version.py, so no
+      # workflow carries a literal of its own to drift silently (FND-1864).
       - uses: ./.github/actions/install-pkl
 
       # Renovate 43 requires Node >=24.11 — newer than the ubuntu-latest default,
@@ -171,7 +171,7 @@ jobs:
       - name: Install Renovate CLI
         # Exact pin for reproducibility; bump deliberately (Renovate releases
         # multiple times a week). Keep in step with the setup-node version above.
-        run: npm install -g renovate@43.265.3
+        run: npm install -g renovate@44.3.2
 
       # Reap a lock-maintenance branch whose refusal will clear itself, so this
       # pass rebuilds it. Ordered immediately before Renovate on purpose: the

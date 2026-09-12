@@ -261,28 +261,29 @@ def test_caller_ref_travels_through_env():
 
 def test_endor_scan_consumes_the_retry_artifact_like_trivy_does():
     """The CI finding: the build job's first upload is continue-on-error and its
-    retry lands as `docker-image-retry`. A bare `name:` misses it silently."""
+    retry lands as `docker-image-retry`. A bare `name:` misses it silently.
+
+    Asserted over EVERY download attempt in both jobs, not just the first: the
+    download is itself retried now, and a retry that reverted to a bare `name:`
+    would reintroduce the miss in precisely the case the retry exists for.
+    """
     downloads = {
         job_id: [
             s
             for s in _steps(_job(BUILD_AND_SCAN, job_id))
             if "actions/download-artifact" in str(s.get("uses", ""))
-            and "docker-image" in str((s.get("with") or {}).get("pattern", ""))
         ]
         for job_id in ("trivy-scan", "endor-scan")
     }
-    assert len(downloads["endor-scan"]) == 1, "endor-scan must download the image"
-    endor = downloads["endor-scan"][0]["with"]
-    assert endor.get("pattern") == "docker-image*"
-    assert endor.get("merge-multiple") is True
-    assert "name" not in endor
-    # Same shape as Trivy so the two consumers cannot drift apart.
+    assert downloads["endor-scan"], "endor-scan must download the image"
     assert downloads["trivy-scan"], "reference Trivy download disappeared"
-    trivy = downloads["trivy-scan"][0]["with"]
-    assert (trivy["pattern"], trivy["merge-multiple"]) == (
-        endor["pattern"],
-        endor["merge-multiple"],
-    )
+    # Same shape in both, so the two consumers cannot drift apart.
+    for job_id, steps in downloads.items():
+        for step in steps:
+            with_block = step.get("with") or {}
+            assert with_block.get("pattern") == "docker-image*", job_id
+            assert with_block.get("merge-multiple") is True, job_id
+            assert "name" not in with_block, job_id
 
 
 def test_endor_scan_script_checkout_is_provenance_pinned():

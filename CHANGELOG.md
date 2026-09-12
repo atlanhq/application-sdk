@@ -1,5 +1,31 @@
 # Changelog
 
+## v3.34.1 (September 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.0...v3.34.1
+
+### Bug Fixes
+
+- mirror metadata_template_key onto object_filter in sdr:fetch_metadata (#3748) (by @Lalit3716-atlan in [e55bf3b](https://github.com/atlanhq/application-sdk/commit/e55bf3b))
+- publish directly to Event Ingress when the Dapr eventstore binding fails (#3745) (by @Lalit3716-atlan in [8abf16c](https://github.com/atlanhq/application-sdk/commit/8abf16c))
+
+
+## v3.34.0 (September 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.33.2...v3.34.0
+
+### Features
+
+- declare SDK-owned asset artifacts with the model, not a hand-written envelope (#3725) (by @cmgrote in [2d85710](https://github.com/atlanhq/application-sdk/commit/2d85710))
+
+### Bug Fixes
+
+- surface the Dapr error body in BindingError (#3716) (by @Lalit3716-atlan in [9904283](https://github.com/atlanhq/application-sdk/commit/9904283))
+- skip the teardown connection-delete when the run created nothing (#3723) (by @cmgrote in [c8b0d87](https://github.com/atlanhq/application-sdk/commit/c8b0d87))
+- make the pkl pin one readable value so a local eval predicts CI (#3726) (by @cmgrote in [8532754](https://github.com/atlanhq/application-sdk/commit/8532754))
+- stop asserting a worker claimed a stalled DAG node (#3734) (by @cmgrote in [7b96773](https://github.com/atlanhq/application-sdk/commit/7b96773))
+
+
 ## v3.33.2 (September 08, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.33.1...v3.33.2

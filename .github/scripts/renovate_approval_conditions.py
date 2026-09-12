@@ -102,6 +102,18 @@ DOT_GITHUB_PREFIX = ".github/"
 #: at the repo root, so an unrelated app.yaml/atlan.yaml elsewhere in a consumer
 #: tree must NOT ride this gate. They are otherwise a deterministic function of
 #: the contract and the (already auto-merged) toolkit version.
+#:
+#: contract_schema.lock.json is here on that same argument, and is ROOT-ONLY for
+#: the same reason: renovate-contract-ledger resolves it as ``repo / NAME`` and
+#: writes nowhere else. The conformance lane regenerates it in-branch (FND-607)
+#: so a release that adds a contract-base field cannot red B006 on the very PR
+#: adopting that release. Without this entry the lane's own self-healing step is
+#: what disqualifies it: the PR reads as non-dependency-only, the atlan-ci
+#: approval is withheld, and the one lane whose job is to propagate fleet policy
+#: is the one that needs a human. It carries no reviewable content of its own —
+#: content is a function of the version this PR locks, the generator is the
+#: SDK's own pinned driver, and the append-only invariant is enforced
+#: independently by B005, so a removal cannot be laundered through this gate.
 DEP_FILE_RE = (
     r"(.*/)?uv\.lock"
     r"|(.*/)?package-lock\.json"
@@ -112,6 +124,7 @@ DEP_FILE_RE = (
     r"|app/generated/.*"
     r"|atlan\.yaml"
     r"|app\.yaml"
+    r"|contract_schema\.lock\.json"
 )
 
 APPROVAL_BODY = (

@@ -1,6 +1,6 @@
 name: Install pkl
 description: |
-  Install the pkl runtime onto the runner, retrying the download.
+  Install the pinned pkl runtime onto the runner, retrying the download.
 
   pkl ships as a GitHub release asset, so every `curl` for it is a live
   dependency on github.com's release CDN at job time. That CDN returns 503s in
@@ -9,12 +9,18 @@ description: |
   burst took out the Connector Tests Gate and ejected a PR from the merge
   queue. This action is the one place that download lives now.
 
-  Two things it gets right that the hand-rolled copies did not:
+  Three things it gets right that the hand-rolled copies did not:
     - retry, via .github/scripts/with-retry.sh (reachable here through
       github.action_path regardless of what the caller checked out);
     - architecture, via runner.arch — pkl publishes a separate aarch64 asset,
       and naming the x86 one on an arm64 runner fails as `cannot execute
-      binary file` several steps later, nowhere near anything about arch.
+      binary file` several steps later, nowhere near anything about arch;
+    - the VERSION, resolved from the single source of truth in
+      application_sdk/pkl_version.py rather than restated here. Six workflows
+      and actions each carried their own "0.27.2" literal, free to drift apart
+      and — worse — invisible to the apps whose contracts they render. pkl is a
+      language, so a contract can evaluate cleanly on a developer's 0.32.x and
+      be structurally incapable of evaluating on CI's pin (FND-1864).
 
   Reusable workflows must reference this as
   `atlanhq/application-sdk/.github/actions/install-pkl@main`, not `./…` — a
@@ -25,26 +31,75 @@ description: |
 inputs:
   version:
     required: false
-    default: "0.27.2"
+    default: ""
     description: |
-      pkl runtime version to install. The default is the fleet-wide pin shared
-      by the contract-toolkit workflows and the regenerate-contract action;
-      pass an explicit value only when a caller must diverge.
+      pkl runtime version to install. EMPTY (the default) means the SDK pin in
+      application_sdk/pkl_version.py — pass an explicit value only when a caller
+      must deliberately diverge from the fleet, and say why at the call site.
+
+outputs:
+  version:
+    description: |
+      The pkl version actually installed — the resolved pin unless the caller
+      overrode it. Callers surface this to contributors (the freshness gate
+      quotes it in its sticky comment) so "align your local pkl" names a
+      version instead of pointing at a job log.
+    value: ${{ steps.resolve.outputs.version }}
 
 runs:
   using: composite
   steps:
+    # The "empty input means the pin" decision is conditional logic, so it lives
+    # in the tested driver rather than in this shell (docs/standards/ci.md). The
+    # driver reads the SoT out of the ACTION's own checkout — the SDK repo at
+    # the referenced ref — never the caller's workspace, which for a consumer
+    # repo has no application_sdk/ at all. Hence the explicit --sot: the
+    # script's own repo-root inference is right in this repo but would resolve
+    # against _actions/… identically only by coincidence, and naming it makes
+    # the dependency legible.
+    - name: Resolve pkl version
+      id: resolve
+      shell: bash
+      env:
+        REQUESTED: ${{ inputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        version="$(python3 "${ACTION_PATH}/../../scripts/pkl_version.py" \
+          --sot "${ACTION_PATH}/../../../application_sdk/pkl_version.py" \
+          resolve --requested "$REQUESTED")"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "Installing pkl $version"
+
     - name: Install pkl
       shell: bash
       env:
-        PKL_VERSION: ${{ inputs.version }}
+        PKL_VERSION: ${{ steps.resolve.outputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
         # Chosen in the expression layer rather than from `uname -m` in the
         # shell, so there is no inlined conditional shell (docs/standards/ci.md).
         PKL_ASSET: pkl-linux-${{ runner.arch == 'ARM64' && 'aarch64' || 'amd64' }}
       run: |
         set -euo pipefail
-        "${{ github.action_path }}/../../scripts/with-retry.sh" \
+        "${ACTION_PATH}/../../scripts/with-retry.sh" \
           curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/${PKL_ASSET}"
         chmod +x /tmp/pkl
         sudo mv /tmp/pkl /usr/local/bin/pkl
         pkl --version
+
+    # Assert that `pkl` on PATH is the version we just resolved. Downloading
+    # the right asset is not the same as *running* it: a runner image (or an
+    # earlier step) can leave another pkl ahead of /usr/local/bin on PATH, and
+    # the whole point of the pin is that every render uses one version. Strict,
+    # because a silent mismatch here reintroduces exactly the skew FND-1864
+    # removed — and would be invisible until a contract failed to eval.
+    - name: Verify the installed pkl is the resolved one
+      shell: bash
+      env:
+        EXPECTED: ${{ steps.resolve.outputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        python3 "${ACTION_PATH}/../../scripts/pkl_version.py" \
+          --sot "${ACTION_PATH}/../../../application_sdk/pkl_version.py" \
+          check-runtime --strict --expected "$EXPECTED" --actual "$(pkl --version)"

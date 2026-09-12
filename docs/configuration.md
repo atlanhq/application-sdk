@@ -23,12 +23,15 @@ Set variables in your shell environment, a `.env` file at the project root, or D
 
 ### Release metadata
 
-Injected by the Local Marketplace into the Helm release at deploy time, and exposed to consumers via the OTel `target_info` gauge (one row per pod). Leave empty for local development.
+Two sources, baked first. `build-and-publish-app.yaml` writes `app/atlan_build.json` into the image (`app_version`, `commit_sha`, `image`, `built_at`); the SDK reads it at startup. Deployers (Local Marketplace into the Helm release, the SDR orchestrator into the container) may still stamp env vars. When both exist the file wins: it describes the image, the env var describes what a deployer thinks it deployed. Images built before this CI started baking the file have no file and fall back to the env vars, then empty. Exposed to consumers via the OTel `target_info` gauge (one row per pod). Leave empty for local development. See [`standards/release-flow.md#image-identity`](standards/release-flow.md#image-identity).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_APPLICATION_VERSION` | _(empty)_ | Semantic version of the app release (e.g. `1.2.3`). |
-| `ATLAN_RELEASE_ID` | _(empty)_ | Release UUID from Global Marketplace. |
+| `ATLAN_APPLICATION_VERSION` | _(empty)_ | Version of the app release as Global Marketplace stores it (release tag for semver apps, sha7 for CD apps). Used only when the baked file is absent or has no `app_version`. |
+| `ATLAN_COMMIT_SHA` | _(empty)_ | Git commit the image was built from. Used only when the baked file is absent or has no `commit_sha`. Deployers do not normally stamp this. |
+| `ATLAN_BUILD_INFO_PATH` | `app/atlan_build.json` | Override the baked-identity lookup for non-template layouts whose Dockerfile does not copy `app/`. When unset, the SDK also tries `<parent of ATLAN_CONTRACT_GENERATED_DIR>/atlan_build.json`. |
+| `ATLAN_BUILD_ID` | _(empty)_ | Immutable image tag, stamped as an image `ENV` by the e2e build action. Takes precedence over the baked file's `build_id`; both are read by `application_sdk.app.build_identity.build_identity()`. Not set on released images, which carry the value in the file instead. |
+| `ATLAN_RELEASE_ID` | _(empty)_ | Release UUID from Global Marketplace. Injected by the deployer. |
 | `ATLAN_RELEASE_CHANNEL` | _(empty)_ | Release channel (`all`, `beta`, `staging`, `specific`). |
 | `ATLAN_SDK_VERSION` | _(empty)_ | SDK version used to build this app image. |
 | `ATLAN_APP_TYPE` | _(empty)_ | App type from Global Marketplace (e.g. `connector`, `system`). |
@@ -160,6 +163,7 @@ Dapr component names are read at module-import time (not at runtime) because the
 | `DEPLOYMENT_OBJECT_STORE_NAME` | `objectstore` | Dapr object store for workflow outputs and artifacts. |
 | `UPSTREAM_OBJECT_STORE_NAME` | `atlan-objectstore` | Dapr object store for uploading data to the Atlan platform (SDR deployments only). If the named component is absent, `upstream_storage` is `None` and `App.upload()`/`App.download()` fall back to the deployment store. See [ADR-0014](adr/0014-two-store-storage-architecture.md). |
 | `EVENT_STORE_NAME` | `eventstore` | Dapr pub/sub component name. |
+| `ATLAN_EVENT_INGRESS_DIRECT_FALLBACK` | `true` | When the Dapr `EVENT_STORE_NAME` binding fails in a way that proves the event got no response (connection, TLS or DNS failure, missing binding), publish the lifecycle event (`worker_start`, `token_refresh`, workflow/activity start/end) directly to Event Ingress over HTTPS from the app process, reusing the same payload and bearer token and the `url` of the `bindings.http` component on disk. Errors that may already have been delivered (an upstream HTTP status) are not re-sent. Backs off 60 s after a failed direct publish. Logged at WARNING as `FALLBACK ACTIVE` / `Published event via direct HTTPS fallback`, `FALLBACK SKIPPED` / `FALLBACK SUSPENDED` when not attempted, `FALLBACK FAILED` / `FALLBACK UNAVAILABLE` at ERROR. Set `false` to disable. |
 | `DEPLOYMENT_SECRET_STORE_NAME` | `deployment-secret-store` | Dapr secret store holding deployment-scoped secrets (auth credentials, etc.). |
 | `DAPR_MAX_GRPC_MESSAGE_LENGTH` | `104857600` (100 MB) | Maximum gRPC message size in bytes for Dapr client calls. Increase for apps that move large payloads through Dapr state or bindings. |
 

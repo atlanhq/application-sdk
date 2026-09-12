@@ -1157,6 +1157,10 @@ _FND1143_VALUES: dict[str, tuple[str, str]] = {
         "tests/e2e/full_dag/",
     ),
     "source_available": ("      source-available: false", "false"),
+    "source_available_overrides": (
+        '      source-available-overrides: "db2zos-e2e=false"',
+        "db2zos-e2e=false",
+    ),
     "dataforge_datasource": (
         '      dataforge-datasource: "cosmosnosql"',
         "cosmosnosql",

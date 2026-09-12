@@ -31,6 +31,24 @@ which passes the image tag it just derived (``sdr-test-<commit8>[-<digest8>]``)
 as a ``--build-arg`` and stamps the connector Dockerfile to promote it to an
 ``ENV`` — see ``.github/scripts/stamp_build_identity.py``.
 
+That action builds only the *e2e* image. A **released** image is built by
+``.github/workflows/build-and-publish-app.yaml``, which never calls it, so
+production images carried no identity at all. They now carry the same value in
+the ``build_id`` key of the ``app/atlan_build.json`` the publish workflow bakes
+into the build context, and this function falls back to it.
+
+One identity, two carriers, in this order:
+
+1. the ``ATLAN_BUILD_ID`` ENV — the e2e path, unchanged, and still first so a
+   stamped image reports exactly what it reports today;
+2. ``app/atlan_build.json``'s ``build_id`` — the publish path.
+
+Both hold the same *kind* of value: the immutable, arch-independent image tag,
+minted after every committed artifact exists and therefore unforgeable by
+anything in the app's source. The alternative — a second env var, a second
+reader, and a second thing an e2e check has to know how to ask for — would make
+"which build is this?" a question with two answers that can disagree.
+
 It is deliberately **not required**: an image built by hand, by a connector's own
 Dockerfile, or by an older CI simply reports ``""``. Every reader treats an empty
 value as "this image carries no build identity", never as a mismatch.
@@ -48,9 +66,12 @@ from __future__ import annotations
 
 import os
 
+from application_sdk.constants import load_build_info
+
 __all__ = [
     "BUILD_ID_ENV",
     "BUILD_IDENTITY_CONFIGMAP_ID",
+    "BUILD_INFO_BUILD_ID_KEY",
     "build_identity",
 ]
 
@@ -68,12 +89,32 @@ BUILD_ID_ENV = "ATLAN_BUILD_ID"
 BUILD_IDENTITY_CONFIGMAP_ID = "atlan-build-identity"
 
 
+#: Key carrying the build identity in the baked ``app/atlan_build.json``.
+#:
+#: Must match what ``build-and-publish-app.yaml``'s "Bake build identity into the
+#: image" step writes; the wiring test asserts the two agree, for the same reason
+#: :data:`BUILD_ID_ENV` has one — a divergent spelling degrades the check to "the
+#: pod reports no build identity" rather than failing loudly.
+BUILD_INFO_BUILD_ID_KEY = "build_id"
+
+
 def build_identity() -> str:
     """Return this image's build identity, or ``""`` when it carries none.
 
-    Read from the environment on every call rather than cached at import: the
-    value is an image ``ENV``, so in production it is constant, but tests and
-    local runs set it per-case and a module-level snapshot would freeze whichever
-    value happened to exist at first import.
+    Reads both carriers on every call rather than caching at import. In
+    production neither can change — an image ``ENV`` and a file inside the image
+    are both fixed for the life of the container — but tests and local runs set
+    them per case, and a module-level snapshot would freeze whichever value
+    happened to exist at first import.
+
+    The file read costs one ``open`` of a five-key JSON, against call sites (an
+    activity's identity field, an HTTP route) that are each orders of magnitude
+    larger. :data:`application_sdk.constants.APPLICATION_VERSION` snapshots the
+    same file at import instead, which is correct there — it is a module
+    constant — and indistinguishable in production, where the file cannot
+    change under either of them.
     """
-    return os.environ.get(BUILD_ID_ENV, "").strip()
+    stamped = os.environ.get(BUILD_ID_ENV, "").strip()
+    if stamped:
+        return stamped
+    return load_build_info().get(BUILD_INFO_BUILD_ID_KEY, "").strip()

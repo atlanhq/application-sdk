@@ -232,6 +232,7 @@ _TESTS_YAML_VALUE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("harness_sdk_ref", "harness-sdk-ref", "plain"),
     ("e2e_test_path", "e2e-test-path", "plain"),
     ("source_available", "source-available", "bool"),
+    ("source_available_overrides", "source-available-overrides", "plain"),
     ("dataforge_datasource", "dataforge-datasource", "plain"),
     ("dataforge_mode", "dataforge-mode", "plain"),
     ("dataforge_env_tier", "dataforge-env-tier", "plain"),

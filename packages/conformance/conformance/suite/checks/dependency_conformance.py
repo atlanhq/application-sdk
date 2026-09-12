@@ -35,6 +35,19 @@ Rules in this check module:
   3.22–3.27) and is fixed at the root in 3.28.0, where ``[daft]`` aliases
   ``[sql]`` again.
 
+* **D012 UnpinnedPackageIndex** — the repo's root ``pyproject.toml`` must pin
+  PyPI as the resolver's default index (``[[tool.uv.index]]`` with
+  ``default = true``).  Without it a machine-wide default index — the Endor
+  Labs package firewall Atlan IT installs into ``~/.config/uv/uv.toml`` — is
+  inherited, and every ``uv`` command silently rewrites every URL in
+  ``uv.lock`` to that proxy.
+* **D013 NonPyPILockfileIndex** — every *artifact* download URL in
+  ``uv.lock`` (``sdist`` / ``wheels``) must name a PyPI host, and none may
+  embed an index credential.  Direct ``source = { url = ... }`` archives are
+  not an index rewrite and are not graded.  This is D012's damage once it has
+  been committed: CI holds no credential for the proxy and fails at
+  dependency install with ``401 Unauthorized``.
+
 D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008/D009
 are pure-text.  D010 is cross-file (source imports + lock/pyproject) and runs in
 ``scan_all``.
@@ -42,6 +55,10 @@ are pure-text.  D010 is cross-file (source imports + lock/pyproject) and runs in
 Self-check exemption: any pyproject whose ``[project].name`` starts with
 ``atlan-application-sdk`` is skipped entirely (the SDK and its sibling packages
 are *publishers* of the contract, not apps subject to it).
+
+D012/D013 are ``scope=both`` and repo-level: they run in :func:`scan_all`
+against the *root* ``pyproject.toml`` only, outside the self-check guard above,
+because the SDK inherits a machine-wide index exactly as an app does.
 """
 
 from __future__ import annotations
@@ -55,6 +72,7 @@ from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from conformance.suite.checks._ast_common import SuppressionsMap, _is_suppressed
 from conformance.suite.checks._ast_common import discover as _discover_sources
@@ -78,6 +96,8 @@ RULE_D008 = "D008"
 RULE_D009 = "D009"
 RULE_D010 = "D010"
 RULE_D011 = "D011"
+RULE_D012 = "D012"
+RULE_D013 = "D013"
 
 SDK_PACKAGE = "atlan-application-sdk"
 # The conformance suite itself (D011).  Apps declare it in a dev group so
@@ -87,6 +107,34 @@ CONFORMANCE_PACKAGE = "atlan-application-sdk-conformance"
 
 # The canonical build backend for Atlan apps (D007).
 HATCHLING_BACKEND = "hatchling.build"
+
+# The default package index every repo must pin, and the hosts a committed
+# lockfile may name (D012/D013).
+#
+# ``files.pythonhosted.org`` is where PyPI serves artefacts and is what every
+# URL in a cleanly-resolved lock points at.  ``pypi.org`` is allowed because uv
+# has used it for some metadata URLs, and excluding it would fail for a reason
+# unrelated to this check's purpose.
+PYPI_SIMPLE_URL = "https://pypi.org/simple"
+PYPI_LOCK_HOSTS = frozenset({"files.pythonhosted.org", "pypi.org"})
+
+# Artifact download URLs in a uv.lock (D013): ``sdist = { url = "..." }`` and
+# wheel entries ``{ url = "..." }`` inside a ``wheels`` array.
+#
+# Matched with a regex rather than a TOML parser because the lockfile schema
+# changes between uv versions while the URL spelling is stable.  Deliberately
+# *not* line-anchored: uv writes these inside inline tables, so a line-anchored
+# pattern matches nothing at all.  The negative lookbehind excludes
+# ``source = { url = "..." }`` — that is a direct archive dependency, not an
+# index rewrite — and a longer key that ends in ``url`` (e.g. a future
+# ``direct_url``) never matches because the pattern requires ``{ url``.
+_LOCK_URL_RE = re.compile(r'(?:sdist\s*=\s*)?(?<!source = )\{\s*url = "([^"]+)"')
+
+# Substrings that mean an index credential rode into a committed lockfile
+# (D013): Endor's API-key prefix, raw and url-encoded, and userinfo attached to
+# the proxy host.  uv strips userinfo from the URLs it records, so these are a
+# backstop for a future uv (or a different tool) that does not.
+_LOCK_CREDENTIAL_MARKERS: tuple[str, ...] = ("endr%2B", "endr+", "@factory.")
 
 # pyright type-checking modes weaker than the SDK baseline ``standard`` (D008).
 PYRIGHT_WEAK_MODES = frozenset({"off", "basic"})
@@ -1782,6 +1830,286 @@ def _scan_conformance_dependency(
     return []
 
 
+# ---------------------------------------------------------------------------
+# D012 / D013 — package-index pinning (repo-level, scope=both)
+# ---------------------------------------------------------------------------
+
+
+def _table_header_line(text: str, name: str) -> int | None:
+    """Return the 1-based line of the ``[name]`` or ``[[name]]`` header, else None."""
+    pat = re.compile(rf"^\s*\[{{1,2}}\s*{re.escape(name)}\s*\]{{1,2}}\s*(?:#.*)?$")
+    for ln, line in enumerate(text.splitlines(), start=1):
+        if pat.match(line):
+            return ln
+    return None
+
+
+def _uv_index_tables(text: str) -> list[tuple[int, dict[str, int]]]:
+    """Return one ``(header_line, {key: line})`` pair per ``[[tool.uv.index]]``.
+
+    :func:`_line_of` cannot be reused for this: its table pattern matches a
+    single-bracket ``[table]`` header only, so an *array*-of-tables header
+    never registers and every lookup silently falls through to line 1.  That
+    would anchor every D012/D013 finding at the top of the file and, worse,
+    put the only working suppression line somewhere no reader would think to
+    write it — the directive has to sit on the finding's line or the one above.
+    """
+    header_re = re.compile(r"^\s*\[\[\s*tool\.uv\.index\s*\]\]")
+    any_table_re = re.compile(r"^\s*\[{1,2}[^\]]+\]{1,2}\s*(?:#.*)?$")
+    key_re = re.compile(r"^\s*([A-Za-z0-9_-]+)\s*=")
+
+    tables: list[tuple[int, dict[str, int]]] = []
+    current: dict[str, int] | None = None
+    for ln, line in enumerate(text.splitlines(), start=1):
+        if header_re.match(line):
+            current = {}
+            tables.append((ln, current))
+            continue
+        if any_table_re.match(line):
+            current = None
+            continue
+        if current is None:
+            continue
+        m = key_re.match(line)
+        if m is not None:
+            current.setdefault(m.group(1), ln)
+    return tables
+
+
+def _uv_config_anchor(text: str) -> int:
+    """Line to anchor a D012/D013 finding on when no default index is declared.
+
+    The first ``[[tool.uv.index]]`` header if the repo has any index tables at
+    all, else the ``[tool.uv]`` header, else line 1.  Whatever this returns is
+    also where an inline ``# conformance: ignore[...]`` has to be written, so
+    it deliberately points at uv's own configuration rather than at the top of
+    the file.
+    """
+    tables = _uv_index_tables(text)
+    if tables:
+        return tables[0][0]
+    return _table_header_line(text, "tool.uv") or 1
+
+
+def _default_index(
+    text: str, *, data: Mapping[str, Any] | None = None
+) -> tuple[str, int] | None:
+    """Return ``(url, lineno)`` of the ``[[tool.uv.index]]`` marked default.
+
+    ``None`` when no entry is marked ``default = true`` — which is D012's
+    first branch, not an error.  When several are marked, the first is what is
+    graded, because that is the one uv uses.  *lineno* is the entry's ``url =``
+    line, falling back to its table header.
+    """
+    if data is None:
+        data = _safe_load(text)
+    if data is None:
+        return None
+    tool = data.get("tool")
+    uv = tool.get("uv") if isinstance(tool, dict) else None
+    indexes = uv.get("index") if isinstance(uv, dict) else None
+    if not isinstance(indexes, list):
+        return None
+
+    tables = _uv_index_tables(text)
+    for position, entry in enumerate(indexes):
+        if not isinstance(entry, dict) or entry.get("default") is not True:
+            continue
+        url = entry.get("url")
+        if not isinstance(url, str):
+            continue
+        # The parsed array and the textual tables are in the same order, so the
+        # nth entry is the nth header; fall back to the file's uv anchor if the
+        # two ever disagree (a table written inline, say) rather than guessing.
+        if position < len(tables):
+            header_line, keys = tables[position]
+            return url, keys.get("url", header_line)
+        return url, _uv_config_anchor(text)
+    return None
+
+
+def _scan_default_index(text: str, rel_pyproject: str) -> list[Finding]:
+    """D012: the root pyproject must pin PyPI as uv's default index.
+
+    Repo-level and at most one finding: this is a property of the repo's
+    resolution, not of each sub-package, so a monorepo does not collect one
+    finding per member.  Two branches — no default index at all, or a default
+    index that is not PyPI (the proxy rewrite already committed).
+    """
+    suppressions = parse_toml_suppressions(text)
+    canonical = (
+        '[[tool.uv.index]]\nname = "pypi"\n'
+        f'url = "{PYPI_SIMPLE_URL}"\ndefault = true'
+    )
+    default = _default_index(text)
+
+    if default is None:
+        return [
+            _make_finding(
+                rule_id=RULE_D012,
+                file=rel_pyproject,
+                line=_uv_config_anchor(text),
+                column=1,
+                message=(
+                    "pyproject.toml declares no [[tool.uv.index]] entry marked "
+                    "'default = true', so the resolver inherits whatever default "
+                    "index the machine supplies. On an Atlan laptop that is the "
+                    "Endor Labs package firewall in ~/.config/uv/uv.toml, and "
+                    "every 'uv run'/'uv sync'/'uv lock' then rewrites every "
+                    "package URL in uv.lock to that credentialed proxy — "
+                    "silently, with no version or hash change. Committing that "
+                    "lock makes CI fail at dependency install with 401 "
+                    f"Unauthorized. Add:\n{canonical}\nPut it in pyproject.toml, "
+                    "not in a project-level uv.toml: a uv.toml suppresses "
+                    "[tool.uv] here entirely and would silently drop any "
+                    "constraint-dependencies CVE floors declared in it."
+                ),
+                suppressions=suppressions,
+            )
+        ]
+
+    url, lineno = default
+    if url.rstrip("/") != PYPI_SIMPLE_URL.rstrip("/"):
+        return [
+            _make_finding(
+                rule_id=RULE_D012,
+                file=rel_pyproject,
+                line=lineno,
+                column=1,
+                message=(
+                    f"The default [[tool.uv.index]] resolves from "
+                    f"'{_host_of(url)}', not from PyPI. Every 'uv lock' then "
+                    f"records that host in uv.lock, and CI — which holds no "
+                    f"credential for an internal proxy — fails at dependency "
+                    f"install with 401 Unauthorized. Set url = "
+                    f"'{PYPI_SIMPLE_URL}' (an internal mirror that is genuinely "
+                    f"required should be a non-default index, or an explicit "
+                    f"inline suppression with the reason)."
+                ),
+                suppressions=suppressions,
+            )
+        ]
+
+    return []
+
+
+def _host_of(url: str) -> str:
+    """Return the hostname of *url*, or a placeholder when it does not parse.
+
+    Only ever the *host* — never the full URL. D013 findings reach SARIF,
+    GitHub code scanning, CI logs and the remediation run artifacts, so a URL
+    carrying an index credential must not be interpolated into a message.
+    """
+    try:
+        return urlsplit(url).hostname or "<unparseable>"
+    except ValueError:
+        return "<unparseable>"
+
+
+def _scan_lockfile_index(root: Path, text: str, rel_pyproject: str) -> list[Finding]:
+    """D013: no non-PyPI host, and no credential, in the committed uv.lock.
+
+    Anchored on ``pyproject.toml`` rather than on ``uv.lock``: a lockfile is
+    regenerated wholesale on every lock, so a ``# conformance: ignore[D013]``
+    directive written into it would not survive, leaving the rule with no
+    suppression path.  ``D011``'s lock branch sets the same precedent.
+
+    A missing or unparseable lock never manufactures a finding.  A lock that
+    parses but yields *no* URLs is reported to stderr as undetermined rather
+    than passing silently — the URL spelling is a uv implementation detail,
+    and a matcher that has gone inert must not read as a clean result.
+    """
+    lock = root / "uv.lock"
+    lock_text = safe_read_text(lock)
+    if lock_text is None:
+        return []
+
+    urls = _LOCK_URL_RE.findall(lock_text)
+    if not urls:
+        print(
+            "conformance (D013): found no download URLs in uv.lock "
+            "(non-PyPI index status undetermined). Either the lock declares no "
+            "registry packages or its URL format changed and this check is now "
+            "inert — fix the check rather than removing it.",
+            file=sys.stderr,
+        )
+        return []
+
+    suppressions = parse_toml_suppressions(text)
+    anchor = _uv_config_anchor(text)
+
+    # ── Branch 1: a credential in a committed file ──────────────────────────
+    # Reported first and alone: a proxy host in the lock is a broken build, a
+    # credential in the lock is a secret in version control.  Neither the URL
+    # nor the userinfo is echoed into the message.
+    credentialed = sum(
+        1
+        for url in urls
+        if _credentialed(url) or any(m in url for m in _LOCK_CREDENTIAL_MARKERS)
+    )
+    if credentialed:
+        noun = "URL that embeds" if credentialed == 1 else "URLs that embed"
+        return [
+            _make_finding(
+                rule_id=RULE_D013,
+                file=rel_pyproject,
+                line=anchor,
+                column=1,
+                message=(
+                    f"uv.lock contains {credentialed} {noun} an index "
+                    f"credential. This is a secret in version control: rotate the "
+                    f"credential before doing anything else, then regenerate the "
+                    f"lock against PyPI. The offending values are deliberately "
+                    f"not reproduced here — read them from uv.lock directly."
+                ),
+                suppressions=suppressions,
+            )
+        ]
+
+    # ── Branch 2: a non-PyPI host ───────────────────────────────────────────
+    offenders: dict[str, int] = {}
+    for url in urls:
+        host = _host_of(url)
+        if host not in PYPI_LOCK_HOSTS:
+            offenders[host] = offenders.get(host, 0) + 1
+    if not offenders:
+        return []
+
+    summary = ", ".join(
+        f"{host} ({count})" for host, count in sorted(offenders.items())
+    )
+    return [
+        _make_finding(
+            rule_id=RULE_D013,
+            file=rel_pyproject,
+            line=anchor,
+            column=1,
+            message=(
+                f"uv.lock resolves packages from a host that is not PyPI: "
+                f"{summary}. This is almost always the package-firewall rewrite "
+                f"from a local 'uv run'/'uv sync' on a machine with a "
+                f"machine-wide default index; it changes no version and no hash, "
+                f"only the URLs. CI holds no credential for that host and fails "
+                f"at dependency install with 401 Unauthorized, on a different "
+                f"package each run. Restore the committed lock from version "
+                f"control; if a dependency genuinely changed, re-lock with "
+                f"'uv lock --default-index {PYPI_SIMPLE_URL}'. Pin the index in "
+                f"pyproject.toml (D012) so it does not recur."
+            ),
+            suppressions=suppressions,
+        )
+    ]
+
+
+def _credentialed(url: str) -> bool:
+    """True iff *url* carries userinfo (``user[:pass]@host``)."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    return bool(parts.username or parts.password)
+
+
 def scan_all(
     paths: list[Path],
     root: Path,
@@ -1834,6 +2162,11 @@ def scan_all(
 
     # ── D011 (repo-level: a property of the root pyproject, not of each) ────
     findings.extend(_scan_conformance_dependency(text, rel_pyproject, root))
+
+    # ── D012 / D013 (repo-level, scope=both: computed outside the self-check
+    # guard, because the SDK inherits a machine-wide index just as an app does)
+    findings.extend(_scan_default_index(text, rel_pyproject))
+    findings.extend(_scan_lockfile_index(root, text, rel_pyproject))
 
     # ── D003 ────────────────────────────────────────────────────────────────
     dep_entries = [

@@ -165,6 +165,21 @@ FINDING_NOT_REQUIRED = "gate-not-required"
 FINDING_NOT_ARRIVING = "gate-not-arriving"
 FINDING_UNPRODUCIBLE = "gate-context-unproducible"
 FINDING_UNREADABLE = "gate-state-unreadable"
+# The arrival-facet sibling of `gate-state-unreadable`, and the reason the
+# FND-1947 paging fix does not simply move the silence somewhere else. Before
+# paging, a commit with >100 contexts left the denominator and nothing was
+# reported; if every sample did that the repo landed on arrival `unknown` with
+# an EMPTY findings list, so a probe that had stopped working looked exactly
+# like a probe with nothing to say. Paging removes the routine cause of that,
+# which also removes the only place a human would have noticed it — truncation
+# counts going to ~0 means the dashboard card stops mentioning truncation at
+# all. So the residual case is reported explicitly instead: this fires only when
+# the scanner could not read ANY sample, i.e. a real paging regression, an
+# unresolvable head, or a commit past the page cap. It should be absent
+# fleet-wide, and its appearance is a fact about the scanner, not about the repo
+# — which is why it is the only finding here emitted at `warning` rather than
+# `error`. See the severity note at the emit site.
+FINDING_ARRIVAL_UNREADABLE = "gate-arrival-unreadable"
 
 # The SDK's standard location for the workflow that produces the gate context.
 #
@@ -291,9 +306,12 @@ def classify_arrival(samples: list) -> tuple:
     *conclusions* are noise here and only *appearance* is signal. That also
     sidesteps the check-runs ordering trap entirely.
 
-    A truncated sample (>100 contexts on the commit, gate not among the first
-    100) proves nothing either way, so it is excluded from the denominator
-    rather than counted as a miss.
+    A truncated sample proves nothing either way, so it is excluded from the
+    denominator rather than counted as a miss. Since FND-1947 a commit carrying
+    more than 100 contexts is *paged* rather than declared truncated, so this
+    now fires only when paging could not resolve the commit at all — the rare
+    safety valve it was written to be, rather than the routine outcome it had
+    quietly become as fleet repos grew past 100 checks.
     """
     conclusive = [s for s in samples if s.get("found") or not s.get("truncated")]
     truncated = len(samples) - len(conclusive)
@@ -416,6 +434,24 @@ def evaluate_repo(
                     f"required but observed on only {with_context}/{sampled} recent "
                     "pull requests — a required context that never reports blocks "
                     "every PR and creates pressure to drop the requirement",
+                )
+            )
+        if arrival_status == ARRIVAL_UNKNOWN:
+            findings.append(
+                _finding(
+                    FINDING_ARRIVAL_UNREADABLE,
+                    # `warning`, not `error` — the one finding here that is not
+                    # a claim about the repo. connector-pulse renders an error
+                    # pill red and everything else amber, and ranks headline
+                    # severity across error > warning > info, so `error` would
+                    # make an unreadable probe pixel-identical to a gate that is
+                    # genuinely not arriving and would promote the repo's
+                    # headline to match. The distinction this finding exists to
+                    # draw is exactly the one the severity field carries.
+                    "warning",
+                    f"gate arrival could not be determined: all {truncated} "
+                    "sampled pull requests had unreadable status contexts — the "
+                    "arrival probe, not the repo, is what needs looking at",
                 )
             )
         if arrival_status == ARRIVAL_NEVER and has_tests_workflow_file is False:
@@ -627,19 +663,30 @@ def fetch_has_tests_workflow_file(repo: str, run: RunFn = _run_gh) -> bool:
     return True
 
 
+# `states: [OPEN, MERGED]` is load-bearing (FND-1947). Without it a CLOSED-
+# without-merge pull request is sampled like any other, and an abandoned branch
+# almost always carries an incomplete check set — CI cancelled, or never started
+# for the final SHA — so it reads as a conclusive *miss*. Worse, the sort key is
+# `UPDATED_AT` and closing a pull request updates it: abandoning a stale branch
+# actively promotes it into the window and evicts a real sample. That made the
+# verdict a function of PR hygiene rather than of gate arrival, and made it flap
+# as the window moved. An abandoned branch is not evidence either way — the same
+# argument the truncation handling below already makes.
 _ARRIVAL_QUERY = """
 query($owner: String!, $name: String!, $base: String!, $first: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequests(first: $first, orderBy: {field: UPDATED_AT, direction: DESC},
-                 baseRefName: $base) {
+                 baseRefName: $base, states: [OPEN, MERGED]) {
       nodes {
         number
         commits(last: 1) {
           nodes {
             commit {
+              oid
               statusCheckRollup {
                 contexts(first: 100) {
                   totalCount
+                  pageInfo { hasNextPage endCursor }
                   nodes {
                     __typename
                     ... on CheckRun { name }
@@ -655,6 +702,42 @@ query($owner: String!, $name: String!, $base: String!, $first: Int!) {
   }
 }
 """
+
+# Page two onwards of one commit's status contexts, addressed by oid. The bulk
+# query above cannot ask for more than 100 per commit, and fleet repos have
+# grown past that: at the time of writing both `atlan-application-sdk` bump PRs
+# on `atlan-metabase-app` — the highest-signal PRs in the repo — carried 136
+# contexts and were discarded as truncated. Left alone the denominator shrinks
+# toward zero as context counts keep growing, and the verdict degrades to
+# `unknown` fleet-wide with nothing red to point at.
+_ARRIVAL_CONTEXTS_QUERY = """
+query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String!) {
+  repository(owner: $owner, name: $name) {
+    object(oid: $oid) {
+      ... on Commit {
+        statusCheckRollup {
+          contexts(first: 100, after: $after) {
+            totalCount
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              __typename
+              ... on CheckRun { name }
+              ... on StatusContext { context }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+# Paging is bounded so a pathological commit can never stall the fleet sweep.
+# 20 pages is 2000 contexts; the busiest fleet repo sits under 150. Hitting it
+# leaves the sample `truncated`, i.e. excluded from the denominator, which is
+# exactly the pre-paging behaviour — the cap degrades to the old safety valve
+# rather than to a false miss.
+MAX_CONTEXT_PAGES = 20
 
 
 def _expect_object(value, path: str, *, required: bool = False) -> Optional[dict]:
@@ -703,7 +786,9 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
 
     One query per repo rather than one per pull request: the fleet sweep is
     already O(repos) on the REST side, and fanning arrival out per PR would
-    multiply that by the sample size for no extra signal.
+    multiply that by the sample size for no extra signal. The follow-up paging
+    in ``_resolve_truncated`` is the one exception, and it only fires for a
+    commit whose contexts did not fit in one page.
 
     Every level is shape-checked on the way down, so "malformed" reaches the
     caller as a ``GhError`` — and therefore as arrival ``unknown`` for that one
@@ -752,64 +837,153 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
             continue
 
         contexts = _expect_object(rollup.get("contexts"), f"{where}.contexts")
-        context_nodes = _expect_list(
-            contexts.get("nodes") if contexts else None, f"{where}.contexts.nodes"
-        )
-        names = set()
-        for ctx_index, ctx_node in enumerate(context_nodes):
-            ctx = _expect_object(ctx_node, f"{where}.contexts.nodes[{ctx_index}]")
-            if ctx is None:
-                continue
-            # CheckRun exposes `name`, StatusContext exposes `context`. Select
-            # by *presence*, not truthiness: an `or`-chain would collapse a
-            # present-but-falsy leaf (`0`, `False`, `[]`, `{}`) to the fallback
-            # or to `None`, skipping it as "absent" — a wrong-typed leaf then
-            # silently reads as `found: False`, the false clean negative the
-            # fail-loud contract forbids.
-            name = ctx.get("name")
-            if name is None:
-                name = ctx.get("context")
-            if name is None:
-                continue
-            if not isinstance(name, str):
-                # The leaf analogue of the container guards above: a present-
-                # but-wrong-typed `name`/`context` is schema drift, and must
-                # reach the caller as GhError rather than aborting the sweep
-                # (an unhashable list/dict raises an uncaught TypeError in
-                # `names.add`, which `scan_repo` does not catch) or silently
-                # misclassifying (a hashable int/bool never matches the
-                # required-context string, reading as a false `found: False`).
-                raise GhError(
-                    f"malformed arrival payload: expected "
-                    f"{where}.contexts.nodes[{ctx_index}].name/context to be a "
-                    f"string, got {type(name).__name__}"
-                )
-            names.add(name)
+        page = parse_contexts_page(contexts, f"{where}.contexts")
 
-        total = (contexts or {}).get("totalCount")
-        if total is None:
-            total = 0
-        if not isinstance(total, int) or isinstance(total, bool):
+        oid = commit.get("oid") if commit else None
+        if oid is not None and not isinstance(oid, str):
             raise GhError(
-                f"malformed arrival payload: expected {where}.contexts.totalCount "
-                f"to be an integer, got {type(total).__name__}"
+                f"malformed arrival payload: expected {where}.commits.nodes[0]."
+                f"commit.oid to be a string, got {type(oid).__name__}"
             )
 
         samples.append(
             {
                 "number": pr.get("number"),
-                "found": required_context in names,
-                # Compare against the nodes actually returned, NOT the distinct
-                # names: a commit routinely carries the same context several
-                # times (a bot PR stacks 5-7 gate runs on one SHA, all but the
-                # newest cancelled), so the deduplicated set is smaller than
-                # totalCount even when nothing was truncated. Measuring against
-                # the set marked most busy repos truncated, which quietly
-                # converted real never-arriving evidence into `unknown`.
-                "truncated": total > len(context_nodes),
+                "found": required_context in page["names"],
+                "truncated": page["hasNextPage"],
+                # Paging handles, consumed by `fetch_arrival_samples` and
+                # stripped before the sample reaches `classify_arrival`.
+                "oid": oid,
+                "cursor": page["cursor"],
             }
         )
     return samples
+
+
+def parse_contexts_page(contexts: Optional[dict], where: str) -> dict:
+    """Read one page of a ``statusCheckRollup.contexts`` connection.
+
+    Returns ``{"names", "count", "hasNextPage", "cursor"}``. Shared by the bulk
+    arrival query and the per-commit paging query so both walk the leaves under
+    the same fail-loud rules, and so a schema drift is caught in one place.
+    """
+    context_nodes = _expect_list(
+        contexts.get("nodes") if contexts else None, f"{where}.nodes"
+    )
+    names = set()
+    for ctx_index, ctx_node in enumerate(context_nodes):
+        ctx = _expect_object(ctx_node, f"{where}.nodes[{ctx_index}]")
+        if ctx is None:
+            continue
+        # CheckRun exposes `name`, StatusContext exposes `context`. Select
+        # by *presence*, not truthiness: an `or`-chain would collapse a
+        # present-but-falsy leaf (`0`, `False`, `[]`, `{}`) to the fallback
+        # or to `None`, skipping it as "absent" — a wrong-typed leaf then
+        # silently reads as `found: False`, the false clean negative the
+        # fail-loud contract forbids.
+        name = ctx.get("name")
+        if name is None:
+            name = ctx.get("context")
+        if name is None:
+            continue
+        if not isinstance(name, str):
+            # The leaf analogue of the container guards above: a present-
+            # but-wrong-typed `name`/`context` is schema drift, and must
+            # reach the caller as GhError rather than aborting the sweep
+            # (an unhashable list/dict raises an uncaught TypeError in
+            # `names.add`, which `scan_repo` does not catch) or silently
+            # misclassifying (a hashable int/bool never matches the
+            # required-context string, reading as a false `found: False`).
+            raise GhError(
+                f"malformed arrival payload: expected "
+                f"{where}.nodes[{ctx_index}].name/context to be a "
+                f"string, got {type(name).__name__}"
+            )
+        names.add(name)
+
+    total = (contexts or {}).get("totalCount")
+    if total is None:
+        total = 0
+    if not isinstance(total, int) or isinstance(total, bool):
+        raise GhError(
+            f"malformed arrival payload: expected {where}.totalCount "
+            f"to be an integer, got {type(total).__name__}"
+        )
+
+    page_info = _expect_object(
+        contexts.get("pageInfo") if contexts else None, f"{where}.pageInfo"
+    )
+    has_next = (page_info or {}).get("hasNextPage")
+    if has_next is None:
+        # `pageInfo` is the authoritative answer, but fall back to the count
+        # comparison when it was not selected. Compare against the nodes
+        # actually returned, NOT the distinct names: a commit routinely carries
+        # the same context several times (a bot PR stacks 5-7 gate runs on one
+        # SHA, all but the newest cancelled), so the deduplicated set is smaller
+        # than totalCount even when nothing was truncated. Measuring against the
+        # set marked most busy repos truncated, which quietly converted real
+        # never-arriving evidence into `unknown`.
+        has_next = total > len(context_nodes)
+    if not isinstance(has_next, bool):
+        raise GhError(
+            f"malformed arrival payload: expected {where}.pageInfo.hasNextPage "
+            f"to be a boolean, got {type(has_next).__name__}"
+        )
+
+    cursor = (page_info or {}).get("endCursor")
+    if cursor is not None and not isinstance(cursor, str):
+        raise GhError(
+            f"malformed arrival payload: expected {where}.pageInfo.endCursor "
+            f"to be a string, got {type(cursor).__name__}"
+        )
+
+    return {
+        "names": names,
+        "count": len(context_nodes),
+        "hasNextPage": has_next,
+        "cursor": cursor,
+        # Whether the commit itself could not be read, as opposed to being read
+        # and found to hold no further contexts. The two are the same *shape* —
+        # no names, nothing more to fetch — and collapsing them makes an
+        # unreadable commit indistinguishable from a fully walked one, i.e. a
+        # false conclusive miss. Set by `parse_contexts_response`; a page that
+        # genuinely parsed is never unresolvable.
+        "unresolvable": False,
+    }
+
+
+def parse_contexts_response(payload: dict) -> dict:
+    """Turn one ``_ARRIVAL_CONTEXTS_QUERY`` response into a context page."""
+    root = _expect_object(payload, "response", required=True)
+    data = _expect_object(root.get("data"), "data", required=True)
+    repository = _expect_object(
+        data.get("repository"), "data.repository", required=True
+    )
+    # `object` is null for an oid GitHub can no longer resolve (a force-pushed
+    # or GC'd commit). That is a legitimate skip, not drift — but it must not be
+    # reported as an exhausted page. Both produce no names and nothing more to
+    # fetch, so returning the plain page shape would let `_resolve_truncated`
+    # read "walked the whole connection, the gate was not in it" out of "could
+    # not read this commit at all" — turning an unreadable head into a false
+    # `never-arriving`, and on a gated repo into a `gate-not-arriving` error.
+    # That is a false claim about the repo, the failure this scanner's
+    # fail-loud contract exists to prevent, so it is flagged explicitly.
+    commit = _expect_object(repository.get("object"), "data.repository.object")
+    if commit is None:
+        return {
+            "names": set(),
+            "count": 0,
+            "hasNextPage": False,
+            "cursor": None,
+            "unresolvable": True,
+        }
+    rollup = _expect_object(
+        commit.get("statusCheckRollup"),
+        "data.repository.object.statusCheckRollup",
+    )
+    where = "data.repository.object.statusCheckRollup.contexts"
+    contexts = _expect_object(rollup.get("contexts") if rollup else None, where)
+    return parse_contexts_page(contexts, where)
 
 
 def fetch_arrival_samples(
@@ -841,7 +1015,126 @@ def fetch_arrival_samples(
         raise GhError(f"unexpected arrival payload for {repo}")
     if payload.get("errors"):
         raise GhError(f"GraphQL errors for {repo}: {payload['errors']}")
-    return parse_arrival_nodes(payload, required_context)
+    # Resolved one at a time, NOT in a comprehension. Paging is the only part of
+    # this probe that issues a request per sample, so it is the only part where
+    # one transient failure can take the others with it: a comprehension lets a
+    # single 502 propagate out of `fetch_arrival_samples`, which `scan_repo`
+    # catches as `samples = None` — and an already-parsed, already-conclusive
+    # sibling sample is then discarded along with it. The repo lands on
+    # `no-data` with an empty findings list, which is the precise silence the
+    # `gate-arrival-unreadable` finding exists to close, reintroduced one layer
+    # below it. A failed page leaves *its own* sample truncated and nothing
+    # else; if that empties the denominator the verdict is `unknown` (reported),
+    # never `no-data` (silent).
+    samples: list = []
+    for sample in parse_arrival_nodes(payload, required_context):
+        try:
+            samples.append(
+                _resolve_truncated(repo, owner, name, sample, required_context, run=run)
+            )
+        except GhError as exc:
+            print(
+                f"::warning::{repo}: PR #{sample.get('number')}: context paging "
+                f"failed: {exc}",
+                file=sys.stderr,
+            )
+            samples.append(_public_sample({**sample, "truncated": True}))
+    return samples
+
+
+def fetch_context_page(
+    repo: str,
+    owner: str,
+    name: str,
+    oid: str,
+    cursor: str,
+    run: RunFn = _run_gh,
+) -> dict:
+    """One page of a commit's status contexts, after ``cursor``."""
+    raw = run(
+        [
+            "api",
+            "graphql",
+            "-f",
+            f"query={_ARRIVAL_CONTEXTS_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-f",
+            f"oid={oid}",
+            "-f",
+            f"after={cursor}",
+        ]
+    )
+    payload = _load_json(raw)
+    if not isinstance(payload, dict):
+        raise GhError(f"unexpected context payload for {repo}")
+    if payload.get("errors"):
+        raise GhError(f"GraphQL errors for {repo}: {payload['errors']}")
+    return parse_contexts_response(payload)
+
+
+def _public_sample(sample: dict) -> dict:
+    """The sample as `classify_arrival` and the record see it — paging handles
+    dropped, so the shape reaching the rest of the scanner is unchanged."""
+    return {
+        "number": sample.get("number"),
+        "found": sample.get("found"),
+        "truncated": sample.get("truncated"),
+    }
+
+
+def _resolve_truncated(
+    repo: str,
+    owner: str,
+    name: str,
+    sample: dict,
+    required_context: str,
+    run: RunFn,
+) -> dict:
+    """Page a truncated commit's remaining contexts until the gate appears.
+
+    Truncation used to be terminal: the sample left the denominator and its
+    evidence was thrown away. That was tolerable while >100 contexts on a commit
+    was rare, and it no longer is — so a truncated sample is now *resolved*
+    rather than discarded, and only an unresolvable one keeps the old treatment.
+
+    Paging stops the moment the gate is seen, and never starts for a sample that
+    already found it on page one — the common case costs nothing extra.
+    """
+    if sample.get("found") or not sample.get("truncated"):
+        return _public_sample(sample)
+
+    oid = sample.get("oid")
+    cursor = sample.get("cursor")
+    if not oid or not cursor:
+        # No handle to page with (a null `endCursor`, or an oid GitHub did not
+        # return). Leave it truncated: excluded from the denominator, which is
+        # the pre-paging behaviour, and never a false miss.
+        return _public_sample(sample)
+
+    for _ in range(MAX_CONTEXT_PAGES):
+        page = fetch_context_page(repo, owner, name, oid, cursor, run=run)
+        if required_context in page["names"]:
+            return _public_sample({**sample, "found": True, "truncated": False})
+        if page["unresolvable"]:
+            # The commit could not be read, so nothing was ruled out. Checked
+            # before the exhaustion branch below, which would otherwise read
+            # this identical shape as "walked it all, the gate was not there".
+            return _public_sample(sample)
+        if not page["hasNextPage"] or not page["cursor"]:
+            # The connection is exhausted and the gate was not anywhere in it.
+            # That is now a *conclusive* miss — the whole point of paging.
+            return _public_sample({**sample, "truncated": False})
+        cursor = page["cursor"]
+
+    print(
+        f"::warning::{repo}: PR #{sample.get('number')}: stopped paging status "
+        f"contexts after {MAX_CONTEXT_PAGES} pages; sample excluded",
+        file=sys.stderr,
+    )
+    return _public_sample(sample)
 
 
 def scan_repo(

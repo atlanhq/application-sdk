@@ -141,14 +141,18 @@ jobs:
           # Pull images first with retry — image pulls are the main 504 surface.
           # Use ${GITHUB_WORKSPACE} (not a bare relative path) to match the style
           # used in composite actions and stay correct if CWD ever changes.
-          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull minio/minio:RELEASE.2025-09-07T16-13-09Z
+          # quay.io, not Docker Hub: MinIO no longer publishes community images
+          # there (hub.docker.com/v2/repositories/minio/minio lists zero tags
+          # and every pull returns 'pull access denied'). quay.io carries the
+          # same pinned release tag, and is MinIO's own registry.
+          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
           "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull mcr.microsoft.com/azure-storage/azurite:3.31.0
           "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull gcr.io/cloud-devrel-public-resources/storage-testbench:v0.62.0
           "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull nginx:1.27-alpine
           # S3 → MinIO
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
           # Azure → Azurite
           docker run -d --name azurite -p 10000:10000 \
             mcr.microsoft.com/azure-storage/azurite:3.31.0 \

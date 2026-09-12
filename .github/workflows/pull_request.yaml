@@ -335,7 +335,8 @@ jobs:
           # legs just go cold forever. Same trap tag-suffix closes for the app
           # image build.
           cache-from: type=gha,scope=sdk-base-${{ matrix.arch }}
-          cache-to: type=gha,mode=min,scope=sdk-base-${{ matrix.arch }}
+          # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
+          cache-to: type=gha,mode=min,scope=sdk-base-${{ matrix.arch }},ignore-error=true
           github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
@@ -765,7 +766,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_INTEG_ROLE_ARN }}
           aws-region: ${{ vars.AWS_INTEG_REGION }}
       - name: Azure — login (OIDC federated, no secret)
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ vars.AZURE_INTEG_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_INTEG_TENANT_ID }}

@@ -10,10 +10,12 @@ from unittest.mock import patch
 import pytest
 
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.storage import ops
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
-from application_sdk.storage.ops import _get_bytes, _put
+from application_sdk.storage.ops import _get_bytes, _put, get_file_meta
 from application_sdk.storage.reference import (
+    _materialize_single_file,
     _write_local_sidecar,
     materialize_file_reference,
     persist_file_reference,
@@ -249,6 +251,296 @@ class TestMaterializeFileReference:
         ref = FileReference(local_path="/tmp/x", is_durable=True, storage_path=None)
         result = await materialize_file_reference(store, ref)
         assert result is ref
+
+    async def test_empty_prefix_with_directory_local_path_returns_the_ref(
+        self, store, tmp_path
+    ) -> None:
+        """A directory-backed ref over an empty prefix must not be hashed.
+
+        This is the shape ``download()`` returns for a prefix holding no
+        objects: ``local_path`` is a fresh empty temp DIRECTORY and
+        ``file_count`` is 0. An empty listing is also what a single object at
+        an exact key looks like, so routing on the listing alone sent this ref
+        down the single-file branch, which hashes ``local_path`` to decide
+        whether it may skip the download — and hashing a directory raised
+        ``IsADirectoryError`` out of ``open(path, "rb")``.
+
+        Regression: a connector DAG node crashed here instead of seeing that
+        its upstream had produced nothing.
+        """
+        empty_dir = tmp_path / "empty-prefix-dest"
+        empty_dir.mkdir()
+        ref = FileReference(
+            local_path=str(empty_dir),
+            storage_path="k/nothing-was-written-here/",
+            is_durable=True,
+            file_count=0,
+        )
+
+        result = await materialize_file_reference(store, ref)
+
+        # Returned as-is, naming the empty directory it already had: the
+        # storage layer reports what is there and leaves the meaning of an
+        # empty hand-off to the consumer.
+        assert result is ref
+        assert Path(result.local_path).is_dir()
+        assert list(Path(result.local_path).iterdir()) == []
+
+    async def test_empty_prefix_with_directory_local_path_does_not_raise(
+        self, store, tmp_path
+    ) -> None:
+        """Pin the exception itself, not just the happy return value.
+
+        The test above would still pass if a future refactor swapped
+        ``IsADirectoryError`` for some other failure; this one fails on any
+        exception at all, which is the property the DAG node depends on.
+        """
+        empty_dir = tmp_path / "another-empty-dest"
+        empty_dir.mkdir()
+        ref = FileReference(
+            local_path=str(empty_dir),
+            storage_path="k/also-empty/",
+            is_durable=True,
+            file_count=0,
+        )
+
+        try:
+            await materialize_file_reference(store, ref)
+        except Exception as exc:  # noqa: BLE001 — the assertion IS "nothing raised"
+            pytest.fail(
+                f"materialising an empty prefix must not raise, got "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    async def test_zero_byte_directory_marker_returns_the_ref(
+        self, store, tmp_path
+    ) -> None:
+        """A 0-byte marker at the bare key is an empty directory, not a file.
+
+        Object stores have no directories, so an empty one is a 0-byte marker
+        object, and this SDK puts the marker for ``D/`` at the bare key ``D``
+        (``delete_prefix``'s ``root_marker``). obstore strips the trailing
+        delimiter when it parses a key, so ``HEAD("D/")`` and ``HEAD("D")`` are
+        the same request: the HEAD that resolves single-file vs empty prefix
+        finds the marker even though the listing under ``D/`` is empty.
+
+        Without the 0-byte check the ref is routed to the single-file branch and
+        dies publishing those zero bytes over its directory destination — the
+        very crash this whole path exists to prevent, on any store that writes
+        directory markers.
+        """
+        await _put("k/emptydir", b"", store, normalize=False)  # the marker
+        assert await get_file_meta("k/emptydir/", store, normalize=False) == (
+            0,
+            '"0"',
+        ), "premise: HEAD on the slash-terminated key finds the bare-key marker"
+
+        empty_dir = tmp_path / "marker-dest"
+        empty_dir.mkdir()
+        ref = FileReference(
+            local_path=str(empty_dir),
+            storage_path="k/emptydir/",
+            is_durable=True,
+            file_count=0,
+        )
+
+        result = await materialize_file_reference(store, ref)
+
+        assert result is ref
+        assert list(Path(result.local_path).iterdir()) == []
+
+    async def test_zero_byte_marker_without_trailing_slash_returns_the_ref(
+        self, store, tmp_path
+    ) -> None:
+        """The marker check cannot lean on the trailing slash alone.
+
+        ``_materialize_directory`` re-adds the delimiter itself
+        (``storage_path.rstrip("/") + "/"``), so a directory ref is not
+        guaranteed to carry one. A directory-backed ref is identified by its
+        ``local_path`` here, exactly as in the no-object case.
+        """
+        await _put("k/emptydir", b"", store, normalize=False)
+        empty_dir = tmp_path / "marker-dest-bare"
+        empty_dir.mkdir()
+        ref = FileReference(
+            local_path=str(empty_dir),
+            storage_path="k/emptydir",  # no trailing delimiter
+            is_durable=True,
+            file_count=0,
+        )
+
+        result = await materialize_file_reference(store, ref)
+
+        assert result is ref
+
+    async def test_zero_byte_single_file_still_materialises(
+        self, store, tmp_path
+    ) -> None:
+        """Guard against reading every 0-byte object as a directory marker.
+
+        An empty file is a legitimate artifact. Nothing about this ref is
+        directory-shaped — no trailing delimiter, and ``local_path`` names a
+        file — so the zero bytes are materialised, not handed back as an empty
+        directory.
+        """
+        await _put("k/zero.bin", b"", store, normalize=False)
+        out = tmp_path / "zero.bin"
+        ref = FileReference(
+            local_path=str(out), is_durable=True, storage_path="k/zero.bin"
+        )
+
+        result = await materialize_file_reference(store, ref)
+
+        assert Path(result.local_path).is_file()
+        assert Path(result.local_path).read_bytes() == b""
+
+    async def test_empty_prefix_without_local_path_still_raises(self, store) -> None:
+        """The empty-prefix branch must not swallow a genuinely missing key.
+
+        Nothing under the prefix, nothing at the exact key, and no local
+        directory to hand back: this is a wrong path, an upstream that never
+        ran, or credentials without list/read permission here. All three must
+        stay loud — the empty-prefix return is for refs that already name a
+        directory, not a blanket "empty is fine".
+        """
+        ref = FileReference(
+            local_path=None, is_durable=True, storage_path="k/no-such-key"
+        )
+
+        with pytest.raises(StorageNotFoundError):
+            await materialize_file_reference(store, ref)
+
+    async def test_real_object_at_exact_key_beats_a_directory_local_path(
+        self, store, tmp_path
+    ) -> None:
+        """An object at the exact key is a single file, whatever the disk says.
+
+        The empty-prefix branch is reached on an empty *listing*, and a real
+        single object at the exact key lists empty too (``list_keys`` appends a
+        trailing slash). Routing on ``local_path.is_dir()`` alone would answer
+        a question about the store with a fact about the local disk, and hand
+        this ref back undownloaded — the caller would receive a directory where
+        a file was promised, silently. The HEAD on the exact key is what makes
+        the routing decisive, so this ref must NOT come back as-is.
+        """
+        await _put("k/data.bin", b"server", store, normalize=False)
+        d = tmp_path / "not-a-file"
+        d.mkdir()
+        ref = FileReference(
+            local_path=str(d), is_durable=True, storage_path="k/data.bin"
+        )
+
+        # The spy turns "the fast path hashed a directory" into a distinct
+        # failure, so a regression cannot hide inside the expected StorageError.
+        with patch(
+            "application_sdk.storage.integrity.sha256_file",
+            side_effect=AssertionError("fast path hashed a directory"),
+        ):
+            # It reaches the transfer and fails writing to a directory
+            # destination — rather than being quietly handed back as-is.
+            with pytest.raises(StorageError) as excinfo:
+                await materialize_file_reference(store, ref)
+
+        # ``OSError``, not ``IsADirectoryError``: POSIX raises EISDIR publishing
+        # over a directory, Windows raises PermissionError (WinError 5) from the
+        # same ``os.replace``. The portable property is that the failure came
+        # from the filesystem write — hashing the directory instead would have
+        # come out of the spy above as an AssertionError, which is not an
+        # OSError and is not wrapped in StorageError either.
+        assert isinstance(excinfo.value.__cause__, OSError), excinfo.value
+
+    async def test_single_file_helper_never_hashes_a_directory(
+        self, store, tmp_path
+    ) -> None:
+        """``is_file()``, not ``exists()``: the fast path declines a directory.
+
+        Defence in depth for a ref that reaches the helper without going
+        through the dispatcher's routing — this calls it directly, which is the
+        only way to exercise the guard now that the dispatcher HEADs first.
+        A directory also ``exists()``, and the line after the guard opens the
+        path to hash it, which is where the production ``IsADirectoryError``
+        came from.
+
+        ``test_single_file_helper_hashes_a_real_file`` is the control: it
+        proves this patch actually intercepts the hash, so "not called" here
+        cannot pass on a mis-wired spy.
+        """
+        await _put("k/data.bin", b"server", store, normalize=False)
+        d = tmp_path / "not-a-file"
+        d.mkdir()
+        ref = FileReference(
+            local_path=str(d), is_durable=True, storage_path="k/data.bin"
+        )
+
+        with patch("application_sdk.storage.integrity.sha256_file") as sha256_file:
+            # The transfer fails publishing over a directory destination —
+            # a later and more honest failure than hashing one, and the
+            # reason this guard is defence in depth rather than a repair.
+            with pytest.raises(StorageError) as excinfo:
+                await _materialize_single_file(store, ref, None)
+
+        sha256_file.assert_not_called()
+        # ``OSError``, not ``IsADirectoryError``: POSIX raises EISDIR publishing
+        # over a directory, Windows raises PermissionError (WinError 5) from the
+        # same ``os.replace``. The portable property is that the failure came
+        # from the filesystem write — hashing the directory instead would have
+        # come out of the spy above as an AssertionError, which is not an
+        # OSError and is not wrapped in StorageError either.
+        assert isinstance(excinfo.value.__cause__, OSError), excinfo.value
+
+    async def test_single_file_helper_hashes_a_real_file(self, store, tmp_path) -> None:
+        """Control for the guard test above: a real file DOES take the fast path."""
+        f = tmp_path / "data.bin"
+        f.write_bytes(b"payload")
+        await _put("k/data.bin", b"payload", store, normalize=False)
+        await _put(
+            "k/data.bin.sha256",
+            _hash_bytes(b"payload").encode(),
+            store,
+            normalize=False,
+        )
+        ref = FileReference(
+            local_path=str(f), is_durable=True, storage_path="k/data.bin"
+        )
+
+        with patch(
+            "application_sdk.storage.integrity.sha256_file",
+            return_value=_hash_bytes(b"payload"),
+        ) as sha256_file:
+            result = await _materialize_single_file(store, ref, None)
+
+        sha256_file.assert_called_once()
+        assert result is ref
+
+    async def test_single_file_materialize_heads_the_key_once(
+        self, store, tmp_path
+    ) -> None:
+        """The hoisted HEAD is handed down, not repeated.
+
+        The dispatcher HEADs the exact key to decide single-file vs empty
+        prefix; the single-file branch needs that same ``(size, etag)`` to pick
+        chunked vs streaming and to version-pin its range GETs. One round trip
+        must serve both, or the hot path pays for the routing fix.
+        """
+        await _put("k/data.bin", b"server", store, normalize=False)
+        ref = FileReference(
+            local_path=str(tmp_path / "out.bin"),
+            is_durable=True,
+            storage_path="k/data.bin",
+        )
+
+        real_get_file_meta = ops.get_file_meta
+        calls: list[str] = []
+
+        async def _counting_get_file_meta(key, *args, **kwargs):
+            calls.append(key)
+            return await real_get_file_meta(key, *args, **kwargs)
+
+        with patch.object(ops, "get_file_meta", _counting_get_file_meta):
+            result = await materialize_file_reference(store, ref)
+
+        assert Path(result.local_path).read_bytes() == b"server"
+        assert calls == ["k/data.bin"], calls
 
     async def test_single_file_fast_path_with_matching_sidecar(
         self, store, tmp_path
