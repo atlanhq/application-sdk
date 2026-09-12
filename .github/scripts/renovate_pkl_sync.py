@@ -83,9 +83,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from pkl_contract_layout import (  # noqa: E402
     GENERATED_DIR,
+    POST_GENERATE_SCRIPT,
     ROOT_FILES,
     baseline_contract_ref,
-    export_contract_at,
+    export_repo_at,
+    plan_swap,
     run_post_generate,
     swap_outputs,
 )
@@ -171,7 +173,9 @@ def _eval_root(root: Path, contract_dir: str, out: Path) -> bool:
     return result.returncode == 0
 
 
-def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
+def regenerate_multi_root(
+    contract_dir: str, roots: list[Path], preserve_overrides: bool = True
+) -> bool:
     """Regenerate an app whose contract has ONE ROOT PER ENTRYPOINT.
 
     Some apps (synapse: ``crawler.pkl`` + ``miner.pkl``) have no single
@@ -203,7 +207,9 @@ def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
                 )
                 continue
             target = f"{GENERATED_DIR}/{root.stem}"
-            base_out, base_work = _baseline_output_for_root(contract_dir, root.name)
+            base_out = None
+            if preserve_overrides:
+                base_out, base_work = _baseline_output_for_root(contract_dir, root.name)
             if swap_outputs(tmp, generated_dir=target, baseline_dir=base_out):
                 placed = True
                 print(f"Regenerated {target} from {root.name}.")
@@ -219,7 +225,7 @@ def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
     return placed
 
 
-def regenerate(contract_dir: str) -> bool:
+def regenerate(contract_dir: str, preserve_overrides: bool = True) -> bool:
     """Regenerate contract artifacts; swap gated on eval+format success.
 
     Eval runs into a temp dir; the working tree is only touched once eval (and
@@ -229,6 +235,23 @@ def regenerate(contract_dir: str) -> bool:
 
     An app shipping ``contract/post-generate.sh`` gets it run after the swap and
     before formatting — see ``pkl_contract_layout.run_post_generate``.
+
+    ``preserve_overrides`` decides whether app-maintained generated files survive
+    the swap. It must stay True for the Renovate sync, whose output is a commit a
+    human reviews: silently reverting an app's own post-processing is the failure
+    this protection exists to prevent.
+
+    It must be False for the freshness gate, which asks "does the committed tree
+    match a fresh generation?". Preserving anything makes the gate compare a file
+    against itself and report clean over stale content — so a check that exists to
+    catch drift would certify it instead. That is not hypothetical: the gate is
+    correct today only because CI checks out at depth 1, so ``baseline_contract_ref``
+    finds no parent commit, returns None, and preservation never engages. Nothing
+    said so; raise the checkout depth for any unrelated reason and the gate starts
+    passing stale artifacts. This flag makes that independent of checkout depth.
+
+    False also skips the baseline eval entirely — a second ``pkl eval`` against an
+    older toolkit package — so the gate gets faster as well as correct.
 
     Returns True only when the working tree was actually updated with fresh
     artifacts. Returns False when there is no contract to generate from, when
@@ -245,7 +268,7 @@ def regenerate(contract_dir: str) -> bool:
                 f"::notice::No {app_pkl}; regenerating {len(roots)} per-entrypoint "
                 f"root(s): {', '.join(r.name for r in roots)}."
             )
-            return regenerate_multi_root(contract_dir, roots)
+            return regenerate_multi_root(contract_dir, roots, preserve_overrides)
         print(
             f"::notice::No {app_pkl} — skipping artifact regeneration (re-resolve only)."
         )
@@ -286,7 +309,9 @@ def regenerate(contract_dir: str) -> bool:
             )
             return False
 
-        baseline_out, baseline_work = _baseline_output(contract_dir)
+        baseline_out = None
+        if preserve_overrides:
+            baseline_out, baseline_work = _baseline_output(contract_dir)
         if not swap_outputs(tmp, baseline_dir=baseline_out):
             # swap_outputs already warned with the specific reason.
             return False
@@ -315,14 +340,18 @@ def _baseline_output_for_root(
     if ref is None:
         return (None, None)  # no pin change in flight — nothing to protect
     work = Path(tempfile.mkdtemp())
-    if not export_contract_at(ref, contract_dir, work):
+    # `repo` and `out` are siblings under `work`: the eval output must not land
+    # inside the export, or the replay's own swap would be writing into the tree
+    # it is reading from.
+    repo = work / "repo"
+    if not export_repo_at(ref, contract_dir, repo):
         print(
-            f"::warning::Could not export {contract_dir}/ at {ref[:12]} — "
+            f"::warning::Could not export the repo at {ref[:12]} — "
             f"app-maintained files under {GENERATED_DIR}/{Path(root_name).stem} "
             "cannot be detected, so regeneration will overwrite them."
         )
         return (None, work)
-    base_root = work / contract_dir / root_name
+    base_root = repo / contract_dir / root_name
     if not base_root.exists():
         # The root is new in this revision: nothing committed came from it, so
         # there is nothing to preserve. Not a failure.
@@ -334,7 +363,7 @@ def _baseline_output_for_root(
             "pkl",
             "eval",
             "--project-dir",
-            str(work / contract_dir),
+            str(repo / contract_dir),
             "-m",
             str(out),
             str(base_root),
@@ -347,6 +376,9 @@ def _baseline_output_for_root(
             "so regeneration will overwrite them."
         )
         return (None, work)
+    _replay_app_pipeline(
+        repo, out, f"{GENERATED_DIR}/{Path(root_name).stem}", contract_dir
+    )
     return (out, work)
 
 
@@ -364,6 +396,12 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
     on a cold runner). Worth it: comparing committed content against it is what
     lets every app's post-processed artifacts survive regeneration with no per-app
     declaration at all.
+
+    The eval output is then run through ``_replay_app_pipeline``, which applies
+    the app's own post-eval stages to it. Without that, the baseline is raw eval
+    output while the committed side has been swapped, post-generated and
+    ruff-formatted — and the difference between the two pipelines, rather than
+    any decision the app made, is what the classifier ends up reading.
     """
     ref = baseline_contract_ref(contract_dir)
     if ref is None:
@@ -371,9 +409,13 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
         return (None, None)
 
     work = Path(tempfile.mkdtemp())
-    if not export_contract_at(ref, contract_dir, work):
+    # `repo` and `out` are siblings under `work`: the eval output must not land
+    # inside the export, or the replay's own swap would be writing into the tree
+    # it is reading from.
+    repo = work / "repo"
+    if not export_repo_at(ref, contract_dir, repo):
         print(
-            f"::warning::Could not export {contract_dir}/ at {ref[:12]} — "
+            f"::warning::Could not export the repo at {ref[:12]} — "
             "app-maintained generated files cannot be detected, so regeneration "
             "will overwrite them. Check the diff for reverted post-processing."
         )
@@ -381,7 +423,7 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
 
     out = work / "out"
     out.mkdir()
-    base_contract = work / contract_dir
+    base_contract = repo / contract_dir
     result = run(
         [
             "pkl",
@@ -400,6 +442,7 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
             "will overwrite them. Check the diff for reverted post-processing."
         )
         return (None, work)
+    _replay_app_pipeline(repo, out, GENERATED_DIR, contract_dir)
     return (out, work)
 
 
@@ -437,6 +480,91 @@ def _format_generated() -> None:
     paths = [str(p) for p in inputs]
     run(["uvx", "ruff", "check", "--fix", "--quiet", "--force-exclude", *paths])
     run(["uvx", "ruff", "format", "--force-exclude", *paths])
+
+
+def _replay_app_pipeline(
+    repo: Path, out: Path, generated_dir: str, contract_dir: str
+) -> None:
+    """Put the baseline eval output through the app's own post-eval pipeline,
+    inside an exported copy of the repo, so it is comparable with what is
+    committed.
+
+    ``overridden_files`` asks whether a committed artifact is one the app
+    maintains itself, and answers by diffing it against the baseline eval. But
+    what is committed is not raw eval output — it is eval output that has been
+    through ``swap_outputs``, the app's ``contract/post-generate.sh`` and
+    ``_format_generated``. Diffing a four-stage artifact against a one-stage one
+    makes every file any of those stages touches read as app-maintained, so it is
+    preserved on this bump and on every bump after it: frozen against the toolkit
+    forever, with the sync exiting 0 and a ``Preserved app-maintained`` notice as
+    the only trace.
+
+    Both missing stages bite, and independently:
+
+      * **ruff.** The toolkit emits its ``application_sdk`` imports as their own
+        group (a repo whose isort config calls that package third-party re-sorts
+        them), and the credential model's ``model_config = ConfigDict(...)`` line
+        is over the default length at class indent with no app-specific text in
+        it. So ``_e2e_credential.py`` and ``_e2e_substitutions.py`` freeze in any
+        app that has them, post-processing or not. Observed on
+        atlan-microstrategy-app#132, where 0.25.1's rename of a name-mangled
+        pydantic field was dropped from the Renovate PR.
+      * **post-generate.** FND-142: an app that genuinely post-processes a file
+        differs from the raw baseline on the first bump and then *permanently*,
+        so the protection meant to preserve its post-processing is what stops the
+        file ever receiving a toolkit change again (coalesce shipped a manifest
+        with no ``args.app_name`` that way).
+
+    Replaying both turns "differs from raw eval output" into the question the
+    classifier actually wants to ask: *can the app's own pipeline reproduce what
+    is committed?* If it can, there is nothing to protect — and the real swap is
+    followed by a real ``run_post_generate``, so an app that wires its
+    post-processing into the hook has it re-applied regardless. Preservation then
+    fires only where it must: post-processing the hook does NOT cover, which is
+    exactly the population FND-1777's ``warn_unwired_post_generate`` flags.
+
+    Runs entirely inside ``repo``, a throwaway ``git archive`` export — the
+    consumer's working tree is never touched, which rules out the obvious
+    alternative of swapping the baseline into the real tree and restoring it
+    afterwards. It also makes ruff resolve the repo's own config naturally, since
+    that config now sits at the root above a real ``app/generated/**``:
+    path-scoped ``exclude`` / ``per-file-ignores`` patterns match here exactly as
+    they do in the working tree, so an app that exempts
+    ``app/generated/_input.py`` gets an unformatted baseline for it, as it must.
+
+    Results are copied back into ``out`` at the positions the eval emitted them,
+    so ``out`` keeps its original family shape and ``plan_swap`` reads it exactly
+    as before.
+
+    Best-effort throughout: a refused swap, a failing post-generate or a ruff
+    hiccup leaves the baseline as raw eval output, i.e. the behaviour before this
+    function existed.
+    """
+    _, plan = plan_swap(out, generated_dir)
+    if not plan:
+        return
+    previous = Path.cwd()
+    try:
+        os.chdir(repo)
+    except OSError as exc:
+        print(f"::warning::Could not enter the exported baseline repo ({exc}).")
+        return
+    try:
+        if not swap_outputs(out, generated_dir=generated_dir):
+            return  # swap_outputs already warned with the specific reason
+        # Guarded rather than called unconditionally: run_post_generate warns
+        # about unwired post-processing when the script is absent, and that
+        # warning belongs to the real run, not to this replay of it.
+        if (Path(contract_dir) / POST_GENERATE_SCRIPT).is_file():
+            print("Replaying the app's post-generate step over the baseline:")
+            run_post_generate(contract_dir)
+        _format_generated()
+    finally:
+        os.chdir(previous)
+    for dest, src in plan.items():
+        produced = repo / dest
+        if produced.is_file():
+            shutil.copyfile(produced, src)
 
 
 def stage_and_commit(message: str) -> bool:
