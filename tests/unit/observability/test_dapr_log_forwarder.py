@@ -213,6 +213,9 @@ class TestMain:
         argv = ["dapr_log_forwarder", "--", "daprd", "--app-id", "app"]
         with (
             patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
+            # The re-exec is POSIX-only (see test_no_reexec_on_windows), so pin
+            # the branch rather than letting the runner's platform decide.
+            patch.object(dlf.os, "name", "posix"),
             patch.object(dlf.os, "execve", side_effect=SystemExit(0)) as execve,
             patch.object(dlf, "_run") as run_mock,
             pytest.raises(SystemExit),
@@ -312,6 +315,9 @@ class TestMain:
 
         with (
             patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
+            # Without this the case is vacuous off POSIX: no exec is attempted
+            # there, so the OSError path would never be reached.
+            patch.object(dlf.os, "name", "posix"),
             patch.object(dlf.os, "execve", side_effect=OSError("no exec")),
             patch.object(dlf, "_run", _fake_run),
         ):
