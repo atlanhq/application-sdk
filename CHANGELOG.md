@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.34.2 (September 12, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.1...v3.34.2
+
+### Bug Fixes
+
+- bake app_version + commit_sha into images and report them on worker events (#3746) (by @Lalit3716-atlan in [f6c9ee8](https://github.com/atlanhq/application-sdk/commit/f6c9ee8))
+- carry heartbeat details across worker-eviction re-dispatch (#3757) (by @rishab-atlan in [1526b12](https://github.com/atlanhq/application-sdk/commit/1526b12))
+- stop materialising an empty prefix as a single file (#3760) (by @vaibhavatlan in [ca06059](https://github.com/atlanhq/application-sdk/commit/ca06059))
+- let DAPR_LOG_LEVEL win over LOG_LEVEL for forwarded daprd lines (#3721) (by @Lalit3716-atlan in [ea58297](https://github.com/atlanhq/application-sdk/commit/ea58297))
+
+
 ## v3.34.1 (September 10, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.0...v3.34.1
