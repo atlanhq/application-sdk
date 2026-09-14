@@ -17,7 +17,9 @@ order is load-bearing for cost as well as for the log):
      ``MEND_REPOS``
   b. the PR is open and not a draft
   c. the PR's current HEAD still matches the SHA being evaluated (race guard)
-  d. every changed file is dependency-related (see :func:`non_dep_files`)
+  d. every changed file is dependency-related (see :func:`non_dep_files`),
+     and every changed file under ``.github/workflows/`` carries a pin-only
+     diff (see :func:`non_pin_only_workflows`)
   e. every ruleset-required check is green (``gh pr checks --required``)
   f. Renovate's own ``renovate/artifacts`` commit status is ``success``
   g. atlan-ci has not already posted an APPROVED review with our signature
@@ -53,6 +55,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -112,7 +115,31 @@ ARTIFACT_MISSING = "missing"
 #: Prefix allowlist: anything under .github/ is dependency-related (Renovate
 #: pins actions there). Matched as a prefix, not a whole path — subdirectories
 #: are in scope, and a lookalike like ``x.github/…`` is not.
+#:
+#: This is a FILENAME judgement only. Workflow files under
+#: :data:`WORKFLOWS_PREFIX` pass it and are then judged a second time on their
+#: diff by :func:`non_pin_only_workflows`, because "Renovate touched a file
+#: under .github/" is not evidence that it only moved a pin (FND-1996).
 DOT_GITHUB_PREFIX = ".github/"
+
+#: The subtree of :data:`DOT_GITHUB_PREFIX` that carries executable CI, and so
+#: the one where a filename says nothing about what the change does. Everything
+#: here is diff-gated; everything else under ``.github/`` is not.
+WORKFLOWS_PREFIX = ".github/workflows/"
+
+#: The only ``status`` a workflow file may carry and still be auto-approvable.
+#: GitHub's other values (``added``, ``removed``, ``renamed``, ``copied``,
+#: ``changed``) have no pin-only reading: a file that did not exist before, or
+#: does not exist after, is not a pin bump no matter what its lines look like.
+#: An unrecognised status falls outside this and withholds, by construction.
+WORKFLOW_MODIFIED_STATUS = "modified"
+
+#: A single ``uses:`` step reference, with full-match semantics. Covers both the
+#: list-item form (``- uses: owner/action@ref``) and the continuation form
+#: (``uses: owner/action@ref``), and the trailing ``# v4.2.2`` comment Renovate
+#: writes next to a digest pin. The ref itself is deliberately opaque here —
+#: which ref is allowed to change is decided by comparing targets, below.
+USES_LINE_RE = re.compile(r"[ \t]*(-[ \t]+)?uses:[ \t]*(?P<ref>\S+)[ \t]*(#.*)?")
 
 #: Whole-path allowlist, an ERE alternation applied with full-match semantics —
 #: the Python equivalent of the workflow's original ``grep -vxE``.
@@ -162,6 +189,34 @@ APPROVAL_BODY = (
 )
 
 Runner = Callable[..., subprocess.CompletedProcess]
+
+
+@dataclass(frozen=True)
+class ChangedFile:
+    """One entry of ``GET /repos/{repo}/pulls/{pr}/files``.
+
+    ``patch`` is the unified diff body GitHub returns for that file, starting at
+    the first ``@@`` hunk header — never the ``---``/``+++`` file headers. It is
+    ABSENT (empty here) for a binary file and for a diff GitHub considers too
+    large, which is exactly the case a filename-only gate could not see.
+    """
+
+    filename: str
+    status: str
+    patch: str
+
+
+@dataclass(frozen=True)
+class Offender:
+    """A changed file that withholds approval, and the reason to print for it.
+
+    The reason travels with the path because the skip log is the only
+    observability on a withheld approval, and "not pin-only" without saying
+    which line is what would send someone to read the diff by hand.
+    """
+
+    filename: str
+    reason: str
 
 
 class GhError(RuntimeError):
@@ -254,6 +309,107 @@ def non_dep_files(filenames: list[str], extra_pattern: str = "") -> list[str]:
         f
         for f in filenames
         if f and not f.startswith(DOT_GITHUB_PREFIX) and not compiled.fullmatch(f)
+    ]
+
+
+def uses_target(line: str) -> str | None:
+    """The action a ``uses:`` line points at, with its ref stripped.
+
+    ``- uses: actions/checkout@v4 # comment`` -> ``actions/checkout``. Returns
+    ``None`` when the line is not a ``uses:`` step reference at all, which is
+    the caller's signal that the diff line is something other than a pin.
+
+    Splitting at the FIRST ``@`` is what makes the target comparison meaningful:
+    everything before it is the thing being run, everything after it is the pin
+    Renovate is allowed to move.
+    """
+    match = USES_LINE_RE.fullmatch(line)
+    if match is None:
+        return None
+    ref = match.group("ref").strip("\"'")
+    return ref.split("@", 1)[0]
+
+
+def workflow_diff_offence(changed: ChangedFile) -> str:
+    """Return why ``changed`` is not a pin-only workflow diff, or ``""``.
+
+    Pin-only means all three of:
+
+    1. the file was MODIFIED — an added, deleted, renamed or copied workflow has
+       no pin-only reading (:data:`WORKFLOW_MODIFIED_STATUS`);
+    2. every added and every removed line, with its leading ``+``/``-`` dropped,
+       is a ``uses:`` step reference — so a ``run:``, ``permissions:``, ``on:``
+       or ``env:`` edit riding along with a bump is not pin-only;
+    3. the multiset of ``uses:`` TARGETS is identical on both sides — the same
+       actions come out as went in. Condition 2 alone would still admit
+       ``- uses: actions/checkout@v4`` / ``+ uses: attacker/action@v1``, which
+       is a pin-shaped line that runs entirely different code, and would admit a
+       whole new step being added as long as it was a ``uses:`` step.
+
+    Every uncertainty resolves to a reason, i.e. to withholding: an unreadable
+    or absent patch, an unrecognised status, a patch whose body carries no
+    ``+``/``-`` lines at all.
+    """
+    if changed.status != WORKFLOW_MODIFIED_STATUS:
+        return (
+            f"file status is '{changed.status or 'unknown'}', not "
+            f"'{WORKFLOW_MODIFIED_STATUS}' — there is no pin-only reading of "
+            "an added, deleted or renamed workflow"
+        )
+    if not changed.patch:
+        return (
+            "no diff body was returned for this file (binary, too large, or "
+            "truncated) — the change cannot be read, so it is not approvable"
+        )
+
+    added: list[str] = []
+    removed: list[str] = []
+    for line in changed.patch.splitlines():
+        if line.startswith("+"):
+            bucket = added
+        elif line.startswith("-"):
+            bucket = removed
+        else:
+            continue
+        body = line[1:]
+        target = uses_target(body)
+        if target is None:
+            return f"changes a line that is not a `uses:` pin: {body.strip()!r}"
+        bucket.append(target)
+
+    if not added and not removed:
+        return "the diff body carried no added or removed lines to check"
+    if sorted(added) != sorted(removed):
+        return (
+            "changes which actions run, not just their pins "
+            f"(removed {sorted(removed)}, added {sorted(added)})"
+        )
+    return ""
+
+
+def non_pin_only_workflows(files: list[ChangedFile]) -> list[Offender]:
+    """Condition (d), part 2: the workflow files whose diff is not a pin bump.
+
+    Filenames alone cannot carry this decision — ``.github/workflows/ci.yml`` is
+    the same path whether the diff moves an action pin or adds a ``run:`` step —
+    so this is the one condition that reads the patch body.
+
+    Why it exists (FND-1996): the ``.github/`` prefix allowlist marks anything
+    under it dependency-only, and the fleet preset sets ``automerge`` +
+    ``platformAutomerge`` on the ``github-actions`` group. An arbitrary workflow
+    diff from a Renovate identity would therefore collect the atlan-ci
+    CODEOWNER approval and merge on green with no human. That is safe today only
+    because no fleet identity holds ``workflows: write`` — a permission doing the
+    work the gate appears to be doing, which stops being true the moment any
+    identity gains it. Files outside :data:`WORKFLOWS_PREFIX` are untouched:
+    ``.github/dependabot.yml``, ``.github/renovate.json`` and the rest still ride
+    the prefix allowlist alone.
+    """
+    return [
+        Offender(f.filename, reason)
+        for f in files
+        if f.filename.startswith(WORKFLOWS_PREFIX)
+        and (reason := workflow_diff_offence(f))
     ]
 
 
@@ -420,15 +576,36 @@ def fetch_pr_meta(repo: str, pr: str, runner: Runner) -> dict[str, Any]:
     return payload
 
 
-def fetch_filenames(repo: str, pr: str, runner: Runner) -> list[str]:
+def fetch_changed_files(repo: str, pr: str, runner: Runner) -> list[ChangedFile]:
+    """The PR's changed files WITH their diffs — the input to both parts of (d).
+
+    The same call that used to yield filenames alone already carries ``status``
+    and ``patch`` per file, so the pin-only check costs no extra API call.
+
+    An entry the API returns without a filename aborts the step rather than
+    being dropped: a changed file nobody can name is a changed file nobody
+    checked, and silently skipping it would let it ride the gate.
+    """
+    what = f"listing changed files for PR #{pr}"
     payload = _gh_json(
         ["api", f"repos/{repo}/pulls/{pr}/files", "--paginate", "--slurp"],
         runner,
-        what=f"listing changed files for PR #{pr}",
+        what=what,
     )
     if not isinstance(payload, list):
-        raise GhError(f"listing changed files for PR #{pr}: unexpected payload shape")
-    return [f["filename"] for f in payload if isinstance(f, dict) and f.get("filename")]
+        raise GhError(f"{what}: unexpected payload shape")
+    files: list[ChangedFile] = []
+    for entry in payload:
+        if not isinstance(entry, dict) or not entry.get("filename"):
+            raise GhError(f"{what}: a changed-file entry carried no filename")
+        files.append(
+            ChangedFile(
+                filename=str(entry["filename"]),
+                status=str(entry.get("status") or ""),
+                patch=str(entry.get("patch") or ""),
+            )
+        )
+    return files
 
 
 def required_checks_green(repo: str, pr: str, runner: Runner) -> bool:
@@ -524,12 +701,12 @@ def process_pr(
             print(message)
             return False
 
-    # d. All changed files must be dependency-related.
-    filenames = fetch_filenames(repo, pr, runner)
-    if not filenames:
+    # d. All changed files must be dependency-related...
+    changed_files = fetch_changed_files(repo, pr, runner)
+    if not changed_files:
         print(f"PR #{pr}: no changed files found — skipping.")
         return False
-    offenders = non_dep_files(filenames, extra_pattern)
+    offenders = non_dep_files([f.filename for f in changed_files], extra_pattern)
     if offenders:
         print(f"PR #{pr}: contains non-dependency files:")
         for name in offenders:
@@ -537,6 +714,17 @@ def process_pr(
         print("Skipping.")
         return False
     print(f"PR #{pr}: all changed files are dependency-related.")
+
+    # ...and any workflow file among them must carry a pin-only diff.
+    workflow_offenders = non_pin_only_workflows(changed_files)
+    if workflow_offenders:
+        print(f"PR #{pr}: contains workflow changes that are not pin-only:")
+        for offender in workflow_offenders:
+            print(f"  {offender.filename}: {offender.reason}")
+        print("Skipping.")
+        return False
+    if any(f.filename.startswith(WORKFLOWS_PREFIX) for f in changed_files):
+        print(f"PR #{pr}: workflow changes are pin-only.")
 
     # e. All ruleset-required checks must be green.
     print(f"PR #{pr}: checking required CI status...")
