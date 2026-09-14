@@ -514,6 +514,12 @@ and is UI-only — separate from `validationRules`. See `docs/reference.md` and 
 | `Widgets.BooleanInput` | `boolean` | `bool` |
 | `Widgets.Switcher` | `switcher` | `bool` |
 
+A `DropDown` with `multiSelect = true` is `list[str]` in both `_input.py` and
+`_e2e_substitutions.py`. Its `default` is the JSON-stringified array the
+multi-select widget needs in order to pre-populate a selection
+(`default = "[\"S3Bucket\",\"S3Object\"]"`); codegen parses that back into the keys
+it names. See `docs/reference.md` and the [`full`](examples/full/) example.
+
 ### Connection & Credential
 
 | Class | Widget | Python Type |
