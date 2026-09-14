@@ -90,9 +90,10 @@ A *foreign engine* reap requires all of:
 
 * the branch name starts with ``BRANCH_PREFIX`` and is not in
   ``UNMANAGED_LANES``,
-* it has an open PR,
+* it has an open PR whose head is in THIS repository and not in a fork,
 * and EVERY commit the branch carries over its merge base with main was written
-  by an engine in ``FOREIGN_ENGINES``.
+  by an engine in ``FOREIGN_ENGINES``, in a page this script can prove is
+  complete.
 
 That last one is the load-bearing guard, and it is deliberately stricter than
 checking the head alone: a human who pushes a fix on top of a foreign branch
@@ -101,6 +102,14 @@ head. ``FOREIGN_ENGINES`` is an allowlist rather than "anyone who is not us", so
 an author this script does not recognise means leave it alone. It reads the
 author GitHub *resolved* for each commit, never the git author name inside the
 commit object, which any pusher can set to anything.
+
+The fork check exists because the ref deleted and the history inspected are two
+different things for a fork PR: we read ``head.ref`` but delete
+``repos/<repo>/git/refs/heads/<head.ref>``, which for a fork is whatever
+happens to bear that name HERE. And the page-completeness check exists because
+``_request`` discards the ``Link`` header, so a full page of commits could be a
+truncated history hiding a human commit past the cut. Both fail closed: an
+unprovable branch is kept, never deleted.
 
 A *self-healing refusal* reap is narrower and unchanged: the branch must be
 exactly ``BRANCH``, the PR's only changed file a ``uv.lock``, whose
@@ -141,6 +150,12 @@ BRANCH = "renovate/lock-file-maintenance"
 # The preset's branchPrefix. A branch outside it is not Renovate's and is never
 # a candidate, whoever wrote it.
 BRANCH_PREFIX = "renovate/"
+
+# GitHub's per-page cap on the commits endpoint, and the page size this script
+# asks for. Both uses must stay equal: foreign_only_history treats a page of
+# exactly this length as possibly truncated and refuses to act on it, which is
+# only sound while it is the size actually requested.
+COMMIT_PAGE_LIMIT = 100
 
 # Lanes the fleet runner does NOT manage, and therefore must never reap:
 # self-hosted.js disables the github-actions manager (the fleet App deliberately
@@ -261,6 +276,25 @@ def is_foreign_engine(login: Optional[str]) -> bool:
     return login in FOREIGN_ENGINES
 
 
+def head_is_in_repo(pr: dict, repo: str) -> bool:
+    """Is this PR's head branch in ``repo`` itself, rather than in a fork?
+
+    The ref this script would DELETE is
+    ``repos/<repo>/git/refs/heads/<head.ref>``. For a fork PR that is a
+    DIFFERENT branch from the one whose commits were inspected — it is whatever
+    happens to share the name in the base repo, quite possibly nothing to do
+    with Renovate. Without this check anyone able to open a fork PR could name
+    their branch ``renovate/<lane>``, have GitHub attribute its commits to a
+    bot, and get a ref deleted here on the strength of a history that was never
+    in this repository.
+
+    ``head.repo`` is null once a fork is deleted, which is likewise not
+    something to act on, so the comparison fails closed on a missing value
+    rather than treating it as a match.
+    """
+    return ((pr.get("head") or {}).get("repo") or {}).get("full_name") == repo
+
+
 def is_reapable_lane(branch: str) -> bool:
     """May a foreign-written branch on this lane be deleted?
 
@@ -281,8 +315,18 @@ def foreign_only_history(commits: list[dict]) -> bool:
 
     Empty is False: a branch with no commits over its base is not something to
     act on, and an API response that came back empty must not read as consent.
+
+    A FULL page is also False. GitHub caps the commits endpoint at
+    ``COMMIT_PAGE_LIMIT`` per page and :func:`_request` discards the ``Link``
+    header, so a complete history and a truncated first page are
+    indistinguishable here — and a human commit sitting past the cut would be
+    deleted along with the branch. The question this function answers is "can I
+    PROVE every commit is foreign", and on a full page the honest answer is no.
+    Costless in practice: a Renovate lane rebuilt from base on every pass never
+    legitimately carries a hundred commits, so this fires only on something that
+    already warrants a human look.
     """
-    if not commits:
+    if not commits or len(commits) >= COMMIT_PAGE_LIMIT:
         return False
     return all(
         is_foreign_engine((commit.get("author") or {}).get("login"))
@@ -318,14 +362,31 @@ def find_foreign(
         branch = pr["head"]["ref"]
         if not is_reapable_lane(branch):
             continue
-        commits = fetch(
-            token,
-            f"{API_ROOT}/repos/{owner}/{name}/pulls/{pr['number']}/commits?per_page=100",
-            None,
-        )
-        if not foreign_only_history(list(commits or [])):  # type: ignore[arg-type]
+        if not head_is_in_repo(pr, repo):
+            # A fork PR. The ref we would delete is not the branch we just
+            # looked at; see head_is_in_repo.
             continue
-        author = (commits[-1].get("author") or {}).get("login")  # type: ignore[index]
+        commits = list(
+            fetch(
+                token,
+                f"{API_ROOT}/repos/{owner}/{name}/pulls/{pr['number']}"
+                f"/commits?per_page={COMMIT_PAGE_LIMIT}",
+                None,
+            )
+            or []  # type: ignore[arg-type]
+        )
+        if len(commits) >= COMMIT_PAGE_LIMIT:
+            # foreign_only_history refuses this too; say so out loud rather than
+            # letting a branch we cannot prove foreign fall silently through the
+            # same door as one we proved is ours.
+            print(
+                f"::warning::{repo} {branch}: {len(commits)}+ commits in one page — "
+                "cannot prove the history is foreign-only, leaving the branch"
+            )
+            continue
+        if not foreign_only_history(commits):
+            continue
+        author = (commits[-1].get("author") or {}).get("login")
         found.append(
             (pr, f"every commit on {branch} written by {author}, not {FLEET_ENGINE}")
         )
@@ -349,6 +410,11 @@ def find_refusal(
     if not prs:
         return None
     pr = prs[0]  # type: ignore[index]
+    if not head_is_in_repo(pr, repo):
+        # `head=<owner>:<branch>` matches on the head OWNER, so a fork inside the
+        # same org satisfies it while living in a different repository — and the
+        # ref we would delete is this repo's, not the one we inspected.
+        return None
     files_payload = fetch(
         token,
         f"{API_ROOT}/repos/{owner}/{name}/pulls/{pr['number']}/files?per_page=100",

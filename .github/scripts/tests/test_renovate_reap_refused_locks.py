@@ -242,6 +242,40 @@ class TestIsReapableLane:
         )
 
 
+class TestHeadIsInRepo:
+    """The ref deleted and the history inspected are two different things for a
+    fork PR: we read head.ref but delete repos/<repo>/git/refs/heads/<head.ref>.
+    Without this, a fork branch named renovate/<lane> whose commits GitHub
+    attributes to a bot gets a ref deleted in the BASE repo, on the strength of
+    a history that was never in it."""
+
+    def pr(self, full_name):
+        return {
+            "head": {
+                "ref": LOCK,
+                "repo": {"full_name": full_name} if full_name else None,
+            }
+        }
+
+    def test_a_branch_in_the_target_repo_qualifies(self):
+        assert reaper.head_is_in_repo(self.pr("atlanhq/x"), "atlanhq/x") is True
+
+    def test_a_fork_does_not(self):
+        assert reaper.head_is_in_repo(self.pr("someone/x"), "atlanhq/x") is False
+
+    def test_a_fork_inside_the_same_org_does_not(self):
+        # `head=<owner>:<branch>` matches on the head OWNER, so this shape
+        # satisfies the refusal path's own query while living elsewhere.
+        assert reaper.head_is_in_repo(self.pr("atlanhq/x-fork"), "atlanhq/x") is False
+
+    def test_a_deleted_fork_does_not(self):
+        # head.repo goes null once the fork is gone. Fail closed, not match.
+        assert reaper.head_is_in_repo(self.pr(None), "atlanhq/x") is False
+
+    def test_a_payload_with_no_head_does_not(self):
+        assert reaper.head_is_in_repo({}, "atlanhq/x") is False
+
+
 class TestForeignOnlyHistory:
     """Every commit, not just the head — the guard that keeps a human's work."""
 
@@ -274,6 +308,18 @@ class TestForeignOnlyHistory:
     def test_no_commits_is_false(self):
         # An API response that came back empty must not read as consent.
         assert reaper.foreign_only_history([]) is False
+
+    def test_a_full_page_is_false_even_when_every_commit_is_foreign(self):
+        # _request discards the Link header, so a full page and a truncated
+        # history are indistinguishable. The commit that would be deleted
+        # unseen is the one at position 101.
+        page = [self.mend()] * reaper.COMMIT_PAGE_LIMIT
+        assert reaper.foreign_only_history(page) is False
+
+    def test_one_short_of_a_full_page_still_qualifies(self):
+        # The boundary in the safe direction: a page that is provably complete.
+        page = [self.mend()] * (reaper.COMMIT_PAGE_LIMIT - 1)
+        assert reaper.foreign_only_history(page) is True
 
 
 class TestIsForeignEngine:
@@ -311,11 +357,24 @@ class TestFindReapable:
         pr_number=7,
         branch=LOCK,
         authors=(reaper.FLEET_ENGINE,),
+        head_repo="atlanhq/x",
     ):
         """A repo with exactly one open PR, on ``branch``, whose commits were
-        written by ``authors`` in order."""
+        written by ``authors`` in order.
+
+        ``head_repo`` is the repository the head branch lives in — "atlanhq/x"
+        (the target) for an ordinary PR, something else for a fork, or None for
+        a fork that has since been deleted.
+        """
         calls: list[str] = []
-        pr = {"number": pr_number, "head": {"sha": "abc1234def", "ref": branch}}
+        pr = {
+            "number": pr_number,
+            "head": {
+                "sha": "abc1234def",
+                "ref": branch,
+                "repo": {"full_name": head_repo} if head_repo else None,
+            },
+        }
 
         def fetch(token, url, _method):
             calls.append(url)
@@ -449,6 +508,37 @@ class TestFindReapableForeignEngine:
         fetch = self.fetcher(authors=("renovate[bot]",))
         reaper.find_reapable("tok", "atlanhq/x", fetch)
         assert not any("/contents/" in u for u in fetch.calls)
+
+    def test_a_fork_pr_is_never_reaped(self):
+        # The ref we would DELETE is atlanhq/x's, while the commits inspected
+        # live in the fork. Red/green pair with test_reaps_a_branch_the_mend_app
+        # _wrote: identical but for where the head branch lives.
+        fetch = self.fetcher(authors=("renovate[bot]",), head_repo="someone/x")
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+
+    def test_a_fork_pr_is_not_reaped_by_the_refusal_path_either(self):
+        # `head=<owner>:<branch>` matches the head OWNER, so a same-org fork
+        # satisfies that query while living in another repository.
+        text = lock_with(
+            '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
+        )
+        fetch = TestFindReapable().fake_fetch(
+            files=["uv.lock"], lock_text=text, head_repo="atlanhq/x-fork"
+        )
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+
+    def test_a_deleted_fork_is_never_reaped(self):
+        fetch = self.fetcher(authors=("renovate[bot]",), head_repo=None)
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+
+    def test_a_branch_whose_history_fills_a_page_is_kept_and_warned_about(self, capsys):
+        # Cannot prove the history is foreign-only from one page, so keep it —
+        # and say so, rather than letting it fall silently through the same door
+        # as a branch proven to be ours.
+        fetch = self.fetcher(authors=("renovate[bot]",) * reaper.COMMIT_PAGE_LIMIT)
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+        out = capsys.readouterr().out
+        assert "::warning::" in out and "cannot prove" in out
 
 
 def test_foreign_engine_set_is_exactly_the_mend_app():
