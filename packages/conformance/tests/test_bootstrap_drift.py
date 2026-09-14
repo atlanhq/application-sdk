@@ -325,35 +325,68 @@ def test_checks_system_deps_structural_drift_flagged(tmp_path: pathlib.Path) -> 
     wf = wf_dir / "checks.yml"
     canonical = render("checks.yml", system_deps="libkrb5-dev")
     wf.write_text(
-        canonical.replace("    timeout-minutes: 10", "    timeout-minutes: 5")
+        canonical.replace(
+            "      group: ${{ github.workflow }}-${{ github.ref }}",
+            "      group: pre-commit-${{ github.ref }}",
+        )
     )
     findings = scan_path(wf, tmp_path)
     assert len(findings) == 1
     assert "drifted" in findings[0].message
 
 
-def test_checks_hand_written_system_deps_step_flagged_then_fixed_by_bootstrap(
+#: A ``checks.yml`` as it stood before FND-1994 collapsed the body into a
+#: reusable — the shape every fleet repo still carries until its own re-sync,
+#: here with the hand-added apt step that predates ``--system-deps``. Held as a
+#: literal rather than rendered, because the point of the test below is that a
+#: file the current template can no longer produce is still read correctly.
+_PRE_REUSABLE_CHECKS_YML = """name: Pre-commit Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+  merge_group:
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install system dependencies for pykerberos
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libkrb5-dev gcc python3-dev
+      - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+"""
+
+
+def test_checks_pre_reusable_shape_flagged_then_migrated_by_bootstrap(
     tmp_path: pathlib.Path,
 ) -> None:
-    """A pre-flag hand-added step is drift (its shape isn't canonical), and the
-    prescribed fix — re-run bootstrap — now preserves the packages instead of
-    deleting them, so the finding clears without breaking the job."""
+    """The progressive-rollout case: an un-migrated repo re-syncs onto the caller.
+
+    A repo still carrying the inlined body is drift (WARN), and the prescribed
+    fix — re-run bootstrap — must migrate it to the thin caller while carrying
+    its packages across. If the extractor only knew the new `system_deps:`
+    shape, this re-sync would silently delete a step the repo's pre-commit job
+    needs, which is the failure that makes a repo-by-repo rollout unsafe.
+    """
     _bootstrap(tmp_path)
     wf = tmp_path / ".github" / "workflows" / "checks.yml"
-    wf.write_text(
-        wf.read_text().replace(
-            "      - uses: atlanhq/application-sdk",
-            "      - name: Install system dependencies for pykerberos\n"
-            "        run: |\n"
-            "          sudo apt-get update\n"
-            "          sudo apt-get install -y libkrb5-dev gcc python3-dev\n"
-            "      - uses: atlanhq/application-sdk",
-        )
-    )
+    wf.write_text(_PRE_REUSABLE_CHECKS_YML)
+
     assert len(scan_path(wf, tmp_path)) == 1
+
     _bootstrap(tmp_path)
     assert scan_path(wf, tmp_path) == []
-    assert "libkrb5-dev gcc python3-dev" in wf.read_text()
+    migrated = wf.read_text()
+    assert "checks-reusable.yaml@main" in migrated
+    assert 'system_deps: "libkrb5-dev gcc python3-dev"' in migrated
 
 
 # ---------------------------------------------------------------------------

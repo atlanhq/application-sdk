@@ -74,7 +74,7 @@ EXEMPT = {
         "integration-test-results*",
     ): "scorecard evidence; a miss degrades the report and gates nothing",
     (
-        "workflows/conformance-upload-sarif.yaml",
+        "workflows/conformance-upload-sarif-reusable.yaml",
         "conformance-${{ matrix.slug }}-sarif*",
     ): "workflow_run consumer; nothing gates on it and there is no queue entry to eject",
 }

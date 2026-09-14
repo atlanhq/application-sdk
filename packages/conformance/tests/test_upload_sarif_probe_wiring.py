@@ -12,9 +12,22 @@ shape cannot see the gate: `"steps.probe" in content` passes just as
 happily when the probe's output is never read, when the `if:` names a
 step id that does not exist, or when the script the `run:` invokes is not
 one bootstrap vendors. So the gate is asserted here structurally, off the
-parsed YAML — and against BOTH copies, since bootstrap force-writes the
-template into every consumer repo while application-sdk's own CI runs the
-canonical file.
+parsed YAML.
+
+Since FND-1994 there is exactly one copy of the body to assert against:
+`conformance-upload-sarif-reusable.yaml` in application-sdk. The bootstrap
+template and application-sdk's own workflow are both thin callers of it,
+so the gate they run is the one asserted here by construction — which is
+stronger than the previous arrangement, where the two copies were asserted
+separately and could drift between assertions. What the callers are still
+checked for is that they *are* callers of that reusable, and that they
+carry the two things a reusable cannot: the `workflow_run` trigger and the
+`permissions:` grant.
+
+Repos that have not yet been re-synced onto the caller still run their own
+inlined copy of the old body. That copy is not asserted here — it is
+frozen at whatever the template rendered when they were last bootstrapped,
+and the remedy for it is a re-sync, not a test.
 
 The `run:`-is-straight-line assertion is the other half. The probe began
 life as inlined `if`/`else` shell, which docs/standards/ci.md forbids
@@ -36,9 +49,14 @@ from conformance.bootstrap.render import MANAGED_ACTION_FILES, render
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-#: The workflow under test, in both places it exists.
+#: The thin caller, in both places it exists.
 _TEMPLATE = "conformance-upload-sarif.yaml"
 _CANONICAL = _REPO_ROOT / ".github/workflows" / _TEMPLATE
+
+#: The body both callers delegate to — the file every assertion about the
+#: probe gate, the download and the upload runs against.
+_REUSABLE_REF = "conformance-upload-sarif-reusable.yaml"
+_REUSABLE = _REPO_ROOT / ".github/workflows" / _REUSABLE_REF
 
 #: The vendored script the probe step must invoke. Asserted against
 #: MANAGED_ACTION_FILES below rather than restated, so renaming the script
@@ -66,6 +84,16 @@ _BRANCHING_KEYWORDS = frozenset(
         "done",
     }
 )
+
+
+def _case_id(value: str) -> str:
+    """Parametrize id: the label only.
+
+    Both parameters are strings, and the second is a whole workflow file —
+    rendered into an id it makes every failure line unreadable, which is how
+    a real failure gets skimmed past.
+    """
+    return "" if "\n" in value else value
 
 
 def _job(source: str) -> dict:  # type: ignore[type-arg]
@@ -116,8 +144,8 @@ def _step_by_id(steps: list[dict], step_id: str) -> dict:  # type: ignore[type-a
     return matches[0]
 
 
-def _both_copies() -> list[tuple[str, str]]:
-    """`(label, source)` for the template and, if present, the canonical file.
+def _callers() -> list[tuple[str, str]]:
+    """`(label, source)` for the template and, if present, the canonical caller.
 
     The canonical file is absent in an isolated sdist build of this
     package, which is why it is conditional rather than required.
@@ -128,15 +156,85 @@ def _both_copies() -> list[tuple[str, str]]:
     return copies
 
 
-_COPIES = _both_copies()
+_CALLERS = _callers()
+_BODIES = (
+    [("reusable", _REUSABLE.read_text(encoding="utf-8"))] if _REUSABLE.exists() else []
+)
 
 
-def test_both_copies_are_under_test() -> None:
+def test_the_body_under_test_exists() -> None:
+    """Guard the guard: a missing reusable must not silently empty this file.
+
+    `_BODIES` is built conditionally so that an sdist build of this package
+    collects rather than errors at import; a parametrize over an empty list
+    silently skips every assertion below, so the absence is asserted here
+    instead of being allowed to pass as a green run.
+    """
+    assert _BODIES, (
+        f"{_REUSABLE} is missing, so every gate assertion below is "
+        f"parametrized over nothing and cannot fail. If the reusable moved, "
+        f"update _REUSABLE."
+    )
+
+
+def test_both_callers_are_under_test() -> None:
     """Guard the guard: a missing canonical file must not silently halve this."""
     assert _CANONICAL.exists(), (
-        f"{_CANONICAL} is missing, so every assertion below is running against "
-        f"the bootstrap template only. application-sdk's own CI runs the "
-        f"canonical copy — if it moved, update _CANONICAL."
+        f"{_CANONICAL} is missing, so every caller assertion below is running "
+        f"against the bootstrap template only. application-sdk's own CI runs "
+        f"the canonical copy — if it moved, update _CANONICAL."
+    )
+
+
+@pytest.mark.parametrize("label,source", _CALLERS, ids=_case_id)
+def test_caller_delegates_to_the_reusable(label: str, source: str) -> None:
+    """The caller must call the body these tests assert, not inline its own.
+
+    Without this the file above could be asserted to perfection while the
+    callers ran something else entirely — which is the failure mode the
+    single-body arrangement exists to remove.
+    """
+    job = _job(source)
+    uses = str(job.get("uses", ""))
+    assert _REUSABLE_REF in uses, (
+        f"[{label}] the `upload` job's `uses:` is {uses!r}, which is not "
+        f"{_REUSABLE_REF}. Every assertion in this file is about that "
+        f"reusable's body; a caller running anything else is untested."
+    )
+    assert "steps" not in job, (
+        f"[{label}] the `upload` job declares `steps:` as well as `uses:`, "
+        f"which GitHub rejects outright — the caller must be thin."
+    )
+
+
+@pytest.mark.parametrize("label,source", _CALLERS, ids=_case_id)
+def test_caller_passes_the_triggering_run_through(label: str, source: str) -> None:
+    """A reusable cannot declare `workflow_run`, so the payload is passed in.
+
+    All three inputs are `required: true` on the reusable, so a caller
+    missing one fails at startup: zero jobs, no check run, and nothing in
+    `gh pr checks` to notice it by.
+    """
+    with_ = _job(source).get("with", {})
+    for key in ("workflow_run_id", "head_branch", "head_sha"):
+        value = str(with_.get(key, ""))
+        assert "github.event.workflow_run" in value, (
+            f"[{label}] the caller passes {key}={value!r}, which does not come "
+            f"from the triggering run's payload"
+        )
+
+
+@pytest.mark.parametrize("label,source", _CALLERS, ids=_case_id)
+def test_caller_keeps_the_workflow_run_trigger(label: str, source: str) -> None:
+    """The trigger is the other thing that cannot move into the reusable.
+
+    `yaml.safe_load` parses the bare `on:` key as the boolean `True`, which
+    is why it is read that way rather than by the string.
+    """
+    triggers = yaml.safe_load(source)[True]
+    assert "workflow_run" in triggers, (
+        f"[{label}] the caller's triggers are {sorted(triggers)}; without "
+        f"`workflow_run` the upload never fires at all."
     )
 
 
@@ -145,7 +243,7 @@ def test_both_copies_are_under_test() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
+@pytest.mark.parametrize("label,source", _BODIES, ids=_case_id)
 def test_upload_is_gated_on_the_probe_output(label: str, source: str) -> None:
     """`upload-sarif` runs only when the probe resolved the repo eligible."""
     steps = _steps(source)
@@ -166,7 +264,7 @@ def test_upload_is_gated_on_the_probe_output(label: str, source: str) -> None:
         )
 
 
-@pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
+@pytest.mark.parametrize("label,source", _BODIES, ids=_case_id)
 def test_sarif_download_globs_so_a_retried_upload_is_found(
     label: str, source: str
 ) -> None:
@@ -200,7 +298,42 @@ def test_sarif_download_globs_so_a_retried_upload_is_found(
     )
 
 
-@pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
+@pytest.mark.parametrize("label,source", _BODIES, ids=_case_id)
+def test_the_download_cannot_fail_the_workflow(label: str, source: str) -> None:
+    """A series with no relevant changes publishes no artifact, and that is fine.
+
+    GitHub Code Scanning marks a tool as "reporting errors" whenever the
+    workflow that uploads its SARIF fails, so this one must always exit 0 —
+    which is the whole reason it is a separate workflow from the gate.
+    """
+    download = _step_by_id(_steps(source), "download")
+    assert download.get("continue-on-error") is True, (
+        f"[{label}] the SARIF download is not `continue-on-error: true`, so a "
+        f"series that published nothing reds the workflow that exists to stay "
+        f"green"
+    )
+
+
+@pytest.mark.parametrize("label,source", _BODIES, ids=_case_id)
+def test_the_default_series_list_covers_a_consumer_app(label: str, source: str) -> None:
+    """The four series a connector app's conformance run produces.
+
+    Asserted on the default rather than on a caller, because the callers
+    bootstrap writes deliberately do not pin their own list — see
+    `test_conformance_upload_sarif_takes_the_default_series_list`. If the
+    default is wrong, every consumer repo is wrong at once.
+    """
+    default = yaml.safe_load(source)[True]["workflow_call"]["inputs"]["slugs"][
+        "default"
+    ]
+    slugs = {entry["slug"] for entry in yaml.safe_load(default)}
+    assert {"ci", "error-handling", "prescriptions", "optimizations"} <= slugs, (
+        f"[{label}] the default series list is {sorted(slugs)}, which is "
+        f"missing a series a consumer app's conformance run produces"
+    )
+
+
+@pytest.mark.parametrize("label,source", _BODIES, ids=_case_id)
 def test_the_empty_sarif_gate_reads_the_file_not_the_download_outcome(
     label: str, source: str
 ) -> None:
@@ -234,9 +367,17 @@ def test_the_empty_sarif_gate_reads_the_file_not_the_download_outcome(
         )
 
 
-@pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
+@pytest.mark.parametrize("label,source", _BODIES, ids=_case_id)
 def test_probe_invokes_the_vendored_script(label: str, source: str) -> None:
-    """The probe runs the script, and the script is one bootstrap vendors."""
+    """The probe runs the script, and the script is still one bootstrap vendors.
+
+    The reusable reads the script out of application-sdk's own checkout, so
+    it no longer depends on the consumer's vendored copy. That copy cannot be
+    retired yet regardless: every repo still running its own inlined
+    pre-FND-1994 body invokes it from its own checkout, and dropping it from
+    `MANAGED_ACTION_FILES` would kill their matrix legs with "No such file or
+    directory" instead of the clean skip FND-1149 bought.
+    """
     probe = _step_by_id(_steps(source), "probe")
     run = str(probe.get("run", ""))
     assert _PROBE_SCRIPT in run, (
@@ -244,14 +385,14 @@ def test_probe_invokes_the_vendored_script(label: str, source: str) -> None:
         f"is {run!r}"
     )
     assert _PROBE_SCRIPT in dict(MANAGED_ACTION_FILES), (
-        f"{_PROBE_SCRIPT} is invoked by {_TEMPLATE} but is not in "
-        f"MANAGED_ACTION_FILES, so bootstrap never writes it into a consumer "
-        f"repo and every matrix leg there dies with 'No such file or "
-        f"directory' instead of skipping cleanly."
+        f"{_PROBE_SCRIPT} is no longer in MANAGED_ACTION_FILES. Repos still "
+        f"running the pre-FND-1994 inlined body invoke it from their own "
+        f"checkout, so it must keep being vendored until the fleet has "
+        f"migrated onto {_REUSABLE_REF}."
     )
 
 
-@pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
+@pytest.mark.parametrize("label,source", _BODIES, ids=_case_id)
 def test_probe_step_run_is_straight_line(label: str, source: str) -> None:
     """No conditional logic in the probe's inlined shell (docs/standards/ci.md)."""
     probe = _step_by_id(_steps(source), "probe")
@@ -271,13 +412,19 @@ def test_probe_step_run_is_straight_line(label: str, source: str) -> None:
     )
 
 
-@pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
+@pytest.mark.parametrize("label,source", _BODIES, ids=_case_id)
 def test_probe_script_is_checked_out_before_it_runs(label: str, source: str) -> None:
     """A `workflow_run` job starts with an empty workspace.
 
     Without a checkout the probe's `run:` fails on a missing file, which
     — because the step is not `continue-on-error` — reds the very
     workflow this change exists to keep green.
+
+    The checkout must also name `repository:` explicitly. A reusable runs in
+    the CALLER's context, so a bare `actions/checkout` there clones the
+    consumer repo — which is the right target for the probe's API question
+    but the wrong one for the script it asks it with, since a consumer that
+    has never been bootstrapped has no copy of it.
     """
     steps = _steps(source)
     probe_index = next(
@@ -299,9 +446,18 @@ def test_probe_script_is_checked_out_before_it_runs(label: str, source: str) -> 
         f"[{label}] the checkout before the probe is sparse and its patterns "
         f"{patterns} exclude {_PROBE_SCRIPT}, so the file is still absent."
     )
+    repositories = [
+        str(step.get("with", {}).get("repository", "")) for step in checkouts
+    ]
+    assert any(repo == "atlanhq/application-sdk" for repo in repositories), (
+        f"[{label}] the checkout before the probe targets {repositories}, not "
+        f"atlanhq/application-sdk. Running in the caller's context, that "
+        f"clones the consumer repo — where {_PROBE_SCRIPT} is present only if "
+        f"bootstrap has ever run there."
+    )
 
 
-@pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
+@pytest.mark.parametrize("label,source", _CALLERS, ids=_case_id)
 def test_token_can_read_contents(label: str, source: str) -> None:
     """The checkout needs a grant, not just a step, to reach a private repo.
 
