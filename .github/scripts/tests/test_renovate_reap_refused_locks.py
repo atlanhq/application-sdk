@@ -203,8 +203,54 @@ def should_reap_lock(lock_text: str) -> bool:
     return reaper.should_reap(["uv.lock"], lock_text)
 
 
-class TestFindRefusal:
-    def fake_fetch(self, *, files, lock_text, pr_number=7):
+class TestLaneFilesOnly:
+    """The gate both reap reasons pass through, so a hole here widens the set of
+    branches the script may delete regardless of which reason fires."""
+
+    def test_a_lone_lock_is_the_lane(self):
+        assert reaper.lane_files_only(["uv.lock"]) is True
+
+    def test_lock_plus_ledger_is_the_lane(self):
+        # What a healthy pass produces once the contract-ledger task has run.
+        assert reaper.lane_files_only(["uv.lock", "contract_schema.lock.json"]) is True
+
+    def test_nested_paths_are_matched_on_basename(self):
+        assert reaper.lane_files_only(["services/api/uv.lock"]) is True
+
+    def test_any_file_outside_the_lane_disqualifies_all_of_them(self):
+        assert reaper.lane_files_only(["uv.lock", "pyproject.toml"]) is False
+
+    def test_a_lookalike_filename_is_not_the_lane(self):
+        assert reaper.lane_files_only(["my-uv.lock.bak"]) is False
+
+    def test_no_files_is_not_the_lane(self):
+        # An API hiccup returning [] must not read as permission to delete.
+        assert reaper.lane_files_only([]) is False
+
+
+class TestIsForeignEngine:
+    """An allowlist, not 'anyone who is not us' — the difference is whether a
+    human who pushes a fix onto the lock branch keeps it."""
+
+    def test_the_mend_hosted_app_is_foreign(self):
+        assert reaper.is_foreign_engine("renovate[bot]") is True
+
+    def test_our_own_runner_is_not_foreign(self):
+        assert reaper.is_foreign_engine(reaper.FLEET_ENGINE) is False
+
+    def test_a_human_is_not_foreign(self):
+        assert reaper.is_foreign_engine("some-engineer") is False
+
+    def test_an_unresolved_author_is_not_foreign(self):
+        # GitHub returns author: null when it cannot map the commit to an
+        # account. Unattributable must mean keep, not delete.
+        assert reaper.is_foreign_engine(None) is False
+
+
+class TestFindReapable:
+    def fake_fetch(
+        self, *, files, lock_text, pr_number=7, head_author=reaper.FLEET_ENGINE
+    ):
         calls: list[str] = []
 
         def fetch(token, url, _method):
@@ -213,6 +259,9 @@ class TestFindRefusal:
                 return [{"number": pr_number, "head": {"sha": "abc1234def"}}]
             if url.endswith("/files?per_page=100"):
                 return [{"filename": f} for f in files]
+            if "/commits/" in url:
+                author = {"login": head_author} if head_author is not None else None
+                return {"author": author}
             if "/contents/" in url:
                 return {"content": base64.b64encode(lock_text.encode()).decode()}
             raise AssertionError(f"unexpected url {url}")
@@ -225,26 +274,30 @@ class TestFindRefusal:
             '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
         )
         fetch = self.fake_fetch(files=["uv.lock"], lock_text=text)
-        pr = reaper.find_refusal("tok", "atlanhq/x", fetch)
-        assert pr is not None and pr["number"] == 7
+        found = reaper.find_reapable("tok", "atlanhq/x", fetch)
+        assert found is not None
+        pr, reason = found
+        assert pr["number"] == 7
+        assert "self-healing lock refusal" in reason
 
     def test_returns_none_for_a_standing_fault(self):
         text = lock_with('[options]\nexclude-newer-span = "P3D"  # refusal: rollback')
         fetch = self.fake_fetch(files=["uv.lock"], lock_text=text)
-        assert reaper.find_refusal("tok", "atlanhq/x", fetch) is None
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
 
     def test_does_not_fetch_contents_for_a_multi_file_pr(self):
         # The short-circuit exists to keep the reaper to two API calls on the
         # common case; assert it rather than trusting it.
         fetch = self.fake_fetch(files=["uv.lock", "pyproject.toml"], lock_text="")
-        assert reaper.find_refusal("tok", "atlanhq/x", fetch) is None
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
         assert not any("/contents/" in u for u in fetch.calls)
+        assert not any("/commits/" in u for u in fetch.calls)
 
     def test_no_open_pr_is_none(self):
         def fetch(token, url, _method):
             return []
 
-        assert reaper.find_refusal("tok", "atlanhq/x", fetch) is None
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
 
     def test_queries_only_the_lock_maintenance_branch(self):
         # The reaper deletes branches. It must never be able to select one
@@ -253,9 +306,86 @@ class TestFindRefusal:
             '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
         )
         fetch = self.fake_fetch(files=["uv.lock"], lock_text=text)
-        reaper.find_refusal("tok", "atlanhq/x", fetch)
+        reaper.find_reapable("tok", "atlanhq/x", fetch)
         assert f"head=atlanhq:{reaper.BRANCH}" in fetch.calls[0]
-        assert all(reaper.BRANCH in u or "/files?" in u for u in fetch.calls)
+        assert all(
+            reaper.BRANCH in u or "/files?" in u or "/commits/" in u
+            for u in fetch.calls
+        )
+
+
+class TestFindReapableForeignEngine:
+    """The FND-1985 shape: the Mend-hosted app pushes over our branch, its
+    postUpgradeTasks are all rejected (allowedCommands is admin-only), and the
+    branch is left red and frozen with an unbounded lock on it."""
+
+    def fetcher(self, **kwargs):
+        return TestFindReapable().fake_fetch(**kwargs)
+
+    def test_reaps_a_branch_the_mend_app_wrote(self):
+        # No refusal stamp anywhere: a hosted engine never runs the driver, so
+        # the only evidence available is who wrote the head.
+        fetch = self.fetcher(
+            files=["uv.lock"], lock_text=lock_with(""), head_author="renovate[bot]"
+        )
+        found = reaper.find_reapable("tok", "atlanhq/x", fetch)
+        assert found is not None
+        pr, reason = found
+        assert pr["number"] == 7
+        assert "renovate[bot]" in reason
+
+    def test_the_same_branch_written_by_us_is_kept(self):
+        # The red/green pair for the test above: identical in every respect
+        # except the head author, and this one must survive.
+        fetch = self.fetcher(
+            files=["uv.lock"], lock_text=lock_with(""), head_author=reaper.FLEET_ENGINE
+        )
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+
+    def test_a_human_push_onto_the_lock_branch_is_kept(self):
+        fetch = self.fetcher(
+            files=["uv.lock"], lock_text=lock_with(""), head_author="some-engineer"
+        )
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+
+    def test_an_unresolved_head_author_is_kept(self):
+        fetch = self.fetcher(
+            files=["uv.lock"], lock_text=lock_with(""), head_author=None
+        )
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+
+    def test_a_foreign_branch_touching_a_non_lane_file_is_kept(self):
+        # Foreign authorship is not on its own a licence to delete: the branch
+        # still has to be carrying nothing but the lane's own artifacts.
+        fetch = self.fetcher(
+            files=["uv.lock", "pyproject.toml"],
+            lock_text=lock_with(""),
+            head_author="renovate[bot]",
+        )
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+
+    def test_a_foreign_branch_is_reaped_without_reading_the_lock(self):
+        # The cheaper conclusion, and the reason the check is ordered first: a
+        # hosted engine's lock has nothing in it for the refusal path to read.
+        fetch = self.fetcher(
+            files=["uv.lock"], lock_text=lock_with(""), head_author="renovate[bot]"
+        )
+        reaper.find_reapable("tok", "atlanhq/x", fetch)
+        assert not any("/contents/" in u for u in fetch.calls)
+
+    def test_a_foreign_branch_carrying_the_ledger_too_is_reaped(self):
+        fetch = self.fetcher(
+            files=["uv.lock", "contract_schema.lock.json"],
+            lock_text=lock_with(""),
+            head_author="renovate[bot]",
+        )
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is not None
+
+
+def test_foreign_engine_set_is_exactly_the_mend_app():
+    # A guard on the blast radius, matching the one on SELF_HEALING_REFUSALS:
+    # adding an identity here is a decision to auto-delete branches it wrote.
+    assert reaper.FOREIGN_ENGINES == frozenset({"renovate[bot]"})
 
 
 class TestIsDryRun:
@@ -294,8 +424,8 @@ class TestMain:
         monkeypatch.setenv("RENOVATE_DRY_RUN", "full")
         monkeypatch.setattr(
             reaper,
-            "find_refusal",
-            lambda *a, **k: {"number": 7, "head": {"sha": "a" * 8}},
+            "find_reapable",
+            lambda *a, **k: ({"number": 7, "head": {"sha": "a" * 8}}, "a reason"),
         )
         deleted: list[str] = []
         monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
@@ -308,8 +438,8 @@ class TestMain:
         monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
         monkeypatch.setattr(
             reaper,
-            "find_refusal",
-            lambda *a, **k: {"number": 7, "head": {"sha": "a" * 8}},
+            "find_reapable",
+            lambda *a, **k: ({"number": 7, "head": {"sha": "a" * 8}}, "a reason"),
         )
         deleted: list[str] = []
         monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
@@ -322,9 +452,28 @@ class TestMain:
         # The workflow passes it as env so no matrix value lands in `run:`.
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
         monkeypatch.setenv("TARGET_REPO", "atlanhq/from-env")
-        monkeypatch.setattr(reaper, "find_refusal", lambda *a, **k: None)
+        monkeypatch.setattr(reaper, "find_reapable", lambda *a, **k: None)
         assert reaper.main([]) == 0
         assert "atlanhq/from-env" in capsys.readouterr().out
+
+    def test_the_reap_reason_reaches_the_log(self, monkeypatch, capsys):
+        # The only record of WHICH shape fired. Without it a job log cannot
+        # distinguish an expired refusal from a foreign engine overwriting us,
+        # which is the difference between "working as designed" and "Mend is
+        # still installed on this repo".
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
+        monkeypatch.setattr(
+            reaper,
+            "find_reapable",
+            lambda *a, **k: (
+                {"number": 7, "head": {"sha": "a" * 8}},
+                "branch head written by renovate[bot], not atlan-app-fleet[bot]",
+            ),
+        )
+        monkeypatch.setattr(reaper, "_request", lambda *a, **k: None)
+        assert reaper.main(["--repo", "atlanhq/x"]) == 0
+        assert "written by renovate[bot]" in capsys.readouterr().out
 
     def test_no_repo_anywhere_fails(self, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
@@ -338,8 +487,8 @@ class TestMain:
         monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
         monkeypatch.setattr(
             reaper,
-            "find_refusal",
-            lambda *a, **k: {"number": 7, "head": {"sha": "a" * 8}},
+            "find_reapable",
+            lambda *a, **k: ({"number": 7, "head": {"sha": "a" * 8}}, "a reason"),
         )
         deleted: list[str] = []
         monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
@@ -352,8 +501,8 @@ class TestMain:
         monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
         monkeypatch.setattr(
             reaper,
-            "find_refusal",
-            lambda *a, **k: {"number": 7, "head": {"sha": "a" * 8}},
+            "find_reapable",
+            lambda *a, **k: ({"number": 7, "head": {"sha": "a" * 8}}, "a reason"),
         )
         calls: list[tuple[str, str]] = []
 
@@ -381,7 +530,7 @@ class TestMain:
         def boom(*a, **k):
             raise TimeoutError("api down")
 
-        monkeypatch.setattr(reaper, "find_refusal", boom)
+        monkeypatch.setattr(reaper, "find_reapable", boom)
         assert reaper.main(["--repo", "atlanhq/x"]) == 0
         assert "::warning::" in capsys.readouterr().out
 

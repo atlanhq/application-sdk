@@ -274,13 +274,14 @@ are for, and recording those in image history is a feature.
 
 ## Renovate post-upgrade commands
 
-Two run today, both installed as bare PATH commands by `.github/workflows/renovate.yaml`
-and both declared in `renovate-config/default.json`:
+Three run today, all installed as bare PATH commands by `.github/workflows/renovate.yaml`
+and all declared in `renovate-config/default.json`:
 
 | command | lane | what it does |
 |---|---|---|
 | `renovate-pkl-sync` | `app-contract-toolkit` | re-resolves the Pkl lock and regenerates contract artifacts |
 | `renovate-uv-lock-bounded` | `lockFileMaintenance` | re-resolves `uv.lock` under the org §5 release-age bound, then strips uv's `[options]` block |
+| `renovate-contract-ledger` | `lockFileMaintenance`, conformance package | regenerates `contract_schema.lock.json` at the conformance version the branch locked |
 
 Three rules apply to any command added here.
 
@@ -306,6 +307,41 @@ applied at lock time and left recorded makes the lock unusable in the app
 Dockerfiles. That is what reddened `scan / Build Image` fleet-wide in #3212. The
 bounded driver strips the block; if you add another lock-writing command, check
 what it records.
+
+### Only one Renovate engine may serve a repo
+
+`allowedCommands` is admin-only, so it exists only for a runner we own. A second
+engine reading the same `renovate.json` resolves the same preset, finds the same
+`postUpgradeTasks`, and has **every one of them rejected** — then pushes to the
+same `renovate/lock-file-maintenance` branch name, because branch names come from
+the shared preset rather than from the engine.
+
+That is not hypothetical. The Mend-hosted app stayed installed org-wide long
+after the fleet moved to the self-hosted runner (FND-1985). On atlan-gcs-app#124
+the fleet runner bounded the lock correctly at 08:11 and Mend replaced it at
+11:18 with an unbounded refresh, a red `renovate/artifacts`, and a red
+`checks/dep-cooldown` naming four packages inside the window. Telling the two
+apart is a one-liner — the branch head's author is `atlan-app-fleet[bot]` when we
+wrote it and `renovate[bot]` when Mend did:
+
+```bash
+gh api "repos/atlanhq/<repo>/commits?sha=renovate%2Flock-file-maintenance&per_page=1" \
+  --jq '.[0].author.login'
+```
+
+Three things stand behind this, and only the first is a fix:
+
+1. **Do not install a second engine on a fleet repo.** Everything below bounds
+   the damage; nothing below prevents it.
+2. `renovate_reap_refused_locks.py` deletes a lock-maintenance branch whose head
+   a foreign engine wrote, so the fleet runner rebuilds it in the same pass. That
+   caps recovery at one four-hourly cycle — without it the branch stays red
+   indefinitely, since Renovate retries artifacts only on the three triggers in
+   the section below.
+3. Condition (a) of the approval gate refuses a Mend-authored PR outside
+   `MEND_REPOS`, so a foreign PR is turned away on identity rather than on
+   whether it happens to look green. `MEND_REPOS` is application-sdk alone,
+   which has not moved off Mend.
 
 ### A refused lock refresh is red on purpose, and nothing re-evaluates it
 

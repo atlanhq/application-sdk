@@ -44,7 +44,7 @@ REPO = "owner/repo"
 # ---------------------------------------------------------------------------
 
 
-def pr_payload(author="renovate[bot]", state="open", draft=False, head=SHA):
+def pr_payload(author="atlan-app-fleet[bot]", state="open", draft=False, head=SHA):
     return {
         "user": {"login": author},
         "state": state,
@@ -184,27 +184,50 @@ def run_main(monkeypatch, *, env=None, capsys=None, **gh_kwargs):
 # ---------------------------------------------------------------------------
 
 
+FLEET_REPO = "atlanhq/atlan-gcs-app"
+
+
 class TestAuthor:
     @pytest.mark.parametrize(
         "author", ["a-human", "dependabot[bot]", "", "renovate", "atlan-app-fleet"]
     )
     def test_non_renovate_authors_are_refused(self, author):
-        ok, msg = gate.check_author("7", author)
+        ok, msg = gate.check_author("7", author, FLEET_REPO)
         assert not ok
         # The skip log is the only observability on why a PR was not approved,
         # so it must name the value that failed, not just the condition.
         assert f"author is '{author}'" in msg
 
-    @pytest.mark.parametrize("author", ["atlan-app-fleet[bot]", "renovate[bot]"])
-    def test_both_renovate_identities_are_accepted(self, author):
-        assert gate.check_author("7", author)[0]
+    @pytest.mark.parametrize("repo", [FLEET_REPO, "atlanhq/application-sdk"])
+    def test_the_fleet_runner_is_accepted_everywhere(self, repo):
+        assert gate.check_author("7", "atlan-app-fleet[bot]", repo)[0]
 
-    def test_mend_identity_is_still_shipped(self):
+    def test_mend_is_accepted_where_mend_is_the_engine(self):
         # application-sdk itself is still on Mend-hosted Renovate for its own
-        # workflow-action updates. Dropping renovate[bot] silently stops
-        # approving those; keep both until the SDK moves to the fleet runner.
-        assert "renovate[bot]" in gate.RENOVATE_AUTHORS
-        assert "atlan-app-fleet[bot]" in gate.RENOVATE_AUTHORS
+        # workflow-action updates. Dropping renovate[bot] outright silently
+        # stops approving those.
+        assert gate.check_author("7", "renovate[bot]", "atlanhq/application-sdk")[0]
+
+    def test_mend_is_refused_in_a_fleet_repo(self):
+        # FND-1985: Mend was still installed org-wide, reading the same
+        # renovate.json and pushing the same branch names, with every
+        # postUpgradeTask rejected because allowedCommands is admin-only. The
+        # red/green pair for the test above — same author, different repo.
+        ok, msg = gate.check_author("7", "renovate[bot]", FLEET_REPO)
+        assert not ok
+        assert "Mend-hosted Renovate" in msg
+        assert FLEET_REPO in msg
+
+    def test_the_repo_match_is_case_insensitive(self):
+        # github.repository preserves the owner/name casing as configured; the
+        # allowlist must not be defeated by it.
+        assert gate.check_author("7", "renovate[bot]", "AtlanHQ/Application-SDK")[0]
+
+    def test_mend_repos_is_exactly_the_sdk(self):
+        # A guard on the blast radius: adding a repo here is a decision to let
+        # an engine that cannot run postUpgradeTasks earn a code-owner approval
+        # there, and it should not pass review unnoticed.
+        assert gate.MEND_REPOS == frozenset({"atlanhq/application-sdk"})
 
 
 # ---------------------------------------------------------------------------
@@ -529,7 +552,7 @@ class TestFailClosed:
             ("head moved", dict(meta=pr_payload(head="deadbeef"))),
             (
                 "head missing",
-                dict(meta={"user": {"login": "renovate[bot]"}, "state": "open"}),
+                dict(meta={"user": {"login": "atlan-app-fleet[bot]"}, "state": "open"}),
             ),
             ("no files", dict(files=[])),
             ("source file", dict(files=file_payload("uv.lock", "src/a.py"))),
@@ -578,6 +601,50 @@ class TestFailClosed:
 # ---------------------------------------------------------------------------
 # Orchestration: ordering, cost, isolation
 # ---------------------------------------------------------------------------
+
+
+class TestForeignEngineEndToEnd:
+    """FND-1985, through main() rather than the condition in isolation: a PR the
+    Mend-hosted app opened on a fleet repo must not earn a code-owner approval,
+    however green everything else on it looks."""
+
+    def test_a_mend_pr_on_a_fleet_repo_is_not_approved(self, monkeypatch, capsys):
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            meta=pr_payload(author="renovate[bot]"),
+        )
+        assert fake.approvals == []
+        assert "Mend-hosted Renovate" in log
+
+    def test_the_same_pr_from_the_fleet_runner_is_approved(self, monkeypatch):
+        # The red/green pair: identical fixture but for the author.
+        _code, fake, _log = run_main(
+            monkeypatch,
+            meta=pr_payload(author="atlan-app-fleet[bot]"),
+        )
+        assert len(fake.approvals) == 1
+
+    def test_a_mend_pr_on_the_sdk_itself_is_still_approved(self, monkeypatch):
+        # application-sdk has not moved off Mend; this lane must keep working.
+        _code, fake, _log = run_main(
+            monkeypatch,
+            env={"REPO": "atlanhq/application-sdk"},
+            meta=pr_payload(author="renovate[bot]"),
+        )
+        assert len(fake.approvals) == 1
+
+    def test_identity_is_refused_before_any_further_api_call(self, monkeypatch):
+        # Condition (a) is first for cost as well as for the log: a foreign PR
+        # must not cost the files/status/reviews round trips.
+        _code, fake, _log = run_main(
+            monkeypatch,
+            meta=pr_payload(author="renovate[bot]"),
+        )
+        assert fake.approvals == []
+        assert not any(
+            path.endswith(("/files", "/status", "/reviews")) for path in fake.api_paths
+        )
 
 
 class TestOrchestration:
