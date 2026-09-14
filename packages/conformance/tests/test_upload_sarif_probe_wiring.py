@@ -58,6 +58,17 @@ _CANONICAL = _REPO_ROOT / ".github/workflows" / _TEMPLATE
 _REUSABLE_REF = "conformance-upload-sarif-reusable.yaml"
 _REUSABLE = _REPO_ROOT / ".github/workflows" / _REUSABLE_REF
 
+#: The suite whose SARIF artifacts these legs collect. Read rather than
+#: restated, so a series added to the matrix shows up here as an unuploaded
+#: slug instead of as silence.
+_SUITE = _REPO_ROOT / ".github/workflows/conformance-reusable.yaml"
+
+#: Series the suite produces SARIF for that application-sdk's caller
+#: deliberately does not upload. `security` predates FND-1994 — the inline
+#: matrix it replaced did not carry the slug either — so it is recorded as a
+#: known gap rather than silently tolerated. Must shrink, never grow.
+_NOT_UPLOADED_BY_THE_SDK = {"security"}
+
 #: The vendored script the probe step must invoke. Asserted against
 #: MANAGED_ACTION_FILES below rather than restated, so renaming the script
 #: without re-registering it fails here instead of at 3am in 82 repos.
@@ -236,6 +247,75 @@ def test_caller_keeps_the_workflow_run_trigger(label: str, source: str) -> None:
         f"[{label}] the caller's triggers are {sorted(triggers)}; without "
         f"`workflow_run` the upload never fires at all."
     )
+
+
+def _suite_sarif_slugs() -> set[str]:
+    """Every `slug` the conformance suite's matrix publishes SARIF for."""
+    matrix = yaml.safe_load(_SUITE.read_text(encoding="utf-8"))["jobs"]["suite"][
+        "strategy"
+    ]["matrix"]["include"]
+    return {entry["slug"] for entry in matrix}
+
+
+def _sdk_caller_slug_entries() -> list[dict]:  # type: ignore[type-arg]
+    """The `slugs` input application-sdk's own caller pins, parsed.
+
+    Two loads deep on purpose: the input is a YAML string whose *content* is
+    the JSON list, which is exactly the thing nothing parsed before.
+    """
+    caller = yaml.safe_load(_CANONICAL.read_text(encoding="utf-8"))
+    return yaml.safe_load(caller["jobs"]["upload"]["with"]["slugs"])
+
+
+def test_the_sdk_caller_uploads_every_series_the_suite_produces() -> None:
+    """The SDK's own caller pins a `slugs` list, so something must parse it.
+
+    It is the one caller that overrides the reusable's default, and a typo or a
+    dropped entry there costs exactly one Security-tab upload — silently, with
+    every other assertion in this file still green, because a slug matching no
+    artifact is indistinguishable from a series that had no relevant changes.
+
+    Derived from the suite's own matrix rather than restated as ten literals: a
+    series added there must be added here too, or named in
+    `_NOT_UPLOADED_BY_THE_SDK` on purpose.
+    """
+    declared = {entry["slug"] for entry in _sdk_caller_slug_entries()}
+    produced = _suite_sarif_slugs()
+
+    unknown = declared - produced
+    assert not unknown, (
+        f"the SDK caller uploads {sorted(unknown)}, which the conformance "
+        f"suite publishes no SARIF for — a slug that matches no artifact is "
+        f"indistinguishable from a series with no relevant changes, so the leg "
+        f"is a permanent no-op nothing reports"
+    )
+
+    missing = produced - declared - _NOT_UPLOADED_BY_THE_SDK
+    assert not missing, (
+        f"the conformance suite publishes SARIF for {sorted(missing)} and the "
+        f"SDK caller does not upload it, so those findings never reach the "
+        f"Security tab. Add the slug, or record it in "
+        f"_NOT_UPLOADED_BY_THE_SDK with the reason."
+    )
+
+
+def test_every_recorded_upload_gap_is_a_series_that_exists() -> None:
+    """Guard the exception set: a stale entry there hides a real omission.
+
+    Once `security` is uploaded — or renamed — the entry must go, or it
+    silently licenses a gap that is no longer the one it documents.
+    """
+    stale = _NOT_UPLOADED_BY_THE_SDK - _suite_sarif_slugs()
+    assert not stale, (
+        f"_NOT_UPLOADED_BY_THE_SDK names {sorted(stale)}, which the suite does "
+        f"not produce. Remove the entry."
+    )
+
+
+def test_the_sdk_caller_names_every_leg_it_uploads() -> None:
+    """`name:` is the job label; an entry without one renders as a blank check."""
+    unnamed = [entry for entry in _sdk_caller_slug_entries() if not entry.get("name")]
+    assert not unnamed, f"slug entries without a `name:`: {unnamed}"
 
 
 # ---------------------------------------------------------------------------
