@@ -333,11 +333,34 @@ Three things stand behind this, and only the first is a fix:
 
 1. **Do not install a second engine on a fleet repo.** Everything below bounds
    the damage; nothing below prevents it.
-2. `renovate_reap_refused_locks.py` deletes a lock-maintenance branch whose head
-   a foreign engine wrote, so the fleet runner rebuilds it in the same pass. That
-   caps recovery at one four-hourly cycle — without it the branch stays red
-   indefinitely, since Renovate retries artifacts only on the three triggers in
-   the section below.
+2. `renovate_reap_refused_locks.py` deletes any managed-lane branch a foreign
+   engine wrote, so the fleet runner rebuilds it in the same pass. **This is the
+   only thing that clears it.** Renovate will not recover such a branch, for two
+   independent reasons — either alone is enough. From the atlan-netsuite-app job
+   of 2026-09-14T14:15:44Z, on `renovate/conformance-package`:
+
+   ```
+   DEBUG: branch.isModified() = true
+     "unrecognizedAuthors": ["29139614+renovate[bot]@users.noreply.github.com"]
+   DEBUG: Branch has been edited but found no PR - skipping
+   ```
+
+   The head commit's author is not the runner's, so the branch reads as
+   hand-modified and Renovate refuses to write it. And Renovate cannot see the
+   PR at all: its PR list is scoped to its own account, so in that same run it
+   found `#64` on the lock lane (author `app/atlan-app-fleet`) and did not find
+   `#92` on this one (author `app/renovate`).
+
+   Do not expect `rebaseWhen: behind-base-branch` to rescue it — atlan-athena-app's
+   `main` had a `latestCommitDate` of 2026-09-02 while its branch sat wedged, so
+   it was never behind base. Renovate's own pruning declines for the same
+   isModified reason (`Orphan Branch is modified - skipping branch deletion`).
+   There is no clock and no trigger.
+
+   The reaper covers every `renovate/*` lane except the github-actions pair,
+   which is the one place deletion would destroy rather than recover: that
+   manager is disabled, so nothing would rebuild the branch. Stranded PRs there
+   are a human's call to close.
 3. Condition (a) of the approval gate refuses a Mend-authored PR outside
    `MEND_REPOS`, so a foreign PR is turned away on identity rather than on
    whether it happens to look green. `MEND_REPOS` is application-sdk alone,

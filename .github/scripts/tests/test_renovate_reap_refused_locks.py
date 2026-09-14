@@ -203,29 +203,77 @@ def should_reap_lock(lock_text: str) -> bool:
     return reaper.should_reap(["uv.lock"], lock_text)
 
 
-class TestLaneFilesOnly:
-    """The gate both reap reasons pass through, so a hole here widens the set of
-    branches the script may delete regardless of which reason fires."""
+class TestIsReapableLane:
+    """Which branches the foreign-engine reap may touch at all. A hole here
+    widens the set of branches the script can delete."""
 
-    def test_a_lone_lock_is_the_lane(self):
-        assert reaper.lane_files_only(["uv.lock"]) is True
+    @pytest.mark.parametrize(
+        "branch",
+        [
+            "renovate/lock-file-maintenance",
+            "renovate/conformance-package",
+            "renovate/app-contract-toolkit",
+            "renovate/atlan-application-sdk-3.x-lockfile",
+            "renovate/redis-8.x",
+        ],
+    )
+    def test_managed_lanes_are_reapable(self, branch):
+        assert reaper.is_reapable_lane(branch) is True
 
-    def test_lock_plus_ledger_is_the_lane(self):
-        # What a healthy pass produces once the contract-ledger task has run.
-        assert reaper.lane_files_only(["uv.lock", "contract_schema.lock.json"]) is True
+    @pytest.mark.parametrize(
+        "branch", ["renovate/github-actions", "renovate/major-github-actions"]
+    )
+    def test_the_unmanaged_github_actions_lanes_are_not(self, branch):
+        # self-hosted.js disables the github-actions manager, so nothing would
+        # rebuild these. Deleting them destroys rather than recovers.
+        assert reaper.is_reapable_lane(branch) is False
 
-    def test_nested_paths_are_matched_on_basename(self):
-        assert reaper.lane_files_only(["services/api/uv.lock"]) is True
+    @pytest.mark.parametrize(
+        "branch", ["main", "feature/my-work", "renovate-but-not-really", ""]
+    )
+    def test_branches_outside_the_prefix_are_not(self, branch):
+        assert reaper.is_reapable_lane(branch) is False
 
-    def test_any_file_outside_the_lane_disqualifies_all_of_them(self):
-        assert reaper.lane_files_only(["uv.lock", "pyproject.toml"]) is False
+    def test_unmanaged_lanes_is_exactly_the_github_actions_pair(self):
+        # A guard on the blast radius in the OTHER direction: removing an entry
+        # here starts auto-deleting branches nothing recreates.
+        assert reaper.UNMANAGED_LANES == frozenset(
+            {"renovate/github-actions", "renovate/major-github-actions"}
+        )
 
-    def test_a_lookalike_filename_is_not_the_lane(self):
-        assert reaper.lane_files_only(["my-uv.lock.bak"]) is False
 
-    def test_no_files_is_not_the_lane(self):
-        # An API hiccup returning [] must not read as permission to delete.
-        assert reaper.lane_files_only([]) is False
+class TestForeignOnlyHistory:
+    """Every commit, not just the head — the guard that keeps a human's work."""
+
+    def mend(self):
+        return {"author": {"login": "renovate[bot]"}}
+
+    def ours(self):
+        return {"author": {"login": reaper.FLEET_ENGINE}}
+
+    def human(self):
+        return {"author": {"login": "some-engineer"}}
+
+    def test_an_all_foreign_history_qualifies(self):
+        assert reaper.foreign_only_history([self.mend(), self.mend()]) is True
+
+    def test_a_human_commit_anywhere_disqualifies(self):
+        # The case the head-only check got wrong: a human pushes a fix, a
+        # foreign engine later pushes on top, and the head alone says "reap".
+        assert reaper.foreign_only_history([self.human(), self.mend()]) is False
+
+    def test_a_human_commit_at_the_head_disqualifies(self):
+        assert reaper.foreign_only_history([self.mend(), self.human()]) is False
+
+    def test_our_own_commit_anywhere_disqualifies(self):
+        assert reaper.foreign_only_history([self.mend(), self.ours()]) is False
+
+    def test_an_unresolved_author_disqualifies(self):
+        assert reaper.foreign_only_history([self.mend(), {"author": None}]) is False
+
+    def test_no_commits_is_false(self):
+        # An API response that came back empty must not read as consent.
+        assert reaper.foreign_only_history([]) is False
 
 
 class TestIsForeignEngine:
@@ -247,21 +295,39 @@ class TestIsForeignEngine:
         assert reaper.is_foreign_engine(None) is False
 
 
+LOCK = "renovate/lock-file-maintenance"
+
+
+def commit_by(login):
+    return {"author": {"login": login} if login is not None else None}
+
+
 class TestFindReapable:
     def fake_fetch(
-        self, *, files, lock_text, pr_number=7, head_author=reaper.FLEET_ENGINE
+        self,
+        *,
+        files,
+        lock_text,
+        pr_number=7,
+        branch=LOCK,
+        authors=(reaper.FLEET_ENGINE,),
     ):
+        """A repo with exactly one open PR, on ``branch``, whose commits were
+        written by ``authors`` in order."""
         calls: list[str] = []
+        pr = {"number": pr_number, "head": {"sha": "abc1234def", "ref": branch}}
 
         def fetch(token, url, _method):
             calls.append(url)
             if "/pulls?" in url:
-                return [{"number": pr_number, "head": {"sha": "abc1234def"}}]
+                # find_refusal narrows by head=; find_foreign lists them all.
+                if "head=" in url and f":{branch}" not in url:
+                    return []
+                return [pr]
+            if url.endswith("/commits?per_page=100"):
+                return [commit_by(a) for a in authors]
             if url.endswith("/files?per_page=100"):
                 return [{"filename": f} for f in files]
-            if "/commits/" in url:
-                author = {"login": head_author} if head_author is not None else None
-                return {"author": author}
             if "/contents/" in url:
                 return {"content": base64.b64encode(lock_text.encode()).decode()}
             raise AssertionError(f"unexpected url {url}")
@@ -275,111 +341,114 @@ class TestFindReapable:
         )
         fetch = self.fake_fetch(files=["uv.lock"], lock_text=text)
         found = reaper.find_reapable("tok", "atlanhq/x", fetch)
-        assert found is not None
-        pr, reason = found
+        assert len(found) == 1
+        pr, reason = found[0]
         assert pr["number"] == 7
         assert "self-healing lock refusal" in reason
 
-    def test_returns_none_for_a_standing_fault(self):
+    def test_returns_nothing_for_a_standing_fault(self):
         text = lock_with('[options]\nexclude-newer-span = "P3D"  # refusal: rollback')
         fetch = self.fake_fetch(files=["uv.lock"], lock_text=text)
-        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
 
     def test_does_not_fetch_contents_for_a_multi_file_pr(self):
-        # The short-circuit exists to keep the reaper to two API calls on the
-        # common case; assert it rather than trusting it.
         fetch = self.fake_fetch(files=["uv.lock", "pyproject.toml"], lock_text="")
-        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
         assert not any("/contents/" in u for u in fetch.calls)
-        assert not any("/commits/" in u for u in fetch.calls)
 
-    def test_no_open_pr_is_none(self):
+    def test_no_open_pr_is_nothing(self):
         def fetch(token, url, _method):
             return []
 
-        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
 
-    def test_queries_only_the_lock_maintenance_branch(self):
-        # The reaper deletes branches. It must never be able to select one
-        # outside the preset's lock lane.
+    def test_the_refusal_path_queries_only_the_lock_branch(self):
+        # The refusal reap stays scoped to the lock lane: a refusal stamp is
+        # written by the bounded-lock driver and exists nowhere else.
         text = lock_with(
             '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
         )
         fetch = self.fake_fetch(files=["uv.lock"], lock_text=text)
         reaper.find_reapable("tok", "atlanhq/x", fetch)
-        assert f"head=atlanhq:{reaper.BRANCH}" in fetch.calls[0]
-        assert all(
-            reaper.BRANCH in u or "/files?" in u or "/commits/" in u
-            for u in fetch.calls
+        narrowed = [u for u in fetch.calls if "head=" in u]
+        assert narrowed and all(f"head=atlanhq:{reaper.BRANCH}" in u for u in narrowed)
+
+    def test_a_branch_is_never_reaped_twice(self):
+        # find_foreign and find_refusal can both match the lock branch. Deleting
+        # it once is recovery; queueing it twice is a second DELETE against a ref
+        # that no longer exists.
+        text = lock_with(
+            '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
         )
+        fetch = self.fake_fetch(
+            files=["uv.lock"], lock_text=text, authors=("renovate[bot]",)
+        )
+        found = reaper.find_reapable("tok", "atlanhq/x", fetch)
+        assert len(found) == 1
+        assert "every commit" in found[0][1]
 
 
 class TestFindReapableForeignEngine:
-    """The FND-1985 shape: the Mend-hosted app pushes over our branch, its
-    postUpgradeTasks are all rejected (allowedCommands is admin-only), and the
-    branch is left red and frozen with an unbounded lock on it."""
+    """The FND-1985 shape: a second engine pushes to the same branch name, its
+    postUpgradeTasks are all rejected (allowedCommands is admin-only), and
+    Renovate then wedges the branch permanently — it reads as human-edited
+    (`unrecognizedAuthors`) AND its PR is invisible, because Renovate scopes its
+    PR list to its own account."""
 
     def fetcher(self, **kwargs):
+        kwargs.setdefault("files", ["uv.lock"])
+        kwargs.setdefault("lock_text", lock_with(""))
         return TestFindReapable().fake_fetch(**kwargs)
 
     def test_reaps_a_branch_the_mend_app_wrote(self):
         # No refusal stamp anywhere: a hosted engine never runs the driver, so
-        # the only evidence available is who wrote the head.
-        fetch = self.fetcher(
-            files=["uv.lock"], lock_text=lock_with(""), head_author="renovate[bot]"
-        )
+        # the only evidence available is who wrote the commits.
+        fetch = self.fetcher(authors=("renovate[bot]",))
         found = reaper.find_reapable("tok", "atlanhq/x", fetch)
-        assert found is not None
-        pr, reason = found
+        assert len(found) == 1
+        pr, reason = found[0]
         assert pr["number"] == 7
         assert "renovate[bot]" in reason
 
     def test_the_same_branch_written_by_us_is_kept(self):
-        # The red/green pair for the test above: identical in every respect
-        # except the head author, and this one must survive.
-        fetch = self.fetcher(
-            files=["uv.lock"], lock_text=lock_with(""), head_author=reaper.FLEET_ENGINE
-        )
-        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+        # The red/green pair: identical but for the author, and this survives.
+        fetch = self.fetcher(authors=(reaper.FLEET_ENGINE,))
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
 
-    def test_a_human_push_onto_the_lock_branch_is_kept(self):
-        fetch = self.fetcher(
-            files=["uv.lock"], lock_text=lock_with(""), head_author="some-engineer"
-        )
-        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+    def test_a_human_push_onto_a_foreign_branch_keeps_the_branch(self):
+        # The guard that a head-only check would get wrong.
+        fetch = self.fetcher(authors=("some-engineer", "renovate[bot]"))
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
 
-    def test_an_unresolved_head_author_is_kept(self):
-        fetch = self.fetcher(
-            files=["uv.lock"], lock_text=lock_with(""), head_author=None
-        )
-        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+    def test_an_unresolved_author_is_kept(self):
+        fetch = self.fetcher(authors=(None,))
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
 
-    def test_a_foreign_branch_touching_a_non_lane_file_is_kept(self):
-        # Foreign authorship is not on its own a licence to delete: the branch
-        # still has to be carrying nothing but the lane's own artifacts.
+    def test_reaps_a_foreign_conformance_package_branch(self):
+        # atlan-netsuite-app#92, the case that proved the deadlock is not
+        # lane-specific and that scoping the reaper to the lock branch left a
+        # hole. No refusal path exists on this lane at all.
         fetch = self.fetcher(
-            files=["uv.lock", "pyproject.toml"],
-            lock_text=lock_with(""),
-            head_author="renovate[bot]",
+            branch="renovate/conformance-package", authors=("renovate[bot]",)
         )
-        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is None
+        found = reaper.find_reapable("tok", "atlanhq/x", fetch)
+        assert len(found) == 1
+        assert found[0][0]["head"]["ref"] == "renovate/conformance-package"
+
+    @pytest.mark.parametrize(
+        "branch", ["renovate/github-actions", "renovate/major-github-actions"]
+    )
+    def test_a_foreign_github_actions_branch_is_kept(self, branch):
+        # The one lane where deleting destroys instead of recovering: the
+        # manager is disabled, so nothing would rebuild it.
+        fetch = self.fetcher(branch=branch, authors=("renovate[bot]",))
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
 
     def test_a_foreign_branch_is_reaped_without_reading_the_lock(self):
-        # The cheaper conclusion, and the reason the check is ordered first: a
-        # hosted engine's lock has nothing in it for the refusal path to read.
-        fetch = self.fetcher(
-            files=["uv.lock"], lock_text=lock_with(""), head_author="renovate[bot]"
-        )
+        # A hosted engine's lock has nothing in it for the refusal path to read.
+        fetch = self.fetcher(authors=("renovate[bot]",))
         reaper.find_reapable("tok", "atlanhq/x", fetch)
         assert not any("/contents/" in u for u in fetch.calls)
-
-    def test_a_foreign_branch_carrying_the_ledger_too_is_reaped(self):
-        fetch = self.fetcher(
-            files=["uv.lock", "contract_schema.lock.json"],
-            lock_text=lock_with(""),
-            head_author="renovate[bot]",
-        )
-        assert reaper.find_reapable("tok", "atlanhq/x", fetch) is not None
 
 
 def test_foreign_engine_set_is_exactly_the_mend_app():
@@ -425,7 +494,9 @@ class TestMain:
         monkeypatch.setattr(
             reaper,
             "find_reapable",
-            lambda *a, **k: ({"number": 7, "head": {"sha": "a" * 8}}, "a reason"),
+            lambda *a, **k: [
+                ({"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}}, "a reason")
+            ],
         )
         deleted: list[str] = []
         monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
@@ -439,7 +510,9 @@ class TestMain:
         monkeypatch.setattr(
             reaper,
             "find_reapable",
-            lambda *a, **k: ({"number": 7, "head": {"sha": "a" * 8}}, "a reason"),
+            lambda *a, **k: [
+                ({"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}}, "a reason")
+            ],
         )
         deleted: list[str] = []
         monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
@@ -452,9 +525,63 @@ class TestMain:
         # The workflow passes it as env so no matrix value lands in `run:`.
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
         monkeypatch.setenv("TARGET_REPO", "atlanhq/from-env")
-        monkeypatch.setattr(reaper, "find_reapable", lambda *a, **k: None)
+        monkeypatch.setattr(reaper, "find_reapable", lambda *a, **k: [])
         assert reaper.main([]) == 0
         assert "atlanhq/from-env" in capsys.readouterr().out
+
+    def test_several_branches_are_all_reaped_in_one_pass(self, monkeypatch):
+        # A repo can have more than one lane wedged by the same foreign engine;
+        # clearing only the first would leave the rest for another four hours.
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
+        monkeypatch.setattr(
+            reaper,
+            "find_reapable",
+            lambda *a, **k: [
+                ({"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}}, "r1"),
+                (
+                    {"number": 8, "head": {"sha": "b" * 8, "ref": "renovate/conf"}},
+                    "r2",
+                ),
+            ],
+        )
+        deleted: list[str] = []
+        monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
+        assert reaper.main(["--repo", "atlanhq/x"]) == 0
+        assert deleted == [
+            f"{reaper.API_ROOT}/repos/atlanhq/x/git/refs/heads/{LOCK}",
+            f"{reaper.API_ROOT}/repos/atlanhq/x/git/refs/heads/renovate/conf",
+        ]
+
+    def test_one_branch_failing_to_delete_does_not_stop_the_others(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
+        monkeypatch.setattr(
+            reaper,
+            "find_reapable",
+            lambda *a, **k: [
+                ({"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}}, "r1"),
+                (
+                    {"number": 8, "head": {"sha": "b" * 8, "ref": "renovate/conf"}},
+                    "r2",
+                ),
+            ],
+        )
+        deleted: list[str] = []
+
+        def flaky(_token, url, method="GET"):
+            if LOCK in url:
+                raise TimeoutError("api down")
+            deleted.append(url)
+
+        monkeypatch.setattr(reaper, "_request", flaky)
+        assert reaper.main(["--repo", "atlanhq/x"]) == 0
+        assert deleted == [
+            f"{reaper.API_ROOT}/repos/atlanhq/x/git/refs/heads/renovate/conf"
+        ]
+        assert "::warning::" in capsys.readouterr().out
 
     def test_the_reap_reason_reaches_the_log(self, monkeypatch, capsys):
         # The only record of WHICH shape fired. Without it a job log cannot
@@ -466,10 +593,13 @@ class TestMain:
         monkeypatch.setattr(
             reaper,
             "find_reapable",
-            lambda *a, **k: (
-                {"number": 7, "head": {"sha": "a" * 8}},
-                "branch head written by renovate[bot], not atlan-app-fleet[bot]",
-            ),
+            lambda *a, **k: [
+                (
+                    {"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}},
+                    "every commit on it written by renovate[bot], "
+                    "not atlan-app-fleet[bot]",
+                )
+            ],
         )
         monkeypatch.setattr(reaper, "_request", lambda *a, **k: None)
         assert reaper.main(["--repo", "atlanhq/x"]) == 0
@@ -488,7 +618,9 @@ class TestMain:
         monkeypatch.setattr(
             reaper,
             "find_reapable",
-            lambda *a, **k: ({"number": 7, "head": {"sha": "a" * 8}}, "a reason"),
+            lambda *a, **k: [
+                ({"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}}, "a reason")
+            ],
         )
         deleted: list[str] = []
         monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
@@ -502,7 +634,9 @@ class TestMain:
         monkeypatch.setattr(
             reaper,
             "find_reapable",
-            lambda *a, **k: ({"number": 7, "head": {"sha": "a" * 8}}, "a reason"),
+            lambda *a, **k: [
+                ({"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}}, "a reason")
+            ],
         )
         calls: list[tuple[str, str]] = []
 
