@@ -54,7 +54,55 @@ def pr_payload(author="atlan-app-fleet[bot]", state="open", draft=False, head=SH
 
 
 def file_payload(*names):
-    return [{"filename": n} for n in names]
+    return [n if isinstance(n, dict) else {"filename": n} for n in names]
+
+
+# A real `actions/checkout` pin bump, in the shape GitHub returns `patch`: the
+# body starts at the hunk header, context lines carry a leading space, and the
+# +/- sits at column 0 in front of the file's own indentation.
+PIN_BUMP_PATCH = (
+    "@@ -10,7 +10,7 @@ jobs:\n"
+    "     steps:\n"
+    "       - name: Checkout\n"
+    "-        uses: actions/checkout@v4\n"
+    "+        uses: actions/checkout@11bd7194 # v4.2.2\n"
+    "         with:\n"
+    "           fetch-depth: 0\n"
+)
+
+RUN_EDIT_PATCH = (
+    "@@ -20,7 +20,7 @@ jobs:\n"
+    "       - name: Test\n"
+    "-        run: uv run poe test\n"
+    "+        run: uv run poe test --all\n"
+)
+
+PERMISSIONS_EDIT_PATCH = PIN_BUMP_PATCH + (
+    "@@ -3,5 +3,6 @@\n" " permissions:\n" "   contents: read\n" "+  id-token: write\n"
+)
+
+ACTION_SWAP_PATCH = (
+    "@@ -10,7 +10,7 @@ jobs:\n"
+    "       - name: Checkout\n"
+    "-        uses: actions/checkout@v4\n"
+    "+        uses: unrelated/checkout@v1\n"
+)
+
+
+def workflow_file(
+    name=".github/workflows/tests.yaml",
+    *,
+    status="modified",
+    patch=PIN_BUMP_PATCH,
+):
+    """A `/pulls/{n}/files` entry for a workflow file, diff included."""
+    return {"filename": name, "status": status, "patch": patch}
+
+
+def changed(
+    name=".github/workflows/tests.yaml", *, status="modified", patch=PIN_BUMP_PATCH
+):
+    return gate.ChangedFile(filename=name, status=status, patch=patch)
 
 
 def status_payload(*pairs):
@@ -370,6 +418,203 @@ class TestDepFileAllowlist:
 
     def test_empty_filenames_are_ignored(self):
         assert gate.non_dep_files(["", "uv.lock"]) == []
+
+
+# ---------------------------------------------------------------------------
+# Condition (d), part 2: pin-only workflow diffs (FND-1996)
+#
+# The `.github/` prefix marks every path under it dependency-only, so before
+# this a Renovate PR carrying ANY workflow diff collected the atlan-ci CODEOWNER
+# approval and merged on green under the preset's automerge + platformAutomerge.
+# Nothing in the gate stopped it; the absence of `workflows: write` on every
+# fleet identity did. These tests hold the gate to the job the permission was
+# doing, so that granting the permission is not also a policy change.
+#
+# Negative cases first, and each one is a fault INJECTED into an otherwise
+# approvable PR — the end-to-end cases at the bottom of this class fail against
+# the pre-FND-1996 script, which is what makes them proof rather than decoration.
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowPinOnly:
+    def test_a_pure_pin_bump_is_pin_only(self):
+        assert gate.non_pin_only_workflows([changed()]) == []
+
+    def test_a_run_edit_is_not_pin_only(self):
+        offenders = gate.non_pin_only_workflows([changed(patch=RUN_EDIT_PATCH)])
+        assert [o.filename for o in offenders] == [".github/workflows/tests.yaml"]
+        # The reason names the offending line, not merely the condition: the
+        # skip log is the only place anyone sees why a Renovate PR stalled.
+        assert "not a `uses:` pin" in offenders[0].reason
+        # The first offending line in the patch is the removed one.
+        assert "run: uv run poe test" in offenders[0].reason
+
+    @pytest.mark.parametrize("status", ["added", "removed", "renamed", "copied", ""])
+    def test_only_a_modification_can_be_pin_only(self, status):
+        # Deliberately paired with a pin-shaped patch: the status alone decides,
+        # so a deleted workflow whose every line happens to be a `uses:` line is
+        # still withheld. There is no pin-only reading of a file that did not
+        # exist before or does not exist after.
+        offenders = gate.non_pin_only_workflows([changed(status=status)])
+        assert len(offenders) == 1
+        assert f"status is '{status or 'unknown'}'" in offenders[0].reason
+
+    def test_a_pin_bump_mixed_with_a_permissions_edit_is_not_pin_only(self):
+        # The realistic attack shape, and the one a "does it contain a bump?"
+        # test would pass: a genuine bump carrying one extra line.
+        offenders = gate.non_pin_only_workflows([changed(patch=PERMISSIONS_EDIT_PATCH)])
+        assert len(offenders) == 1
+        assert "id-token: write" in offenders[0].reason
+
+    def test_swapping_the_action_is_not_pin_only(self):
+        # Every added and removed line IS a `uses:` line here, so line shape
+        # alone would admit it. What changed is which code runs.
+        offenders = gate.non_pin_only_workflows([changed(patch=ACTION_SWAP_PATCH)])
+        assert len(offenders) == 1
+        assert "changes which actions run" in offenders[0].reason
+        assert "actions/checkout" in offenders[0].reason
+
+    def test_adding_a_whole_step_is_not_pin_only(self):
+        patch = (
+            "@@ -10,6 +10,7 @@ jobs:\n"
+            "       - name: Checkout\n"
+            "         uses: actions/checkout@v4\n"
+            "+        uses: unrelated/exfil@v1\n"
+        )
+        offenders = gate.non_pin_only_workflows([changed(patch=patch)])
+        assert len(offenders) == 1
+        assert "changes which actions run" in offenders[0].reason
+
+    def test_an_unreadable_patch_withholds(self):
+        # GitHub omits `patch` for a binary file and for a diff it considers too
+        # large. "Cannot read it" must never collapse into "nothing to object to".
+        offenders = gate.non_pin_only_workflows([changed(patch="")])
+        assert len(offenders) == 1
+        assert "no diff body" in offenders[0].reason
+
+    def test_a_patch_with_no_changed_lines_withholds(self):
+        offenders = gate.non_pin_only_workflows(
+            [changed(patch="@@ -1,2 +1,2 @@\n a\n")]
+        )
+        assert len(offenders) == 1
+        assert "no added or removed lines" in offenders[0].reason
+
+    def test_every_offending_workflow_is_reported_not_just_the_first(self):
+        files = [
+            changed(".github/workflows/a.yml"),
+            changed(".github/workflows/b.yml", patch=RUN_EDIT_PATCH),
+            changed(".github/workflows/c.yml", status="added"),
+        ]
+        assert [o.filename for o in gate.non_pin_only_workflows(files)] == [
+            ".github/workflows/b.yml",
+            ".github/workflows/c.yml",
+        ]
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            ".github/dependabot.yml",
+            ".github/renovate.json",
+            ".github/CODEOWNERS",
+            ".github/actions/setup/action.yml",
+            "docs/.github/workflows/x.yml",
+        ],
+    )
+    def test_non_workflow_paths_keep_the_prefix_allowlist_alone(self, path):
+        # The narrowing is scoped to `.github/workflows/`. Everything else under
+        # `.github/` is judged by filename exactly as before, diff or no diff.
+        assert gate.non_pin_only_workflows([changed(path, patch=RUN_EDIT_PATCH)]) == []
+
+    @pytest.mark.parametrize(
+        "line,target",
+        [
+            ("        uses: actions/checkout@v4", "actions/checkout"),
+            ("      - uses: actions/checkout@v4", "actions/checkout"),
+            ("        uses: actions/checkout@sha # v4.2.2", "actions/checkout"),
+            ('        uses: "actions/checkout@v4"', "actions/checkout"),
+            (
+                "uses: owner/repo/.github/workflows/x.yml@v1",
+                "owner/repo/.github/workflows/x.yml",
+            ),
+        ],
+    )
+    def test_uses_target_strips_the_ref(self, line, target):
+        assert gate.uses_target(line) == target
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "        run: echo hi",
+            "        name: uses: something",
+            "        with:",
+            "",
+            "        # uses: actions/checkout@v4",
+            "        uses:",
+        ],
+    )
+    def test_uses_target_refuses_non_uses_lines(self, line):
+        assert gate.uses_target(line) is None
+
+    # -- end to end: these are the four cases FND-1996 requires, driven through
+    # -- main() so they exercise the real orchestration. Cases 2-4 pass against
+    # -- the pre-FND-1996 script only by approving, i.e. they are reproduced reds.
+
+    def test_e2e_a_pin_bump_is_still_approved(self, monkeypatch, capsys):
+        _code, fake, log = run_main(
+            monkeypatch, capsys=capsys, files=file_payload(workflow_file())
+        )
+        assert len(fake.approvals) == 1
+        assert "workflow changes are pin-only." in log
+
+    def test_e2e_a_run_edit_is_withheld(self, monkeypatch, capsys):
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            files=file_payload(workflow_file(patch=RUN_EDIT_PATCH)),
+        )
+        assert fake.approvals == []
+        assert "contains workflow changes that are not pin-only:" in log
+        assert "  .github/workflows/tests.yaml: " in log
+
+    def test_e2e_deleting_a_workflow_is_withheld(self, monkeypatch, capsys):
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            files=file_payload(workflow_file(status="removed")),
+        )
+        assert fake.approvals == []
+        assert "contains workflow changes that are not pin-only:" in log
+
+    def test_e2e_a_bump_carrying_a_permissions_edit_is_withheld(
+        self, monkeypatch, capsys
+    ):
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            files=file_payload("uv.lock", workflow_file(patch=PERMISSIONS_EDIT_PATCH)),
+        )
+        assert fake.approvals == []
+        assert "contains workflow changes that are not pin-only:" in log
+
+    def test_e2e_a_dependabot_edit_is_still_approved(self, monkeypatch, capsys):
+        # The regression guard on the narrowing itself: the rest of `.github/`
+        # must not have become diff-gated by accident.
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            files=file_payload({"filename": ".github/dependabot.yml"}),
+        )
+        assert len(fake.approvals) == 1
+        assert "workflow changes are pin-only." not in log
+
+    def test_e2e_a_file_entry_without_a_filename_aborts(self, monkeypatch, capsys):
+        # A changed file nobody can name is a changed file nobody checked.
+        code, fake, log = run_main(
+            monkeypatch, capsys=capsys, files=[{"status": "modified"}]
+        )
+        assert code == 1
+        assert fake.approvals == []
+        assert "carried no filename" in log
 
 
 # ---------------------------------------------------------------------------
