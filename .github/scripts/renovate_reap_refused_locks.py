@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Delete lock-maintenance branches whose refusal will clear itself (FND-909).
+"""Delete lock-maintenance branches the next pass rebuilds better.
+
+Two independent reasons: a lock refusal that has since expired (FND-909), and a
+branch some other Renovate engine wrote over (FND-1985).
 
 Runs once per repo, immediately *before* Renovate in the same matrix job of
 ``renovate.yaml``, so a reaped branch is rebuilt in the same pass — there is no
@@ -35,16 +38,42 @@ heals on its own. A yanked-pin wedge or a broken interpreter keeps its tripwire
 and stays red for a human — reaping those would recycle them every four hours
 and hide a standing fault behind a lane that looks busy.
 
+The other shape: a foreign engine wrote the branch
+--------------------------------------------------
+``allowedCommands`` is an admin-only option, so it exists only for a runner we
+own. Any OTHER Renovate engine reading the same ``renovate.json`` — the
+Mend-hosted app, still installed across the org long after the fleet moved off
+it — resolves the same preset, finds the same ``postUpgradeTasks``, and has
+every one of them rejected. It then pushes to the SAME branch name, so a lock
+this runner bounded correctly at 08:11 is replaced at 11:18 by one refreshed
+unbounded, carrying a red ``renovate/artifacts``.
+
+The controls hold: the auto-approve gate withholds its code-owner approval
+while that status is red, so nothing merges. Nothing recovers either — Renovate
+re-runs artifacts only on the three triggers above — so the branch stays red
+and the repo quietly stops receiving lock refreshes until a human notices.
+Reaping it puts recovery on the same four-hour clock as everything else, safe
+for the same reason the refusal case is: deleted and rebuilt inside one job.
+
+A backstop, not the fix. The fix is for no second engine to be installed on
+these repos at all; this only bounds the damage while one is.
+
 Safety
 ------
-Deletes only a branch that satisfies every one of:
+Both reasons require the branch to be exactly ``BRANCH`` (the lock-maintenance
+branch of the shared preset) — never an arbitrary or human branch — carrying an
+open PR whose changed files all lie in ``LANE_FILENAMES``.
 
-* the branch is exactly ``BRANCH`` (the lock-maintenance branch of the shared
-  preset) — never an arbitrary or human branch,
-* it has an open PR authored by the fleet app,
-* the PR's only changed file is a ``uv.lock``,
-* that lock's ``[options]`` table carries a refusal stamp, and
-* the stamped reason is in ``SELF_HEALING_REFUSALS``.
+A *foreign engine* reap additionally requires the branch head's resolved commit
+author to be in ``FOREIGN_ENGINES``. An allowlist, not "anyone who is not us":
+this script deletes branches, so an author it does not recognise must mean
+leave it alone, or a human pushing a fix onto the lock branch loses it on the
+next pass. It reads the author GitHub *resolved* for the commit, never the git
+author name inside the commit object, which any pusher can set to anything.
+
+A *self-healing refusal* reap additionally requires the PR's only changed file
+to be a ``uv.lock``, whose ``[options]`` table carries a refusal stamp, whose
+stamped reason is in ``SELF_HEALING_REFUSALS``.
 
 An *unstamped* tripwire is left alone. Locks refused before this change carry no
 reason, and treating "no reason given" as self-healing is the one mistake that
@@ -73,6 +102,20 @@ API_ROOT = "https://api.github.com"
 # as an argument: this script deletes branches, and the set it may delete from
 # should not be widenable by a caller's typo.
 BRANCH = "renovate/lock-file-maintenance"
+
+# The engine this runner authenticates as. A branch head some other engine wrote
+# did not run our postUpgradeTasks — allowedCommands is admin-only, so no hosted
+# engine can hold them — which means an unbounded lock and a red artifacts status.
+FLEET_ENGINE = "atlan-app-fleet[bot]"
+
+# Engines that are not ours but are known to write this branch. Deliberately an
+# allowlist rather than "anything that is not FLEET_ENGINE": see Safety above.
+FOREIGN_ENGINES = frozenset({"renovate[bot]"})
+
+# Everything the lock lane is allowed to touch: uv.lock from Renovate's native
+# uv manager, contract_schema.lock.json from the contract-ledger task. A branch
+# carrying anything else is not the lane's, whoever wrote it.
+LANE_FILENAMES = frozenset({"uv.lock", "contract_schema.lock.json"})
 
 # The stamp withhold() writes, as it appears in the lock:
 #     exclude-newer-span = "P3D"  # refusal: window-empty
@@ -164,6 +207,28 @@ def lone_lock(files: list[str]) -> Optional[str]:
     return None
 
 
+def lane_files_only(files: list[str]) -> bool:
+    """Does this PR touch nothing outside the lock lane's own artifacts?
+
+    The gate both reap reasons pass through, and the reason neither needs its
+    own "is this really our branch" check. Empty is False: a PR with no changed
+    files is not a lane PR, and treating it as one would let an API hiccup that
+    returns ``[]`` read as permission to delete.
+    """
+    return bool(files) and all(
+        name.rsplit("/", 1)[-1] in LANE_FILENAMES for name in files
+    )
+
+
+def is_foreign_engine(login: Optional[str]) -> bool:
+    """Did a Renovate engine that is not ours write this?
+
+    ``None`` — GitHub could not resolve the commit to an account — is False, so
+    an unattributable commit is kept rather than deleted.
+    """
+    return login in FOREIGN_ENGINES
+
+
 def should_reap(files: list[str], lock_text: str) -> bool:
     """Is this PR a refusal that will clear itself on the next resolve?"""
     if lone_lock(files) is None:
@@ -171,13 +236,20 @@ def should_reap(files: list[str], lock_text: str) -> bool:
     return refusal_reason(lock_text) in SELF_HEALING_REFUSALS
 
 
-def find_refusal(token: str, repo: str, fetch: Fetch = _request) -> Optional[dict]:
-    """The open lock-maintenance PR on ``repo`` if it is a self-healing refusal.
+def find_reapable(
+    token: str, repo: str, fetch: Fetch = _request
+) -> Optional[tuple[dict, str]]:
+    """The open lock-maintenance PR on ``repo`` and why to reap it, or None.
 
-    Returns the PR payload (for logging) or None. Any transport failure raises:
-    a reaper that silently does nothing on an API blip is indistinguishable from
-    a healthy lane, and this script's whole purpose is to be the thing that
-    notices.
+    Returns ``(pr, reason)``; the reason is the only record of WHICH of the two
+    shapes fired, so it is produced here and logged verbatim rather than
+    recomputed by the caller. Any transport failure raises: a reaper that
+    silently does nothing on an API blip is indistinguishable from a healthy
+    lane, and this script's whole purpose is to be the thing that notices.
+
+    The foreign-engine check comes first because it is the cheaper conclusion —
+    a branch a hosted engine wrote has no bounded lock to inspect, and its
+    ``[options]`` table, if it has one, is uv's rather than the driver's.
     """
     owner, name = repo.split("/", 1)
     prs = fetch(
@@ -194,6 +266,20 @@ def find_refusal(token: str, repo: str, fetch: Fetch = _request) -> Optional[dic
         None,
     )
     files = [f["filename"] for f in files_payload]  # type: ignore[union-attr]
+    if not lane_files_only(files):
+        # Short-circuit before any further call: a branch touching anything
+        # outside the lane is neither a refusal nor ours to delete.
+        return None
+
+    commit = fetch(
+        token,
+        f"{API_ROOT}/repos/{owner}/{name}/commits/{pr['head']['sha']}",
+        None,
+    )
+    head_author = ((commit or {}).get("author") or {}).get("login")  # type: ignore[union-attr]
+    if is_foreign_engine(head_author):
+        return pr, f"branch head written by {head_author}, not {FLEET_ENGINE}"
+
     path = lone_lock(files)
     if path is None:
         # Short-circuit before fetching contents. Same predicate should_reap
@@ -207,7 +293,9 @@ def find_refusal(token: str, repo: str, fetch: Fetch = _request) -> Optional[dic
     lock_text = base64.b64decode(contents["content"]).decode(  # type: ignore[index]
         errors="replace"
     )
-    return pr if should_reap(files, lock_text) else None
+    if not should_reap(files, lock_text):
+        return None
+    return pr, f"self-healing lock refusal ({refusal_reason(lock_text)})"
 
 
 def is_dry_run(renovate_dry_run: str | None, flag: bool) -> bool:
@@ -259,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
     dry_run = is_dry_run(os.environ.get("RENOVATE_DRY_RUN"), args.dry_run)
 
     try:
-        pr = find_refusal(token, args.repo)
+        found = find_reapable(token, args.repo)
     except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as exc:
         # Loud, and non-fatal to the pass: Renovate still runs after this step,
         # so a reaper outage delays recovery by one cycle rather than stopping
@@ -267,12 +355,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::warning::reaper could not inspect {args.repo}: {exc}")
         return 0
 
-    if pr is None:
-        print(f"{args.repo}: no self-healing lock refusal to reap")
+    if found is None:
+        print(f"{args.repo}: nothing to reap on {BRANCH}")
         return 0
 
+    pr, reason = found
     print(
-        f"{args.repo}: PR #{pr['number']} is a self-healing lock refusal "
+        f"{args.repo}: PR #{pr['number']} is reapable — {reason} "
         f"({BRANCH}, head {pr['head']['sha'][:7]}) — deleting the branch so "
         "this pass rebuilds it"
     )

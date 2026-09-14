@@ -12,8 +12,9 @@ An approval is posted iff ALL of the following hold, evaluated in this order and
 short-circuiting on the first failure (later conditions cost an API call, so the
 order is load-bearing for cost as well as for the log):
 
-  a. author is a Renovate bot — ``atlan-app-fleet[bot]`` (self-hosted fleet
-     runner) or ``renovate[bot]`` (Mend; application-sdk itself is still on it)
+  a. author is the Renovate engine sanctioned for THIS repo — the self-hosted
+     ``atlan-app-fleet[bot]`` everywhere, plus ``renovate[bot]`` (Mend) only in
+     ``MEND_REPOS``
   b. the PR is open and not a draft
   c. the PR's current HEAD still matches the SHA being evaluated (race guard)
   d. every changed file is dependency-related (see :func:`non_dep_files`)
@@ -70,11 +71,35 @@ APPROVAL_SIGNATURE = "**Renovate auto-approval:**"
 #: Apps cannot be code owners, which is why this one path keeps using the PAT.
 APPROVER_LOGIN = "atlan-ci"
 
-#: Renovate identities whose PRs are eligible. Keep BOTH: atlan-app-fleet[bot]
-#: is the self-hosted fleet runner; renovate[bot] is the Mend-hosted app, which
-#: application-sdk itself still uses for its own workflow-action updates. Do not
-#: drop renovate[bot] while application-sdk remains on Mend.
-RENOVATE_AUTHORS = ("atlan-app-fleet[bot]", "renovate[bot]")
+#: The self-hosted fleet runner — the sanctioned engine in every repo.
+FLEET_AUTHOR = "atlan-app-fleet[bot]"
+
+#: The Mend-hosted app. Sanctioned only in :data:`MEND_REPOS`.
+MEND_AUTHOR = "renovate[bot]"
+
+#: Every Renovate identity, whichever repo it is sanctioned in. This is the
+#: "a Renovate is driving this" fact, separate from "which one should be" —
+#: renovate-lock-cooldown.yaml's actor allowlist is pinned to it by a drift test
+#: in test_bound_lock_branch.py, because that lane serves whichever engine
+#: pushed, and pinning it to the narrower per-repo answer would stop the lane
+#: the moment the sanctioned engine changed.
+RENOVATE_AUTHORS = (FLEET_AUTHOR, MEND_AUTHOR)
+
+#: Repos where Mend-hosted Renovate is the engine we actually run, compared
+#: case-insensitively (GitHub repo names are). application-sdk is still on it
+#: for its own workflow-action updates; nothing else should be.
+#:
+#: Why this is a per-repo allowlist and not simply both identities (FND-1985):
+#: Mend was still installed org-wide long after the fleet moved to the
+#: self-hosted runner, and it reads the SAME renovate.json and opens PRs on the
+#: SAME branch names. But ``allowedCommands`` is an admin-only option, so under
+#: Mend every postUpgradeTask is rejected — the lock refreshes unbounded, past
+#: the release-age cooldown the fleet lane exists to enforce. Condition (f)
+#: catches that via the red ``renovate/artifacts`` status and is the control
+#: that held in practice, but it is one status away from approving an unbounded
+#: lock. Naming the engine per repo means a Mend PR in a fleet repo is refused
+#: on identity, before the question of whether it happens to look green.
+MEND_REPOS = frozenset({"atlanhq/application-sdk"})
 
 #: Renovate's own artifact-update status context (condition f).
 ARTIFACT_CONTEXT = "renovate/artifacts"
@@ -156,10 +181,24 @@ class GhError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-def check_author(pr: str, author: str) -> tuple[bool, str]:
-    """Condition (a): the PR must come from a Renovate bot."""
+def check_author(pr: str, author: str, repo: str) -> tuple[bool, str]:
+    """Condition (a): the PR must come from the engine sanctioned for ``repo``.
+
+    Two distinct refusals, because they need distinct responses. "Not a Renovate
+    bot" is the ordinary case and means nothing. "Mend, here" means a second
+    engine is installed on a repo that moved off it, and the skip log is where
+    anyone would first see that — so it says so rather than collapsing into the
+    generic message.
+    """
     if author not in RENOVATE_AUTHORS:
         return False, f"PR #{pr}: author is '{author}', not a Renovate bot — skipping."
+    if author == MEND_AUTHOR and repo.lower() not in MEND_REPOS:
+        return (
+            False,
+            f"PR #{pr}: author is '{author}' (Mend-hosted Renovate), which is not "
+            f"the sanctioned engine for {repo} — skipping. A Mend PR here means "
+            "the Mend app is still installed on this repo and should not be.",
+        )
     return True, ""
 
 
@@ -477,7 +516,7 @@ def process_pr(
     head_sha = str(((meta.get("head") or {}).get("sha")) or "")
 
     for ok, message in (
-        check_author(pr, author),
+        check_author(pr, author, repo),
         check_open(pr, state, draft),
         check_head_unchanged(pr, head_sha, eval_sha),
     ):

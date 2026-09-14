@@ -11,9 +11,18 @@ name: Renovate (self-hosted fleet runner)
 # renovate-pkl-sync.yaml glue used, instead of baking a custom Renovate image.
 #
 # LIVE: dry_run defaults to 'null', so scheduled runs and the release fan-out
-# open/update real PRs across the discovered fleet. Mend has been uninstalled
-# fleet-wide, so there is no second engine to collide with. For a manual dry
-# run, dispatch with dry_run='full' (and optionally scope with the repos input).
+# open/update real PRs across the discovered fleet. For a manual dry run,
+# dispatch with dry_run='full' (and optionally scope with the repos input).
+#
+# A SECOND ENGINE COLLIDES WITH THIS ONE. Branch names come from the shared
+# preset, not from the engine, so any other Renovate reading a fleet repo's
+# renovate.json pushes to the same renovate/lock-file-maintenance — with every
+# postUpgradeTask rejected, because allowedCommands is admin-only and a hosted
+# engine cannot hold one. The Mend-hosted app stayed installed org-wide long
+# after the fleet moved here (FND-1985); an earlier version of this comment
+# asserted it had been uninstalled, which was not true. The reap step below is
+# the backstop, not the fix — see docs/standards/ci.md, "Only one Renovate
+# engine may serve a repo".
 
 on:
   workflow_dispatch:
@@ -173,16 +182,23 @@ jobs:
         # multiple times a week). Keep in step with the setup-node version above.
         run: npm install -g renovate@44.3.2
 
-      # Reap a lock-maintenance branch whose refusal will clear itself, so this
-      # pass rebuilds it. Ordered immediately before Renovate on purpose: the
+      # Reap a lock-maintenance branch this pass can rebuild better, for either
+      # of two reasons. Ordered immediately before Renovate on purpose: the
       # branch is deleted and recreated inside one job, so the repo is never
       # left without a lock PR and the PR timeline shows no delete/recreate
-      # churn. Only refusals stamped `window-empty` are reaped — a yanked pin or
-      # an unsatisfiable floor keeps its tripwire and stays red for a human,
-      # because recycling one of those every four hours would hide it. Never
-      # fails the job: Renovate runs regardless, so a reaper outage costs one
-      # cycle of recovery latency, not the lock refresh (FND-909).
-      - name: Reap self-healing lock refusals
+      # churn.
+      #
+      # (1) A refusal that has since expired — and only those stamped
+      # `window-empty`. A yanked pin or an unsatisfiable floor keeps its
+      # tripwire and stays red for a human, because recycling one of those
+      # every four hours would hide it (FND-909).
+      #
+      # (2) A branch head some OTHER Renovate engine wrote, which therefore ran
+      # none of our postUpgradeTasks and carries an unbounded lock (FND-1985).
+      #
+      # Never fails the job: Renovate runs regardless, so a reaper outage costs
+      # one cycle of recovery latency, not the lock refresh.
+      - name: Reap lock branches the next pass rebuilds better
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           # Both passed as env rather than interpolated into `run:`. TARGET_REPO
