@@ -822,6 +822,16 @@ check_dropdown_default "hand-written stringified default" \
           multiSelect = true' \
   "cannot be set by hand"
 
+# Both set: without a guard the hand-written value simply overrides the generated
+# one and `defaultSelection` is ignored in silence — the exact footgun the
+# property exists to remove, and the one case a "default == null" check misses.
+echo ":: Checking a hand-written default ALONGSIDE defaultSelection is rejected..."
+check_dropdown_default "default set alongside defaultSelection" \
+  '          defaultSelection { "S3Bucket"; "S3Object" }
+          default = "SILENTLY-WINS"
+          multiSelect = true' \
+  "generated from .defaultSelection."
+
 echo ":: Checking defaultSelection is rejected on a single-select DropDown..."
 check_dropdown_default "defaultSelection without multiSelect" \
   '          defaultSelection { "S3Bucket" }' \

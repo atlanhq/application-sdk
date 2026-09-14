@@ -866,8 +866,15 @@ class DropDown extends UIElementWithEnum {
   /// inherited ones (`possibleValues`) do not resolve inside a constraint — so
   /// the `possibleValues` membership check lives in the value expression below.
   default: String?(
-    if (multiSelect && this != null && defaultSelection == null)
+    if (!multiSelect || this == null)
+      true
+    else if (defaultSelection == null)
       throw("DropDown `default` cannot be set by hand when `multiSelect` is true — the widget needs a JSON-stringified array, which the toolkit generates for you. Replace it with `defaultSelection { \"key1\"; \"key2\" }`.")
+    else if (this != jsonStringArray(defaultSelection!!.toList()))
+      // Both were set. Without this branch the hand-written value would simply
+      // override the generated one and `defaultSelection` would be ignored in
+      // silence — the exact footgun this property exists to remove.
+      throw("DropDown `default` is generated from `defaultSelection` when `multiSelect` is true; remove the `default` assignment and keep `defaultSelection` alone.")
     else true
   ) =
     if (defaultSelection == null)
