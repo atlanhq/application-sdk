@@ -245,9 +245,9 @@ uiConfig = new UIConfig {
             ["View"] = "View"
             ["MaterialisedView"] = "Materialised view"
           }
-          // A multi-select pre-populates from a JSON-stringified array — the only
-          // shape the widget accepts for `default` when `multiSelect` is on.
-          default = "[\"Table\",\"View\"]"
+          // Pre-selection is declared structurally; the toolkit generates the
+          // JSON-stringified `default` the multi-select widget needs.
+          defaultSelection { "Table"; "View" }
           multiSelect = true
           width = 4
         }

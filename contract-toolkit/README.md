@@ -515,10 +515,11 @@ and is UI-only — separate from `validationRules`. See `docs/reference.md` and 
 | `Widgets.Switcher` | `switcher` | `bool` |
 
 A `DropDown` with `multiSelect = true` is `list[str]` in both `_input.py` and
-`_e2e_substitutions.py`. Its `default` is the JSON-stringified array the
-multi-select widget needs in order to pre-populate a selection
-(`default = "[\"S3Bucket\",\"S3Object\"]"`); codegen parses that back into the keys
-it names. See `docs/reference.md` and the [`full`](examples/full/) example.
+`_e2e_substitutions.py`. Declare its pre-selection structurally with
+`defaultSelection { "S3Bucket"; "S3Object" }` — the widget needs `default` as a
+JSON-stringified array, and the toolkit generates that string, so assigning
+`default` by hand on a multi-select is rejected. See `docs/reference.md` and the
+[`full`](examples/full/) example.
 
 ### Connection & Credential
 

@@ -532,7 +532,27 @@ Only `_e2e_credential.py` carries both classes; the credential configmap (`atlan
 
 > **ConditionalInput value space:** when an `extraction-method` (or any radio `ConditionalInput`) exposes extra options via a condition's `overrideEnum`, the generated `_e2e_substitutions.py` types that field as the **union** of `baseEnum` and every `overrideEnum` (e.g. `Literal["direct", "agent"]`), so an agent-mode e2e run can submit `"agent"`.
 
-> **multiSelect DropDown:** a `DropDown` with `multiSelect = true` submits a *list* of keys, so `_e2e_substitutions.py` types it `list[str]` (never `Literal[...]`, which describes a single choice). Its `default` is the JSON-stringified array the multi-select widget needs in order to pre-populate a selection — `default = "[\"S3Bucket\",\"S3Object\"]"` — and codegen parses that back into the keys it names, emitting `Field(default_factory=lambda: ["S3Bucket", "S3Object"])`. A bare key (`default = "S3Bucket"`) is read as a one-element selection. `_input.py` types the same field `Annotated[list[str], MaxItems(1000)]` with `default_factory=list`; the input contract's default stays empty because an absent key there means "the caller sent nothing", not "the form's pre-selection".
+> **multiSelect DropDown — `defaultSelection`, never a stringified `default`:** a `DropDown` with `multiSelect = true` submits a *list* of keys, so `_e2e_substitutions.py` types it `list[str]` (never `Literal[...]`, which describes a single choice).
+>
+> The frontend's multi-select widget reads its pre-selection from `default` as a **JSON-stringified array**. A contract never writes that string — it declares the keys structurally in `defaultSelection` and the toolkit renders it:
+>
+> ```pkl
+> ["asset-scope"] = new DropDown {
+>   title = "Asset ingestion scope"
+>   possibleValues {
+>     ["S3Bucket"] = "Bucket"
+>     ["S3Object"] = "Object"
+>   }
+>   defaultSelection { "S3Bucket"; "S3Object" }
+>   multiSelect = true
+> }
+> ```
+>
+> renders `"default": "[\"S3Bucket\",\"S3Object\"]"` into the workflow config, and types the substitution field `list[str] = Field(default_factory=lambda: ["S3Bucket", "S3Object"])`.
+>
+> Three things are rejected at generation time: assigning `default` by hand on a multi-select (the message names `defaultSelection`), setting `defaultSelection` without `multiSelect = true`, and naming a key absent from `possibleValues` (the message names the unknown keys). A single-select DropDown sets `default` directly, as before.
+>
+> `_input.py` types the same field `Annotated[list[str], MaxItems(1000)]` with `default_factory=list`; the input contract's default stays empty because an absent key there means "the caller sent nothing", not "the form's pre-selection".
 
 ### Pipeline Block
 

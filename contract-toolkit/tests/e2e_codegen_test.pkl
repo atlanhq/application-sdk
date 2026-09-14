@@ -107,16 +107,16 @@ local widgetApp = (App) {
             title = "Multi With Default"
             multiSelect = true
             possibleValues { ["p"] = "P"; ["q"] = "Q" }
-            // The JSON-stringified array a multi-select widget needs to
-            // pre-populate a selection — the shape that used to emit invalid
-            // Python (unescaped quotes inside a `str` default).
-            default = "[\"p\",\"q\"]"
+            // Structured pre-selection. The toolkit renders the JSON-stringified
+            // `default` the widget needs — the shape that used to be hand-written
+            // and emitted unescaped quotes into invalid Python.
+            defaultSelection { "p"; "q" }
           }
-          ["multi_bare_default_field"] = new App.DropDown {
-            title = "Multi With Bare Default"
+          ["multi_single_default_field"] = new App.DropDown {
+            title = "Multi With One Selected"
             multiSelect = true
             possibleValues { ["p"] = "P"; ["q"] = "Q" }
-            default = "p"
+            defaultSelection { "p" }
           }
           ["quoted_default_field"] = new App.TextInput {
             title = "Quoted"
@@ -668,13 +668,20 @@ facts {
     !widgetSubs.contains("Literal[\"p\",")
   }
 
-  ["multiSelect DropDown parses a JSON-stringified default into a list literal"] {
+  ["defaultSelection drives the generated list default"] {
     // 92 chars → fmtSubsField wraps to multi-line form
     widgetSubs.contains("multi_default_field: list[str] = Field(\n        default_factory=lambda: [\"p\", \"q\"],\n        alias=\"{{multi_default_field}}\",\n    )")
   }
 
-  ["multiSelect DropDown reads a bare (non-JSON) default as a one-element list"] {
-    widgetSubs.contains("multi_bare_default_field: list[str] = Field(\n        default_factory=lambda: [\"p\"],\n        alias=\"{{multi_bare_default_field}}\",\n    )")
+  ["a one-key defaultSelection generates a one-element list"] {
+    widgetSubs.contains("multi_single_default_field: list[str] = Field(\n        default_factory=lambda: [\"p\"],\n        alias=\"{{multi_single_default_field}}\",\n    )")
+  }
+
+  // `default` is generated, so the rendered workflow config must carry exactly the
+  // JSON-stringified array the frontend's multi-select widget reads.
+  ["defaultSelection renders the JSON-stringified array into the workflow config"] {
+    widgetApp.output.files["app/generated/widget-test.json"].text
+      .contains("\"default\": \"[\\\"p\\\",\\\"q\\\"]\"")
   }
 
   ["Substitution defaults escape quotes so the generated Python parses"] {

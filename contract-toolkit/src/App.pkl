@@ -3469,13 +3469,16 @@ local function unquoteToken(tok: String): String =
 
 // The keys a multiSelect DropDown's `default` selects.
 //
-// A multi-select widget pre-populates from a JSON-stringified array
-// (the pkl source reads `default = "[\"S3Bucket\",\"S3Object\"]"`), so the raw
-// value normally carries quotes.
-// Parsing is deliberately tolerant rather than strict JSON: a bare key
+// A multi-select widget pre-populates from a JSON-stringified array, so the raw
+// value carries quotes. On a multi-select the contract declares the keys
+// structurally in `defaultSelection` and `Widgets.DropDown` renders that string
+// (a hand-written `default` there is rejected), so this reads back what the
+// toolkit itself just wrote.
+//
+// Parsing is still deliberately tolerant rather than strict JSON — a bare key
 // (`"S3Bucket"`) reads as a one-element selection and an empty or bracket-only
-// value yields none, so a hand-written default can never fail evaluation of the
-// whole contract.
+// value yields none — so a contract predating `defaultSelection` degrades to a
+// sensible default instead of failing evaluation of the whole contract.
 local function multiSelectDefaultValues(raw: String?): List<String> =
   let (s = if (raw != null) raw!!.trim() else "")
   if (s.isEmpty)
@@ -3562,6 +3565,7 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
       // selection, so that value always carries `"` — interpolating it into a
       // `str` default emitted unescaped quotes and syntactically invalid Python.
       // Parse it back into the keys it selects and emit a real list instead.
+      // The keys originate as `DropDown.defaultSelection`; see `Widgets.pkl`.
       let (defVals = multiSelectDefaultValues(dd.default))
       if (defVals.isEmpty)
         fmtSubsField(pyName, "list[str]", "default_factory=list", k)
