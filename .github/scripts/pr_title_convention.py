@@ -6,6 +6,7 @@ files require, per the precedence rules documented in
 .github/workflows/pr-title-convention.yaml:
 
   0. Version-bump / release automation -> ignored entirely.
+  0.5 dependency manifests/locks only -> chore:/ci: required.
   1. application_sdk/ touched         -> no restriction.
   2. Dockerfile / entrypoint.sh       -> feat:/fix: required.
   3. contract-toolkit/ core           -> feat(contract-toolkit):/fix(contract-toolkit): required.
@@ -40,6 +41,23 @@ CHORE_RE = re.compile(r"^(chore|ci)(\([^)]*\))?!?:")
 
 DOCKER_IMAGE_FILES = ("Dockerfile", "entrypoint.sh")
 
+# Dependency manifests and lock files, matched by basename at any depth. A PR
+# that touches nothing but these is a dependency update — a chore, wherever in
+# the tree it lands (root, packages/conformance/, contract-toolkit/, ...).
+DEP_MANIFEST_NAMES = frozenset(
+    {
+        "pyproject.toml",
+        "uv.lock",
+        "requirements.txt",
+        "package.json",
+        "package-lock.json",
+        "yarn.lock",
+        "poetry.lock",
+        "Pipfile",
+        "Pipfile.lock",
+    }
+)
+
 CT_EXEMPT_GLOBS = (
     "contract-toolkit/docs/*",
     "contract-toolkit/examples/*",
@@ -55,6 +73,7 @@ CF_EXEMPT_GLOBS = (
 )
 
 _VALIDATORS = {
+    "deps": (CHORE_RE, "deps"),
     "docker-img": (DOCKER_RE, "docker-img"),
     "ct-core": (CT_RE, "ct-core"),
     "cf-core": (CF_RE, "cf-core"),
@@ -63,6 +82,10 @@ _VALIDATORS = {
 
 _LOG_MESSAGES = {
     "sdk": "application_sdk/ touched — title type unrestricted. ✅",
+    ("deps", False): "Dependency-manifest-only change with a chore/ci title. ✅",
+    ("deps", True): (
+        "Violation: dependency-manifest-only change must use chore: or ci:."
+    ),
     ("docker-img", False): "Docker image file change with a valid feat/fix title. ✅",
     ("docker-img", True): (
         "Violation: Docker image file change (Dockerfile/entrypoint.sh) must "
@@ -86,6 +109,11 @@ _LOG_MESSAGES = {
 }
 
 _ERROR_MESSAGES = {
+    "deps": (
+        "Dependency-only changes (manifests and lock files) must use 'chore:' "
+        "or 'ci:' — a dependency update is a chore wherever it lands, including "
+        "packages/conformance/ and contract-toolkit/."
+    ),
     "docker-img": (
         "Docker image changes (Dockerfile/entrypoint.sh) must use 'feat:' or 'fix:'."
     ),
@@ -105,6 +133,19 @@ _ERROR_MESSAGES = {
 }
 
 _COMMENTS = {
+    "deps": """\
+### \U0001f3f7️ Dependency updates need a `chore`/`ci` title
+
+This PR changes nothing but dependency manifests and lock files
+(`pyproject.toml`, `uv.lock`, `package.json`, ...), so it is a
+dependency update — a chore — even when the manifest lives inside
+`packages/conformance/` or `contract-toolkit/`.
+
+- `chore(deps): …` (what Renovate/Dependabot generate)
+- `ci: …` / `ci(scope): …` if it is really CI tooling
+
+Editing the PR title re-runs this check and clears this comment automatically.
+""",
     "docker-img": """\
 ### \U0001f3f7️ Docker image changes need a `feat`/`fix` title
 
@@ -174,11 +215,19 @@ def is_version_bump_pr(pr_title: str, head_ref: str) -> bool:
     )
 
 
+def is_dependency_manifest(path: str) -> bool:
+    """True for a dependency manifest or lock file, at any depth in the tree."""
+    return path.rsplit("/", 1)[-1] in DEP_MANIFEST_NAMES
+
+
 def classify_files(files: list) -> str:
     """Return the highest-precedence zone touched by ``files``.
 
-    One of "sdk", "docker-img", "ct-core", "cf-core", or "other".
+    One of "deps", "sdk", "docker-img", "ct-core", "cf-core", or "other".
     """
+    if files and all(is_dependency_manifest(f) for f in files):
+        return "deps"
+
     sdk = docker_img = ct_core = cf_core = False
     for f in files:
         if f.startswith("application_sdk/"):

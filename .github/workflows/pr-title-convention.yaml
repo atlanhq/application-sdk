@@ -13,6 +13,15 @@
 #      (branch `bump-version-*`, or a `Bump version to ...` / `chore(...): release ...`
 #      title). These are generated and must not be policed.
 #
+#   0.5 A PR that changes *nothing but* dependency manifests and lock files
+#      (`pyproject.toml`, `uv.lock`, `requirements.txt`, `package.json`,
+#      `package-lock.json`, `yarn.lock`, ... matched by basename at any depth)
+#      ->  title must be `chore:`/`chore(...):` or `ci:`/`ci(...):`.
+#      A dependency bump is a chore wherever the manifest lives — including
+#      inside `packages/conformance/` and `contract-toolkit/` — and must not
+#      surface in the changelog as a feature or fix. This is what Renovate
+#      generates (`chore(deps): update dependency ruff to vX`).
+#
 #   1. Any change under `application_sdk/`  ->  no restriction.
 #      Source changes are the legitimate home of feat:/fix: (and may also be
 #      chore:/ci:/etc.). This takes precedence over every rule below.

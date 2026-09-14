@@ -127,8 +127,19 @@ class TestBumpVersion:
     def test_large_numbers(self) -> None:
         assert conformance_release.bump_version("10.20.30", "patch") == "10.20.31"
 
-    def test_major_from_zero(self) -> None:
-        assert conformance_release.bump_version("0.1.0", "major") == "1.0.0"
+    # Semver §4: a breaking change on a 0.x package bumps the MINOR. Promoting
+    # 0.x to 1.0.0 declares the API stable and stays a human decision.
+    def test_breaking_on_zero_major_bumps_minor(self) -> None:
+        assert conformance_release.bump_version("0.1.0", "major") == "0.2.0"
+
+    def test_breaking_on_zero_major_does_not_reach_one(self) -> None:
+        assert conformance_release.bump_version("0.29.0", "major") == "0.30.0"
+
+    def test_breaking_on_zero_major_resets_patch(self) -> None:
+        assert conformance_release.bump_version("0.25.2", "major") == "0.26.0"
+
+    def test_breaking_past_one_still_bumps_major(self) -> None:
+        assert conformance_release.bump_version("1.0.0", "major") == "2.0.0"
 
 
 # ---------------------------------------------------------------------------

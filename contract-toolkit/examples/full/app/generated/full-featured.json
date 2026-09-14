@@ -130,6 +130,29 @@
           "Warning"
         ]
       },
+      "asset_types": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "select",
+          "label": "Asset types",
+          "hidden": false,
+          "help": "Which asset kinds to ingest; leave as-is to ingest all three.",
+          "grid": 4,
+          "mode": "multiple"
+        },
+        "default": "[\"Table\",\"View\"]",
+        "enum": [
+          "Table",
+          "View",
+          "MaterialisedView"
+        ],
+        "enumNames": [
+          "Table",
+          "View",
+          "Materialised view"
+        ]
+      },
       "lineage_depth": {
         "type": "number",
         "required": false,
@@ -269,6 +292,7 @@
           "enable_lineage",
           "load-to-atlan",
           "log_level",
+          "asset_types",
           "lineage_depth",
           "table_prefix",
           "custom_attributes",
