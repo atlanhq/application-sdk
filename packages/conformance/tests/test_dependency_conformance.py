@@ -2678,3 +2678,85 @@ def test_d014_suppressed_by_inline_directive(tmp_path: Path) -> None:
     )
     assert len(findings) == 1
     assert findings[0].suppressed
+
+
+_INLINE_CARVE_OUTS = (
+    "exclude-newer-package = { "
+    'atlan-application-sdk = "2026-09-03T00:00:00Z", '
+    'pyatlan = "2026-08-27T00:00:00Z" }\n'
+)
+
+
+def test_d014_per_package_fences_carry_a_discriminator(tmp_path: Path) -> None:
+    """Fingerprints hash (rule, uri, line). Two packages fenced on one inline
+    line share all three, so without a discriminator they collapse to a single
+    SARIF identity and a line-level suppress silences both."""
+    findings = _fence_scan(tmp_path, "\n[tool.uv]\n" + _INLINE_CARVE_OUTS)
+    assert len(findings) == 2
+    assert {f.discriminator for f in findings} == {
+        "exclude-newer-package.atlan-application-sdk",
+        "exclude-newer-package.pyatlan",
+    }
+
+
+def test_d014_repo_wide_fence_has_no_discriminator(tmp_path: Path) -> None:
+    """One per repo, so it keeps the pre-discriminator fingerprint."""
+    findings = _fence_scan(
+        tmp_path, '\n[tool.uv]\nexclude-newer = "2026-09-01T00:00:00Z"\n'
+    )
+    assert findings[0].discriminator is None
+
+
+def test_d014_per_package_fingerprints_are_distinct(tmp_path: Path) -> None:
+    """The assertion the discriminator exists for — two findings at one anchor
+    must not share a SARIF identity."""
+    from conformance.suite.schema.findings import findings_to_report
+
+    findings = _fence_scan(tmp_path, "\n[tool.uv]\n" + _INLINE_CARVE_OUTS)
+    assert len({f.line for f in findings}) == 1, "the inline-table shape under test"
+
+    report = findings_to_report(findings, tool_version="0.0.0-test")
+    fps = [
+        r.partial_fingerprints["atlanConformance/v1"] for r in report.runs[0].results
+    ]
+    assert len(fps) == 2
+    assert fps[0] != fps[1]
+
+
+def test_d014_a_targeted_suppression_spares_its_siblings(tmp_path: Path) -> None:
+    directive = (
+        "# conformance: ignore"
+        "[D014:exclude-newer-package.pyatlan] pinned for FND-1125\n"
+    )
+    findings = _fence_scan(tmp_path, "\n[tool.uv]\n" + directive + _INLINE_CARVE_OUTS)
+    by_pkg = {f.discriminator: f for f in findings}
+    assert by_pkg["exclude-newer-package.pyatlan"].suppressed
+    assert not by_pkg["exclude-newer-package.atlan-application-sdk"].suppressed
+
+
+def test_d014_a_bare_rule_suppression_still_silences_the_whole_line(
+    tmp_path: Path,
+) -> None:
+    """A directive with no ``:subject`` stays rule-wide, as everywhere else."""
+    directive = "# conformance: ignore[D014] owner-gated hold\n"
+    findings = _fence_scan(tmp_path, "\n[tool.uv]\n" + directive + _INLINE_CARVE_OUTS)
+    assert len(findings) == 2
+    assert all(f.suppressed for f in findings)
+
+
+def test_d014_a_sub_table_anchors_each_package_on_its_own_line(
+    tmp_path: Path,
+) -> None:
+    """The other spelling: one key per line, so the directive can sit where the
+    reader expects. The discriminator is still set, because the fingerprint
+    must not depend on which spelling the repo chose."""
+    findings = _fence_scan(
+        tmp_path,
+        "\n[tool.uv.exclude-newer-package]\n"
+        'atlan-application-sdk = "2026-09-03T00:00:00Z"\n'
+        'pyatlan = "2026-08-27T00:00:00Z"\n',
+    )
+    assert len(findings) == 2
+    assert len({f.line for f in findings}) == 2, "each key anchored on its own line"
+    assert all(f.discriminator is not None for f in findings)
+    assert all(f.line > 1 for f in findings), "never anchored at the top of the file"

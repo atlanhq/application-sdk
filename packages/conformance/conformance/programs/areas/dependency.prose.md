@@ -17,9 +17,10 @@ findings in the working tree, as reported by `suite.runner --series D`.
 #### violations-dependency
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
-include WARNING results in strict mode — D002/D003/D004/D006/D007/D008/D012/D013
-are WARN-tier, so they are processed in strict mode; D001, D005, D009, D010 and
-D011 are BLOCK-tier and processed in both modes.
+include WARNING results in strict mode —
+D002/D003/D004/D006/D007/D008/D012/D013/D014 are WARN-tier, so they are
+processed in strict mode; D001, D005, D009, D010 and D011 are BLOCK-tier and
+processed in both modes.
 
 This facet's fingerprint moves when any D-series finding is resolved (fixed or
 suppressed with justification) or when new ones appear.  An unchanged
@@ -321,6 +322,44 @@ WARN-tier — route to residue for human decision):
   and the rewrite will recur on the contributor's next `uv` command — say so in
   the residue entry, because fixing only the lock is a repair with a known
   expiry date.
+
+- **D014 AbsoluteResolverFence** (`classification = "judgment"`,
+  `not_remediable = true`) — **always route to residue; never delete the key.**
+  A `[tool.uv] exclude-newer` (or an `exclude-newer-package` entry) is pinned to
+  a fixed date, which freezes every resolve in the repo rather than applying the
+  rolling cooldown its comment usually claims.
+
+  The edit is one line, which is exactly why it must not be automatic.  Deleting
+  the key does not merely clear the finding: the next `uv lock` jumps the repo
+  across every release the fence was holding back — on the repos measured for
+  FND-1985 that was up to 33 days, 12 conformance minors and 4 SDK minors at
+  once.  Nothing in the D-series loop resolves or tests that jump (the loop does
+  not `uv sync` between edit and gates), so the fix would land unvalidated and
+  its blast radius would first be felt in the app's next image build.
+
+  And the finding cannot tell drift from a deliberate hold.  At least one
+  instance is an owner-gated fence with a tracking issue
+  (`atlan-mongodbatlas-app`, FND-1125) whose carve-outs exist so a specific
+  migration can proceed; deleting it would silently undo someone's decision.
+  That distinction lives in a ticket, not in the file, so a human makes it.
+
+  Emit a residue entry that:
+
+  - names the fenced date and which form fired — repo-wide `exclude-newer`, or
+    `exclude-newer-package.<name>` (the finding's discriminator carries the
+    package, so per-package fences are addressable individually);
+  - says the remedy is to delete the key and re-lock, and that the central
+    rolling cooldown in `renovate-config/default.json` already covers the repo,
+    so nothing is lost by removing it;
+  - flags the catch-up jump as the thing to review, not the deletion;
+  - if a tracking issue is referenced in a comment near the key, names it and
+    says the hold may be deliberate.
+
+  If the hold is genuinely intended, the proposal is a suppression rather than a
+  deletion: `# conformance: ignore[D014] <reason and owner>` for the whole
+  fence, or `# conformance: ignore[D014:exclude-newer-package.<name>] <reason>`
+  to keep one carve-out while the repo-wide fence is still reported.  A
+  suppression here must name an owner — an unattributed hold is how these rot.
 
 - **D010 QueryTransformerWithoutDuckdb** — the app imports the SDK query
   transformer (`application_sdk.transformers.query`; the finding message names

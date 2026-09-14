@@ -1070,9 +1070,21 @@ def _make_finding(
     column: int,
     message: str,
     suppressions: SuppressionsMap,
+    discriminator: str | None = None,
 ) -> Finding:
-    """Construct a Finding, marking it suppressed if a directive applies."""
-    suppressed, justification = _is_suppressed(suppressions, rule_id, line)
+    """Construct a Finding, marking it suppressed if a directive applies.
+
+    *discriminator* names the varying subject when one rule reports several
+    findings at one anchor — several packages fenced on a single inline-table
+    line, say.  Fingerprints hash ``(rule, uri, line)``, so without it those
+    siblings collapse to one SARIF identity and a line-level
+    ``# conformance: ignore[...]`` cannot single one of them out.  ``None``
+    keeps the pre-discriminator fingerprint and directive behaviour, so every
+    existing caller is unchanged.
+    """
+    suppressed, justification = _is_suppressed(
+        suppressions, rule_id, line, discriminator
+    )
     return Finding(
         rule_id=rule_id,
         file=file,
@@ -1080,6 +1092,7 @@ def _make_finding(
         column=column,
         message=message,
         snippet=None,
+        discriminator=discriminator,
         suppressed=suppressed,
         suppression_justification=justification,
     )
@@ -2007,14 +2020,23 @@ _ABSOLUTE_DATE = re.compile(r"^\s*\d{4}-\d{2}-\d{2}")
 
 def _absolute_fences(
     text: str, *, data: Mapping[str, Any] | None = None
-) -> list[tuple[str, str, int]]:
-    """Return ``(label, value, lineno)`` for each absolute fence under ``[tool.uv]``.
+) -> list[tuple[str, str, int, str | None]]:
+    """Return ``(label, value, lineno, discriminator)`` per absolute fence.
 
     Two places carry one, and a check that reads only the first misreports the
     second: ``exclude-newer`` fences the whole repo, while
     ``exclude-newer-package`` fences named packages — atlanhq/atlan-mongodbatlas-app
     carries both at once, with the repo-wide value three weeks older than the
     per-package carve-outs written to work around it.
+
+    Every per-package fence carries a *discriminator*.  Written as an inline
+    table they all share one line, so without it two fenced packages hash to
+    one SARIF identity and a suppression on that line silences both — the
+    discriminator is what keeps them addressable.  Written as a
+    ``[tool.uv.exclude-newer-package]`` sub-table each key has a line of its
+    own, and the anchor is that line, so a comment sits where the reader
+    expects; the discriminator is still set, because the fingerprint must not
+    depend on which of the two spellings the repo happens to use.
     """
     if data is None:
         data = _safe_load(text)
@@ -2026,18 +2048,28 @@ def _absolute_fences(
         return []
 
     anchor = _line_of(text, "exclude-newer", section="tool.uv")
-    found: list[tuple[str, str, int]] = []
+    found: list[tuple[str, str, int, str | None]] = []
 
     whole = uv.get("exclude-newer")
     if isinstance(whole, str) and _ABSOLUTE_DATE.match(whole):
-        found.append(("exclude-newer", whole, anchor))
+        found.append(("exclude-newer", whole, anchor, None))
 
     per_package = uv.get("exclude-newer-package")
     if isinstance(per_package, dict):
-        pkg_anchor = _line_of(text, "exclude-newer-package", section="tool.uv")
+        inline_anchor = _line_of(text, "exclude-newer-package", section="tool.uv")
         for name, value in sorted(per_package.items()):
-            if isinstance(value, str) and _ABSOLUTE_DATE.match(value):
-                found.append((f"exclude-newer-package.{name}", value, pkg_anchor))
+            if not (isinstance(value, str) and _ABSOLUTE_DATE.match(value)):
+                continue
+            label = f"exclude-newer-package.{name}"
+            # A sub-table gives each package its own line; an inline table does
+            # not, and _line_of returns 1 when it finds nothing — which would
+            # anchor the finding at the top of the file, where no reader would
+            # think to write the directive. So take the key's own line only
+            # when one was actually found.
+            key_line = _line_of(text, name, section="tool.uv.exclude-newer-package")
+            found.append(
+                (label, value, key_line if key_line > 1 else inline_anchor, label)
+            )
     return found
 
 
@@ -2052,16 +2084,21 @@ def _scan_resolver_fence(text: str, rel_pyproject: str) -> list[Finding]:
     every run — a day count in the message would rewrite the SARIF, move the
     fingerprint and re-notify on an unchanged repo, every day, forever. The
     reader can subtract.
+
+    Per-package fences carry their label as the finding's discriminator, so
+    each keeps a distinct fingerprint and can be suppressed alone with
+    ``# conformance: ignore[D014:exclude-newer-package.<name>]``.
     """
     suppressions = parse_toml_suppressions(text)
     findings: list[Finding] = []
-    for label, value, lineno in _absolute_fences(text):
+    for label, value, lineno, discriminator in _absolute_fences(text):
         findings.append(
             _make_finding(
                 rule_id=RULE_D014,
                 file=rel_pyproject,
                 line=lineno,
                 column=1,
+                discriminator=discriminator,
                 message=(
                     f"[tool.uv] {label} is pinned to the fixed date '{value}', "
                     "which is a freeze rather than a cooldown: it does not roll "

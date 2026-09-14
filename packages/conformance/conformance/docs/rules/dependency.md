@@ -521,6 +521,16 @@ rolls, so `exclude-newer-span = "P3D"` and any non-date value pass.  Only a valu
 beginning `YYYY-MM-DD` — uv accepts a bare date and an RFC 3339 timestamp — is a fence
 that never moves.
 
+**Each per-package fence carries a discriminator.**  Written as an inline table they
+share one line, so fingerprints — hashed from (rule, uri, line) — would collapse two
+fenced packages into one SARIF identity and a line-level directive would silence both.
+The discriminator is `exclude-newer-package.<name>`, so one can be suppressed alone with
+`# conformance: ignore[D014:exclude-newer-package.<name>]` while the repo-wide fence is
+still reported.  Written as a `[tool.uv.exclude-newer-package]` sub-table each key
+anchors on its own line as well, so the directive sits where a reader expects it; the
+discriminator is set either way, because a fingerprint must not depend on which spelling
+the repo chose.
+
 **Findings never state how stale the fence is.**  Staleness is the point of the rule and
 also the one fact that changes on every run: a day count in the message would rewrite
 the SARIF, move the fingerprint and re-notify on an unchanged repo daily, forever. The
