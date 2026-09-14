@@ -844,3 +844,31 @@ make that edit easy to get wrong:
   level each scope is used at, and asserts the scaffolded caller declares exactly
   that — so adding a scope to a job of the reusable fails there rather than
   silently arriving as `none` in every connector.
+
+### Collapsing a managed workflow into a reusable renames its status check
+
+A job that `uses:` a reusable reports as `<caller job> / <called job>`, never as
+the caller job alone. So moving a bootstrap template's body into a reusable
+renames the check every consumer repo publishes — `checks.yml`'s `pre-commit`
+became `pre-commit / Pre-commit` in FND-1994. Where a repo's ruleset **requires**
+the old context by name, that requirement can never be satisfied again and every
+PR in that repo deadlocks: the required check is simply absent, not failing.
+
+The rename is unavoidable (there is no spelling of caller and callee that
+collapses the path), so it is handled rather than dodged:
+
+* Re-sync one repo at a time and edit its ruleset in the same step. Both halves
+  are per-repo, and neither is a bot action — the fleet App has no
+  `workflows: write` and no ruleset write.
+* `.github/scripts/gate_enforcement_scan.py` reports which repos actually pin a
+  context, which is the list this applies to. Most of the fleet pins nothing and
+  migrates with no ruleset edit at all.
+
+This is also why such a migration is a **pull**, not a push: a repo keeps running
+its own inlined copy until it is re-synced, un-migrated and migrated repos
+coexist indefinitely, and C002 reports the difference at WARN — a signal that the
+repo is due a re-sync, not a failing gate. What that costs the SDK side is that
+every parameter the old shape carried must stay readable: see
+`extract_apt_packages`, which reads `system_deps` off both the caller's `with:`
+block and a pre-migration inline `apt-get install` step. Drop the second arm and
+the first re-sync of an un-migrated repo silently deletes a step its build needs.
