@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -2547,3 +2548,215 @@ def test_d013_suppressed_by_inline_directive(tmp_path: Path) -> None:
     findings = _index_scan(tmp_path, body, lock=lock, rule="D013")
     assert len(findings) == 1
     assert findings[0].suppressed
+
+
+# ── D014 — absolute-dated resolver fence (FND-1985) ──────────────────────────
+
+
+def _fence_scan(tmp_path: Path, uv_block: str) -> list:
+    """Write a root pyproject carrying *uv_block*; return its D014 findings.
+
+    The pinned index rides along because D012 is scope=both and fires on an
+    absence — without it every fixture here would also collect a D012 finding
+    and the rule filter would be doing more work than the assertions show.
+    """
+    body = _D012_HEAD + _PINNED_INDEX + uv_block
+    return _index_scan(tmp_path, body, rule="D014")
+
+
+def test_d014_clean_with_no_uv_table(tmp_path: Path) -> None:
+    assert _fence_scan(tmp_path, "") == []
+
+
+def test_d014_clean_when_uv_declares_no_fence(tmp_path: Path) -> None:
+    assert _fence_scan(tmp_path, '\n[tool.uv]\ndefault-groups = ["dev"]\n') == []
+
+
+def test_d014_fires_on_a_repo_wide_timestamp(tmp_path: Path) -> None:
+    findings = _fence_scan(
+        tmp_path, '\n[tool.uv]\nexclude-newer = "2026-09-01T00:00:00Z"\n'
+    )
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule_id == "D014"
+    assert "2026-09-01T00:00:00Z" in f.message
+    assert not f.suppressed
+
+
+def test_d014_fires_on_a_bare_date(tmp_path: Path) -> None:
+    """uv accepts ``YYYY-MM-DD`` as well as RFC 3339; both are fences."""
+    findings = _fence_scan(tmp_path, '\n[tool.uv]\nexclude-newer = "2026-09-01"\n')
+    assert len(findings) == 1
+
+
+def test_d014_ignores_a_rolling_span(tmp_path: Path) -> None:
+    """The red/green pair for the timestamp case: a duration genuinely rolls.
+
+    This is the whole reason the rule grades the VALUE and not the key — a
+    repo that moved to a span has fixed the problem, and flagging it would
+    push it back towards the fence.
+    """
+    assert _fence_scan(tmp_path, '\n[tool.uv]\nexclude-newer-span = "P3D"\n') == []
+
+
+def test_d014_ignores_a_non_date_exclude_newer(tmp_path: Path) -> None:
+    assert _fence_scan(tmp_path, '\n[tool.uv]\nexclude-newer = "7 days"\n') == []
+
+
+def test_d014_fires_on_a_per_package_fence(tmp_path: Path) -> None:
+    """The half a key-presence check would miss."""
+    findings = _fence_scan(
+        tmp_path,
+        "\n[tool.uv]\n"
+        'exclude-newer-package = { atlan-application-sdk = "2026-09-03T00:00:00Z" }\n',
+    )
+    assert len(findings) == 1
+    assert "exclude-newer-package.atlan-application-sdk" in findings[0].message
+
+
+def test_d014_reports_both_fences_when_a_repo_carries_both(tmp_path: Path) -> None:
+    """atlan-mongodbatlas-app's shape: a repo-wide fence plus carve-outs
+    written to work around it. Reporting only the first would describe the
+    workaround as the whole problem."""
+    findings = _fence_scan(
+        tmp_path,
+        "\n[tool.uv]\n"
+        'exclude-newer = "2026-08-12T16:00:59Z"\n'
+        "exclude-newer-package = { "
+        'atlan-application-sdk = "2026-09-03T00:00:00Z", '
+        'pyatlan = "2026-08-27T00:00:00Z" }\n',
+    )
+    assert len(findings) == 3
+    labels = sorted(f.message.split(" is pinned")[0] for f in findings)
+    assert labels == [
+        "[tool.uv] exclude-newer",
+        "[tool.uv] exclude-newer-package.atlan-application-sdk",
+        "[tool.uv] exclude-newer-package.pyatlan",
+    ]
+
+
+def test_d014_ignores_a_rolling_carve_out(tmp_path: Path) -> None:
+    findings = _fence_scan(
+        tmp_path,
+        "\n[tool.uv]\n"
+        'exclude-newer = "2026-08-12T16:00:59Z"\n'
+        'exclude-newer-package = { pyatlan = "P7D" }\n',
+    )
+    assert len(findings) == 1
+    assert "exclude-newer-package" not in findings[0].message
+
+
+def test_d014_message_never_states_how_stale_the_fence_is(tmp_path: Path) -> None:
+    """Staleness is the point of the rule and also the one fact that changes
+    every run. A day count would rewrite the SARIF and move the fingerprint on
+    an unchanged repo, daily, forever."""
+    findings = _fence_scan(
+        tmp_path, '\n[tool.uv]\nexclude-newer = "2026-09-01T00:00:00Z"\n'
+    )
+    message = findings[0].message
+    assert "days stale" not in message
+    assert not re.search(r"\b\d+ days?\b", message)
+
+
+def test_d014_grades_the_sdk_too(tmp_path: Path) -> None:
+    """scope=both: a fence bounds the SDK's own resolves exactly as an app's."""
+    body = (
+        '[project]\nname = "atlan-application-sdk"\nversion = "0.1.0"\n'
+        "dependencies = []\n"
+        + _PINNED_INDEX
+        + '\n[tool.uv]\nexclude-newer = "2026-09-01T00:00:00Z"\n'
+    )
+    assert len(_index_scan(tmp_path, body, rule="D014")) == 1
+
+
+def test_d014_suppressed_by_inline_directive(tmp_path: Path) -> None:
+    findings = _fence_scan(
+        tmp_path,
+        "\n[tool.uv]\n"
+        "# conformance: ignore[D014] owner-gated hold, FND-1125\n"
+        'exclude-newer = "2026-09-01T00:00:00Z"\n',
+    )
+    assert len(findings) == 1
+    assert findings[0].suppressed
+
+
+_INLINE_CARVE_OUTS = (
+    "exclude-newer-package = { "
+    'atlan-application-sdk = "2026-09-03T00:00:00Z", '
+    'pyatlan = "2026-08-27T00:00:00Z" }\n'
+)
+
+
+def test_d014_per_package_fences_carry_a_discriminator(tmp_path: Path) -> None:
+    """Fingerprints hash (rule, uri, line). Two packages fenced on one inline
+    line share all three, so without a discriminator they collapse to a single
+    SARIF identity and a line-level suppress silences both."""
+    findings = _fence_scan(tmp_path, "\n[tool.uv]\n" + _INLINE_CARVE_OUTS)
+    assert len(findings) == 2
+    assert {f.discriminator for f in findings} == {
+        "exclude-newer-package.atlan-application-sdk",
+        "exclude-newer-package.pyatlan",
+    }
+
+
+def test_d014_repo_wide_fence_has_no_discriminator(tmp_path: Path) -> None:
+    """One per repo, so it keeps the pre-discriminator fingerprint."""
+    findings = _fence_scan(
+        tmp_path, '\n[tool.uv]\nexclude-newer = "2026-09-01T00:00:00Z"\n'
+    )
+    assert findings[0].discriminator is None
+
+
+def test_d014_per_package_fingerprints_are_distinct(tmp_path: Path) -> None:
+    """The assertion the discriminator exists for — two findings at one anchor
+    must not share a SARIF identity."""
+    from conformance.suite.schema.findings import findings_to_report
+
+    findings = _fence_scan(tmp_path, "\n[tool.uv]\n" + _INLINE_CARVE_OUTS)
+    assert len({f.line for f in findings}) == 1, "the inline-table shape under test"
+
+    report = findings_to_report(findings, tool_version="0.0.0-test")
+    fps = [
+        r.partial_fingerprints["atlanConformance/v1"] for r in report.runs[0].results
+    ]
+    assert len(fps) == 2
+    assert fps[0] != fps[1]
+
+
+def test_d014_a_targeted_suppression_spares_its_siblings(tmp_path: Path) -> None:
+    directive = (
+        "# conformance: ignore"
+        "[D014:exclude-newer-package.pyatlan] pinned for FND-1125\n"
+    )
+    findings = _fence_scan(tmp_path, "\n[tool.uv]\n" + directive + _INLINE_CARVE_OUTS)
+    by_pkg = {f.discriminator: f for f in findings}
+    assert by_pkg["exclude-newer-package.pyatlan"].suppressed
+    assert not by_pkg["exclude-newer-package.atlan-application-sdk"].suppressed
+
+
+def test_d014_a_bare_rule_suppression_still_silences_the_whole_line(
+    tmp_path: Path,
+) -> None:
+    """A directive with no ``:subject`` stays rule-wide, as everywhere else."""
+    directive = "# conformance: ignore[D014] owner-gated hold\n"
+    findings = _fence_scan(tmp_path, "\n[tool.uv]\n" + directive + _INLINE_CARVE_OUTS)
+    assert len(findings) == 2
+    assert all(f.suppressed for f in findings)
+
+
+def test_d014_a_sub_table_anchors_each_package_on_its_own_line(
+    tmp_path: Path,
+) -> None:
+    """The other spelling: one key per line, so the directive can sit where the
+    reader expects. The discriminator is still set, because the fingerprint
+    must not depend on which spelling the repo chose."""
+    findings = _fence_scan(
+        tmp_path,
+        "\n[tool.uv.exclude-newer-package]\n"
+        'atlan-application-sdk = "2026-09-03T00:00:00Z"\n'
+        'pyatlan = "2026-08-27T00:00:00Z"\n',
+    )
+    assert len(findings) == 2
+    assert len({f.line for f in findings}) == 2, "each key anchored on its own line"
+    assert all(f.discriminator is not None for f in findings)
+    assert all(f.line > 1 for f in findings), "never anchored at the top of the file"

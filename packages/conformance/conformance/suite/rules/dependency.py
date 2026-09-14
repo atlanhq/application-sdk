@@ -723,4 +723,95 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/dependency.md#d013"
         ),
     ),
+    RuleDefinition(
+        id="D014",
+        scope=RuleScope.BOTH,
+        name="AbsoluteResolverFence",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="supply-chain",
+        autofixable=False,
+        since="0.31.0",
+        rationale=(
+            "A repo-local '[tool.uv] exclude-newer' pinned to a fixed date is written as a "
+            "release-age cooldown and behaves as a freeze. The comment above it in all "
+            "three repos found carrying one says 'never resolve a version published in the "
+            "last 7 days'; the value is a timestamp, so it was seven days on the day it was "
+            "typed and has widened by a day every day since. Nothing fails when nobody "
+            "moves it, which is why it is found by census rather than by anyone noticing. "
+            "It bounds every resolve in the repo, /fix-vulnerabilities included, so a "
+            "security fix cannot land until a human edits the date first — the opposite of "
+            "what a cooldown is for. It is also silent in a way that reads as health: "
+            "Renovate's package datasource is unbounded, so it keeps opening upgrade PRs, "
+            "and 'uv lock --upgrade-package' then returns the lock unchanged because uv "
+            "cannot see past the fence. The repo looks maintained and is frozen. "
+            "Customer impact: the connector ships on a dependency set nobody chose, missing "
+            "SDK fixes and CVE patches alike, and the PRs that would have delivered them sit "
+            "open and green-adjacent rather than failing visibly. Measured 2026-09-14: three "
+            "fleet repos, the oldest fence 33 days stale, one of them 12 conformance minors "
+            "and 4 SDK minors behind. FND-414 cleaned eleven repos of this in August; two of "
+            "the three found in September were written AFTER that cleanup, which is why this "
+            "is a rule and not another sweep."
+        ),
+        short_description=(
+            "pyproject.toml pins [tool.uv] exclude-newer to a fixed date, "
+            "freezing every resolve in the repo"
+        ),
+        full_description=(
+            "The repo's root ``pyproject.toml`` must not fence uv's resolver\n"
+            "to an absolute date.  Both places one can be declared are\n"
+            "checked, and each yields its own finding::\n"
+            "\n"
+            "    [tool.uv]\n"
+            '    exclude-newer = "2026-09-01T00:00:00Z"          # repo-wide\n'
+            '    exclude-newer-package = { pkg = "2026-09-03" }  # per package\n'
+            "\n"
+            "Reading only the first misreports a repo that carries both —\n"
+            "``atlan-mongodbatlas-app`` has a repo-wide fence three weeks\n"
+            "older than the per-package carve-outs written to work around it.\n"
+            "\n"
+            "**The value's shape is what is graded, not the key's presence.**\n"
+            'A duration genuinely rolls, so ``exclude-newer-span = "P3D"``\n'
+            "and any non-date value pass.  Only a value beginning\n"
+            "``YYYY-MM-DD`` — uv accepts a bare date and an RFC 3339\n"
+            "timestamp — is a fence that never moves.\n"
+            "\n"
+            "**Each per-package fence carries a discriminator.**  Written as\n"
+            "an inline table they share one line, so fingerprints — hashed\n"
+            "from (rule, uri, line) — would collapse two fenced packages into\n"
+            "one SARIF identity and a line-level directive would silence both.\n"
+            "The discriminator is ``exclude-newer-package.<name>``, so one can\n"
+            "be suppressed alone with\n"
+            "``# conformance: ignore[D014:exclude-newer-package.<name>]`` while\n"
+            "the repo-wide fence is still reported.  Written as a\n"
+            "``[tool.uv.exclude-newer-package]`` sub-table each key anchors on\n"
+            "its own line as well, so the directive sits where a reader expects\n"
+            "it; the discriminator is set either way, because a fingerprint\n"
+            "must not depend on which spelling the repo chose.\n"
+            "\n"
+            "**Findings never state how stale the fence is.**  Staleness is\n"
+            "the point of the rule and also the one fact that changes on every\n"
+            "run: a day count in the message would rewrite the SARIF, move the\n"
+            "fingerprint and re-notify on an unchanged repo daily, forever.\n"
+            "The message names the date; the reader subtracts.\n"
+            "\n"
+            "Not autofixable, deliberately.  Deleting the key is one line, but\n"
+            "the next resolve then jumps the repo across every release the\n"
+            "fence was holding back, and at least one instance is a documented\n"
+            "owner-gated hold (FND-1125) rather than drift.  Which of those a\n"
+            "given fence is cannot be read off the file, so the remediation\n"
+            "loop must not decide it.\n"
+            "\n"
+            "Scope is ``both``: a fence bounds the SDK's own resolves exactly\n"
+            "as it bounds an app's.  The fleet does need a release-age bound —\n"
+            "it is applied centrally and rolling, by ``minimumReleaseAge`` in\n"
+            "``renovate-config/default.json`` and by the bounded driver in\n"
+            "``postUpgradeTasks``, neither of which can rot in a repo.\n"
+            "Cite: FND-1985, FND-1999, FND-2000, FND-2001."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d014"
+        ),
+    ),
 )
