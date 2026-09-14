@@ -98,6 +98,7 @@ RULE_D010 = "D010"
 RULE_D011 = "D011"
 RULE_D012 = "D012"
 RULE_D013 = "D013"
+RULE_D014 = "D014"
 
 SDK_PACKAGE = "atlan-application-sdk"
 # The conformance suite itself (D011).  Apps declare it in a dev group so
@@ -1993,6 +1994,97 @@ def _scan_default_index(text: str, rel_pyproject: str) -> list[Finding]:
     return []
 
 
+# D014 — an absolute-dated resolver fence (repo-level, scope=both)
+# ---------------------------------------------------------------------------
+
+#: An ``exclude-newer`` value that is a point in time rather than a duration.
+#: uv accepts both an RFC 3339 timestamp and a bare ``YYYY-MM-DD``; either is a
+#: fence that never moves.  A duration (``P3D``, ``7 days``) genuinely rolls and
+#: is not this rule's concern — which is why the test is on the VALUE's shape
+#: and not on the key's presence.
+_ABSOLUTE_DATE = re.compile(r"^\s*\d{4}-\d{2}-\d{2}")
+
+
+def _absolute_fences(
+    text: str, *, data: Mapping[str, Any] | None = None
+) -> list[tuple[str, str, int]]:
+    """Return ``(label, value, lineno)`` for each absolute fence under ``[tool.uv]``.
+
+    Two places carry one, and a check that reads only the first misreports the
+    second: ``exclude-newer`` fences the whole repo, while
+    ``exclude-newer-package`` fences named packages — atlanhq/atlan-mongodbatlas-app
+    carries both at once, with the repo-wide value three weeks older than the
+    per-package carve-outs written to work around it.
+    """
+    if data is None:
+        data = _safe_load(text)
+    if data is None:
+        return []
+    tool = data.get("tool")
+    uv = tool.get("uv") if isinstance(tool, dict) else None
+    if not isinstance(uv, dict):
+        return []
+
+    anchor = _line_of(text, "exclude-newer", section="tool.uv")
+    found: list[tuple[str, str, int]] = []
+
+    whole = uv.get("exclude-newer")
+    if isinstance(whole, str) and _ABSOLUTE_DATE.match(whole):
+        found.append(("exclude-newer", whole, anchor))
+
+    per_package = uv.get("exclude-newer-package")
+    if isinstance(per_package, dict):
+        pkg_anchor = _line_of(text, "exclude-newer-package", section="tool.uv")
+        for name, value in sorted(per_package.items()):
+            if isinstance(value, str) and _ABSOLUTE_DATE.match(value):
+                found.append((f"exclude-newer-package.{name}", value, pkg_anchor))
+    return found
+
+
+def _scan_resolver_fence(text: str, rel_pyproject: str) -> list[Finding]:
+    """D014: no absolute-dated ``[tool.uv] exclude-newer`` in the root pyproject.
+
+    One finding per fence, so a repo that carves out individual packages is told
+    about each rather than only the repo-wide one.
+
+    The message names the date but never how stale it is. The staleness is the
+    whole point of the rule, and it is also the one fact that would change on
+    every run — a day count in the message would rewrite the SARIF, move the
+    fingerprint and re-notify on an unchanged repo, every day, forever. The
+    reader can subtract.
+    """
+    suppressions = parse_toml_suppressions(text)
+    findings: list[Finding] = []
+    for label, value, lineno in _absolute_fences(text):
+        findings.append(
+            _make_finding(
+                rule_id=RULE_D014,
+                file=rel_pyproject,
+                line=lineno,
+                column=1,
+                message=(
+                    f"[tool.uv] {label} is pinned to the fixed date '{value}', "
+                    "which is a freeze rather than a cooldown: it does not roll "
+                    "forward, so the window it enforces widens by a day every "
+                    "day and nothing fails when nobody moves it. It bounds EVERY "
+                    "resolve in the repo — including /fix-vulnerabilities, which "
+                    "is how a CVE fix actually lands — and it is silent: Renovate "
+                    "still opens upgrade PRs, because its package datasource is "
+                    "unbounded, and then 'uv lock --upgrade-package' returns the "
+                    "lock unchanged because uv cannot see past the fence. Delete "
+                    "the key and rely on the fleet's rolling release-age cooldown "
+                    "(renovate-config/default.json applies minimumReleaseAge "
+                    "centrally, and the lock lane is bounded in postUpgradeTasks). "
+                    "If this repo genuinely needs its own hold, use a duration — "
+                    "'exclude-newer-span' — so it rolls, or suppress inline with "
+                    "the reason and an owner."
+                ),
+                suppressions=suppressions,
+            )
+        )
+    return findings
+
+
 def _host_of(url: str) -> str:
     """Return the hostname of *url*, or a placeholder when it does not parse.
 
@@ -2167,6 +2259,10 @@ def scan_all(
     # guard, because the SDK inherits a machine-wide index just as an app does)
     findings.extend(_scan_default_index(text, rel_pyproject))
     findings.extend(_scan_lockfile_index(root, text, rel_pyproject))
+
+    # ── D014 (repo-level, scope=both: a resolver fence bounds the SDK's own
+    # resolves exactly as it bounds an app's, /fix-vulnerabilities included) ──
+    findings.extend(_scan_resolver_fence(text, rel_pyproject))
 
     # ── D003 ────────────────────────────────────────────────────────────────
     dep_entries = [

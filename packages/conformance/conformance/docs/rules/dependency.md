@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**13 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**14 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -28,6 +28,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D011](#d011) | `ConformanceDependencyContract` | `block` | `app` | `dependency-tooling` | yes | 0.23.0 |
 | [D012](#d012) | `UnpinnedPackageIndex` | `warn` | `both` | `supply-chain` | yes | 0.30.0 |
 | [D013](#d013) | `NonPyPILockfileIndex` | `warn` | `both` | `supply-chain` | — | 0.30.0 |
+| [D014](#d014) | `AbsoluteResolverFence` | `warn` | `both` | `supply-chain` | — | 0.31.0 |
 
 ---
 
@@ -475,5 +476,66 @@ A lock that is absent or unparseable never manufactures a finding. A lock that p
 but yields **no** URLs is reported on stderr as undetermined rather than passing
 silently: the URL spelling is a uv implementation detail, and a matcher that has gone
 inert must not read as a clean result.  Cite: FND-1928.
+
+---
+
+## D014 — `AbsoluteResolverFence` {#d014}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `supply-chain` · **Autofixable:** — · **Since:** 0.31.0
+
+> pyproject.toml pins [tool.uv] exclude-newer to a fixed date, freezing every resolve in the repo
+
+**Rationale:** A repo-local '[tool.uv] exclude-newer' pinned to a fixed date is written as a
+release-age cooldown and behaves as a freeze. The comment above it in all three repos
+found carrying one says 'never resolve a version published in the last 7 days'; the
+value is a timestamp, so it was seven days on the day it was typed and has widened by a
+day every day since. Nothing fails when nobody moves it, which is why it is found by
+census rather than by anyone noticing. It bounds every resolve in the repo,
+/fix-vulnerabilities included, so a security fix cannot land until a human edits the
+date first — the opposite of what a cooldown is for. It is also silent in a way that
+reads as health: Renovate's package datasource is unbounded, so it keeps opening upgrade
+PRs, and 'uv lock --upgrade-package' then returns the lock unchanged because uv cannot
+see past the fence. The repo looks maintained and is frozen. Customer impact: the
+connector ships on a dependency set nobody chose, missing SDK fixes and CVE patches
+alike, and the PRs that would have delivered them sit open and green-adjacent rather
+than failing visibly. Measured 2026-09-14: three fleet repos, the oldest fence 33 days
+stale, one of them 12 conformance minors and 4 SDK minors behind. FND-414 cleaned eleven
+repos of this in August; two of the three found in September were written AFTER that
+cleanup, which is why this is a rule and not another sweep.
+
+The repo's root `pyproject.toml` must not fence uv's resolver to an absolute date.  Both
+places one can be declared are checked, and each yields its own finding:
+
+```python
+[tool.uv]
+exclude-newer = "2026-09-01T00:00:00Z"          # repo-wide
+exclude-newer-package = { pkg = "2026-09-03" }  # per package
+```
+
+Reading only the first misreports a repo that carries both — `atlan-mongodbatlas-app`
+has a repo-wide fence three weeks older than the per-package carve-outs written to work
+around it.
+
+**The value's shape is what is graded, not the key's presence.** A duration genuinely
+rolls, so `exclude-newer-span = "P3D"` and any non-date value pass.  Only a value
+beginning `YYYY-MM-DD` — uv accepts a bare date and an RFC 3339 timestamp — is a fence
+that never moves.
+
+**Findings never state how stale the fence is.**  Staleness is the point of the rule and
+also the one fact that changes on every run: a day count in the message would rewrite
+the SARIF, move the fingerprint and re-notify on an unchanged repo daily, forever. The
+message names the date; the reader subtracts.
+
+Not autofixable, deliberately.  Deleting the key is one line, but the next resolve then
+jumps the repo across every release the fence was holding back, and at least one
+instance is a documented owner-gated hold (FND-1125) rather than drift.  Which of those
+a given fence is cannot be read off the file, so the remediation loop must not decide
+it.
+
+Scope is `both`: a fence bounds the SDK's own resolves exactly as it bounds an app's.
+The fleet does need a release-age bound — it is applied centrally and rolling, by
+`minimumReleaseAge` in `renovate-config/default.json` and by the bounded driver in
+`postUpgradeTasks`, neither of which can rot in a repo. Cite: FND-1985, FND-1999,
+FND-2000, FND-2001.
 
 ---
