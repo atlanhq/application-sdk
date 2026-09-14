@@ -663,6 +663,45 @@ def fetch_has_tests_workflow_file(repo: str, run: RunFn = _run_gh) -> bool:
     return True
 
 
+def fetch_tests_workflow_last_modified(
+    repo: str, run: RunFn = _run_gh
+) -> Optional[str]:
+    """When ``.github/workflows/tests.yaml`` last changed, or ``None``.
+
+    The cutoff for `select_arrival_samples`: pull requests whose head commit is
+    older than this ran against different CI wiring and say nothing about the
+    wiring in place now (FND-1973).
+
+    ``None`` — no exclusion — for a repo where the path has never existed, which
+    is a real state in this fleet: the gate context is composed from a caller
+    job id and the reusable's job name, so a differently-named workflow produces
+    it just as well. A read that *fails* raises instead, and `scan_repo`
+    degrades that to ``None`` with a warning, because an unreadable cutoff must
+    not quietly become a stricter or looser filter than the one intended.
+    """
+    payload = _load_json(
+        run(
+            [
+                "api",
+                f"repos/{repo}/commits?path={TESTS_WORKFLOW_PATH}&per_page=1",
+                "--jq",
+                "{d: .[0].commit.committer.date}",
+            ]
+        )
+    )
+    if not isinstance(payload, dict):
+        raise GhError(f"unexpected tests workflow history payload for {repo}")
+    last = payload.get("d")
+    if last is None:
+        return None
+    if not isinstance(last, str):
+        raise GhError(
+            f"malformed tests workflow history for {repo}: expected a string "
+            f"date, got {type(last).__name__}"
+        )
+    return last
+
+
 # `states: [OPEN, MERGED]` is load-bearing (FND-1947). Without it a CLOSED-
 # without-merge pull request is sampled like any other, and an abandoned branch
 # almost always carries an incomplete check set — CI cancelled, or never started
@@ -672,6 +711,25 @@ def fetch_has_tests_workflow_file(repo: str, run: RunFn = _run_gh) -> bool:
 # verdict a function of PR hygiene rather than of gate arrival, and made it flap
 # as the window moved. An abandoned branch is not evidence either way — the same
 # argument the truncation handling below already makes.
+#
+# `isDraft` and `committedDate` are the FND-1973 half of that same argument, for
+# pull requests the `states:` filter cannot reach. `atlan-postgres-app` reported
+# `intermittent` on a draft (#501) that had been open and conflicted for six
+# weeks: its head commit predated the repo's adoption of the unified tests.yaml,
+# so it carried the legacy check set and could never have shown the gate. A
+# comment bumped its `updatedAt`, which promoted it into the window and evicted
+# a real sample — `UPDATED_AT` moves on a comment, a label or a base-branch
+# change, none of which say anything about CI wiring.
+#
+# So the two facts the window sorts on are selected and applied client-side
+# (`pullRequests` has no draft or date argument):
+#
+#   * `committedDate` — a commit that predates the current tests.yaml cannot be
+#     evidence about it, whether or not the pull request is a draft. Staleness,
+#     not draft-ness, is what actually broke this.
+#   * `isDraft` — policy call from the review of that incident: a draft pull
+#     request influences no Fleet-Drift dimension. A merged PR is never draft,
+#     so this only ever drops open ones.
 _ARRIVAL_QUERY = """
 query($owner: String!, $name: String!, $base: String!, $first: Int!) {
   repository(owner: $owner, name: $name) {
@@ -679,10 +737,12 @@ query($owner: String!, $name: String!, $base: String!, $first: Int!) {
                  baseRefName: $base, states: [OPEN, MERGED]) {
       nodes {
         number
+        isDraft
         commits(last: 1) {
           nodes {
             commit {
               oid
+              committedDate
               statusCheckRollup {
                 contexts(first: 100) {
                   totalCount
@@ -733,11 +793,24 @@ query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String!) {
 """
 
 # Paging is bounded so a pathological commit can never stall the fleet sweep.
-# 20 pages is 2000 contexts; the busiest fleet repo sits under 150. Hitting it
-# leaves the sample `truncated`, i.e. excluded from the denominator, which is
-# exactly the pre-paging behaviour — the cap degrades to the old safety valve
-# rather than to a false miss.
+# 20 pages is 2000 contexts, and the busiest fleet repo sits an order of
+# magnitude below that — but no longer below one page: 3 of the last 10 pull
+# requests on `atlan-postgres-app` carried 152 contexts (FND-1973), so paging is
+# now the routine path on busy repos rather than the exception, at one extra
+# request each. Hitting the cap leaves the sample `truncated`, i.e. excluded
+# from the denominator, which is exactly the pre-paging behaviour — the cap
+# degrades to the old safety valve rather than to a false miss.
 MAX_CONTEXT_PAGES = 20
+
+# Fetch more pull requests than the sample needs, so client-side exclusions
+# shrink the *candidate pool* rather than the denominator (FND-1973). Filtering
+# 5 fetched samples down to 4 repeats the mistake FND-1947 fixed for CLOSED-
+# without-merge pull requests: abandoned or stale work should not shrink the
+# evidence base, it should be stepped over. Bounded because `first` is a
+# server-side page — GitHub caps it at 100 — and because an unbounded multiplier
+# would make a sweep of ~80 repos proportionally slower for samples it discards.
+ARRIVAL_OVERFETCH = 3
+MAX_ARRIVAL_FETCH = 60
 
 
 def _expect_object(value, path: str, *, required: bool = False) -> Optional[dict]:
@@ -816,6 +889,19 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
         if pr is None:
             continue
 
+        is_draft = pr.get("isDraft")
+        if is_draft is not None and not isinstance(is_draft, bool):
+            raise GhError(
+                f"malformed arrival payload: expected {where}.isDraft to be a "
+                f"boolean, got {type(is_draft).__name__}"
+            )
+        if is_draft:
+            # A draft influences no Fleet-Drift dimension (FND-1973). Dropped
+            # here rather than server-side because the `pullRequests` connection
+            # has no draft argument; a merged pull request is never draft, so
+            # this only ever drops open ones.
+            continue
+
         commits = _expect_object(pr.get("commits"), f"{where}.commits")
         commit_nodes = _expect_list(
             commits.get("nodes") if commits else None, f"{where}.commits.nodes"
@@ -846,6 +932,14 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
                 f"commit.oid to be a string, got {type(oid).__name__}"
             )
 
+        committed_date = commit.get("committedDate") if commit else None
+        if committed_date is not None and not isinstance(committed_date, str):
+            raise GhError(
+                f"malformed arrival payload: expected {where}.commits.nodes[0]."
+                f"commit.committedDate to be a string, got "
+                f"{type(committed_date).__name__}"
+            )
+
         samples.append(
             {
                 "number": pr.get("number"),
@@ -855,9 +949,96 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
                 # stripped before the sample reaches `classify_arrival`.
                 "oid": oid,
                 "cursor": page["cursor"],
+                # Staleness handle, consumed by `select_arrival_samples` and
+                # stripped by `_public_sample` alongside the paging ones.
+                "committedDate": committed_date,
             }
         )
     return samples
+
+
+def _parse_timestamp(value: str, what: str) -> datetime:
+    """One ISO-8601 instant from the GitHub API, as an aware ``datetime``.
+
+    Both sides of the staleness comparison are GitHub timestamps in the same
+    shape (``2026-09-02T17:01:38Z``), and both are *committer* dates: GraphQL's
+    ``committedDate`` and REST's ``commit.committer.date``. Author dates are
+    deliberately not used — a replayed commit keeps its original author date,
+    which would make a freshly-pushed head read as stale.
+
+    Raises ``GhError`` rather than returning ``None`` on an unparseable value:
+    the caller's fallback for "no cutoff" is to run *without* the staleness
+    filter, and silently taking that path on a value we did receive but could
+    not read would restore the bug this filter exists to fix.
+    """
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise GhError(f"unparseable {what}: {value!r}") from exc
+
+
+def select_arrival_samples(
+    samples: list,
+    stale_before: Optional[str],
+    sample_size: int,
+    repo: str = "",
+) -> list:
+    """The first ``sample_size`` samples whose head commit is current enough.
+
+    ``stale_before`` is the last time ``.github/workflows/tests.yaml`` changed
+    in the repo. A pull request whose head commit predates that cannot be
+    evidence about the workflow as it now stands — it ran whatever CI existed at
+    the time, and on `atlan-postgres-app` that was a legacy check set that could
+    never have produced the gate context (FND-1973). Same reasoning the
+    truncation handling already applies: not evidence either way, so not in the
+    denominator.
+
+    Note the direction of the residual error. Dropping every sample leaves the
+    repo on arrival `no-data`, i.e. "no pull request has run since the workflow
+    last changed" — the honest answer, and strictly better than the false
+    `never-arriving` those same samples would otherwise produce. It does mean a
+    repo that changes tests.yaml and then merges nothing reports `no-data` until
+    its next pull request.
+
+    ``stale_before`` is ``None`` when the cutoff could not be read (no such
+    file — the repo produces the context from a differently-named workflow — or
+    a failed read). No cutoff means no exclusion: a filter that cannot establish
+    its own boundary must not discard evidence on a guess.
+    """
+    if sample_size <= 0:
+        return []
+    cutoff = (
+        _parse_timestamp(stale_before, "tests workflow timestamp")
+        if stale_before
+        else None
+    )
+
+    selected: list = []
+    stale: list = []
+    for sample in samples:
+        if len(selected) >= sample_size:
+            break
+        committed_date = sample.get("committedDate")
+        if cutoff is not None and committed_date:
+            committed = _parse_timestamp(
+                committed_date, f"head commit date for PR #{sample.get('number')}"
+            )
+            if committed < cutoff:
+                stale.append(sample.get("number"))
+                continue
+        selected.append(sample)
+
+    if stale:
+        # stderr, not `::warning::`. This is the filter working as intended on
+        # any repo with history, so annotating it would put an amber banner on a
+        # healthy sweep; it is logged because the one question a future false
+        # verdict raises is "which pull requests were counted".
+        print(
+            f"{repo}: excluded {len(stale)} sample(s) with head commits "
+            f"predating {stale_before}: " + ", ".join(f"#{n}" for n in stale),
+            file=sys.stderr,
+        )
+    return selected
 
 
 def parse_contexts_page(contexts: Optional[dict], where: str) -> dict:
@@ -992,8 +1173,13 @@ def fetch_arrival_samples(
     sample_size: int,
     required_context: str,
     run: RunFn = _run_gh,
+    stale_before: Optional[str] = None,
 ) -> list:
     owner, _, name = repo.partition("/")
+    # Over-fetched, then narrowed to `sample_size` survivors below, so a draft
+    # or a stale head costs a *candidate* rather than a place in the denominator
+    # (FND-1973).
+    first = max(1, min(sample_size * ARRIVAL_OVERFETCH, MAX_ARRIVAL_FETCH))
     raw = run(
         [
             "api",
@@ -1007,7 +1193,7 @@ def fetch_arrival_samples(
             "-F",
             f"base={default_branch}",
             "-F",
-            f"first={sample_size}",
+            f"first={first}",
         ]
     )
     payload = _load_json(raw)
@@ -1027,7 +1213,14 @@ def fetch_arrival_samples(
     # else; if that empties the denominator the verdict is `unknown` (reported),
     # never `no-data` (silent).
     samples: list = []
-    for sample in parse_arrival_nodes(payload, required_context):
+    # Selection runs BEFORE paging: a discarded sample must not cost a follow-up
+    # request per truncated commit.
+    for sample in select_arrival_samples(
+        parse_arrival_nodes(payload, required_context),
+        stale_before,
+        sample_size,
+        repo,
+    ):
         try:
             samples.append(
                 _resolve_truncated(repo, owner, name, sample, required_context, run=run)
@@ -1076,8 +1269,9 @@ def fetch_context_page(
 
 
 def _public_sample(sample: dict) -> dict:
-    """The sample as `classify_arrival` and the record see it — paging handles
-    dropped, so the shape reaching the rest of the scanner is unchanged."""
+    """The sample as `classify_arrival` and the record see it — paging and
+    staleness handles dropped, so the shape reaching the rest of the scanner is
+    unchanged."""
     return {
         "number": sample.get("number"),
         "found": sample.get("found"),
@@ -1173,9 +1367,27 @@ def scan_repo(
         except GhError as exc:
             print(f"::warning::{repo}: {exc}", file=sys.stderr)
         if sample_size > 0:
+            stale_before: Optional[str] = None
+            try:
+                stale_before = fetch_tests_workflow_last_modified(repo, run=run)
+            except GhError as exc:
+                # Guarded like every other corroborating read: an unreadable
+                # cutoff disables the staleness filter for this repo and nothing
+                # else. That is the pre-FND-1973 behaviour — never a stricter
+                # filter, and never a reason to fail the arrival probe outright.
+                print(
+                    f"::warning::{repo}: tests workflow history unreadable, "
+                    f"sampling without a staleness cutoff: {exc}",
+                    file=sys.stderr,
+                )
             try:
                 samples = fetch_arrival_samples(
-                    repo, default_branch, sample_size, required_context, run=run
+                    repo,
+                    default_branch,
+                    sample_size,
+                    required_context,
+                    run=run,
+                    stale_before=stale_before,
                 )
             except GhError as exc:
                 print(
