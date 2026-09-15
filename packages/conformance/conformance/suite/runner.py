@@ -22,10 +22,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import conformance.suite.checks.entrypoint as entrypoint
 import conformance.suite.checks.logging as logging_checks
 import conformance.suite.checks.sdr as sdr_checks
-import conformance.suite.checks.sdr_test_checks as sdr_test_checks
 from conformance.suite.checks import (
     actions_pinning,
     app_name_alignment,
@@ -46,6 +44,7 @@ from conformance.suite.checks import (
     e2e_deployment_name,
     e2e_generated_harness,
     e2e_workflow_shape,
+    entrypoint,
     entrypoint_alignment,
     entrypoint_e2e_coverage,
     error_handling,
@@ -63,6 +62,7 @@ from conformance.suite.checks import (
     preflight,
     prescriptions,
     release_contract,
+    sdr_test_checks,
     security,
     test_quality,
     test_structure,
@@ -71,7 +71,11 @@ from conformance.suite.checks import (
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
-from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 from conformance.suite.schema.findings import Finding, findings_to_report
 
 
@@ -502,7 +506,7 @@ def parse_rule_ids(raw: str) -> set[str]:
     the exact bug class ``--series L004`` used to cause (a series letter match
     against a full rule id selected zero checks and reported a clean repo).
     """
-    from conformance.suite.rules import CATALOG  # noqa: PLC0415
+    from conformance.suite.rules import CATALOG
 
     ids = {r.strip().upper() for r in raw.split(",") if r.strip()}
     if not ids:
@@ -523,6 +527,27 @@ def main(argv: list[str] | None = None) -> int:
         "--output", metavar="FILE", help="Write SARIF to FILE (default: stdout)"
     )
     parser.add_argument("--tool-version", default=TOOL_VERSION, metavar="VERSION")
+    execution = parser.add_mutually_exclusive_group()
+    execution.add_argument(
+        "--with-tests",
+        action="store_true",
+        help="Execute registered preflight scenarios in a bounded pytest subprocess.",
+    )
+    execution.add_argument(
+        "--static",
+        action="store_true",
+        help="Run static analysis only (default); TEST rules are reported as not evaluated.",
+    )
+    parser.add_argument(
+        "--test-timeout",
+        type=float,
+        default=120.0,
+        help="Maximum seconds for the complete preflight scenario subprocess.",
+    )
+    parser.add_argument(
+        "--test-python",
+        help="Python executable from the app's test environment (default: current interpreter).",
+    )
     parser.add_argument(
         "--series",
         metavar="LETTERS",
@@ -575,6 +600,8 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+    if not 0 < args.test_timeout < float("inf"):
+        parser.error("--test-timeout must be positive and finite")
 
     rule_ids: set[str] | None = None
     if args.rule:
@@ -585,6 +612,10 @@ def main(argv: list[str] | None = None) -> int:
         rule_ids = parse_rule_ids(args.rule)
         requested = {rid[0] for rid in rule_ids}
         active = [c for c in _CHECKS if c.series in requested]
+        from conformance.suite.rules.preflight import RULES as PREFLIGHT_RULES
+
+        if rule_ids <= {rule.id for rule in PREFLIGHT_RULES}:
+            active = [c for c in active if c.scan_all is preflight.scan_all]
     elif args.series:
         requested = {s.strip().upper() for s in args.series.split(",")}
         active = [c for c in _CHECKS if c.series in requested]
@@ -627,6 +658,55 @@ def main(argv: list[str] | None = None) -> int:
             for p in paths:
                 all_findings.extend(check.scan_path(p, root))
 
+    selected_rules = {
+        rid
+        for rid, rule in CATALOG.items()
+        if _rule_in_scope(rule.scope, active_scope)
+        and (rule_ids is None or rid in rule_ids)
+        and (not args.series or rid[0] in requested)
+    }
+    test_rules = {
+        rid for rid in selected_rules if get_rule(rid).mechanism is RuleMechanism.TEST
+    }
+    behavior_summary = {
+        rid: {"execution": "not_evaluated", "complete": False}
+        for rid in sorted(test_rules)
+    }
+    if "P061" in selected_rules:
+        from conformance.suite.checks.preflight._lifetime import scan_removed_config
+
+        all_findings.extend(
+            finding
+            for finding in scan_removed_config(root)
+            if not any(
+                finding.file == prefix or finding.file.startswith(prefix + "/")
+                for prefix in excluded_prefixes
+            )
+        )
+    if args.with_tests and test_rules:
+        from conformance.suite.checks.preflight._behavior import run_behavior
+        from conformance.suite.checks.preflight._common import (
+            build_registry,
+            entrypoint_contracts,
+        )
+
+        paths = preflight.discover(root)
+        entries = tuple(entrypoint_contracts(build_registry(paths, root))) or (
+            "default",
+        )
+        scopes = [active_scope.value] if active_scope is not None else ["app", "sdk"]
+        for scope in scopes:
+            result = run_behavior(
+                root,
+                test_rules,
+                scope,
+                args.test_timeout,
+                entries if scope == "app" else ("default",),
+                args.test_python,
+            )
+            all_findings.extend(result.findings)
+            behavior_summary.update(result.summary)
+
     # Drop findings for rules outside the active scope.  This is the
     # finding-level counterpart to the series-level skip above: it covers
     # mixed-scope series (e.g. C, where C001 is 'both' but C002/C003 are 'app')
@@ -659,6 +739,11 @@ def main(argv: list[str] | None = None) -> int:
         excluded_paths=list(excluded_prefixes),
         rule_ids=rule_ids,
     )
+    for result in report.runs[0].results:
+        if result.rule_id == "P065":
+            result.properties["atlan/analysisStatus"] = "unresolved"
+    if behavior_summary:
+        report.runs[0].properties["atlan/preflightTests"] = behavior_summary
     payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True), indent=2)
 
     if args.output:
