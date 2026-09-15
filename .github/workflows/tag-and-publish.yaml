@@ -183,11 +183,20 @@ jobs:
         # `fnd-NNNN` identifier is deleted at merge, so the CLI hands Linear the
         # PR number and Linear resolves it back to the issues linked to that PR.
         #
-        # dry_run is deliberate on first ship: with no prior release in the
-        # pipeline there is no stored baseline, so the very first scan range is
-        # unbounded and could sweep years of PRs into one release. Read the log
-        # of the first bump merge, then flip this to false (and pass `base_ref`
-        # for one run if the range is wrong). Tracked in FND-2071.
+        # base_ref is a ONE-RUN override, to be removed in the PR that follows
+        # the first live release. With no prior release in the pipeline the CLI
+        # scans only the current commit (there is no previous SHA to bound the
+        # range from), which would record the bump PR alone and then park the
+        # baseline past everything merged since. v3.34.3 is the last version
+        # that shipped, so it is the exclusive lower bound that makes the first
+        # live release exactly its own contents. Issues that shipped in v3.34.3
+        # itself are being completed by hand — they predate the pipeline going
+        # live and are deliberately out of this range.
+        #
+        # Once removed, the range comes from the baseline the CLI stores after
+        # each successful sync, which is what makes a failed sync self-healing
+        # (see the soft-fail note above). Leaving base_ref pinned here would
+        # defeat that and re-attach the same issues to every later release.
         uses: linear/linear-release-action@53ad0f863963e7f8e270fba18426bbb55ef55384 # v0.17.2
         with:
           access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
@@ -195,7 +204,7 @@ jobs:
           name: v${{ steps.meta.outputs.version }}
           release_notes: ${{ runner.temp }}/linear_release_notes.md
           links: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.meta.outputs.version }}
-          dry_run: true
+          base_ref: v3.34.3
 
       - name: Warn when the Linear sync failed
         # The soft-fail above leaves the run green, so without this a revoked
