@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.34.1
-source-sha:    ccf53bff8017832a7352c380e475aa988feaba77
-source-date:   2026-09-11T10:25:22+01:00
+sdk-version:   3.34.2
+source-sha:    ca8c5dde19dda99bd521dd932c0b64d87fa4bc8a
+source-date:   2026-09-14T15:56:00Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 27 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 32 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -501,6 +501,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** A compiled include/exclude filter with uniform regex-or-exact semantics.
 - **Defined in:** `application_sdk/common/filter_matching.py`
 
+#### `ModelDumpAsset`
+
+- **Import:** `from application_sdk.common.asset_serialization import ModelDumpAsset`
+- **Signature:** `class ModelDumpAsset`
+- **Summary:** A pydantic-style model exposing ``model_dump()``.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
+#### `NestedBytesAsset`
+
+- **Import:** `from application_sdk.common.asset_serialization import NestedBytesAsset`
+- **Signature:** `class NestedBytesAsset`
+- **Summary:** An asset that encodes itself straight to Atlas nested-format JSON bytes.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
+#### `NestedDictAsset`
+
+- **Import:** `from application_sdk.common.asset_serialization import NestedDictAsset`
+- **Signature:** `class NestedDictAsset`
+- **Summary:** An asset that renders itself as an Atlas nested-format ``dict``.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
 #### `TaskResult`
 
 - **Import:** `from application_sdk.common import TaskResult`
@@ -558,6 +579,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `ensure_free_space(path: str | Path, required_bytes: int, *, operation: str) -> None`
 - **Summary:** Fail before a large write that the filesystem plainly cannot hold.
 - **Defined in:** `application_sdk/common/atomic.py`
+
+#### `entity_bytes`
+
+- **Import:** `from application_sdk.common.asset_serialization import entity_bytes`
+- **Signature:** `entity_bytes(asset: object, *, connection_name: str = '', entity_type: str | None = None) -> bytes`
+- **Summary:** Serialise a mapper's return value to one Atlas wire-shape JSON line.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
 
 #### `extract_epoch_id_from_qualified_name`
 
@@ -636,6 +664,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `normalize_filters(filter_dict: dict[str, FilterValue], is_include: bool)`
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `orjson_default`
+
+- **Import:** `from application_sdk.common.asset_serialization import orjson_default`
+- **Signature:** `orjson_default(obj: Any) -> Any`
+- **Summary:** Fallback serialiser for orjson — covers types it doesn't handle natively.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
 
 #### `persist_marker_to_storage`
 
