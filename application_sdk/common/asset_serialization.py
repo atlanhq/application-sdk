@@ -34,6 +34,7 @@ __all__ = [
     "NestedBytesAsset",
     "NestedDictAsset",
     "ModelDumpAsset",
+    "UnserializableValue",
     "entity_bytes",
     "orjson_default",
 ]
@@ -72,6 +73,22 @@ class ModelDumpAsset(Protocol):
     def model_dump(self) -> dict[str, Any]: ...
 
 
+class UnserializableValue(TypeError):
+    """A nested value ``orjson_default`` cannot render, naming its type.
+
+    A ``TypeError`` because that is what orjson's ``default=`` protocol
+    contractually requires to signal "not serialisable" — anything else is
+    swallowed or re-raised as something less useful. The subclass exists so
+    :func:`entity_bytes` can re-raise it as the module's own typed error with
+    the *offending value's* type rather than the mapper result's, which for a
+    dict is the uninformative ``dict``.
+    """
+
+    def __init__(self, type_name: str) -> None:
+        super().__init__(f"Object of type {type_name} is not JSON-serializable")
+        self.type_name = type_name
+
+
 def orjson_default(obj: Any) -> Any:
     """Fallback serialiser for orjson — covers types it doesn't handle natively.
 
@@ -80,14 +97,19 @@ def orjson_default(obj: Any) -> Any:
     ``dataclass`` instances. SQL drivers commonly return ``Decimal`` for
     numeric columns and occasionally ``bytes`` for blob columns; both fall
     back to a JSON-safe representation here.
+
+    Raises:
+        UnserializableValue: *obj* is none of those — a ``TypeError`` subclass,
+            so the orjson protocol is honoured and the type name survives for
+            :func:`entity_bytes` to attribute.
     """
     if isinstance(obj, Decimal):
         return float(obj)
     if isinstance(obj, (bytes, bytearray)):
         return obj.decode("utf-8", errors="replace")
     # conformance: ignore[E012] orjson default= protocol contractually requires TypeError to signal non-serialisable; replacing with AppError would break serialisation
-    raise TypeError(  # orjson default= protocol requires TypeError to signal non-serializable
-        f"Object of type {type(obj).__name__} is not JSON-serializable"
+    raise UnserializableValue(  # orjson default= protocol requires TypeError to signal non-serializable
+        type(obj).__name__
     )
 
 
@@ -129,6 +151,77 @@ def _set_connection_name(asset: object, connection_name: str) -> None:
         return
 
 
+def _where(entity_type: str | None) -> str:
+    """The `` while transforming <entity>`` clause, or nothing when unknown."""
+    return f" while transforming {entity_type}" if entity_type else ""
+
+
+def _dumps(payload: Any, asset: object, entity_type: str | None) -> bytes:
+    """``orjson.dumps`` with this module's typed error on an unrenderable value.
+
+    A dict the mapper produced can still hold a value orjson cannot render —
+    a driver type that is neither ``Decimal`` nor ``bytes``. Left unwrapped
+    that surfaces as a bare ``TypeError``, which fails the activity loudly but
+    lands outside the ``DataIntegrityError`` / ``APP_OWNER`` attribution the
+    rest of this seam guarantees, so the Automation Engine cannot read who owns
+    it from the typed fields.
+    """
+    try:
+        return orjson.dumps(payload, default=orjson_default)
+    except TypeError as exc:
+        # orjson does not let an exception from ``default=`` through: it raises
+        # its own JSONEncodeError (itself a TypeError) with ours as __cause__.
+        # So the offending type has to be read off the cause, not the raised
+        # error. Failures orjson raises on its own — recursion, an unsupported
+        # key type — have no cause and no inner type to name.
+        cause = exc.__cause__
+        if isinstance(cause, UnserializableValue):
+            raise UnserializableMapperResultError(
+                message=(
+                    f"Asset mapper result{_where(entity_type)} holds a "
+                    f"{cause.type_name} value, which the SDK cannot serialise "
+                    f"to the Atlas wire shape"
+                ),
+                observed=cause.type_name,
+                location=entity_type,
+            ) from exc
+        # The encoder's own text is deliberately not interpolated into
+        # ``message`` (E015: it breaks dashboard grouping and can carry
+        # unsanitised payload text). ``from exc`` keeps it on the traceback.
+        raise UnserializableMapperResultError(
+            message=(
+                f"Asset mapper result{_where(entity_type)} could not be "
+                f"encoded as JSON"
+            ),
+            observed=type(asset).__name__,
+            location=entity_type,
+        ) from exc
+
+
+def _checked_line(line: bytes, asset: object, entity_type: str | None) -> bytes:
+    """Reject a ``to_nested_bytes()`` result that is not a single JSON line.
+
+    The caller writes this verbatim and appends one ``b"\\n"``, so bytes that
+    already span lines would split one entity across several JSONL records —
+    well-formed lines, wrong count, no error. That is the same silent,
+    count-passing damage this module exists to remove, so it is refused here
+    rather than trusted. ``pyatlan_v9``'s encoder is compact, but
+    ``NestedBytesAsset`` is public: any implementer can reach this branch.
+    """
+    if b"\n" in line or b"\r" in line:
+        observed = type(asset).__name__
+        raise UnserializableMapperResultError(
+            message=(
+                f"{observed}.to_nested_bytes(){_where(entity_type)} returned "
+                f"JSON spanning more than one line; the Atlas wire format is "
+                f"one entity per JSONL record"
+            ),
+            observed=observed,
+            location=entity_type,
+        )
+    return line
+
+
 def entity_bytes(
     asset: object,
     *,
@@ -153,22 +246,29 @@ def entity_bytes(
 
     Raises:
         UnserializableMapperResultError: *asset* is none of the supported
-            shapes. This is the branch that used to write the unmapped raw
-            source record and report success.
+            shapes — the branch that used to write the unmapped raw source
+            record and report success; a supported shape holds a nested value
+            that cannot be rendered; or ``to_nested_bytes()`` returned bytes
+            spanning more than one line.
     """
     if connection_name:
         _set_connection_name(asset, connection_name)
 
     if isinstance(asset, NestedBytesAsset):
-        return asset.to_nested_bytes()
+        return _checked_line(asset.to_nested_bytes(), asset, entity_type)
     if isinstance(asset, NestedDictAsset):
-        return orjson.dumps(asset.to_nested_dict(), default=orjson_default)
+        return _dumps(asset.to_nested_dict(), asset, entity_type)
     if isinstance(asset, ModelDumpAsset):
-        return orjson.dumps(asset.model_dump(), default=orjson_default)
+        return _dumps(asset.model_dump(), asset, entity_type)
     if isinstance(asset, dict):
-        return orjson.dumps(asset, default=orjson_default)
+        return _dumps(asset, asset, entity_type)
 
+    observed = type(asset).__name__
     raise UnserializableMapperResultError(
-        observed=type(asset).__name__,
+        message=(
+            f"Asset mapper returned {observed}{_where(entity_type)}, which the "
+            f"SDK cannot serialise to the Atlas wire shape"
+        ),
+        observed=observed,
         location=entity_type,
     )

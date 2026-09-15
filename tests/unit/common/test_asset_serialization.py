@@ -62,6 +62,58 @@ class NotAnAsset:
     name: str
 
 
+class Unrenderable:
+    """A nested value neither orjson nor ``orjson_default`` can render.
+
+    Deliberately not a ``dataclass``: orjson serialises those natively, so
+    ``NotAnAsset`` would sail through as a nested value even though it is
+    rejected as a mapper *result*.
+    """
+
+
+class CompactBytesAsset:
+    """A well-behaved ``NestedBytesAsset``: one compact JSON line."""
+
+    def to_nested_bytes(self) -> bytes:
+        return b'{"typeName":"Table","attributes":{}}'
+
+
+class PrettyPrintingAsset:
+    """A ``NestedBytesAsset`` implementer whose encoder indents."""
+
+    def to_nested_bytes(self) -> bytes:
+        return b'{\n  "typeName": "Table",\n  "attributes": {}\n}'
+
+
+class CarriageReturnAsset:
+    """The same breach with CRLF line endings."""
+
+    def to_nested_bytes(self) -> bytes:
+        return b'{"typeName":"Table"}\r\n{"typeName":"Table"}'
+
+
+class UnsettableConnectionName:
+    """An asset whose ``connection_name`` reads falsy but refuses assignment.
+
+    A frozen or property-backed asset: the getter exists and is empty, so the
+    injector reaches the setter, and the setter raises. Losing
+    ``connectionName`` there is the deliberate trade-off ``_set_connection_name``
+    makes — better than failing a whole transform over an attribute every asset
+    type that needs it exposes as settable.
+    """
+
+    @property
+    def connection_name(self) -> str:
+        return ""
+
+    @connection_name.setter
+    def connection_name(self, value: str) -> None:
+        raise AttributeError("read-only")
+
+    def to_nested_dict(self) -> dict[str, Any]:
+        return {"typeName": "Custom", "attributes": {}}
+
+
 class TestPyatlanV9Asset:
     """to_nested_bytes is the only serialiser a pyatlan_v9 asset has."""
 
@@ -142,6 +194,20 @@ class TestConnectionNameInjection:
             "typeName": "Custom"
         }
 
+    def test_a_raising_setter_loses_the_name_rather_than_the_run(self):
+        """Pins the trade-off the ``except (AttributeError, TypeError)`` makes.
+
+        ``test_object_without_the_attribute_is_untouched`` exits at the getter,
+        so it never reaches the setter. This one has a getter that reads falsy
+        and a setter that raises — the only path that exercises the swallow.
+        """
+        out = orjson.loads(
+            entity_bytes(UnsettableConnectionName(), connection_name="ours")
+        )
+
+        assert out["typeName"] == "Custom"
+        assert "connectionName" not in out["attributes"]
+
 
 class TestDispatchOrder:
     def test_nested_dict_shape(self):
@@ -203,6 +269,109 @@ class TestUnserializableResult:
             entity_bytes(NotAnAsset(name="x"))
 
         assert exc.value.effective_retryable is False
+
+    def test_str_of_the_error_names_the_type_and_the_entity(self):
+        """The structured fields reach a consumer only through the envelope.
+
+        ``AppError.__str__`` returns ``message`` alone, so a static class
+        default is all a log line or traceback shows — the operator reading it
+        would see neither the offending type nor where it happened.
+        """
+        with pytest.raises(UnserializableMapperResultError) as exc:
+            entity_bytes(NotAnAsset(name="x"), entity_type="column")
+
+        rendered = str(exc.value)
+        assert "NotAnAsset" in rendered
+        assert "column" in rendered
+
+    def test_str_without_an_entity_type_still_names_the_type(self):
+        with pytest.raises(UnserializableMapperResultError) as exc:
+            entity_bytes(NotAnAsset(name="x"))
+
+        rendered = str(exc.value)
+        assert "NotAnAsset" in rendered
+        assert "transforming" not in rendered
+
+    def test_class_default_message_survives_as_a_fallback(self):
+        """The raise site interpolates; the class keeps a safe generic default."""
+        assert "cannot serialise" in str(UnserializableMapperResultError())
+
+
+class TestMultiLineNestedBytes:
+    """``NestedBytesAsset`` is public API, so its output is checked not trusted.
+
+    The caller writes the returned bytes verbatim and appends one newline. An
+    implementer whose encoder pretty-prints would split one entity across
+    several JSONL records — well-formed lines, wrong count, no error: the same
+    silent, count-passing damage this module exists to remove.
+    """
+
+    def test_pretty_printed_bytes_are_refused(self):
+        with pytest.raises(UnserializableMapperResultError) as exc:
+            entity_bytes(PrettyPrintingAsset(), entity_type="table")
+
+        assert exc.value.observed == "PrettyPrintingAsset"
+        assert exc.value.location == "table"
+        assert exc.value.effective_retryable is False
+
+    def test_carriage_return_is_refused_too(self):
+        with pytest.raises(UnserializableMapperResultError):
+            entity_bytes(CarriageReturnAsset(), entity_type="table")
+
+    def test_a_compact_implementer_passes_through_verbatim(self):
+        asset = CompactBytesAsset()
+
+        assert entity_bytes(asset) == asset.to_nested_bytes()
+
+    def test_pyatlan_v9_is_single_line(self):
+        """The shape that motivated the guard is itself newline-free."""
+        assert b"\n" not in entity_bytes(_table())
+
+
+class TestNestedValueFailures:
+    """A supported shape holding a value orjson cannot render.
+
+    Unwrapped this surfaced as a bare ``TypeError``: the activity still failed
+    loudly, but outside the ``DataIntegrityError`` / ``APP_OWNER`` attribution
+    the rest of this seam guarantees, so the typed fields the Automation Engine
+    reads carried no owner.
+    """
+
+    def test_dict_with_an_unrenderable_value_raises_the_typed_error(self):
+        payload = {"attributes": {"weird": Unrenderable()}}
+
+        with pytest.raises(UnserializableMapperResultError) as exc:
+            entity_bytes(payload, entity_type="table")
+
+        assert exc.value.observed == "Unrenderable"
+        assert exc.value.location == "table"
+        assert exc.value.effective_retryable is False
+
+    def test_the_message_names_the_nested_type_not_the_container(self):
+        with pytest.raises(UnserializableMapperResultError) as exc:
+            entity_bytes({"attributes": {"weird": Unrenderable()}})
+
+        assert "Unrenderable" in str(exc.value)
+
+    def test_nested_dict_shape_is_wrapped_too(self):
+        asset = NestedDictOnly(payload={"attributes": {"weird": Unrenderable()}})
+
+        with pytest.raises(UnserializableMapperResultError) as exc:
+            entity_bytes(asset)
+
+        assert exc.value.observed == "Unrenderable"
+
+    def test_model_dump_shape_is_wrapped_too(self):
+        asset = ModelDumpOnly(payload={"attributes": {"weird": Unrenderable()}})
+
+        with pytest.raises(UnserializableMapperResultError):
+            entity_bytes(asset)
+
+    def test_the_cause_is_kept_for_the_traceback(self):
+        with pytest.raises(UnserializableMapperResultError) as exc:
+            entity_bytes({"attributes": {"weird": Unrenderable()}})
+
+        assert isinstance(exc.value.__cause__, TypeError)
 
 
 class TestOrjsonDefault:

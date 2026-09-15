@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.34.2
-source-sha:    ca8c5dde19dda99bd521dd932c0b64d87fa4bc8a
-source-date:   2026-09-14T15:56:00Z
+source-sha:    bf0ba42b7a21a8829232f2eb40fc5c0d2bc409e4
+source-date:   2026-09-15T12:19:19+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 32 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 33 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -535,6 +535,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `class TaskStatistics(total_record_count: int = 0, ...)`
 - **Summary:** Statistics produced by a completed task.
 - **Defined in:** `application_sdk/common/models.py`
+
+#### `UnserializableValue`
+
+- **Import:** `from application_sdk.common.asset_serialization import UnserializableValue`
+- **Signature:** `class UnserializableValue(type_name: str) -> None`
+- **Summary:** A nested value ``orjson_default`` cannot render, naming its type.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
 
 ### Functions
 

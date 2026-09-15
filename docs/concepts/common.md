@@ -391,7 +391,17 @@ line = entity_bytes(asset, connection_name="My MySQL", entity_type="table")
 
 Anything else raises `UnserializableMapperResultError`. There is deliberately no fallback: the branch this replaced wrote the *raw source record* when no shape matched, so a mapper returning a `pyatlan_v9` asset — the type `map_<entity>()` is annotated to return — published unmapped source rows as entities while the run reported SUCCESS (FND-2056).
 
-`connectionName` is stamped before the dispatch, on the asset itself rather than on a serialised dict afterwards, so an asset-returning mapper keeps it. A value the mapper set explicitly always wins.
+**Every failure is that one typed error**, non-retryable and attributed to `APP_OWNER`, with a message naming the offending type and the entity:
+
+| Failure | `observed` |
+|---------|-----------|
+| The result matches no supported shape | The returned type |
+| A supported shape holds a value neither orjson nor `orjson_default` can render | The *nested* value's type |
+| `to_nested_bytes()` returned JSON spanning more than one line | The asset's type |
+
+The last one guards a public protocol rather than a live bug — `pyatlan_v9`'s encoder is compact — but `NestedBytesAsset` is exported, and the caller writes the returned bytes verbatim plus one newline. A pretty-printing implementer would therefore split one entity across several JSONL records: well-formed lines, wrong count, no error. That is the same silent, count-passing damage this seam exists to remove, so it is refused rather than trusted.
+
+`connectionName` is stamped before the dispatch, on the asset itself rather than on a serialised dict afterwards, so an asset-returning mapper keeps it. A value the mapper set explicitly always wins. If the asset declares `connection_name` but refuses assignment (frozen, or a property with no setter), the name is dropped rather than failing the transform — every asset type that genuinely needs it exposes a settable field.
 
 ## General Utilities
 
