@@ -113,6 +113,7 @@ import random
 import re
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -452,6 +453,34 @@ _DESCRIBE_MAX_PODS = 6
 #: reports nothing".
 BUILD_IDENTITY_CONFIGMAP_ID = "atlan-build-identity"
 
+#: Statuses on the build-identity route that mean "ask again", not "no".
+#:
+#: Same reasoning as ``setup_routes._RETRYABLE_STATUSES``, and deliberately the
+#: same set: a 5xx or a 429 is the edge not having a pod to route to yet, while
+#: every 4xx is the route answering. Kept as a literal here rather than imported
+#: for the reason ``BUILD_IDENTITY_CONFIGMAP_ID`` is — this module must import on
+#: a bare interpreter with no SDK.
+_POD_TRANSIENT_STATUSES = (429, 500, 502, 503, 504)
+
+#: How long ``verify`` keeps asking a pod that is not answering (FND-2057), and
+#: the gap between asks.
+#:
+#: Spent inside the **e2e leg**, which has a 120-minute job budget, and not
+#: inside ``prepare-tenant``, which does not have the room: the guard in
+#: ``test_job_timeout_stays_above_the_scripts_own_waits`` sums this script's
+#: waits against that job's `timeout-minutes`, and at 240 + 600 + 600 + 90 the
+#: sum already lands exactly on its 50-minute ceiling. So ``install`` still
+#: takes one reading and ``verify`` is where the waiting happens — which is also
+#: where the race bites, since ``verify`` runs in the leg immediately before the
+#: pod-served routes that FND-2057 watched time out.
+#:
+#: 300 matches ``setup_routes.DEFAULT_POD_RECONCILE_WAIT_SECONDS``, which bounds
+#: the same wait one step later in the same leg; that constant carries the
+#: derivation. Two different numbers for one physical event would only invite
+#: the question of which is right.
+DEFAULT_POD_WAIT_SECONDS = 300
+_POD_POLL_SECONDS = 10
+
 #: Where the SDK's build-identity module lives, for the diagnostic probe in
 #: :func:`_local_sdk_serves_build_identity`. A dotted path rather than an import:
 #: see that function for why it must not import anything.
@@ -528,6 +557,21 @@ class PodIdentity:
     build_id: str = ""
     app_name: str = ""
     detail: str = ""
+    #: Is the unreachability worth waiting out? (FND-2057)
+    #:
+    #: The three outcomes above say what was established. This says what to DO
+    #: about the first of them, and the two must not be collapsed either.
+    #:
+    #: ``True`` — nothing answered: a read timeout, a connection fault, a 5xx.
+    #: That is the ordinary shape of a deployment still reconciling onto the
+    #: pod, or of a KEDA scale-to-zero cold start, and it is worth re-asking.
+    #:
+    #: ``False`` — the route ANSWERED, with a rejection (a 404 from an image
+    #: whose SDK predates the route, say). Re-asking a 404 buys nothing but
+    #: delay: it is a verdict, and waiting for it to change is how a wait meant
+    #: to absorb a race turns into a hang on every app with an older pin. The
+    #: 404-versus-timeout split is the whole point.
+    transient: bool = False
 
 
 @dataclass(frozen=True)
@@ -769,17 +813,76 @@ def read_pod_build_identity(client: TenantClient) -> PodIdentity:
     try:
         response = client.get(path)
     except TenantApiError as exc:
-        return PodIdentity(reachable=False, detail=str(exc))
+        # No status line at all — DNS, connection, read timeout. Nothing
+        # answered, so this may simply be too early. See PodIdentity.transient.
+        return PodIdentity(reachable=False, detail=str(exc), transient=True)
     if not response.ok:
         return PodIdentity(
             reachable=False,
             detail=f"HTTP {response.status} from {path}",
+            transient=response.status in _POD_TRANSIENT_STATUSES,
         )
     try:
         payload = response.data()
     except TenantApiError as exc:
+        # A 200 whose body will not parse is the route answering, badly. That is
+        # not a race and re-reading it is not going to fix it.
         return PodIdentity(reachable=False, detail=str(exc))
     return parse_pod_identity(payload)
+
+
+def _progress(message: str) -> None:
+    """Print one poll-progress line, flushed.
+
+    Flushed explicitly because Python block-buffers stdout when it is not a TTY,
+    and a GitHub Actions step's ``run:`` is a pipe. Without it a patient wait and
+    a hung step produce the identical log — nothing — until the step ends, and
+    the wait this file just gained is up to five minutes long.
+
+    Only the new loop uses it. Making the whole module line-buffered at import
+    would be the broader fix and is a bigger change than this one needs.
+    """
+    print(message, flush=True)
+
+
+def await_pod_build_identity(
+    client: TenantClient,
+    wait_seconds: int = DEFAULT_POD_WAIT_SECONDS,
+    on_progress: Callable[[str], None] | None = None,
+) -> PodIdentity:
+    """Ask the pod, and keep asking while the silence is worth waiting out.
+
+    FND-2057. :func:`read_pod_build_identity` asks once, and one read lands in a
+    window it cannot see the shape of: the install record flips the moment LM
+    writes it, while the HelmRelease rollout that actually replaces the pod is
+    still in flight, and the pod that will answer may not be running yet. A
+    single read taken inside that window reports "the pod did not answer" and
+    the caller falls back to the record layers — which is how a leg comes to
+    announce, accurately and uselessly, that it verified at the INSTALL-RECORD
+    layer and that *the pod itself was NOT asked*. The pod was asked. It was
+    asked once, too early.
+
+    So the read is repeated while, and only while, nothing is answering. A
+    rejection — the 404 every image whose SDK predates the route returns — ends
+    the loop on the first read, because it is an answer and no amount of waiting
+    will change it. That split is what keeps this from adding minutes to every
+    leg of every app still on an older pin: those pay one read, exactly as
+    before.
+
+    Never raises, for the same reason :func:`read_pod_build_identity` does not.
+    """
+    deadline = time.monotonic() + max(wait_seconds, 0)
+    while True:
+        identity = read_pod_build_identity(client)
+        if not identity.transient or time.monotonic() >= deadline:
+            return identity
+        if on_progress is not None:
+            on_progress(
+                f"the app pod is not answering the build-identity route yet "
+                f"({identity.detail}); the deployment is still reconciling onto "
+                f"it. Retrying in {_POD_POLL_SECONDS}s"
+            )
+        time.sleep(_POD_POLL_SECONDS)
 
 
 def _local_sdk_serves_build_identity() -> bool:
@@ -807,8 +910,28 @@ def _local_sdk_serves_build_identity() -> bool:
         return False
 
 
-def _unreadable_pod_hint(identity: PodIdentity) -> str:
-    """Explain an unreadable pod identity, and say what it does NOT establish."""
+def _unreadable_pod_hint(identity: PodIdentity, waited: int = 0) -> str:
+    """Explain an unreadable pod identity, and say what it does NOT establish.
+
+    Args:
+        identity: What the last read got back.
+        waited: Seconds already spent re-asking, when the caller waited. Named
+            in the message because the two silences need different next steps
+            and only the elapsed time tells them apart: a 404 that came back on
+            the first read is an SDK pin, and a route that stayed silent through
+            a five-minute wait is a deployment problem. Without this, both
+            printed the same sentence and the reader picked the wrong one — see
+            FND-2057, where the run's own notice said the pod was not asked.
+    """
+    if identity.transient and waited > 0:
+        return (
+            f"The app pod never answered the build-identity route across {waited}s "
+            f"of retries ({identity.detail}). Nothing answered — no status, no "
+            "body — which is a pod that is not serving, not an image whose SDK "
+            "predates the route: that returns a prompt 404. Look at the "
+            "deployment: a rollout that never replaced the pod, a crash loop, or "
+            "a cold start longer than the wait."
+        )
     if identity.reachable:
         return (
             "The pod answered but reports no build identity, so the image it "
@@ -2546,6 +2669,16 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     # revisited, and LM reporting SUCCEEDED while nothing moves is a known shape
     # (DISTR-921). A disagreement here is fatal, because the whole purpose of
     # this job is to leave the tenant serving the version under test.
+    #
+    # One read, not the wait `verify` does (FND-2057), and the reason is budget
+    # rather than principle: `test_job_timeout_stays_above_the_scripts_own_waits`
+    # sums this script's defaults against prepare-tenant's `timeout-minutes`, and
+    # 240 + 600 + 600 + 90 already lands exactly on its 50-minute ceiling — so a
+    # wait here would force that ceiling, and the tenant lease TTL behind it, up
+    # for every run. `verify` runs inside the e2e leg, which budgets 120 minutes
+    # and is where the race actually costs a leg. If the reconcile window is ever
+    # measured to outlast a leg's own wait, this is the place to spend it, and
+    # raising the job's ceiling is the price.
     pod = read_pod_build_identity(read_client)
     if pod.reachable and pod.build_id and pod.build_id != args.version:
         raise TenantAppError(
@@ -2592,6 +2725,16 @@ def verify(args: argparse.Namespace) -> str:
         to the app pod's own handler. The image under test is stamped with its
         tag at build time, so a matching answer here is proof the pod serving
         traffic IS the build under test. **Decides on its own, both ways.**
+
+        Asked repeatedly, not once (FND-2057). One read samples an instant, and
+        the instant this runs at is inside the window the layers below it are
+        wrong about: LM's install record flips when the install lands, while the
+        rollout that replaces the pod is still in flight. A read taken there
+        reports silence, this function falls through to the records, and the leg
+        proceeds against a pod nobody established anything about — then fails
+        moments later in the setup-route check, whose reads go to that same pod.
+        A *rejection* still decides immediately; only silence is waited out. See
+        :func:`await_pod_build_identity`.
     ``deployment``
         LM's ``deployment_status``. Consulted only when the pod could not
         answer, and never on its own evidence: LM reporting SUCCEEDED while
@@ -2606,7 +2749,8 @@ def verify(args: argparse.Namespace) -> str:
     base_url = validate_tenant_base_url(args.base_url)
     _, read_client = _clients(base_url)
 
-    pod = read_pod_build_identity(read_client)
+    pod_wait = int(getattr(args, "pod_wait_seconds", DEFAULT_POD_WAIT_SECONDS))
+    pod = await_pod_build_identity(read_client, pod_wait, _progress)
     if pod.reachable and pod.build_id:
         if pod.build_id != args.expected:
             raise TenantAppError(
@@ -2625,11 +2769,13 @@ def verify(args: argparse.Namespace) -> str:
         )
         return pod.build_id
 
-    # The pod could not answer. Everything below reads marketplace records,
-    # which are written by the install and never revisited — so a pass here is
-    # weaker than it looks, and the log has to say so rather than printing the
-    # bare "verified" that hid this for as long as it did.
-    print(f"::warning::{_unreadable_pod_hint(pod)}")
+    # The pod could not answer — and, when the silence was the waitable kind, it
+    # could not answer for `pod_wait` seconds of asking rather than for the
+    # instant one read happened to sample. Everything below reads marketplace
+    # records, which are written by the install and never revisited — so a pass
+    # here is weaker than it looks, and the log has to say so rather than
+    # printing the bare "verified" that hid this for as long as it did.
+    print(f"::warning::{_unreadable_pod_hint(pod, pod_wait)}")
 
     installed, info = _read_install_record(read_client, app_id)
     if installed and installed == args.expected:
@@ -2802,6 +2948,15 @@ def main(argv: list[str] | None = None) -> int:
     p_verify = sub.add_parser("verify", help="assert the installed version")
     _add_common(p_verify)
     p_verify.add_argument("--expected", required=True)
+    p_verify.add_argument(
+        "--pod-wait-seconds",
+        type=int,
+        default=DEFAULT_POD_WAIT_SECONDS,
+        help=(
+            "How long to keep asking the app pod for its build identity while "
+            "it is not answering at all. 0 reads once."
+        ),
+    )
 
     args = parser.parse_args(argv)
 

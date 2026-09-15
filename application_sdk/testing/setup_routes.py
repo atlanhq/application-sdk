@@ -91,6 +91,25 @@ authority the app pod's own handler reads. Re-deriving either would compare
 one guess against another and drift the moment the exclusion vocabulary grew
 a prefix.
 
+A silent pod is a wait, not a verdict
+-------------------------------------
+FND-2057. ``?source=app`` buys the right answer at the cost of the slowest
+path: it forces the read onto the app pod, and an app pod is KEDA
+scale-to-zero and may still be being replaced by the rollout the install
+triggered. From outside, both of those look like a read timeout — and three of
+those in a row used to fail the leg outright in ~97s, raising straight past the
+poll loop that existed to wait for precisely this. ``atlan-teradata`` run
+34957093020 is the record: one commit, three clouds, the aws and gcp legs cut
+off at ~97s, the azure leg patient for 61.5s and green, and both failures
+passing on a re-run with no code change.
+
+Unreachability is now waited out on its own budget, and it is attributable
+because of the order the reads happen in: the catalog poll and the negative
+control are both answered by Local Marketplace *without* consulting the pod, so
+reaching a pod-served read at all means the host, the token, Heracles and LM
+have each already answered. A silence after that is the pod's, and the failure
+says so instead of reasoning about the runner's egress.
+
 Skip, don't fail
 ----------------
 An app with no marketplace card (the behind-the-scenes pattern) and an app that
@@ -129,6 +148,7 @@ from application_sdk.app._generated_tree import form_configmap, generated_layout
 
 __all__ = [
     "DEFAULT_CATALOG_WAIT_SECONDS",
+    "DEFAULT_POD_RECONCILE_WAIT_SECONDS",
     "AppIdentity",
     "Card",
     "Entrypoint",
@@ -136,6 +156,7 @@ __all__ = [
     "RouteReader",
     "SetupRouteError",
     "TenantRoutes",
+    "TenantUnreachable",
     "FormStep",
     "ServedForm",
     "declared_inputs",
@@ -188,6 +209,12 @@ _USER_AGENT = "atlan-application-sdk-setup-routes/1.0"
 #: Three, not more: the point is to survive a blip, not to wait out a genuine
 #: outage. Three consecutive failures over the backoff below is evidence, and
 #: the worst case stays well inside the job's budget.
+#:
+#: What three consecutive failures are evidence *of* is the part FND-2057
+#: corrected. They are not evidence of a broken route: on a pod-served read
+#: they are the ordinary signature of a pod that has not reconciled yet, and
+#: this exhausting is the *start* of :data:`DEFAULT_POD_RECONCILE_WAIT_SECONDS`
+#: rather than a verdict. See :class:`TenantUnreachable`.
 _RETRY_ATTEMPTS = 3
 
 #: Base delay between attempts, doubled each time (2s, then 4s).
@@ -219,6 +246,32 @@ _REJECTION_STATUSES = (400, 403, 404)
 #: flaky-by-construction on exactly the path CI takes.
 DEFAULT_CATALOG_WAIT_SECONDS = 120
 _CATALOG_POLL_SECONDS = 10
+
+#: How long to keep re-asking a POD-SERVED route that is not answering at all.
+#:
+#: Separate from :data:`DEFAULT_CATALOG_WAIT_SECONDS` because it is a different
+#: wait with a different ceiling, and FND-2057 is what happens when the two are
+#: conflated. That budget covers a route that *answers* with something stale;
+#: this one covers a route that does not answer, which is what a pod still
+#: reconciling — or cold-starting under KEDA scale-to-zero, which
+#: ``?source=app`` forces this check onto — actually looks like from outside.
+#:
+#: Why 300 and not a percentile. The only cross-cloud evidence is censored: the
+#: check aborted at ~97s, so every observation above that is a non-observation.
+#: What IS observed, on ``atlan-teradata-app`` run 34957093020, is one leg that
+#: took **61.5s** on this step and passed while two identical legs were cut off
+#: at ~97s and failed — so the previous ceiling sat 1.6x above the only measured
+#: cold-path success, which is not clearance. 300s is picked from what the leg
+#: can afford instead: the e2e job's own budget is 120 minutes, and the thing
+#: this wait replaces is a *guaranteed-lost* leg — image build, tenant lease and
+#: deploy, tens of minutes — so five minutes of patience is cheap even when it
+#: ends in the same failure. A healthy leg pays none of it: the measured warm
+#: path is 6.5-8.0s.
+#:
+#: Raising it further is not free, and the thing to check first is whether the
+#: wait is being spent on a pod that will never answer — see
+#: :func:`_await_route`, which distinguishes the two.
+DEFAULT_POD_RECONCILE_WAIT_SECONDS = 300
 
 #: How many catalog entries the not-found diagnostic names verbatim.
 #:
@@ -285,6 +338,27 @@ class RouteReader(Protocol):
 
 class SetupRouteError(RuntimeError):
     """A setup route is broken, or the tenant could not be asked."""
+
+
+class TenantUnreachable(SetupRouteError):
+    """One GET got no answer at all — no status line, no body (FND-2057).
+
+    A subclass rather than a sibling, so every existing caller that catches
+    :class:`SetupRouteError` keeps behaving exactly as it did. What the subclass
+    buys is the one distinction the callers inside this module need and could
+    not make before: **"the tenant answered something wrong" versus "the tenant
+    did not answer"**.
+
+    Those need opposite responses, and collapsing them cost a fleet-wide flake.
+    A wrong answer is a verdict — report it. No answer at all, on a route
+    ``?source=app`` deliberately points at the app pod, is the ordinary shape of
+    a deployment that has not reconciled onto that pod yet: the reads *around*
+    it come back fine, because they are served by Local Marketplace rather than
+    by the pod. Before this, three read timeouts raised straight past
+    :func:`_await_route`'s poll loop — the loop whose entire purpose is to wait
+    out exactly that lag — and failed the leg in ~97s without ever spending the
+    budget it was holding.
+    """
 
 
 class RouteCheckSkipped(RuntimeError):
@@ -1197,14 +1271,19 @@ class TenantRoutes:
                 earlier.append(f"HTTP {exc.code}")
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 if last:
-                    raise SetupRouteError(
+                    # Deliberately states what happened and stops. The old text
+                    # went on to conclude that three in a row ruled out a
+                    # transient fault, which sent FND-2057's investigation at
+                    # the runner's VPN for a day; the cause was tenant-side.
+                    # Whether this is weather, a cold pod or a dead route is not
+                    # knowable from one path's retry history, and the caller
+                    # that CAN tell — it knows whether this route is served by
+                    # the pod or by Local Marketplace — says so instead.
+                    raise TenantUnreachable(
                         f"GET {path} could not reach {self.base_url} after "
                         f"{_RETRY_ATTEMPTS} attempts over "
                         f"{time.monotonic() - started:.0f}s: {exc}. Earlier "
-                        f"attempts: {earlier or ['none']}. One read timeout "
-                        "here is usually transient egress loss on the runner "
-                        f"rather than a broken route, which is why this "
-                        f"retries; {_RETRY_ATTEMPTS} in a row is not."
+                        f"attempts: {earlier or ['none']}."
                     ) from exc
                 earlier.append(f"{type(exc).__name__}: {exc}")
             time.sleep(_RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1))
@@ -1387,6 +1466,32 @@ def _check_route(
     return None, form
 
 
+def _pod_never_answered(
+    entrypoint: Entrypoint, exc: TenantUnreachable, waited: int
+) -> str:
+    """Report a pod-served route that never answered, as a pod finding.
+
+    Named separately because the *wording* is the third of FND-2057's three
+    fixes, not decoration. The message this replaces reasoned about runner
+    egress ("3 in a row is not [transient]"), and a reader who trusted it spent
+    the investigation on the VPN and the GlobalProtect tunnel — which were fine,
+    identically, on the leg that passed. What distinguishes the two causes is
+    not this route's retry history but the reads that already succeeded against
+    the same host, so that is what this says.
+    """
+    return (
+        f"Entrypoint {entrypoint.name!r}: the app pod never answered its setup "
+        f"route. {exc} Waited {waited}s for the deployment to reconcile onto "
+        "the pod. This is the POD, not the tenant and not the runner: the "
+        "marketplace catalog read and the negative control both answered from "
+        "this same host moments earlier, and `?source=app` is what sends this "
+        "one read past Local Marketplace's cache to the app pod's own handler. "
+        "Look at the deployment — a rollout that never replaced the pod, a pod "
+        "crash-looping, or a KEDA scale-to-zero cold start that outlasted the "
+        "wait — not at egress from the runner."
+    )
+
+
 def _await_route(
     routes: RouteReader,
     entrypoint: Entrypoint,
@@ -1394,6 +1499,8 @@ def _await_route(
     siblings: Sequence[Entrypoint],
     wait_seconds: int,
     on_progress: Callable[[str], None] | None = None,
+    pod_wait_seconds: int = DEFAULT_POD_RECONCILE_WAIT_SECONDS,
+    pod_deadline: float | None = None,
 ) -> tuple[str | None, ServedForm | None]:
     """Poll one entry point's route until it resolves, or give up saying why.
 
@@ -1421,10 +1528,63 @@ def _await_route(
     shortfall that survives the whole window is reported as a real finding
     *and says it waited*, so a stale rollout stays distinguishable from a
     contract that genuinely never reached the tenant.
+
+    A pod that does not answer at all is that same lag, one stage earlier
+    ------------------------------------------------------------------------
+    FND-2057. The loop above only ever saw failures the route *reported*. A
+    :class:`TenantUnreachable` — three read timeouts against the pod path —
+    raised straight through it, so the one wait built for reconcile lag was
+    skipped by the commonest shape of reconcile lag there is. ``atlan-teradata``
+    run 34957093020: same commit, three clouds, and the aws and gcp legs each
+    burned ~97s of transport retries and died while azure took 61.5s on the same
+    step and passed. Re-running the two failures passed unchanged.
+
+    So unreachability is now waited out too, on :data:`its own budget
+    <DEFAULT_POD_RECONCILE_WAIT_SECONDS>` rather than the rollout budget — two
+    different things, and giving them one number is what made ~97s look
+    principled. Two deadlines, each answering to the kind of failure it bounds.
+
+    What keeps this from becoming a long hang on a genuinely broken route: the
+    wait is only ever reached on the POD-served read. Everything that would be
+    broken tenant-wide — the token, the host, Heracles, Local Marketplace — is
+    read *before* this, by the catalog poll and the negative control, and those
+    still fail at the first exhaustion. By the time this loop is entered, the
+    tenant has demonstrably answered twice. That is what lets the deadline
+    message say *pod* rather than *tenant*, and say it as a finding instead of a
+    hedge.
+
+    Args:
+        pod_wait_seconds: The unreachable budget, and what the message reports.
+        pod_deadline: That budget as an absolute :func:`time.monotonic` instant,
+            when the caller is spending ONE across several entry points.
+            :func:`verify` passes one, because the question the wait asks — has
+            the deployment reconciled onto the pod? — has a single answer for
+            the whole app, and a per-entry-point budget would multiply the wait
+            for a pod that is simply down by however many entry points the app
+            declares. The first entry point spends the budget; the rest inherit
+            the verdict immediately.
     """
     deadline = time.monotonic() + max(wait_seconds, 0)
+    unreachable_deadline = (
+        time.monotonic() + max(pod_wait_seconds, 0)
+        if pod_deadline is None
+        else pod_deadline
+    )
     while True:
-        failure, form = _check_route(routes, entrypoint, card, siblings)
+        try:
+            failure, form = _check_route(routes, entrypoint, card, siblings)
+        except TenantUnreachable as exc:
+            if time.monotonic() >= unreachable_deadline:
+                return _pod_never_answered(entrypoint, exc, pod_wait_seconds), None
+            if on_progress is not None:
+                on_progress(
+                    f"{entrypoint.name}: the app pod is not answering yet "
+                    f"({exc}); the catalog and the negative control both "
+                    "answered, so this is the deployment reconciling onto the "
+                    f"pod. Retrying in {_CATALOG_POLL_SECONDS}s"
+                )
+            time.sleep(_CATALOG_POLL_SECONDS)
+            continue
         if failure is None:
             return None, form
         if time.monotonic() >= deadline:
@@ -1447,12 +1607,29 @@ def verify(
     generated_dir: str = "app/generated",
     wait_seconds: int = DEFAULT_CATALOG_WAIT_SECONDS,
     on_progress: Callable[[str], None] | None = None,
+    pod_wait_seconds: int = DEFAULT_POD_RECONCILE_WAIT_SECONDS,
 ) -> list[str]:
     """Check every entry point's setup route. Returns the lines to report.
+
+    Keyword-only and defaulted, all of them: the CLI shell in the ``sdr-e2e``
+    action is pinned ``@main`` while the SDK it imports is each connector's OWN
+    version, so a new *required* parameter here is a fleet-wide ``TypeError``
+    the day it merges. ``pod_wait_seconds`` therefore takes effect on every app
+    at its current pin without the shell having to pass it.
+
+    Args:
+        pod_wait_seconds: How long to keep re-asking a pod-served route that is
+            not answering at all, before reporting it. Separate from
+            *wait_seconds*, which bounds a route that answers with something
+            stale — see :func:`_await_route`.
 
     Raises:
         RouteCheckSkipped: when there is no setup route to check.
         SetupRouteError: when a route is broken or the tenant cannot be asked.
+        TenantUnreachable: a :class:`SetupRouteError`, raised when the catalog
+            or the negative control cannot be read at all. Those are read
+            before any pod-served route and are not waited out: nothing below
+            them means anything if the tenant is not answering.
     """
     identity = read_app_identity(repo_root)
     entrypoints = read_entrypoints(repo_root, generated_dir)
@@ -1462,6 +1639,15 @@ def verify(
     # knows answers 200; if the endpoint answered 200 for names it does not
     # know, all of it would be vacuous — so prove the endpoint discriminates
     # before trusting a single 200 from it.
+    #
+    # It earns a second job from FND-2057's ordering. This and the catalog poll
+    # above are the two reads Local Marketplace answers WITHOUT consulting the
+    # pod — an unknown name is rejected at the marketplace layer, which is why
+    # this one came back promptly on the very legs whose pod-served reads were
+    # timing out. Reaching the per-entry-point loop below therefore establishes
+    # that the host, the token, Heracles and LM all answer, and that is exactly
+    # what licenses `_await_route` to attribute a later silence to the pod and
+    # to wait for it. Moving either read after the loop would take that away.
     bogus = f"{identity.name}-nonexistent-setup-route-check"
     status, _ = routes.configmap(bogus)
     if status not in _REJECTION_STATUSES:
@@ -1474,12 +1660,22 @@ def verify(
 
     report: list[str] = []
     failures: list[str] = []
+    # One pod-reconcile budget for the whole app, not one per entry point — see
+    # `_await_route`'s `pod_deadline`.
+    pod_deadline = time.monotonic() + max(pod_wait_seconds, 0)
     for entrypoint in entrypoints:
         card = cards[entrypoint.name]
         label = entrypoint.name
 
         failure, form = _await_route(
-            routes, entrypoint, card, entrypoints, wait_seconds, on_progress
+            routes,
+            entrypoint,
+            card,
+            entrypoints,
+            wait_seconds,
+            on_progress,
+            pod_wait_seconds=pod_wait_seconds,
+            pod_deadline=pod_deadline,
         )
         if failure is not None or form is None:
             failures.append(failure or f"Entrypoint {label!r}: no form served.")
