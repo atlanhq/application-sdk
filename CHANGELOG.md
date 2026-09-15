@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.34.3 (September 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.2...v3.34.3
+
+### Bug Fixes
+
+- raise instead of publishing raw source rows for an Asset mapper (FND-2056) (#3785) (by @cmgrote in [2c567bf](https://github.com/atlanhq/application-sdk/commit/2c567bf))
+- wait out a pod that has not reconciled instead of failing the leg (#3788) (by @cmgrote in [ee7ac71](https://github.com/atlanhq/application-sdk/commit/ee7ac71))
+- survive a blobstorage gateway that cannot reach Keycloak (FND-2076) (#3790) (by @cmgrote in [d07199c](https://github.com/atlanhq/application-sdk/commit/d07199c))
+
+
 ## v3.34.2 (September 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.1...v3.34.2
