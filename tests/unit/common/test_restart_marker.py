@@ -53,6 +53,18 @@ def prompt_polling(monkeypatch):
     monkeypatch.setattr(rm, "RECHECK_SECONDS", 0.02)
 
 
+@pytest.fixture
+def told_to_wait(monkeypatch):
+    """Stand in for an endpoint that says a replacement is on its way, so the
+    wait's own exits can be tested without one."""
+
+    async def answer():
+        return (True, "eviction-scheduled", 0)
+
+    monkeypatch.setattr(rm, "OOM_RESTART_CHECK", rm.CHECK_API)
+    monkeypatch.setattr(rm, "ask_what_this_restart_earns", answer)
+
+
 def test_first_start_in_a_pod_is_clean_and_leaves_a_marker(marker_dir):
     assert rm.check_and_update_the_marker() == 0
     assert json.loads((marker_dir / rm.MARKER_NAME).read_text())["starts"] == 1
@@ -147,7 +159,7 @@ async def test_a_restart_does_not_wait_while_waiting_is_switched_off(marker_dir,
 
 
 async def test_a_restart_waits_out_the_budget_then_proceeds(
-    marker_dir, monkeypatch, prompt_polling
+    marker_dir, monkeypatch, prompt_polling, told_to_wait
 ):
     rm.check_and_update_the_marker()
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 1)
@@ -158,7 +170,7 @@ async def test_a_restart_waits_out_the_budget_then_proceeds(
 
 
 async def test_the_wait_holds_until_something_ends_it(
-    marker_dir, monkeypatch, prompt_polling
+    marker_dir, monkeypatch, prompt_polling, told_to_wait
 ):
     """The point of the wait: with a long budget and nothing to release it, the
     worker is still not polling."""
@@ -173,7 +185,7 @@ async def test_the_wait_holds_until_something_ends_it(
 
 
 async def test_the_release_file_ends_the_wait_early(
-    marker_dir, monkeypatch, prompt_polling
+    marker_dir, monkeypatch, prompt_polling, told_to_wait
 ):
     rm.check_and_update_the_marker()
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
@@ -184,7 +196,9 @@ async def test_the_release_file_ends_the_wait_early(
     await asyncio.wait_for(task, timeout=5)
 
 
-async def test_shutdown_ends_the_wait(marker_dir, monkeypatch, prompt_polling):
+async def test_shutdown_ends_the_wait(
+    marker_dir, monkeypatch, prompt_polling, told_to_wait
+):
     rm.check_and_update_the_marker()
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     shutdown = asyncio.Event()
@@ -206,3 +220,168 @@ async def test_a_failure_setting_up_the_wait_starts_the_worker_anyway(
 
     monkeypatch.setattr(rm, "wait_for_pod_to_get_replaced", boom)
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+
+
+# -------------------------------------------------- what this restart earns
+
+
+@pytest.fixture
+def advice(monkeypatch, tmp_path):
+    """Everything the ask needs, plus a place to put the answer and a record of
+    what was asked."""
+    (tmp_path / "namespace").write_text("athena-app")
+    monkeypatch.setattr(rm, "SERVICE_ACCOUNT_DIR", tmp_path)
+    monkeypatch.setenv(rm.ADVICE_URL_ENV, "http://rerouter/restart-advice")
+    monkeypatch.setenv(rm.POD_NAME_ENV, "athena-worker-1")
+    monkeypatch.setenv(rm.CONTAINER_NAME_ENV, "athena")
+    monkeypatch.setattr(rm, "OOM_RESTART_CHECK", rm.CHECK_API)
+
+    state: dict = {
+        "asked": [],
+        "body": {"wait": False, "reason": "unset"},
+        "raise": None,
+    }
+
+    class _Response:
+        def __init__(self, body):
+            self._body = body
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._body
+
+    class _Client:
+        def __init__(self, *_a, **kw):
+            state["timeout"] = kw.get("timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def get(self, url, params=None):
+            state["asked"].append((url, params))
+            if state["raise"] is not None:
+                raise state["raise"]
+            return _Response(state["body"])
+
+    monkeypatch.setattr(rm.httpx, "AsyncClient", _Client)
+    return state
+
+
+async def test_a_replacement_on_its_way_holds_the_worker_back(
+    marker_dir, monkeypatch, advice, prompt_polling
+):
+    advice["body"] = {"wait": True, "reason": "eviction-scheduled", "waitSeconds": 1}
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=5)
+    assert loop.time() - started >= 1, "a scheduled eviction must be waited for"
+
+
+async def test_the_ask_names_this_pod_and_nothing_else(
+    marker_dir, monkeypatch, advice, prompt_polling
+):
+    advice["body"] = {"wait": False, "reason": "no-eviction-scheduled"}
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+
+    assert len(advice["asked"]) == 1, "exactly one call, on the restart path only"
+    url, params = advice["asked"][0]
+    assert url == "http://rerouter/restart-advice"
+    assert params == {
+        "namespace": "athena-app",
+        "pod": "athena-worker-1",
+        "container": "athena",
+    }
+    assert advice["timeout"] == rm.ADVICE_TIMEOUT_SECONDS
+
+
+async def test_nothing_coming_means_the_worker_polls_now(
+    marker_dir, monkeypatch, advice, logs, prompt_polling
+):
+    advice["body"] = {"wait": False, "reason": "not-vpa-managed"}
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+    assert loop.time() - started < 1, "a worker nothing is coming for must not wait"
+    assert logs.says(
+        "warning", "not-vpa-managed"
+    ), f"the operator has to be told why it did not wait: {logs.rows}"
+
+
+async def test_an_unreachable_endpoint_polls_rather_than_waiting(
+    marker_dir, monkeypatch, advice, logs, prompt_polling
+):
+    """Fail open. A worker that cannot ask is in the same position it was in
+    before any of this existed, and waiting on a silent service would spend the
+    activity's retries for nothing."""
+    advice["raise"] = RuntimeError("connection refused")
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+    assert loop.time() - started < 1, "an unreachable endpoint must not hold a worker"
+    assert logs.says("warning", "could not find out what this restart earns"), logs.rows
+
+
+async def test_an_unparsable_answer_polls_rather_than_waiting(
+    marker_dir, monkeypatch, advice, prompt_polling
+):
+    advice["body"] = ["not", "an", "object"]
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+    assert (
+        loop.time() - started < 1
+    ), "a body that will not parse must not hold a worker"
+
+
+async def test_the_budget_bounds_a_long_answer(
+    marker_dir, monkeypatch, advice, prompt_polling
+):
+    """The endpoint's number is advisory. A wait longer than the budget would
+    outlive the retries it exists to protect."""
+    advice["body"] = {"wait": True, "reason": "eviction-scheduled", "waitSeconds": 9999}
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 1)
+    rm.check_and_update_the_marker()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=5)
+    assert 1 <= loop.time() - started < 4, "the wait must be clamped to the budget"
+
+
+async def test_without_the_check_nothing_is_asked(
+    marker_dir, monkeypatch, advice, prompt_polling
+):
+    monkeypatch.setattr(rm, "OOM_RESTART_CHECK", "none")
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+    assert advice["asked"] == [], "the check being off must cost no call at all"
+
+
+async def test_a_pod_that_cannot_name_itself_asks_nothing(
+    marker_dir, monkeypatch, advice, prompt_polling
+):
+    monkeypatch.delenv(rm.POD_NAME_ENV, raising=False)
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+    assert advice["asked"] == [], "without its own name it cannot ask about itself"

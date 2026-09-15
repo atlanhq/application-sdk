@@ -7,6 +7,7 @@ import pytest
 import application_sdk.constants as constants
 from application_sdk.constants import (
     _load_dirty_restart_max_wait_seconds,
+    _load_oom_restart_check,
     _load_worker_liveness_max_idle_seconds,
 )
 
@@ -310,3 +311,32 @@ class TestLoadBuildInfo:
             monkeypatch.delenv("ATLAN_BUILD_INFO_PATH")
             monkeypatch.delenv("ATLAN_APPLICATION_VERSION")
             importlib.reload(constants)
+
+
+class TestLoadOomRestartCheck:
+    """Cover the ``ATLAN_OOM_RESTART_CHECK`` loader."""
+
+    ENV = "ATLAN_OOM_RESTART_CHECK"
+
+    def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch):
+        """The default asks the apiserver nothing, so it needs no RBAC granted."""
+        monkeypatch.delenv(self.ENV, raising=False)
+        assert _load_oom_restart_check() == "none"
+
+    def test_the_api_check_is_opted_into(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(self.ENV, "api")
+        assert _load_oom_restart_check() == "api"
+
+    def test_case_and_padding_are_tolerated(self, monkeypatch: pytest.MonkeyPatch):
+        """Helm renders values with whatever whitespace the template had."""
+        monkeypatch.setenv(self.ENV, " API\n")
+        assert _load_oom_restart_check() == "api"
+
+    def test_an_unknown_word_falls_back_and_says_so(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Without this the typo would land on whichever branch is the else, and
+        a fleet would quietly be running handling nobody selected."""
+        monkeypatch.setenv(self.ENV, "apiserver")
+        with pytest.warns(UserWarning, match="is not one of"):
+            assert _load_oom_restart_check() == "none"

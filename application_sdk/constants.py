@@ -637,6 +637,44 @@ def _load_dirty_restart_max_wait_seconds() -> int:
 
 DIRTY_RESTART_IDLE_MAX_SECONDS = _load_dirty_restart_max_wait_seconds()
 
+
+def _one_of(name: str, allowed: tuple[str, ...], default: str) -> str:
+    """Read a switch whose value is one of a fixed set of words.
+
+    An unrecognised word falls back to the default and says so, rather than
+    reaching the code that branches on it: a typo there would otherwise select
+    whichever branch happens to be the ``else``, silently and fleet-wide.
+    """
+    raw = os.getenv(name, default).strip().lower()
+    if raw in allowed:
+        return raw
+    warnings.warn(
+        f"{name}={raw!r} is not one of {allowed}; falling back to {default!r}",
+        stacklevel=2,
+    )
+    return default
+
+
+#: Where a restarted worker learns why the earlier container in its pod ended.
+#:
+#: ``api`` reads this pod's own last termination reason from the apiserver, which
+#: costs one point GET per restart from every restarting pod and lets a restart
+#: that was not an out-of-memory kill resume immediately. ``none`` never calls the
+#: apiserver, so every restart is treated as if it could have been an
+#: out-of-memory one - cheaper on the apiserver, and it makes a crash-looping
+#: worker wait out its budget on every loop.
+#:
+#: ``none`` is the default because it is the behaviour that needs nothing granted:
+#: reading a pod requires RBAC the worker's service account does not have by
+#: default, and a worker that cannot read its own pod under ``api`` waits rather
+#: than resuming, which is the more expensive way to be wrong.
+def _load_oom_restart_check() -> str:
+    return _one_of("ATLAN_OOM_RESTART_CHECK", ("api", "none"), default="none")
+
+
+OOM_RESTART_CHECK = _load_oom_restart_check()
+
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations.
 #: Enabled by default; set ATLAN_SQL_USE_SERVER_SIDE_CURSOR to any value other
