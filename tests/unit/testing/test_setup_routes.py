@@ -2495,3 +2495,261 @@ class TestUnlabelledBundleCard:
 
         assert "calculated_default" not in source
         assert "sorted(names)[0]" not in source
+
+
+class TestPodNotAnsweringIsWaitedOut:
+    """FND-2057: three read timeouts are the start of a wait, not a verdict.
+
+    ``atlan-teradata-app`` run 34957093020, one commit across three clouds: aws
+    spent 103.6s on ``Verify workflow-setup routes`` and FAILED on three read
+    timeouts, gcp spent 102.8s and failed the same way, and azure spent 61.5s
+    and PASSED — then ran the full DAG green. Re-running the two failures passed
+    with no code change.
+
+    The azure leg is the tell: at 61.5s it was *also* waiting, it just landed
+    inside a ~97s ceiling that two identical legs fell the wrong side of.
+    Nothing about the route was broken on any of them.
+
+    The mechanism was that ``TenantRoutes.get`` raised past ``_await_route``, so
+    the one poll loop built to wait out reconcile lag never ran for the commonest
+    shape of reconcile lag. Three things are pinned here, and the third is what
+    keeps this from being a licence to hang: a pod that comes back is waited for,
+    a pod that never comes back is reported *as a pod* and bounded, and a tenant
+    that cannot be reached at all still fails at the first exhaustion because the
+    catalog is read before any pod-served route.
+    """
+
+    @staticmethod
+    def _routes(unreachable_reads: int) -> Any:
+        """Routes whose POD-served reads time out *unreachable_reads* times.
+
+        The catalog and the negative-control name keep answering throughout,
+        which is not a convenience: that is what the live tenant did. Local
+        Marketplace answers both without consulting the pod, which is why they
+        came back promptly on the very legs whose pod reads were timing out.
+        """
+
+        class _ColdPod:
+            def __init__(self) -> None:
+                self.catalog_reads = 0
+                self.asked: list[str] = []
+                self.timeouts = 0
+
+            def catalog(self) -> list[dict[str, Any]]:
+                self.catalog_reads += 1
+                return [_card_payload("atlan-mysql", name="mysql", entrypoint="")]
+
+            def configmap(self, name: str) -> tuple[int, dict[str, Any]]:
+                self.asked.append(name)
+                if name not in {"atlan-mysql", "mysql"}:
+                    return 404, {}
+                if self.timeouts < unreachable_reads:
+                    self.timeouts += 1
+                    raise setup_routes.TenantUnreachable(
+                        f"GET /api/service/configmaps/{name}?source=app could "
+                        "not reach https://tenant.example.invalid after 3 "
+                        "attempts over 97s: The read operation timed out. "
+                        "Earlier attempts: ['TimeoutError: The read operation "
+                        "timed out', 'TimeoutError: The read operation timed "
+                        "out']."
+                    )
+                return 200, _configmap_response(
+                    _form_schema("extraction-method", "credential-guid", "connection"),
+                    "atlan-mysql",
+                )
+
+        return _ColdPod()
+
+    def test_a_pod_that_reconciles_late_is_waited_for(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The failing legs' exact shape, now green.
+
+        Two full transport exhaustions and then an answer — aws and gcp, had
+        they been allowed the patience azure got by luck.
+        """
+        monkeypatch.setattr(setup_routes, "time", _FakeClock())
+        _write_flat(tmp_path)
+        routes = self._routes(unreachable_reads=2)
+
+        report = verify(tmp_path, routes, wait_seconds=0, pod_wait_seconds=300)
+
+        assert len(report) == 1
+        assert "resolves" in report[0]
+        assert routes.timeouts == 2
+
+    def test_the_old_behaviour_would_have_failed_this(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression guard: with no unreachable budget, the leg still dies.
+
+        Without this the test above could pass for the wrong reason — a fake
+        that never really raised — and the fix could be reverted silently.
+        ``pod_wait_seconds=0`` reproduces the pre-FND-2057 behaviour exactly:
+        one read, and its exhaustion decides.
+        """
+        monkeypatch.setattr(setup_routes, "time", _FakeClock())
+        _write_flat(tmp_path)
+        routes = self._routes(unreachable_reads=2)
+
+        with pytest.raises(SetupRouteError) as excinfo:
+            verify(tmp_path, routes, wait_seconds=0, pod_wait_seconds=0)
+
+        assert "never answered" in str(excinfo.value)
+        assert routes.timeouts == 1
+
+    def test_a_pod_that_never_answers_is_bounded_and_blamed_correctly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A real break must stay a finding, named as the pod's.
+
+        The whole risk of adding a wait is that it converts a failure into
+        patience, and the whole risk of the *message* is what happened in
+        FND-2057: the old text reasoned about runner egress, so a day went into
+        the VPN while all three legs had an identical, healthy tunnel. It must
+        say pod, it must say what it waited, and it must not hang past its
+        budget.
+        """
+        clock = _FakeClock()
+        monkeypatch.setattr(setup_routes, "time", clock)
+        _write_flat(tmp_path)
+        routes = self._routes(unreachable_reads=10_000)
+
+        with pytest.raises(SetupRouteError) as excinfo:
+            verify(tmp_path, routes, wait_seconds=0, pod_wait_seconds=120)
+
+        message = str(excinfo.value)
+        assert "the app pod never answered" in message
+        assert "Waited 120s" in message
+        # Attributed, and attributed by the evidence that licenses it.
+        assert "POD, not the tenant and not the runner" in message
+        assert "negative control both answered" in message
+        # Bounded: it really stopped, and it really spent the budget it claims.
+        assert 120 <= sum(clock.slept) < 240
+        # And it does NOT repeat the egress reasoning that misdirected FND-2057.
+        assert "egress loss on the runner" not in message
+
+    def test_progress_says_it_is_waiting_on_the_pod(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A silent wait is indistinguishable from a hang — the CLI's own rule."""
+        monkeypatch.setattr(setup_routes, "time", _FakeClock())
+        _write_flat(tmp_path)
+        routes = self._routes(unreachable_reads=10_000)
+        notes: list[str] = []
+
+        with pytest.raises(SetupRouteError):
+            verify(
+                tmp_path,
+                routes,
+                wait_seconds=0,
+                pod_wait_seconds=60,
+                on_progress=notes.append,
+            )
+
+        assert notes
+        assert any("app pod is not answering yet" in note for note in notes)
+        assert any("reconciling onto the pod" in note for note in notes)
+
+    def test_an_unreachable_tenant_still_fails_fast(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The wait must not cover the catalog, or a dead tenant hangs.
+
+        This is the half that keeps the fix honest. The catalog is Local
+        Marketplace's, not the pod's, and it is read *first* — so a tenant that
+        is genuinely unreachable exhausts there, before any budget exists to
+        spend, and reports in the same breath it always did.
+        """
+        clock = _FakeClock()
+        monkeypatch.setattr(setup_routes, "time", clock)
+        _write_flat(tmp_path)
+
+        class _DeadTenant:
+            def catalog(self) -> list[dict[str, Any]]:
+                raise setup_routes.TenantUnreachable(
+                    "GET /api/service/marketplace/apps could not reach "
+                    "https://tenant.example.invalid after 3 attempts over 97s: "
+                    "The read operation timed out. Earlier attempts: ['none']."
+                )
+
+            def configmap(self, name: str) -> tuple[int, dict[str, Any]]:
+                raise AssertionError("the catalog must be read first")
+
+        with pytest.raises(SetupRouteError) as excinfo:
+            verify(tmp_path, _DeadTenant(), wait_seconds=120, pod_wait_seconds=300)
+
+        assert "marketplace/apps could not reach" in str(excinfo.value)
+        assert sum(clock.slept) == 0
+
+    def test_one_budget_is_shared_across_entrypoints(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A down pod costs the budget once, not once per entry point.
+
+        "Has the deployment reconciled onto the pod?" has one answer for the
+        whole app. Charging it per entry point would make the wait a multiple of
+        however many an app declares — 15 minutes for a three-entrypoint app
+        against a pod that is simply down.
+        """
+        clock = _FakeClock()
+        monkeypatch.setattr(setup_routes, "time", clock)
+        _write_bundle(tmp_path)
+
+        class _DownPod:
+            def catalog(self) -> list[dict[str, Any]]:
+                return _both_cards()
+
+            def configmap(self, name: str) -> tuple[int, dict[str, Any]]:
+                if name not in {"clickhouse-crawler", "clickhouse-miner"}:
+                    return 404, {}
+                raise setup_routes.TenantUnreachable(
+                    f"GET /api/service/configmaps/{name}?source=app could not "
+                    "reach https://tenant.example.invalid after 3 attempts "
+                    "over 97s: The read operation timed out. Earlier attempts: "
+                    "['none']."
+                )
+
+        with pytest.raises(SetupRouteError) as excinfo:
+            verify(tmp_path, _DownPod(), wait_seconds=0, pod_wait_seconds=120)
+
+        # Both entry points are reported, and the second one did not restart the
+        # clock: total sleep stays inside one budget.
+        assert str(excinfo.value).count("never answered its setup route") == 2
+        assert 120 <= sum(clock.slept) < 240
+
+
+class TestUnreachableIsItsOwnError:
+    """``TenantUnreachable`` must stay a ``SetupRouteError`` subclass.
+
+    The CLI shell in the ``sdr-e2e`` action is pinned ``@main`` while the SDK it
+    imports is each connector's own version, and it catches ``SetupRouteError``
+    by name. A sibling class would escape that handler as an unhandled traceback
+    on every app on the day this merged — the same fleet-wide skew failure the
+    shell's import probe exists to avoid.
+    """
+
+    def test_it_is_caught_as_a_setup_route_error(self) -> None:
+        assert issubclass(setup_routes.TenantUnreachable, SetupRouteError)
+
+    def test_transport_exhaustion_raises_the_subclass(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Driven through the real ``get``, not asserted on the class alone."""
+        monkeypatch.setattr(setup_routes, "time", _FakeClock())
+
+        class _Opener:
+            def open(self, request: object, timeout: object = None) -> object:
+                raise TimeoutError("The read operation timed out")
+
+        monkeypatch.setattr(setup_routes, "_OPENER", _Opener())
+        routes = TenantRoutes(base_url="https://tenant.example.invalid", bearer="t")
+
+        with pytest.raises(setup_routes.TenantUnreachable) as excinfo:
+            routes.get("/api/service/marketplace/apps")
+
+        message = str(excinfo.value)
+        assert "after 3 attempts" in message
+        # The claim that three in a row rules out a transient fault was wrong,
+        # and it is what sent FND-2057 at the VPN. It must not come back.
+        assert "in a row is not" not in message

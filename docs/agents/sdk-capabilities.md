@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.34.2
-source-sha:    bf0ba42b7a21a8829232f2eb40fc5c0d2bc409e4
-source-date:   2026-09-15T12:19:19+01:00
+source-sha:    a520d3a70524601ed2991bcb68c8f7013e100315
+source-date:   2026-09-15T15:19:11+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 382 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 384 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -4499,6 +4499,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Reads the two routes the setup page walks, with one bearer credential.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
 
+#### `TenantUnreachable`
+
+- **Import:** `from application_sdk.testing.setup_routes import TenantUnreachable`
+- **Signature:** `class TenantUnreachable`
+- **Summary:** One GET got no answer at all — no status line, no body (FND-2057).
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `TypenameDiff`
 
 - **Import:** `from application_sdk.testing import TypenameDiff`
@@ -5937,6 +5944,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.setup_routes import DEFAULT_CATALOG_WAIT_SECONDS`
 - **Signature:** `DEFAULT_CATALOG_WAIT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
+
+- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_POD_RECONCILE_WAIT_SECONDS`
+- **Signature:** `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/setup_routes.py`
 
