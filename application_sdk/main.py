@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import orjson
 
+from application_sdk.common import restart_marker
 from application_sdk.common._env import env_int as _env_int
 from application_sdk.common.task_queue import task_queue_from_env
 from application_sdk.discovery import (
@@ -1462,6 +1463,12 @@ async def run_worker_mode(config: AppConfig) -> None:
     # health_server stays up across worker restarts so the runtime keeps
     # answering health checks while the supervisor rebuilds a crashed worker.
     async with health_server:
+        # A container that restarted in place after running out of memory comes
+        # back on the limit that killed it, so polling now would take the work
+        # straight back onto a pod that cannot hold it. This has to run before
+        # anything builds a worker, which is why it is here and not in the
+        # supervisor.
+        await restart_marker.wait_if_pod_restarted(shutdown_event)
         await _run_worker_with_restart(
             build_worker=_build_worker,
             shutdown_event=shutdown_event,
@@ -1470,6 +1477,9 @@ async def run_worker_mode(config: AppConfig) -> None:
             health_server=health_server,
             reconnect=_reconnect,
         )
+        # Reached only when the worker drained on request. Anything that escapes
+        # leaves the marker in place, which is what makes the next start a restart.
+        restart_marker.clear()
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
