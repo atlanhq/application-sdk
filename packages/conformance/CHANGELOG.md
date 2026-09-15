@@ -2,6 +2,17 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.31.0] - 2026-09-15
+
+### Features
+
+- add D014, banning an absolute-dated uv resolver fence (#3780) ([b9b9df9](https://github.com/atlanhq/application-sdk/commit/b9b9df9))
+
+### Bug fixes
+
+- raise instead of publishing raw source rows for an Asset mapper (FND-2056) (#3785) ([2c567bf](https://github.com/atlanhq/application-sdk/commit/2c567bf))
+- collapse checks.yml and the SARIF upload into thin reusable callers (#3779) ([92643f8](https://github.com/atlanhq/application-sdk/commit/92643f8))
+
 ## [0.30.0] - 2026-09-14
 
 ### Features
