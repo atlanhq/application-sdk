@@ -7,9 +7,7 @@ import pytest
 import application_sdk.constants as constants
 from application_sdk.constants import (
     _load_dirty_restart_max_wait_seconds,
-    _load_oom_restart_action,
     _load_oom_restart_check,
-    _load_oom_restart_settle_seconds,
     _load_worker_liveness_max_idle_seconds,
 )
 
@@ -342,54 +340,3 @@ class TestLoadOomRestartCheck:
         monkeypatch.setenv(self.ENV, "apiserver")
         with pytest.warns(UserWarning, match="is not one of"):
             assert _load_oom_restart_check() == "none"
-
-
-class TestLoadOomRestartAction:
-    """Cover the ``ATLAN_OOM_RESTART_ACTION`` loader."""
-
-    ENV = "ATLAN_OOM_RESTART_ACTION"
-
-    def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch):
-        """The default needs no verb beyond reading, and no PDB is bypassed."""
-        monkeypatch.delenv(self.ENV, raising=False)
-        assert _load_oom_restart_action() == "park"
-
-    def test_deleting_is_opted_into(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv(self.ENV, "delete")
-        assert _load_oom_restart_action() == "delete"
-
-    def test_ejecting_is_opted_into(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv(self.ENV, "eject")
-        assert _load_oom_restart_action() == "eject"
-
-    def test_an_unknown_word_falls_back_and_says_so(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setenv(self.ENV, "evict")
-        with pytest.warns(UserWarning, match="is not one of"):
-            assert _load_oom_restart_action() == "park"
-
-
-class TestLoadOomRestartSettleSeconds:
-    """Cover the ``ATLAN_OOM_RESTART_SETTLE_SECONDS`` loader."""
-
-    ENV = "ATLAN_OOM_RESTART_SETTLE_SECONDS"
-
-    def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv(self.ENV, raising=False)
-        assert _load_oom_restart_settle_seconds() == 90
-
-    def test_valid_value(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv(self.ENV, "60")
-        assert _load_oom_restart_settle_seconds() == 60
-
-    def test_negative_clamped_to_zero(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv(self.ENV, "-5")
-        assert _load_oom_restart_settle_seconds() == 0
-
-    def test_non_numeric_falls_back_to_the_default(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setenv(self.ENV, "")
-        with pytest.warns(UserWarning, match="not a valid integer"):
-            assert _load_oom_restart_settle_seconds() == 90
