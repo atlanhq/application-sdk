@@ -134,3 +134,57 @@ jobs:
         run: |
           gh workflow run renovate.yaml --repo atlanhq/application-sdk \
           || echo "::warning::Could not trigger renovate.yaml — consumers will update on the next scheduled run."
+
+  linear-release:
+    # Record what shipped in this version as a Linear release, so the
+    # Foundation team's "release completed → Done" automation marks issues done
+    # when the bump PR that carries them merges — not when the original feature
+    # PR merged. Gated by `needs: [release]`, so it inherits that job's `if:`
+    # (merged PR labelled `release`) and fires exactly once per SDK version.
+    # The conformance and contract-toolkit bumps carry `release:conformance` /
+    # `release:contract-toolkit`, which `contains()` does not match.
+    name: Sync Linear release
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout the merged bump commit
+        # The bump PR's own merge commit on main, not `main` itself: it pins the
+        # scan to exactly this version's contents even if another PR lands while
+        # this job runs, and it is the commit the CLI stores as the baseline for
+        # the next release's range. fetch-depth: 0 is required — the CLI scans
+        # <stored baseline>..HEAD.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Collect version and release notes
+        id: meta
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/extract_release_notes.py "${VERSION}" > "${RUNNER_TEMP}/linear_release_notes.md"
+
+      - name: Sync release to Linear
+        # Issue attribution rides on the PR number, not the commit text: squash
+        # subjects on main end in `(#NNNN)` and the head branch carrying the
+        # `fnd-NNNN` identifier is deleted at merge, so the CLI hands Linear the
+        # PR number and Linear resolves it back to the issues linked to that PR.
+        #
+        # dry_run is deliberate on first ship: with no prior release in the
+        # pipeline there is no stored baseline, so the very first scan range is
+        # unbounded and could sweep years of PRs into one release. Read the log
+        # of the first bump merge, then flip this to false (and pass `base_ref`
+        # for one run if the range is wrong). Tracked in FND-2071.
+        uses: linear/linear-release-action@53ad0f863963e7f8e270fba18426bbb55ef55384 # v0.17.2
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          version: ${{ steps.meta.outputs.version }}
+          name: v${{ steps.meta.outputs.version }}
+          release_notes: ${{ runner.temp }}/linear_release_notes.md
+          links: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.meta.outputs.version }}
+          dry_run: true
