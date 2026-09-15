@@ -16,6 +16,7 @@ from typing import ClassVar
 from application_sdk.errors import (
     STORAGE_CONFIG,
     STORAGE_EMPTY_UPLOAD,
+    STORAGE_GATEWAY_AUTH,
     STORAGE_HANDOFF_INCOMPLETE,
     STORAGE_INTEGRITY,
     STORAGE_NOT_FOUND,
@@ -151,6 +152,58 @@ class StorageBucketRelocationError(StorageError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_RELOCATION
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
+        self.suggested_action = suggested_action
+
+
+@dataclass(kw_only=True)
+class StorageGatewayAuthUnavailableError(StorageError):
+    """A request was rejected by the object-store gateway's own auth backend.
+
+    Atlan's ``/api/blobstorage`` proxy verifies SigV4 by looking the signing
+    key's secret up in Keycloak on every request. The Kong plugin that does
+    this (``kong-plugins/s3proxy-signature-verification``) maps *every* failure
+    of that lookup — including its own 30s context timeout — onto
+    ``401 {"code": 1005, "error": "Invalid Client"}``. The client therefore
+    sees a credential rejection for a condition that has nothing to do with its
+    credentials: the gateway could not reach the identity provider.
+
+    The distinction is not cosmetic. The signing key is a static Keycloak
+    client id/secret pair, so a genuinely wrong credential fails on the very
+    first request a deployment makes — the SDR preflight probe at startup, long
+    before any artifact moves. A 1005 arriving mid-run, after that probe
+    passed, is the gateway being unavailable rather than the connector being
+    unauthorised, and the remediation is to wait it out, not to rotate
+    anything.
+
+    Carries its own code instead of the generic
+    ``DEPENDENCY_UNAVAILABLE_STORAGE`` so an operator reading the envelope is
+    not sent to re-issue working credentials. Retryable, like every other
+    ``StorageError``. (FND-2076)
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_GATEWAY_AUTH
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_AUTH"
 
     def __init__(
         self,

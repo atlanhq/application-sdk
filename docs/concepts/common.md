@@ -100,6 +100,34 @@ shortens a relocation. That is why it is PLATFORM-attributed and `retryable=True
 `objectStoreAccess:<store>` check and a mid-run `upload_file` failure raise or stamp this one code,
 so a relocation lands in a single analytics bucket wherever it is caught.
 
+### StorageGatewayAuthUnavailableError — a 401 that is not about your credentials
+
+`StorageGatewayAuthUnavailableError(StorageError)` carries
+`DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_AUTH` / `AAF-STR-010` instead of the generic
+`AAF-STR-004`, for one narrow condition: Atlan's `/api/blobstorage` proxy verifies the SigV4
+signature by looking the signing key's secret up in Keycloak on **every** request, and maps every
+failure of that lookup — including its own 30-second timeout — onto
+`401 {"code": 1005, "error": "Invalid Client"}`.
+
+The leaf matches on both halves of that pair, so a 401 from any other store, or a `1005` on any
+other status, still falls through to the generic `StorageError`.
+
+It applies to reads as well as writes. Every store operation that can fail against a remote —
+`upload_file`, `put`, `download_file`, `exists`, `get_file_meta`, `_get_bytes`, `delete`,
+`list_keys` — now routes its non-not-found failures through the same classifier, so all of them
+carry `http_status` / `provider_code` / `target` too. That matters for more than tidiness: a
+`verify_refs` HEAD goes through `exists()`, and a HEAD was what the run that motivated this leaf
+finally died on. The not-found contracts are unchanged — `exists` and `delete` still return
+`False`, `get_file_meta` and `_get_bytes` still return `None` — because the classifier sits after
+that short-circuit.
+
+Why the distinction earns a code: the signing key is a *static* Keycloak client id/secret, so a
+genuinely wrong credential fails the very first request a deployment makes — the SDR preflight
+probe at startup, long before any artifact moves. A `1005` arriving mid-run, after that probe
+passed, is the gateway being unavailable, and no credential change fixes it. Its
+`suggested_action` says so explicitly, because the generic wording ("lacked valid authentication
+credentials") sends an operator to rotate credentials that are working.
+
 ### ColdStartRaceError — the cross-domain transient marker
 
 `ColdStartRaceError(DependencyUnavailableError)` is not a domain umbrella itself — it's a

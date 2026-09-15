@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.34.2
-source-sha:    a520d3a70524601ed2991bcb68c8f7013e100315
-source-date:   2026-09-15T15:19:11+01:00
+source-sha:    500722ed520ecc12b8b295a9ef7adf822ab5f16a
+source-date:   2026-09-15T16:55:35+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 66 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 67 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -33,7 +33,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 384 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
@@ -1804,6 +1804,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `STORAGE_GATEWAY_AUTH`
+
+- **Import:** `from application_sdk.errors import STORAGE_GATEWAY_AUTH`
+- **Signature:** `STORAGE_GATEWAY_AUTH`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `STORAGE_HANDOFF_INCOMPLETE`
 
 - **Import:** `from application_sdk.errors import STORAGE_HANDOFF_INCOMPLETE`
@@ -3033,6 +3040,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import StorageError`
 - **Signature:** `class StorageError(message: str, ...)`
 - **Summary:** Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageGatewayAuthUnavailableError`
+
+- **Import:** `from application_sdk.storage import StorageGatewayAuthUnavailableError`
+- **Signature:** `class StorageGatewayAuthUnavailableError(message: str, ...)`
+- **Summary:** A request was rejected by the object-store gateway's own auth backend.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageIntegrityError`
