@@ -2306,3 +2306,121 @@ class TestUploadFileRelocationClassification:
             with pytest.raises(StorageError) as excinfo:
                 await upload_file("test/column.json", f, store)
         assert excinfo.value.code == "DEPENDENCY_UNAVAILABLE_STORAGE"
+
+
+class TestUploadFileGatewayAuthClassification:
+    """A blobstorage-gateway 401 must not read as a rejected credential.
+
+    Atlan's ``/api/blobstorage`` proxy verifies SigV4 by looking the signing
+    key's secret up in Keycloak per request, and maps every failure of that
+    lookup — its own 30s timeout included — onto
+    ``401 {"code": 1005, "error": "Invalid Client"}``. The credential is a
+    static Keycloak client id/secret the SDR preflight already exercised at
+    startup, so a 1005 mid-run is the gateway being unavailable. Surfacing it
+    as "lacked valid authentication credentials" sends an operator to rotate
+    working credentials. (FND-2076)
+    """
+
+    # Verbatim from the failing leg of atlanhq/atlan-quicksight-app run
+    # 34981199440, minus the tenant host. The 30.19s is the plugin's own
+    # ``context.WithTimeout(30*time.Second)`` on the Keycloak call expiring —
+    # the tell that separates this from a genuinely bad key.
+    _GATEWAY_401 = (
+        "Error performing PUT https://tenant.example.com/api/blobstorage/"
+        "atlan-bucket/artifacts/apps/quicksight/workflows/run-extract/raw/"
+        "folders/0.json in 30.191040891s - Server returned non-2xx status "
+        'code: 401 Unauthorized: {"code":1005,"error":"Invalid Client",'
+        '"message":"Client authentication failed"}'
+    )
+
+    async def test_gateway_401_raises_typed_error(self, store, tmp_path) -> None:
+        from unittest import mock
+
+        from application_sdk.storage.errors import StorageGatewayAuthUnavailableError
+
+        f = tmp_path / "column.json"
+        f.write_bytes(b"{}")
+        with mock.patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            side_effect=Exception(self._GATEWAY_401),
+        ):
+            with pytest.raises(StorageGatewayAuthUnavailableError) as excinfo:
+                await upload_file("test/column.json", f, store)
+        err = excinfo.value
+        assert err.code == "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_AUTH"
+        assert "[AAF-STR-010]" in str(err)
+        assert err.http_status == 401
+        assert err.provider_code == "1005"
+        # The remediation is the whole point of the leaf: an operator must be
+        # told *not* to touch credentials that are working.
+        assert err.suggested_action and "Do not rotate" in err.suggested_action
+
+    async def test_gateway_401_is_still_retryable(self, store, tmp_path) -> None:
+        """Classification must not turn a transient into a terminal failure."""
+        from unittest import mock
+
+        from application_sdk.storage.errors import StorageError
+
+        f = tmp_path / "column.json"
+        f.write_bytes(b"{}")
+        with mock.patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            side_effect=Exception(self._GATEWAY_401),
+        ):
+            with pytest.raises(StorageError) as excinfo:
+                await upload_file("test/column.json", f, store)
+        assert excinfo.value.effective_retryable is True
+
+    async def test_ordinary_401_stays_generic(self, store, tmp_path) -> None:
+        """Only the gateway's own code routes here — a bare 401 must not.
+
+        The store-side 401s this leaf must never swallow are the ones where the
+        credential really is wrong. They carry no ``1005``, so they fall
+        through to the generic StorageError exactly as before.
+        """
+        from unittest import mock
+
+        from application_sdk.storage.errors import (
+            StorageError,
+            StorageGatewayAuthUnavailableError,
+        )
+
+        f = tmp_path / "column.json"
+        f.write_bytes(b"{}")
+        with mock.patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            side_effect=Exception(
+                "Error performing PUT https://s3.example.com/b/k in 0.2s - "
+                "Server returned non-2xx status code: 401 Unauthorized: "
+                "<Error><Code>InvalidAccessKeyId</Code></Error>"
+            ),
+        ):
+            with pytest.raises(StorageError) as excinfo:
+                await upload_file("test/column.json", f, store)
+        assert not isinstance(excinfo.value, StorageGatewayAuthUnavailableError)
+        assert excinfo.value.code == "DEPENDENCY_UNAVAILABLE_STORAGE"
+
+    async def test_gateway_code_on_a_non_401_stays_generic(
+        self, store, tmp_path
+    ) -> None:
+        """Both halves of the pair are load-bearing, not just the code."""
+        from unittest import mock
+
+        from application_sdk.storage.errors import (
+            StorageError,
+            StorageGatewayAuthUnavailableError,
+        )
+
+        f = tmp_path / "column.json"
+        f.write_bytes(b"{}")
+        with mock.patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            side_effect=Exception(
+                "Error performing PUT https://tenant.example.com/api/"
+                "blobstorage/b/k in 0.2s - Server returned non-2xx status "
+                'code: 500 Internal Server Error: {"code":1005}'
+            ),
+        ):
+            with pytest.raises(StorageError) as excinfo:
+                await upload_file("test/column.json", f, store)
+        assert not isinstance(excinfo.value, StorageGatewayAuthUnavailableError)

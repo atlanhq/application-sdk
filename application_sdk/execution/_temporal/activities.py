@@ -828,6 +828,9 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
     else:
         retry_policy = TemporalRetryPolicy(
             maximum_attempts=task_metadata.retry_max_attempts,
+            initial_interval=timedelta(
+                seconds=task_metadata.retry_initial_interval_seconds
+            ),
             maximum_interval=timedelta(
                 seconds=task_metadata.retry_max_interval_seconds
             ),
