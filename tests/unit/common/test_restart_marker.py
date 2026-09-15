@@ -85,9 +85,9 @@ def test_no_volume_means_detection_is_inert(monkeypatch, tmp_path, logs):
     assert (
         not missing.exists()
     ), "check_and_update_the_marker() must not create the directory"
-    assert logs.says("warning", str(missing), "emptyDir"), (
-        "an absent volume must be reported, or it is indistinguishable from a "
-        f"pod that never restarted: {logs.rows}"
+    assert logs.says("debug", str(missing), "emptyDir"), (
+        "an absent volume must still be reported, at debug because most of the "
+        f"fleet does not mount it: {logs.rows}"
     )
 
 
@@ -118,6 +118,21 @@ def test_a_non_utf8_marker_counts_as_a_restart_and_is_replaced(marker_dir):
 async def test_a_clean_start_does_not_wait(marker_dir, monkeypatch):
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+
+
+async def test_only_the_first_restart_in_a_pod_waits(marker_dir, monkeypatch, logs):
+    """A second restart means the first wait did not get the pod replaced, so
+    waiting again would pay the same penalty for the same non-answer."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()  # start 1 -> marker says 1 restart
+    rm.check_and_update_the_marker()  # start 2 -> marker says 2
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+    assert logs.says(
+        "warning", "polls instead of waiting again"
+    ), f"a second restart must say why it is not waiting: {logs.rows}"
+    assert not logs.says(
+        "warning", "not polling for up to"
+    ), f"it must not announce a wait it is not doing: {logs.rows}"
 
 
 async def test_a_restart_does_not_wait_while_waiting_is_switched_off(marker_dir, logs):

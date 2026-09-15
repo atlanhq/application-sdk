@@ -5,17 +5,26 @@ cleanly, so an abnormal exit is what leaves it behind. A later container start i
 the same pod finds it there and knows it is a restart.
 
 A container that exceeds its memory limit is killed by the kernel and restarted
-by the kubelet *inside the same pod*, and a pod's resource spec is immutable for
-its lifetime - so the container comes back on the limit that just killed it.
-Something outside has to replace the pod before the memory can change. Until it
+by the kubelet *inside the same pod*. Kubernetes 1.33 made a running pod's
+resources mutable through the ``pods/resize`` subresource, so the spec is no
+longer immutable in general - but on the vcluster platform this deploys to it is
+accepted and never actuated (verified 2026-09-15 on EKS 1.33: VPA in
+``InPlaceOrRecreate`` and a direct ``kubectl patch --subresource resize`` both
+left ``status.allocatedResources`` and the container's own ``memory.max``
+unchanged, with no ``PodResizePending`` condition ever set). So the container
+comes back on the limit that just killed it, and something outside has to
+replace the pod before the memory can change. Until it
 does, a restarted worker that resumes polling takes work straight back onto a
 pod that cannot hold it, and the retries cannot succeed. So a restarted worker
 waits instead of polling, for a bounded time, and resumes either way.
 
-Written at birth, not at death: under cgroup v2 ``memory.oom.group=1`` the kernel
-kills every process in the container's cgroup, PID 1 included, so no handler
-runs. Recording the start and clearing it on a clean return inverts that into
-something always observable.
+Written at birth, not at death: the kill arrives without warning and no handler
+runs. Where cgroup v2 ``memory.oom.group`` is 1 the kernel takes every process in
+the container's cgroup, PID 1 included; where it is 0 it takes the largest, which
+for a single-process worker is that worker. (Measured 2026-09-15: the value is
+not consistent across pods on one node, so neither case can be assumed.)
+Recording the start and clearing it on a clean return inverts that into something
+always observable.
 
 The marker lives on a small memory-backed ``emptyDir``, whose lifetime is the
 pod's: contents survive every container restart and vanish with the pod. Nothing
@@ -84,7 +93,10 @@ def check_and_update_the_marker() -> int:
         # and a marker on the container filesystem would be discarded with every
         # restart - detecting nothing, forever. The writes below would fail
         # anyway; this is the only thing that says why.
-        logger.warning(
+        # Debug, not warning: most of the fleet does not mount the volume, so this
+        # is the intended default rather than a problem. It still has to say why
+        # detection is off for anyone who mounted it and expected it to work.
+        logger.debug(
             "%s is not a directory, so a restarted worker cannot be told apart from a "
             "fresh one and this worker will always poll immediately. Mount a small "
             "memory-backed emptyDir there to enable it.",
@@ -182,6 +194,18 @@ async def wait_if_pod_restarted(shutdown_event: asyncio.Event) -> None:
         "would take work back onto a pod that cannot hold it.",
         restarted_count + 1,
     )
+
+    if restarted_count > 1:
+        # The wait on the previous start did not get this pod replaced, so the
+        # thing it waits for is not coming and waiting again buys nothing. One
+        # bounded penalty per pod instead of one per restart, which is what a
+        # crash loop would otherwise pay forever.
+        logger.warning(
+            "container start %d in this pod: the wait on the previous start did not get "
+            "it replaced, so this one polls instead of waiting again",
+            restarted_count + 1,
+        )
+        return
 
     budget = DIRTY_RESTART_IDLE_MAX_SECONDS
     if budget <= 0:

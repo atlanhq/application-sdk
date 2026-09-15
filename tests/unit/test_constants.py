@@ -227,7 +227,7 @@ class TestLoadDirtyRestartMaxWaitSeconds:
 
     def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv(self.ENV, raising=False)
-        assert _load_dirty_restart_max_wait_seconds() == 600
+        assert _load_dirty_restart_max_wait_seconds() == 150
 
     def test_valid_positive_value(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv(self.ENV, "900")
@@ -247,7 +247,9 @@ class TestLoadDirtyRestartMaxWaitSeconds:
         """A typo in a deployment must not stop a worker from running at all."""
         monkeypatch.setenv(self.ENV, "abc")
         with pytest.warns(UserWarning, match="not a valid integer"):
-            assert _load_dirty_restart_max_wait_seconds() == 600
+            assert _load_dirty_restart_max_wait_seconds() == 150
+
+
 class TestLoadBuildInfo:
     """Cover the baked ``app/atlan_build.json`` identity loader."""
 
