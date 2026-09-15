@@ -239,7 +239,7 @@ sql = [
 
 [[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.29.0"
+version = "0.30.0"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },
