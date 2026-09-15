@@ -151,6 +151,7 @@ jobs:
 <% endif %><% if apt_packages %>      apt-packages: "<< apt_packages >>"
 <% endif %><% if private_git_deps %>      private-git-deps: << private_git_deps >>
 <% endif %><% if git_lfs_skip_smudge %>      git-lfs-skip-smudge: << git_lfs_skip_smudge >>
+<% endif %><% if lfs %>      lfs: << lfs >>
 <% endif %><% if health_check_timeout_seconds %>      health-check-timeout-seconds: "<< health_check_timeout_seconds >>"
 <% endif %><% if container_health_timeout_seconds %>      container-health-timeout-seconds: "<< container_health_timeout_seconds >>"
 <% endif %><% if runtime_sdk_ref %>      runtime-sdk-ref: "<< runtime_sdk_ref >>"
