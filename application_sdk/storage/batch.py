@@ -344,12 +344,11 @@ async def delete_prefix(
                 _is_not_found(exc)
                 or _is_local_dir_collision(exc, resolved, root_marker)
             ):
-                from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                    StorageError,
-                )
-
-                raise StorageError(
-                    f"Failed to check root marker '{root_marker}'", cause=exc
+                raise _storage_error_for(
+                    exc,
+                    root_marker,
+                    f"Failed to check root marker '{root_marker}'",
+                    resolved,
                 ) from exc
             # not-found → no marker exists, nothing to add
 
@@ -361,13 +360,11 @@ async def delete_prefix(
     # conformance: ignore[E004] not-found is the benign list/delete race handled below (logged + retried per key); every other error re-raises as StorageError
     except Exception as exc:
         if not _is_not_found(exc):
-            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                StorageError,
-            )
-
-            raise StorageError(
+            raise _storage_error_for(
+                exc,
+                prefix,
                 f"Failed to delete {len(paths)} objects with prefix '{prefix}'",
-                cause=exc,
+                resolved,
             ) from exc
 
         # A key vanished between the listing and the bulk delete (GCS and Azure
