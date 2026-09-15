@@ -78,7 +78,6 @@ import os
 import time
 import warnings
 from collections.abc import Callable, Sequence
-from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
 
@@ -91,6 +90,8 @@ from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
+from application_sdk.common.asset_serialization import entity_bytes
+from application_sdk.common.asset_serialization import orjson_default as _orjson_default
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
@@ -423,25 +424,6 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
         app_name=details.app_name,
         run_id=details.run_id,
         **evidence,
-    )
-
-
-def _orjson_default(obj: Any) -> Any:
-    """Fallback serialiser for orjson — covers types it doesn't handle natively.
-
-    orjson natively serialises ``str``, ``int``, ``float``, ``bool``, ``None``,
-    ``list``, ``dict``, ``datetime``, ``date``, ``time``, ``UUID`` and
-    ``dataclass`` instances. SQL drivers commonly return ``Decimal`` for
-    numeric columns and occasionally ``bytes`` for blob columns; both fall
-    back to a JSON-safe representation here.
-    """
-    if isinstance(obj, Decimal):
-        return float(obj)
-    if isinstance(obj, (bytes, bytearray)):
-        return obj.decode("utf-8", errors="replace")
-    # conformance: ignore[E012] orjson default= protocol contractually requires TypeError to signal non-serialisable; replacing with AppError would break serialisation
-    raise TypeError(  # orjson default= protocol requires TypeError to signal non-serializable
-        f"Object of type {type(obj).__name__} is not JSON-serializable"
     )
 
 
@@ -1957,20 +1939,19 @@ class SqlApp(App):
                         continue
                     record = orjson.loads(line)
                     asset = mapper_fn(record, connection_qn)
-                    # Inject connectionName if the mapper returned a dict
-                    if isinstance(asset, dict) and connection_name:
-                        asset.setdefault("attributes", {}).setdefault(
-                            "connectionName", connection_name
+                    # One seam owns connectionName injection and the
+                    # asset → wire-shape dispatch, for every template that
+                    # runs the mapper pattern (FND-2056). A return value it
+                    # does not recognise raises rather than falling back to
+                    # writing ``record`` — that fallback published unmapped
+                    # source rows as entities under a SUCCESS status.
+                    w.write(
+                        entity_bytes(
+                            asset,
+                            connection_name=connection_name,
+                            entity_type=entity_type,
                         )
-                    if hasattr(asset, "to_nested_dict"):
-                        payload = asset.to_nested_dict()
-                    elif hasattr(asset, "model_dump"):
-                        payload = asset.model_dump()
-                    elif isinstance(asset, dict):
-                        payload = asset
-                    else:
-                        payload = record
-                    w.write(orjson.dumps(payload, default=_orjson_default))
+                    )
                     w.write(b"\n")
                     written += 1
             return written
