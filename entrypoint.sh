@@ -17,7 +17,7 @@
 #   DAPR_HTTP_PORT       - DAPR HTTP API port (default: 3500)
 #   DAPR_GRPC_PORT       - DAPR gRPC API port (default: 50001)
 #   DAPR_COMPONENTS_PATH - Path to DAPR component YAML files (default: /app/components)
-#   DAPR_LOG_LEVEL                  - DAPR log level (default: warn)
+#   DAPR_LOG_LEVEL                  - DAPR log level (base image ENV sets info; warn only if unset)
 #   DAPR_METRICS_PORT               - Port for daprd Prometheus metrics (default: 3100)
 #   DAPR_MAX_BODY_SIZE              - Max request body size passed to daprd as
 #                                     --max-request-body-size (default: 1024Mi)

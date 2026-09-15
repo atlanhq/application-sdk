@@ -143,7 +143,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
+      # buildx resolves the Dockerfile's `# syntax=docker/dockerfile:1`
+      # frontend from Docker Hub ANONYMOUSLY on every build, before it looks at
+      # the base image, and `uv sync` reaches the package index from inside the
+      # build. Both are third-party endpoints that have moments:
+      # `auth.docker.io/token: 500` and a `401 Unauthorized` from the index are
+      # both observed, both clear on a re-run with no code change, and both fail
+      # the required check on a PR that never touched the image. So: absorb one.
+      #
+      # A blanket retry (rather than one gated on the error text, which the
+      # action does not expose as an output) is cheap here because the failures
+      # that are NOT transient — a stale `uv.lock` under `--locked`, an
+      # unsatisfiable resolution — fail one to three seconds into the step, and
+      # `cache-from: type=gha` means the second attempt replays every layer
+      # before the failing one. The cost of a wasted retry is the sleep, not a
+      # second build.
       - name: Build image
+        id: build-image
+        continue-on-error: true
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
@@ -172,6 +189,35 @@ jobs:
           # This job already logs into GHCR with the PAT above, so there's no
           # benefit to minting a separate App token just for this -- the PAT is
           # already in play.
+          secrets: |
+            git_token=${{ secrets.ORG_PAT_GITHUB }}
+
+      # Long enough for a registry or index having a moment to have passed, short
+      # enough that a genuinely broken build still reports inside the job's
+      # 15-minute budget.
+      - name: Wait before the build retry
+        if: steps.build-image.outcome == 'failure'
+        run: sleep 30
+
+      # Inputs restated verbatim, comments and all omitted — see the first attempt.
+      # A reusable workflow cannot `uses:` a composite action from its own
+      # repository without checking that repository out first, so the block is
+      # duplicated rather than factored out.
+      #
+      # NOT continue-on-error: if the image cannot be built twice there is nothing
+      # to scan, and the security gate reads a failed `build` as exactly that.
+      - name: Build image (retry)
+        if: steps.build-image.outcome == 'failure'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ${{ steps.meta.outputs.dockerfile }}
+          push: false
+          tags: ${{ steps.meta.outputs.scan_image }}
+          outputs: type=docker,dest=/tmp/image.tar
+          cache-from: type=gha,scope=scan
+          cache-to: type=gha,mode=max,scope=scan,ignore-error=true
+          provenance: false
           secrets: |
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 

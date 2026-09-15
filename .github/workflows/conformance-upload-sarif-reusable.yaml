@@ -1,0 +1,174 @@
+name: "Conformance SARIF Upload (reusable)"
+
+# Body of the fleet's `conformance-upload-sarif.yaml`, hoisted out of the
+# consumer repos (FND-1994). It was one of only two bootstrap templates in which
+# a consumer repo carried third-party action pins — `actions/checkout`,
+# `actions/download-artifact` and `github/codeql-action/upload-sarif` — and they
+# now live here, where Mend already maintains them.
+#
+# What stays in the caller, and why it cannot move here:
+#   - the `workflow_run` trigger: a reusable workflow may only declare
+#     `workflow_call`.
+#   - the `permissions:` block: permissions are caller-granted, and a
+#     `permissions:` block is exhaustive rather than additive — every scope it
+#     omits is `none`, whatever the repository default is. `contents: read` is
+#     load-bearing there (see the caller's own header), not decoration.
+#
+# Runs in the CALLER's context, so `github.repository`, the SARIF destination
+# and `security-events: write` all resolve to the consumer repo. Same property
+# `renovate-auto-approve-reusable.yml` depends on.
+#
+# Always exits 0. GitHub Code Scanning marks a tool as "reporting errors"
+# whenever the workflow that uploads its SARIF fails, so the upload is decoupled
+# from the gate (which intentionally exits 1 on blocking violations).
+
+on:
+  workflow_call:
+    inputs:
+      workflow_run_id:
+        description: "ID of the triggering Conformance run to download artifacts from."
+        type: string
+        required: true
+      head_branch:
+        description: "Branch of the triggering run, for the Security-tab ref."
+        type: string
+        required: true
+      head_sha:
+        description: "Commit of the triggering run, for the Security-tab sha."
+        type: string
+        required: true
+      slugs:
+        description: >-
+          JSON array of `{"slug": …, "name": …}` objects, one per SARIF artifact
+          to upload. Defaults to the four series a consumer app's conformance
+          run produces; application-sdk's own caller passes its longer list.
+        type: string
+        required: false
+        default: >-
+          [{"slug": "ci", "name": "Upload CI SARIF"},
+           {"slug": "error-handling", "name": "Upload Error-handling SARIF"},
+           {"slug": "prescriptions", "name": "Upload Prescriptions SARIF"},
+           {"slug": "optimizations", "name": "Upload Optimizations SARIF"}]
+      sdk_ref:
+        description: >-
+          Ref of atlanhq/application-sdk to read the availability probe from.
+          An explicit input because `github.job_workflow_sha` renders empty for
+          a reusable called from another repository — there is no context that
+          reports "the ref this reusable was called at", so it is passed.
+        type: string
+        required: false
+        default: "main"
+
+jobs:
+  upload:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.slugs) }}
+    steps:
+      # Code scanning is a GitHub Advanced Security feature: free on public
+      # repos, licensed on private ones. GHAS is disabled across the atlanhq
+      # private fleet, so `upload-sarif` fails the whole job with "Advanced
+      # Security must be enabled for this repository to use code scanning" —
+      # on 77 of the 82 repos carrying this workflow, once per matrix leg, on
+      # every push to main (FND-1149).
+      #
+      # Gate on the repository's actual eligibility rather than on visibility
+      # alone, so a private repo starts uploading the moment GHAS is licensed
+      # with no edit here. Public repos never carry an `advanced_security` key
+      # (the feature is inherent to them), hence the two-branch test.
+      #
+      # Caveat, deliberately accepted: `security_and_analysis` is admin-only on
+      # the repos endpoint, so a non-admin GITHUB_TOKEN may read `visibility`
+      # but see `advanced_security` as absent even on a licensed private repo —
+      # which would skip the upload. That direction is the safe one (it is
+      # today's behaviour minus the failing job) and it is not silent: the
+      # probe prints both values into the job log on every run, so the first
+      # licensed private repo shows up as `advanced_security=absent` rather
+      # than as a mystery. Querying code-scanning/analyses instead was
+      # rejected — it 404s on a repo with no analyses yet, which is exactly a
+      # newly-licensed repo, so the check would lock itself off permanently.
+      #
+      # Nothing downstream depends on this upload: connector-pulse ingests the
+      # k.atlan.dev mirror published by `update-dashboard.yml`, not the Security
+      # tab, so a skipped leg costs no fleet visibility.
+      #
+      # The decision itself is a tested Python script, not inlined shell:
+      # docs/standards/ci.md forbids conditional logic in `run:` blocks because
+      # those branches cannot be regression-tested. The four cases (public,
+      # private+enabled, private+absent-or-disabled, and a probe that could not
+      # read the API) are covered by
+      # .github/scripts/tests/test_probe_code_scanning.py.
+      #
+      # The checkout is what makes the script reachable: `workflow_run` jobs
+      # start with an empty workspace. It reads the script out of
+      # application-sdk rather than out of the caller — this is the copy the
+      # tests above cover, and taking it from here means a consumer repo needs
+      # nothing of its own on disk for this job to work. (Bootstrap still
+      # vendors `.github/scripts/probe_code_scanning.py` into consumer repos:
+      # every repo not yet migrated to this reusable runs the script out of its
+      # own checkout, so that copy cannot be retired until the fleet is.)
+      - name: "Check out the availability probe"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ inputs.sdk_ref }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts/probe_code_scanning.py
+          sparse-checkout-cone-mode: false
+
+      # `github.token` is the CALLER's token: the probe asks about the consumer
+      # repo, which is what its eligibility decision is about.
+      - name: "Check code scanning availability"
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/probe_code_scanning.py
+
+      - name: "Download SARIF artifact"
+        id: download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          # Glob + merge-multiple, not the bare name: the suite's upload retry
+          # cannot reuse the first attempt's artifact name (a failed
+          # FinalizeArtifact holds that name for the whole run and
+          # CreateArtifact then 409s), so it publishes `…-sarif-retry`.
+          # merge-multiple flattens whichever of the two landed into the working
+          # directory as `<slug>.sarif`, which is what the strip step reads.
+          pattern: conformance-${{ matrix.slug }}-sarif*
+          merge-multiple: true
+          run-id: ${{ inputs.workflow_run_id }}
+          github-token: ${{ github.token }}
+        continue-on-error: true  # absent when series had no relevant changes
+
+      # Gated on the FILE, not on `steps.download.outcome`: with `pattern:`
+      # (unlike `name:`) download-artifact treats "nothing matched" as success,
+      # so the outcome no longer distinguishes a series that uploaded SARIF
+      # from one that had no relevant changes. hashFiles does.
+      - name: "Strip suppressed results"
+        if: hashFiles(format('{0}.sarif', matrix.slug)) != ''
+        env:
+          SARIF_SLUG: ${{ matrix.slug }}
+        run: |
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            "$SARIF_SLUG.sarif" > "$SARIF_SLUG-upload.sarif"
+
+      # `category:` is set explicitly rather than left to GitHub's default,
+      # which is derived from the workflow file, job and matrix values — all of
+      # which change when a repo moves from its own copy of this workflow to
+      # this reusable. A changed category orphans the repo's existing analyses:
+      # they linger in the Security tab as stale results from a tool that no
+      # longer reports. The move costs one such change either way (the derived
+      # default moves too); naming it means it is the last one, and that every
+      # repo in the fleet reports under the same category regardless of which
+      # side of the migration it is on.
+      - name: "Upload SARIF to Security tab"
+        if: hashFiles(format('{0}-upload.sarif', matrix.slug)) != '' && steps.probe.outputs.available == 'true'
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+        with:
+          sarif_file: ${{ matrix.slug }}-upload.sarif
+          category: conformance-${{ matrix.slug }}
+          ref: refs/heads/${{ inputs.head_branch }}
+          sha: ${{ inputs.head_sha }}

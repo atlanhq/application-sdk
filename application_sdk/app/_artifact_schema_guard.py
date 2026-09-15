@@ -24,6 +24,7 @@ Surface                                          Declaration   Why
 ===============================================  ============  ==============================================
 An entry point's ``input_type``/``output_type``  **required**  Public by definition — another app or the DAG reads it
 An internal ``@task`` contract                   optional      App-internal processing; the app owns the risk
+A field marked ``AssetArtifact``                 n/a           Already declared, by the model itself
 ===============================================  ============  ==============================================
 
 The boundary needs no special-casing: the default ``run()`` method is registered
@@ -31,6 +32,20 @@ as an *implicit* entry point carrying the same ``EntryPointMetadata`` as an
 explicit ``@entrypoint``, so "every entry point" already means "every public
 boundary".  ``@task`` contracts never become ``EntryPointMetadata``, so they are
 excluded by construction rather than by a filter that could drift.
+
+**One exemption, and it is not a hole** (FND-1863).  A field carrying the
+:class:`~application_sdk.contracts.types.AssetArtifact` marker is already
+declared — by an executable model rather than by a generated field map — so this
+guard does not ask for a second declaration of it.  The artifact is Atlas
+assets, 500+ types and 4000+ properties, and the only envelope an app could
+hand-write for it is a partial restatement of ``Asset``; the interceptor
+validates a marked field against the whole model instead
+(:func:`application_sdk.validation.interceptor._source_for`).  The marker
+therefore *raises* the standard of the boundary check while removing the
+authoring burden, and the exemption is read through the same
+:func:`~application_sdk.contracts.types.asset_artifact_marker` the interceptor
+reads — one reader, so a field this guard stops asking about cannot be one the
+interceptor stops checking.
 
 **Warns in 3.x, raises in 4.0.**  A missing declaration is the same class of
 defect as the ``EntryPointContractError`` family this runs alongside — a public
@@ -59,7 +74,7 @@ from application_sdk.app._generated_tree import (
     generated_layout,
 )
 from application_sdk.constants import CONTRACT_GENERATED_DIR
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.types import FileReference, asset_artifact_marker
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -313,6 +328,22 @@ def warn_undeclared_artifact_schemas(
             ):
                 for field_name in _boundary_artifact_fields(contract):
                     if field_name in declarations.keys:
+                        continue
+                    if asset_artifact_marker(contract, field_name) is not None:
+                        # Declared by a typed model, not by a field map. DEBUG
+                        # rather than silence: the absence of a warning for a
+                        # boundary FileReference field is otherwise
+                        # indistinguishable from this guard having missed it.
+                        _logger.debug(
+                            "App '%s' entry point '%s': %s contract '%s' field "
+                            "'%s' is model-declared (AssetArtifact), so it needs "
+                            "no artifactSchemas entry.",
+                            app_name,
+                            ep_name,
+                            direction,
+                            contract.__name__,
+                            field_name,
+                        )
                         continue
                     message = (
                         f"App '{app_name}' entry point '{ep_name}': "

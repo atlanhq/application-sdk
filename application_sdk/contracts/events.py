@@ -182,6 +182,9 @@ class WorkerStartEventData(BaseModel):
         sdk_version: SDK version used to build the app image (ATLAN_SDK_VERSION).
         app_type: App type from Global Marketplace (ATLAN_APP_TYPE).
         published_at: Release publication timestamp (ATLAN_PUBLISHED_AT).
+        commit_sha: Git commit the image was built from, baked into the image
+            at build time (app/atlan_build.json). Empty on images built before
+            the CI started baking it.
         objectstore_binding_type: Dapr component type of the deployment object
             store (e.g. "bindings.aws.s3", "bindings.localstorage"), discovered
             at runtime from the Dapr sidecar metadata. Empty if undiscoverable.
@@ -214,6 +217,7 @@ class WorkerStartEventData(BaseModel):
     sdk_version: str = ""
     app_type: str = ""
     published_at: str = ""
+    commit_sha: str = ""
     objectstore_binding_type: str = ""
     upstream_objectstore_binding_type: str = ""
     secretstore_binding_type: str = ""
@@ -232,6 +236,9 @@ class WorkerTokenRefreshEventData(BaseModel):
         token_expiry_time: Unix timestamp when the new token expires.
         time_until_expiry: Seconds until token expires.
         refresh_timestamp: Unix timestamp when the refresh occurred.
+        app_version: Version of the running app image (see WorkerStartEventData).
+            Repeated here so a fleet registry can heal a missed worker_start.
+        commit_sha: Git commit of the running app image (see WorkerStartEventData).
     """
 
     application_name: str
@@ -240,3 +247,5 @@ class WorkerTokenRefreshEventData(BaseModel):
     token_expiry_time: float
     time_until_expiry: float
     refresh_timestamp: float
+    app_version: str = ""
+    commit_sha: str = ""

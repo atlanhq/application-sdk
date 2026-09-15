@@ -514,6 +514,13 @@ and is UI-only — separate from `validationRules`. See `docs/reference.md` and 
 | `Widgets.BooleanInput` | `boolean` | `bool` |
 | `Widgets.Switcher` | `switcher` | `bool` |
 
+A `DropDown` with `multiSelect = true` is `list[str]` in both `_input.py` and
+`_e2e_substitutions.py`. Declare its pre-selection structurally with
+`defaultSelection { "S3Bucket"; "S3Object" }` — the widget needs `default` as a
+JSON-stringified array, and the toolkit generates that string, so assigning
+`default` by hand on a multi-select is rejected. See `docs/reference.md` and the
+[`full`](examples/full/) example.
+
 ### Connection & Credential
 
 | Class | Widget | Python Type |

@@ -2,6 +2,32 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.30.0] - 2026-09-14
+
+### Features
+
+- add D012/D013 for the uv PyPI index pin (#3758) ([633d9ae](https://github.com/atlanhq/application-sdk/commit/633d9ae))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.26.0 (#3772) ([345ceaa](https://github.com/atlanhq/application-sdk/commit/345ceaa))
+- chore(deps): update dependency ruff to v0.16.7 (#3767) ([c23d8ed](https://github.com/atlanhq/application-sdk/commit/c23d8ed))
+- chore(contract-toolkit): release v0.25.2 (#3729) ([46cbd03](https://github.com/atlanhq/application-sdk/commit/46cbd03))
+
+## [0.29.0] - 2026-09-09
+
+### Features
+
+- declare SDK-owned asset artifacts with the model, not a hand-written envelope (#3725) ([2d85710](https://github.com/atlanhq/application-sdk/commit/2d85710))
+- resolve source-available and compose-overlay per e2e suite (#3724) ([ab6dd7f](https://github.com/atlanhq/application-sdk/commit/ab6dd7f))
+
+### Bug fixes
+
+- resolve K004 outputs against both contract layouts (#3733) ([2ec12d3](https://github.com/atlanhq/application-sdk/commit/2ec12d3))
+- update github/codeql-action digest to b96794f (#3728) ([2c3f759](https://github.com/atlanhq/application-sdk/commit/2c3f759))
+- slot every tests-reusable input in the bootstrap template (#3718) ([ac9f2fa](https://github.com/atlanhq/application-sdk/commit/ac9f2fa))
+- accept the GHCR base mirror in I001 (#3686) ([d1b5c90](https://github.com/atlanhq/application-sdk/commit/d1b5c90))
+
 ## [0.28.0] - 2026-09-08
 
 ### Features

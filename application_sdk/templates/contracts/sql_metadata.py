@@ -17,7 +17,12 @@ from application_sdk.common.sql_filters import (
     validate_filter_no_sql_injection,
 )
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
-from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
+from application_sdk.contracts.types import (
+    AssetArtifact,
+    ConnectionRef,
+    FileReference,
+    MaxItems,
+)
 from application_sdk.credentials.ingress import (
     declared_agent_spec_type,
     normalize_agent_json,
@@ -313,9 +318,9 @@ class ExtractionOutput(Output, PublishInputMixin):
     additional output prefixes (e.g. lineage-specific dirs) can derive them
     from this field instead of re-calling workflow.info()."""
 
-    transformed_files: Annotated[list[FileReference], MaxItems(1000)] = Field(
-        default_factory=list
-    )
+    transformed_files: Annotated[
+        list[FileReference], MaxItems(1000), AssetArtifact()
+    ] = Field(default_factory=list)
     """The producer's declaration of what the transform step actually wrote.
 
     One durable ``FileReference`` per entity that transformed at least one
@@ -341,6 +346,17 @@ class ExtractionOutput(Output, PublishInputMixin):
 
     ``transformed_data_prefix`` is unchanged and remains the field publish
     reads — these refs supplement it, they do not replace it.
+
+    **Declared by the model, not by the app** (FND-1863).  This field is the
+    SDK's own: it is declared here, populated by ``SqlApp.run()``, and written
+    by ``SqlApp._transform_entity`` — no connector authors any part of it.  The
+    :class:`~application_sdk.contracts.types.AssetArtifact` marker says so, and
+    it is what keeps every SQL connector from having to hand-write an
+    ``artifactSchemas`` envelope for an artifact the SDK already validates
+    against the full ``pyatlan_v9`` ``Asset`` backbone on the upload path.  The
+    marker upgrades the boundary check to that same model rather than turning it
+    off; see the marker's own docstring for why a field map is the wrong
+    instrument here.
     """
 
 

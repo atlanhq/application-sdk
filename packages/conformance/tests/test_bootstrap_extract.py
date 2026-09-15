@@ -70,6 +70,36 @@ def test_extract_apt_packages_absent_returns_empty() -> None:
     assert extract_apt_packages(render("checks.yml")) == ""
 
 
+def test_extract_apt_packages_prefers_the_declared_input_over_an_inline_step() -> None:
+    """A file carrying BOTH shapes is read as what it declares to the reusable.
+
+    The mid-migration hand-edit: someone re-synced onto the thin caller but left
+    the old inline step behind (commented back in, or re-added by hand). Only
+    the `system_deps:` input reaches the reusable, so that is what actually
+    installs — reading the stale inline list instead would re-render a caller
+    that installs packages the file's own declaration does not name, and the
+    repo would keep drifting back.
+
+    The two lists are deliberately disjoint so a merge of the arms, or the wrong
+    arm winning, cannot pass.
+    """
+    text = (
+        "jobs:\n"
+        "  pre-commit:\n"
+        "    uses: atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main\n"
+        "    with:\n"
+        '      system_deps: "libpq-dev"\n'
+        "      # left over from before the re-sync:\n"
+        "      #   sudo apt-get install -y libkrb5-dev\n"
+        "  stale-hand-edit:\n"
+        "    steps:\n"
+        "      - run: |\n"
+        "          sudo apt-get update\n"
+        "          sudo apt-get install -y libkrb5-dev\n"
+    )
+    assert extract_apt_packages(text) == "libpq-dev"
+
+
 def test_extract_apt_packages_drops_flags() -> None:
     text = "          sudo apt-get install -y --no-install-recommends libpq-dev\n"
     assert extract_apt_packages(text) == "libpq-dev"

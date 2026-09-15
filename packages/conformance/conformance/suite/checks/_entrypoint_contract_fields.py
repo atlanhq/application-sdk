@@ -26,11 +26,13 @@ producers and readers of this data so small syntactic variations
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import NamedTuple
 
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
+    SDK_MODEL_BACKED_ARTIFACT_FIELDS,
     SDK_TEMPLATE_CONTRACT_FIELDS,
 )
 from conformance.suite.checks.prescriptions._contract_common import _unwrap_annotated
@@ -178,11 +180,50 @@ def _canonical_type(node: ast.expr) -> str:
 # ── Field extraction ──────────────────────────────────────────────────────────
 
 
+#: Matches the SDK's ``AssetArtifact`` marker in a field's **raw** annotation.
+#:
+#: Deliberately not read off ``canonical_type``: ``_normalize_type_node`` strips
+#: ``Annotated[...]``, which is the only place the marker ever appears, so the
+#: canonical string can never carry it. Matching the source text means an import
+#: alias is not recognised — the same false-negative direction
+#: ``_FILE_REFERENCE_RE`` already accepts, and the safe one here: an unrecognised
+#: marker means the field is *reported*, never silently waved through.
+_ASSET_ARTIFACT_RE = re.compile(r"\bAssetArtifact\b")
+
+
+def _annotation_declares_model(annotation: ast.expr) -> bool:
+    """Whether *annotation* carries the ``AssetArtifact`` marker.
+
+    The marker says this ``FileReference`` field's declaration *is* an executable
+    model — ``pyatlan_v9``'s ``Asset`` — rather than a hand-authored field map, so
+    there is nothing for the app to write down and nothing for a rule to demand
+    (FND-1863).
+    """
+    try:
+        return bool(_ASSET_ARTIFACT_RE.search(ast.unparse(annotation)))
+    except (AttributeError, ValueError):  # pragma: no cover — defensive
+        return False
+
+
 class _FieldInfo(NamedTuple):
     name: str
     canonical_type: str
     status: str  # "active" | "deprecated" | "sunset"
     node: ast.AnnAssign | None  # None for fields resolved via inheritance
+    #: Whether this field's declaration is a typed model rather than a field map.
+    #:
+    #: **Provenance, carried rather than re-derived.** The marker lives in
+    #: ``Annotated`` metadata, which canonicalisation strips and which an
+    #: inherited field's ``node=None`` puts out of a caller's reach entirely. A
+    #: caller left to answer "is this field model-declared?" for itself can only
+    #: fall back to matching the field *name*, and a name is not a marker: it
+    #: waves through any same-named field nothing declares, while reporting a
+    #: marked field the app factored onto a base of its own. Resolving it here,
+    #: where the annotation is still in hand, is what makes both answers right.
+    #:
+    #: Trailing with a default so every existing positional construction of this
+    #: tuple keeps working.
+    model_declared: bool = False
 
 
 def _field_status(ann_node: ast.AnnAssign) -> str:
@@ -255,6 +296,7 @@ def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
                 canonical_type=_canonical_type(stmt.annotation),
                 status=_field_status(stmt),
                 node=stmt,
+                model_declared=_annotation_declares_model(stmt.annotation),
             )
         )
     return result
@@ -267,6 +309,28 @@ def _base_name(base: ast.expr) -> str | None:
     if isinstance(base, ast.Attribute):
         return base.attr
     return None
+
+
+def _keep_model_declared(new: _FieldInfo, previous: _FieldInfo | None) -> _FieldInfo:
+    """Carry ``model_declared`` forward when a redeclaration would drop it.
+
+    Every other attribute of a field is overridden by the most derived
+    declaration, mirroring Python's MRO. The marker is not, and it has to not be,
+    because the SDK reader it mirrors behaves the same way: Pydantic rebuilds a
+    redeclared field's metadata tuple from the new annotation, so a subclass that
+    narrows a type or attaches its own ``Field(...)`` loses the marker from its
+    own ``model_fields`` — which is why
+    :func:`application_sdk.contracts.types.asset_artifact_marker` resolves across
+    the MRO rather than reading one class.
+
+    If this rule took the redeclaration at face value it would report a field the
+    SDK exempts, on a boundary the interceptor is model-validating in full. The
+    two answers have to agree, and the marker asserts a fact about the *bytes* —
+    narrowing an annotation does not change what wrote them.
+    """
+    if previous is not None and previous.model_declared and not new.model_declared:
+        return new._replace(model_declared=True)
+    return new
 
 
 def resolve_contract_fields(
@@ -337,17 +401,29 @@ def resolve_contract_fields(
                 for base_name in reversed(rec.bases):
                     merge_ancestor(base_name, visiting)
                 for fi in _iter_fields(rec.node):
-                    fields_by_name[fi.name] = fi._replace(node=None)
+                    fields_by_name[fi.name] = _keep_model_declared(
+                        fi._replace(node=None), fields_by_name.get(fi.name)
+                    )
         else:
+            # The un-scannable case: an SDK contract, whose source is not part of
+            # a consumer repo's AST. Its own fields are mirrored statically, and
+            # so is the one annotation fact a caller cannot recover from a bare
+            # name — which of them the SDK marks.
             sdk_fields = SDK_CONTRACT_BASE_FIELDS.get(
                 name, SDK_TEMPLATE_CONTRACT_FIELDS.get(name, ())
             )
             for sdk_field in sdk_fields:
-                fields_by_name[sdk_field.name] = _FieldInfo(
-                    name=sdk_field.name,
-                    canonical_type=sdk_field.canonical_type,
-                    status=sdk_field.status,
-                    node=None,
+                fields_by_name[sdk_field.name] = _keep_model_declared(
+                    _FieldInfo(
+                        name=sdk_field.name,
+                        canonical_type=sdk_field.canonical_type,
+                        status=sdk_field.status,
+                        node=None,
+                        model_declared=(
+                            sdk_field.name in SDK_MODEL_BACKED_ARTIFACT_FIELDS
+                        ),
+                    ),
+                    fields_by_name.get(sdk_field.name),
                 )
         merged.add(name)
 
@@ -359,9 +435,10 @@ def resolve_contract_fields(
         if bname is not None:
             merge_ancestor(aliases.get(bname, bname), visiting)
 
-    # Fields declared directly on classdef always win over inherited ones.
+    # Fields declared directly on classdef always win over inherited ones —
+    # except for the marker, which is sticky (see `_keep_model_declared`).
     for fi in _iter_fields(classdef):
-        fields_by_name[fi.name] = fi
+        fields_by_name[fi.name] = _keep_model_declared(fi, fields_by_name.get(fi.name))
 
     return list(fields_by_name.values())
 

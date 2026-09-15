@@ -237,6 +237,20 @@ uiConfig = new UIConfig {
           default = "INFO"
           width = 4
         }
+        ["asset_types"] = new DropDown {
+          title = "Asset types"
+          helpText = "Which asset kinds to ingest; leave as-is to ingest all three."
+          possibleValues {
+            ["Table"] = "Table"
+            ["View"] = "View"
+            ["MaterialisedView"] = "Materialised view"
+          }
+          // Pre-selection is declared structurally; the toolkit generates the
+          // JSON-stringified `default` the multi-select widget needs.
+          defaultSelection { "Table"; "View" }
+          multiSelect = true
+          width = 4
+        }
         ["lineage_depth"] = new NumericInput {
           title = "Lineage depth"
           helpText = "How many hops of upstream lineage to resolve (required when lineage is on)."

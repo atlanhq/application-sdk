@@ -209,19 +209,37 @@ is justified.
 > contract/app.pkl exists but an expected generated artifact (atlan.yaml / manifest.json / _input.py) is missing — regenerate
 
 **Rationale:** An app that defines contract/app.pkl commits the pkl eval outputs (atlan.yaml,
-app/generated/manifest.json, app/generated/_input.py) so that deployment and CI consume
-them without a pkl toolchain.  When one of those outputs is absent while the contract
-exists, the app was never generated (or the artifact was deleted): the platform reads a
-manifest that does not exist, and the app fails to deploy or register.  File existence
-is a fully deterministic check that needs no pkl (BLDX-1414).
+manifest.json, _input.py) so that deployment and CI consume them without a pkl
+toolchain.  When one of those outputs is absent while the contract exists, the app was
+never generated (or the artifact was deleted): the platform reads a manifest that does
+not exist, and the app fails to deploy or register.  File existence is a fully
+deterministic check that needs no pkl (BLDX-1414).  The two app/generated artifacts are
+resolved against BOTH layouts — the single-entrypoint app/generated/ path and a bundle's
+per-entrypoint app/generated/<entrypoint>/ path — because hard-coding the
+single-entrypoint prefix made the rule unsatisfiable on every bundle: the finding named
+a path the contract never emits, and its remedy (regenerate and commit) could not clear
+it.
 
 The app defines `contract/app.pkl` but one or more of the artifacts `pkl eval` is
 expected to produce is absent:
 
-* `atlan.yaml` * `app/generated/manifest.json` * `app/generated/_input.py`
+* `atlan.yaml` * `manifest.json` * `_input.py`
 
 These are the outputs the deployment pipeline and the SDK read at runtime; a missing one
 means the contract was never generated (or an output was deleted).
+
+**Both contract layouts satisfy this rule.**  A single-entrypoint contract emits
+`manifest.json` and `_input.py` at `app/generated/`; a contract declaring an
+`entrypoints` block (a multi-entrypoint bundle) emits one copy per entrypoint at
+`app/generated/<entrypoint>/` and nothing at the top level.  The check requires the path
+the contract actually declares: a non-bundle must carry the top-level file (a same-named
+file in a subdirectory does not count), and a bundle must carry a copy under *every*
+declared entrypoint (one generated copy does not cover the rest).  `atlan.yaml` stays in
+scope for both — a bundle root emits it too.
+
+Unlike K010, which exempts bundles outright, this rule checks the declared layout so its
+coverage is preserved: a bundle that was never generated has no per-entrypoint copy
+either, and still fires.
 
 **Fix:** regenerate from the contract —
 
@@ -807,6 +825,16 @@ model, so a key there could not name a real field.
 
 Never hand-edit the generated `artifact_schemas.json`: it is a pkl eval output and the
 next toolkit run reverts the edit.
+
+**Model-declared fields are exempt, and need no suppression.** A `FileReference` field
+carrying the SDK's `AssetArtifact` marker is already declared -- by `pyatlan_v9`'s
+`Asset` rather than by a field map -- and the SDK's interceptor validates it against the
+whole model. The asset hand-off is 500+ types and 4000+ properties, so any envelope
+authored for one is a partial restatement of `Asset`, and picking `required` from what
+one connector happens to emit encodes a connector-local observation as a cross-app
+contract. The commonest case needs nothing from the app at all:
+`ExtractionOutput.transformed_files` is the SDK's own field, so every subclass of it
+inherits the exemption (FND-1863).
 
 **Suppress** with `# conformance: ignore[K016] <reason>` on the field declaration, or on
 the contract class definition for a field inherited from a base. Suppressing states that

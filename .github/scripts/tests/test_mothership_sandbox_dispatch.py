@@ -115,6 +115,15 @@ def test_payload_shape():
     assert "BLDX-1" in p["prompt"] and "CRITICAL" in p["prompt"]
 
 
+def test_payload_declares_an_attributed_gateway_key():
+    """Mothership rejects the run outright when no AI Gateway key is
+    attributed to it, so the alias must be in the payload — `_base` does not
+    carry one. Regression guard for the silent breakage that left the rover
+    dead from 2026-08-21."""
+    p = md.build_payload("BLDX-1", "HIGH", "2026-09-10", "http://run")
+    assert p["ai_gateway_key_name"] == "sdk_review"
+
+
 # ---------------------------------------------------------------------------
 # health check
 # ---------------------------------------------------------------------------

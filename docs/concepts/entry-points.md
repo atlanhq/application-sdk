@@ -426,3 +426,67 @@ against the wrong workflow rather than an error:
   `app/generated/<ep>/_e2e_base.py`. Conformance rule `T025` reports any bundle
   entry point without one. See
   [Connector CI e2e — Multi-entrypoint apps](../standards/connector-ci-e2e.md#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).
+
+## Contract types
+
+An entry point's `input`/return contracts are its public boundary, and a few of
+their field types carry meaning the annotation alone does not. All of them live in
+`application_sdk.contracts.types`:
+
+| Type | What it says |
+|---|---|
+| `FileReference` | The payload is a file, referenced rather than embedded (Temporal caps a payload at 2 MB). The activity interceptor materialises it before your task runs and persists it after |
+| `Lazy` | `Annotated[FileReference \| None, Lazy()]` — do **not** auto-materialise this one; the task calls `fetch(ref, store)` itself when it turns out to need the bytes |
+| `MaxItems` | The collection is bounded, and by how much |
+| `AssetArtifact` | This `FileReference` field's artifact declaration **is** a typed model — see below |
+
+### `AssetArtifact`: a field whose declaration is a model
+
+Every `FileReference` field on an entry point's boundary needs a declared shape,
+and today that means an `artifactSchemas` entry in the pkl contract — a warning
+now, an error in **v4.0**. See
+[Apps — Declaring artifact schemas](apps.md#declaring-artifact-schemas).
+
+`AssetArtifact` is the exception, for fields carrying Atlas assets:
+
+```python
+from typing import Annotated
+
+from application_sdk.contracts.types import AssetArtifact, FileReference
+
+class MyOutput(Output):
+    transformed_files: Annotated[list[FileReference], AssetArtifact()] = []
+```
+
+The marker goes in the field's `Annotated` metadata, alongside `MaxItems` if the
+field has one; order does not matter. What it changes:
+
+* **The runtime check gets stronger, not weaker.** The interceptor validates a
+  marked field against the whole `pyatlan_v9` `Asset` backbone — every record
+  decoded and `.validate()`d, plus a referential/orphan pass — instead of against
+  a field map. The outcome row reads `artifact_schema_source=model`.
+* **Nothing is left to author.** The registration-time guard and conformance
+  `K016` treat a marked field as declared, so no `artifactSchemas` entry is
+  required for it, at v4.0 either.
+
+**You are very unlikely to need to write this.** `ExtractionOutput.transformed_files`
+is the SDK's own field and already carries the marker, so any contract inheriting
+from it is covered:
+
+```python
+class MyExtractionOutput(ExtractionOutput):   # inherits the marker
+    row_count: int = 0
+```
+
+Redeclaring the field — narrowing its type, adding your own `Field(...)` — keeps
+the marker too: it is resolved across the class's MRO, so a subclass cannot
+silently undeclare an inherited artifact. Marking a field of your own is only
+right when its bytes really are one Atlas entity per line in the nested format
+`Asset.validate()` reads.
+
+**Migrating off a hand-written envelope.** If your contract already declares an
+`artifactSchemas` entry for a field that is now model-declared, delete it. A
+declaration for a marked field is *ignored* — a field cannot have two, and of the
+two the model is the stronger — so removing it changes nothing at runtime, and
+leaving it in place only invites someone to maintain a partial restatement of a
+500-type model.

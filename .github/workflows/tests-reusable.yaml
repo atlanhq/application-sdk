@@ -387,6 +387,22 @@ on:
           otherwise fails (or wastes minutes) during `uv sync`.  Leave false
           for connectors that genuinely need their LFS content at test time
           (the same reason build-and-publish takes an explicit `lfs` input).
+      lfs:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Check out git-LFS objects before building the e2e image (default
+          false). Set true for apps that vendor LFS-tracked assets (e.g. large
+          parser jars) into the Docker build context — without it the build
+          copies the LFS pointer, not the real file. Mirrors the same input on
+          build-and-publish-app.yaml and build-and-scan.yaml; only applied to
+          the image-build checkout.
+
+          Distinct from `git-lfs-skip-smudge` above, which only ever disables
+          LFS further: that one governs the TEST jobs' clones, this one the
+          image build. A connector can need both (skip the smudge during
+          `uv sync`, fetch the objects for the Docker context).
       apt-packages:
         required: false
         type: string
@@ -1356,6 +1372,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # This checkout IS the Docker build context, so an app that vendors
+          # LFS-tracked assets into its image needs the objects materialised
+          # here or the build copies a ~130-byte pointer. atlan-bw-app vendors
+          # SAP JCo's sapjco3.jar and its Dockerfile refuses to build on a
+          # pointer, so every e2e image build failed the moment the repo gained
+          # its first e2e suite and this job started running at all.
+          #
+          # build-and-publish-app.yaml and build-and-scan.yaml already take this
+          # input for exactly this reason (#2086); this is the third and last
+          # image-building path, and the only one that lacked it.
+          lfs: ${{ inputs.lfs }}
 
       - id: build
         uses: atlanhq/application-sdk/.github/actions/build-app-image@main
@@ -2248,9 +2275,9 @@ jobs:
       # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
       # and fails with `uv: command not found`. Install it unconditionally here.
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.12.11"
+          version: "0.12.13"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -2663,9 +2690,9 @@ jobs:
       HAS_TENANT_MATRIX: ${{ secrets.E2E_TENANT_MATRIX_JSON != '' && 'true' || '' }}
     steps:
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.12.11"
+          version: "0.12.13"
           enable-cache: true
 
       # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`

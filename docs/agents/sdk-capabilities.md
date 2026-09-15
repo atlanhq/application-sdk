@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.33.2
-source-sha:    eb3f58581f82399f32e701c4743a5bca879b2a89
-source-date:   2026-09-09T14:22:00+01:00
+sdk-version:   3.34.1
+source-sha:    ccf53bff8017832a7352c380e475aa988feaba77
+source-date:   2026-09-11T10:25:22+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,10 +18,10 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 46 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 27 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 40 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 66 |
@@ -320,6 +320,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app.build_identity import BUILD_IDENTITY_CONFIGMAP_ID`
 - **Signature:** `BUILD_IDENTITY_CONFIGMAP_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/build_identity.py`
+
+#### `BUILD_INFO_BUILD_ID_KEY`
+
+- **Import:** `from application_sdk.app.build_identity import BUILD_INFO_BUILD_ID_KEY`
+- **Signature:** `BUILD_INFO_BUILD_ID_KEY`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/app/build_identity.py`
 
@@ -680,6 +687,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 
 ### Classes
 
+#### `AssetArtifact`
+
+- **Import:** `from application_sdk.contracts import AssetArtifact`
+- **Signature:** `class AssetArtifact`
+- **Summary:** Marker: this ``FileReference`` field's declaration **is** a typed model.
+- **Defined in:** `application_sdk/contracts/types.py`
+
 #### `CompatibilityError`
 
 - **Import:** `from application_sdk.contracts.compat import CompatibilityError`
@@ -891,6 +905,20 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Signature:** `assert_backwards_compatible(old_cls: type, new_cls: type) -> None`
 - **Summary:** Assert *new_cls* is backwards-compatible with *old_cls*, raising on failure.
 - **Defined in:** `application_sdk/contracts/compat.py`
+
+#### `asset_artifact_fields`
+
+- **Import:** `from application_sdk.contracts import asset_artifact_fields`
+- **Signature:** `asset_artifact_fields(contract: type)`
+- **Summary:** Every field on *contract* carrying the :class:`AssetArtifact` marker.
+- **Defined in:** `application_sdk/contracts/types.py`
+
+#### `asset_artifact_marker`
+
+- **Import:** `from application_sdk.contracts import asset_artifact_marker`
+- **Signature:** `asset_artifact_marker(contract: type | None, field: str)`
+- **Summary:** The :class:`AssetArtifact` marker on ``contract``'s *field*, or ``None``.
+- **Defined in:** `application_sdk/contracts/types.py`
 
 #### `canonical_type_str`
 
@@ -1847,7 +1875,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `NoopHeartbeatController`
 
 - **Import:** `from application_sdk.execution.heartbeat import NoopHeartbeatController`
-- **Signature:** `class NoopHeartbeatController() -> None`
+- **Signature:** `class NoopHeartbeatController(fallback_details: tuple[Any, ...] = ()) -> None`
 - **Summary:** No-op HeartbeatController for local execution and testing.
 - **Defined in:** `application_sdk/execution/heartbeat.py`
 
@@ -1929,7 +1957,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `TemporalHeartbeatController`
 
 - **Import:** `from application_sdk.execution.heartbeat import TemporalHeartbeatController`
-- **Signature:** `class TemporalHeartbeatController() -> None`
+- **Signature:** `class TemporalHeartbeatController(fallback_details: tuple[Any, ...] = ()) -> None`
 - **Summary:** HeartbeatController that uses Temporal's activity.heartbeat().
 - **Defined in:** `application_sdk/execution/heartbeat.py`
 
@@ -7158,7 +7186,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `records_uploaded: int` `= 0`
   - `error: str` `= ''`
   - `output_path: str` `= ''` — Resolved local base path used during extraction. Subclasses that need
-  - `transformed_files: Annotated[list[FileReference], MaxItems(1000)]` `= Field(default_factory=list)` — The producer's declaration of what the transform step actually wrote.
+  - `transformed_files: Annotated[list[FileReference], MaxItems(1000), AssetArtifact()]` `= Field(default_factory=list)` — The producer's declaration of what the transform step actually wrote.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `ExtractionTaskInput`

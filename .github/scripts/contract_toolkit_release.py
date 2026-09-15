@@ -105,6 +105,15 @@ def compute_bump(subjects, bodies):
 def bump_version(current, bump):
     major, minor, patch = (int(x) for x in current.split("."))
     if bump == "major":
+        # Semver §4: while the major version is zero the public API is not
+        # declared stable, so a breaking change bumps the MINOR, not the major.
+        # Cutting 1.0.0 is a deliberate stability declaration about the whole
+        # package and must stay a human decision — never a side effect of one
+        # `feat!:` commit landing. The changelog still files the change under
+        # "Breaking changes" (categorise() reads the commits, not this bump),
+        # so the signal survives the smaller version bump.
+        if major == 0:
+            return f"0.{minor + 1}.0"
         return f"{major + 1}.0.0"
     if bump == "minor":
         return f"{major}.{minor + 1}.0"

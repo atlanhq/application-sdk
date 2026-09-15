@@ -192,7 +192,11 @@ def _make_sdk_repo_with_unused_dep(root: Path) -> None:
     """
     (root / "pyproject.toml").write_text(
         '[project]\nname = "atlan-application-sdk"\nversion = "0.1.0"\n'
-        'dependencies = ["pydantic>=2,<3"]\n',
+        'dependencies = ["pydantic>=2,<3"]\n'
+        # D012 is scope=both and fires on an absence, so pin the index here to
+        # keep this fixture's rule-id set about D001/D002/D003 scope filtering.
+        '\n[[tool.uv.index]]\nname = "pypi"\n'
+        'url = "https://pypi.org/simple"\ndefault = true\n',
         encoding="utf-8",
     )
 
