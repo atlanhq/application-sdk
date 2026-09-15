@@ -3036,6 +3036,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.heartbeat_timeout_seconds,
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
+                    retry_initial_interval_seconds=task_meta.retry_initial_interval_seconds,
                     pool=task_meta.pool,
                     schedule_to_close_seconds=task_meta.schedule_to_close_seconds,
                     progress_watchdog=task_meta.progress_watchdog,
@@ -3056,6 +3057,7 @@ def _create_task_activity_wrapper(
     auto_heartbeat_seconds: int | None = 10,
     retry_policy: Any = None,
     *,
+    retry_initial_interval_seconds: int = 1,
     pool: str | None = None,
     schedule_to_close_seconds: int | None = None,
     progress_watchdog: "ProgressWatchdogMode | None" = None,
@@ -3074,6 +3076,11 @@ def _create_task_activity_wrapper(
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
+        retry_initial_interval_seconds: Delay before the first retry. Later
+            delays grow from it by the backoff coefficient, so this is what
+            decides how wide a window a small attempt budget spans. Keyword-only
+            and defaulting to Temporal's own 1 second, so the positional
+            signature this function has always had is unchanged.
         pool: Logical worker-pool name. When set, the activity is routed
             to a dedicated task queue. Queue name resolution order:
             1. ``ATLAN_POOL_<POOL>_QUEUE`` env var (explicit override).
@@ -3135,6 +3142,7 @@ def _create_task_activity_wrapper(
         temporal_retry_policy = _to_temporal_retry_policy(
             _RP(
                 max_attempts=retry_max_attempts,
+                initial_interval=timedelta(seconds=retry_initial_interval_seconds),
                 max_interval=timedelta(seconds=retry_max_interval_seconds),
             )
         )

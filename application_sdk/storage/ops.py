@@ -1200,10 +1200,8 @@ async def download_file(
             elapsed_ms=elapsed_ms,
             error_class=_exc_class_name(exc),
         )
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-        raise StorageError(
-            f"Failed to download key '{key}'", key=key, cause=exc
+        raise _storage_error_for(
+            exc, key, f"Failed to download key '{key}'", resolved
         ) from exc
 
     bytes_written = 0
@@ -1382,11 +1380,9 @@ async def get_file_meta(
     except Exception as exc:
         if _is_not_found(exc):
             return None
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
-
-        raise StorageError(f"Failed to head key '{key}'", key=key, cause=exc) from exc
+        raise _storage_error_for(
+            exc, key, f"Failed to head key '{key}'", resolved
+        ) from exc
 
 
 async def _get_bytes(
@@ -1430,9 +1426,9 @@ async def _get_bytes(
     except Exception as exc:
         if _is_not_found(exc):
             return None
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-        raise StorageError(f"Failed to get key '{key}'", key=key, cause=exc) from exc
+        raise _storage_error_for(
+            exc, key, f"Failed to get key '{key}'", resolved
+        ) from exc
 
 
 async def _put(
@@ -1537,9 +1533,9 @@ async def delete(
     except Exception as exc:
         if _is_not_found(exc):
             return False
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-        raise StorageError(f"Failed to delete key '{key}'", key=key, cause=exc) from exc
+        raise _storage_error_for(
+            exc, key, f"Failed to delete key '{key}'", resolved
+        ) from exc
 
 
 async def exists(
@@ -1579,8 +1575,6 @@ async def exists(
     except Exception as exc:
         if _is_not_found(exc):
             return False
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-        raise StorageError(
-            f"Failed to check existence of key '{key}'", key=key, cause=exc
+        raise _storage_error_for(
+            exc, key, f"Failed to check existence of key '{key}'", resolved
         ) from exc

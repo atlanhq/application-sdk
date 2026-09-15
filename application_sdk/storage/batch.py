@@ -44,6 +44,7 @@ from application_sdk.storage.ops import (
     _normalize_listing_prefix,
     _resolve_store,
     _safe_join_under,
+    _storage_error_for,
 )
 from application_sdk.storage.ops import delete as _delete_object
 from application_sdk.storage.ops import (
@@ -120,12 +121,8 @@ async def list_keys(
         )
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
-
-        raise StorageError(
-            f"Failed to list keys with prefix '{prefix}'", cause=exc
+        raise _storage_error_for(
+            exc, prefix, f"Failed to list keys with prefix '{prefix}'", resolved
         ) from exc
 
 
@@ -163,12 +160,8 @@ async def list_keys_with_meta(
         )
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
-
-        raise StorageError(
-            f"Failed to list keys with prefix '{prefix}'", cause=exc
+        raise _storage_error_for(
+            exc, prefix, f"Failed to list keys with prefix '{prefix}'", resolved
         ) from exc
 
 
@@ -321,12 +314,8 @@ async def delete_prefix(
         items = await _list_items(resolved, prefix or None, include_markers=True)
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
-
-        raise StorageError(
-            f"Failed to list keys with prefix '{prefix}'", cause=exc
+        raise _storage_error_for(
+            exc, prefix, f"Failed to list keys with prefix '{prefix}'", resolved
         ) from exc
 
     paths = [path for path, _, _ in items]

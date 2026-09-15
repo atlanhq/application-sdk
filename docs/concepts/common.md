@@ -112,6 +112,15 @@ failure of that lookup — including its own 30-second timeout — onto
 The leaf matches on both halves of that pair, so a 401 from any other store, or a `1005` on any
 other status, still falls through to the generic `StorageError`.
 
+It applies to reads as well as writes. Every store operation that can fail against a remote —
+`upload_file`, `put`, `download_file`, `exists`, `get_file_meta`, `_get_bytes`, `delete`,
+`list_keys` — now routes its non-not-found failures through the same classifier, so all of them
+carry `http_status` / `provider_code` / `target` too. That matters for more than tidiness: a
+`verify_refs` HEAD goes through `exists()`, and a HEAD was what the run that motivated this leaf
+finally died on. The not-found contracts are unchanged — `exists` and `delete` still return
+`False`, `get_file_meta` and `_get_bytes` still return `None` — because the classifier sits after
+that short-circuit.
+
 Why the distinction earns a code: the signing key is a *static* Keycloak client id/secret, so a
 genuinely wrong credential fails the very first request a deployment makes — the SDR preflight
 probe at startup, long before any artifact moves. A `1005` arriving mid-run, after that probe
