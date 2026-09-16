@@ -1,4 +1,4 @@
-"""The two pure evaluators, generalised off the connector class attributes.
+"""The pure evaluators, generalised off the connector class attributes.
 
 Both already exist on ``BaseE2ETest`` as pure functions of their input plus a
 dozen ``ClassVar``\\s: ``_evaluate_asset_expectations`` (floors, exact parity,
@@ -34,23 +34,48 @@ The count evaluator gets the same treatment, because it has the mirror-image
 version of the same bug: an unreadable count arrives as ``0`` and is reported as
 "asset floor not met" — fail-*closed*, but attributed to the connector instead
 of to the search that failed.
+
+A third evaluator joined them on FND-2094: :func:`evaluate_attributes`. Counts
+and depths together answer "did the right number of assets land, in the right
+shape" and neither answers "does this asset carry the right values", so a
+connector could publish a structurally perfect tree in which every computed
+attribute was ``0`` and stay green. It inherits the same ``Unreadable``
+contract, and adds one distinction of its own that the count checks structurally
+cannot make: *present-but-zero* is not *absent*. See :class:`AssetAttributes`.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TypeAlias, Union
 
 __all__ = [
     "UNREADABLE",
+    "Absent",
+    "AssetAttributes",
     "AssetExpectations",
+    "AssetRef",
+    "AtLeast",
+    "AtMost",
+    "AttributeExpectationValue",
+    "AttributeMatcher",
+    "AttributeSampleRead",
+    "AttributeValue",
     "CountRead",
+    "Exactly",
     "Finding",
+    "Present",
     "SampleRead",
     "Unreadable",
+    "as_matcher",
+    "evaluate_attributes",
+    "evaluate_attributes_at",
     "evaluate_counts",
     "evaluate_locations",
+    "normalise_attribute_expectations",
+    "normalise_attribute_expectations_at",
 ]
 
 #: :attr:`Finding.expectation` value marking a finding that exists because a
@@ -89,6 +114,400 @@ CountRead: TypeAlias = Union[int, Unreadable]
 SampleRead: TypeAlias = Union[Sequence[str], Unreadable]
 
 
+# ---------------------------------------------------------------------------
+# Attribute values, and the vocabulary for asserting on them
+# ---------------------------------------------------------------------------
+#
+# Counts and depths say whether the right assets landed in the right shape.
+# Neither says whether an asset carries the right *values*, so a connector can
+# publish a structurally perfect tree in which every computed attribute is ``0``
+# and every suite in the fleet stays green (FND-2094).
+#
+# Two distinctions have to survive from the Atlas read all the way into a
+# finding, or the check reproduces the blind spot it exists to close:
+#
+# * **present-but-zero vs absent.** ``0`` is a value a connector meant to
+#   publish; an absent attribute is one it stopped publishing. To a count
+#   assertion they are the same and in Atlas they are not, which is why
+#   :class:`AssetAttributes` spells absence as *the key is missing* rather than
+#   as ``None`` — ``None`` is reserved for an attribute Atlas returned as null.
+# * **unmet vs unreadable**, the same split the counts and samples already make.
+
+#: One attribute value as Atlas returned it.
+#:
+#: ``object`` rather than ``Any`` on purpose: a matcher has to narrow before it
+#: compares, and ``Any`` would let ``AtLeast(3).matches(present=True,
+#: value="nine")`` type-check. The values that reach here are scalars — Atlas
+#: indexes the computed attributes connectors assert on (``tableCount``,
+#: ``schemaCount``, ``rowCount``, ``lastSyncRunAt``) as numbers, strings, bools
+#: or nulls — but nothing stops a struct arriving, and a matcher that cannot
+#: narrow one simply does not match it.
+AttributeValue: TypeAlias = object
+
+#: What a suite may write on the right-hand side of an attribute expectation: a
+#: matcher, or a bare scalar meaning :class:`Exactly` that scalar. The sugar is
+#: coerced to a matcher at the declaration boundary by :func:`as_matcher`, so
+#: nothing past it handles two shapes.
+AttributeExpectationValue: TypeAlias = Union[
+    "AttributeMatcher", str, int, float, bool, None
+]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AssetAttributes:
+    """The attribute values one sampled asset carries.
+
+    Attributes:
+        qualified_name: The sampled asset's qualifiedName, so a finding names
+            the asset it is about and not only its type.
+        values: Requested attribute name -> the value Atlas returned. **A
+            requested attribute Atlas did not return is absent from this
+            mapping**, which is how "the connector never set it" is spelled; a
+            key present with ``None`` is an attribute Atlas returned as null.
+            Collapsing those two into ``None`` would put the check back in the
+            hole it was dug out of.
+    """
+
+    qualified_name: str
+    values: Mapping[str, AttributeValue] = field(default_factory=dict)
+
+
+#: One per-type sample of asset attributes, or the fact that it could not be
+#: read. Same shape and same reason as :data:`SampleRead`.
+AttributeSampleRead: TypeAlias = Union[Sequence[AssetAttributes], Unreadable]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AssetRef:
+    """Which single asset an attribute expectation is about.
+
+    The per-type check asserts the same claim about every sampled asset of a
+    type, which is only right where every asset of that type genuinely shares
+    the value. It does not survive the ordinary case: crawl five schemas, one
+    with no views and one with ten, and there is no per-type claim about
+    ``viewsCount`` left to make beyond :class:`Present`. Addressing one asset is
+    what makes the values themselves assertable.
+
+    **The suffix, not the qualified name.** A run's connection qualified name
+    carries a freshly minted epoch, so no suite can write an asset's full name
+    in a class attribute. What a suite *can* write is the stable tail — and a
+    suffix rather than the whole path below the connection, so a Column can be
+    named ``"col"`` rather than ``"db/sch/tbl/col"``.
+
+    Attributes:
+        type_name: Atlan type name, e.g. ``"Schema"``. Required, not
+            decoration: it scopes the search, and two types can carry the same
+            tail (a Table and its View pattern, a Column named for its table).
+        qualified_name_suffix: The tail of the asset's qualifiedName, matched on
+            a path-segment boundary — ``"sch"`` matches
+            ``…/db/sch`` and never ``…/db/other_sch``.
+    """
+
+    type_name: str
+    qualified_name_suffix: str
+
+    def __str__(self) -> str:
+        """The ref as a finding's subject reads it.
+
+        Returns:
+            ``Schema[sch_empty]``.
+        """
+        return f"{self.type_name}[{self.qualified_name_suffix}]"
+
+
+class AttributeMatcher(ABC):
+    """One claim about a single attribute value on a single asset.
+
+    A closed vocabulary rather than ``Callable[[object], bool]``. A callable
+    would be shorter to offer and worse to read: a red CI leg has to print *what
+    was expected*, and a lambda can only print itself. Every matcher therefore
+    answers two questions — did it match, and what was it asking for.
+
+    Both halves of the reading are passed separately because the interesting
+    case is the one where there is no value at all. ``present=False`` means
+    Atlas returned no such attribute on this asset, and ``value`` then carries
+    no information.
+    """
+
+    __slots__ = ()
+
+    @abstractmethod
+    def matches(self, *, present: bool, value: AttributeValue) -> bool:
+        """Whether this reading satisfies the claim.
+
+        Args:
+            present: Whether Atlas returned the attribute at all.
+            value: The value it returned. Meaningless when *present* is False.
+
+        Returns:
+            True when the claim holds.
+        """
+
+    @abstractmethod
+    def describe(self) -> str:
+        """The claim, as the ``expected ...`` half of a failure line.
+
+        Returns:
+            A short phrase, e.g. ``"exactly 8"`` or ``"a number >= 1"``.
+        """
+
+
+@dataclass(frozen=True, slots=True)
+class Exactly(AttributeMatcher):
+    """The attribute is present and equal to *expected*.
+
+    The strictest matcher, and the right one against a pinned hermetic fixture
+    where the number is knowable. Against a live source it is the wrong tool —
+    :class:`AtLeast` or :class:`Present` belong there.
+
+    Attributes:
+        expected: The value the attribute must carry.
+    """
+
+    expected: AttributeValue
+
+    def matches(self, *, present: bool, value: AttributeValue) -> bool:
+        """Whether the attribute is present and equal to :attr:`expected`.
+
+        Args:
+            present: Whether Atlas returned the attribute.
+            value: The value it returned.
+
+        Returns:
+            True when present and equal. ``0`` never matches ``False`` and ``1``
+            never matches ``True``, though Python's ``==`` says they do: a flag
+            and a count are different findings about a connector, and quietly
+            equating them is the class of confusion this knob exists to remove.
+        """
+        if not present:
+            return False
+        if isinstance(value, bool) != isinstance(self.expected, bool):
+            return False
+        return bool(value == self.expected)
+
+    def describe(self) -> str:
+        """The claim as a phrase.
+
+        Returns:
+            ``"exactly <expected>"``.
+        """
+        return f"exactly {self.expected!r}"
+
+
+@dataclass(frozen=True, slots=True)
+class Present(AttributeMatcher):
+    """The attribute is present and not null — any value will do.
+
+    The matcher that catches the silent-drop regression: a connector that stops
+    setting an attribute entirely reads as green to every count assertion, and
+    as a failure here. Use it wherever the value depends on a live source and
+    only its existence is pinnable.
+    """
+
+    def matches(self, *, present: bool, value: AttributeValue) -> bool:
+        """Whether Atlas returned a non-null value.
+
+        Args:
+            present: Whether Atlas returned the attribute.
+            value: The value it returned.
+
+        Returns:
+            True when present and not ``None``.
+        """
+        return present and value is not None
+
+    def describe(self) -> str:
+        """The claim as a phrase.
+
+        Returns:
+            ``"a value (present and not null)"``.
+        """
+        return "a value (present and not null)"
+
+
+@dataclass(frozen=True, slots=True)
+class Absent(AttributeMatcher):
+    """The attribute is not set on this asset.
+
+    The inverse pin, and not a curiosity: a connector may deliberately leave an
+    attribute unset rather than publish ``0`` for it, because absent means
+    "unknown" while ``0`` is a claim. This is the only way to assert that rule
+    held.
+    """
+
+    def matches(self, *, present: bool, value: AttributeValue) -> bool:
+        """Whether Atlas returned no such attribute.
+
+        Args:
+            present: Whether Atlas returned the attribute.
+            value: Ignored.
+
+        Returns:
+            True when the attribute is absent. An attribute returned as ``None``
+            counts as *present*: Atlas holding an explicit null is a different
+            state from Atlas holding nothing, and a connector that published the
+            first has not left the attribute unset.
+        """
+        return not present
+
+    def describe(self) -> str:
+        """The claim as a phrase.
+
+        Returns:
+            ``"no value (attribute unset)"``.
+        """
+        return "no value (attribute unset)"
+
+
+@dataclass(frozen=True, slots=True)
+class AtLeast(AttributeMatcher):
+    """The attribute is a number greater than or equal to *minimum*.
+
+    The live-source counterpart to :class:`Exactly`: a crawl of a real database
+    cannot pin ``tableCount == 8``, but ``AtLeast(1)`` still separates "computed
+    something" from "published the degraded zero".
+
+    Attributes:
+        minimum: The floor the value must clear.
+    """
+
+    minimum: float
+
+    def matches(self, *, present: bool, value: AttributeValue) -> bool:
+        """Whether the attribute is a number at or above :attr:`minimum`.
+
+        Args:
+            present: Whether Atlas returned the attribute.
+            value: The value it returned.
+
+        Returns:
+            True when present and numerically at least :attr:`minimum`. A
+            non-numeric value does not match — an attribute whose type changed
+            is a finding, not a comparison error.
+        """
+        number = _as_number(present, value)
+        return number is not None and number >= self.minimum
+
+    def describe(self) -> str:
+        """The claim as a phrase.
+
+        Returns:
+            ``"a number >= <minimum>"``.
+        """
+        return f"a number >= {self.minimum}"
+
+
+@dataclass(frozen=True, slots=True)
+class AtMost(AttributeMatcher):
+    """The attribute is a number less than or equal to *maximum*.
+
+    Attributes:
+        maximum: The ceiling the value must stay under.
+    """
+
+    maximum: float
+
+    def matches(self, *, present: bool, value: AttributeValue) -> bool:
+        """Whether the attribute is a number at or below :attr:`maximum`.
+
+        Args:
+            present: Whether Atlas returned the attribute.
+            value: The value it returned.
+
+        Returns:
+            True when present and numerically at most :attr:`maximum`.
+        """
+        number = _as_number(present, value)
+        return number is not None and number <= self.maximum
+
+    def describe(self) -> str:
+        """The claim as a phrase.
+
+        Returns:
+            ``"a number <= <maximum>"``.
+        """
+        return f"a number <= {self.maximum}"
+
+
+def _as_number(present: bool, value: AttributeValue) -> float | None:
+    """Narrow a reading to a number, or say it is not one.
+
+    Args:
+        present: Whether Atlas returned the attribute.
+        value: The value it returned.
+
+    Returns:
+        The value as a float, or ``None`` when it is absent or not a number.
+        ``bool`` is excluded although Python calls it an ``int``: ``AtLeast(1)``
+        matching ``True`` would be a coincidence of the type system rather than
+        an assertion anyone wrote.
+    """
+    if not present or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def as_matcher(declared: AttributeExpectationValue) -> AttributeMatcher:
+    """Coerce one declared right-hand side into a matcher.
+
+    Args:
+        declared: A matcher, or a bare scalar meaning :class:`Exactly` it.
+
+    Returns:
+        The matcher.
+    """
+    if isinstance(declared, AttributeMatcher):
+        return declared
+    return Exactly(declared)
+
+
+def normalise_attribute_expectations(
+    declared: Mapping[str, Mapping[str, AttributeExpectationValue]],
+) -> dict[str, dict[str, AttributeMatcher]]:
+    """Coerce a whole declaration into matchers.
+
+    Args:
+        declared: Asset type -> attribute name -> matcher or bare scalar, as a
+            suite writes it.
+
+    Returns:
+        The same mapping with every value a matcher, so
+        :func:`evaluate_attributes` never sees the sugar.
+    """
+    return {
+        type_name: {
+            attribute: as_matcher(value) for attribute, value in attributes.items()
+        }
+        for type_name, attributes in declared.items()
+    }
+
+
+def normalise_attribute_expectations_at(
+    declared: Mapping[str, Mapping[str, Mapping[str, AttributeExpectationValue]]],
+) -> dict[AssetRef, dict[str, AttributeMatcher]]:
+    """Flatten a per-asset declaration into matchers keyed by :class:`AssetRef`.
+
+    A suite writes three nested levels — type, then which asset, then which
+    attribute — because that groups by the same outer key as the per-type knob
+    and reads as a table. Everything downstream wants one asset per entry, so
+    the nesting is collapsed here, once.
+
+    Args:
+        declared: Asset type -> qualifiedName suffix -> attribute name ->
+            matcher or bare scalar, as a suite writes it.
+
+    Returns:
+        One entry per addressed asset.
+    """
+    return {
+        AssetRef(type_name=type_name, qualified_name_suffix=suffix): {
+            attribute: as_matcher(value) for attribute, value in attributes.items()
+        }
+        for type_name, by_suffix in declared.items()
+        for suffix, attributes in by_suffix.items()
+    }
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Finding:
     """One unmet expectation, in a form a report can render without re-parsing.
@@ -124,6 +543,20 @@ class AssetExpectations:
             the connection prefix. Catches assets that landed at the wrong
             hierarchy level — mis-parented, flattened, a dropped path segment —
             even when the count is right.
+        attributes: Asset type -> attribute name -> the claim its value must
+            satisfy, already coerced to matchers by
+            :func:`normalise_attribute_expectations`. Catches an asset that
+            landed in the right place, in the right number, carrying the wrong
+            *values* — a computed count degraded to ``0``, or an attribute that
+            silently stopped being set. Counts and depths can see neither.
+            Applied to every sampled asset of the type, so it can only carry a
+            claim every asset of that type shares.
+        attributes_at: One addressed asset -> attribute name -> the claim its
+            value must satisfy, from
+            :func:`normalise_attribute_expectations_at`. The per-asset half:
+            crawl five schemas, one with no views and one with ten, and no
+            per-type claim about ``viewsCount`` survives beyond
+            :class:`Present`. This is where the numbers themselves get pinned.
         require_nonempty: Whether a run that completes and lands zero assets
             fails. Defaults on, and it fires even for a connector that declares
             nothing else — those are the ones most likely to regress silently.
@@ -136,6 +569,12 @@ class AssetExpectations:
     floors: Mapping[str, int] = field(default_factory=dict)
     exacts: Mapping[str, int] = field(default_factory=dict)
     depths: Mapping[str, int] = field(default_factory=dict)
+    attributes: Mapping[str, Mapping[str, AttributeMatcher]] = field(
+        default_factory=dict
+    )
+    attributes_at: Mapping[AssetRef, Mapping[str, AttributeMatcher]] = field(
+        default_factory=dict
+    )
     require_nonempty: bool = True
     connection_qualified_name: str = ""
 
@@ -371,3 +810,147 @@ def _evaluate_one_location(
             ),
         )
     return ()
+
+
+def evaluate_attributes(
+    samples: Mapping[str, AttributeSampleRead],
+    expectations: AssetExpectations,
+) -> Sequence[Finding]:
+    """Evaluate sampled attribute values against the declared matchers.
+
+    The third grader, and the only one that looks at what an asset *says* rather
+    than at how many of them there are or where they sit. Every sampled asset of
+    a declared type must satisfy every matcher declared for that type, so one
+    mis-valued asset among the sample is a finding.
+
+    Args:
+        samples: Asset type -> the sampled assets and their attribute values, or
+            :class:`Unreadable` when the sample read failed. A type with an
+            *empty* sample is skipped, for the reason :func:`evaluate_locations`
+            skips one: "too few or none" is the count floors' job, and this check
+            is only about the values assets that did land are carrying. That skip
+            is why an unreadable read may not be spelled as an empty sequence —
+            and why every type declared here should be paired with a floor.
+        expectations: What was declared.
+
+    Returns:
+        One :class:`Finding` per (asset, attribute) that did not satisfy its
+        matcher; empty when all did. A finding whose expectation is
+        :data:`UNREADABLE` says the check could not be graded.
+    """
+    findings: list[Finding] = []
+    for type_name, matchers in expectations.attributes.items():
+        sample = samples.get(type_name, ())
+        if isinstance(sample, Unreadable):
+            findings.append(_unreadable(type_name, sample, checking="attribute"))
+            continue
+        for asset in sample:
+            findings.extend(_evaluate_one_asset(type_name, asset, matchers))
+    return findings
+
+
+def evaluate_attributes_at(
+    reads: Mapping[AssetRef, AttributeSampleRead],
+    expectations: AssetExpectations,
+) -> Sequence[Finding]:
+    """Evaluate the attribute values of individually addressed assets.
+
+    The per-asset counterpart to :func:`evaluate_attributes`, and the only one
+    that can pin a value that differs *within* a type.
+
+    It grades absence differently from every other check here, and deliberately.
+    An empty per-type sample is skipped because "the type landed nothing" is the
+    count floors' job; an addressed asset that is not there is nobody else's
+    job — the suite named it, so its absence is the finding. Two or more matches
+    are a finding too: grading the first would make the result depend on Atlas's
+    result ordering, and a suite that meant one asset would silently be told
+    about another.
+
+    Args:
+        reads: One addressed asset -> the assets whose qualifiedName matched its
+            suffix, or :class:`Unreadable` when the search failed. Zero matches
+            and several matches are both expected inputs and both produce
+            findings.
+        expectations: What was declared.
+
+    Returns:
+        One :class:`Finding` per unmet matcher, plus one per ref that resolved to
+        no asset or to more than one.
+    """
+    findings: list[Finding] = []
+    for ref, matchers in expectations.attributes_at.items():
+        read = reads.get(ref, ())
+        if isinstance(read, Unreadable):
+            findings.append(_unreadable(str(ref), read, checking="attribute"))
+            continue
+        matched = list(read)
+        if not matched:
+            findings.append(
+                Finding(
+                    subject=str(ref),
+                    detail=(
+                        f"no active {ref.type_name} under the connection has a "
+                        f"qualifiedName ending in "
+                        f"{'/' + ref.qualified_name_suffix!r}, so its attribute "
+                        "expectations describe an asset that did not land"
+                    ),
+                    expectation="missing",
+                )
+            )
+            continue
+        if len(matched) > 1:
+            names = ", ".join(repr(asset.qualified_name) for asset in matched)
+            findings.append(
+                Finding(
+                    subject=str(ref),
+                    detail=(
+                        f"matches {len(matched)} assets ({names}), so which one "
+                        "the expectations are about is ambiguous — lengthen the "
+                        "suffix until it names exactly one"
+                    ),
+                    expectation="ambiguous",
+                )
+            )
+            continue
+        findings.extend(_evaluate_one_asset(str(ref), matched[0], matchers))
+    return findings
+
+
+def _evaluate_one_asset(
+    subject: str,
+    asset: AssetAttributes,
+    matchers: Mapping[str, AttributeMatcher],
+) -> Sequence[Finding]:
+    """Check one asset against every matcher declared for it.
+
+    Args:
+        subject: What the expectation was declared against — an asset type for
+            the per-type check, an :class:`AssetRef` for the per-asset one. Used
+            as the finding's subject, with the attribute appended.
+        asset: The asset's qualified name and attribute values.
+        matchers: Attribute name -> the claim its value must satisfy.
+
+    Returns:
+        One finding per unsatisfied matcher, in declaration order.
+    """
+    findings: list[Finding] = []
+    for attribute, matcher in matchers.items():
+        present = attribute in asset.values
+        value = asset.values.get(attribute)
+        if matcher.matches(present=present, value=value):
+            continue
+        # "is absent" rather than "= None": the whole point of carrying presence
+        # separately is that a red leg says which of the two it was, since they
+        # implicate different halves of a connector.
+        observed = f"= {value!r}" if present else "is absent (attribute not set)"
+        findings.append(
+            Finding(
+                subject=f"{subject}.{attribute}",
+                detail=(
+                    f"on {asset.qualified_name!r} {observed}, "
+                    f"expected {matcher.describe()}"
+                ),
+                expectation="attribute",
+            )
+        )
+    return findings

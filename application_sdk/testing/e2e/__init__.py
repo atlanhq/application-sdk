@@ -19,6 +19,18 @@ Full-DAG AE harness (new — subclass per connector)::
     from application_sdk.testing.e2e import SQLAppE2ETest          # SQL connectors
     from application_sdk.testing.e2e.payload import AgentSpec, ConnectionSpec
     from application_sdk.testing.e2e.client import AEWorkflowClient
+
+Asserting on attribute VALUES needs the matcher vocabulary, which lives with the
+evaluator that grades it::
+
+    from application_sdk.testing.harness.expectations import (
+        Absent, AtLeast, AtMost, Exactly, Present,
+    )
+
+``expected_asset_attributes`` carries the claim every asset of a type shares;
+``expected_asset_attributes_at`` (type -> qualifiedName suffix -> attribute)
+pins a value that differs between assets of the same type, which no per-type
+claim can express.
 """
 
 from application_sdk.testing.e2e.base import (
