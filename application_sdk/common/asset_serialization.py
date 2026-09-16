@@ -14,11 +14,32 @@ rather than silently degrading. Each accepted shape is declared as a
 ``runtime_checkable`` Protocol so the contract is a named type rather than a
 string method name spelled out at the call site.
 
+The seam also owns **framework-injected attributes** — values the SDK holds
+that the mapper is never handed, so an asset-returning mapper cannot set them
+correctly on its own. Today that is ``connectionName`` (FND-2056) and the
+three ``lastSync*`` attributes (FND-2097). Both are injected here rather than
+copied into every connector, because a copy in every connector is how they
+ended up wrong or missing in the first place.
+
 Public API::
 
     from application_sdk.common.asset_serialization import entity_bytes
+    from application_sdk.common.last_sync import resolve_last_sync_details
 
-    line = entity_bytes(asset, connection_name="my-conn", entity_type="table")
+    # Resolve ONCE per transform activity, never per record: every asset a run
+    # produces should carry the same lastSyncRunAt.
+    last_sync = resolve_last_sync_details()
+
+    line = entity_bytes(
+        asset,
+        connection_name="my-conn",
+        last_sync=last_sync,
+        entity_type="table",
+    )
+
+Non-SQL apps get the same behaviour from the same call — this module is the
+shared seam, and nothing in it is SQL-specific. ``SqlApp._transform_entity``
+is simply its first caller.
 """
 
 from __future__ import annotations
@@ -29,6 +50,11 @@ from typing import Any, Protocol, runtime_checkable
 import orjson
 
 from application_sdk.common.errors import UnserializableMapperResultError
+from application_sdk.common.last_sync import (
+    LastSyncDetails,
+    LastSyncStampable,
+    set_last_sync_details_on_asset,
+)
 
 __all__ = [
     "NestedBytesAsset",
@@ -151,6 +177,81 @@ def _set_connection_name(asset: object, connection_name: str) -> None:
         return
 
 
+#: The dict path's ``(resolved field, Atlas wire key)`` table for the two
+#: *conditional* values only. ``run_at_ms`` is deliberately absent: the
+#: primitive assigns it unconditionally, so folding it into a uniform
+#: truthiness loop here made the dict path drop ``run_at_ms=0`` while the
+#: object path kept it. The asymmetry is real, so it is spelled out rather
+#: than hidden in a table.
+#:
+#: The object path needs no table at all — it goes through the primitive,
+#: which knows its own field names.
+_LAST_SYNC_OPTIONAL_KEYS: tuple[tuple[str, str], ...] = (
+    ("run", "lastSyncRun"),
+    ("workflow_name", "lastSyncWorkflowName"),
+)
+
+
+def _set_last_sync(asset: object, details: LastSyncDetails) -> None:
+    """Stamp ``lastSyncRun`` / ``lastSyncWorkflowName`` / ``lastSyncRunAt``.
+
+    These identify *which* run last touched the asset. They are run identity,
+    not asset content: the mapper is handed a record and a connection
+    qualified name, so it cannot resolve the AE-dispatched workflow id or the
+    end-to-end correlation id — a connector that tries reaches for
+    ``input.workflow_id`` and stamps the *child* workflow's Temporal id, which
+    is not clickable back to the AE run.
+
+    So, unlike ``connectionName``, a value already on the asset does **not**
+    win: whoever resolved *details* had the run context the mapper did not.
+
+    Which of the three that applies to is the primitive's rule, and both
+    paths below honour it exactly: an empty resolved ``run`` /
+    ``workflow_name`` is never written, so outside Temporal a hand-set value
+    survives rather than being blanked — while ``run_at_ms`` is *always*
+    written, including a caller's explicit ``0``. ``LastSyncDetails``
+    documents ``run_at_ms`` as an accepted override, so 0 is a value a caller
+    can mean, not an absence.
+
+    The object path is :func:`set_last_sync_details_on_asset`, unwrapped: the
+    SDK has one implementation of "what stamping means" and this is not a
+    second one. All this function adds is the aperture ``entity_bytes``
+    already has and the primitive does not — it takes ``object``, so the
+    shape may be a dict, or may not declare the fields, or may refuse
+    assignment.
+    """
+    if isinstance(asset, dict):
+        # The one case the primitive deliberately cannot serve. BLDX-1229
+        # removed its dict-shaped helpers to stop *new* code adopting
+        # dict transformation, and that stands: nothing public is added
+        # back here. But ``entity_bytes`` has always accepted a dict in the
+        # Atlas wire shape, and ``SqlApp.map_<entity>`` is annotated to
+        # return one — so stamping every shape except that one would leave
+        # exactly the silent per-shape gap this change exists to close.
+        attributes = asset.setdefault("attributes", {})
+        if not isinstance(attributes, dict):
+            return
+        for field, wire_key in _LAST_SYNC_OPTIONAL_KEYS:
+            value = getattr(details, field)
+            if value:
+                attributes[wire_key] = value
+        attributes["lastSyncRunAt"] = details.run_at_ms
+        return
+
+    if not isinstance(asset, LastSyncStampable):
+        # A shape declaring none of the three. Its own serialiser would
+        # ignore an invented field, and the SDK does not add fields to
+        # somebody else's model.
+        return
+
+    try:
+        set_last_sync_details_on_asset(asset, details=details)
+    except (AttributeError, TypeError):
+        # Frozen or read-only asset. Same trade-off as connectionName:
+        # losing a debugging attribute beats failing the whole transform.
+        return
+
+
 def _where(entity_type: str | None) -> str:
     """The `` while transforming <entity>`` clause, or nothing when unknown."""
     return f" while transforming {entity_type}" if entity_type else ""
@@ -226,6 +327,7 @@ def entity_bytes(
     asset: object,
     *,
     connection_name: str = "",
+    last_sync: LastSyncDetails | None = None,
     entity_type: str | None = None,
 ) -> bytes:
     """Serialise a mapper's return value to one Atlas wire-shape JSON line.
@@ -236,6 +338,13 @@ def entity_bytes(
             module, or a plain ``dict`` already in the Atlas wire shape.
         connection_name: Connection display name to stamp on the asset when the
             mapper left it unset. Empty string skips the injection.
+        last_sync: Run-identity values to stamp, from
+            :func:`application_sdk.common.last_sync.resolve_last_sync_details`.
+            Resolve it **once per transform activity** and pass the same
+            object for every record, so one crawl produces one
+            ``lastSyncRunAt``. ``None`` (the default) skips the injection —
+            for a caller that has already stamped the asset itself, or one
+            running outside any run context.
         entity_type: Entity being transformed (``"table"``, ``"column"``, …).
             Carried into the error so a failure names where it happened.
 
@@ -253,6 +362,8 @@ def entity_bytes(
     """
     if connection_name:
         _set_connection_name(asset, connection_name)
+    if last_sync is not None:
+        _set_last_sync(asset, last_sync)
 
     if isinstance(asset, NestedBytesAsset):
         return _checked_line(asset.to_nested_bytes(), asset, entity_type)

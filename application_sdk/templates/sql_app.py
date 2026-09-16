@@ -92,6 +92,7 @@ from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
 from application_sdk.common.asset_serialization import entity_bytes
 from application_sdk.common.asset_serialization import orjson_default as _orjson_default
+from application_sdk.common.last_sync import resolve_last_sync_details
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
@@ -1926,6 +1927,21 @@ class SqlApp(App):
                 connection_qn = getattr(attrs, "qualified_name", "") or ""
                 connection_name = getattr(attrs, "name", "") or ""
 
+        # Resolved once, here, for two reasons (FND-2097).
+        #
+        # Once, not per record: ``lastSyncRunAt`` is a property of the *run*,
+        # so every asset this activity writes must carry the same value. A
+        # per-record ``time.time()`` — what connectors hand-rolling this did —
+        # gives every row in one crawl a different "last synced at".
+        #
+        # Here, not inside ``_map_records``: the resolver reads the execution
+        # and correlation contextvars the Temporal interceptor populates.
+        # ``run_in_thread`` does propagate them (it runs the callable under
+        # ``contextvars.copy_context()``), so resolving in the thread would
+        # also work today — but that correctness would rest on an offload
+        # implementation detail rather than on where the call sits.
+        last_sync = resolve_last_sync_details()
+
         output_dir = Path(output_path) / "transformed" / entity_type
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "entities.json"
@@ -1939,16 +1955,18 @@ class SqlApp(App):
                         continue
                     record = orjson.loads(line)
                     asset = mapper_fn(record, connection_qn)
-                    # One seam owns connectionName injection and the
-                    # asset → wire-shape dispatch, for every template that
-                    # runs the mapper pattern (FND-2056). A return value it
-                    # does not recognise raises rather than falling back to
-                    # writing ``record`` — that fallback published unmapped
-                    # source rows as entities under a SUCCESS status.
+                    # One seam owns the framework-injected attributes —
+                    # connectionName (FND-2056) and lastSync* (FND-2097) —
+                    # and the asset → wire-shape dispatch, for every template
+                    # that runs the mapper pattern. A return value it does not
+                    # recognise raises rather than falling back to writing
+                    # ``record`` — that fallback published unmapped source rows
+                    # as entities under a SUCCESS status.
                     w.write(
                         entity_bytes(
                             asset,
                             connection_name=connection_name,
+                            last_sync=last_sync,
                             entity_type=entity_type,
                         )
                     )

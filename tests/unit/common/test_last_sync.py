@@ -1,4 +1,4 @@
-"""Unit tests for the last-sync details primitive (BLDX-1229).
+"""Unit tests for the last-sync details primitive (BLDX-1229, FND-2097).
 
 Covers the four interesting paths through ``resolve_last_sync_details`` —
 top-level workflow, child workflow (where the AE-assigned id is exposed via
@@ -13,17 +13,17 @@ from datetime import UTC
 
 import pytest
 
+from application_sdk.common.last_sync import (
+    LastSyncDetails,
+    resolve_last_sync_details,
+    set_last_sync_details_on_asset,
+    set_last_sync_details_on_assets_bulk,
+)
 from application_sdk.observability import (
     CorrelationContext,
     ExecutionContext,
     set_correlation_context,
     set_execution_context,
-)
-from application_sdk.transformers.common.last_sync import (
-    LastSyncDetails,
-    resolve_last_sync_details,
-    set_last_sync_details_on_asset,
-    set_last_sync_details_on_assets_bulk,
 )
 
 
@@ -259,3 +259,30 @@ def test_bulk_on_assets_accepts_explicit_overrides():
         assert asset.last_sync_run == "explicit"
         assert asset.last_sync_workflow_name == "explicit-wf"
         assert asset.last_sync_run_at == _epoch_ms_to_datetime(_TEST_RUN_AT_MS_BULK)
+
+
+# ---------------------------------------------------------------------------
+# Module relocation (FND-2097)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_legacy_transformers_path_re_exports_the_same_objects():
+    """``application_sdk.transformers.common.last_sync`` still resolves.
+
+    The primitive moved out of the deprecated ``transformers`` package so the
+    v3 asset-mapper seam could import it without emitting a deprecation on
+    every SDK import. v3 is shipped and has consumers, so the old path stays
+    until ``transformers`` is removed in v4.0 — and it must alias, not copy,
+    or an ``isinstance`` check against ``LastSyncDetails`` would start failing
+    depending on which path the caller imported.
+    """
+    import application_sdk.transformers.common.last_sync as legacy
+
+    assert legacy.LastSyncDetails is LastSyncDetails
+    assert legacy.resolve_last_sync_details is resolve_last_sync_details
+    assert legacy.set_last_sync_details_on_asset is set_last_sync_details_on_asset
+    assert (
+        legacy.set_last_sync_details_on_assets_bulk
+        is set_last_sync_details_on_assets_bulk
+    )

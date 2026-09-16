@@ -405,7 +405,12 @@ include_pattern, exclude_pattern = prepare_filters(
 ```python
 from application_sdk.common.asset_serialization import entity_bytes
 
-line = entity_bytes(asset, connection_name="My MySQL", entity_type="table")
+line = entity_bytes(
+    asset,
+    connection_name="My MySQL",
+    last_sync=last_sync,       # see "Framework-injected attributes" below
+    entity_type="table",
+)
 ```
 
 **What it accepts**, in dispatch order:
@@ -429,7 +434,44 @@ Anything else raises `UnserializableMapperResultError`. There is deliberately no
 
 The last one guards a public protocol rather than a live bug — `pyatlan_v9`'s encoder is compact — but `NestedBytesAsset` is exported, and the caller writes the returned bytes verbatim plus one newline. A pretty-printing implementer would therefore split one entity across several JSONL records: well-formed lines, wrong count, no error. That is the same silent, count-passing damage this seam exists to remove, so it is refused rather than trusted.
 
-`connectionName` is stamped before the dispatch, on the asset itself rather than on a serialised dict afterwards, so an asset-returning mapper keeps it. A value the mapper set explicitly always wins. If the asset declares `connection_name` but refuses assignment (frozen, or a property with no setter), the name is dropped rather than failing the transform — every asset type that genuinely needs it exposes a settable field.
+### Framework-injected attributes
+
+Two groups of attributes are stamped by the seam, before the dispatch, on the asset itself rather than on a serialised dict afterwards — one of the accepted shapes (`to_nested_bytes()`) never produces a dict to patch.
+
+| Attribute(s) | Source | Who wins on a conflict |
+|---|---|---|
+| `connectionName` | The `connection_name` argument | The mapper. A value it set explicitly is kept. |
+| `lastSyncRun`, `lastSyncWorkflowName`, `lastSyncRunAt` | The `last_sync` argument | The framework. A resolved value overwrites whatever the mapper set. |
+
+Both exist for the same reason: the mapper is handed a source record and a connection *qualified* name, and nothing else, so anything resolved from run context has to be injected by the framework. One seam beats a copy in every connector, which is how these ended up missing or wrong in the first place.
+
+They differ on who wins because they are different kinds of value. `connectionName` is asset content the mapper may legitimately know better. The three `lastSync*` attributes are *run identity* the mapper structurally cannot resolve: a connector that tries reaches for the workflow id it was handed, which is the **child** workflow's Temporal id, not the AE-dispatched run — so the value lands on the asset looking right and is not clickable back to the run that produced it (FND-2097, BLDX-1229). One exception, inherited from the primitive: an empty resolved `run` or `workflow_name` is never written, so outside Temporal (CLI tools, tests) a hand-set value survives rather than being blanked.
+
+If the asset declares the attribute but refuses assignment (frozen, or a property with no setter), the value is dropped rather than failing the transform — every asset type that genuinely needs these exposes settable fields.
+
+The stamping itself is `application_sdk.common.last_sync.set_last_sync_details_on_asset()`, unwrapped — the seam adds the wider aperture (`entity_bytes` takes an `object`, so the shape may be a dict, may not declare the fields, or may refuse assignment) but not a second definition of what stamping means. An asset object qualifies when it satisfies `LastSyncStampable`, a runtime-checkable Protocol over the three fields; it is a structural type rather than pyatlan's `Asset` because both pyatlan generations are valid targets and they are unrelated classes.
+
+**Resolve `last_sync` once per transform activity**, never per record:
+
+```python
+from application_sdk.common.asset_serialization import entity_bytes
+from application_sdk.common.last_sync import resolve_last_sync_details
+
+last_sync = resolve_last_sync_details()   # once, outside the record loop
+
+for record in records:
+    line = entity_bytes(
+        mapper(record, connection_qn),
+        connection_name="My MySQL",
+        last_sync=last_sync,
+        entity_type="table",
+    )
+```
+
+`lastSyncRunAt` is a property of the *run*, so every asset one crawl produces must carry the same value; a per-record `time.time()` gives every row in one crawl a different "last synced at". `SqlApp._transform_entity` does this for every SQL connector already. **Non-SQL apps get the same behaviour from the same two calls** — nothing in this seam or in `last_sync` is SQL-specific, and an app that writes `asset.to_nested_bytes()` directly today gets both injections plus the typed-error contract by routing through `entity_bytes()` instead.
+
+`resolve_last_sync_details()` reads the execution and correlation contextvars the SDK's Temporal interceptor populates. Call it on the event loop inside the activity. `run_in_thread` does propagate contextvars (it runs the callable under `contextvars.copy_context()`), so resolving inside an offloaded loop works too — but then the correctness rests on an offload implementation detail rather than on where the call sits.
+
 
 ## General Utilities
 
