@@ -9,8 +9,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.common.errors import UnserializableMapperResultError
 from application_sdk.contracts.storage import VerifyRefsOutput
-from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.contracts.types import (
+    ConnectionAttributes,
+    ConnectionRef,
+    FileReference,
+    StorageTier,
+)
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.errors.categories import Audience
 from application_sdk.templates.contracts.sql_metadata import (
@@ -3078,3 +3084,136 @@ class TestPrimeFailureClassification:
         assert isinstance(err, SqlProbeTimeoutError)
         assert err.audience is Audience.USER
         assert err.operation == "prime_sql_auth"
+
+
+# ---------------------------------------------------------------------------
+# Mapper result serialisation (FND-2056)
+# ---------------------------------------------------------------------------
+#
+# ``_transform_entity`` used to probe ``to_nested_dict`` / ``model_dump`` /
+# ``dict`` on the mapper's return value and, finding none, write the raw source
+# row. A pyatlan_v9 asset — the type ``map_<entity>()`` is annotated to return —
+# has none of those three, so the entity file filled with unmapped SQL rows and
+# the run reported SUCCESS. These pin the seam that replaced that chain.
+
+
+class AssetMapperSqlApp(TestSqlApp):
+    """A connector whose mappers return real pyatlan_v9 assets."""
+
+    def map_database(self, record: dict[str, Any], connection_qn: str):
+        from pyatlan_v9.model.assets import Database
+
+        return Database.creator(
+            name=record["database_name"], connection_qualified_name=connection_qn
+        )
+
+    def map_table(self, record: dict[str, Any], connection_qn: str):
+        from pyatlan_v9.model.assets import Table
+
+        return Table.creator(
+            name=record["table_name"],
+            schema_qualified_name=f"{connection_qn}/db/sch",
+        )
+
+
+class BadMapperSqlApp(TestSqlApp):
+    """A connector whose mapper returns something unserialisable."""
+
+    def map_table(self, record: dict[str, Any], connection_qn: str):
+        return object()
+
+
+def _connection_ref(name: str = "", qualified_name: str = "default/mysql/1"):
+    return ConnectionRef(
+        attributes=ConnectionAttributes(name=name, qualified_name=qualified_name)
+    )
+
+
+class TestMapperResultSerialisation:
+    async def test_pyatlan_asset_is_written_not_the_raw_record(self, tmp_path):
+        """The regression: this row used to land in entities.json unmapped."""
+        app = AssetMapperSqlApp()
+        _seed_raw(tmp_path, "database", [{"database_name": "db1", "junk": "raw"}])
+        input_ = _make_task_input(
+            output_path=str(tmp_path), connection=_connection_ref()
+        )
+
+        result = await app.transform_databases(input_)
+
+        assert result.total_record_count == 1
+        entity = json.loads(
+            (tmp_path / "transformed" / "database" / "entities.json")
+            .read_text()
+            .strip()
+        )
+        assert entity["typeName"] == "Database"
+        assert entity["attributes"]["qualifiedName"] == "default/mysql/1/db1"
+        # The raw source column is nowhere in the transformed entity.
+        assert "junk" not in json.dumps(entity)
+
+    async def test_connection_name_lands_on_an_asset_mapper_result(self, tmp_path):
+        """Previously injected only on the dict branch, so assets lost it."""
+        app = AssetMapperSqlApp()
+        _seed_raw(tmp_path, "table", [{"table_name": "users"}])
+        input_ = _make_task_input(
+            output_path=str(tmp_path), connection=_connection_ref(name="My MySQL")
+        )
+
+        await app.transform_tables(input_)
+
+        entity = json.loads(
+            (tmp_path / "transformed" / "table" / "entities.json").read_text().strip()
+        )
+        assert entity["attributes"]["connectionName"] == "My MySQL"
+
+    async def test_multiple_asset_rows_stay_one_per_line(self, tmp_path):
+        app = AssetMapperSqlApp()
+        _seed_raw(tmp_path, "table", [{"table_name": n} for n in ("a", "b", "c")])
+        input_ = _make_task_input(
+            output_path=str(tmp_path), connection=_connection_ref()
+        )
+
+        result = await app.transform_tables(input_)
+
+        lines = (
+            (tmp_path / "transformed" / "table" / "entities.json")
+            .read_text()
+            .strip()
+            .split("\n")
+        )
+        assert result.total_record_count == 3
+        assert len(lines) == 3
+        assert [json.loads(line)["typeName"] for line in lines] == ["Table"] * 3
+
+    async def test_unserialisable_mapper_result_fails_the_transform(self, tmp_path):
+        """No silent fallback: an unrecognised return value fails the run."""
+        app = BadMapperSqlApp()
+        _seed_raw(tmp_path, "table", [{"table_name": "users"}])
+        input_ = _make_task_input(
+            output_path=str(tmp_path), connection=_connection_ref()
+        )
+
+        with pytest.raises(UnserializableMapperResultError) as exc:
+            await app.transform_tables(input_)
+
+        assert exc.value.observed == "object"
+        assert exc.value.location == "table"
+
+    async def test_dict_mapper_behaviour_is_unchanged(self, tmp_path):
+        """Every connector returning a dict today keeps its exact output."""
+        app = TestSqlApp()
+        _seed_raw(tmp_path, "table", [{"table_name": "users"}])
+        input_ = _make_task_input(
+            output_path=str(tmp_path), connection=_connection_ref(name="My MySQL")
+        )
+
+        await app.transform_tables(input_)
+
+        entity = json.loads(
+            (tmp_path / "transformed" / "table" / "entities.json").read_text().strip()
+        )
+        assert entity == {
+            "typeName": "Table",
+            "qualifiedName": "default/mysql/1/users",
+            "attributes": {"connectionName": "My MySQL"},
+        }

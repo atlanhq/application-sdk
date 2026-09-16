@@ -125,6 +125,39 @@ except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] pac
 # feeds it now live in one module. The emitted row is unchanged by that move.
 _VALIDATION_MATRIX_MAX_ROWS = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
 
+#: Retry shape for the four framework tasks that move bytes across a store
+#: boundary — ``upload``, ``download``, ``verify_refs``, ``upload_refs``.
+#:
+#: What these tasks were short of is not attempt *count* but attempt *spread*.
+#: Three attempts on the default 1-second initial interval retry after 1s and
+#: 2s, so the whole budget is spent inside a ~3-second window: any dependency
+#: outage outliving three seconds costs the entire run. The outages they
+#: actually meet are tens of seconds. In FND-2076 a tenant's blobstorage
+#: gateway rejected every signed request for at least 55 seconds while its own
+#: Keycloak lookup was timing out, and ``upload_refs`` burned all three
+#: attempts within 25 seconds of the first failure — the run died at the
+#: handoff with a complete, already-paid-for extraction behind it.
+#:
+#: Four attempts at 10s / 20s / 40s spread 70 seconds of backoff across the
+#: same work, which covers that shape with margin. The cost falls only on a
+#: store that is genuinely broken rather than briefly unavailable: it now fails
+#: after ~70s of waiting instead of ~3s, which is the right way round for work
+#: this far downstream.
+#:
+#: These tasks declare no ``schedule_to_close_seconds``, so the wider backoff
+#: has no ceiling to overrun. A deployment that sets a fleet-wide one via
+#: ``ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS`` should note that
+#: ``retry_product_seconds``'s fixed 10s backoff allowance no longer covers
+#: this policy's waits — see its docstring on passing a larger
+#: ``backoff_headroom_seconds``.
+#:
+#: Three constants passed by name rather than one dict splatted into ``@task``:
+#: the decorator is overloaded, and a ``**dict[str, int]`` defeats overload
+#: resolution.
+_STORE_TRANSFER_MAX_ATTEMPTS = 4
+_STORE_TRANSFER_INITIAL_INTERVAL_SECONDS = 10
+_STORE_TRANSFER_MAX_INTERVAL_SECONDS = 60
+
 
 def _resolve_transformed_target(local_path: str) -> "Path | None":
     """Locate the ``transformed/`` asset subtree under ``local_path``, if any.
@@ -1330,7 +1363,11 @@ class App(ABC):
     # until it completes, so it holds until ``max_no_progress_seconds``. That is
     # the same quiet spot ADR-0018 accepts fleet-wide, and it is bounded by the
     # stall alert rather than by a number nobody can pick.
-    @task(retry_max_attempts=3)
+    @task(
+        retry_max_attempts=_STORE_TRANSFER_MAX_ATTEMPTS,
+        retry_initial_interval_seconds=_STORE_TRANSFER_INITIAL_INTERVAL_SECONDS,
+        retry_max_interval_seconds=_STORE_TRANSFER_MAX_INTERVAL_SECONDS,
+    )
     async def upload(
         self,
         input: UploadInput,
@@ -1527,7 +1564,11 @@ class App(ABC):
     # No ``timeout_seconds``, for the same reason as ``upload`` — symmetric knob,
     # symmetric problem, and ``transfer.download`` marks progress per file and
     # per range chunk.
-    @task(retry_max_attempts=3)
+    @task(
+        retry_max_attempts=_STORE_TRANSFER_MAX_ATTEMPTS,
+        retry_initial_interval_seconds=_STORE_TRANSFER_INITIAL_INTERVAL_SECONDS,
+        retry_max_interval_seconds=_STORE_TRANSFER_MAX_INTERVAL_SECONDS,
+    )
     async def download(
         self,
         input: DownloadInput,
@@ -1593,7 +1634,11 @@ class App(ABC):
     # which is the unguessable question ADR-0018 removed the knob for. The task
     # takes the 24h backstop and is bounded in minutes by the stall watchdog
     # instead, which the per-ref ``mark_progress`` below feeds.
-    @task(retry_max_attempts=3)
+    @task(
+        retry_max_attempts=_STORE_TRANSFER_MAX_ATTEMPTS,
+        retry_initial_interval_seconds=_STORE_TRANSFER_INITIAL_INTERVAL_SECONDS,
+        retry_max_interval_seconds=_STORE_TRANSFER_MAX_INTERVAL_SECONDS,
+    )
     async def verify_refs(self, input: VerifyRefsInput) -> VerifyRefsOutput:
         """Framework task: assert every declared ``FileReference`` is really there.
 
@@ -1770,7 +1815,11 @@ class App(ABC):
     # A duration budget for "upload this tenant's transformed tree" is a moving
     # target by construction (ADR-0018 Problem 1). Progress is already marked per
     # file by ``storage.transfer.upload``, so the watchdog covers the loop.
-    @task(retry_max_attempts=3)
+    @task(
+        retry_max_attempts=_STORE_TRANSFER_MAX_ATTEMPTS,
+        retry_initial_interval_seconds=_STORE_TRANSFER_INITIAL_INTERVAL_SECONDS,
+        retry_max_interval_seconds=_STORE_TRANSFER_MAX_INTERVAL_SECONDS,
+    )
     async def upload_refs(self, input: UploadRefsInput) -> UploadRefsOutput:
         """Framework task: deliver a declaration as one outbound tree.
 
@@ -2987,6 +3036,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.heartbeat_timeout_seconds,
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
+                    retry_initial_interval_seconds=task_meta.retry_initial_interval_seconds,
                     pool=task_meta.pool,
                     schedule_to_close_seconds=task_meta.schedule_to_close_seconds,
                     progress_watchdog=task_meta.progress_watchdog,
@@ -3007,6 +3057,7 @@ def _create_task_activity_wrapper(
     auto_heartbeat_seconds: int | None = 10,
     retry_policy: Any = None,
     *,
+    retry_initial_interval_seconds: int = 1,
     pool: str | None = None,
     schedule_to_close_seconds: int | None = None,
     progress_watchdog: "ProgressWatchdogMode | None" = None,
@@ -3025,6 +3076,11 @@ def _create_task_activity_wrapper(
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
+        retry_initial_interval_seconds: Delay before the first retry. Later
+            delays grow from it by the backoff coefficient, so this is what
+            decides how wide a window a small attempt budget spans. Keyword-only
+            and defaulting to Temporal's own 1 second, so the positional
+            signature this function has always had is unchanged.
         pool: Logical worker-pool name. When set, the activity is routed
             to a dedicated task queue. Queue name resolution order:
             1. ``ATLAN_POOL_<POOL>_QUEUE`` env var (explicit override).
@@ -3086,6 +3142,7 @@ def _create_task_activity_wrapper(
         temporal_retry_policy = _to_temporal_retry_policy(
             _RP(
                 max_attempts=retry_max_attempts,
+                initial_interval=timedelta(seconds=retry_initial_interval_seconds),
                 max_interval=timedelta(seconds=retry_max_interval_seconds),
             )
         )

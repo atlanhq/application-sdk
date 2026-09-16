@@ -226,6 +226,7 @@ _TESTS_YAML_VALUE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("apt_packages", "apt-packages", "apt"),
     ("private_git_deps", "private-git-deps", "bool"),
     ("git_lfs_skip_smudge", "git-lfs-skip-smudge", "bool"),
+    ("lfs", "lfs", "bool"),
     ("health_check_timeout_seconds", "health-check-timeout-seconds", "int"),
     ("container_health_timeout_seconds", "container-health-timeout-seconds", "int"),
     ("runtime_sdk_ref", "runtime-sdk-ref", "plain"),
@@ -965,6 +966,42 @@ def extract_use_ghcr_base(text: str) -> str:
     return "true" if extract_field(text, "use_ghcr_base") == "true" else ""
 
 
+def extract_vulnerability_scan_lfs(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``vulnerability-scan.yml``) opts into the
+    LFS checkout on the scan's image build, else ``""``.
+
+    Same round-trip contract as ``extract_use_ghcr_base`` one function up, and
+    for the same reason: this is a per-repo choice on an *always-overwrite*
+    managed shim, so it needs both halves or it cannot survive.  Bootstrap's
+    autodetection reads it here so a re-run re-renders the line instead of
+    deleting it, and the C002 checker reads it here so a repo that opted in is
+    not reported as drifted.
+
+    Without the round-trip the input is not merely unsupported, it is actively
+    destroyed on a cadence nobody controls.  ``vulnerability-scan.yml`` has no
+    ``unpreserved_declarations`` guard of the kind that makes ``tests.yaml``
+    *refuse* a resync (FND-604) — it is overwritten silently — so an app that
+    vendors LFS-tracked assets into its Docker build context loses the line on
+    every bootstrap invocation, including granular ones like
+    ``--renovate-automerge true`` that have nothing to do with this file.  The
+    next scan then builds from a ~130-byte LFS pointer instead of the real
+    asset.  Observed three times on one connector before this slot existed.
+
+    Anything other than a literal ``true`` returns ``""`` ("say nothing, take
+    the SDK default"), including ``false``: ``build-and-scan.yaml`` already
+    defaults ``lfs`` to false, so rendering an explicit ``lfs: false`` would be
+    a second spelling of the default and would read as drift on every repo that
+    spells it the other way.
+
+    Read file-wide via ``extract_field`` rather than through
+    ``reusable_job_with_block``: that scope is keyed on the job calling
+    ``tests-reusable.yaml`` and so does not apply here, and this shim is a
+    17-line file with exactly one job — the same reasoning that lets
+    ``extract_use_ghcr_base`` read ``build-and-publish.yaml`` file-wide.
+    """
+    return "true" if extract_field(text, "lfs") == "true" else ""
+
+
 def extract_field(text: str, field: str) -> str:
     """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
 
@@ -1001,7 +1038,24 @@ def extract_field(text: str, field: str) -> str:
 
 
 def extract_apt_packages(text: str) -> str:
-    """Return the apt packages installed by *text*'s ``apt-get install`` step.
+    """Return the apt packages *text* (a ``checks.yml``) installs, in either shape.
+
+    Two shapes are read, because both are live at once across the fleet while
+    FND-1994 rolls out repo by repo:
+
+    1. ``system_deps: "<packages>"`` — the ``with:`` input of the thin caller
+       that ``checks.yml`` is now rendered as. Read first: it is the canonical
+       form, so a file carrying both (a hand-edit mid-migration) is read as
+       what it declares to the reusable, which is what actually runs.
+    2. An inline ``apt-get install`` step — every repo that has not yet been
+       re-synced onto the caller, plus any hand-written step pre-dating the
+       ``--system-deps`` flag.
+
+    Reading both is what lets a repo migrate by a plain ``bootstrap`` re-run
+    rather than by a fleet-wide edit: the old shape is read off disk and
+    re-rendered as the new one with the value intact. Dropping arm 2 would make
+    the first re-sync of an un-migrated repo silently delete its apt step —
+    exactly the failure ``_read_apt_packages``'s tolerance exists to prevent.
 
     *text* is a rendered (or hand-written) ``checks.yml``. Returns a single
     space-separated package list, or ``""`` when the file installs nothing.
@@ -1038,6 +1092,17 @@ def extract_apt_packages(text: str) -> str:
     # continuation stays whole; the canonical render never uses `\`-continuation,
     # so this only rescues a near-invalid hand-written form and leaves the
     # C002 round-trip untouched.
+    # Arm 1: the caller's `system_deps:` input. `extract_field` ignores comment
+    # lines (its pattern anchors on optional whitespace, which `#` is not), so a
+    # commented-out input is excluded for the same reason a commented-out
+    # install line is below. Re-normalised through the same package filter, so a
+    # hand-edited caller cannot put anything into the rendered file that a
+    # hand-edited install line could not.
+    declared = sanitize_package_list(extract_field(text, "system_deps"))
+    if declared:
+        return " ".join(declared)
+
+    # Arm 2: an inline `apt-get install` step.
     cleaned = re.sub(r"\n{2,}", "\n", _COMMENT_LINE_RE.sub("", text))
     packages: list[str] = []
     for m in _APT_INSTALL_RE.finditer(cleaned):

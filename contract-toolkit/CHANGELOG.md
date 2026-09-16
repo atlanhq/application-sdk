@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.26.0] - 2026-09-14
+
+### Breaking changes
+
+- generate a multiSelect DropDown default from a structured defaultSelection (#3771) ([3e2e590](https://github.com/atlanhq/application-sdk/commit/3e2e590))
+
 ## [0.25.2] - 2026-09-09
 
 ### Bug fixes

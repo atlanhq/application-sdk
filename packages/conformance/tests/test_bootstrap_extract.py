@@ -20,6 +20,7 @@ from conformance.bootstrap.extract import (
     extract_secrets_block,
     extract_tests_yaml_params,
     extract_use_ghcr_base,
+    extract_vulnerability_scan_lfs,
     format_dropped_declarations,
     resolve_renovate_fallback_exit_zero,
     reusable_job_with_block,
@@ -68,6 +69,36 @@ def test_extract_apt_packages_from_rendered_checks_yml() -> None:
 
 def test_extract_apt_packages_absent_returns_empty() -> None:
     assert extract_apt_packages(render("checks.yml")) == ""
+
+
+def test_extract_apt_packages_prefers_the_declared_input_over_an_inline_step() -> None:
+    """A file carrying BOTH shapes is read as what it declares to the reusable.
+
+    The mid-migration hand-edit: someone re-synced onto the thin caller but left
+    the old inline step behind (commented back in, or re-added by hand). Only
+    the `system_deps:` input reaches the reusable, so that is what actually
+    installs — reading the stale inline list instead would re-render a caller
+    that installs packages the file's own declaration does not name, and the
+    repo would keep drifting back.
+
+    The two lists are deliberately disjoint so a merge of the arms, or the wrong
+    arm winning, cannot pass.
+    """
+    text = (
+        "jobs:\n"
+        "  pre-commit:\n"
+        "    uses: atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main\n"
+        "    with:\n"
+        '      system_deps: "libpq-dev"\n'
+        "      # left over from before the re-sync:\n"
+        "      #   sudo apt-get install -y libkrb5-dev\n"
+        "  stale-hand-edit:\n"
+        "    steps:\n"
+        "      - run: |\n"
+        "          sudo apt-get update\n"
+        "          sudo apt-get install -y libkrb5-dev\n"
+    )
+    assert extract_apt_packages(text) == "libpq-dev"
 
 
 def test_extract_apt_packages_drops_flags() -> None:
@@ -355,6 +386,53 @@ def test_extract_use_ghcr_base_empty_for_explicit_false() -> None:
 def test_extract_use_ghcr_base_ignores_commented_opt_in() -> None:
     text = "jobs:\n  build:\n    with:\n      # use_ghcr_base: true\n"
     assert extract_use_ghcr_base(text) == ""
+
+
+# ---------------------------------------------------------------------------
+# vulnerability-scan.yml's lfs (an app vendoring LFS assets into its build)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_vulnerability_scan_lfs_round_trips_through_render() -> None:
+    """The write side and the read side must agree, or the opt-in is deleted by
+    the next bootstrap run of an always-overwrite shim.
+
+    Unlike tests.yaml there is no ``unpreserved_declarations`` guard on this
+    file to refuse the write, so a broken round-trip here is silent: the line
+    vanishes and the next scan builds from an LFS pointer.
+    """
+    rendered = render("vulnerability-scan.yml", vuln_scan_lfs="true")
+    assert extract_vulnerability_scan_lfs(rendered) == "true"
+
+
+def test_extract_vulnerability_scan_lfs_empty_when_absent() -> None:
+    assert extract_vulnerability_scan_lfs(render("vulnerability-scan.yml")) == ""
+
+
+def test_extract_vulnerability_scan_lfs_empty_for_explicit_false() -> None:
+    """``false`` is a second spelling of ``build-and-scan.yaml``'s own default,
+    so it renders no line — same reasoning as ``use_ghcr_base`` above."""
+    text = "jobs:\n  scan:\n    with:\n      lfs: false\n"
+    assert extract_vulnerability_scan_lfs(text) == ""
+
+
+def test_extract_vulnerability_scan_lfs_ignores_commented_opt_in() -> None:
+    text = "jobs:\n  scan:\n    with:\n      # lfs: true\n"
+    assert extract_vulnerability_scan_lfs(text) == ""
+
+
+def test_vulnerability_scan_default_render_is_unchanged_by_the_slot() -> None:
+    """Adding the slot must not churn the ~53 repos that do not opt in.
+
+    The no-opt-in render has to stay byte-identical to the pre-slot template,
+    or every non-LFS repo reports C002 until it re-runs bootstrap.
+    """
+    rendered = render("vulnerability-scan.yml")
+    assert "with:" not in rendered
+    assert rendered.endswith(
+        "    uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main\n"
+        "    secrets: inherit\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1142,6 +1220,7 @@ _FND1143_VALUES: dict[str, tuple[str, str]] = {
     ),
     "private_git_deps": ("      private-git-deps: true", "true"),
     "git_lfs_skip_smudge": ("      git-lfs-skip-smudge: true", "true"),
+    "lfs": ("      lfs: true", "true"),
     "health_check_timeout_seconds": (
         '      health-check-timeout-seconds: "180"',
         "180",

@@ -764,6 +764,32 @@ The install reports the same field: `verified_layer` in `$GITHUB_OUTPUT` and in
 prepare-tenant's step summary, so a skipped install that rested on the record
 alone is visible without reading the log.
 
+**The pod is asked repeatedly, not once (FND-2057).** One read samples an
+instant, and the instant this step runs at sits inside the window the two lower
+layers are wrong about: LM's install record flips when the install lands, while
+the rollout that replaces the pod is still in flight. A read taken there reports
+silence, `verify` falls through to the records, and the leg proceeds having
+established nothing about the pod — then fails moments later in the
+[workflow-setup route check](#workflow-setup-routes-fnd-1667), whose reads go to
+that same pod. So `--pod-wait-seconds` (default 300) keeps asking, and the
+distinction that makes it safe is **silence versus rejection**:
+
+| The route | Meaning | Response |
+|---|---|---|
+| times out, refuses, or 5xxs | nothing answered — no pod to route to yet | re-ask until the budget is spent |
+| returns 404 | the route answered: this image's SDK predates it | decide immediately, fall through to the records |
+
+Without that split the wait would land on most of the fleet, since every image
+built from an SDK older than the route 404s here. The waited-out case gets its
+own warning naming the elapsed time, because "an SDK predating the route" and "a
+pod that never came up" need opposite next steps and used to print the same
+sentence.
+
+The wait is spent in `verify`, inside the e2e leg (120-minute job budget), not in
+`install`: `test_job_timeout_stays_above_the_scripts_own_waits` sums that
+script's waits against prepare-tenant's `timeout-minutes`, and at 240 + 600 + 600
++ 90 they already land exactly on its 50-minute ceiling.
+
 **Where the pod's answer comes from.** Nothing an app already exposes could
 answer this. `App._app_version` / `AppContext.app_version` is a semver declared
 in the app's own source, identical across every build of it; the served manifest
@@ -1125,6 +1151,24 @@ Skip-not-fail on the first two is deliberate: without it this would be a fleet-w
 ### Timing
 
 The catalog read is a **bounded poll** (`--wait-seconds`, default 120s), not a single read. `install()` polling the *deployment* to `SUCCEEDED` is not evidence that LM's catalog snapshot and the pod's configmap endpoint have caught up — nothing sequences those against the deployment verdict — so a single read would be flaky-by-construction on exactly the path CI takes. Progress lines are flushed, so a patient step does not read as a hung one.
+
+#### Two waits, because there are two things to wait for (FND-2057)
+
+A route that *answers* with something stale and a route that does not answer **at all** are different failures with different ceilings, and giving them one number cost a leg per occurrence.
+
+| Wait | Bounds | Default | Spent on |
+|---|---|---|---|
+| `wait_seconds` | a route answering with the previous image's contract | 120s | the rollout lagging LM's catalog record |
+| `pod_wait_seconds` | a pod-served route answering nothing at all | 300s | the deployment reconciling onto the pod, or a KEDA cold start |
+
+Before this, three read timeouts raised straight past the poll loop and failed the leg in ~97s. `atlan-teradata-app` run `34957093020` is the record: one commit, three clouds, aws and gcp cut off at ~97s and red, azure patient for 61.5s and green — then green all the way through the DAG. Re-running the two failures passed with no code change.
+
+Two properties keep the wait from becoming a hang:
+
+- **It only ever covers the pod.** The catalog poll and the negative control are both answered by Local Marketplace *without* consulting the pod, and both run first. A genuinely unreachable tenant still fails at the first exhaustion, before any budget exists to spend.
+- **One budget for the whole app**, not one per entry point. "Has the deployment reconciled?" has a single answer; charging it per entry point would multiply the wait by however many an app declares.
+
+The same race is waited for one step earlier, on the build-identity route — see [Where the version check gets its answer from](#where-the-version-check-gets-its-answer-from-fnd-1684). There, a **404 is not waited out**: it is the route answering, which is what every image on an SDK older than the route returns, and re-asking it would add minutes to every leg of most of the fleet.
 
 ### Where the logic lives, and why
 

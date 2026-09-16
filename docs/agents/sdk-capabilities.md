@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.34.1
-source-sha:    ccf53bff8017832a7352c380e475aa988feaba77
-source-date:   2026-09-11T10:25:22+01:00
+sdk-version:   3.34.2
+source-sha:    500722ed520ecc12b8b295a9ef7adf822ab5f16a
+source-date:   2026-09-15T16:55:35+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,11 +20,11 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 27 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 33 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 66 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 67 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -33,9 +33,9 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 382 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 384 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -501,6 +501,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** A compiled include/exclude filter with uniform regex-or-exact semantics.
 - **Defined in:** `application_sdk/common/filter_matching.py`
 
+#### `ModelDumpAsset`
+
+- **Import:** `from application_sdk.common.asset_serialization import ModelDumpAsset`
+- **Signature:** `class ModelDumpAsset`
+- **Summary:** A pydantic-style model exposing ``model_dump()``.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
+#### `NestedBytesAsset`
+
+- **Import:** `from application_sdk.common.asset_serialization import NestedBytesAsset`
+- **Signature:** `class NestedBytesAsset`
+- **Summary:** An asset that encodes itself straight to Atlas nested-format JSON bytes.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
+#### `NestedDictAsset`
+
+- **Import:** `from application_sdk.common.asset_serialization import NestedDictAsset`
+- **Signature:** `class NestedDictAsset`
+- **Summary:** An asset that renders itself as an Atlas nested-format ``dict``.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
 #### `TaskResult`
 
 - **Import:** `from application_sdk.common import TaskResult`
@@ -514,6 +535,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `class TaskStatistics(total_record_count: int = 0, ...)`
 - **Summary:** Statistics produced by a completed task.
 - **Defined in:** `application_sdk/common/models.py`
+
+#### `UnserializableValue`
+
+- **Import:** `from application_sdk.common.asset_serialization import UnserializableValue`
+- **Signature:** `class UnserializableValue(type_name: str) -> None`
+- **Summary:** A nested value ``orjson_default`` cannot render, naming its type.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
 
 ### Functions
 
@@ -558,6 +586,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `ensure_free_space(path: str | Path, required_bytes: int, *, operation: str) -> None`
 - **Summary:** Fail before a large write that the filesystem plainly cannot hold.
 - **Defined in:** `application_sdk/common/atomic.py`
+
+#### `entity_bytes`
+
+- **Import:** `from application_sdk.common.asset_serialization import entity_bytes`
+- **Signature:** `entity_bytes(asset: object, *, connection_name: str = '', entity_type: str | None = None) -> bytes`
+- **Summary:** Serialise a mapper's return value to one Atlas wire-shape JSON line.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
 
 #### `extract_epoch_id_from_qualified_name`
 
@@ -636,6 +671,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `normalize_filters(filter_dict: dict[str, FilterValue], is_include: bool)`
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `orjson_default`
+
+- **Import:** `from application_sdk.common.asset_serialization import orjson_default`
+- **Signature:** `orjson_default(obj: Any) -> Any`
+- **Summary:** Fallback serialiser for orjson — covers types it doesn't handle natively.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
 
 #### `persist_marker_to_storage`
 
@@ -1759,6 +1801,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
 - **Signature:** `STORAGE_EMPTY_UPLOAD`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_GATEWAY_AUTH`
+
+- **Import:** `from application_sdk.errors import STORAGE_GATEWAY_AUTH`
+- **Signature:** `STORAGE_GATEWAY_AUTH`
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
@@ -2991,6 +3040,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import StorageError`
 - **Signature:** `class StorageError(message: str, ...)`
 - **Summary:** Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageGatewayAuthUnavailableError`
+
+- **Import:** `from application_sdk.storage import StorageGatewayAuthUnavailableError`
+- **Signature:** `class StorageGatewayAuthUnavailableError(message: str, ...)`
+- **Summary:** A request was rejected by the object-store gateway's own auth backend.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageIntegrityError`
@@ -4457,6 +4513,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Reads the two routes the setup page walks, with one bearer credential.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
 
+#### `TenantUnreachable`
+
+- **Import:** `from application_sdk.testing.setup_routes import TenantUnreachable`
+- **Signature:** `class TenantUnreachable`
+- **Summary:** One GET got no answer at all — no status line, no body (FND-2057).
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `TypenameDiff`
 
 - **Import:** `from application_sdk.testing import TypenameDiff`
@@ -5895,6 +5958,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.setup_routes import DEFAULT_CATALOG_WAIT_SECONDS`
 - **Signature:** `DEFAULT_CATALOG_WAIT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
+
+- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_POD_RECONCILE_WAIT_SECONDS`
+- **Signature:** `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/setup_routes.py`
 

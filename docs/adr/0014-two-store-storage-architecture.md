@@ -147,6 +147,27 @@ deployment→deployment copy inexpressible: the leg fell through to `StorageErro
 `best_effort` and a **failed run** under `required`, even though the upstream
 leg had done its job.
 
+### Retry window at the boundary (FND-2076)
+
+The upstream store is reached over Atlan's `/api/blobstorage` gateway, whose
+auth hop can be unavailable for tens of seconds at a time — see
+`StorageGatewayAuthUnavailableError` in `docs/concepts/common.md` for the
+mechanism. The framework tasks that cross the boundary (`upload`, `download`,
+`verify_refs`, `upload_refs`) therefore declare a wider retry shape than the
+SDK default: **4 attempts at 10s / 20s / 40s**, spreading 70 seconds of backoff
+across the same work.
+
+The default (3 attempts, 1-second initial interval) retries after 1s and 2s, so
+the whole budget is spent inside roughly three seconds. That is shorter than
+the outages this boundary actually meets: the FND-2076 failure saw every signed
+request rejected for at least 55 seconds, and `upload_refs` gave up 25 seconds
+in — losing a complete extraction at the hand-off.
+
+The cost falls only on a store that is genuinely broken rather than briefly
+unavailable, which now fails after ~70s of waiting instead of ~3s. That is the
+right way round for work this far downstream: the run has already paid for the
+extraction by the time it reaches the hand-off.
+
 ### Connector responsibility
 
 Connectors that hand artifacts to Atlan system apps **must** call `App.upload()`

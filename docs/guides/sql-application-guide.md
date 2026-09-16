@@ -246,15 +246,11 @@ def map_column(row: dict, connection_qualified_name: str) -> Column:
     )
 
 
-def serialize_entity(entity) -> dict:
-    """Convert a pyatlan_v9 entity to Atlas nested-entity dict format for publishing."""
-    return {
-        "typeName": entity.type_name,
-        "attributes": entity.attributes.model_dump(exclude_none=True),
-    }
 ```
 
 Each mapper function is a pure function: easy to unit test, no framework dependencies, no YAML files to maintain. The extractor calls these in its `transform_data` task (see below).
+
+**Return the asset, not a dict.** The SDK serialises whatever the mapper returns through `application_sdk.common.asset_serialization.entity_bytes()`, which encodes a `pyatlan_v9` asset natively and stamps `connectionName` on it. Hand-rolling a `serialize_entity()` helper to convert the asset to a dict first costs two extra JSON passes per record and gives up the type checking that is the point of the asset mapper — `asset.column_cont = 7` is a pyright error, `payload["columnCont"] = 7` is not. A return value the seam does not recognise raises `UnserializableMapperResultError` rather than falling back to anything.
 
 ## App (Extractor)
 

@@ -274,13 +274,14 @@ are for, and recording those in image history is a feature.
 
 ## Renovate post-upgrade commands
 
-Two run today, both installed as bare PATH commands by `.github/workflows/renovate.yaml`
-and both declared in `renovate-config/default.json`:
+Three run today, all installed as bare PATH commands by `.github/workflows/renovate.yaml`
+and all declared in `renovate-config/default.json`:
 
 | command | lane | what it does |
 |---|---|---|
 | `renovate-pkl-sync` | `app-contract-toolkit` | re-resolves the Pkl lock and regenerates contract artifacts |
 | `renovate-uv-lock-bounded` | `lockFileMaintenance` | re-resolves `uv.lock` under the org §5 release-age bound, then strips uv's `[options]` block |
+| `renovate-contract-ledger` | `lockFileMaintenance`, conformance package | regenerates `contract_schema.lock.json` at the conformance version the branch locked |
 
 Three rules apply to any command added here.
 
@@ -306,6 +307,64 @@ applied at lock time and left recorded makes the lock unusable in the app
 Dockerfiles. That is what reddened `scan / Build Image` fleet-wide in #3212. The
 bounded driver strips the block; if you add another lock-writing command, check
 what it records.
+
+### Only one Renovate engine may serve a repo
+
+`allowedCommands` is admin-only, so it exists only for a runner we own. A second
+engine reading the same `renovate.json` resolves the same preset, finds the same
+`postUpgradeTasks`, and has **every one of them rejected** — then pushes to the
+same `renovate/lock-file-maintenance` branch name, because branch names come from
+the shared preset rather than from the engine.
+
+That is not hypothetical. The Mend-hosted app stayed installed org-wide long
+after the fleet moved to the self-hosted runner (FND-1985). On atlan-gcs-app#124
+the fleet runner bounded the lock correctly at 08:11 and Mend replaced it at
+11:18 with an unbounded refresh, a red `renovate/artifacts`, and a red
+`checks/dep-cooldown` naming four packages inside the window. Telling the two
+apart is a one-liner — the branch head's author is `atlan-app-fleet[bot]` when we
+wrote it and `renovate[bot]` when Mend did:
+
+```bash
+gh api "repos/atlanhq/<repo>/commits?sha=renovate%2Flock-file-maintenance&per_page=1" \
+  --jq '.[0].author.login'
+```
+
+Three things stand behind this, and only the first is a fix:
+
+1. **Do not install a second engine on a fleet repo.** Everything below bounds
+   the damage; nothing below prevents it.
+2. `renovate_reap_refused_locks.py` deletes any managed-lane branch a foreign
+   engine wrote, so the fleet runner rebuilds it in the same pass. **This is the
+   only thing that clears it.** Renovate will not recover such a branch, for two
+   independent reasons — either alone is enough. From the atlan-netsuite-app job
+   of 2026-09-14T14:15:44Z, on `renovate/conformance-package`:
+
+   ```
+   DEBUG: branch.isModified() = true
+     "unrecognizedAuthors": ["29139614+renovate[bot]@users.noreply.github.com"]
+   DEBUG: Branch has been edited but found no PR - skipping
+   ```
+
+   The head commit's author is not the runner's, so the branch reads as
+   hand-modified and Renovate refuses to write it. And Renovate cannot see the
+   PR at all: its PR list is scoped to its own account, so in that same run it
+   found `#64` on the lock lane (author `app/atlan-app-fleet`) and did not find
+   `#92` on this one (author `app/renovate`).
+
+   Do not expect `rebaseWhen: behind-base-branch` to rescue it — atlan-athena-app's
+   `main` had a `latestCommitDate` of 2026-09-02 while its branch sat wedged, so
+   it was never behind base. Renovate's own pruning declines for the same
+   isModified reason (`Orphan Branch is modified - skipping branch deletion`).
+   There is no clock and no trigger.
+
+   The reaper covers every `renovate/*` lane except the github-actions pair,
+   which is the one place deletion would destroy rather than recover: that
+   manager is disabled, so nothing would rebuild the branch. Stranded PRs there
+   are a human's call to close.
+3. Condition (a) of the approval gate refuses a Mend-authored PR outside
+   `MEND_REPOS`, so a foreign PR is turned away on identity rather than on
+   whether it happens to look green. `MEND_REPOS` is application-sdk alone,
+   which has not moved off Mend.
 
 ### A refused lock refresh is red on purpose, and nothing re-evaluates it
 
@@ -785,3 +844,31 @@ make that edit easy to get wrong:
   level each scope is used at, and asserts the scaffolded caller declares exactly
   that — so adding a scope to a job of the reusable fails there rather than
   silently arriving as `none` in every connector.
+
+### Collapsing a managed workflow into a reusable renames its status check
+
+A job that `uses:` a reusable reports as `<caller job> / <called job>`, never as
+the caller job alone. So moving a bootstrap template's body into a reusable
+renames the check every consumer repo publishes — `checks.yml`'s `pre-commit`
+became `pre-commit / Pre-commit` in FND-1994. Where a repo's ruleset **requires**
+the old context by name, that requirement can never be satisfied again and every
+PR in that repo deadlocks: the required check is simply absent, not failing.
+
+The rename is unavoidable (there is no spelling of caller and callee that
+collapses the path), so it is handled rather than dodged:
+
+* Re-sync one repo at a time and edit its ruleset in the same step. Both halves
+  are per-repo, and neither is a bot action — the fleet App has no
+  `workflows: write` and no ruleset write.
+* `.github/scripts/gate_enforcement_scan.py` reports which repos actually pin a
+  context, which is the list this applies to. Most of the fleet pins nothing and
+  migrates with no ruleset edit at all.
+
+This is also why such a migration is a **pull**, not a push: a repo keeps running
+its own inlined copy until it is re-synced, un-migrated and migrated repos
+coexist indefinitely, and C002 reports the difference at WARN — a signal that the
+repo is due a re-sync, not a failing gate. What that costs the SDK side is that
+every parameter the old shape carried must stay readable: see
+`extract_apt_packages`, which reads `system_deps` off both the caller's `with:`
+block and a pre-migration inline `apt-get install` step. Drop the second arm and
+the first re-sync of an un-migrated repo silently deletes a step its build needs.

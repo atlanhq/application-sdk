@@ -100,6 +100,34 @@ shortens a relocation. That is why it is PLATFORM-attributed and `retryable=True
 `objectStoreAccess:<store>` check and a mid-run `upload_file` failure raise or stamp this one code,
 so a relocation lands in a single analytics bucket wherever it is caught.
 
+### StorageGatewayAuthUnavailableError — a 401 that is not about your credentials
+
+`StorageGatewayAuthUnavailableError(StorageError)` carries
+`DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_AUTH` / `AAF-STR-010` instead of the generic
+`AAF-STR-004`, for one narrow condition: Atlan's `/api/blobstorage` proxy verifies the SigV4
+signature by looking the signing key's secret up in Keycloak on **every** request, and maps every
+failure of that lookup — including its own 30-second timeout — onto
+`401 {"code": 1005, "error": "Invalid Client"}`.
+
+The leaf matches on both halves of that pair, so a 401 from any other store, or a `1005` on any
+other status, still falls through to the generic `StorageError`.
+
+It applies to reads as well as writes. Every store operation that can fail against a remote —
+`upload_file`, `put`, `download_file`, `exists`, `get_file_meta`, `_get_bytes`, `delete`,
+`list_keys` — now routes its non-not-found failures through the same classifier, so all of them
+carry `http_status` / `provider_code` / `target` too. That matters for more than tidiness: a
+`verify_refs` HEAD goes through `exists()`, and a HEAD was what the run that motivated this leaf
+finally died on. The not-found contracts are unchanged — `exists` and `delete` still return
+`False`, `get_file_meta` and `_get_bytes` still return `None` — because the classifier sits after
+that short-circuit.
+
+Why the distinction earns a code: the signing key is a *static* Keycloak client id/secret, so a
+genuinely wrong credential fails the very first request a deployment makes — the SDR preflight
+probe at startup, long before any artifact moves. A `1005` arriving mid-run, after that probe
+passed, is the gateway being unavailable, and no credential change fixes it. Its
+`suggested_action` says so explicitly, because the generic wording ("lacked valid authentication
+credentials") sends an operator to rotate credentials that are working.
+
 ### ColdStartRaceError — the cross-domain transient marker
 
 `ColdStartRaceError(DependencyUnavailableError)` is not a domain umbrella itself — it's a
@@ -369,6 +397,39 @@ include_pattern, exclude_pattern = prepare_filters(
     '{"dev_db": "*"}',
 )
 ```
+
+## Asset Serialisation
+
+`application_sdk.common.asset_serialization.entity_bytes()` is the single seam that turns an asset-mapper return value into one Atlas wire-shape JSONL record. Every template that runs the `map_<entity>()` pattern calls it, so a connector never serialises its own assets.
+
+```python
+from application_sdk.common.asset_serialization import entity_bytes
+
+line = entity_bytes(asset, connection_name="My MySQL", entity_type="table")
+```
+
+**What it accepts**, in dispatch order:
+
+| Shape | Protocol | Notes |
+|-------|----------|-------|
+| `to_nested_bytes()` | `NestedBytesAsset` | `pyatlan_v9` assets. Passed through byte-for-byte — no JSON round-trip on the SDK side. |
+| `to_nested_dict()` | `NestedDictAsset` | Serialised with the shared `orjson_default` (`Decimal` → float, `bytes` → text). |
+| `model_dump()` | `ModelDumpAsset` | pyatlan v1 / pydantic assets. Last of the object shapes: `model_dump()` yields the model's own field names, which for a snake_case model is *not* the Atlas wire shape, so an asset exposing a nested encoder as well is serialised through that instead. |
+| `dict` | — | Already in the Atlas wire shape. |
+
+Anything else raises `UnserializableMapperResultError`. There is deliberately no fallback: the branch this replaced wrote the *raw source record* when no shape matched, so a mapper returning a `pyatlan_v9` asset — the type `map_<entity>()` is annotated to return — published unmapped source rows as entities while the run reported SUCCESS (FND-2056).
+
+**Every failure is that one typed error**, non-retryable and attributed to `APP_OWNER`, with a message naming the offending type and the entity:
+
+| Failure | `observed` |
+|---------|-----------|
+| The result matches no supported shape | The returned type |
+| A supported shape holds a value neither orjson nor `orjson_default` can render | The *nested* value's type |
+| `to_nested_bytes()` returned JSON spanning more than one line | The asset's type |
+
+The last one guards a public protocol rather than a live bug — `pyatlan_v9`'s encoder is compact — but `NestedBytesAsset` is exported, and the caller writes the returned bytes verbatim plus one newline. A pretty-printing implementer would therefore split one entity across several JSONL records: well-formed lines, wrong count, no error. That is the same silent, count-passing damage this seam exists to remove, so it is refused rather than trusted.
+
+`connectionName` is stamped before the dispatch, on the asset itself rather than on a serialised dict afterwards, so an asset-returning mapper keeps it. A value the mapper set explicitly always wins. If the asset declares `connection_name` but refuses assignment (frozen, or a property with no setter), the name is dropped rather than failing the transform — every asset type that genuinely needs it exposes a settable field.
 
 ## General Utilities
 
