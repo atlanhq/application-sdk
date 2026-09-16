@@ -53,6 +53,8 @@ from application_sdk.testing.harness._errors import (
 )
 from application_sdk.testing.harness.expectations import (
     UNREADABLE,
+    AssetAttributes,
+    AttributeSampleRead,
     CountRead,
     Finding,
     SampleRead,
@@ -67,6 +69,7 @@ __all__ = [
     "Settled",
     "Stalled",
     "Verdict",
+    "as_attribute_samples",
     "as_count",
     "as_counts",
     "as_samples",
@@ -410,6 +413,29 @@ def as_samples(
         Type name -> sampled names or ``Unreadable``. The distinction matters
         more here than for counts:
         :func:`~application_sdk.testing.harness.expectations.evaluate_locations`
+        *skips* an empty sample, so a failed read spelled as an empty list is a
+        silent pass.
+    """
+    if isinstance(reading, Settled):
+        return {name: list(value) for name, value in reading.value.items()}
+    unreadable = Unreadable(cause=_cause_of(reading))
+    return dict.fromkeys(type_names, unreadable)
+
+
+def as_attribute_samples(
+    reading: Outcome[Mapping[str, Sequence[AssetAttributes]]],
+    type_names: Sequence[str],
+) -> Mapping[str, AttributeSampleRead]:
+    """Project an attribute sample read the same way :func:`as_samples` does.
+
+    Args:
+        reading: What the reader answered.
+        type_names: The types that were asked for.
+
+    Returns:
+        Type name -> the sampled assets or ``Unreadable``. The distinction
+        matters here for the same reason it does for qualified-name samples:
+        :func:`~application_sdk.testing.harness.expectations.evaluate_attributes`
         *skips* an empty sample, so a failed read spelled as an empty list is a
         silent pass.
     """

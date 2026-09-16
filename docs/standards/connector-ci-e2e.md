@@ -1108,6 +1108,95 @@ async def _wait() -> bool:
 
 **Optionally, Temporal can be asked who is polling the extract queue.** `NoWorkerOnTaskQueueError` fires on an inference: nothing started inside `ae_stall_grace_seconds`, so probably nothing is polling. Set `temporal_address` on the suite (or export `E2E_TEMPORAL_ADDRESS`, plus `E2E_TEMPORAL_NAMESPACE`) and the harness reads the queue's pollers and attaches what it saw to the same error. Off by default because the connector CI runner has **no route into a tenant's vcluster** — the same constraint that makes the AE submit the only tenant-facing probe of the installed app pod — so it is for a suite driving a cluster it can actually reach. A read that fails changes nothing: the inference still stands.
 
+## Asserting what an asset *contains*, not just that it landed (FND-2094)
+
+Three of the harness's four asset knobs are about **shape**:
+
+| knob | asserts |
+| -- | -- |
+| `expected_min_asset_counts` | per-type floors |
+| `expected_exact_counts` | per-type exact counts |
+| `expected_asset_qn_depth` | qualifiedName nesting depth below the connection |
+
+None of them reads an asset attribute, so a connector can publish a structurally
+perfect asset tree in which every computed attribute is `0` and the suite stays
+green. The fourth knob closes that:
+
+```python
+from application_sdk.testing.harness.expectations import AtLeast, Present
+
+class TestTrinoFullDAG(SQLAppE2ETest):
+    # Pair every attribute type with a floor — see "what it will not catch".
+    expected_min_asset_counts = {"Database": 1, "Schema": 1, "Table": 5}
+    expected_asset_attributes = {
+        "Schema":   {"tableCount": 8, "viewsCount": 0},
+        "Database": {"schemaCount": AtLeast(1)},
+    }
+```
+
+A bare scalar means `Exactly(scalar)`. The full vocabulary, all from
+`application_sdk.testing.harness.expectations`:
+
+| matcher | matches |
+| -- | -- |
+| `Exactly(v)` (or a bare `v`) | present and equal to `v` |
+| `Present()` | present and not null — any value |
+| `Absent()` | not set at all |
+| `AtLeast(n)` / `AtMost(n)` | present, numeric, and within the bound |
+
+### Two failure modes the counts cannot see
+
+1. **A degraded value published as fact.** A connector that wraps a source call
+   in a bare `except Exception`, logs a warning and substitutes `0` publishes a
+   permissions error as a genuine count. `0` is a present value, so an
+   absent-means-unset rule does not catch it either.
+2. **An attribute that silently stops being set.** `0` and *absent* are the same
+   number to a count assertion and different states in Atlas, so a regression
+   that drops the attribute entirely reads as green.
+
+The harness therefore keeps **present-but-zero, present-but-null and absent**
+apart end to end. `sample_asset_attributes` records which attributes the search
+payload actually carried rather than reading the client model's `None` defaults,
+so:
+
+* `Exactly(0)` passes on a published zero and **fails** on an unset attribute
+  (`… viewsCount on '…/db/sch' is absent (attribute not set), expected exactly 0`);
+* `Present()` is the matcher for the silent-drop case when the value itself
+  depends on a live source;
+* `Absent()` pins the inverse rule — "leave it unset rather than claim `0`".
+
+### Choosing exact values vs a predicate
+
+`Exactly` is right against a **pinned hermetic fixture** where the number is
+knowable: a `trinodb/trino` sibling exposing a tpch-backed catalog whose `tiny`
+schema is a fixed 8-table / 0-view / 1-schema dataset supports `tableCount == 8`
+and `viewsCount == 0` exactly, and those are strictly stronger than that suite's
+floors on the same tenant lease with no extra crawl. A suite crawling a **live
+source** cannot pin a number and should use `AtLeast(1)` or `Present()` — both
+still separate "computed something" from "published the degraded zero".
+
+### What it will not catch
+
+Same contract as `expected_asset_qn_depth`, for the same reasons:
+
+* It samples a few assets per type (`asset_attribute_sample_size`, default 3, no
+  sort) and requires **every** sampled asset to satisfy every matcher. So it
+  catches "the whole type carries the wrong value" and will rarely catch one bad
+  asset among thousands. Declare a fixed value only where every asset of that
+  type genuinely shares it.
+* A **fully-dropped type** is invisible (no samples → the type is skipped).
+  "Too few / none" is the count check's job, so pair every type here with an
+  `expected_min_asset_counts` floor for the same type — that is also what keeps
+  the count poll alive until ES has indexed the type the sample reads.
+* The harness sees only what Atlas **indexed**. A misspelled attribute name, or
+  one the type does not carry, reads as absent — a finding rather than a silent
+  pass, but check the spelling before believing a connector dropped it.
+
+An unreadable attribute search is graded exactly like an unreadable count or
+sample: `AtlasReadIndeterminateError`, reported as a pytest **error** and never
+as a claim about the connector. See
+[What a red leg means when Atlas could not be read](#what-a-red-leg-means-when-atlas-could-not-be-read-fnd-225).
+
 ## Contract regeneration before tests
 
 The e2e/integration tests consume `app/generated/manifest.json` (the Automation Engine DAG): the host-side harness reads the committed file, and the connector Docker image `COPY`s `app/generated/` at build time and serves `manifest.json` at runtime. Nothing used to regenerate that file from `contract/app.pkl`, so a Contract Toolkit change — at the app level (`contract/app.pkl`) or the SDK level (`contract-toolkit/src`) — ran against a possibly-stale committed manifest and was never actually exercised (BLDX-1493).

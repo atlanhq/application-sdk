@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar, Union
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness.atlas._errors import UnknownConnectorTypeError
 from application_sdk.testing.harness.budgets import Budget
+from application_sdk.testing.harness.expectations import AssetAttributes
 from application_sdk.testing.harness.outcome import (
     Indeterminate,
     NeverStarted,
@@ -83,6 +84,11 @@ __all__ = [
     "ADMIN_ROLE_NAME",
     "DEFAULT_TYPE_NAMES",
     "AdminIdentity",
+    # Re-exported from ``harness.expectations``, where it has to live so the
+    # evaluator can name it without importing this module: it is what
+    # ``sample_asset_attributes`` answers with, so a caller importing the reader
+    # should not need a second import to type its result.
+    "AssetAttributes",
     "Reading",
     "admin_identity",
     "atlas_client",
@@ -92,6 +98,7 @@ __all__ = [
     "count_total_assets",
     "create_connection",
     "poll_for_connection",
+    "sample_asset_attributes",
     "sample_qualified_names",
     # Leaf
     "UnknownConnectorTypeError",
@@ -515,6 +522,189 @@ async def sample_qualified_names(
         elapsed=elapsed,
         value=dict(zip(type_names, sampled, strict=True)),
     )
+
+
+async def sample_asset_attributes(
+    client: AsyncAtlanClient,
+    connection_qualified_name: str,
+    type_attributes: Mapping[str, Sequence[str]],
+    *,
+    per_type: int = 3,
+) -> Reading[Mapping[str, Sequence[AssetAttributes]]]:
+    """Sample up to *per_type* assets per type, reading the named attributes.
+
+    Sibling to :func:`sample_qualified_names`, and mechanically almost the same
+    query: the one addition is an ``include_on_results`` per requested attribute.
+    The cost of this reader is in its *contract*, not in its search.
+
+    What it buys is the only question the harness could not previously ask. The
+    counts say how many assets landed, the qualified-name samples say where they
+    landed — neither says what they *contain*, so a connector could publish a
+    structurally perfect tree in which every computed attribute was ``0`` and
+    every e2e suite in the fleet stayed green (FND-2094).
+
+    **Absent is not zero, and not null.** A requested attribute Atlas did not
+    return is left *out* of :attr:`AssetAttributes.values` rather than mapped to
+    ``None``. That is the distinction the whole feature turns on: ``0`` is a
+    value a connector meant to publish, an absent attribute is one it stopped
+    publishing, and a count assertion cannot tell them apart. Presence is read
+    from the model's own record of which fields the wire actually carried, so an
+    attribute that arrived as an explicit null is *present with* ``None`` — a
+    third state, and a different finding.
+
+    Args:
+        client: An open client from :func:`atlas_client`.
+        connection_qualified_name: Connection prefix to sample under.
+        type_attributes: Atlan type name -> the attribute names to read for it,
+            spelled as Atlan spells them (``"tableCount"``, not
+            ``"table_count"``). A type with no attributes listed is searched and
+            contributes assets carrying no values, which is a no-op for the
+            evaluator; declaring one is a suite bug rather than an error here.
+        per_type: How many assets to sample per type.
+
+    Returns:
+        :class:`~application_sdk.testing.harness.outcome.Settled` carrying type
+        name -> the sampled assets, or
+        :class:`~application_sdk.testing.harness.outcome.Indeterminate` when the
+        search could not be read — including when the client library stops
+        exposing which fields the wire carried, because a reader that cannot
+        tell absent from unset would report every attribute as dropped. An empty
+        sequence is a type that landed nothing; as with
+        :func:`sample_qualified_names`, that is why a failed read must not be
+        spelled the same way.
+    """
+    from pyatlan.model.assets import Asset  # noqa: PLC0415
+    from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
+
+    label = f"asset-attribute samples under {connection_qualified_name}"
+    started = time.monotonic()
+    if not type_attributes:
+        name, attempts, elapsed = _one_shot(label, started)
+        return Settled(label=name, attempts=attempts, elapsed=elapsed, value={})
+    prefix = f"{connection_qualified_name}/"
+    connection_qn = connection_qualified_name
+    type_names = tuple(type_attributes)
+
+    async def _sample_one(type_name: str) -> list[AssetAttributes]:
+        attributes = tuple(type_attributes[type_name])
+        builder = (
+            FluentSearch()
+            .where(FluentSearch.active_assets())
+            .where(Asset.QUALIFIED_NAME.startswith(prefix))
+            .where(Asset.CONNECTION_QUALIFIED_NAME.eq(connection_qn))
+            .where(Asset.TYPE_NAME.eq(type_name))
+            .include_on_results(Asset.QUALIFIED_NAME)
+            .include_on_results(Asset.CONNECTION_QUALIFIED_NAME)
+        )
+        for attribute in attributes:
+            builder = builder.include_on_results(attribute)
+        request = builder.to_request()
+        request.dsl.size = per_type
+        results = await client.asset.search(request)
+        sampled: list[AssetAttributes] = []
+        for asset in results.current_page() or []:
+            sampled.append(
+                AssetAttributes(
+                    qualified_name=asset.qualified_name or "",
+                    values=_returned_attributes(asset, attributes),
+                )
+            )
+            if len(sampled) >= per_type:
+                break
+        return sampled
+
+    try:
+        sampled = await asyncio.gather(*(_sample_one(tn) for tn in type_names))
+    except Exception as error:
+        return _unreadable(label, started, error)
+    name, attempts, elapsed = _one_shot(label, started)
+    return Settled(
+        label=name,
+        attempts=attempts,
+        elapsed=elapsed,
+        value=dict(zip(type_names, sampled, strict=True)),
+    )
+
+
+def _returned_attributes(asset: object, attributes: Sequence[str]) -> dict[str, object]:
+    """Read the requested attributes off one search hit, keeping absence absent.
+
+    pyatlan hands back a model whose every attribute field defaults to ``None``,
+    so ``getattr`` alone cannot tell an attribute Atlas never returned from one
+    it returned as null — the exact collapse this reader exists to avoid. What
+    can tell them apart is the model's record of which fields the parsed payload
+    actually set, so that is what this consults.
+
+    Args:
+        asset: One hit from the search, a pyatlan ``Asset`` model.
+        attributes: Attribute names as Atlan spells them, e.g. ``"tableCount"``.
+
+    Returns:
+        Only the attributes the payload carried, keyed by the requested name.
+        An attribute the payload omitted is absent from the mapping.
+
+    Raises:
+        AttributeError: The model exposes neither pydantic v1's
+            ``__fields_set__`` nor v2's ``model_fields_set``, so presence cannot
+            be determined. Raised rather than degraded because the degraded
+            answer — "every attribute is absent" — reads as a connector that
+            dropped all of them. The caller turns this into
+            :class:`~application_sdk.testing.harness.outcome.Indeterminate`.
+    """
+    holder = getattr(asset, "attributes", None)
+    if holder is None:
+        return {}
+    was_set = getattr(holder, "__fields_set__", None)
+    if was_set is None:
+        was_set = getattr(holder, "model_fields_set", None)
+    if was_set is None:
+        raise AttributeError(
+            f"{type(holder).__name__} exposes no record of which fields the "
+            "search payload set, so an attribute Atlas never returned cannot be "
+            "told from one it returned as null"
+        )
+    by_alias = _field_names_by_alias(type(holder))
+    values: dict[str, object] = {}
+    for attribute in attributes:
+        field_name = by_alias.get(attribute)
+        if field_name is None or field_name not in was_set:
+            continue
+        values[attribute] = getattr(holder, field_name)
+    return values
+
+
+def _field_names_by_alias(model: type) -> Mapping[str, str]:
+    """Map a pyatlan attributes model's Atlan names onto its Python field names.
+
+    pyatlan spells its fields in snake_case and aliases them to the camelCase
+    names Atlan uses on the wire, which are the names a suite writes in its
+    declaration. Cached per model class because the mapping is a property of the
+    class and a sample walks several assets of the same type.
+
+    Args:
+        model: The ``Asset.Attributes`` subclass of one search hit.
+
+    Returns:
+        Atlan attribute name -> Python field name. Empty when the model exposes
+        no field metadata, which leaves every requested attribute reading as
+        absent — a finding, not a silent pass.
+    """
+    cached = _ALIAS_CACHE.get(model)
+    if cached is not None:
+        return cached
+    fields = getattr(model, "__fields__", None) or getattr(model, "model_fields", {})
+    by_alias = {
+        (getattr(field, "alias", None) or field_name): field_name
+        for field_name, field in fields.items()
+    }
+    _ALIAS_CACHE[model] = by_alias
+    return by_alias
+
+
+#: Per-model alias maps, built once. Keyed by the class itself, which pyatlan
+#: generates at import time and never rebuilds, so this is bounded by the number
+#: of asset types a suite samples.
+_ALIAS_CACHE: dict[type, Mapping[str, str]] = {}
 
 
 async def _counts(

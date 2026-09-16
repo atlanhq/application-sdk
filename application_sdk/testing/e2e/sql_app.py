@@ -20,7 +20,7 @@ Subclasses provide:
 * The identity attrs (``connector_short_name``, ``argo_package_name``,
   ``argo_template_name``).
 * Connector-specific knobs (``include_filter``, ``qi_input_prefix_field``,
-  ``expected_min_asset_counts``).
+  ``expected_min_asset_counts``, ``expected_asset_attributes``).
 * :meth:`database_spec` — host / port / credentials of the DB under test.
 * :meth:`_credential_body` — returns the codegen'd
   ``<Connector>CredentialBody`` instance for the AE payload.
@@ -77,6 +77,10 @@ class SQLAppE2ETest(BaseE2ETest):
             expected_min_asset_counts = {
                 "Database": 1, "Schema": 1, "Table": 2, "View": 1, "Column": 10,
             }
+            # Counts say the right assets landed; this says they carry the
+            # right VALUES. Only worth pinning exactly against a fixture
+            # whose numbers are knowable — use AtLeast / Present otherwise.
+            expected_asset_attributes = {"Schema": {"tableCount": 2}}
 
             def database_spec(self) -> DatabaseSpec:
                 return DatabaseSpec(

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.34.2
-source-sha:    500722ed520ecc12b8b295a9ef7adf822ab5f16a
-source-date:   2026-09-15T16:55:35+01:00
+sdk-version:   3.34.3
+source-sha:    953efc4fa2a6bf222a665dffbed06b78fc8fbe9e
+source-date:   2026-09-15T20:18:17Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 384 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 399 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3348,6 +3348,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 ### Classes
 
+#### `Absent`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Absent`
+- **Signature:** `class Absent() -> None`
+- **Summary:** The attribute is not set on this asset.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `AdminIdentity`
 
 - **Import:** `from application_sdk.testing.harness.atlas import AdminIdentity`
@@ -3436,6 +3443,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Where to find the app under test inside a cluster.
 - **Defined in:** `application_sdk/testing/harness/spec.py`
 
+#### `AssetAttributes`
+
+- **Import:** `from application_sdk.testing.harness.atlas import AssetAttributes`
+- **Also importable from:** `application_sdk.testing.harness.expectations`
+- **Signature:** `class AssetAttributes(*, qualified_name: str, values: Mapping[str, AttributeValue] = dict())`
+- **Summary:** The attribute values one sampled asset carries.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `AssetDiff`
 
 - **Import:** `from application_sdk.testing.integration import AssetDiff`
@@ -3500,6 +3515,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AtlanApiTimeoutError(*, ...)`
 - **Summary:** No response received from the AE API before the timeout elapsed.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AtLeast`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AtLeast`
+- **Signature:** `class AtLeast(minimum: float) -> None`
+- **Summary:** The attribute is a number greater than or equal to *minimum*.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AtMost`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AtMost`
+- **Signature:** `class AtMost(maximum: float) -> None`
+- **Summary:** The attribute is a number less than or equal to *maximum*.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AttributeMatcher`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeMatcher`
+- **Signature:** `class AttributeMatcher`
+- **Summary:** One claim about a single attribute value on a single asset.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `AutomationEngineNotDispatchingError`
 
@@ -3762,6 +3798,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class EvidenceLog(label: str) -> None`
 - **Summary:** A mutable builder for one test's :class:`EvidenceBundle`.
 - **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `Exactly`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Exactly`
+- **Signature:** `class Exactly(expected: AttributeValue) -> None`
+- **Summary:** The attribute is present and equal to *expected*.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `Expired`
 
@@ -4160,6 +4203,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class PreflightOutcomeCapture()`
 - **Summary:** A stand-in for the gate's logger that keeps the rows it was handed.
 - **Defined in:** `application_sdk/testing/preflight.py`
+
+#### `Present`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Present`
+- **Signature:** `class Present() -> None`
+- **Summary:** The attribute is present and not null — any value will do.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `PublishedVersion`
 
@@ -4681,6 +4731,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** AppContext wired with MockStateStore and MockSecretStore.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
+#### `as_attribute_samples`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_attribute_samples`
+- **Signature:** `as_attribute_samples(reading: Outcome[Mapping[str, ...)`
+- **Summary:** Project an attribute sample read the same way :func:`as_samples` does.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
 #### `as_count`
 
 - **Import:** `from application_sdk.testing.harness.outcome import as_count`
@@ -4694,6 +4751,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `as_counts(reading: Outcome[Mapping[str, int]], type_names: Sequence[str]) -> Mapping[str, CountRead]`
 - **Summary:** Project a per-type count read, spreading an unreadable one over its types.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `as_matcher`
+
+- **Import:** `from application_sdk.testing.harness.expectations import as_matcher`
+- **Signature:** `as_matcher(declared: AttributeExpectationValue) -> AttributeMatcher`
+- **Summary:** Coerce one declared right-hand side into a matcher.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `as_samples`
 
@@ -4970,6 +5034,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `equals(expected: Any, *, description: str | None = None)`
 - **Summary:** Assert that the actual value equals the expected value.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `evaluate_attributes`
+
+- **Import:** `from application_sdk.testing.harness.expectations import evaluate_attributes`
+- **Signature:** `evaluate_attributes(samples: Mapping[str, AttributeSampleRead], expectations: AssetExpectations) -> Sequence[Finding]`
+- **Summary:** Evaluate sampled attribute values against the declared matchers.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `evaluate_counts`
 
@@ -5501,6 +5572,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert that none of the predicates pass.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `normalise_attribute_expectations`
+
+- **Import:** `from application_sdk.testing.harness.expectations import normalise_attribute_expectations`
+- **Signature:** `normalise_attribute_expectations(declared: Mapping[str, ...)`
+- **Summary:** Coerce a whole declaration into matchers.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `not_contains`
 
 - **Import:** `from application_sdk.testing.integration import not_contains`
@@ -5704,6 +5782,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** POST to the handler's workflow endpoint and return the workflow ID.
 - **Defined in:** `application_sdk/testing/e2e/workflows.py`
 
+#### `sample_asset_attributes`
+
+- **Import:** `from application_sdk.testing.harness.atlas import sample_asset_attributes`
+- **Signature:** `sample_asset_attributes(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Sample up to *per_type* assets per type, reading the named attributes.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `sample_qualified_names`
 
 - **Import:** `from application_sdk.testing.harness.atlas import sample_qualified_names`
@@ -5894,6 +5979,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `APPLICATION_NAME_ENV`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `AttributeExpectationValue`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeExpectationValue`
+- **Signature:** `AttributeExpectationValue: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AttributeSampleRead`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeSampleRead`
+- **Signature:** `AttributeSampleRead: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AttributeValue`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeValue`
+- **Signature:** `AttributeValue: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `Authorizer`
 

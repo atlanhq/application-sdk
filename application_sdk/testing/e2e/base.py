@@ -150,13 +150,18 @@ from application_sdk.testing.harness.evidence import (
 )
 from application_sdk.testing.harness.expectations import (
     UNREADABLE,
+    AssetAttributes,
     AssetExpectations,
+    AttributeExpectationValue,
+    AttributeSampleRead,
     CountRead,
     Finding,
     SampleRead,
     Unreadable,
+    evaluate_attributes,
     evaluate_counts,
     evaluate_locations,
+    normalise_attribute_expectations,
 )
 from application_sdk.testing.harness.identity import (
     Minter,
@@ -167,6 +172,7 @@ from application_sdk.testing.harness.outcome import (
     Indeterminate,
     Outcome,
     Settled,
+    as_attribute_samples,
     as_count,
     as_counts,
     as_samples,
@@ -258,6 +264,7 @@ _FINDING_TEMPLATES = {
     "nonempty": "  - {detail}",
     "depth": "  - {subject} {detail}",
     "nesting": "  - {subject} {detail}",
+    "attribute": "  - {subject} {detail}",
     UNREADABLE: "  - {subject}: {detail}",
 }
 
@@ -478,6 +485,12 @@ class FullDAGOutcome:
             the types in ``expected_asset_qn_depth``); used to assert assets
             landed at the correct hierarchy depth. Empty when location
             validation isn't requested or the Connection probe didn't succeed.
+        asset_attribute_samples: A few sampled assets per type with the
+            attribute values they carry (only for the types in
+            ``expected_asset_attributes``); used to assert an asset's
+            *contents*, which the counts and depths cannot see. Empty when
+            attribute validation isn't requested or the Connection probe didn't
+            succeed.
     """
 
     ae_result: DAGRunResult
@@ -502,6 +515,19 @@ class FullDAGOutcome:
     used to fail *open* — a failed sample read arrived as an empty list, which is
     also how "this type landed nothing" is spelled, and an empty list is skipped.
     Keeping the distinction here is what closes finding C4 on FND-224."""
+    asset_attribute_samples: dict[str, list[AssetAttributes]] = field(
+        default_factory=dict
+    )
+    """Sampled assets and their attribute values, settled-only, for a connector
+    suite that wants to assert something beyond the declared matchers."""
+    asset_attribute_reads: Mapping[str, AttributeSampleRead] = field(
+        default_factory=dict
+    )
+    """Sampled attribute values as the reader answered them, so an unreadable
+    search is an
+    :class:`~application_sdk.testing.harness.expectations.Unreadable` here rather
+    than an empty sample the attribute check would skip. Same fail-open shape as
+    :attr:`asset_qn_reads`, closed the same way."""
     connection_read: Outcome[bool] | None = None
     """The Connection poll's verdict, or ``None`` when it never ran.
 
@@ -586,6 +612,7 @@ class DAGSpec:
         expected_exact_counts: Per-type exact-count parity.
         expected_asset_qn_depth: Per-type qualifiedName depth below the
             connection.
+        expected_asset_attributes: Per-type attribute-value claims.
         connection_qualified_name: The connection this run is submitted and
             graded against. ``None`` — the default, and what every run did
             before FND-1648 — means the suite's own minted connection, which is
@@ -612,6 +639,9 @@ class DAGSpec:
     expected_min_asset_counts: Mapping[str, int] | None = None
     expected_exact_counts: Mapping[str, int] | None = None
     expected_asset_qn_depth: Mapping[str, int] | None = None
+    expected_asset_attributes: (
+        Mapping[str, Mapping[str, AttributeExpectationValue]] | None
+    ) = None
     connection_qualified_name: str | None = None
     label: str = ""
 
@@ -638,6 +668,9 @@ class ResolvedDAG:
     expected_min_asset_counts: Mapping[str, int]
     expected_exact_counts: Mapping[str, int]
     expected_asset_qn_depth: Mapping[str, int]
+    expected_asset_attributes: Mapping[str, Mapping[str, AttributeExpectationValue]] = (
+        field(default_factory=dict)
+    )
     connection_qualified_name: str = ""
 
 
@@ -1110,6 +1143,63 @@ class BaseE2ETest:
     #     (db>schema>table>column); BI / object-store connectors whose QNs embed
     #     slashes would mis-count — don't enable it there without adjusting.
     expected_asset_qn_depth: ClassVar[dict[str, int]] = {}
+
+    # Opt-in: validate the VALUES published assets carry, not just how many
+    # landed and where. Maps typeName -> attribute name (as Atlan spells it) ->
+    # the claim its value must satisfy. A bare scalar is sugar for
+    # ``Exactly(scalar)``; the matcher vocabulary is Exactly / Present / Absent /
+    # AtLeast / AtMost, from
+    # :mod:`application_sdk.testing.harness.expectations`::
+    #
+    #     expected_asset_attributes = {
+    #         "Schema":   {"tableCount": 8, "viewsCount": 0},
+    #         "Database": {"schemaCount": AtLeast(1)},
+    #     }
+    #
+    # Why it exists: the three knobs above are all about SHAPE. A connector can
+    # publish a structurally perfect asset tree in which every computed
+    # attribute is 0 and every e2e suite in the fleet stays green (FND-2094).
+    # Two failure modes are invisible without this:
+    #
+    #   * a DEGRADED value published as fact — a connector that swallows a
+    #     permissions error and substitutes 0 is indistinguishable, in published
+    #     output, from a genuinely empty source;
+    #   * an attribute that SILENTLY STOPS being set — 0 and absent are the same
+    #     number to a count assertion and different states in Atlas.
+    #
+    # Present-but-zero and absent are therefore kept apart end to end: the
+    # reader records which attributes the search payload actually carried, so
+    # ``Exactly(0)`` fails on an unset attribute and ``Present()`` is the matcher
+    # that catches the silent drop. ``Absent()`` pins the inverse, for a
+    # connector whose rule is "leave it unset rather than claim 0".
+    #
+    # Scope + contract (same shape as expected_asset_qn_depth, and the same
+    # reasons — read that attr's docstring too):
+    #   * Samples a few assets per type (no sort) and requires EVERY sampled
+    #     asset to satisfy every matcher. So it reliably catches "the whole type
+    #     carries the wrong value" and will rarely catch one bad asset among
+    #     thousands. Declare a fixed value only where every asset of that type
+    #     genuinely shares it (a single-schema hermetic fixture); use AtLeast /
+    #     Present where they don't.
+    #   * A FULLY-DROPPED type is invisible here (no samples -> the type is
+    #     skipped). Pair every type you put here with an
+    #     expected_min_asset_counts floor for the same type.
+    #   * The harness can only see what Atlas INDEXED. An attribute name that is
+    #     misspelled, or that the type does not carry, reads as absent — which
+    #     is a finding, not a silent pass, but check the spelling before
+    #     believing a connector dropped it.
+    #
+    # Empty = skip (no extra Atlas call).
+    expected_asset_attributes: ClassVar[
+        dict[str, dict[str, AttributeExpectationValue]]
+    ] = {}
+
+    # How many assets to sample per type for the attribute check. Separate from
+    # the location sampler's fixed 3 because the tradeoff is different: the
+    # location check is a systematic-drift detector where three assets prove as
+    # much as thirty, while an attribute check may be pinning a value only some
+    # assets share. Raising it widens coverage at one search's cost.
+    asset_attribute_sample_size: ClassVar[int] = 3
 
     # ------------------------------------------------------------------
     # Setup
@@ -2938,6 +3028,14 @@ class BaseE2ETest:
                 if spec.expected_asset_qn_depth is None
                 else spec.expected_asset_qn_depth
             ),
+            expected_asset_attributes={
+                type_name: dict(attributes)
+                for type_name, attributes in (
+                    self.expected_asset_attributes
+                    if spec.expected_asset_attributes is None
+                    else spec.expected_asset_attributes
+                ).items()
+            },
             # ``getattr`` rather than the attribute: ``_validate_dag_runs``
             # resolves every declared run inside ``setup_method``, *before* the
             # minter has named this run's connection. Both sides of the
@@ -4223,19 +4321,20 @@ class BaseE2ETest:
         # Atlas counts and the post-loop location sample reads populated data
         # once those types have indexed.
         #
-        # NOTE: adding a location type here does NOT by itself make the poll
-        # WAIT for that type — the loop only stays alive via a per-type floor or
-        # the non-empty backstop (total == 0), so a location-only type with no
-        # floor can still be zero when the loop exits (the moment any other type
-        # makes total > 0). The real wait-for-this-type safeguard is pairing each
-        # expected_asset_qn_depth type with an expected_min_asset_counts floor —
-        # see that attr's docstring.
+        # NOTE: adding a location or attribute type here does NOT by itself make
+        # the poll WAIT for that type — the loop only stays alive via a per-type
+        # floor or the non-empty backstop (total == 0), so a sample-only type
+        # with no floor can still be zero when the loop exits (the moment any
+        # other type makes total > 0). The real wait-for-this-type safeguard is
+        # pairing each expected_asset_qn_depth / expected_asset_attributes type
+        # with an expected_min_asset_counts floor — see those attrs' docstrings.
         dag = self._dag
         probe_types = tuple(
             {
                 *dag.expected_min_asset_counts,
                 *dag.expected_exact_counts,
                 *dag.expected_asset_qn_depth,
+                *dag.expected_asset_attributes,
             }
         )
         count_reads: Mapping[str, CountRead] = {}
@@ -4297,6 +4396,30 @@ class BaseE2ETest:
                 dict(sample_reads),
             )
 
+        # Sample attribute VALUES for the contents assertion (opt-in). Its own
+        # search rather than a widening of the one above: the two knobs name
+        # different type sets, and a suite that declares only depths must not
+        # start paying for attribute includes it never asked for.
+        attribute_reads: Mapping[str, AttributeSampleRead] = {}
+        if dag.expected_asset_attributes:
+            attribute_reads = as_attribute_samples(
+                await atlas.sample_asset_attributes(
+                    client,
+                    self.connection_qualified_name,
+                    {
+                        type_name: tuple(attributes)
+                        for type_name, attributes in dag.expected_asset_attributes.items()
+                    },
+                    per_type=self.asset_attribute_sample_size,
+                ),
+                tuple(dag.expected_asset_attributes),
+            )
+            logger.info(
+                "Atlas attribute samples under %s: %s",
+                self.connection_qualified_name,
+                dict(attribute_reads),
+            )
+
         return self._outcome(
             ae_result,
             connection_in_atlas=True,
@@ -4305,6 +4428,7 @@ class BaseE2ETest:
             total_read=total_read,
             lineage_read=lineage_read,
             sample_reads=sample_reads,
+            attribute_reads=attribute_reads,
         )
 
     async def _poll_asset_counts(
@@ -4373,6 +4497,7 @@ class BaseE2ETest:
         total_read: CountRead | None = None,
         lineage_read: bool | Unreadable | None = None,
         sample_reads: Mapping[str, SampleRead] | None = None,
+        attribute_reads: Mapping[str, AttributeSampleRead] | None = None,
     ) -> FullDAGOutcome:
         """Assemble the outcome, projecting each reading into its settled half.
 
@@ -4385,6 +4510,7 @@ class BaseE2ETest:
             lineage_read: Whether any lineage asset was observed, or the fact
                 that the count could not be read.
             sample_reads: Sampled qualified names as read.
+            attribute_reads: Sampled attribute values as read.
 
         Returns:
             The outcome. Every reading is carried in both shapes: the settled
@@ -4393,6 +4519,7 @@ class BaseE2ETest:
         """
         counts = dict(count_reads or {})
         samples = dict(sample_reads or {})
+        attributes = dict(attribute_reads or {})
         return FullDAGOutcome(
             ae_result=ae_result,
             connection_qualified_name=self.connection_qualified_name,
@@ -4409,9 +4536,15 @@ class BaseE2ETest:
                 for name, value in samples.items()
                 if not isinstance(value, Unreadable)
             },
+            asset_attribute_samples={
+                name: list(value)
+                for name, value in attributes.items()
+                if not isinstance(value, Unreadable)
+            },
             asset_count_reads=counts,
             total_asset_read=total_read,
             asset_qn_reads=samples,
+            asset_attribute_reads=attributes,
             connection_expected=self._dag.expect_connection,
         )
 
@@ -4433,6 +4566,10 @@ class BaseE2ETest:
             floors=dict(dag.expected_min_asset_counts),
             exacts=dict(dag.expected_exact_counts),
             depths=dict(dag.expected_asset_qn_depth),
+            # Coerced here, once, at the boundary between what a suite writes
+            # (a bare scalar is sugar for ``Exactly``) and what the evaluator
+            # grades (always a matcher).
+            attributes=normalise_attribute_expectations(dag.expected_asset_attributes),
             require_nonempty=dag.require_nonempty_assets,
             # getattr, because the count half of this is a pure function of the
             # class attributes and is unit-tested on an instance that never ran
@@ -4479,6 +4616,20 @@ class BaseE2ETest:
             nested at the wrong depth.
         """
         return evaluate_locations(samples, self._asset_expectations())
+
+    def _attribute_findings(
+        self, samples: Mapping[str, AttributeSampleRead]
+    ) -> Sequence[Finding]:
+        """Grade the sampled attribute values against the declared matchers.
+
+        Args:
+            samples: Sampled assets and their attribute values, as read.
+
+        Returns:
+            One finding per (asset, attribute) whose value did not satisfy its
+            matcher.
+        """
+        return evaluate_attributes(samples, self._asset_expectations())
 
     def _evaluate_asset_expectations(
         self,
@@ -4558,6 +4709,38 @@ class BaseE2ETest:
         return [
             _render_finding(finding)
             for finding in self._location_findings(asset_qn_samples)
+        ]
+
+    def _validate_asset_attributes(
+        self, asset_attribute_samples: Mapping[str, AttributeSampleRead]
+    ) -> list[str]:
+        """Validate sampled assets carry the declared attribute values.
+
+        The sibling of :meth:`_evaluate_asset_expectations` and
+        :meth:`_validate_asset_locations` for the third question — not *how
+        many* assets landed, nor *where*, but *what they contain*. The logic is
+        :func:`~application_sdk.testing.harness.expectations.evaluate_attributes`.
+
+        The gap it closes: a connector that computes an attribute — a count, a
+        size, a partition flag, ``lastSyncRunAt`` — can publish a structurally
+        perfect tree in which the computed value is a degraded ``0``, or stops
+        being set at all, and every count and depth assertion passes. Both are
+        the same number to a count check and different states in Atlas, so this
+        check keeps present-but-zero and absent apart all the way from the
+        search payload into the failure line.
+
+        Args:
+            asset_attribute_samples: Sampled assets and their values, as read.
+
+        Returns:
+            Human-readable failure lines, empty when every sampled asset
+            satisfied every matcher. Types with no sampled assets are skipped —
+            "too few / none" is the COUNT check's job, which is why every type
+            declared in ``expected_asset_attributes`` should carry a floor too.
+        """
+        return [
+            _render_finding(finding)
+            for finding in self._attribute_findings(asset_attribute_samples)
         ]
 
     # ------------------------------------------------------------------
@@ -4681,10 +4864,14 @@ class BaseE2ETest:
              the non-empty backstop (see ``_evaluate_asset_expectations``).
           4. Asset locations: sampled assets are nested under the connection at
              the depth declared in ``expected_asset_qn_depth`` (opt-in).
-          5. At least one Process/ColumnProcess exists (unless ``expect_lineage``
+          5. Asset attribute values: sampled assets satisfy the matchers
+             declared in ``expected_asset_attributes`` (opt-in) — the only
+             assertion about what an asset *contains* rather than how many
+             landed or where.
+          6. At least one Process/ColumnProcess exists (unless ``expect_lineage``
              is False).
 
-        Assertions 2-5 are all about published inventory, so ``expect_connection
+        Assertions 2-6 are all about published inventory, so ``expect_connection
         = False`` drops them and leaves assertion 1 as the verdict. That is the
         whole gate for an entrypoint that publishes nothing; such a suite is
         expected to add its own terminal evidence on top. Every expectation the
@@ -4820,14 +5007,14 @@ class BaseE2ETest:
             )
 
         if not self._dag.expect_connection:
-            # Assertions 2-5 are all about published inventory, and the probes
+            # Assertions 2-6 are all about published inventory, and the probes
             # that feed them never ran. Evaluating them against empty counts
             # would fail every run — the zero-asset backstop in
             # _evaluate_asset_expectations most obviously. The DAG gate above is
             # the verdict; anything further is the suite's own to assert.
             logger.info(
                 "%s declares expect_connection=False — DAG succeeded; skipping the "
-                "asset-count, asset-location and lineage assertions",
+                "asset-count, asset-location, asset-attribute and lineage assertions",
                 type(self).__name__,
             )
             return
@@ -4843,12 +5030,17 @@ class BaseE2ETest:
         location_findings = self._location_findings(
             outcome.asset_qn_reads or outcome.asset_qn_samples
         )
+        attribute_findings = self._attribute_findings(
+            outcome.asset_attribute_reads or outcome.asset_attribute_samples
+        )
         # Ungraded before unmet, always. A finding that exists because a search
         # could not be READ is not evidence about the connector, and reporting it
         # as one is what sent an Atlas outage to the connector team as "the
         # floors were not met". It is raised first, and as a leaf that is not an
         # AssertionError, so pytest marks the leg an error rather than a failure.
-        self._raise_if_ungraded([*count_findings, *location_findings])
+        self._raise_if_ungraded(
+            [*count_findings, *location_findings, *attribute_findings]
+        )
 
         asset_failures = [_render_finding(finding) for finding in count_findings]
         if asset_failures:
@@ -4866,6 +5058,18 @@ class BaseE2ETest:
                 f"{outcome.connection_qualified_name} (extract succeeded and the "
                 "counts may look right, but the qualifiedName hierarchy is "
                 "wrong):\n" + "\n".join(location_failures)
+            )
+
+        attribute_failures = [
+            _render_finding(finding) for finding in attribute_findings
+        ]
+        if attribute_failures:
+            raise AssertionError(
+                "Published assets carry the wrong attribute values under "
+                f"{outcome.connection_qualified_name} (the right number of "
+                "assets landed in the right place, but what they contain is "
+                "wrong — a computed value degraded, or an attribute stopped "
+                "being set):\n" + "\n".join(attribute_failures)
             )
 
         # `lineage_present` is False for both "no Process exists" and "never

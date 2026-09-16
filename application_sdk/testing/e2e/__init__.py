@@ -19,6 +19,13 @@ Full-DAG AE harness (new — subclass per connector)::
     from application_sdk.testing.e2e import SQLAppE2ETest          # SQL connectors
     from application_sdk.testing.e2e.payload import AgentSpec, ConnectionSpec
     from application_sdk.testing.e2e.client import AEWorkflowClient
+
+Asserting on attribute VALUES (``expected_asset_attributes``) needs the matcher
+vocabulary, which lives with the evaluator that grades it::
+
+    from application_sdk.testing.harness.expectations import (
+        Absent, AtLeast, AtMost, Exactly, Present,
+    )
 """
 
 from application_sdk.testing.e2e.base import (
