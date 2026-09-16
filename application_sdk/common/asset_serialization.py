@@ -45,14 +45,16 @@ is simply its first caller.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import orjson
 
 from application_sdk.common.errors import UnserializableMapperResultError
-
-if TYPE_CHECKING:
-    from application_sdk.common.last_sync import LastSyncDetails
+from application_sdk.common.last_sync import (
+    LastSyncDetails,
+    LastSyncStampable,
+    set_last_sync_details_on_asset,
+)
 
 __all__ = [
     "NestedBytesAsset",
@@ -175,13 +177,13 @@ def _set_connection_name(asset: object, connection_name: str) -> None:
         return
 
 
-#: The three run-identity attributes, as ``(python attribute, Atlas wire key)``.
-#: One table, so the object path and the dict path can never disagree about
-#: which field maps to which key.
-_LAST_SYNC_FIELDS: tuple[tuple[str, str], ...] = (
-    ("last_sync_run", "lastSyncRun"),
-    ("last_sync_workflow_name", "lastSyncWorkflowName"),
-    ("last_sync_run_at", "lastSyncRunAt"),
+#: The dict path's ``(resolved value attribute, Atlas wire key)`` table. The
+#: object path does not need one — it goes through the primitive, which knows
+#: the field names.
+_LAST_SYNC_WIRE_KEYS: tuple[tuple[str, str], ...] = (
+    ("run", "lastSyncRun"),
+    ("workflow_name", "lastSyncWorkflowName"),
+    ("run_at_ms", "lastSyncRunAt"),
 )
 
 
@@ -193,58 +195,49 @@ def _set_last_sync(asset: object, details: LastSyncDetails) -> None:
     qualified name, so it cannot resolve the AE-dispatched workflow id or the
     end-to-end correlation id — a connector that tries reaches for
     ``input.workflow_id`` and stamps the *child* workflow's Temporal id, which
-    is not clickable back to the AE run (see
-    :mod:`application_sdk.common.last_sync`).
+    is not clickable back to the AE run.
 
     So, unlike ``connectionName``, a value already on the asset does **not**
     win: whoever resolved *details* had the run context the mapper did not.
-    The one exception is inherited from the primitive — an empty resolved
-    ``run`` or ``workflow_name`` is never written, so outside Temporal (CLI
-    tools, unit tests) a hand-set value survives rather than being blanked.
+    The rule that an empty resolved ``run`` / ``workflow_name`` is never
+    written — so outside Temporal a hand-set value survives rather than being
+    blanked — belongs to the primitive, and both paths below honour it.
 
-    ``run_at_ms`` is always written. It is resolved once per run by the
-    caller, which is the point: a per-record ``time.time()`` gives every row
-    in one crawl a different "last synced at".
+    The object path is :func:`set_last_sync_details_on_asset`, unwrapped: the
+    SDK has one implementation of "what stamping means" and this is not a
+    second one. All this function adds is the aperture ``entity_bytes``
+    already has and the primitive does not — it takes ``object``, so the
+    shape may be a dict, or may not declare the fields, or may refuse
+    assignment.
     """
-    values = (details.run, details.workflow_name, details.run_at_ms)
-
     if isinstance(asset, dict):
+        # The one case the primitive deliberately cannot serve. BLDX-1229
+        # removed its dict-shaped helpers to stop *new* code adopting
+        # dict transformation, and that stands: nothing public is added
+        # back here. But ``entity_bytes`` has always accepted a dict in the
+        # Atlas wire shape, and ``SqlApp.map_<entity>`` is annotated to
+        # return one — so stamping every shape except that one would leave
+        # exactly the silent per-shape gap this change exists to close.
         attributes = asset.setdefault("attributes", {})
         if not isinstance(attributes, dict):
             return
-        for (_, wire_key), value in zip(_LAST_SYNC_FIELDS, values):
+        for field, wire_key in _LAST_SYNC_WIRE_KEYS:
+            value = getattr(details, field)
             if value:
                 attributes[wire_key] = value
         return
 
-    # Anything else: only touch attributes the object actually declares, same
-    # rule as ``_set_connection_name``. A mapper shape that has no such field
-    # could not carry the value to the wire anyway, and adding one silently
-    # would put a field on the object that its own serialiser ignores.
-    for (attribute, _), value in zip(_LAST_SYNC_FIELDS, values):
-        if value:
-            _set_if_settable(asset, attribute, value)
-
-
-def _set_if_settable(asset: object, attribute: str, value: object) -> None:
-    """``setattr`` that gives up rather than failing the transform.
-
-    Split out of the loop above so the swallow is a ``return`` from one
-    attribute rather than a ``continue`` past two more — an except-continue
-    inside a per-record loop is how a silently skipped field becomes
-    invisible, and a DEBUG line per attribute per record would be a log flood
-    on a frozen asset type rather than a signal.
-    """
-    if not hasattr(asset, attribute):
-        # Not a field this shape declares. Its own serialiser would ignore an
-        # invented one, and the SDK does not add fields to somebody else's
-        # model.
+    if not isinstance(asset, LastSyncStampable):
+        # A shape declaring none of the three. Its own serialiser would
+        # ignore an invented field, and the SDK does not add fields to
+        # somebody else's model.
         return
+
     try:
-        setattr(asset, attribute, value)
+        set_last_sync_details_on_asset(asset, details=details)
     except (AttributeError, TypeError):
-        # Frozen or read-only asset. Same trade-off as connectionName: losing
-        # one debugging attribute beats failing the whole transform.
+        # Frozen or read-only asset. Same trade-off as connectionName:
+        # losing a debugging attribute beats failing the whole transform.
         return
 
 

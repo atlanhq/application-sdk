@@ -448,7 +448,15 @@ class NoLastSyncFields:
 
 
 class UnsettableLastSync:
-    """An asset whose last-sync fields read back but refuse assignment."""
+    """Declares all three fields, then refuses assignment on the first.
+
+    All three, deliberately: a shape missing one is filtered out earlier by
+    the ``LastSyncStampable`` check and would never reach the setter, so a
+    partial shape here would leave the swallow untested.
+    """
+
+    last_sync_workflow_name: str = ""
+    last_sync_run_at: int = 0
 
     @property
     def last_sync_run(self) -> str:
@@ -538,9 +546,15 @@ class TestLastSyncInjection:
 
     def test_read_only_asset_does_not_fail_the_transform(self):
         """Same trade-off as connectionName: lose the attribute, keep the run."""
-        out = orjson.loads(entity_bytes(UnsettableLastSync(), last_sync=DETAILS))
+        asset = UnsettableLastSync()
+
+        out = orjson.loads(entity_bytes(asset, last_sync=DETAILS))
 
         assert out["typeName"] == "Custom"
+        # The raise really happened — the setter is reached and swallowed,
+        # not skipped by the shape check before it.
+        with pytest.raises(AttributeError):
+            asset.last_sync_run = "x"
 
     def test_both_injections_apply_together(self):
         out = orjson.loads(

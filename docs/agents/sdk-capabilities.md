@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.34.3
-source-sha:    953efc4fa2a6bf222a665dffbed06b78fc8fbe9e
-source-date:   2026-09-15T20:18:17Z
+source-sha:    47953bc1264f93086909c106e14377c238706077
+source-date:   2026-09-16T02:37:50+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 37 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 38 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -508,6 +508,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Resolved last-sync values for a single end-to-end run.
 - **Defined in:** `application_sdk/common/last_sync.py`
 
+#### `LastSyncStampable`
+
+- **Import:** `from application_sdk.common.last_sync import LastSyncStampable`
+- **Signature:** `class LastSyncStampable`
+- **Summary:** Any asset object that declares the three run-identity fields.
+- **Defined in:** `application_sdk/common/last_sync.py`
+
 #### `ModelDumpAsset`
 
 - **Import:** `from application_sdk.common.asset_serialization import ModelDumpAsset`
@@ -731,15 +738,15 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `set_last_sync_details_on_asset`
 
 - **Import:** `from application_sdk.common.last_sync import set_last_sync_details_on_asset`
-- **Signature:** `set_last_sync_details_on_asset(asset: Asset, *, ...)`
-- **Summary:** Stamp last-sync details onto a pyatlan ``Asset`` (mutating in place).
+- **Signature:** `set_last_sync_details_on_asset(asset: LastSyncStampable, *, ...)`
+- **Summary:** Stamp last-sync details onto an asset (mutating in place).
 - **Defined in:** `application_sdk/common/last_sync.py`
 
 #### `set_last_sync_details_on_assets_bulk`
 
 - **Import:** `from application_sdk.common.last_sync import set_last_sync_details_on_assets_bulk`
-- **Signature:** `set_last_sync_details_on_assets_bulk(assets: Iterable[Asset], *, ...)`
-- **Summary:** Stamp last-sync details on every pyatlan ``Asset`` in ``assets``.
+- **Signature:** `set_last_sync_details_on_assets_bulk(assets: Iterable[LastSyncStampable], *, ...)`
+- **Summary:** Stamp last-sync details on every asset in ``assets``.
 - **Defined in:** `application_sdk/common/last_sync.py`
 
 ### Constants and Enums

@@ -83,19 +83,43 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import Protocol, runtime_checkable
 
 from application_sdk.observability import get_correlation_context, get_execution_context
 
-if TYPE_CHECKING:
-    from pyatlan.model.assets import Asset
-
 __all__ = [
     "LastSyncDetails",
+    "LastSyncStampable",
     "resolve_last_sync_details",
     "set_last_sync_details_on_asset",
     "set_last_sync_details_on_assets_bulk",
 ]
+
+
+@runtime_checkable
+class LastSyncStampable(Protocol):
+    """Any asset object that declares the three run-identity fields.
+
+    A Protocol rather than pyatlan's ``Asset`` because both pyatlan
+    generations are valid targets and they are unrelated classes: v3
+    connectors return ``pyatlan_v9`` assets, the v2 ``AtlasTransformer``
+    returns pyatlan v1 ones.  Naming either one excluded the other — and
+    pyright cannot resolve either package's types, so the previous
+    ``Asset`` annotation was never a check, only documentation that
+    happened to be wrong for the v3 path.  A structural type is both
+    accurate and free.
+
+    ``runtime_checkable``, so ``isinstance`` answers "does this shape
+    declare the fields at all".  That is the guard
+    :mod:`application_sdk.common.asset_serialization` needs before
+    stamping an arbitrary mapper return value: an object that declares
+    none of them could not carry the values to the wire anyway, and the
+    SDK does not invent fields on somebody else's model.
+    """
+
+    last_sync_run: str
+    last_sync_workflow_name: str
+    last_sync_run_at: int
 
 
 @dataclass(frozen=True)
@@ -151,14 +175,14 @@ def resolve_last_sync_details(
 
 
 def set_last_sync_details_on_asset(
-    asset: Asset,
+    asset: LastSyncStampable,
     *,
     details: LastSyncDetails | None = None,
     run: str | None = None,
     workflow_name: str | None = None,
     run_at_ms: int | None = None,
-) -> Asset:
-    """Stamp last-sync details onto a pyatlan ``Asset`` (mutating in place).
+) -> LastSyncStampable:
+    """Stamp last-sync details onto an asset (mutating in place).
 
     pyatlan accepts ``run_at_ms`` as an int (epoch milliseconds) and stores
     it internally as a ``datetime``; no conversion is needed on the caller.
@@ -194,13 +218,13 @@ def set_last_sync_details_on_asset(
 
 
 def set_last_sync_details_on_assets_bulk(
-    assets: Iterable[Asset],
+    assets: Iterable[LastSyncStampable],
     *,
     run: str | None = None,
     workflow_name: str | None = None,
     run_at_ms: int | None = None,
-) -> list[Asset]:
-    """Stamp last-sync details on every pyatlan ``Asset`` in ``assets``.
+) -> list[LastSyncStampable]:
+    """Stamp last-sync details on every asset in ``assets``.
 
     Resolves the values **once** so every asset in the batch carries the
     same ``last_sync_run_at`` (and the same resolved run / workflow_name
