@@ -17,6 +17,7 @@ Two layers, because each catches what the other cannot:
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import rerun_evicted_tests_run  # noqa: E402
 from rerun_evicted_tests_run import (  # noqa: E402
     is_repairable_eviction,
     newer_runs,
@@ -299,6 +301,53 @@ def test_a_rejected_rerun_warns_and_names_the_token(capsys) -> None:
     assert "actions: write" in capsys.readouterr().err
 
 
+def _stub_gh(monkeypatch, *, returncode: int, stdout: str, stderr: str = "") -> None:
+    """Stub `subprocess.run` so the REAL `_run_gh` seam is under test."""
+    monkeypatch.setattr(
+        rerun_evicted_tests_run.subprocess,
+        "run",
+        lambda *_a, **_k: subprocess.CompletedProcess(
+            args=["gh"], returncode=returncode, stdout=stdout, stderr=stderr
+        ),
+    )
+
+
+@pytest.mark.parametrize("stdout", ["", "\n", "  "])
+def test_an_empty_bodied_201_is_a_success(monkeypatch, capsys, stdout: str) -> None:
+    """`POST .../rerun` is a documented 201 with NO response schema.
+
+    So a completed re-run reaches the seam as exit 0 with empty stdout. Reading
+    acceptance off the body would log that as a token/scope failure — the repair
+    would have happened and the log would say it had not.
+    """
+    _stub_gh(monkeypatch, returncode=0, stdout=stdout)
+    assert rerun(REPO, 7, rerun_evicted_tests_run._run_gh) is True
+    assert "re-ran" in capsys.readouterr().err
+
+
+def test_a_non_zero_gh_exit_is_still_a_rejection(monkeypatch, capsys) -> None:
+    """The exit code is the discriminator, so a real 403 keeps its warning."""
+    _stub_gh(monkeypatch, returncode=1, stdout="", stderr="HTTP 403: Forbidden")
+    assert rerun(REPO, 7, rerun_evicted_tests_run._run_gh) is False
+    err = capsys.readouterr().err
+    assert "HTTP 403" in err
+    assert "actions: write" in err
+
+
+def test_an_empty_success_does_not_invent_a_payload(monkeypatch) -> None:
+    """`{}` stands in for "no body", so a reader still sees no usable payload.
+
+    The substitution exists for `rerun`'s truthiness check alone; it must not
+    read as data anywhere else, or an unreadable listing would come back as
+    "there are no newer runs".
+    """
+    _stub_gh(monkeypatch, returncode=0, stdout="")
+    assert (
+        newer_runs(REPO, SHA, WORKFLOW_ID, SELF, rerun_evicted_tests_run._run_gh)
+        is None
+    )
+
+
 # --- end to end ------------------------------------------------------------
 
 
@@ -347,13 +396,40 @@ def _repair_step() -> dict[str, Any]:
     return matches[0]
 
 
+def _repair_checkout_step() -> dict[str, Any]:
+    steps = _gate_job().get("steps") or []
+    matches = [
+        step
+        for step in steps
+        if (step.get("with") or {}).get("repository") == "atlanhq/application-sdk"
+    ]
+    assert len(matches) == 1, (
+        "the Tests Gate job must check out the SDK's repair driver exactly once; "
+        f"found {len(matches)} checkouts"
+    )
+    return matches[0]
+
+
+@pytest.mark.parametrize("step", ["repair", "checkout"])
+def test_every_step_after_the_verdict_is_fail_open(step: str) -> None:
+    """The whole tail of this job has to be incapable of reddening it.
+
+    `tests-passed` IS the required `tests / Tests Gate` context. Once
+    `Evaluate Tests Gate` has computed a verdict, any later step that can fail
+    converts a measured `passed=true` into a required-check failure — the exact
+    outcome this change exists to remove. The checkout is not exempt: a 404 or a
+    timeout fetching the driver is precisely the kind of transient this has to
+    absorb.
+    """
+    under_test = _repair_step() if step == "repair" else _repair_checkout_step()
+    assert under_test.get("continue-on-error") is True, (
+        f"the {step} step can fail the required Tests Gate context; every step "
+        "after the gate evaluation must carry `continue-on-error: true`"
+    )
+
+
 def test_gate_job_wires_the_repair() -> None:
     step = _repair_step()
-    assert step.get("continue-on-error") is True, (
-        "the repair must never fail the gate job: it runs inside the required "
-        "`tests / Tests Gate` context, so an API hiccup here would turn a "
-        "cosmetic flake into the block it exists to remove"
-    )
     env = step.get("env") or {}
     # Event-derived values go through env, never inline ${{ }} in the script
     # body (docs/standards/ci.md): `${{ }}` is substituted before bash parses,

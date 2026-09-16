@@ -2996,6 +2996,12 @@ jobs:
         if: >-
           always() && github.event_name == 'pull_request' &&
           steps.gate.outputs.conclusion != 'cancelled'
+        # Same reasoning as the step below, and just as load-bearing: this job
+        # IS the required `tests / Tests Gate` context, so a 404 or a timeout
+        # fetching the driver must not turn a measured `passed=true` into a
+        # required-check failure. Every step in this job after the gate
+        # evaluation is fail-open; a checkout is no exception.
+        continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk

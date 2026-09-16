@@ -115,6 +115,17 @@ def _run_gh(args: list) -> str:
     The single seam the tests stub (docs/standards/ci.md), with `gh`'s stderr
     echoed as a `::warning::` so an auth/scope error stays diagnosable instead of
     collapsing silently into the fail-open path.
+
+    **"" is this seam's failure signal**, and the exit code is what decides it —
+    never the body. A write endpoint may legitimately answer with nothing:
+    `POST .../rerun` is a documented `201 Created` with no response schema, so a
+    successful re-run request arrives here as exit 0 with empty stdout. Spelling
+    that the same way as a 403 would make :func:`rerun` log a completed repair as
+    a token/scope failure — the gate stays green either way, so the only casualty
+    is the log line that says which of the two actually happened. An empty
+    success therefore becomes the empty JSON object: every reader in this module
+    already treats `{}` as "no usable payload", and `rerun` reads it as
+    "accepted".
     """
     result = subprocess.run(["gh", *args], capture_output=True, text=True)
     if result.returncode != 0:
@@ -124,7 +135,7 @@ def _run_gh(args: list) -> str:
                 file=sys.stderr,
             )
         return ""
-    return result.stdout
+    return result.stdout if result.stdout.strip() else "{}"
 
 
 def _load(raw: str):
@@ -306,7 +317,13 @@ def select_candidate(
 
 
 def rerun(repo: str, run_id: int, run: RunFn, *, dry_run: bool = False) -> bool:
-    """Re-run ``run_id``. Returns whether GitHub accepted the request."""
+    """Re-run ``run_id``. Returns whether GitHub accepted the request.
+
+    Acceptance is read off the seam's failure signal — an empty return — and not
+    off the response body, because this endpoint's success has no body. See
+    :func:`_run_gh`, which is where exit 0 with empty stdout is turned into a
+    non-empty value so the two cannot be confused.
+    """
     if dry_run:
         _notice(f"--dry-run: would re-run {repo} run {run_id}")
         return True
