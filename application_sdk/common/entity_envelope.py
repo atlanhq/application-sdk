@@ -48,10 +48,15 @@ than the nested encoder the SDK uses today — ``to_nested_bytes`` builds a whol
     to_atlas_format + orjson.dumps :   3.0 us/call
 
 So the v9 path delegates, and :func:`flatten_envelope` exists only for the
-shapes ``to_atlas_format`` cannot take: plain dicts and pyatlan v1 models. The
-two are kept behaviourally identical — including null handling — because
-"flattened" meaning two different things depending on the mapper's return type
-is the same class of bug this module closes.
+shapes ``to_atlas_format`` cannot take: plain dicts and pyatlan v1 models.
+
+The two paths agree on the question this module exists to settle — where
+relationship refs live — and diverge on null handling. ``to_atlas_format``
+collapses an explicit ``None`` into an absent key (``to_nested_bytes`` does
+not); :func:`flatten_envelope` leaves nulls exactly as the mapper wrote them.
+See :func:`flatten_envelope` for why making them identical silently deleted
+data a dict-returning mapper had emitted on purpose, and why the v9 side's
+loss is tolerable here.
 
 Public API::
 
@@ -201,26 +206,39 @@ class EntityDecorations:
         return fields
 
 
-def _drop_nulls(value: dict[str, Any]) -> dict[str, Any]:
-    """Drop ``None``-valued keys, one level deep.
-
-    Matches ``to_atlas_format``, which skips ``None`` when partitioning the
-    encoded Struct. Applied to the entity root and to ``attributes``, never to
-    ``customAttributes`` — a null there is a value the source reported as
-    empty and the v2 baseline carried, so dropping it would be a diff against
-    every previously published entity.
-    """
-    return {k: v for k, v in value.items() if v is not None}
-
-
 def flatten_envelope(entity: dict[str, Any]) -> dict[str, Any]:
     """Merge a nested-format entity's relationship refs into ``attributes``.
 
     The generic path, for the shapes ``to_atlas_format`` cannot take: a plain
     dict from a dict-returning mapper, or a pyatlan v1 model's ``model_dump``.
-    Kept behaviourally identical to ``to_atlas_format`` — same null handling,
-    same dropped keys — so ``FLATTENED`` means one thing regardless of what the
-    mapper returned.
+
+    **This moves relationship refs and nothing else.** It deliberately does not
+    copy ``to_atlas_format``'s null-dropping. An earlier revision did, on the
+    reasoning that ``FLATTENED`` should mean one thing whatever the mapper
+    returned — but that silently deleted values a dict-returning mapper had
+    emitted on purpose. ``atlan-clickhouse-app``'s ``_rel()`` emits a null
+    relationship stub to mirror "the legacy transformer's all-None-leaves
+    collapse", and its ``_positive_bigint_or_none`` emits null ``rowCount`` /
+    ``sizeBytes`` for the same v2 parity. Dropping those rehashes every entity
+    in ``atlan-publish-app``'s diff cache for no behavioural gain.
+
+    So null handling stays the mapper's decision here, and ``FLATTENED`` means
+    exactly "relationship refs live in ``attributes``" — the only question the
+    envelope needed to settle.
+
+    The asymmetry with the v9 path is real and worth naming, because the
+    obvious explanation for it is wrong. ``pyatlan_v9`` fields are three-state
+    (``Union[str, None, UnsetType] = UNSET``), so an asset **can** express an
+    explicit null, and ``to_nested_bytes`` preserves the distinction —
+    ``UNSET`` is absent, ``None`` serialises as ``null``. It is
+    ``to_atlas_format`` that collapses ``None`` into absent. That loss is
+    tolerable in this pipeline rather than harmless in principle:
+    ``atlan-publish-app``'s ``calculate_attributes_diff`` re-synthesises the
+    clear, emitting ``{key: None}`` when a key present in the cached entity is
+    absent from the new one. So a v9 asset's dropped null still reaches Atlas
+    as a clear on the incremental path, and on a create there is nothing to
+    clear. Do not rely on a producer-side null for a v9 asset; set the value
+    you mean.
 
     ``appendRelationshipAttributes`` and ``removeRelationshipAttributes`` are
     dropped rather than merged. That is load-bearing, not tidying:
@@ -237,19 +255,23 @@ def flatten_envelope(entity: dict[str, Any]) -> dict[str, Any]:
     entity.pop("appendRelationshipAttributes", None)
     entity.pop("removeRelationshipAttributes", None)
 
-    attributes = entity.get("attributes")
-    if isinstance(attributes, dict):
-        if isinstance(relationships, dict):
-            # A ref the mapper also set directly in ``attributes`` loses to the
-            # relationship field. ``to_atlas_format`` resolves the same
-            # collision the same way — the relationship field is the typed one,
-            # and the string in ``attributes`` is the hand-written duplicate.
-            attributes.update({k: v for k, v in relationships.items() if v is not None})
-        entity["attributes"] = _drop_nulls(attributes)
-    elif isinstance(relationships, dict):
-        entity["attributes"] = _drop_nulls(relationships)
+    if isinstance(relationships, dict):
+        # A ref the mapper also set directly in ``attributes`` loses to the
+        # relationship field. ``to_atlas_format`` resolves the same collision
+        # the same way — the relationship field is the typed one, and the
+        # string in ``attributes`` is the hand-written duplicate.
+        #
+        # A ``None``-valued ref is skipped rather than moved: it carries no
+        # reference, and writing it into ``attributes`` would *create* a null
+        # the mapper never put there.
+        moved = {k: v for k, v in relationships.items() if v is not None}
+        attributes = entity.get("attributes")
+        if isinstance(attributes, dict):
+            attributes.update(moved)
+        elif moved:
+            entity["attributes"] = moved
 
-    return _drop_nulls(entity)
+    return entity
 
 
 def to_atlas_format_dict(asset: object) -> dict[str, Any] | None:
