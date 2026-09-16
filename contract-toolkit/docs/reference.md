@@ -219,6 +219,18 @@ nothing reported an error — streaming was on in name only. The second is its m
 fails just as quietly, which is why a declared-but-inert value is refused here the same
 way it is for the batch knobs and `ackPaths`.
 
+Streaming is declared **per entrypoint**, like `schedules` and `artifactSchemas`. A
+trigger binds to an entrypoint by containment — `events` lives in that entrypoint's
+`contract` — so for a **multi-entrypoint** app, declare `events` and
+`streamingWorkflowType` on each [entrypoint's `contract`](#multi-entrypoint-bundle),
+since each entrypoint renders its own manifest. Declaring either on a bundle root is
+refused at eval time: the root renders no manifest, so both would be dropped silently.
+
+An app may therefore have as many streaming entrypoints as it likes, each with its own
+topics, its own workflow type and its own shard. One entrypoint has exactly one
+`streamingWorkflowType` and exactly one shard, because the extract node it names is
+per-entrypoint.
+
 ### A streaming entrypoint holds streaming triggers and nothing else
 
 An entrypoint renders **one** extract node, and every trigger on it — each schedule,
@@ -306,7 +318,9 @@ its events inline from the `$.event.*` jsonpath namespace:
   Drop `ackPaths`, or drop `streaming`.
 - Sharding is **one shard per workflow slug**, so every trigger on the same entrypoint
   shares one shard and is processed sequentially. Several high-volume topics on one
-  entrypoint therefore queue behind each other.
+  entrypoint therefore queue behind each other. The remedy is **separate streaming
+  entrypoints**: distinct workflow names mean distinct slugs, distinct shards, and
+  parallel drain. For a high-volume app that is the primary scaling lever.
 - There is no watchdog backstop on this path. A dropped signal is not retried.
 - The streaming DAG receives its events at `args.batch` (`$.event.batch`) and must not
   expect to read the Iceberg events table — the streaming path never writes it.

@@ -471,6 +471,35 @@ facts {
   // optional there and the in-node reference always fires. The output-block force is
   // still applied to both schemas to keep them in lockstep.
 
+  // `batch` collides with a UI property of the same name in the extract-node args
+  // mapping. Verified before the guard: a duplicate-key crash, not a silent override —
+  // the same failure the app_name/agent_json/extraction_method guards prevent.
+  ["a `batch` property does not collide with args.batch under streaming"] {
+    let (withBatchProp = (appStreamingRealtime) {
+      uiConfig = new App.UIConfig {
+        tasks {
+          ["Configuration"] {
+            inputs { ["batch"] = new App.TextInput { title = "Batch" } }
+          }
+        }
+      }
+    })
+      appDag(withBatchProp)["extract"]["inputs"]["args"]["batch"] == "$.event.batch"
+  }
+
+  ["a `batch` property is untouched without streaming"] {
+    let (withBatchProp = (appNoStreaming) {
+      uiConfig = new App.UIConfig {
+        tasks {
+          ["Configuration"] {
+            inputs { ["batch"] = new App.TextInput { title = "Batch" } }
+          }
+        }
+      }
+    })
+      appDag(withBatchProp)["extract"]["inputs"]["args"]["batch"] == "{{batch}}"
+  }
+
   // The parity group above compares trigger_config only, never the extract node —
   // which is where the workflow-type split actually lands. Each schema renders its
   // OWN declared override, so the assertion is structural, not string equality.

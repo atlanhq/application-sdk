@@ -277,7 +277,15 @@ streamingWorkflowType: String?
 hidden _streamingEntrypointCheck: Any =
   let (_streaming = events.toList().filter((e) -> e.triggerConfig.streaming.enabled))
   let (_batch = events.toList().filter((e) -> !e.triggerConfig.streaming.enabled))
-    if (_streaming.isEmpty)
+    // A bundle root renders no manifest of its own, so anything declared here is
+    // dropped without a word — the same outcome the refusals below exist to prevent,
+    // and refused by name for `artifactSchemas` and `legacyWorkflowTypes` already.
+    // Scoped to what streaming adds: plain `events`/`schedules` on a root are dropped
+    // the same way, but that predates this change and refusing them here would break
+    // contracts this PR never touched.
+    if (!entrypoints.isEmpty && (streamingWorkflowType != null || !_streaming.isEmpty))
+      throw("App.pkl: streaming is declared on a multi-entrypoint bundle root, which renders no manifest of its own — the trigger(s) and streamingWorkflowType would be dropped silently. A streaming trigger binds to an entrypoint by containment, so declare `events` and `streamingWorkflowType` on each entrypoint's `contract` instead. Separate entrypoints are also how several high-volume topics get separate shards.")
+    else if (_streaming.isEmpty)
       // The mirror of the case below, and the same class this whole check exists for:
       // a declared value silently dropped. With nothing streaming, the node renders
       // the batch type and the streaming type the author wrote is discarded without a
@@ -2433,14 +2441,6 @@ class EventSource {
   topic: String
 }
 
-/// Per-trigger delivery config. Mirrors AE's `TriggerConfig`: `max_retries` bounds
-/// redelivery; `ack_paths` are JSONPaths (against the run's node outputs) to the ack
-/// parquet AE marks processed after the run settles.
-///
-/// AE **requires `ack_paths` non-empty** and rejects `[]`. Set real JSONPath(s) (e.g.
-/// `"$.extract.outputs.ack_path"`) so events are acked only after your DAG produces the
-/// ack parquet. Leave it empty to opt into fire-and-forget — the toolkit then renders
-/// `[""]` (AE's fire-and-forget form: auto-ack without reading a parquet), never `[]`.
 /// AE's streaming dispatch shell. Mechanics of *how* AE delivers, not part of the
 /// app's event contract — see `EventTriggerConfig.ackPaths` for what a trigger
 /// asserts about delivery. Kept as its own class so the boundary is visible in the
@@ -2509,6 +2509,14 @@ class StreamingDispatch {
     else null
 }
 
+/// Per-trigger delivery config. Mirrors AE's `TriggerConfig`: `max_retries` bounds
+/// redelivery; `ack_paths` are JSONPaths (against the run's node outputs) to the ack
+/// parquet AE marks processed after the run settles.
+///
+/// AE **requires `ack_paths` non-empty** and rejects `[]`. Set real JSONPath(s) (e.g.
+/// `"$.extract.outputs.ack_path"`) so events are acked only after your DAG produces the
+/// ack parquet. Leave it empty to opt into fire-and-forget — the toolkit then renders
+/// `[""]` (AE's fire-and-forget form: auto-ack without reading a parquet), never `[]`.
 class EventTriggerConfig {
   /// Redelivery bound for the batch path. Inert when `streaming.enabled` — the
   /// streaming shard never reads it (verified against AE: `streaming_dispatch.py`
@@ -3006,6 +3014,10 @@ local function generateExtractNode(): Mapping<String, Any> =
       ["args"] = new Mapping {
         // The streaming shard hands the DAG its events inline; nothing else does.
         // Without this the streaming workflow starts with no events to apply.
+        // Reserved while streaming, like app_name/agent_json/extraction_method above:
+        // the loops below skip a `batch` property to avoid a duplicate key. Not in
+        // reservedUiFieldNames, which is unconditional — a non-streaming contract may
+        // legitimately have one.
         when (_isStreaming) {
           ["batch"] = "$.event.batch"
         }
@@ -3037,12 +3049,12 @@ local function generateExtractNode(): Mapping<String, Any> =
           ["extraction_method"] = "{{extraction-method}}"
         }
         for (argName, formField in manifestTopLevelArgs) {
-          when (argName != "app_name" && uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
+          when (argName != "app_name" && !(_isStreaming && argName == "batch") && uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"
           }
         }
         for (paramKey, param in (uiConfig?.properties ?? Map())) {
-          when (toPyName(paramKey) != "app_name" && param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
+          when (toPyName(paramKey) != "app_name" && !(_isStreaming && toPyName(paramKey) == "batch") && param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
             [toPyName(paramKey)] = "{{" + paramKey + "}}"
           }
         }
