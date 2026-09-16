@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar, Union
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness.atlas._errors import UnknownConnectorTypeError
 from application_sdk.testing.harness.budgets import Budget
-from application_sdk.testing.harness.expectations import AssetAttributes
+from application_sdk.testing.harness.expectations import AssetAttributes, AssetRef
 from application_sdk.testing.harness.outcome import (
     Indeterminate,
     NeverStarted,
@@ -89,6 +89,7 @@ __all__ = [
     # ``sample_asset_attributes`` answers with, so a caller importing the reader
     # should not need a second import to type its result.
     "AssetAttributes",
+    "AssetRef",
     "Reading",
     "admin_identity",
     "atlas_client",
@@ -98,6 +99,7 @@ __all__ = [
     "count_total_assets",
     "create_connection",
     "poll_for_connection",
+    "read_asset_attributes",
     "sample_asset_attributes",
     "sample_qualified_names",
     # Leaf
@@ -624,6 +626,142 @@ async def sample_asset_attributes(
         elapsed=elapsed,
         value=dict(zip(type_names, sampled, strict=True)),
     )
+
+
+#: How many matches one addressed asset's search asks for. Larger than the one
+#: a caller wants, because the useful answer when a suffix is ambiguous is *how
+#: ambiguous* — a reader that asked for one would report the collision as a
+#: clean hit and grade whichever asset Atlas happened to order first.
+_MATCHES_PER_REF = 10
+
+
+async def read_asset_attributes(
+    client: AsyncAtlanClient,
+    connection_qualified_name: str,
+    ref_attributes: Mapping[AssetRef, Sequence[str]],
+) -> Reading[Mapping[AssetRef, Sequence[AssetAttributes]]]:
+    """Read named attributes off individually addressed assets.
+
+    The per-asset counterpart to :func:`sample_asset_attributes`, which samples
+    a type and can therefore only carry a claim every asset of that type shares.
+    Crawl five schemas, one with no views and one with ten, and that is no claim
+    about ``viewsCount`` at all — this addresses one schema and pins its number.
+
+    **Addressed by suffix, because a qualified name is not writable.** A run's
+    connection carries a freshly minted epoch, so the full name of an asset
+    under it does not exist until the run starts. The stable part is the tail,
+    and a *suffix* of it rather than the whole path below the connection, so a
+    Column is ``"col"`` rather than ``"db/sch/tbl/col"``.
+
+    The match is anchored on a **path-segment boundary** — ``"sch"`` matches
+    ``…/db/sch`` and never ``…/db/other_sch``. Elasticsearch does the coarse
+    work (a connection-anchored wildcard, scoped to the type) and the boundary
+    itself is checked here, because a wildcard cannot express "or the start of
+    the tail" without a second clause that would also have to be escaped.
+
+    Args:
+        client: An open client from :func:`atlas_client`.
+        connection_qualified_name: Connection the suffixes are relative to.
+        ref_attributes: One addressed asset -> the attribute names to read for
+            it, spelled as Atlan spells them.
+
+    Returns:
+        :class:`~application_sdk.testing.harness.outcome.Settled` carrying each
+        ref -> **every** asset whose qualifiedName matched its suffix, or
+        :class:`~application_sdk.testing.harness.outcome.Indeterminate` when a
+        search could not be read. Zero matches and several matches are both
+        returned as they are rather than resolved here: which of them is a
+        finding is the evaluator's call, and a reader that collapsed either one
+        would be deciding it silently.
+    """
+    from pyatlan.model.assets import Asset  # noqa: PLC0415
+    from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
+
+    label = f"addressed asset attributes under {connection_qualified_name}"
+    started = time.monotonic()
+    if not ref_attributes:
+        name, attempts, elapsed = _one_shot(label, started)
+        return Settled(label=name, attempts=attempts, elapsed=elapsed, value={})
+    prefix = f"{connection_qualified_name}/"
+    refs = tuple(ref_attributes)
+
+    async def _read_one(ref: AssetRef) -> list[AssetAttributes]:
+        attributes = tuple(ref_attributes[ref])
+        suffix = ref.qualified_name_suffix.strip("/")
+        builder = (
+            FluentSearch()
+            .where(FluentSearch.active_assets())
+            .where(Asset.TYPE_NAME.eq(ref.type_name))
+            .where(Asset.CONNECTION_QUALIFIED_NAME.eq(connection_qualified_name))
+            .where(Asset.QUALIFIED_NAME.wildcard(f"{prefix}*{_escaped(suffix)}"))
+            .include_on_results(Asset.QUALIFIED_NAME)
+            .include_on_results(Asset.CONNECTION_QUALIFIED_NAME)
+        )
+        for attribute in attributes:
+            builder = builder.include_on_results(attribute)
+        request = builder.to_request()
+        request.dsl.size = _MATCHES_PER_REF
+        results = await client.asset.search(request)
+        matched: list[AssetAttributes] = []
+        for asset in results.current_page() or []:
+            qualified_name = asset.qualified_name or ""
+            if not _ends_on_segment(qualified_name, prefix, suffix):
+                continue
+            matched.append(
+                AssetAttributes(
+                    qualified_name=qualified_name,
+                    values=_returned_attributes(asset, attributes),
+                )
+            )
+        return matched
+
+    try:
+        read = await asyncio.gather(*(_read_one(ref) for ref in refs))
+    except Exception as error:
+        return _unreadable(label, started, error)
+    name, attempts, elapsed = _one_shot(label, started)
+    return Settled(
+        label=name,
+        attempts=attempts,
+        elapsed=elapsed,
+        value=dict(zip(refs, read, strict=True)),
+    )
+
+
+def _escaped(suffix: str) -> str:
+    """Neutralise a suffix's wildcard metacharacters for the Atlas query.
+
+    Args:
+        suffix: The literal tail a suite declared.
+
+    Returns:
+        The same text with ``*`` and ``?`` escaped, so a suffix that happens to
+        contain one addresses the asset named rather than a pattern. The
+        boundary check in :func:`_ends_on_segment` compares the unescaped
+        literal, so the escape affects only how much Atlas returns.
+    """
+    return suffix.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
+
+
+def _ends_on_segment(qualified_name: str, prefix: str, suffix: str) -> bool:
+    """Whether *qualified_name* ends with *suffix* on a path-segment boundary.
+
+    Args:
+        qualified_name: The candidate asset's qualifiedName.
+        prefix: The connection qualified name with its trailing separator.
+        suffix: The literal tail declared, without surrounding separators.
+
+    Returns:
+        True when the name sits under the connection and its tail is either
+        exactly *suffix* or ends in ``/<suffix>``. The boundary is what keeps
+        ``"sch"`` from matching ``…/db/other_sch`` — plain suffix semantics
+        would, and a suite declaring a schema name does not mean "any asset
+        whose name happens to end in these characters".
+    """
+    if not qualified_name.startswith(prefix):
+        return False
+    tail = qualified_name[len(prefix) :]
+    return tail == suffix or tail.endswith(f"/{suffix}")
 
 
 def _returned_attributes(asset: object, attributes: Sequence[str]) -> dict[str, object]:

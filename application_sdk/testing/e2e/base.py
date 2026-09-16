@@ -152,6 +152,7 @@ from application_sdk.testing.harness.expectations import (
     UNREADABLE,
     AssetAttributes,
     AssetExpectations,
+    AssetRef,
     AttributeExpectationValue,
     AttributeSampleRead,
     CountRead,
@@ -159,9 +160,11 @@ from application_sdk.testing.harness.expectations import (
     SampleRead,
     Unreadable,
     evaluate_attributes,
+    evaluate_attributes_at,
     evaluate_counts,
     evaluate_locations,
     normalise_attribute_expectations,
+    normalise_attribute_expectations_at,
 )
 from application_sdk.testing.harness.identity import (
     Minter,
@@ -265,6 +268,8 @@ _FINDING_TEMPLATES = {
     "depth": "  - {subject} {detail}",
     "nesting": "  - {subject} {detail}",
     "attribute": "  - {subject} {detail}",
+    "missing": "  - {subject}: {detail}",
+    "ambiguous": "  - {subject}: {detail}",
     UNREADABLE: "  - {subject}: {detail}",
 }
 
@@ -528,6 +533,16 @@ class FullDAGOutcome:
     :class:`~application_sdk.testing.harness.expectations.Unreadable` here rather
     than an empty sample the attribute check would skip. Same fail-open shape as
     :attr:`asset_qn_reads`, closed the same way."""
+    addressed_attribute_reads: Mapping[AssetRef, AttributeSampleRead] = field(
+        default_factory=dict
+    )
+    """Every asset matching each addressed ref's qualifiedName suffix, as read.
+
+    Holds *all* the matches rather than the one the suite meant, because zero
+    and several are the two answers that have to reach the grader intact: an
+    addressed asset that is not there is a finding, and a suffix matching two
+    assets is a different finding. Resolving either here would decide them
+    silently."""
     connection_read: Outcome[bool] | None = None
     """The Connection poll's verdict, or ``None`` when it never ran.
 
@@ -613,6 +628,8 @@ class DAGSpec:
         expected_asset_qn_depth: Per-type qualifiedName depth below the
             connection.
         expected_asset_attributes: Per-type attribute-value claims.
+        expected_asset_attributes_at: Per-asset attribute-value claims, keyed by
+            type then qualifiedName suffix.
         connection_qualified_name: The connection this run is submitted and
             graded against. ``None`` — the default, and what every run did
             before FND-1648 — means the suite's own minted connection, which is
@@ -641,6 +658,9 @@ class DAGSpec:
     expected_asset_qn_depth: Mapping[str, int] | None = None
     expected_asset_attributes: (
         Mapping[str, Mapping[str, AttributeExpectationValue]] | None
+    ) = None
+    expected_asset_attributes_at: (
+        Mapping[str, Mapping[str, Mapping[str, AttributeExpectationValue]]] | None
     ) = None
     connection_qualified_name: str | None = None
     label: str = ""
@@ -671,6 +691,9 @@ class ResolvedDAG:
     expected_asset_attributes: Mapping[str, Mapping[str, AttributeExpectationValue]] = (
         field(default_factory=dict)
     )
+    expected_asset_attributes_at: Mapping[
+        str, Mapping[str, Mapping[str, AttributeExpectationValue]]
+    ] = field(default_factory=dict)
     connection_qualified_name: str = ""
 
 
@@ -1176,11 +1199,12 @@ class BaseE2ETest:
     # Scope + contract (same shape as expected_asset_qn_depth, and the same
     # reasons — read that attr's docstring too):
     #   * Samples a few assets per type (no sort) and requires EVERY sampled
-    #     asset to satisfy every matcher. So it reliably catches "the whole type
-    #     carries the wrong value" and will rarely catch one bad asset among
-    #     thousands. Declare a fixed value only where every asset of that type
-    #     genuinely shares it (a single-schema hermetic fixture); use AtLeast /
-    #     Present where they don't.
+    #     asset to satisfy every matcher. So a value declared here has to be one
+    #     EVERY asset of that type carries. Crawl five schemas, one with no
+    #     views and one with ten, and there is no per-type claim about
+    #     viewsCount left to make beyond Present() — pin the numbers with
+    #     expected_asset_attributes_at below, and keep this knob for the claim
+    #     that does hold across the type ("it is set at all").
     #   * A FULLY-DROPPED type is invisible here (no samples -> the type is
     #     skipped). Pair every type you put here with an
     #     expected_min_asset_counts floor for the same type.
@@ -1192,6 +1216,43 @@ class BaseE2ETest:
     # Empty = skip (no extra Atlas call).
     expected_asset_attributes: ClassVar[
         dict[str, dict[str, AttributeExpectationValue]]
+    ] = {}
+
+    # Opt-in: the same claims about ONE NAMED ASSET rather than about every
+    # asset of a type. Maps typeName -> qualifiedName suffix -> attribute ->
+    # matcher (a bare scalar is sugar for Exactly)::
+    #
+    #     expected_asset_attributes_at = {
+    #         "Schema": {
+    #             "sch_empty": {"viewsCount": 0,  "tableCount": 3},
+    #             "sch_busy":  {"viewsCount": 10, "tableCount": 8},
+    #         },
+    #     }
+    #
+    # This is the knob that makes a value assertable when it DIFFERS within a
+    # type, which is the ordinary case for anything computed per asset. The
+    # per-type knob above can only carry a claim the whole type shares.
+    #
+    # Addressed by SUFFIX because a qualifiedName is not writable: the
+    # connection carries a freshly minted epoch, so no class attribute can name
+    # an asset under it. The suffix is matched on a path-segment boundary, so
+    # "sch" matches ".../db/sch" and never ".../db/other_sch", and a Column can
+    # be named "col" rather than "db/sch/tbl/col".
+    #
+    # Scope + contract:
+    #   * A suffix that matches NOTHING is a finding, not a skip — unlike the
+    #     per-type sampler, where an empty sample is the count floors' job. The
+    #     suite named this asset, so its absence is the claim under test.
+    #   * A suffix matching TWO OR MORE assets is also a finding: grading the
+    #     first would make the verdict depend on Atlas's result ordering.
+    #     Lengthen the suffix until it names exactly one.
+    #   * Costs one Atlas search per addressed asset, so it is for the handful
+    #     of assets whose values a fixture pins — not for asserting a whole
+    #     type asset by asset.
+    #
+    # Empty = skip (no extra Atlas call).
+    expected_asset_attributes_at: ClassVar[
+        dict[str, dict[str, dict[str, AttributeExpectationValue]]]
     ] = {}
 
     # How many assets to sample per type for the attribute check. Separate from
@@ -3036,6 +3097,16 @@ class BaseE2ETest:
                     else spec.expected_asset_attributes
                 ).items()
             },
+            expected_asset_attributes_at={
+                type_name: {
+                    suffix: dict(attributes) for suffix, attributes in by_suffix.items()
+                }
+                for type_name, by_suffix in (
+                    self.expected_asset_attributes_at
+                    if spec.expected_asset_attributes_at is None
+                    else spec.expected_asset_attributes_at
+                ).items()
+            },
             # ``getattr`` rather than the attribute: ``_validate_dag_runs``
             # resolves every declared run inside ``setup_method``, *before* the
             # minter has named this run's connection. Both sides of the
@@ -4335,6 +4406,7 @@ class BaseE2ETest:
                 *dag.expected_exact_counts,
                 *dag.expected_asset_qn_depth,
                 *dag.expected_asset_attributes,
+                *dag.expected_asset_attributes_at,
             }
         )
         count_reads: Mapping[str, CountRead] = {}
@@ -4420,6 +4492,28 @@ class BaseE2ETest:
                 dict(attribute_reads),
             )
 
+        # Read the individually addressed assets (opt-in). One search per ref,
+        # which is why this is for the handful of assets a fixture pins rather
+        # than a way to walk a type.
+        addressed_reads: Mapping[AssetRef, AttributeSampleRead] = {}
+        addressed = normalise_attribute_expectations_at(
+            dag.expected_asset_attributes_at
+        )
+        if addressed:
+            addressed_reads = as_attribute_samples(
+                await atlas.read_asset_attributes(
+                    client,
+                    self.connection_qualified_name,
+                    {ref: tuple(matchers) for ref, matchers in addressed.items()},
+                ),
+                tuple(addressed),
+            )
+            logger.info(
+                "Atlas addressed-asset attributes under %s: %s",
+                self.connection_qualified_name,
+                {str(ref): value for ref, value in addressed_reads.items()},
+            )
+
         return self._outcome(
             ae_result,
             connection_in_atlas=True,
@@ -4429,6 +4523,7 @@ class BaseE2ETest:
             lineage_read=lineage_read,
             sample_reads=sample_reads,
             attribute_reads=attribute_reads,
+            addressed_reads=addressed_reads,
         )
 
     async def _poll_asset_counts(
@@ -4498,6 +4593,7 @@ class BaseE2ETest:
         lineage_read: bool | Unreadable | None = None,
         sample_reads: Mapping[str, SampleRead] | None = None,
         attribute_reads: Mapping[str, AttributeSampleRead] | None = None,
+        addressed_reads: Mapping[AssetRef, AttributeSampleRead] | None = None,
     ) -> FullDAGOutcome:
         """Assemble the outcome, projecting each reading into its settled half.
 
@@ -4511,6 +4607,7 @@ class BaseE2ETest:
                 that the count could not be read.
             sample_reads: Sampled qualified names as read.
             attribute_reads: Sampled attribute values as read.
+            addressed_reads: Addressed assets' attribute values as read.
 
         Returns:
             The outcome. Every reading is carried in both shapes: the settled
@@ -4545,6 +4642,7 @@ class BaseE2ETest:
             total_asset_read=total_read,
             asset_qn_reads=samples,
             asset_attribute_reads=attributes,
+            addressed_attribute_reads=dict(addressed_reads or {}),
             connection_expected=self._dag.expect_connection,
         )
 
@@ -4570,6 +4668,9 @@ class BaseE2ETest:
             # (a bare scalar is sugar for ``Exactly``) and what the evaluator
             # grades (always a matcher).
             attributes=normalise_attribute_expectations(dag.expected_asset_attributes),
+            attributes_at=normalise_attribute_expectations_at(
+                dag.expected_asset_attributes_at
+            ),
             require_nonempty=dag.require_nonempty_assets,
             # getattr, because the count half of this is a pure function of the
             # class attributes and is unit-tested on an instance that never ran
@@ -4630,6 +4731,21 @@ class BaseE2ETest:
             matcher.
         """
         return evaluate_attributes(samples, self._asset_expectations())
+
+    def _addressed_attribute_findings(
+        self, reads: Mapping[AssetRef, AttributeSampleRead]
+    ) -> Sequence[Finding]:
+        """Grade the individually addressed assets against their matchers.
+
+        Args:
+            reads: Each addressed ref -> every asset whose qualifiedName matched
+                its suffix, as read.
+
+        Returns:
+            One finding per unmet matcher, plus one per ref that matched no
+            asset or more than one.
+        """
+        return evaluate_attributes_at(reads, self._asset_expectations())
 
     def _evaluate_asset_expectations(
         self,
@@ -4741,6 +4857,32 @@ class BaseE2ETest:
         return [
             _render_finding(finding)
             for finding in self._attribute_findings(asset_attribute_samples)
+        ]
+
+    def _validate_addressed_asset_attributes(
+        self, addressed_attribute_reads: Mapping[AssetRef, AttributeSampleRead]
+    ) -> list[str]:
+        """Validate individually addressed assets carry the declared values.
+
+        The per-asset half of the attribute check, and the one that can pin a
+        value differing *within* a type — five schemas at five different view
+        counts share no per-type claim about ``viewsCount`` beyond
+        ``Present()``. The logic is
+        :func:`~application_sdk.testing.harness.expectations.evaluate_attributes_at`.
+
+        Args:
+            addressed_attribute_reads: Each addressed ref -> every asset whose
+                qualifiedName matched its suffix, as read.
+
+        Returns:
+            Human-readable failure lines, empty when every addressed asset
+            resolved to exactly one match satisfying every matcher. Unlike the
+            per-type check, a ref matching **nothing** is a failure line rather
+            than a skip: the suite named the asset, so its absence is the claim.
+        """
+        return [
+            _render_finding(finding)
+            for finding in self._addressed_attribute_findings(addressed_attribute_reads)
         ]
 
     # ------------------------------------------------------------------
@@ -5030,9 +5172,12 @@ class BaseE2ETest:
         location_findings = self._location_findings(
             outcome.asset_qn_reads or outcome.asset_qn_samples
         )
-        attribute_findings = self._attribute_findings(
-            outcome.asset_attribute_reads or outcome.asset_attribute_samples
-        )
+        attribute_findings = [
+            *self._attribute_findings(
+                outcome.asset_attribute_reads or outcome.asset_attribute_samples
+            ),
+            *self._addressed_attribute_findings(outcome.addressed_attribute_reads),
+        ]
         # Ungraded before unmet, always. A finding that exists because a search
         # could not be READ is not evidence about the connector, and reporting it
         # as one is what sent an Atlas outage to the connector team as "the

@@ -79,6 +79,12 @@ __all__ = [
 
 T = TypeVar("T")
 
+#: How a projected reading is keyed. Only :func:`as_attribute_samples` is
+#: generic in it: its two readers address assets by type and by
+#: :class:`~application_sdk.testing.harness.expectations.AssetRef` respectively,
+#: and the projection is identical either way.
+K = TypeVar("K")
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _Waited(Generic[T]):
@@ -423,26 +429,35 @@ def as_samples(
 
 
 def as_attribute_samples(
-    reading: Outcome[Mapping[str, Sequence[AssetAttributes]]],
-    type_names: Sequence[str],
-) -> Mapping[str, AttributeSampleRead]:
-    """Project an attribute sample read the same way :func:`as_samples` does.
+    reading: Outcome[Mapping[K, Sequence[AssetAttributes]]],
+    keys: Sequence[K],
+) -> Mapping[K, AttributeSampleRead]:
+    """Project an attribute read the same way :func:`as_samples` does.
+
+    Generic in its key because the two attribute readers address assets
+    differently and the projection does not care which: per *type* for
+    :func:`~application_sdk.testing.harness.atlas.sample_asset_attributes`, per
+    :class:`~application_sdk.testing.harness.expectations.AssetRef` for
+    :func:`~application_sdk.testing.harness.atlas.read_asset_attributes`. Two
+    copies of this differing only in an annotation would be two places to forget
+    the spread below.
 
     Args:
         reading: What the reader answered.
-        type_names: The types that were asked for.
+        keys: What was asked for, so an unreadable batch still produces an entry
+            for each.
 
     Returns:
-        Type name -> the sampled assets or ``Unreadable``. The distinction
-        matters here for the same reason it does for qualified-name samples:
+        Key -> the assets read or ``Unreadable``. The distinction matters here
+        for the same reason it does for qualified-name samples:
         :func:`~application_sdk.testing.harness.expectations.evaluate_attributes`
         *skips* an empty sample, so a failed read spelled as an empty list is a
         silent pass.
     """
     if isinstance(reading, Settled):
-        return {name: list(value) for name, value in reading.value.items()}
+        return {key: list(value) for key, value in reading.value.items()}
     unreadable = Unreadable(cause=_cause_of(reading))
-    return dict.fromkeys(type_names, unreadable)
+    return dict.fromkeys(keys, unreadable)
 
 
 def _cause_of(reading: Outcome[Any]) -> BaseException:

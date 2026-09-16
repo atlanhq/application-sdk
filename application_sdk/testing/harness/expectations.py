@@ -56,6 +56,7 @@ __all__ = [
     "Absent",
     "AssetAttributes",
     "AssetExpectations",
+    "AssetRef",
     "AtLeast",
     "AtMost",
     "AttributeExpectationValue",
@@ -70,9 +71,11 @@ __all__ = [
     "Unreadable",
     "as_matcher",
     "evaluate_attributes",
+    "evaluate_attributes_at",
     "evaluate_counts",
     "evaluate_locations",
     "normalise_attribute_expectations",
+    "normalise_attribute_expectations_at",
 ]
 
 #: :attr:`Finding.expectation` value marking a finding that exists because a
@@ -172,6 +175,44 @@ class AssetAttributes:
 #: One per-type sample of asset attributes, or the fact that it could not be
 #: read. Same shape and same reason as :data:`SampleRead`.
 AttributeSampleRead: TypeAlias = Union[Sequence[AssetAttributes], Unreadable]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AssetRef:
+    """Which single asset an attribute expectation is about.
+
+    The per-type check asserts the same claim about every sampled asset of a
+    type, which is only right where every asset of that type genuinely shares
+    the value. It does not survive the ordinary case: crawl five schemas, one
+    with no views and one with ten, and there is no per-type claim about
+    ``viewsCount`` left to make beyond :class:`Present`. Addressing one asset is
+    what makes the values themselves assertable.
+
+    **The suffix, not the qualified name.** A run's connection qualified name
+    carries a freshly minted epoch, so no suite can write an asset's full name
+    in a class attribute. What a suite *can* write is the stable tail — and a
+    suffix rather than the whole path below the connection, so a Column can be
+    named ``"col"`` rather than ``"db/sch/tbl/col"``.
+
+    Attributes:
+        type_name: Atlan type name, e.g. ``"Schema"``. Required, not
+            decoration: it scopes the search, and two types can carry the same
+            tail (a Table and its View pattern, a Column named for its table).
+        qualified_name_suffix: The tail of the asset's qualifiedName, matched on
+            a path-segment boundary — ``"sch"`` matches
+            ``…/db/sch`` and never ``…/db/other_sch``.
+    """
+
+    type_name: str
+    qualified_name_suffix: str
+
+    def __str__(self) -> str:
+        """The ref as a finding's subject reads it.
+
+        Returns:
+            ``Schema[sch_empty]``.
+        """
+        return f"{self.type_name}[{self.qualified_name_suffix}]"
 
 
 class AttributeMatcher(ABC):
@@ -441,6 +482,32 @@ def normalise_attribute_expectations(
     }
 
 
+def normalise_attribute_expectations_at(
+    declared: Mapping[str, Mapping[str, Mapping[str, AttributeExpectationValue]]],
+) -> dict[AssetRef, dict[str, AttributeMatcher]]:
+    """Flatten a per-asset declaration into matchers keyed by :class:`AssetRef`.
+
+    A suite writes three nested levels — type, then which asset, then which
+    attribute — because that groups by the same outer key as the per-type knob
+    and reads as a table. Everything downstream wants one asset per entry, so
+    the nesting is collapsed here, once.
+
+    Args:
+        declared: Asset type -> qualifiedName suffix -> attribute name ->
+            matcher or bare scalar, as a suite writes it.
+
+    Returns:
+        One entry per addressed asset.
+    """
+    return {
+        AssetRef(type_name=type_name, qualified_name_suffix=suffix): {
+            attribute: as_matcher(value) for attribute, value in attributes.items()
+        }
+        for type_name, by_suffix in declared.items()
+        for suffix, attributes in by_suffix.items()
+    }
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Finding:
     """One unmet expectation, in a form a report can render without re-parsing.
@@ -482,6 +549,14 @@ class AssetExpectations:
             landed in the right place, in the right number, carrying the wrong
             *values* — a computed count degraded to ``0``, or an attribute that
             silently stopped being set. Counts and depths can see neither.
+            Applied to every sampled asset of the type, so it can only carry a
+            claim every asset of that type shares.
+        attributes_at: One addressed asset -> attribute name -> the claim its
+            value must satisfy, from
+            :func:`normalise_attribute_expectations_at`. The per-asset half:
+            crawl five schemas, one with no views and one with ten, and no
+            per-type claim about ``viewsCount`` survives beyond
+            :class:`Present`. This is where the numbers themselves get pinned.
         require_nonempty: Whether a run that completes and lands zero assets
             fails. Defaults on, and it fires even for a connector that declares
             nothing else — those are the ones most likely to regress silently.
@@ -495,6 +570,9 @@ class AssetExpectations:
     exacts: Mapping[str, int] = field(default_factory=dict)
     depths: Mapping[str, int] = field(default_factory=dict)
     attributes: Mapping[str, Mapping[str, AttributeMatcher]] = field(
+        default_factory=dict
+    )
+    attributes_at: Mapping[AssetRef, Mapping[str, AttributeMatcher]] = field(
         default_factory=dict
     )
     require_nonempty: bool = True
@@ -771,16 +849,85 @@ def evaluate_attributes(
     return findings
 
 
+def evaluate_attributes_at(
+    reads: Mapping[AssetRef, AttributeSampleRead],
+    expectations: AssetExpectations,
+) -> Sequence[Finding]:
+    """Evaluate the attribute values of individually addressed assets.
+
+    The per-asset counterpart to :func:`evaluate_attributes`, and the only one
+    that can pin a value that differs *within* a type.
+
+    It grades absence differently from every other check here, and deliberately.
+    An empty per-type sample is skipped because "the type landed nothing" is the
+    count floors' job; an addressed asset that is not there is nobody else's
+    job — the suite named it, so its absence is the finding. Two or more matches
+    are a finding too: grading the first would make the result depend on Atlas's
+    result ordering, and a suite that meant one asset would silently be told
+    about another.
+
+    Args:
+        reads: One addressed asset -> the assets whose qualifiedName matched its
+            suffix, or :class:`Unreadable` when the search failed. Zero matches
+            and several matches are both expected inputs and both produce
+            findings.
+        expectations: What was declared.
+
+    Returns:
+        One :class:`Finding` per unmet matcher, plus one per ref that resolved to
+        no asset or to more than one.
+    """
+    findings: list[Finding] = []
+    for ref, matchers in expectations.attributes_at.items():
+        read = reads.get(ref, ())
+        if isinstance(read, Unreadable):
+            findings.append(_unreadable(str(ref), read, checking="attribute"))
+            continue
+        matched = list(read)
+        if not matched:
+            findings.append(
+                Finding(
+                    subject=str(ref),
+                    detail=(
+                        f"no active {ref.type_name} under the connection has a "
+                        f"qualifiedName ending in "
+                        f"{'/' + ref.qualified_name_suffix!r}, so its attribute "
+                        "expectations describe an asset that did not land"
+                    ),
+                    expectation="missing",
+                )
+            )
+            continue
+        if len(matched) > 1:
+            names = ", ".join(repr(asset.qualified_name) for asset in matched)
+            findings.append(
+                Finding(
+                    subject=str(ref),
+                    detail=(
+                        f"matches {len(matched)} assets ({names}), so which one "
+                        "the expectations are about is ambiguous — lengthen the "
+                        "suffix until it names exactly one"
+                    ),
+                    expectation="ambiguous",
+                )
+            )
+            continue
+        findings.extend(_evaluate_one_asset(str(ref), matched[0], matchers))
+    return findings
+
+
 def _evaluate_one_asset(
-    type_name: str,
+    subject: str,
     asset: AssetAttributes,
     matchers: Mapping[str, AttributeMatcher],
 ) -> Sequence[Finding]:
-    """Check one sampled asset against every matcher declared for its type.
+    """Check one asset against every matcher declared for it.
 
     Args:
-        type_name: Asset type the sample belongs to.
-        asset: The sampled asset's qualified name and attribute values.
+        subject: What the expectation was declared against — an asset type for
+            the per-type check, an :class:`AssetRef` for the per-asset one. Used
+            as the finding's subject, with the attribute appended.
+        asset: The asset's qualified name and attribute values.
         matchers: Attribute name -> the claim its value must satisfy.
 
     Returns:
@@ -798,7 +945,7 @@ def _evaluate_one_asset(
         observed = f"= {value!r}" if present else "is absent (attribute not set)"
         findings.append(
             Finding(
-                subject=f"{type_name}.{attribute}",
+                subject=f"{subject}.{attribute}",
                 detail=(
                     f"on {asset.qualified_name!r} {observed}, "
                     f"expected {matcher.describe()}"

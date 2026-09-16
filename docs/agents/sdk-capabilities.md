@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.34.3
-source-sha:    953efc4fa2a6bf222a665dffbed06b78fc8fbe9e
-source-date:   2026-09-15T20:18:17Z
+source-sha:    f07ecc95ee30a247c5a9fd3f3137d4c8dcb4b9d3
+source-date:   2026-09-16T02:44:19+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 399 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 403 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3474,6 +3474,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** An asset present on both sides whose fields differ.
 - **Defined in:** `application_sdk/testing/golden.py`
 
+#### `AssetRef`
+
+- **Import:** `from application_sdk.testing.harness.atlas import AssetRef`
+- **Also importable from:** `application_sdk.testing.harness.expectations`
+- **Signature:** `class AssetRef(*, type_name: str, qualified_name_suffix: str)`
+- **Summary:** Which single asset an attribute expectation is about.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `AssetValidationFailure`
 
 - **Import:** `from application_sdk.testing.integration import AssetValidationFailure`
@@ -4734,8 +4742,8 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `as_attribute_samples`
 
 - **Import:** `from application_sdk.testing.harness.outcome import as_attribute_samples`
-- **Signature:** `as_attribute_samples(reading: Outcome[Mapping[str, ...)`
-- **Summary:** Project an attribute sample read the same way :func:`as_samples` does.
+- **Signature:** `as_attribute_samples(reading: Outcome[Mapping[K, ...)`
+- **Summary:** Project an attribute read the same way :func:`as_samples` does.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
 
 #### `as_count`
@@ -5040,6 +5048,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.expectations import evaluate_attributes`
 - **Signature:** `evaluate_attributes(samples: Mapping[str, AttributeSampleRead], expectations: AssetExpectations) -> Sequence[Finding]`
 - **Summary:** Evaluate sampled attribute values against the declared matchers.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `evaluate_attributes_at`
+
+- **Import:** `from application_sdk.testing.harness.expectations import evaluate_attributes_at`
+- **Signature:** `evaluate_attributes_at(reads: Mapping[AssetRef, ...)`
+- **Summary:** Evaluate the attribute values of individually addressed assets.
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `evaluate_counts`
@@ -5579,6 +5594,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Coerce a whole declaration into matchers.
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
 
+#### `normalise_attribute_expectations_at`
+
+- **Import:** `from application_sdk.testing.harness.expectations import normalise_attribute_expectations_at`
+- **Signature:** `normalise_attribute_expectations_at(declared: Mapping[str, ...)`
+- **Summary:** Flatten a per-asset declaration into matchers keyed by :class:`AssetRef`.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `not_contains`
 
 - **Import:** `from application_sdk.testing.integration import not_contains`
@@ -5679,6 +5701,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `read_app_identity(repo_root: Path) -> AppIdentity`
 - **Summary:** Return the names ``atlan.yaml`` commits, as cards may report them.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `read_asset_attributes`
+
+- **Import:** `from application_sdk.testing.harness.atlas import read_asset_attributes`
+- **Signature:** `read_asset_attributes(client: AsyncAtlanClient, ...)`
+- **Summary:** Read named attributes off individually addressed assets.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `read_entrypoint_names`
 
