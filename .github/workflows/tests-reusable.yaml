@@ -2969,6 +2969,75 @@ jobs:
             **Overall:** ${{ steps.gate.outputs.overall-status }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
         continue-on-error: true
 
+      # ── Repair an evicted sibling run on this same commit (FND-2167) ─────
+      #
+      # A bot PR gets several `pull_request` events on ONE head SHA seconds
+      # apart — `opened` plus one `labeled` per label Renovate applies — so
+      # GitHub creates several `Tests` runs on that SHA and the unit job's
+      # concurrency group evicts all but one. Each evicted run still reaches
+      # this job (`if: always()`, deliberately) and publishes a FAILURE on the
+      # required `tests / Tests Gate` context.
+      #
+      # That is survivable only while the surviving run is the NEWEST one:
+      # GitHub resolves a required status check to the check run of the newest
+      # check suite on the commit, not the most recently completed one. Eviction
+      # order is not run-creation order, so which run survives is luck — and
+      # when the loser is newest the PR sits at BLOCKED with auto-merge on until
+      # Renovate happens to rebase it (measured >10% of fleet bot PRs).
+      #
+      # So the run that DID produce a verdict re-runs that newer evicted run,
+      # replacing an unearned verdict with a measured one. The driver's
+      # docstring records why the two cheaper-looking fixes are both wrong —
+      # skipping the duplicate runs' jobs publishes `skipped`, which GitHub
+      # counts as a PASS and would let a label run override a genuine failure;
+      # and greening the gate on cancellation lets a manual cancel merge
+      # untested code.
+      - name: Check out the evicted-run repair driver
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          steps.gate.outputs.conclusion != 'cancelled'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Re-run an evicted Tests run on this commit
+        # Only a run holding a real verdict repairs anything: `conclusion` is
+        # "cancelled" exactly when this run's own gate was blocked solely by
+        # cancellations, i.e. when THIS is an evicted run. Letting those act
+        # would re-run each other straight back into one concurrency group.
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          steps.gate.outputs.conclusion != 'cancelled'
+        # Never fails the gate. This step runs inside the required context, so a
+        # 403 or a network blip here must leave the verdict exactly as computed
+        # rather than redden it; the driver also exits 0 on every error path.
+        continue-on-error: true
+        shell: bash
+        # Re-running needs `actions: write`. This job cannot ask for it: a called
+        # workflow may only equal or narrow its caller's grant, the scaffolded
+        # callers grant `actions: read`, and requesting more is a hard workflow
+        # error in every consumer at once. So the PAT does the write, and its
+        # absence degrades to a logged no-op.
+        #
+        # Event-derived values are routed through env and referenced as shell
+        # variables rather than interpolated: `${{ }}` is substituted textually
+        # before bash parses the script, so a value carrying `$(...)` would
+        # execute as code.
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SELF_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 .github/scripts/rerun_evicted_tests_run.py \
+            --repo "$REPO" \
+            --head-sha "$HEAD_SHA" \
+            --self-run-id "$SELF_RUN_ID"
+
       # Branch-free enforcement: the decision lives in the driver's `passed`
       # output; this step just fails the required check when it isn't "true".
       - name: Enforce gate
