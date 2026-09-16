@@ -76,7 +76,6 @@ import asyncio
 import dataclasses
 import os
 import time
-import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
@@ -84,6 +83,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
 import orjson
 from pydantic import ValidationError
 from temporalio import workflow as _temporal_workflow
+from typing_extensions import deprecated
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
@@ -1700,6 +1700,10 @@ class SqlApp(App):
     # public name, so the mock is never reached — quieter than a broken import
     # and worth knowing before debugging one. Each docstring says so.
 
+    @deprecated(
+        "SqlApp._resolve_credential_ref is deprecated; use the public "
+        "SqlApp.resolve_credential_ref instead. Will be removed in v4.0.0."
+    )
     def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
         """**Deprecated** — use :meth:`resolve_credential_ref`.
 
@@ -1715,15 +1719,13 @@ class SqlApp(App):
             running under a mock the author believes is in place. Move the
             patch site to the public name.
         """
-        warnings.warn(
-            "SqlApp._resolve_credential_ref is deprecated; use the public "
-            "SqlApp.resolve_credential_ref instead. Will be removed in v4.0.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         return self.resolve_credential_ref(input)
 
     @staticmethod
+    @deprecated(
+        "SqlApp._build_transform_input is deprecated; use the public "
+        "SqlApp.build_transform_input instead. Will be removed in v4.0.0."
+    )
     def _build_transform_input(
         base: ExtractionTaskInput,
         raw_file: FileReference | None,
@@ -1737,12 +1739,6 @@ class SqlApp(App):
             :meth:`_resolve_credential_ref` for why. Move the patch site to
             :meth:`build_transform_input`.
         """
-        warnings.warn(
-            "SqlApp._build_transform_input is deprecated; use the public "
-            "SqlApp.build_transform_input instead. Will be removed in v4.0.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         return SqlApp.build_transform_input(base, raw_file)
 
     # =====================================================================
