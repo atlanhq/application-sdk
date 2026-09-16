@@ -102,6 +102,41 @@ class TestPyatlanFlattenContract:
 
         assert to_atlas_format(asset)["customAttributes"]["row_format"] is None
 
+    def test_to_atlas_format_collapses_explicit_none_into_absent(self):
+        """Pinned because it is lossy, and the loss is easy to misattribute.
+
+        ``pyatlan_v9`` fields are three-state
+        (``Union[str, None, UnsetType] = UNSET``), so an asset *can* express
+        an explicit null — ``to_nested_bytes`` preserves it as ``null``.
+        ``to_atlas_format`` does not: it renders ``None`` and ``UNSET``
+        identically, as an absent key.
+
+        Tolerable here only because ``atlan-publish-app``'s
+        ``calculate_attributes_diff`` re-synthesises the clear from its cache.
+        If this assertion ever flips — pyatlan starting to preserve the null —
+        that is a wire-format change for every connector on the flattened
+        default, not a test to update.
+        """
+        unset = _table()
+        explicit_null = _table()
+        explicit_null.description = None
+
+        # The model itself distinguishes them.
+        assert unset.description is not None
+        assert repr(unset.description) == "UNSET"
+        assert explicit_null.description is None
+
+        # to_nested_bytes keeps the distinction...
+        assert "description" not in orjson.loads(unset.to_nested_bytes())["attributes"]
+        assert (
+            orjson.loads(explicit_null.to_nested_bytes())["attributes"]["description"]
+            is None
+        )
+
+        # ...and to_atlas_format loses it.
+        assert "description" not in to_atlas_format(unset)["attributes"]
+        assert "description" not in to_atlas_format(explicit_null)["attributes"]
+
     def test_status_and_custom_attributes_stay_at_the_root(self):
         asset = _table()
         asset.status = "ACTIVE"
@@ -177,7 +212,14 @@ class TestFlattenEnvelope:
 
         assert "table" not in entity["attributes"]
 
-    def test_nulls_dropped_from_attributes_and_root(self):
+    def test_nulls_are_left_alone(self):
+        """Flattening moves refs and touches nothing else.
+
+        An earlier revision dropped ``None`` here to mirror
+        ``to_atlas_format``. That silently deleted values a dict-returning
+        mapper had emitted on purpose — see
+        ``TestDictMapperNullsSurvive`` for the shape that caught it.
+        """
         entity = flatten_envelope(
             {
                 "typeName": "Table",
@@ -186,7 +228,28 @@ class TestFlattenEnvelope:
             }
         )
 
-        assert entity == {"typeName": "Table", "attributes": {"name": "t"}}
+        assert entity == {
+            "typeName": "Table",
+            "status": None,
+            "attributes": {"name": "t", "description": None},
+        }
+
+    def test_a_null_ref_is_skipped_rather_than_moved(self):
+        """The one null this function does act on, and only by omission.
+
+        Moving a ``None`` ref into ``attributes`` would *create* a null the
+        mapper never put there. Leaving it out is not the same as dropping a
+        null the mapper wrote.
+        """
+        entity = flatten_envelope(
+            {
+                "typeName": "Column",
+                "attributes": {"name": "c1"},
+                "relationshipAttributes": {"table": None, "view": {"typeName": "View"}},
+            }
+        )
+
+        assert entity["attributes"] == {"name": "c1", "view": {"typeName": "View"}}
 
     def test_nulls_kept_inside_custom_attributes(self):
         entity = flatten_envelope(
@@ -222,10 +285,13 @@ class TestFlattenEnvelope:
 
 
 class TestBothFlattenPathsAgree:
-    """The generic pass and ``to_atlas_format`` must produce the same envelope.
+    """The two paths agree on **ref placement** — the question the envelope settles.
 
-    A dict-returning mapper and an asset-returning mapper describing the same
-    entity have to land on the same line, or ``FLATTENED`` means two things.
+    They deliberately diverge on null handling; see
+    ``TestDictMapperNullsSurvive``. These fixtures carry no explicit nulls, so
+    the envelopes match exactly, which is the useful comparison: an
+    asset-returning and a dict-returning mapper describing the same entity put
+    their refs in the same place.
     """
 
     @pytest.mark.parametrize("factory", [_table, _column, _view])
@@ -236,6 +302,62 @@ class TestBothFlattenPathsAgree:
         via_generic = flatten_envelope(orjson.loads(asset.to_nested_bytes()))
 
         assert via_generic == via_pyatlan
+
+
+class TestDictMapperNullsSurvive:
+    """A dict mapper's deliberate nulls must reach the wire (FND-2137).
+
+    Shaped on ``atlan-clickhouse-app/app/mappers.py``, which subclasses
+    ``SqlApp`` — so it takes this default — and emits ``None`` on purpose:
+    ``_rel()`` returns a null relationship stub to mirror "the legacy
+    transformer's all-None-leaves collapse" (``mappers.py:76-88``), and
+    ``_positive_bigint_or_none`` emits null ``rowCount`` / ``sizeBytes``
+    (``mappers.py:303-304``). Both are v2-parity contracts.
+
+    An earlier revision of ``flatten_envelope`` dropped them, which deleted
+    real wire values and would have rehashed every entity in
+    ``atlan-publish-app``'s diff cache on the first run after an SDK bump.
+    """
+
+    def _clickhouse_table(self) -> dict[str, Any]:
+        return {
+            "typeName": "Table",
+            "status": "ACTIVE",
+            "attributes": {
+                "name": "events",
+                "qualifiedName": f"{SCHEMA_QN}/events",
+                "rowCount": None,
+                "sizeBytes": None,
+                "atlanSchema": None,
+            },
+            "customAttributes": {"clickhouse_parts": None},
+        }
+
+    def test_null_attributes_reach_the_wire_under_the_default(self):
+        out = orjson.loads(entity_bytes(self._clickhouse_table()))
+
+        assert out["attributes"]["rowCount"] is None
+        assert out["attributes"]["sizeBytes"] is None
+        assert out["attributes"]["atlanSchema"] is None
+
+    def test_null_custom_attributes_reach_the_wire(self):
+        out = orjson.loads(entity_bytes(self._clickhouse_table()))
+
+        assert out["customAttributes"]["clickhouse_parts"] is None
+
+    def test_default_is_byte_identical_to_the_lever_for_a_ref_free_dict(self):
+        """The sharpest form of the guarantee.
+
+        A dict mapper that emits no top-level ``relationshipAttributes`` has
+        nothing for the envelope to move, so flattening must be a total no-op
+        — not "nearly the same". Anything else rehashes its diff cache for no
+        behavioural gain.
+        """
+        payload = self._clickhouse_table()
+
+        assert entity_bytes(dict(payload)) == entity_bytes(
+            dict(payload), envelope=PYATLAN_ENVELOPE
+        )
 
 
 class TestSqlDialect:
