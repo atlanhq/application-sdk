@@ -121,6 +121,10 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "unit_coverage_fail_under": "",
         # "" = not explicitly set; "true"/"false" = explicit. See TRISTATE_FLAGS.
         "use_ghcr_base": "",
+        # No flag: autodetected from an existing vulnerability-scan.yml. Seeded
+        # here so apply_bootstrap_autodetection can test it like any other
+        # render param and render() receives it as a known keyword.
+        "vuln_scan_lfs": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",

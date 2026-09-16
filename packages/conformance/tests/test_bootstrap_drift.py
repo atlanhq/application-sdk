@@ -307,6 +307,54 @@ def test_build_and_publish_ghcr_base_opt_in_with_structural_drift_flagged(
     assert findings[0].rule_id == "C002"
 
 
+def test_vulnerability_scan_lfs_opt_in_not_flagged(tmp_path: pathlib.Path) -> None:
+    """An app vendoring LFS-tracked assets into its Docker build context keeps
+    ``lfs: true`` without reporting drift.
+
+    The only "fix" for a C002 finding here would be re-running bootstrap, which
+    deletes the line and leaves the scan building from a ~130-byte pointer
+    instead of the real jar — so the opt-in has to be a per-repo value, not
+    drift.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "vulnerability-scan.yml"
+    wf.write_text(render("vulnerability-scan.yml", vuln_scan_lfs="true"))
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_vulnerability_scan_hand_added_lfs_opt_in_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The opt-in as an app would actually hand-write it back after a resync."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "vulnerability-scan.yml"
+    wf.write_text(
+        render("vulnerability-scan.yml").replace(
+            "    secrets: inherit", "    with:\n      lfs: true\n    secrets: inherit"
+        )
+    )
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_vulnerability_scan_lfs_opt_in_with_structural_drift_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Only the opt-in itself is per-repo — other edits are still drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "vulnerability-scan.yml"
+    wf.write_text(
+        render("vulnerability-scan.yml", vuln_scan_lfs="true").replace(
+            "    secrets: inherit", "      ref: nightly\n    secrets: inherit"
+        )
+    )
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
 def test_checks_custom_system_deps_not_flagged(tmp_path: pathlib.Path) -> None:
     """A repo that used --system-deps must not be flagged: the only
     "fix" for a C002 finding here is re-running bootstrap, which would delete
