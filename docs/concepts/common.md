@@ -417,7 +417,7 @@ line = entity_bytes(
 
 | Shape | Protocol | Notes |
 |-------|----------|-------|
-| `to_nested_bytes()` | `NestedBytesAsset` | `pyatlan_v9` assets. Passed through byte-for-byte — no JSON round-trip on the SDK side. |
+| `to_nested_bytes()` | `NestedBytesAsset` | `pyatlan_v9` assets. Under the `PYATLAN` envelope, passed through byte-for-byte; under the default flattened envelope the asset goes through pyatlan's own `to_atlas_format` instead (see [Entity envelope](#entity-envelope)). |
 | `to_nested_dict()` | `NestedDictAsset` | Serialised with the shared `orjson_default` (`Decimal` → float, `bytes` → text). |
 | `model_dump()` | `ModelDumpAsset` | pyatlan v1 / pydantic assets. Last of the object shapes: `model_dump()` yields the model's own field names, which for a snake_case model is *not* the Atlas wire shape, so an asset exposing a nested encoder as well is serialised through that instead. |
 | `dict` | — | Already in the Atlas wire shape. |
@@ -471,6 +471,53 @@ for record in records:
 `lastSyncRunAt` is a property of the *run*, so every asset one crawl produces must carry the same value; a per-record `time.time()` gives every row in one crawl a different "last synced at". `SqlApp._transform_entity` does this for every SQL connector already. **Non-SQL apps get the same behaviour from the same two calls** — nothing in this seam or in `last_sync` is SQL-specific, and an app that writes `asset.to_nested_bytes()` directly today gets both injections plus the typed-error contract by routing through `entity_bytes()` instead.
 
 `resolve_last_sync_details()` reads the execution and correlation contextvars the SDK's Temporal interceptor populates. Call it on the event loop inside the activity. `run_in_thread` does propagate contextvars (it runs the callable under `contextvars.copy_context()`), so resolving inside an offloaded loop works too — but then the correctness rests on an offload implementation detail rather than on where the call sits.
+
+### Entity envelope
+
+`entity_bytes()` decides *how to serialise* the mapper's return value. `application_sdk.common.entity_envelope` decides *what the finished line looks like* — and in particular where relationship references live (FND-2137).
+
+Before this, every connector hand-rolled its own post-serialisation pass, and a scan of the six SqlApp-pattern connectors found four mutually incompatible envelope strategies, two of which disagreed about that question. Two apps publishing to the same downstream disagreed about the wire contract.
+
+```python
+from application_sdk.common.entity_envelope import (
+    EntityDecorations,
+    EntityEnvelopePolicy,
+    EnvelopeShape,
+)
+
+class TeradataApp(SqlApp):
+    entity_envelope = EntityEnvelopePolicy(sql_dialect="teradata")
+```
+
+Declared once per app as a class attribute, not per mapper: the envelope is a property of the downstream contract, and per-mapper choice is how the fleet ended up with four of them. `SqlApp` reads it in `_transform_entity` and threads it into `entity_bytes()`; a non-SQL app passes `envelope=` directly.
+
+**`shape`** — where relationship refs live:
+
+| Value | Output | Use |
+|---|---|---|
+| `EnvelopeShape.FLATTENED` | Refs merged into `attributes`, no `relationshipAttributes` key | The default |
+| `EnvelopeShape.PYATLAN` | Refs under a top-level `relationshipAttributes` key | **Deprecated, removed in v4.0.** A migration lever for a connector whose *released* output is this shape |
+
+Flattened is the default because that is what the publish app's diff engine reads: it does set-based append/remove diffing for `inputs`, `outputs` and `upstreamTables` out of `attributes`, and a top-level `relationshipAttributes` key falls through to a whole-dict equality branch. Under the pyatlan-native envelope the relationship append/remove path never fires. A connector emitting no lineage gets away with it; the first one that does loses incremental relationship diffing silently. `application_sdk.validation.assets` and the SDK's own seed harness are already on the flattened side.
+
+The flattening itself is `pyatlan_v9.model.transform.to_atlas_format` — the SDK does not hand-roll it, and does not need to: that encoder is *cheaper* than the nested one (≈3 µs/record against ≈11 µs), drops `None` from `attributes` while preserving nulls inside `customAttributes`, and never emits the `appendRelationshipAttributes` / `removeRelationshipAttributes` keys the publish app generates itself. A dict-returning mapper or a pyatlan v1 model goes through `flatten_envelope()`, which is kept behaviourally identical so `FLATTENED` means one thing regardless of what the mapper returned.
+
+**`sql_dialect`** — stamped as `attributes.sqlDialect` on assets that carry DDL (`tableDefinition` on a `Table`, `definition` on a `View` / `MaterialisedView`), so downstream SQL parsing knows which grammar to read a definition with. The value is static per connector; the condition is per record. It lives here because no `pyatlan_v9` asset type declares `sqlDialect` — an asset-returning mapper has nowhere to put it.
+
+**Decorations** — top-level fields no pyatlan model field can hold, returned per record from `SqlApp.decorate_entity()`:
+
+```python
+class MysqlApp(SqlApp):
+    def decorate_entity(self, *, entity_type, record) -> EntityDecorations | None:
+        return EntityDecorations(
+            default_catalog_name=record["table_catalog"],
+            default_schema_name=record["table_schema"],
+        )
+```
+
+These land on the entity *root*, beside `typeName`, because that is where their readers look — Query Intelligence reads `defaultCatalogName` / `defaultSchemaName` into each `success.json` row, which lineage-app then uses to resolve a bare table name to a fully-qualified Atlas path. The publish app strips unknown root keys before hashing, so a decoration reaches its reader off the transformed artifact or not at all.
+
+The return type is a typed model rather than a `Mapping[str, Any]` deliberately. Every field is a named cross-app contract with a specific reader; a free dict is how a second undocumented side-channel gets added without anyone noticing. A connector needing a field `EntityDecorations` does not have adds it there, which forces the conversation about who reads it.
 
 
 ## General Utilities
