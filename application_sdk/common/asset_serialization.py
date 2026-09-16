@@ -177,13 +177,18 @@ def _set_connection_name(asset: object, connection_name: str) -> None:
         return
 
 
-#: The dict path's ``(resolved value attribute, Atlas wire key)`` table. The
-#: object path does not need one — it goes through the primitive, which knows
-#: the field names.
-_LAST_SYNC_WIRE_KEYS: tuple[tuple[str, str], ...] = (
+#: The dict path's ``(resolved field, Atlas wire key)`` table for the two
+#: *conditional* values only. ``run_at_ms`` is deliberately absent: the
+#: primitive assigns it unconditionally, so folding it into a uniform
+#: truthiness loop here made the dict path drop ``run_at_ms=0`` while the
+#: object path kept it. The asymmetry is real, so it is spelled out rather
+#: than hidden in a table.
+#:
+#: The object path needs no table at all — it goes through the primitive,
+#: which knows its own field names.
+_LAST_SYNC_OPTIONAL_KEYS: tuple[tuple[str, str], ...] = (
     ("run", "lastSyncRun"),
     ("workflow_name", "lastSyncWorkflowName"),
-    ("run_at_ms", "lastSyncRunAt"),
 )
 
 
@@ -199,9 +204,14 @@ def _set_last_sync(asset: object, details: LastSyncDetails) -> None:
 
     So, unlike ``connectionName``, a value already on the asset does **not**
     win: whoever resolved *details* had the run context the mapper did not.
-    The rule that an empty resolved ``run`` / ``workflow_name`` is never
-    written — so outside Temporal a hand-set value survives rather than being
-    blanked — belongs to the primitive, and both paths below honour it.
+
+    Which of the three that applies to is the primitive's rule, and both
+    paths below honour it exactly: an empty resolved ``run`` /
+    ``workflow_name`` is never written, so outside Temporal a hand-set value
+    survives rather than being blanked — while ``run_at_ms`` is *always*
+    written, including a caller's explicit ``0``. ``LastSyncDetails``
+    documents ``run_at_ms`` as an accepted override, so 0 is a value a caller
+    can mean, not an absence.
 
     The object path is :func:`set_last_sync_details_on_asset`, unwrapped: the
     SDK has one implementation of "what stamping means" and this is not a
@@ -221,10 +231,11 @@ def _set_last_sync(asset: object, details: LastSyncDetails) -> None:
         attributes = asset.setdefault("attributes", {})
         if not isinstance(attributes, dict):
             return
-        for field, wire_key in _LAST_SYNC_WIRE_KEYS:
+        for field, wire_key in _LAST_SYNC_OPTIONAL_KEYS:
             value = getattr(details, field)
             if value:
                 attributes[wire_key] = value
+        attributes["lastSyncRunAt"] = details.run_at_ms
         return
 
     if not isinstance(asset, LastSyncStampable):

@@ -563,3 +563,21 @@ class TestLastSyncInjection:
 
         assert out["attributes"]["connectionName"] == "my-conn"
         assert out["attributes"]["lastSyncRun"] == DETAILS.run
+
+    def test_run_at_ms_zero_survives_on_both_paths(self):
+        """0 is a value a caller can mean, not an absence.
+
+        The two run-identity *strings* are skipped when empty, so a hand-set
+        value survives outside Temporal. ``run_at_ms`` is not: the primitive
+        assigns it unconditionally, and ``LastSyncDetails`` documents it as an
+        accepted explicit override. A dict path that filtered all three on
+        truthiness dropped it on one shape and kept it on the other — the same
+        seam disagreeing with itself.
+        """
+        zero = LastSyncDetails(run="r", workflow_name="w", run_at_ms=0)
+
+        as_dict = orjson.loads(entity_bytes({"typeName": "Table"}, last_sync=zero))
+        as_asset = orjson.loads(entity_bytes(_table(), last_sync=zero))
+
+        assert as_dict["attributes"]["lastSyncRunAt"] == 0
+        assert as_asset["attributes"]["lastSyncRunAt"] == 0
