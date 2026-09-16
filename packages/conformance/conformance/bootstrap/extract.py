@@ -966,6 +966,42 @@ def extract_use_ghcr_base(text: str) -> str:
     return "true" if extract_field(text, "use_ghcr_base") == "true" else ""
 
 
+def extract_vulnerability_scan_lfs(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``vulnerability-scan.yml``) opts into the
+    LFS checkout on the scan's image build, else ``""``.
+
+    Same round-trip contract as ``extract_use_ghcr_base`` one function up, and
+    for the same reason: this is a per-repo choice on an *always-overwrite*
+    managed shim, so it needs both halves or it cannot survive.  Bootstrap's
+    autodetection reads it here so a re-run re-renders the line instead of
+    deleting it, and the C002 checker reads it here so a repo that opted in is
+    not reported as drifted.
+
+    Without the round-trip the input is not merely unsupported, it is actively
+    destroyed on a cadence nobody controls.  ``vulnerability-scan.yml`` has no
+    ``unpreserved_declarations`` guard of the kind that makes ``tests.yaml``
+    *refuse* a resync (FND-604) — it is overwritten silently — so an app that
+    vendors LFS-tracked assets into its Docker build context loses the line on
+    every bootstrap invocation, including granular ones like
+    ``--renovate-automerge true`` that have nothing to do with this file.  The
+    next scan then builds from a ~130-byte LFS pointer instead of the real
+    asset.  Observed three times on one connector before this slot existed.
+
+    Anything other than a literal ``true`` returns ``""`` ("say nothing, take
+    the SDK default"), including ``false``: ``build-and-scan.yaml`` already
+    defaults ``lfs`` to false, so rendering an explicit ``lfs: false`` would be
+    a second spelling of the default and would read as drift on every repo that
+    spells it the other way.
+
+    Read file-wide via ``extract_field`` rather than through
+    ``reusable_job_with_block``: that scope is keyed on the job calling
+    ``tests-reusable.yaml`` and so does not apply here, and this shim is a
+    17-line file with exactly one job — the same reasoning that lets
+    ``extract_use_ghcr_base`` read ``build-and-publish.yaml`` file-wide.
+    """
+    return "true" if extract_field(text, "lfs") == "true" else ""
+
+
 def extract_field(text: str, field: str) -> str:
     """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
 
