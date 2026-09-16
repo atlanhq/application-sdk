@@ -960,3 +960,63 @@ def test_extract_exit_zero_matches_takes_priority_over_renovate() -> None:
     # No root/renovate.json is ever touched in this case; a bogus path proves
     # the match path doesn't need it.
     assert _extract_exit_zero(text, pathlib.Path("/nonexistent")) == "true"
+
+
+def test_build_publish_lfs_opt_in_not_flagged(tmp_path: pathlib.Path) -> None:
+    """An app vendoring LFS-tracked assets keeps `lfs: true` on the RELEASE
+    image build without reporting drift.
+
+    The only "fix" for a C002 finding here would be re-running bootstrap, which
+    deletes the line — and unlike the scan's copy, nothing goes red until a
+    release is cut, so the loss is invisible until it is expensive.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "build-and-publish.yaml"
+    wf.write_text(render("build-and-publish.yaml", build_publish_lfs="true"))
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_build_publish_hand_added_lfs_opt_in_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The opt-in as an app would hand-write it back after a bootstrap run."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "build-and-publish.yaml"
+    wf.write_text(
+        render("build-and-publish.yaml").replace(
+            "    secrets: inherit", "      lfs: true\n    secrets: inherit"
+        )
+    )
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_build_publish_lfs_and_ghcr_base_together_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Two independent per-repo opt-ins on the same shim must both survive."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "build-and-publish.yaml"
+    wf.write_text(
+        render("build-and-publish.yaml", build_publish_lfs="true", use_ghcr_base="true")
+    )
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_build_publish_lfs_opt_in_with_structural_drift_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Only the opt-in itself is per-repo — other edits are still drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "build-and-publish.yaml"
+    wf.write_text(
+        render("build-and-publish.yaml", build_publish_lfs="true").replace(
+            "    secrets: inherit", "      channel: nightly\n    secrets: inherit"
+        )
+    )
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"

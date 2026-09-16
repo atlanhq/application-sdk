@@ -39,4 +39,5 @@ jobs:
       release_tag: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
       unit_tests_workflow_file: "<< unit_tests_workflow >>"
 <% if use_ghcr_base == 'true' %>      use_ghcr_base: true
+<% endif %><% if build_publish_lfs %>      lfs: << build_publish_lfs >>
 <% endif %>    secrets: inherit

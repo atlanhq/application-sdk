@@ -125,6 +125,8 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         # here so apply_bootstrap_autodetection can test it like any other
         # render param and render() receives it as a known keyword.
         "vuln_scan_lfs": "",
+        # Same, read off an existing build-and-publish.yaml.
+        "build_publish_lfs": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",
