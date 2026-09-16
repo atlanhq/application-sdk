@@ -25,6 +25,7 @@ from application_sdk.common.asset_serialization import (
     orjson_default,
 )
 from application_sdk.common.errors import UnserializableMapperResultError
+from application_sdk.common.last_sync import LastSyncDetails
 
 SCHEMA_QN = "default/mysql/1234567890/db/sch"
 
@@ -401,3 +402,150 @@ class TestOrjsonDefault:
         out = orjson.loads(entity_bytes({"attributes": {"created": stamp}}))
 
         assert out["attributes"]["created"].startswith("2026-09-15T12:00:00")
+
+
+# ---------------------------------------------------------------------------
+# Framework-injected lastSync* attributes (FND-2097)
+# ---------------------------------------------------------------------------
+#
+# The regression these pin: nothing on the v3 asset-mapper path ever set
+# lastSyncRun / lastSyncWorkflowName / lastSyncRunAt. The SDK had the
+# primitive, but only the v2 AtlasTransformer called it — so every v3-crawled
+# asset lost the "which run last touched this" affordance the legacy Argo
+# connectors emitted, and the UI had nothing to show.
+
+
+DETAILS = LastSyncDetails(
+    run="d637c39c-81a0-48b5-bf36-312108e4615c",
+    workflow_name="4b9eade4-de53-4b69-9010-2446e0a8f85c",
+    run_at_ms=1789000000000,
+)
+
+
+@dataclass
+class HandRolledLastSync:
+    """A mapper shape that stamped last-sync itself, the wrong way.
+
+    This is what the non-SQL connectors do today: reach for the workflow id
+    they were handed, which is the *child* workflow's Temporal id, not the AE
+    run. The framework value has to win over it.
+    """
+
+    payload: dict[str, Any]
+    last_sync_run: str = "child-wf-run"
+    last_sync_workflow_name: str = "child-wf-id"
+    last_sync_run_at: int = 1
+
+    def to_nested_dict(self) -> dict[str, Any]:
+        return self.payload
+
+
+class NoLastSyncFields:
+    """An asset shape that declares none of the three attributes."""
+
+    def to_nested_dict(self) -> dict[str, Any]:
+        return {"typeName": "Custom", "attributes": {}}
+
+
+class UnsettableLastSync:
+    """An asset whose last-sync fields read back but refuse assignment."""
+
+    @property
+    def last_sync_run(self) -> str:
+        return ""
+
+    @last_sync_run.setter
+    def last_sync_run(self, value: str) -> None:
+        raise AttributeError("read-only")
+
+    def to_nested_dict(self) -> dict[str, Any]:
+        return {"typeName": "Custom", "attributes": {}}
+
+
+class TestLastSyncInjection:
+    def test_pyatlan_v9_asset_carries_all_three_on_the_wire(self):
+        out = orjson.loads(entity_bytes(_table(), last_sync=DETAILS))
+
+        assert out["attributes"]["lastSyncRun"] == DETAILS.run
+        assert out["attributes"]["lastSyncWorkflowName"] == DETAILS.workflow_name
+        assert out["attributes"]["lastSyncRunAt"] == DETAILS.run_at_ms
+
+    def test_dict_asset_gets_the_atlas_wire_keys(self):
+        out = orjson.loads(
+            entity_bytes({"typeName": "Table", "attributes": {}}, last_sync=DETAILS)
+        )
+
+        assert out["attributes"]["lastSyncRun"] == DETAILS.run
+        assert out["attributes"]["lastSyncWorkflowName"] == DETAILS.workflow_name
+        assert out["attributes"]["lastSyncRunAt"] == DETAILS.run_at_ms
+
+    def test_dict_without_an_attributes_block_gets_one(self):
+        out = orjson.loads(entity_bytes({"typeName": "Table"}, last_sync=DETAILS))
+
+        assert out["attributes"]["lastSyncRunAt"] == DETAILS.run_at_ms
+
+    def test_omitting_last_sync_stamps_nothing(self):
+        """Default is off: a caller with no run context changes no asset."""
+        out = orjson.loads(entity_bytes(_table()))
+
+        assert "lastSyncRun" not in out["attributes"]
+        assert "lastSyncWorkflowName" not in out["attributes"]
+        assert "lastSyncRunAt" not in out["attributes"]
+
+    def test_framework_value_overwrites_a_hand_rolled_one(self):
+        """Unlike connectionName, the mapper is *not* the authority here.
+
+        These are run identity, which the mapper cannot resolve — a connector
+        that tries stamps the child workflow's Temporal id, which is not
+        clickable back to the AE run.
+        """
+        asset = HandRolledLastSync(payload={"typeName": "Custom", "attributes": {}})
+
+        entity_bytes(asset, last_sync=DETAILS)
+
+        assert asset.last_sync_run == DETAILS.run
+        assert asset.last_sync_workflow_name == DETAILS.workflow_name
+        assert asset.last_sync_run_at == DETAILS.run_at_ms
+
+    def test_empty_resolved_values_leave_a_hand_rolled_one_alone(self):
+        """Outside Temporal the resolver returns empty run / workflow_name.
+
+        Blanking a value the caller did set would be worse than leaving it:
+        the primitive's own rule, kept here so the two cannot diverge.
+        """
+        asset = HandRolledLastSync(payload={"typeName": "Custom", "attributes": {}})
+
+        entity_bytes(
+            asset, last_sync=LastSyncDetails(run="", workflow_name="", run_at_ms=42)
+        )
+
+        assert asset.last_sync_run == "child-wf-run"
+        assert asset.last_sync_workflow_name == "child-wf-id"
+        assert asset.last_sync_run_at == 42
+
+    def test_shape_without_the_fields_is_left_untouched(self):
+        """No attribute is invented on an object that does not declare one.
+
+        Its own serialiser would ignore it anyway, and the SDK does not add
+        fields to somebody else's model.
+        """
+        asset = NoLastSyncFields()
+
+        out = orjson.loads(entity_bytes(asset, last_sync=DETAILS))
+
+        assert not hasattr(asset, "last_sync_run")
+        assert out["attributes"] == {}
+
+    def test_read_only_asset_does_not_fail_the_transform(self):
+        """Same trade-off as connectionName: lose the attribute, keep the run."""
+        out = orjson.loads(entity_bytes(UnsettableLastSync(), last_sync=DETAILS))
+
+        assert out["typeName"] == "Custom"
+
+    def test_both_injections_apply_together(self):
+        out = orjson.loads(
+            entity_bytes(_table(), connection_name="my-conn", last_sync=DETAILS)
+        )
+
+        assert out["attributes"]["connectionName"] == "my-conn"
+        assert out["attributes"]["lastSyncRun"] == DETAILS.run

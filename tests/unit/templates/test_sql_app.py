@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.common.errors import UnserializableMapperResultError
+from application_sdk.common.last_sync import resolve_last_sync_details
 from application_sdk.contracts.storage import VerifyRefsOutput
 from application_sdk.contracts.types import (
     ConnectionAttributes,
@@ -19,6 +20,12 @@ from application_sdk.contracts.types import (
 )
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.errors.categories import Audience
+from application_sdk.observability import (
+    CorrelationContext,
+    ExecutionContext,
+    set_correlation_context,
+    set_execution_context,
+)
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
@@ -3199,8 +3206,14 @@ class TestMapperResultSerialisation:
         assert exc.value.observed == "object"
         assert exc.value.location == "table"
 
-    async def test_dict_mapper_behaviour_is_unchanged(self, tmp_path):
-        """Every connector returning a dict today keeps its exact output."""
+    async def test_dict_mapper_keeps_its_own_output(self, tmp_path):
+        """A dict-returning mapper keeps every field it produced.
+
+        The seam only *adds* the framework-injected attributes — here
+        ``connectionName`` (FND-2056) and ``lastSyncRunAt`` (FND-2097); the
+        other two lastSync values are empty outside a run context and so are
+        not written. Nothing the mapper itself emitted is rewritten.
+        """
         app = TestSqlApp()
         _seed_raw(tmp_path, "table", [{"table_name": "users"}])
         input_ = _make_task_input(
@@ -3212,8 +3225,96 @@ class TestMapperResultSerialisation:
         entity = json.loads(
             (tmp_path / "transformed" / "table" / "entities.json").read_text().strip()
         )
+        attributes = entity.pop("attributes")
+        assert attributes.pop("lastSyncRunAt") > 0
+        assert attributes == {"connectionName": "My MySQL"}
         assert entity == {
             "typeName": "Table",
             "qualifiedName": "default/mysql/1/users",
-            "attributes": {"connectionName": "My MySQL"},
         }
+
+
+# ---------------------------------------------------------------------------
+# lastSync* stamping on the v3 transform path (FND-2097)
+# ---------------------------------------------------------------------------
+#
+# Nothing on this path ever set lastSyncRun / lastSyncWorkflowName /
+# lastSyncRunAt. The SDK had the primitive but only the v2 AtlasTransformer
+# called it, so every v3-crawled asset lost the "which run last touched this"
+# affordance — no last-sync run in the UI, and no path from an asset back to
+# the AE run that produced it. Publish already strips these three before diff
+# hashing, which only makes sense if the connector is expected to emit them.
+
+
+class TestTransformStampsLastSync:
+    @pytest.fixture(autouse=True)
+    def _run_context(self):
+        """Stand in for what the Temporal interceptor populates in production."""
+        set_execution_context(
+            ExecutionContext(
+                execution_type="activity",
+                workflow_id="child-wf-id",
+                parent_workflow_id="4b9eade4-de53-4b69-9010-2446e0a8f85c",
+            )
+        )
+        set_correlation_context(
+            CorrelationContext(correlation_id="d637c39c-81a0-48b5-bf36-312108e4615c")
+        )
+        yield
+        set_execution_context(ExecutionContext())
+        set_correlation_context(CorrelationContext())
+
+    async def test_transformed_entities_carry_the_three_attributes(self, app, tmp_path):
+        _seed_raw(tmp_path, "table", [{"table_name": "users"}])
+
+        await app.transform_tables(_make_task_input(output_path=str(tmp_path)))
+
+        out = (tmp_path / "transformed" / "table" / "entities.json").read_text()
+        attributes = json.loads(out.strip())["attributes"]
+        # parent_workflow_id, not workflow_id: the AE-dispatched run is what
+        # is clickable from an asset, and the child id is not.
+        assert attributes["lastSyncWorkflowName"] == (
+            "4b9eade4-de53-4b69-9010-2446e0a8f85c"
+        )
+        assert attributes["lastSyncRun"] == "d637c39c-81a0-48b5-bf36-312108e4615c"
+        assert attributes["lastSyncRunAt"] > 0
+
+    async def test_every_record_in_a_run_shares_one_timestamp(self, app, tmp_path):
+        """One crawl, one ``lastSyncRunAt`` — not a per-row ``time.time()``."""
+        _seed_raw(
+            tmp_path,
+            "table",
+            [{"table_name": n} for n in ("users", "orders", "products")],
+        )
+
+        await app.transform_tables(_make_task_input(output_path=str(tmp_path)))
+
+        lines = (
+            (tmp_path / "transformed" / "table" / "entities.json")
+            .read_text()
+            .strip()
+            .split("\n")
+        )
+        stamps = {json.loads(line)["attributes"]["lastSyncRunAt"] for line in lines}
+        assert len(stamps) == 1
+
+    async def test_resolution_happens_once_per_activity(self, app, tmp_path):
+        """Pins the *mechanism*, not just its observable effect.
+
+        Three rows finishing inside the same millisecond would satisfy the
+        shared-timestamp assertion above even with a per-record resolve, so
+        the call count is asserted directly.
+        """
+        _seed_raw(
+            tmp_path,
+            "table",
+            [{"table_name": n} for n in ("users", "orders", "products")],
+        )
+
+        with patch(
+            "application_sdk.templates.sql_app.resolve_last_sync_details",
+            wraps=resolve_last_sync_details,
+        ) as resolver:
+            await app.transform_tables(_make_task_input(output_path=str(tmp_path)))
+
+        assert resolver.call_count == 1
