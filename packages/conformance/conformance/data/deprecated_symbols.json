@@ -199,6 +199,24 @@
       "symbol": "IncrementalSqlMetadataExtractor"
     },
     {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "SqlApp._build_transform_input is deprecated; use the public SqlApp.build_transform_input instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_build_transform_input"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "SqlApp._resolve_credential_ref is deprecated; use the public SqlApp.resolve_credential_ref instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_resolve_credential_ref"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": " subclasses SqlMetadataExtractor which is deprecated. Use application_sdk.templates.SqlApp instead. Will be removed in v4.0.0.",
