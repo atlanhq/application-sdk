@@ -532,3 +532,97 @@ def test_the_e2e_concurrency_groups_still_refuse_to_cancel_in_progress() -> None
         assert (
             workflow["jobs"][name]["concurrency"]["cancel-in-progress"] is False
         ), name
+
+
+# ── The scaffolded caller's own guard (conformance bootstrap template) ───────
+#
+# `tests-reusable.yaml` cannot hold this one. `unit` must not be skipped
+# (verify_test_gate.py fails the gate on `unit != "success"`) and `integration`
+# must not be either (the two cases above pin it to every PR event when the base
+# branch has no merge queue). So the only layer that can stop a `labeled` event
+# from starting a second run — whose `unit`/`integration` jobs then evict the
+# in-flight ones through their PR-shared cancel-in-progress groups — is the
+# CALLER job in each connector's tests.yaml, which bootstrap scaffolds.
+#
+# That template is Jinja, so its block lines are stripped before parsing; the
+# `tests:` job's `if:` is plain YAML and survives untouched.
+
+_TESTS_TEMPLATE = (
+    _REPO_ROOT / "packages/conformance/conformance/bootstrap/templates/tests.yaml"
+)
+
+
+def _load_tests_template() -> dict[str, Any]:
+    raw = _TESTS_TEMPLATE.read_text(encoding="utf-8")
+    stripped = "\n".join(line for line in raw.splitlines() if "<%" not in line)
+    return yaml.safe_load(stripped) or {}
+
+
+def _scaffolded_caller_gate() -> str:
+    job = (_load_tests_template().get("jobs") or {}).get("tests")
+    assert job, "the scaffolded tests.yaml lost its `tests:` job"
+    condition = job.get("if")
+    assert condition, (
+        "the scaffolded tests.yaml caller lost its label guard; an unrelated "
+        "label will cancel in-flight unit/integration runs in every connector"
+    )
+    return str(condition)
+
+
+#: Unlike `_SCENARIOS`, this gate is NOT a state check — the tier runs on every
+#: ordinary event whether or not the PR carries a label. It suppresses exactly
+#: one thing: a `labeled` event for some label other than `e2e`.
+_CALLER_SCENARIOS: tuple[tuple[str, dict[str, Any], bool], ...] = (
+    ("a real push", _pull_request("synchronize", ()), True),
+    ("opened", _pull_request("opened", ()), True),
+    ("reopened", _pull_request("reopened", ()), True),
+    (
+        "a push on a PR already carrying e2e",
+        _pull_request("synchronize", ("e2e",)),
+        True,
+    ),
+    ("the e2e label being added", _pull_request("labeled", ("e2e",), added="e2e"), True),
+    # The regression this guard exists for.
+    (
+        "a review bot's label added mid-run",
+        _pull_request("labeled", ("e2e",), added="mothership-reviewed"),
+        False,
+    ),
+    (
+        "an unrelated label on a PR without e2e",
+        _pull_request("labeled", (), added="size/M"),
+        False,
+    ),
+    ("the merge queue", _merge_group(), True),
+)
+
+
+@pytest.mark.parametrize(
+    "description,github,expected",
+    _CALLER_SCENARIOS,
+    ids=[s[0] for s in _CALLER_SCENARIOS],
+)
+def test_scaffolded_caller_gate_suppresses_only_unrelated_labels(
+    description: str, github: dict[str, Any], expected: bool
+) -> None:
+    gate = _scaffolded_caller_gate()
+    assert evaluate(gate, {"github": github}) is expected, description
+
+
+def test_scaffolded_caller_gate_is_inert_off_the_pull_request_path() -> None:
+    """push / workflow_dispatch / merge_group carry no `labeled` action, so the
+    first clause is true and the tier runs exactly as before."""
+    gate = _scaffolded_caller_gate()
+    for github in (
+        {"event_name": "push", "event": {}},
+        {"event_name": "workflow_dispatch", "event": {}},
+        _merge_group(),
+    ):
+        assert evaluate(gate, {"github": github}) is True, github["event_name"]
+
+
+def test_scaffolded_caller_keeps_the_labeled_trigger() -> None:
+    """The guard is only safe while `labeled` remains a trigger: dropping it
+    would stop the `e2e` label requesting the tier at all."""
+    on = _load_tests_template().get(True) or _load_tests_template().get("on") or {}
+    assert "labeled" in on["pull_request"]["types"]

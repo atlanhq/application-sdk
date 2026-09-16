@@ -107,6 +107,49 @@ on:
 
 jobs:
   tests:
+    # Ignore `labeled` events for any label but `e2e`.
+    #
+    # The trigger above must keep `labeled`, because that is the only way the
+    # `e2e` label can request the e2e tier and GitHub has no trigger-level
+    # filter for WHICH label fired. So every unrelated label a bot touches —
+    # a review-state swap, a size or area label — starts a second run of this
+    # workflow while the first is still going.
+    #
+    # That second run is not harmless. `unit` and `integration` inside
+    # tests-reusable.yaml both key `concurrency` on a group SHARED across the
+    # PR's commits with `cancel-in-progress`, so the new run's jobs claim those
+    # groups and EVICT the in-flight ones mid-test.
+    #
+    # MEASURED on atlan-bw-app (2026-09-15, commit 96be97a):
+    #   12:39:24  push -> run A starts, e2e jobs begin
+    #   12:40:19  a review bot adds a label
+    #   12:40:22  run B starts, cancels run A 55s in - and skips e2e itself
+    # An earlier run then reported `Tests Gate: success` having skipped every
+    # e2e job. A required check that can pass vacuously is worse than one that
+    # is merely noisy.
+    #
+    # This belongs on the CALLER, not in the reusable, and that is not a
+    # preference — the reusable cannot express it:
+    #   * `unit` must not be skipped. verify_test_gate.py fails the gate on
+    #     `unit != "success"`, so a skip turns the required `tests / Tests Gate`
+    #     RED on every unrelated label.
+    #   * `integration` must not be skipped either. Two cases in
+    #     test_label_trigger_gates.py pin it to run on every PR event when the
+    #     base branch has no merge queue — that tier is then the only thing
+    #     catching a bad merge — and to stay in lockstep with detect-integration.
+    # Skipping the caller sidesteps both: no reusable job is created, so none
+    # claims a concurrency group and none reports a result. The run's own
+    # check-runs are simply absent, and the ones already green on this SHA
+    # stand — a `labeled` event does not change the head SHA, so nothing a
+    # ruleset requires goes missing. (Contrast the merge-queue case in
+    # release-gate.yaml, where the ref IS new and the trigger must be added.)
+    #
+    # Non-`labeled` events are unaffected: push, synchronize, reopened, the
+    # merge queue and workflow_dispatch carry no `github.event.action` of
+    # `labeled`, so the first clause is true and the tier runs as before.
+    if: >-
+      github.event.action != 'labeled' ||
+      github.event.label.name == 'e2e'
     # Declared rather than inherited from the repository default, because a
     # called workflow's permissions can only EQUAL or NARROW its caller's. Every
     # scope below is one the reusable workflow's own jobs declare; leaving this

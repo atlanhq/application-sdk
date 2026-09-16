@@ -1465,3 +1465,52 @@ def test_non_default_install_app_to_tenant_still_refuses(value: str) -> None:
     assert "install-app-to-tenant" in unpreserved_tests_yaml_declarations(
         text, rendered
     )
+
+
+# ---------------------------------------------------------------------------
+# tests.yaml's caller-side label guard (FND-604 round-trip)
+# ---------------------------------------------------------------------------
+
+
+def test_tests_yaml_template_carries_the_label_guard() -> None:
+    """The scaffolded caller must suppress `labeled` events for any label but
+    `e2e`.
+
+    Without it, an unrelated label (a review bot's state swap, a size label)
+    starts a second run whose `unit`/`integration` jobs claim the PR-shared
+    cancel-in-progress groups and evict the in-flight ones mid-test. Measured on
+    a connector: a run cancelled 55s in, and an earlier one reported
+    `Tests Gate: success` having skipped every e2e job.
+
+    It has to live on the caller: `unit` cannot be skipped (verify_test_gate
+    fails the gate on a non-success result) and `integration` cannot either
+    (it must run on every PR event where the base branch has no merge queue).
+    """
+    rendered = render("tests.yaml")
+    assert "github.event.action != 'labeled'" in rendered
+    assert "github.event.label.name == 'e2e'" in rendered
+
+
+def test_tests_yaml_guard_does_not_block_its_own_resync() -> None:
+    """A repo carrying the guard must still be re-renderable.
+
+    ``declared_keys`` compares a flat set of key names, so before the template
+    declared `if` the guard read as a key the canonical had no place for and
+    ``--resync`` refused the whole file (FND-604) — freezing that repo against
+    every future structural update, which is exactly the cost a repo paid for
+    protecting itself.
+    """
+    rendered = render("tests.yaml")
+    params = extract_tests_yaml_params(rendered)
+    assert unpreserved_tests_yaml_declarations(rendered, render("tests.yaml", **params)) == []
+
+
+def test_tests_yaml_guard_survives_a_round_trip_with_per_repo_values() -> None:
+    """The guard is re-emitted alongside a repo's own customisation, not in
+    place of it — the two must not compete for the same round trip."""
+    rendered = render("tests.yaml", app_name="sapbw", lfs="true", source_available="true")
+    params = extract_tests_yaml_params(rendered)
+    rerendered = render("tests.yaml", **params)
+    assert "github.event.label.name == 'e2e'" in rerendered
+    assert "lfs: true" in rerendered
+    assert unpreserved_tests_yaml_declarations(rendered, rerendered) == []
