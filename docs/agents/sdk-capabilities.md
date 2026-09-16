@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.34.3
-source-sha:    3435a565b2919b60f4bca9e9a3bd5176f41a17ac
-source-date:   2026-09-16T08:26:24+01:00
+source-sha:    af576016582a9598b36d2073373e76ba9438e1ca
+source-date:   2026-09-16T09:10:49Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 38 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 45 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -493,6 +493,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Enumeration of dataframe types.
 - **Defined in:** `application_sdk/common/types.py`
 
+#### `EntityDecorations`
+
+- **Import:** `from application_sdk.common.entity_envelope import EntityDecorations`
+- **Signature:** `class EntityDecorations(default_catalog_name: str | None = None, default_schema_name: str | None = None) -> None`
+- **Summary:** Top-level entity fields that no pyatlan model field can hold.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `EntityEnvelopePolicy`
+
+- **Import:** `from application_sdk.common.entity_envelope import EntityEnvelopePolicy`
+- **Signature:** `class EntityEnvelopePolicy(shape: EnvelopeShape = EnvelopeShape.FLATTENED, sql_dialect: str | None = None) -> None`
+- **Summary:** How one connector's serialised entities are shaped.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `EnvelopeShape`
+
+- **Import:** `from application_sdk.common.entity_envelope import EnvelopeShape`
+- **Signature:** `class EnvelopeShape`
+- **Summary:** Where relationship references live in the serialised entity.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
 #### `FilterPattern`
 
 - **Import:** `from application_sdk.common import FilterPattern`
@@ -558,6 +579,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Defined in:** `application_sdk/common/asset_serialization.py`
 
 ### Functions
+
+#### `apply_envelope`
+
+- **Import:** `from application_sdk.common.entity_envelope import apply_envelope`
+- **Signature:** `apply_envelope(entity: dict[str, *, ...)`
+- **Summary:** Apply *policy* and *decorations* to one serialised entity dict.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `atomic_copy`
 
@@ -629,6 +657,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `filter_matches(candidate: str, *, ...)`
 - **Summary:** Convenience one-shot: compile ``include``/``exclude`` and test ``candidate``.
 - **Defined in:** `application_sdk/common/filter_matching.py`
+
+#### `flatten_envelope`
+
+- **Import:** `from application_sdk.common.entity_envelope import flatten_envelope`
+- **Signature:** `flatten_envelope(entity: dict[str, Any]) -> dict[str, Any]`
+- **Summary:** Merge a nested-format entity's relationship refs into ``attributes``.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `get_actual_cpu_count`
 
@@ -749,7 +784,21 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Stamp last-sync details on every asset in ``assets``.
 - **Defined in:** `application_sdk/common/last_sync.py`
 
+#### `to_atlas_format_dict`
+
+- **Import:** `from application_sdk.common.entity_envelope import to_atlas_format_dict`
+- **Signature:** `to_atlas_format_dict(asset: object) -> dict[str, Any] | None`
+- **Summary:** ``pyatlan_v9.to_atlas_format(asset)``, or ``None`` if it doesn't apply.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
 ### Constants and Enums
+
+#### `DEFAULT_ENVELOPE`
+
+- **Import:** `from application_sdk.common.entity_envelope import DEFAULT_ENVELOPE`
+- **Signature:** `DEFAULT_ENVELOPE: Final[EntityEnvelopePolicy]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `PARTIAL_DIRNAME`
 

@@ -21,6 +21,16 @@ three ``lastSync*`` attributes (FND-2097). Both are injected here rather than
 copied into every connector, because a copy in every connector is how they
 ended up wrong or missing in the first place.
 
+What this module does **not** decide is the *envelope* — the shape of the line
+once serialisation has happened, and in particular where relationship
+references live. That is
+:mod:`application_sdk.common.entity_envelope` (FND-2137), which
+:func:`entity_bytes` applies through its ``envelope`` and ``decorations``
+arguments. Dispatch here, envelope there: this module answers "how do I
+serialise this object at all", that one answers "what does the finished line
+look like", and keeping them apart is what stops either becoming the place
+every new connector-specific knob gets bolted on.
+
 Public API::
 
     from application_sdk.common.asset_serialization import entity_bytes
@@ -49,6 +59,14 @@ from typing import Any, Protocol, runtime_checkable
 
 import orjson
 
+from application_sdk.common.entity_envelope import (
+    DEFAULT_ENVELOPE,
+    EntityDecorations,
+    EntityEnvelopePolicy,
+    EnvelopeShape,
+    apply_envelope,
+    to_atlas_format_dict,
+)
 from application_sdk.common.errors import UnserializableMapperResultError
 from application_sdk.common.last_sync import (
     LastSyncDetails,
@@ -323,12 +341,47 @@ def _checked_line(line: bytes, asset: object, entity_type: str | None) -> bytes:
     return line
 
 
+def _nested_dict(asset: object, entity_type: str | None) -> dict[str, Any]:
+    """The nested-format dict for *asset*, by the same ordered dispatch.
+
+    Split out of :func:`entity_bytes` because the envelope path needs a dict
+    where the identity path can stay on raw bytes. The order is the dispatch
+    order and must not drift from it: a shape that serialises one way as bytes
+    and another way as a dict is the per-shape gap this module exists to close.
+
+    Raises:
+        UnserializableMapperResultError: *asset* is none of the supported
+            shapes.
+    """
+    if isinstance(asset, NestedBytesAsset):
+        line = _checked_line(asset.to_nested_bytes(), asset, entity_type)
+        return orjson.loads(line)  # type: ignore[no-any-return]
+    if isinstance(asset, NestedDictAsset):
+        return asset.to_nested_dict()
+    if isinstance(asset, ModelDumpAsset):
+        return asset.model_dump()
+    if isinstance(asset, dict):
+        return asset
+
+    observed = type(asset).__name__
+    raise UnserializableMapperResultError(
+        message=(
+            f"Asset mapper returned {observed}{_where(entity_type)}, which the "
+            f"SDK cannot serialise to the Atlas wire shape"
+        ),
+        observed=observed,
+        location=entity_type,
+    )
+
+
 def entity_bytes(
     asset: object,
     *,
     connection_name: str = "",
     last_sync: LastSyncDetails | None = None,
     entity_type: str | None = None,
+    envelope: EntityEnvelopePolicy | None = None,
+    decorations: EntityDecorations | None = None,
 ) -> bytes:
     """Serialise a mapper's return value to one Atlas wire-shape JSON line.
 
@@ -347,6 +400,16 @@ def entity_bytes(
             running outside any run context.
         entity_type: Entity being transformed (``"table"``, ``"column"``, …).
             Carried into the error so a failure names where it happened.
+        envelope: The connector's declared
+            :class:`~application_sdk.common.entity_envelope.EntityEnvelopePolicy`.
+            ``None`` (the default) means
+            :data:`~application_sdk.common.entity_envelope.DEFAULT_ENVELOPE` —
+            **flattened**, which is a change from the pre-FND-2137 output. A
+            caller that must keep the pyatlan-native shape pins
+            ``EnvelopeShape.PYATLAN`` rather than relying on the default.
+        decorations: Top-level contract fields to add to the entity root, as an
+            :class:`~application_sdk.common.entity_envelope.EntityDecorations`.
+            ``None`` adds none.
 
     Returns:
         Compact JSON bytes with no trailing newline. JSON string escaping means
@@ -365,21 +428,31 @@ def entity_bytes(
     if last_sync is not None:
         _set_last_sync(asset, last_sync)
 
-    if isinstance(asset, NestedBytesAsset):
-        return _checked_line(asset.to_nested_bytes(), asset, entity_type)
-    if isinstance(asset, NestedDictAsset):
-        return _dumps(asset.to_nested_dict(), asset, entity_type)
-    if isinstance(asset, ModelDumpAsset):
-        return _dumps(asset.model_dump(), asset, entity_type)
-    if isinstance(asset, dict):
-        return _dumps(asset, asset, entity_type)
+    policy = envelope if envelope is not None else DEFAULT_ENVELOPE
 
-    observed = type(asset).__name__
-    raise UnserializableMapperResultError(
-        message=(
-            f"Asset mapper returned {observed}{_where(entity_type)}, which the "
-            f"SDK cannot serialise to the Atlas wire shape"
-        ),
-        observed=observed,
-        location=entity_type,
+    if policy.is_identity and decorations is None:
+        # The pre-FND-2137 path, byte for byte. Reached only by a caller that
+        # pinned PYATLAN: the migration lever is worth nothing if it produces
+        # output merely equivalent to what it is standing in for.
+        if isinstance(asset, NestedBytesAsset):
+            return _checked_line(asset.to_nested_bytes(), asset, entity_type)
+        return _dumps(_nested_dict(asset, entity_type), asset, entity_type)
+
+    entity = None
+    already_flattened = False
+    if policy.shape is EnvelopeShape.FLATTENED:
+        # pyatlan owns its own flattening, and its encoder is cheaper than the
+        # nested one plus our pass. ``None`` means "not a pyatlan_v9 asset" —
+        # a dict or a v1 model — which the generic path below handles.
+        entity = to_atlas_format_dict(asset)
+        already_flattened = entity is not None
+    if entity is None:
+        entity = _nested_dict(asset, entity_type)
+
+    entity = apply_envelope(
+        entity,
+        policy=policy,
+        decorations=decorations,
+        already_flattened=already_flattened,
     )
+    return _dumps(entity, asset, entity_type)

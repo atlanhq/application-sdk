@@ -24,10 +24,16 @@ from application_sdk.common.asset_serialization import (
     entity_bytes,
     orjson_default,
 )
+from application_sdk.common.entity_envelope import EntityEnvelopePolicy, EnvelopeShape
 from application_sdk.common.errors import UnserializableMapperResultError
 from application_sdk.common.last_sync import LastSyncDetails
 
 SCHEMA_QN = "default/mysql/1234567890/db/sch"
+
+#: The migration lever, spelled once. Every test that pins pre-FND-2137
+#: behaviour goes through this rather than constructing its own, so removing
+#: the lever in 4.0 breaks them all at one import.
+PYATLAN_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.PYATLAN)
 
 
 def _table(name: str = "T1") -> Table:
@@ -139,11 +145,21 @@ class TestPyatlanV9Asset:
 
         assert b"\n" not in entity_bytes(asset)
 
-    def test_no_round_trip_through_a_dict(self):
-        """The asset's own encoder output is passed through byte-for-byte."""
+    def test_pyatlan_lever_passes_the_encoder_output_through_byte_for_byte(self):
+        """The migration lever's whole point (FND-2137).
+
+        ``EnvelopeShape.PYATLAN`` exists so a connector whose released output
+        is the nested shape can pin it for one cycle. That is worth nothing if
+        the pinned output is merely *equivalent* to what it replaced — a
+        re-serialised dict reorders keys, which rehashes every entity in
+        ``atlan-publish-app``'s diff cache and forces exactly the full
+        re-publish the lever exists to defer. So: byte for byte.
+        """
         asset = _table()
 
-        assert entity_bytes(asset) == asset.to_nested_bytes()
+        out = entity_bytes(asset, envelope=PYATLAN_ENVELOPE)
+
+        assert out == asset.to_nested_bytes()
 
 
 class TestConnectionNameInjection:

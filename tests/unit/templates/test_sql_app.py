@@ -9,6 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.common.entity_envelope import (
+    EntityDecorations,
+    EntityEnvelopePolicy,
+    EnvelopeShape,
+)
 from application_sdk.common.errors import UnserializableMapperResultError
 from application_sdk.common.last_sync import resolve_last_sync_details
 from application_sdk.contracts.storage import VerifyRefsOutput
@@ -3318,3 +3323,140 @@ class TestTransformStampsLastSync:
             await app.transform_tables(_make_task_input(output_path=str(tmp_path)))
 
         assert resolver.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Entity envelope (FND-2137)
+# ---------------------------------------------------------------------------
+#
+# ``_transform_entity`` owns three framework injections now: connectionName
+# (FND-2056), lastSync* (FND-2097), and the envelope the finished line takes.
+# These pin that the declared policy and the per-record hook actually reach
+# ``entity_bytes`` — a seam nothing threads is the same as no seam.
+
+
+class FlattenedEnvelopeSqlApp(AssetMapperSqlApp):
+    """Takes the SDK default: flattened, no dialect, no decorations."""
+
+
+class PinnedEnvelopeSqlApp(AssetMapperSqlApp):
+    """A connector pinning the pre-FND-2137 shape for one migration cycle."""
+
+    entity_envelope = EntityEnvelopePolicy(shape=EnvelopeShape.PYATLAN)
+
+
+class DialectSqlApp(TestSqlApp):
+    """A connector declaring its SQL dialect, mapping views with DDL."""
+
+    entity_envelope = EntityEnvelopePolicy(sql_dialect="teradata")
+
+    def map_table(self, record: dict[str, Any], connection_qn: str):
+        from pyatlan_v9.model.assets import View
+
+        asset = View.creator(
+            name=record["table_name"], schema_qualified_name=f"{connection_qn}/db/sch"
+        )
+        asset.definition = record["definition"]
+        return asset
+
+
+class DecoratingSqlApp(AssetMapperSqlApp):
+    """A connector owing a downstream app two root-level fields."""
+
+    def decorate_entity(self, *, entity_type: str, record: dict[str, Any]):
+        return EntityDecorations(
+            default_catalog_name=record.get("db"),
+            default_schema_name=record.get("sch"),
+        )
+
+
+def _one_entity(tmp_path, entity_type: str) -> dict[str, Any]:
+    path = tmp_path / "transformed" / entity_type / "entities.json"
+    return json.loads(path.read_text().strip())
+
+
+class TestTransformAppliesTheEnvelope:
+    async def test_default_flattens_relationship_refs_into_attributes(self, tmp_path):
+        """What ``atlan-publish-app``'s diff engine reads."""
+        app = FlattenedEnvelopeSqlApp()
+        _seed_raw(tmp_path, "table", [{"table_name": "users"}])
+
+        await app.transform_tables(
+            _make_task_input(output_path=str(tmp_path), connection=_connection_ref())
+        )
+
+        entity = _one_entity(tmp_path, "table")
+        assert "relationshipAttributes" not in entity
+        assert entity["attributes"]["atlanSchema"]["uniqueAttributes"] == {
+            "qualifiedName": "default/mysql/1/db/sch"
+        }
+
+    async def test_declared_lever_keeps_the_nested_shape(self, tmp_path):
+        app = PinnedEnvelopeSqlApp()
+        _seed_raw(tmp_path, "table", [{"table_name": "users"}])
+
+        await app.transform_tables(
+            _make_task_input(output_path=str(tmp_path), connection=_connection_ref())
+        )
+
+        entity = _one_entity(tmp_path, "table")
+        assert entity["relationshipAttributes"]["atlanSchema"]["uniqueAttributes"] == {
+            "qualifiedName": "default/mysql/1/db/sch"
+        }
+        assert "atlanSchema" not in entity["attributes"]
+
+    async def test_declared_dialect_reaches_a_definition_bearing_asset(self, tmp_path):
+        app = DialectSqlApp()
+        _seed_raw(
+            tmp_path, "table", [{"table_name": "v1", "definition": "CREATE VIEW ..."}]
+        )
+
+        await app.transform_tables(
+            _make_task_input(output_path=str(tmp_path), connection=_connection_ref())
+        )
+
+        assert _one_entity(tmp_path, "table")["attributes"]["sqlDialect"] == "teradata"
+
+    async def test_decorations_land_at_the_entity_root(self, tmp_path):
+        app = DecoratingSqlApp()
+        _seed_raw(tmp_path, "table", [{"table_name": "users", "db": "D", "sch": "S"}])
+
+        await app.transform_tables(
+            _make_task_input(output_path=str(tmp_path), connection=_connection_ref())
+        )
+
+        entity = _one_entity(tmp_path, "table")
+        assert entity["defaultCatalogName"] == "D"
+        assert entity["defaultSchemaName"] == "S"
+        assert "defaultCatalogName" not in entity["attributes"]
+
+    async def test_the_hook_sees_the_raw_row_and_the_stream(self, tmp_path):
+        """Its aperture, pinned: a decoration is derived from the source row,
+        so a hook handed the mapped asset instead could not produce one."""
+        seen: list[tuple[str, dict[str, Any]]] = []
+
+        class RecordingSqlApp(AssetMapperSqlApp):
+            def decorate_entity(self, *, entity_type: str, record: dict[str, Any]):
+                seen.append((entity_type, record))
+                return None
+
+        _seed_raw(tmp_path, "table", [{"table_name": "users", "junk": "raw"}])
+
+        await RecordingSqlApp().transform_tables(
+            _make_task_input(output_path=str(tmp_path), connection=_connection_ref())
+        )
+
+        assert seen == [("table", {"table_name": "users", "junk": "raw"})]
+
+    async def test_base_hook_returns_none_so_nothing_is_added(self, tmp_path):
+        """A connector that owes no decorations pays no envelope keys for it."""
+        app = FlattenedEnvelopeSqlApp()
+        _seed_raw(tmp_path, "table", [{"table_name": "users"}])
+
+        await app.transform_tables(
+            _make_task_input(output_path=str(tmp_path), connection=_connection_ref())
+        )
+
+        entity = _one_entity(tmp_path, "table")
+        assert "defaultCatalogName" not in entity
+        assert "defaultSchemaName" not in entity
