@@ -3,8 +3,14 @@
 The suffix is the load-bearing part. A run's connection carries a freshly minted
 epoch, so a suite cannot write an asset's qualifiedName — only its stable tail —
 and that tail has to match on a **path-segment boundary** or `"sch"` silently
-also addresses `"other_sch"`. Elasticsearch does the coarse filtering and the
-boundary is enforced here, so both halves are pinned below.
+also addresses `"other_sch"`.
+
+That boundary lives in the *query*, and the tests below pin it there rather than
+only at its result. A coarser query filtered client-side passes every
+single-asset test and still fails in production: the search is capped, so a
+connection holding a page-worth of near-misses can push the real asset off the
+page, and the reader then reports an asset that exists as one that did not land.
+The filter is kept as a guard, so both layers are asserted.
 
 Real pyatlan models throughout, for the reason given in
 ``test_sample_attributes.py``: presence is what this reader must not lose.
@@ -107,9 +113,10 @@ async def test_a_zero_is_still_a_zero_and_an_omission_still_absent() -> None:
 
 
 async def test_a_suffix_does_not_match_mid_segment() -> None:
-    # ES's wildcard returns it; the boundary check is what rejects it. A suite
-    # declaring the schema "sch" does not mean "anything ending in those
-    # characters".
+    # A suite declaring the schema "sch" does not mean "anything ending in those
+    # characters". The query no longer asks for this hit at all; the fake serves
+    # it anyway, so what is under test here is the guard that would still drop
+    # it if Atlas matched something the two `should` clauses do not describe.
     reading = await _read(
         _page(_schema_hit(f"{_CONN}/db/other_sch", viewsCount=4)),
         {_ref("sch"): ("viewsCount",)},
@@ -118,8 +125,9 @@ async def test_a_suffix_does_not_match_mid_segment() -> None:
     assert reading.value[_ref("sch")] == []
 
 
-async def test_the_boundary_check_keeps_the_genuine_match() -> None:
-    # The control for the case above, in one page: only the exact segment wins.
+async def test_the_boundary_guard_keeps_the_genuine_match() -> None:
+    # The control for the case above, in one page: only the exact segment wins,
+    # and the guard does not over-reject.
     reading = await _read(
         _page(
             _schema_hit(f"{_CONN}/db/other_sch", viewsCount=4),
@@ -160,15 +168,72 @@ async def test_every_match_is_returned_so_ambiguity_reaches_the_grader() -> None
 # ---------------------------------------------------------------------------
 
 
-async def test_the_search_is_scoped_by_type_connection_and_a_wildcard() -> None:
+async def test_the_search_is_scoped_by_type_connection_and_the_boundary() -> None:
     client = _client(_page(_schema_hit(f"{_CONN}/db/sch", viewsCount=1)))
     await atlas.read_asset_attributes(client, _CONN, {_ref("sch"): ("viewsCount",)})
     request = client.asset.requests[0]
-    body = request.dsl.query.to_dict()
-    rendered = str(body)
+    rendered = str(request.dsl.query.to_dict())
     assert "Schema" in rendered
-    assert f"{_CONN}/*sch" in rendered
+    # The boundary rule, in the query: the suffix is the whole tail, or it
+    # follows a separator. Never a bare `*sch`, which also matches `other_sch`.
+    assert f"{_CONN}/sch" in rendered
+    assert f"{_CONN}/*/sch" in rendered
+    assert f"{_CONN}/*sch'" not in rendered
     assert "viewsCount" in request.attributes
+
+
+async def test_the_query_does_not_ask_for_the_near_misses_it_would_discard() -> None:
+    """The regression behind the boundary-in-the-query change.
+
+    A single ``<connection>/*<suffix>`` wildcard also matches ``…/db/other_sch``.
+    The search is capped, so a connection holding a page-worth of ``*_sch``
+    schemas could fill the page with near-misses, the client-side boundary check
+    would discard every one, and the reader would report **zero matches** for an
+    asset sitting in Atlas — which ``evaluate_attributes_at`` renders as "did not
+    land", a claim about the connector from a search that never saw it.
+
+    Pinning the query is what closes it: Atlas is never asked for the hits that
+    could crowd the real one out.
+    """
+    client = _client(_page())
+    await atlas.read_asset_attributes(client, _CONN, {_ref("sch"): ("viewsCount",)})
+    should = client.asset.requests[0].dsl.query.to_dict()["bool"]["should"]
+    patterns = {
+        clause.get("wildcard", clause.get("term", {}))
+        .get("qualifiedName", {})
+        .get("value")
+        for clause in should
+    }
+    assert patterns == {f"{_CONN}/sch", f"{_CONN}/*/sch"}
+
+
+async def test_a_full_page_of_near_misses_cannot_hide_the_real_match() -> None:
+    """End to end over the fake: the near-misses are not in the result set.
+
+    The fake answers every search with the same page, so if the reader still
+    asked the coarse question this would be the truncation case — ten
+    ``*_sch`` hits and the genuine one nowhere. It resolves to exactly one
+    because the *query* excludes them.
+    """
+    near_misses = [
+        _schema_hit(f"{_CONN}/db/alt{index}_sch", viewsCount=index)
+        for index in range(10)
+    ]
+    genuine = _schema_hit(f"{_CONN}/db/sch", viewsCount=7)
+
+    def only_boundary_matches(request: Any) -> FakeSearchResult:
+        # Stand in for Elasticsearch honouring the two `should` clauses.
+        rendered = str(request.dsl.query.to_dict())
+        hits = [*near_misses, genuine]
+        if f"{_CONN}/*/sch" in rendered:
+            hits = [hit for hit in hits if hit.qualified_name.endswith("/sch")]
+        return FakeSearchResult(hits[:10])
+
+    reading = await _read(only_boundary_matches, {_ref("sch"): ("viewsCount",)})
+    assert isinstance(reading, Settled)
+    matched = reading.value[_ref("sch")]
+    assert [asset.qualified_name for asset in matched] == [f"{_CONN}/db/sch"]
+    assert matched[0].values == {"viewsCount": 7}
 
 
 async def test_wildcard_metacharacters_in_a_suffix_are_escaped() -> None:

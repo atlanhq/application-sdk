@@ -632,6 +632,14 @@ async def sample_asset_attributes(
 #: a caller wants, because the useful answer when a suffix is ambiguous is *how
 #: ambiguous* — a reader that asked for one would report the collision as a
 #: clean hit and grade whichever asset Atlas happened to order first.
+#:
+#: It is safe for this to truncate only because the query matches the boundary
+#: rule exactly (see :func:`read_asset_attributes`). Every hit is a genuine
+#: match, so a full page means "at least this many" — which is already the
+#: ambiguous finding, and the remedy does not change with the count. When the
+#: query was coarser than the rule this cap was a correctness bug: a page of
+#: near-misses could crowd out the one real match and the reader would report
+#: the asset as absent.
 _MATCHES_PER_REF = 10
 
 
@@ -654,10 +662,22 @@ async def read_asset_attributes(
     Column is ``"col"`` rather than ``"db/sch/tbl/col"``.
 
     The match is anchored on a **path-segment boundary** — ``"sch"`` matches
-    ``…/db/sch`` and never ``…/db/other_sch``. Elasticsearch does the coarse
-    work (a connection-anchored wildcard, scoped to the type) and the boundary
-    itself is checked here, because a wildcard cannot express "or the start of
-    the tail" without a second clause that would also have to be escaped.
+    ``…/db/sch`` and never ``…/db/other_sch`` — and *the query expresses that
+    rule*, as two clauses under a ``should``: the suffix is the whole tail
+    (``<connection>/<suffix>``, an exact term) or it follows a separator
+    (``<connection>/*/<suffix>``).
+
+    Spelling the boundary in the query rather than filtering a coarser one
+    client-side is load-bearing, not tidiness. A single ``<connection>/*<suffix>``
+    wildcard also matches ``…/db/other_sch``, and the search is capped at
+    :data:`_MATCHES_PER_REF`: a connection holding ten ``*_sch`` schemas could
+    fill that page with near-misses, the boundary filter would discard all of
+    them, and the reader would report zero matches for an asset that is sitting
+    in Atlas. ``evaluate_attributes_at`` renders zero matches as "did not land" —
+    a confident claim about the connector, produced by a search that never
+    looked at the asset. With the boundary in the query every hit is a genuine
+    match, so truncation can only ever understate *how ambiguous* a suffix is,
+    and that is the same finding either way.
 
     Args:
         client: An open client from :func:`atlas_client`.
@@ -667,7 +687,8 @@ async def read_asset_attributes(
 
     Returns:
         :class:`~application_sdk.testing.harness.outcome.Settled` carrying each
-        ref -> **every** asset whose qualifiedName matched its suffix, or
+        ref -> the assets whose qualifiedName matched its suffix, up to
+        :data:`_MATCHES_PER_REF` of them, or
         :class:`~application_sdk.testing.harness.outcome.Indeterminate` when a
         search could not be read. Zero matches and several matches are both
         returned as they are rather than resolved here: which of them is a
@@ -693,7 +714,15 @@ async def read_asset_attributes(
             .where(FluentSearch.active_assets())
             .where(Asset.TYPE_NAME.eq(ref.type_name))
             .where(Asset.CONNECTION_QUALIFIED_NAME.eq(connection_qualified_name))
-            .where(Asset.QUALIFIED_NAME.wildcard(f"{prefix}*{_escaped(suffix)}"))
+            # The boundary rule, as a query. Clause one is the suffix as the
+            # whole tail below the connection; clause two is the suffix
+            # following a separator at any depth. Together they are exactly
+            # what _ends_on_segment accepts, and nothing else — see this
+            # function's docstring for why a single looser wildcard is a
+            # correctness bug rather than a slower path.
+            .where_some(Asset.QUALIFIED_NAME.eq(f"{prefix}{suffix}"))
+            .where_some(Asset.QUALIFIED_NAME.wildcard(f"{prefix}*/{_escaped(suffix)}"))
+            .min_somes(1)
             .include_on_results(Asset.QUALIFIED_NAME)
             .include_on_results(Asset.CONNECTION_QUALIFIED_NAME)
         )
@@ -705,6 +734,10 @@ async def read_asset_attributes(
         matched: list[AssetAttributes] = []
         for asset in results.current_page() or []:
             qualified_name = asset.qualified_name or ""
+            # Belt and braces now that the query carries the rule: a hit that
+            # fails this would mean Atlas matched something the two should
+            # clauses do not describe. Dropping it is the safe direction — the
+            # alternative is grading an asset the suite did not address.
             if not _ends_on_segment(qualified_name, prefix, suffix):
                 continue
             matched.append(
@@ -736,9 +769,10 @@ def _escaped(suffix: str) -> str:
 
     Returns:
         The same text with ``*`` and ``?`` escaped, so a suffix that happens to
-        contain one addresses the asset named rather than a pattern. The
-        boundary check in :func:`_ends_on_segment` compares the unescaped
-        literal, so the escape affects only how much Atlas returns.
+        contain one addresses the asset named rather than a pattern. Only the
+        wildcard clause needs it — the exact-tail clause is a term query, where
+        the literal is already literal — and the boundary check in
+        :func:`_ends_on_segment` compares the unescaped literal either way.
     """
     return suffix.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
 

@@ -1176,8 +1176,14 @@ is the tail — and a suffix of it rather than the whole path below the
 connection, so a Column is `"col"` rather than `"db/sch/tbl/col"`.
 
 The suffix matches on a **path-segment boundary**: `"sch"` matches `…/db/sch`
-and never `…/db/other_sch`. Two outcomes are findings rather than skips, and
-both differ from how the per-type check treats an empty sample:
+and never `…/db/other_sch`. The Atlas query expresses that rule directly — the
+suffix is the whole tail below the connection, or it follows a separator — which
+matters because the search is capped: a looser `*sch` wildcard filtered
+afterwards could fill its page with near-misses and report an asset that exists
+as one that never landed.
+
+Two outcomes are findings rather than skips, and both differ from how the
+per-type check treats an empty sample:
 
 * **a suffix that matches nothing** — the suite named this asset, so its absence
   is the claim under test, not the count floors' job;
