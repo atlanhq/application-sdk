@@ -563,6 +563,34 @@ jobs:
   # integration job spins up, so a PR greens in seconds of test time.
   unit:
     name: Unit
+    # A `labeled` event is not a new commit, so re-running this tier on one is
+    # pure waste -- and worse than waste, because the group below is SHARED
+    # across the PR's commits with cancel-in-progress. Adding any unrelated
+    # label (an `atlanhq/mothership` security-review bot swapping
+    # `mothership-review` for `mothership-reviewed`, a triage label, a size
+    # label) therefore starts a second run whose unit job claims the group and
+    # KILLS the in-flight one mid-test.
+    #
+    # MEASURED on atlan-bw-app (2026-09-15, commit 96be97a):
+    #   12:39:24  push -> run A starts
+    #   12:40:19  atlan-security-reviewer[bot] adds a label
+    #   12:40:22  run B starts and cancels run A 55s in
+    # An earlier run then reported `Tests Gate: success` having skipped
+    # everything it was supposed to prove. A required check that can pass
+    # vacuously is worse than one that is merely noisy.
+    #
+    # The `e2e` label is the one that legitimately starts work, so it is the
+    # single exception -- the same expression detect-integration, integration
+    # and the e2e legs already use. Non-`pull_request` events (push,
+    # merge_group, workflow_dispatch) have no `action`, so the first term is
+    # true and this tier keeps running on every one of them.
+    #
+    # This lives here rather than in each connector's caller `tests.yaml`
+    # because a caller-side guard only protects the repo that hand-added it;
+    # ~54 connectors call this workflow.
+    if: >-
+      github.event.action != 'labeled' ||
+      github.event.label.name == 'e2e'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -780,10 +808,22 @@ jobs:
     # label runs both. Same label expression as the e2e legs: on a `labeled`
     # event only the `e2e` label itself counts, so adding any other label does
     # not re-run the tier.
+    #
+    # The label term is ALSO hoisted to the top level below. Inside the
+    # parenthesised group it is unreachable whenever the base branch has no
+    # merge queue: `needs.detect-merge-queue.outputs.enabled == 'false'` is an
+    # earlier disjunct, so it short-circuits the whole group true and an
+    # unrelated `labeled` event runs this tier anyway -- against a group that
+    # is SHARED across the PR's commits with cancel-in-progress, so it kills
+    # the in-flight integration run. Same failure as the unit job above, one
+    # tier over. As a top-level conjunct the term cannot be bypassed, and it
+    # changes nothing for non-`labeled` events.
     if: >-
       always() &&
       needs.detect-integration.result == 'success' &&
       needs.detect-integration.outputs.count != '0' &&
+      ( github.event.action != 'labeled' ||
+        github.event.label.name == 'e2e' ) &&
       ( github.event_name != 'pull_request' ||
         needs.detect-merge-queue.outputs.enabled == 'false' ||
         ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
