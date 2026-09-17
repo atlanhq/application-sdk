@@ -319,7 +319,7 @@ class TestLoadOomRestartCheck:
     ENV = "ATLAN_OOM_RESTART_CHECK"
 
     def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch):
-        """The default asks the apiserver nothing, so it needs no RBAC granted."""
+        """The default asks nothing, so a restart resumes as it always did."""
         monkeypatch.delenv(self.ENV, raising=False)
         assert _load_oom_restart_check() == "none"
 

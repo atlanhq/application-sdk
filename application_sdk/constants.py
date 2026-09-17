@@ -655,19 +655,18 @@ def _one_of(name: str, allowed: tuple[str, ...], default: str) -> str:
     return default
 
 
-#: Where a restarted worker learns why the earlier container in its pod ended.
+#: Whether a restarted worker asks what the restart earns before it polls again.
 #:
-#: ``api`` reads this pod's own last termination reason from the apiserver, which
-#: costs one point GET per restart from every restarting pod and lets a restart
-#: that was not an out-of-memory kill resume immediately. ``none`` never calls the
-#: apiserver, so every restart is treated as if it could have been an
-#: out-of-memory one - cheaper on the apiserver, and it makes a crash-looping
-#: worker wait out its budget on every loop.
+#: ``api`` sends one GET to ``ATLAN_RESTART_ADVICE_URL`` naming this pod. The
+#: activity rerouter answers it: ``wait: true`` means an eviction is scheduled
+#: for this pod, so the worker holds off polling until it is replaced. ``none``,
+#: the default, never asks and resumes immediately.
 #:
-#: ``none`` is the default because it is the behaviour that needs nothing granted:
-#: reading a pod requires RBAC the worker's service account does not have by
-#: default, and a worker that cannot read its own pod under ``api`` waits rather
-#: than resuming, which is the more expensive way to be wrong.
+#: Nothing here talks to the apiserver, so neither setting needs anything
+#: granted to the worker. Every way of not getting a clear yes resumes polling
+#: too: no URL, no pod identity, a timeout, a refusal, or a body that will not
+#: parse - none of those establish that a replacement is coming, and holding a
+#: worker back is only worth its retry budget while one is.
 def _load_oom_restart_check() -> str:
     return _one_of("ATLAN_OOM_RESTART_CHECK", ("api", "none"), default="none")
 
