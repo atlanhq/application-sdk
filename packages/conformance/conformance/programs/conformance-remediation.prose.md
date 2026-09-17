@@ -123,7 +123,7 @@ as *Fix belongs in* in the same doc:
 
 | locus | edit here |
 |---|---|
-| `contract` | `contract/*.pkl`, then the repo's OWN generate task — never the generated output, and never a bare `pkl eval`, which skips post-processing and rewrites unrelated files |
+| `contract` | anything hand-written under `contract/` — the `*.pkl` sources, and the `PklProject` / `PklProject.deps.json` toolkit pin, which K003, K005, K007 and P029 all send you to — then the repo's OWN generate task. Never the generated output, and never a bare `pkl eval`, which skips post-processing and rewrites unrelated files |
 | `toolkit` | the `contract-toolkit` renderer; **no app-side change can resolve it** |
 | `ci` | `.github/**` |
 | `packaging` | `pyproject.toml`, `uv.lock`, `Dockerfile`, `atlan.yaml` |
