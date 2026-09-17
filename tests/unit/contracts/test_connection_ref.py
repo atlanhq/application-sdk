@@ -12,9 +12,12 @@ Covers:
 
 from __future__ import annotations
 
+from typing import Any
+
 import msgspec
+import orjson
 import pytest
-from pyatlan_v9.model.transform import get_type
+from pyatlan_v9.model.transform import get_type, to_atlas_format
 from pydantic import ValidationError
 
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
@@ -308,6 +311,144 @@ class TestNullAdminListsAreAValue:
 
         assert ref.attributes.connector_name is None
         assert ref.attributes.category is None
+
+
+# ---------------------------------------------------------------------------
+# admin_* states, end to end
+# ---------------------------------------------------------------------------
+
+
+def _bare_conn() -> Any:
+    """A ``Connection`` struct with *no* ``admin_*`` field touched at all.
+
+    Distinct from ``_make_conn()``, which writes ``[]`` into all three. That
+    difference is the point of :class:`TestAdminListStatesEndToEnd`.
+    """
+    return get_type("Connection")(name="c", qualified_name="default/sf/123")
+
+
+class TestAdminListStatesEndToEnd:
+    """What each ``admin_users`` state becomes at every hop.
+
+    Four states on the ``pyatlan_v9`` struct, and they are not four distinct
+    outputs — the table below is the contract, lossy leg included:
+
+    ===================  ===================  ==========  ==================
+    struct               ``to_atlas_format``  model       ``model_dump``
+    ===================  ===================  ==========  ==================
+    ``UNSET``            absent               ``[]``      ``[]``
+    ``= None``           ``null``             ``None``    ``null``
+    ``= []``             ``[]``               ``[]``      ``[]``
+    ``= ["alice"]``      ``["alice"]``        ``["alice"]``  ``["alice"]``
+    ===================  ===================  ==========  ==================
+
+    Pinned as a table rather than as scattered cases because the interesting
+    assertions are the *collisions*, and a test per state cannot see them:
+
+    * ``None`` is the only clear. Writing ``conn.admin_users = None`` is what
+      expresses "remove every admin user"; leaving the field alone does not.
+      It survives every hop, which is what pyatlan 11.3.0 bought — see
+      ``TestPyatlanFlattenContract`` in
+      ``tests/unit/common/test_entity_envelope.py``.
+    * ``UNSET`` and ``[]`` **collapse**. A connection that never mentioned
+      ``adminUsers`` serialises as ``[]``, an explicit empty ACL it never
+      claimed. That is this model's default, not the encoder's: it predates
+      the 11.3 work and is left alone deliberately, because widening the
+      default to ``None`` would change what every ``connection:
+      ConnectionRef = Field(default_factory=ConnectionRef)`` contract reads
+      today. It is safe only because the one write path
+      (``testing/e2e/base.py``) always sets admins explicitly — see the
+      assertion at ``base.py:2524``. Anything that starts round-tripping a
+      *real* connection through this model has to revisit it first.
+    """
+
+    @pytest.mark.parametrize(
+        ("mutate", "expected_atlas", "expected_py"),
+        [
+            pytest.param(lambda c: None, "<absent>", [], id="unset"),
+            pytest.param(
+                lambda c: setattr(c, "admin_users", None), None, None, id="cleared"
+            ),
+            pytest.param(lambda c: setattr(c, "admin_users", []), [], [], id="empty"),
+            pytest.param(
+                lambda c: setattr(c, "admin_users", ["alice"]),
+                ["alice"],
+                ["alice"],
+                id="populated",
+            ),
+        ],
+    )
+    def test_state_reaches_the_model_intact(
+        self, mutate: Any, expected_atlas: Any, expected_py: Any
+    ) -> None:
+        conn = _bare_conn()
+        mutate(conn)
+
+        atlas = to_atlas_format(conn)["attributes"].get("adminUsers", "<absent>")
+        ref = ConnectionRef.from_connection(conn)
+
+        assert atlas == expected_atlas
+        assert ref.attributes.admin_users == expected_py
+
+    def test_a_connection_with_no_admin_fields_serialises(self) -> None:
+        """The bare case: nothing raises, and the three land as ``[]``.
+
+        ``[]`` rather than absent is the collapse described above.
+        """
+        ref = ConnectionRef.from_connection(_bare_conn())
+
+        dumped = ref.model_dump(by_alias=True)["attributes"]
+
+        assert dumped["adminUsers"] == []
+        assert dumped["adminRoles"] == []
+        assert dumped["adminGroups"] == []
+
+    def test_a_cleared_list_serialises_to_json_null(self) -> None:
+        """Asserted as bytes, because "serialises as null" is a wire claim.
+
+        A dict-level ``is None`` would also pass if the key were being
+        dropped, which is the failure this exists to catch.
+        """
+        conn = _bare_conn()
+        conn.admin_users = None
+
+        ref = ConnectionRef.from_connection(conn)
+        wire = orjson.loads(orjson.dumps(ref.model_dump(by_alias=True)))
+
+        assert "adminUsers" in wire["attributes"]
+        assert wire["attributes"]["adminUsers"] is None
+
+    def test_cleared_and_empty_do_not_collapse(self) -> None:
+        """``None`` means "remove them", ``[]`` means "there are none"."""
+        cleared, empty = _bare_conn(), _bare_conn()
+        cleared.admin_users = None
+        empty.admin_users = []
+
+        cleared_ref = ConnectionRef.from_connection(cleared)
+        empty_ref = ConnectionRef.from_connection(empty)
+
+        assert cleared_ref.attributes.admin_users is None
+        assert empty_ref.attributes.admin_users == []
+        assert cleared_ref.attributes != empty_ref.attributes
+
+    def test_each_admin_field_can_be_cleared_independently(self) -> None:
+        """The ACL edit that motivates all of this.
+
+        Clear ``admin_roles``, grant ``admin_groups``, leave ``admin_users``
+        alone — one wire payload has to carry all three states at once.
+        """
+        conn = _bare_conn()
+        conn.admin_users = ["alice"]
+        conn.admin_roles = None
+        conn.admin_groups = ["data-platform"]
+
+        attrs = ConnectionRef.from_connection(conn).model_dump(by_alias=True)[
+            "attributes"
+        ]
+
+        assert attrs["adminUsers"] == ["alice"]
+        assert attrs["adminRoles"] is None
+        assert attrs["adminGroups"] == ["data-platform"]
 
 
 # ---------------------------------------------------------------------------
