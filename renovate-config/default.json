@@ -3,7 +3,8 @@
   "description": [
     "Atlan fleet upgrade policy for atlan-*-app repos. Extend via: {\"extends\": [\"github>atlanhq/application-sdk//renovate-config/default.json\"]}",
     "statusCheckWhen.artifactError is flipped from Renovate's default of `failed` to `always`, so the renovate/artifacts context is published on every branch — green when the artifacts updated cleanly, red when they did not. The default publishes it ONLY on failure, which leaves a consumer unable to distinguish 'no artifact errors' from 'Renovate never evaluated this branch', and therefore unable to fail closed. renovate-auto-approve-reusable.yml depends on that distinction: it withholds the atlan-ci code-owner approval unless the context is green, which is what stops a branch whose artifacts failed to update — a lock refresh that could not resolve, a pkl-sync that did not run — from auto-merging on the strength of the checks it did pass. Renovate sets this status only on runs where it actually commits to the branch, so every branch it creates or updates from now on carries it; Renovate PRs already open when this shipped acquire it on their next rebase, and until then they are simply not auto-approved.",
-    "EVERY LABEL COSTS A WORKFLOW RUN, so the set is kept to the ones something reads. GitHub emits one `pull_request: labeled` event PER label, and the fleet's tests.yaml subscribes to `labeled` (it is the only way the `e2e` label can start a run — GitHub has no trigger-level filter for WHICH label). So a PR carrying three labels gets four `Tests` runs on one head SHA: `opened` plus one per label. The unit job's concurrency group evicts all but one, each evicted run still publishes a FAILURE on the required `tests / Tests Gate` context, and GitHub resolves that required check to the newest check SUITE rather than the most recently completed run — so whenever an evicted run is newest, the PR sits at BLOCKED on a verdict nothing measured. rerun_evicted_tests_run.py repairs that, but it is a repair, and it fails open when the App's API budget is spent (2026-09-17). Dropping the top-level `dependencies` label takes every bot PR from three labels to two, i.e. from four runs to three — a quarter of the duplicate runs and a quarter of the eviction exposure, for nothing given up. Nothing reads `dependencies`: the Renovate dashboard classifies on the category labels (conformance-package-update, sdk-package-update, contract-toolkit-update, update:lock-maintenance, update:github-actions) and the update-type labels (update:major|minor|patch|digest|pin), which packages/conformance/conformance/renovate/classify.py maps by exact name, and renovate-auto-approve-reusable.yml gates on changed files and the renovate/artifacts status, not on any label. check-dapr-version.yaml applies `dependencies` to its own PRs, which is unaffected — that is a different workflow labelling a different PR. Do NOT add a label here to make a PR easier to eyeball: the cost is a full unit-test run per repo per label, and the read side already has the classifier. The structural fix, which would make this trade-off go away, is to stop tests.yaml subscribing to `labeled` at all and route the `e2e` label through a dispatcher workflow.",
+    "THIS PRESET APPLIES NO LABELS, AND ADDING ONE IS A CI COST, NOT A COSMETIC CHOICE (FND-2201). GitHub emits one `pull_request: labeled` event PER label; the fleet's tests.yaml subscribes to `labeled` because that is the only way the human `e2e` label can start a run, and GitHub offers no trigger-level filter for WHICH label. So each label is one extra `Tests` run on the same head SHA — a PR carrying three labels got four. The unit job's concurrency group evicts all but one; each evicted run still publishes a FAILURE on the required `tests / Tests Gate` context, and that failure is not cosmetic in two separate ways. GitHub resolves a required check to the newest check SUITE rather than the most recently completed run, so whenever an evicted run is newest the PR sits at BLOCKED on a verdict nothing measured (rerun_evicted_tests_run.py repairs that, but it is a repair, and it fails open when the App's API budget is spent). And Renovate's own automerge fallback aggregates ALL check runs, not just required ones, so a single evicted failure reds the branch — `PR is not ready for merge (branch status is red)` — on a PR GitHub itself reports as CLEAN. Labels were therefore a standing tax on every bot PR in the fleet, paid to populate two dashboard fields.",
+    "WHAT REPLACED THEM: the branch slug. Renovate derives it from this preset's own groupName/branchName, so it carries exactly what the labels did and arrives with the PR instead of as N extra webhook events — renovate/lock-file-maintenance, renovate/github-actions, renovate/app-contract-toolkit, renovate/conformance-package, renovate/atlan-application-sdk-*-lockfile. conformance/renovate/classify.py already had that parser as its pre-label fallback; it is now the only path. The update:<type> labels are simply gone: the one thing that branched on update type, auto_merge_expected(), was wrong in both arms that used it — contract-toolkit majors are `enabled: false` here so the PR cannot exist, and conformance majors ARE auto-merged by design (FND-378), so reporting them as awaiting-human suppressed the stuck-PR signal on the lane that most needs it. The dashboard still reports an update type, parsed from Renovate's own PR body table, at coarser resolution (no patch/digest/pin). That fidelity is worth a fraction of one wasted CI run, never mind three per PR across ~86 repos. Do NOT add a label here to make a PR easier to eyeball, and do NOT reintroduce one to sharpen a dashboard column: read the version move out of the body table (classify.extract_deps) instead. If something genuinely needs a label one day, remove `labeled` from tests.yaml's triggers first and route the `e2e` label through a dispatcher workflow — that is what makes labels cheap again. renovate-auto-approve-reusable.yml never read a label (it gates on changed files and the renovate/artifacts status), and check-dapr-version.yaml still labels its OWN PRs, which is a different workflow on a different PR and unaffected.",
     "rebaseWhen is pinned to behind-base-branch rather than left at the `auto` default. `auto` resolves to behind-base-branch ONLY when a rule requires the branch to be up to date (branch protection, or automerge on that branch). Fleet repos have neither: branch protection is absent org-wide (GET /branches/main/protection 404s), and soft-mode repos set automerge:false. So `auto` silently degraded to `conflicted` on every repo — the runner log reads `Converting rebaseWhen=auto to rebaseWhen=conflicted because no rule for behind-base-branch applies`. A non-conflicted stale branch was then reused as-is (`reuseExistingBranch: true`), recomputed to `No package files need updating`, produced no commit, and PR creation 422'd with 'no commits between main and branch' — leaving the branch in place to repeat the cycle forever. Open PRs hit the same wall from the other side: never rebased, so never re-resolved, frozen on whatever version was latest when they were opened. Set at the TOP LEVEL deliberately: the degradation is a repo-level decision affecting every branch (observed on renovate/app-contract-toolkit as well as renovate/lock-file-maintenance), so scoping it under lockFileMaintenance would leave the other managers broken. Cost is extra rebases/CI on branches that fall behind main; that is the price of having no branch protection to make `auto` work unaided."
   ],
   "extends": [
@@ -42,9 +43,6 @@
     "automerge": true,
     "automergeType": "pr",
     "platformAutomerge": true,
-    "addLabels": [
-      "update:lock-maintenance"
-    ],
     "postUpgradeTasks": {
       "commands": [
         "renovate-uv-lock-bounded --window P3D --exempt atlan-application-sdk --exempt atlan-application-sdk-conformance --exempt pyatlan",
@@ -69,7 +67,7 @@
       "enabled": false
     },
     {
-      "description": "SDK lane: give atlan-application-sdk bumps their own uv.lock-only PR (rangeStrategy update-lockfile, mirroring the conformance-package rule) instead of riding the batched lockFileMaintenance refresh — a stale lock-refresh branch that is not behind main never re-resolves, so it can sit pinned one SDK release behind indefinitely. prPriority 10: when prConcurrentLimit is contended, the SDK PR is created before every other dependency PR (Renovate cannot exempt a package from the limit; priority ordering + the bounded lanes below are the substitute). Auto-merged on green as of FND-359: an SDK release must reach the fleet in minutes, and now that the lock-refresh lane is release-age bounded this is the only lane that can deliver it promptly. A repo not ready for that opts OUT in its own renovate.json, since repo-local packageRules are appended after this preset's and later matching rules win: {matchPackageNames: ['atlan-application-sdk'], automerge: false, platformAutomerge: false}. Set it inside a packageRule — a top-level automerge:false will not override this. The soft-mode bootstrap template already opts every package out this way. minimumReleaseAge is explicitly null: first-party releases are never subject to the cooldown. The sdk-package-update label is the fleet scanner's classification signal.",
+      "description": "SDK lane: give atlan-application-sdk bumps their own uv.lock-only PR (rangeStrategy update-lockfile, mirroring the conformance-package rule) instead of riding the batched lockFileMaintenance refresh — a stale lock-refresh branch that is not behind main never re-resolves, so it can sit pinned one SDK release behind indefinitely. prPriority 10: when prConcurrentLimit is contended, the SDK PR is created before every other dependency PR (Renovate cannot exempt a package from the limit; priority ordering + the bounded lanes below are the substitute). Auto-merged on green as of FND-359: an SDK release must reach the fleet in minutes, and now that the lock-refresh lane is release-age bounded this is the only lane that can deliver it promptly. A repo not ready for that opts OUT in its own renovate.json, since repo-local packageRules are appended after this preset's and later matching rules win: {matchPackageNames: ['atlan-application-sdk'], automerge: false, platformAutomerge: false}. Set it inside a packageRule — a top-level automerge:false will not override this. The soft-mode bootstrap template already opts every package out this way. minimumReleaseAge is explicitly null: first-party releases are never subject to the cooldown. The fleet scanner classifies this lane by its branch slug (renovate/atlan-application-sdk-*-lockfile), not by a label — see conformance/renovate/classify.py and the label note at the top of this file.",
       "matchPackageNames": [
         "atlan-application-sdk"
       ],
@@ -78,10 +76,7 @@
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true,
-      "minimumReleaseAge": null,
-      "addLabels": [
-        "sdk-package-update"
-      ]
+      "minimumReleaseAge": null
     },
     {
       "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below. postUpgradeTasks re-resolves contract/PklProject.deps.json and regenerates app/generated/** (+ atlan.yaml/app.yaml) in-branch via the shared renovate-pkl-sync driver, so the bump lands as a self-contained PR with no follow-up glue workflow. Runs ONLY under self-hosted Renovate: postUpgradeTasks commands are gated by the allowedCommands admin allowlist (set in application-sdk's central renovate workflow), so this block is an inert no-op under the Mend-hosted app. The driver is installed as a bare PATH command by that workflow (Renovate does NOT shell-expand the command, so it must not contain ${VARS}); --no-commit leaves the fileFilters commit to Renovate.",
@@ -97,9 +92,6 @@
       "automergeType": "pr",
       "platformAutomerge": true,
       "prPriority": 9,
-      "addLabels": [
-        "contract-toolkit-update"
-      ],
       "postUpgradeTasks": {
         "commands": [
           "renovate-pkl-sync --contract-dir contract --regenerate true --no-commit"
@@ -135,9 +127,6 @@
       "automergeType": "pr",
       "platformAutomerge": true,
       "minimumReleaseAge": null,
-      "addLabels": [
-        "conformance-package-update"
-      ],
       "postUpgradeTasks": {
         "commands": [
           "renovate-contract-ledger"
@@ -218,10 +207,7 @@
       "groupName": "github-actions",
       "automerge": true,
       "automergeType": "pr",
-      "platformAutomerge": true,
-      "addLabels": [
-        "update:github-actions"
-      ]
+      "platformAutomerge": true
     },
     {
       "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately — scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision.",
@@ -232,19 +218,6 @@
         "github-actions"
       ],
       "enabled": false
-    },
-    {
-      "description": "Fleet-wide update-type labels — applied to every PR so the Renovate dashboard scanner can classify without title-parsing. Renovate auto-creates these labels per repo; no per-repo manual setup needed.",
-      "matchUpdateTypes": [
-        "major",
-        "minor",
-        "patch",
-        "digest",
-        "pin"
-      ],
-      "addLabels": [
-        "update:{{{updateType}}}"
-      ]
     },
     {
       "description": "Force chore commit type for all dependency updates. config:recommended includes :semanticPrefixFixDepsChoreOthers which sets semanticCommitType=fix via a packageRule, overriding any top-level semanticCommitType setting. Placing this rule last gives it higher precedence.",

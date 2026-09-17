@@ -73,35 +73,45 @@ def make_pr(
     )
 
 
-# ── Category: label-driven path ──────────────────────────────────────────────
+# ── Labels are NOT read (FND-2201) ───────────────────────────────────────────
+#
+# The preset applies no labels any more, and the classifier no longer reads
+# them. These pin that: a PR still carrying the old labels from before the
+# rollout must be classified by its BRANCH, and a label that disagrees with the
+# branch must not win. Without these, restoring the label path would go
+# unnoticed — and restoring it would restore one wasted `Tests` run per label
+# on every bot PR in the fleet.
 
 
-def test_category_lock_maintenance_via_label() -> None:
-    pr = classify(make_pr(labels=["update:lock-maintenance"]))
+def test_stale_category_label_does_not_override_the_branch() -> None:
+    pr = classify(
+        make_pr(
+            labels=["conformance-package-update", "update:major", "dependencies"],
+            branch="renovate/lock-file-maintenance",
+        )
+    )
     assert pr.category is Category.LOCK_MAINTENANCE
 
 
-def test_category_github_actions_via_label() -> None:
-    pr = classify(make_pr(labels=["update:github-actions"]))
-    assert pr.category is Category.GITHUB_ACTIONS
-
-
-def test_category_contract_toolkit_via_label() -> None:
-    pr = classify(make_pr(labels=["contract-toolkit-update"]))
-    assert pr.category is Category.CONTRACT_TOOLKIT
-
-
-def test_category_conformance_package_via_label() -> None:
-    pr = classify(make_pr(labels=["conformance-package-update"]))
-    assert pr.category is Category.CONFORMANCE_PACKAGE
-
-
-def test_category_python_dep_major_via_label() -> None:
-    pr = classify(make_pr(labels=["update:major", "dependencies"]))
+def test_category_label_alone_classifies_nothing() -> None:
+    """Label present, branch inert: the label must contribute no signal."""
+    pr = classify(
+        make_pr(labels=["conformance-package-update"], branch="renovate/foo-1.x")
+    )
     assert pr.category is Category.PYTHON_DEP
 
 
-# ── Category: fallback parsing path (no update: labels) ──────────────────────
+def test_update_type_label_alone_contributes_nothing() -> None:
+    pr = classify(make_pr(labels=["update:patch"], body=""))
+    assert pr.update_type is UpdateType.UNKNOWN
+
+
+def test_category_python_dep_is_the_default() -> None:
+    pr = classify(make_pr(labels=[], branch="renovate/foo-1.x"))
+    assert pr.category is Category.PYTHON_DEP
+
+
+# ── Category: branch/title parsing (the only path) ───────────────────────────
 
 
 def test_category_lock_maintenance_fallback() -> None:
@@ -132,8 +142,8 @@ def test_category_conformance_package_fallback_ungrouped_branch() -> None:
 
 
 def test_category_conformance_package_fallback_title() -> None:
-    # Title arm of categorize(): branch and labels carry no conformance signal, so
-    # the "conformance package" substring in the title is what classifies it.
+    # Title arm of categorize(): the branch carries no conformance signal, so the
+    # "conformance package" substring in the title is what classifies it.
     pr = classify(
         make_pr(
             labels=[],
@@ -144,20 +154,7 @@ def test_category_conformance_package_fallback_title() -> None:
     assert pr.category is Category.CONFORMANCE_PACKAGE
 
 
-# ── UpdateType from labels ───────────────────────────────────────────────────
-
-
-def test_update_type_major_from_label() -> None:
-    pr = classify(make_pr(labels=["update:major"]))
-    assert pr.update_type is UpdateType.MAJOR
-
-
-def test_update_type_patch_from_label() -> None:
-    pr = classify(make_pr(labels=["update:patch"]))
-    assert pr.update_type is UpdateType.PATCH
-
-
-# ── UpdateType fallback from body ────────────────────────────────────────────
+# ── UpdateType from the PR body table (the only path) ────────────────────────
 
 
 def test_update_type_major_from_body() -> None:
@@ -179,49 +176,57 @@ def test_update_type_unknown_when_no_signal() -> None:
 
 
 def test_auto_merge_expected_lock_maintenance() -> None:
-    pr = classify(make_pr(labels=["update:lock-maintenance"]))
+    pr = classify(make_pr(branch="renovate/lock-file-maintenance"))
     assert pr.auto_merge_expected is True
 
 
 def test_auto_merge_expected_github_actions() -> None:
-    pr = classify(make_pr(labels=["update:github-actions"]))
+    pr = classify(make_pr(branch="renovate/github-actions"))
     assert pr.auto_merge_expected is True
 
 
-def test_auto_merge_expected_contract_toolkit_minor() -> None:
-    pr = classify(make_pr(labels=["contract-toolkit-update", "update:minor"]))
-    assert pr.auto_merge_expected is True
-
-
-def test_auto_merge_expected_contract_toolkit_major() -> None:
-    pr = classify(make_pr(labels=["contract-toolkit-update", "update:major"]))
-    assert pr.auto_merge_expected is False
-
-
-def test_auto_merge_expected_conformance_package_minor() -> None:
-    pr = classify(make_pr(labels=["conformance-package-update", "update:minor"]))
+def test_auto_merge_expected_contract_toolkit() -> None:
+    pr = classify(make_pr(branch="renovate/app-contract-toolkit-1.x"))
     assert pr.auto_merge_expected is True
 
 
 def test_auto_merge_expected_conformance_package_major() -> None:
-    pr = classify(make_pr(labels=["conformance-package-update", "update:major"]))
-    assert pr.auto_merge_expected is False
+    """FND-378: the conformance lane auto-merges EVERY update type, majors too.
 
-
-def test_auto_merge_expected_conformance_package_unknown() -> None:
-    # No update-type label and no parseable body table → UNKNOWN → human-reviewed.
-    pr = classify(make_pr(labels=["conformance-package-update"], body=""))
-    assert pr.update_type is UpdateType.UNKNOWN
-    assert pr.auto_merge_expected is False
-
-
-def test_conformance_package_prelabel_compatibility_composed() -> None:
-    # Pre-label-rollout PR: no self-managed labels, so category comes from the
-    # branch fallback and update type from the body table — composed through
-    # classify() end to end (not as independent units).
+    The old classifier returned False here, which reported a PR the fleet was
+    in fact auto-merging as AWAITING_HUMAN_REVIEW — the one classification that
+    suppresses the stuck-PR signal, on the lane whose whole job is to propagate
+    fleet policy.
+    """
     pr = classify(
         make_pr(
-            labels=[],
+            branch="renovate/conformance-package",
+            body="Updates atlan-application-sdk-conformance from 1.2.3 -> 2.0.0",
+        )
+    )
+    assert pr.update_type is UpdateType.MAJOR
+    assert pr.auto_merge_expected is True
+
+
+def test_auto_merge_expected_is_independent_of_update_type() -> None:
+    """An unparseable body must not change the verdict.
+
+    This is the regression the removed ``UNKNOWN`` arm caused: the verdict used
+    to depend on whether a label happened to be present, so a PR whose labels
+    had not landed yet was silently reclassified as needing a human.
+    """
+    verdicts = {
+        classify(
+            make_pr(branch="renovate/conformance-package", body=body)
+        ).auto_merge_expected
+        for body in ("", "Updates x from 1.2.3 -> 1.3.0", "Updates x from 1.0 -> 2.0")
+    }
+    assert verdicts == {True}
+
+
+def test_conformance_package_classified_end_to_end_from_branch_and_body() -> None:
+    pr = classify(
+        make_pr(
             branch="renovate/conformance-package",
             body="Updates atlan-application-sdk-conformance from 1.2.3 -> 1.3.0",
         )
@@ -231,13 +236,15 @@ def test_conformance_package_prelabel_compatibility_composed() -> None:
     assert pr.auto_merge_expected is True
 
 
-def test_auto_merge_expected_python_dep_minor() -> None:
-    pr = classify(make_pr(labels=["update:minor", "dependencies"]))
+def test_auto_merge_expected_sdk_package_is_human() -> None:
+    pr = classify(make_pr(branch="renovate/atlan-application-sdk-3.x-lockfile"))
+    assert pr.category is Category.SDK_PACKAGE
     assert pr.auto_merge_expected is False
 
 
-def test_auto_merge_expected_python_dep_major() -> None:
-    pr = classify(make_pr(labels=["update:major", "dependencies"]))
+def test_auto_merge_expected_python_dep_is_human() -> None:
+    pr = classify(make_pr(branch="renovate/foo-1.x"))
+    assert pr.category is Category.PYTHON_DEP
     assert pr.auto_merge_expected is False
 
 
@@ -246,31 +253,37 @@ def test_auto_merge_expected_python_dep_major() -> None:
 
 def test_blocking_awaiting_human_review() -> None:
     # python-dep major is not auto-merge-eligible — blocked by design.
-    pr = classify(make_pr(labels=["update:major", "dependencies"]))
+    pr = classify(make_pr())
     assert pr.blocking_reason is BlockingReason.AWAITING_HUMAN_REVIEW
 
 
 def test_blocking_checks_failing() -> None:
     pr = classify(
-        make_pr(labels=["update:lock-maintenance"], checks_state=ChecksState.FAILING)
+        make_pr(
+            branch="renovate/lock-file-maintenance", checks_state=ChecksState.FAILING
+        )
     )
     assert pr.blocking_reason is BlockingReason.CHECKS_FAILING
 
 
 def test_blocking_checks_pending() -> None:
     pr = classify(
-        make_pr(labels=["update:lock-maintenance"], checks_state=ChecksState.PENDING)
+        make_pr(
+            branch="renovate/lock-file-maintenance", checks_state=ChecksState.PENDING
+        )
     )
     assert pr.blocking_reason is BlockingReason.CHECKS_PENDING
 
 
 def test_blocking_merge_conflict() -> None:
-    pr = classify(make_pr(labels=["update:lock-maintenance"], mergeable="CONFLICTING"))
+    pr = classify(
+        make_pr(branch="renovate/lock-file-maintenance", mergeable="CONFLICTING")
+    )
     assert pr.blocking_reason is BlockingReason.MERGE_CONFLICT
 
 
 def test_blocking_non_dep_files() -> None:
-    pr = classify(make_pr(labels=["update:github-actions"], files=["src/foo.py"]))
+    pr = classify(make_pr(branch="renovate/github-actions", files=["src/foo.py"]))
     assert pr.blocking_reason is BlockingReason.NON_DEP_FILES
 
 
@@ -284,7 +297,7 @@ def test_blocking_awaiting_approval() -> None:
     # anything — it is the NOT_ARMED fault, whatever its age.
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[".github/workflows/test.yaml"],
             mergeable="MERGEABLE",
             checks_state=ChecksState.GREEN,
@@ -301,7 +314,7 @@ def test_blocking_awaiting_approval_armed_and_young() -> None:
     # via the queue imminently. Not stuck.
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[".github/workflows/test.yaml"],
             review_decision="APPROVED",
             auto_merge_enabled=True,
@@ -317,7 +330,7 @@ def test_blocking_automerge_not_armed() -> None:
     # Flagged immediately (age 0), no staleness wait.
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[".github/workflows/test.yaml"],
             review_decision="APPROVED",
             auto_merge_enabled=False,
@@ -334,7 +347,7 @@ def test_soft_mode_repo_is_never_auto_merge_expected() -> None:
     # stuck is what buried the one real instance among 27 on 2026-09-17.
     pr = classify(
         make_pr(
-            labels=["update:lock-maintenance"],
+            branch="renovate/lock-file-maintenance",
             files=["uv.lock"],
             review_decision="",
             auto_merge_enabled=False,
@@ -351,7 +364,7 @@ def test_auto_mode_repo_still_reports_not_armed() -> None:
     # exists for, and the soft-mode gate above must not swallow it.
     pr = classify(
         make_pr(
-            labels=["update:lock-maintenance"],
+            branch="renovate/lock-file-maintenance",
             files=["uv.lock"],
             review_decision="",
             auto_merge_enabled=False,
@@ -368,7 +381,7 @@ def test_unknown_mode_classifies_as_before_the_field_existed() -> None:
     # must classify on lane policy alone, exactly as it did before the field.
     pr = classify(
         make_pr(
-            labels=["update:lock-maintenance"],
+            branch="renovate/lock-file-maintenance",
             files=["uv.lock"],
             auto_merge_enabled=True,
             repo_automerge_mode="unknown",
@@ -382,7 +395,7 @@ def test_blocking_automerge_not_armed_wins_over_stale() -> None:
     # Precise not-armed signal takes priority over the age backstop when both hold.
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[".github/workflows/test.yaml"],
             review_decision="APPROVED",
             auto_merge_enabled=False,
@@ -401,7 +414,7 @@ def test_blocking_automerge_not_armed_without_approval() -> None:
     # merely stale.
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[".github/workflows/test.yaml"],
             review_decision="",
             auto_merge_enabled=False,
@@ -418,7 +431,7 @@ def test_blocking_automerge_stale_unapproved_old() -> None:
     # Armed so the not-armed branch above is skipped and the backstop is isolated.
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[".github/workflows/test.yaml"],
             review_decision="",
             auto_merge_enabled=True,
@@ -432,7 +445,7 @@ def test_blocking_automerge_stale_armed_but_wedged() -> None:
     # Armed and approved but still open past the threshold → merge queue wedged.
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[".github/workflows/test.yaml"],
             review_decision="APPROVED",
             auto_merge_enabled=True,
@@ -449,7 +462,7 @@ def test_blocking_automerge_stale_at_exact_threshold() -> None:
     # is isolated.
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[".github/workflows/test.yaml"],
             review_decision="",
             auto_merge_enabled=True,
@@ -466,7 +479,7 @@ def test_blocking_automerge_not_stale_just_under_threshold() -> None:
     # boundary being tested.
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[".github/workflows/test.yaml"],
             review_decision="",
             auto_merge_enabled=True,
@@ -483,7 +496,7 @@ def test_blocking_unknown_checks_not_flagged_as_automerge() -> None:
     # it falls through to AWAITING_APPROVAL as it did before these signals existed.
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[".github/workflows/test.yaml"],
             review_decision="APPROVED",
             auto_merge_enabled=False,
@@ -500,7 +513,7 @@ def test_blocking_unknown_checks_not_flagged_as_automerge() -> None:
 def test_dep_files_allowed() -> None:
     pr = classify(
         make_pr(
-            labels=["update:github-actions"],
+            branch="renovate/github-actions",
             files=[
                 ".github/workflows/test.yaml",
                 "uv.lock",
@@ -513,7 +526,7 @@ def test_dep_files_allowed() -> None:
 
 
 def test_non_dep_file_triggers_block() -> None:
-    pr = classify(make_pr(labels=["update:github-actions"], files=["src/app.py"]))
+    pr = classify(make_pr(branch="renovate/github-actions", files=["src/app.py"]))
     assert pr.blocking_reason is BlockingReason.NON_DEP_FILES
 
 
@@ -585,8 +598,13 @@ def test_parse_checks_state_empty_rollup() -> None:
 # ── Category: sdk-package ────────────────────────────────────────────────────
 
 
-def test_category_sdk_package_via_label() -> None:
-    pr = classify(make_pr(labels=["sdk-package-update"]))
+def test_category_sdk_package_via_title() -> None:
+    pr = classify(
+        make_pr(
+            branch="renovate/all-minor-patch",
+            title="chore(deps): update dependency atlan-application-sdk to v3.35.0",
+        )
+    )
     assert pr.category is Category.SDK_PACKAGE
 
 
@@ -691,9 +709,8 @@ def test_extract_deps_lock_maintenance_empty() -> None:
     # Lock refresh PRs carry no version table and no versioned title.
     pr = classify(
         make_pr(
-            labels=["update:lock-maintenance"],
-            title="Lock file maintenance",
             branch="renovate/lock-file-maintenance",
+            title="Lock file maintenance",
             body="This PR refreshes the lock file.",
         )
     )
@@ -792,7 +809,8 @@ def _refusal_pr(
     window: str = "P3D",
     head_age: timedelta = timedelta(days=4),
     files: list[str] | None = None,
-    labels: list[str] | None = None,
+    branch: str = "renovate/lock-file-maintenance",
+    title: str = "Lock file maintenance",
     checks_state: ChecksState = ChecksState.FAILING,
     reason: str = "",
 ) -> RenovatePR:
@@ -800,11 +818,13 @@ def _refusal_pr(
 
     ``reason`` defaults to unstamped — the pre-FND-909 shape, which is judged
     against the window it names rather than the reaper's grace.
+
+    ``branch`` is the category lever since FND-2201 removed the labels: point it
+    at another lane to assert the category guard.
     """
     return make_pr(
-        labels=labels if labels is not None else ["update:lock-maintenance"],
-        title="Lock file maintenance",
-        branch="renovate/lock-file-maintenance",
+        title=title,
+        branch=branch,
         checks_state=checks_state,
         files=files if files is not None else ["uv.lock"],
         created_at=_OLD,
@@ -913,7 +933,7 @@ def test_blocking_checks_failing_when_head_date_is_unknown() -> None:
     # substitute — Renovate rewrites a lock branch in place.
     pr = classify(
         make_pr(
-            labels=["update:lock-maintenance"],
+            branch="renovate/lock-file-maintenance",
             checks_state=ChecksState.FAILING,
             files=["uv.lock"],
             created_at=_OLD,
@@ -928,14 +948,20 @@ def test_blocking_refusal_signal_only_applies_to_lock_maintenance() -> None:
     # Only the lock lane runs the bounded driver, so only it can be carrying a
     # refusal. Assert the category guard rather than relying on the other three
     # conditions to happen to exclude everything else.
-    pr = classify(_refusal_pr(labels=["conformance-package-update", "update:patch"]))
+    pr = classify(
+        _refusal_pr(
+            branch="renovate/conformance-package",
+            title="chore(deps): update dependency atlan-application-sdk-conformance",
+        )
+    )
+    assert pr.category is Category.CONFORMANCE_PACKAGE
     assert pr.blocking_reason is BlockingReason.CHECKS_FAILING
 
 
 def test_blocking_merge_conflict_still_wins_over_the_refusal_signal() -> None:
     pr = classify(
         make_pr(
-            labels=["update:lock-maintenance"],
+            branch="renovate/lock-file-maintenance",
             checks_state=ChecksState.FAILING,
             files=["uv.lock"],
             mergeable="CONFLICTING",
@@ -1003,9 +1029,8 @@ def test_standing_fault_is_reported_without_a_head_clock() -> None:
     """The stamp alone is enough; the standing path never reaches the clock."""
     pr = classify(
         make_pr(
-            labels=["update:lock-maintenance"],
-            title="Lock file maintenance",
             branch="renovate/lock-file-maintenance",
+            title="Lock file maintenance",
             checks_state=ChecksState.FAILING,
             files=["uv.lock"],
             created_at=_OLD,
