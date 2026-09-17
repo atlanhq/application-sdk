@@ -34,6 +34,23 @@ touched the branch, never from the run that happened to open it.
 Note the tag itself is read from `pyproject.toml` in Stage 2 and never from the PR title, so
 a stale title misleads reviewers rather than mis-tagging a release.
 
+**Two guards decide whether a run acts at all** (`.github/scripts/release_guard.py`, called
+from `release.py` before any file is touched; each sets `skip=true`, which every mutating
+step is gated on). Both read the target branch fresh from the remote rather than trusting
+the checkout, and both fail open when the check itself cannot be made:
+
+- *Did the PR land on the target branch?* GitHub delivers a stacked PR's merge into its
+  **parent feature branch** as a `pull_request: closed` event on the stack's root, so
+  `branches: [main]` matches and `actions/checkout` fetches the feature branch tip *as*
+  `origin/main`. The workflow passes `github.event.pull_request.merge_commit_sha` through
+  `PR_MERGE_COMMIT_SHA`, and the guard asks git whether that commit is an ancestor of the real
+  branch tip. Without this, one such merge rebuilt `bump-version-main` on fifteen unmerged
+  feature commits and the bump PR went CONFLICTING (application-sdk#3794).
+- *Has this version already shipped?* The checkout can be a frozen merge ref that predates a
+  release merged seconds earlier, so a sibling PR's run recomputes the version that just
+  published. The guard compares the computed version with the one on the target branch and
+  skips when the branch is already at or past it (application-sdk#3570).
+
 **Caller wiring** (`.github/workflows/release.yaml`):
 ```yaml
 on:
