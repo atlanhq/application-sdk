@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.35.0 (September 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.3...v3.35.0
+
+### Features
+
+- let the e2e harness assert asset attribute values (FND-2094) (#3796) (by @cmgrote in [af57601](https://github.com/atlanhq/application-sdk/commit/af57601))
+- own the transformed entity envelope on SqlApp (FND-2137) (#3805) (by @cmgrote in [1794546](https://github.com/atlanhq/application-sdk/commit/1794546))
+
+### Bug Fixes
+
+- stamp lastSync* on v3 asset-mapper output (FND-2097) (#3795) (by @cmgrote in [46dc8ac](https://github.com/atlanhq/application-sdk/commit/46dc8ac))
+- stop the flattened envelope stripping a dict mapper's nulls (FND-2137) (#3806) (by @cmgrote in [691cb7a](https://github.com/atlanhq/application-sdk/commit/691cb7a))
+- adopt pyatlan 11.3's explicit-null preservation (FND-2296) (#3814) (by @cmgrote in [bab6e78](https://github.com/atlanhq/application-sdk/commit/bab6e78))
+
+
 ## v3.34.3 (September 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.2...v3.34.3
