@@ -35,7 +35,7 @@ Suppress a finding on the violating line or the line directly above it:
 
 ## D001 — `UnpinnedSdkDependency` {#d001}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Application SDK dependency is missing or its version specifier is not bounded on both ends
 
@@ -45,6 +45,12 @@ has a bound that stops automatic upgrades past the reviewed point. Customer impa
 unreviewed SDK major rides an automated lockfile bump into the next release, and its
 breaking changes surface as connector failures in customer tenants with no app-code diff
 that explains them — the hardest kind of regression to attribute during an incident.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `atlan-application-sdk>=3.24.1,<4.0.0`. Bounded at
+  both ends: a floor for the features the app uses, a ceiling at the next major so a
+  breaking release cannot arrive through a lockfile refresh.
 
 Every app must declare `atlan-application-sdk` in `[project.dependencies]` with a
 version specifier that has both a lower bound (`>=` or `==`) and an upper bound (`<` or
@@ -57,7 +63,7 @@ the SDK are also exempt — packages whose `[project].name` starts with
 
 ## D002 — `RedeclaredSdkManagedDependency` {#d002}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Dependency redeclared in the app's pyproject.toml is already managed by the SDK
 
@@ -65,6 +71,12 @@ the SDK are also exempt — packages whose `[project].name` starts with
 specifier over the SDK's, yielding a version never validated against the SDK. This
 causes resolver conflicts during upgrades and forces touching every app that holds a
 duplicate when the SDK pin changes.
+
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app pyproject.toml — [project.dependencies] holds exactly one entry,
+  the SDK. Everything the SDK already resolves (orjson, pydantic, temporalio) is
+  imported without being redeclared, so there is one place a version can move.
 
 Packages pinned by `atlan-application-sdk` (its core `[project.dependencies]`) must not
 be redeclared in the app's `[project.dependencies]` or any
@@ -78,7 +90,7 @@ the runtime environment, this rule is skipped silently.
 
 ## D003 — `UnusedDependency` {#d003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `dependency-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `dependency-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A package declared in [project.dependencies] is never imported in source
 
@@ -88,6 +100,13 @@ elsewhere (a test/dev group). Surfacing it turns the recurring manual question d
 version bump — 'is this even used?' — into a deterministic, reviewable signal. It stays
 advisory (WARN, no autofix) because a dependency can be loaded dynamically, via an entry
 point/plugin, or run as a server (e.g. uvicorn) without an explicit import.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app pyproject.toml — aiomysql is declared with no import to justify it, and
+  carries an inline ignore[D003] saying SQLAlchemy loads it dynamically from the
+  "mysql+aiomysql" dialect string. A dynamically-loaded dependency is real; it just has
+  to say so.
 
 Every package in the repo's core `[project.dependencies]` should be imported somewhere
 in the shipped source.  This rule maps each declared distribution to the import name(s)
@@ -112,7 +131,7 @@ synced environment for this reason.  See BLDX-1462.
 
 ## D004 — `RedeclaredSdkManagedDependencyInGroups` {#d004}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
 
 > SDK-managed dependency redeclared in a [dependency-groups] table
 
@@ -120,6 +139,12 @@ synced environment for this reason.  See BLDX-1462.
 SDK-managed package re-pinned in a PEP 735 [dependency-groups] table escapes it. A
 dev/test group that re-pins a package the SDK already manages drifts from the SDK's
 validated dev environment and must be touched on every SDK bump.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app pyproject.toml — the dev and test groups hold only what the SDK does
+  not ship (pre-commit, pyright, ruff, poethepoet, testcontainers, httpx, docker),
+  several with a comment on why. Nothing the SDK already pins is repeated there.
 
 Packages pinned by `atlan-application-sdk` must not be redeclared in the app's PEP 735
 `[dependency-groups.*]` tables (dev/test groups).  This is the coverage gap left by
@@ -133,7 +158,7 @@ this rule is skipped silently. Cite: BLDX-1410.
 
 ## D005 — `UnknownSdkExtra` {#d005}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
 
 > Reference to an atlan-application-sdk extra the SDK does not publish
 
@@ -144,6 +169,12 @@ silent-failure at build time. Customer impact: the dependencies the app needs ar
 installed, so the connector raises ImportError on the first real run in the customer's
 tenant — a day-one install failure on an image that passed every build gate, because the
 typo is invisible to the resolver that silently dropped it.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app pyproject.toml — `atlan-application-sdk[iam-auth,sql,workflows,pandas]`.
+  All four are extras the SDK publishes; a typo here resolves to nothing and fails at
+  import, not at install.
 
 Every `atlan-application-sdk[extra]` reference must name an extra the SDK actually
 publishes (its `Provides-Extra` metadata).  An unknown extra is silently dropped by uv,
@@ -156,7 +187,7 @@ findings route to residue rather than auto-fix.  Cite: BLDX-1410.
 
 ## D006 — `IncompatibleRequiresPython` {#d006}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `python-version` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `python-version` · **Autofixable:** yes · **Since:** 0.5.0
 
 > App requires-python lower bound is below the SDK's minimum supported Python version
 
@@ -164,6 +195,12 @@ findings route to residue rather than auto-fix.  Cite: BLDX-1410.
 interpreter the SDK does not. Installs on that Python resolve a degraded or broken
 dependency set, and the mismatch surfaces only at runtime on the oldest supported
 environment — exactly where it is hardest to catch in review.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `requires-python = ">=3.11"`, the SDK's own floor. A
+  lower bound than the SDK's promises an interpreter the dependency tree cannot actually
+  satisfy.
 
 The app's `[project].requires-python` lower bound must be at least the SDK's minimum
 supported Python (`>=3.11`). A lower floor lets the app be installed on a Python the SDK
@@ -176,7 +213,7 @@ from installed metadata, so this rule needs no resolved environment. Cite: BLDX-
 
 ## D007 — `NonStandardBuildBackend` {#d007}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `build-system` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `build-system` · **Autofixable:** yes · **Since:** 0.5.0
 
 > Build backend is not Hatchling
 
@@ -184,6 +221,11 @@ from installed metadata, so this rule needs no resolved environment. Cite: BLDX-
 build steps are uniform across the fleet. A setuptools/poetry-core backend diverges from
 that baseline and from the bootstrapped build-and-publish workflow, making fleet-wide
 build changes per-app instead of uniform.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `build-backend = "hatchling.build"`, which is what
+  the app-runtime base image and the publish pipeline expect.
 
 `[build-system].build-backend` must be `hatchling.build`.  Atlan's app fleet
 standardises on Hatchling so the managed build-and-publish workflow and wheel layout are
@@ -194,13 +236,19 @@ uniform; a different backend diverges from that baseline.  A pyproject with no
 
 ## D008 — `WeakenedTypeChecking` {#d008}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `tooling-baseline` · **Autofixable:** yes · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `tooling-baseline` · **Autofixable:** yes · **Since:** 0.5.0
 
 > pyright typeCheckingMode is weaker than the SDK baseline 'standard'
 
 **Rationale:** The SDK's typed contracts only protect an app whose type checker actually runs at the
 SDK's level. A typeCheckingMode of 'off' or 'basic' lets type regressions against SDK
 APIs pass app CI unnoticed, defeating the point of the typed surface.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `typeCheckingMode = "standard"` under [tool.pyright],
+  the SDK baseline. Weakening it locally hides exactly the boundary errors the typed
+  contracts exist to catch.
 
 `[tool.pyright].typeCheckingMode` must not be weaker than the SDK baseline `standard` —
 `off` and `basic` are flagged; `standard` and `strict` pass.  A weakened mode lets type
@@ -212,7 +260,7 @@ scope (they can be legitimate).  Cite: BLDX-1410.
 
 ## D009 — `RemoteDaprComponentFetch` {#d009}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dapr-components` · **Autofixable:** yes · **Since:** 0.12.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dapr-components` · **Autofixable:** yes · **Since:** 0.12.0
 
 > A poe task fetches Dapr component YAMLs from GitHub instead of the installed application-sdk wheel
 
@@ -226,6 +274,12 @@ Customer impact: the flaky 429 blocks the build pipeline exactly when a customer
 waiting on a hotfix release, and component YAMLs fetched at a drifted ref can ship
 state/queue configuration the locked SDK was never validated against — misbehaving only
 once deployed in the tenant.
+
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app pyproject.toml — [tool.poe.tasks.download-components] copies the
+  Dapr component YAMLs out of the installed application_sdk wheel. Components then match
+  whatever SDK version uv.lock resolved, instead of whatever main happened to hold.
 
 No `[tool.poe.tasks.*]` entry (in either the shorthand `task.shell = "..."` form or the
 full `[tool.poe.tasks.task]` table form) may reference `raw.githubusercontent.com` or
@@ -241,7 +295,7 @@ Docker build, where `uv sync` precedes `poe download-components`). Inline suppre
 
 ## D010 — `QueryTransformerWithoutDuckdb` {#d010}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `runtime-dependencies` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `runtime-dependencies` · **Autofixable:** — · **Since:** 0.18.0
 
 > App imports the SDK query transformer but duckdb is not resolved (no [sql]/[incremental] extra, no direct dependency)
 
@@ -260,6 +314,12 @@ also covered. Statically checkable: transformer-usage scan + lockfile/pyproject 
 Customer impact: every transform in the customer's crawl dies with ImportError, so no
 metadata reaches their catalog at all — and because imports succeed and mocked unit
 tests pass, the first thing that reveals it is the customer's own failed run.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app pyproject.toml — the SDK is installed with the `sql` extra, which is
+  what resolves duckdb. An app importing the SDK query transformer without one of
+  [sql]/[incremental], or a direct duckdb pin, imports a module whose engine is absent.
 
 An app whose source imports the SDK query transformer
 (`application_sdk.transformers.query` — the `transform_metadata` /
@@ -316,7 +376,7 @@ with no app-side edit.  Bump the SDK; do not reach for a suppression.
 
 ## D011 — `ConformanceDependencyContract` {#d011}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `dependency-tooling` · **Autofixable:** yes · **Since:** 0.23.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-tooling` · **Autofixable:** yes · **Since:** 0.23.0
 
 > atlan-application-sdk-conformance is undeclared, declared in [project.dependencies], pinned to a non-floating specifier, or missing from uv.lock
 
@@ -345,6 +405,16 @@ ruleset would have blocked, and because the gate reported success the first thin
 reveals it is the customer's own failed crawl. Where a declaration is missing outright,
 the remediation loop cannot run in the repo at all, so nothing can be fixed there even
 once it is found.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app pyproject.toml — `atlan-application-sdk-conformance>=0.17.0,<1.0.0` in a
+  dependency group, with a comment recording that the D-series CI leg resolves the suite
+  from this repo's own environment. A hard pin freezes that one leg while every other
+  leg runs the latest; a declaration in [project.dependencies] ships the linter to
+  production.
+- **Already correct when:** The specifier must be able to float. Pinning is what freezes one repo's D-series leg to
+  a single suite version while every other leg runs the latest.
 
 Every app should declare `atlan-application-sdk-conformance` in a dev/test dependency
 array, with a specifier that can float, and have it resolved in `uv.lock`.  At most one
@@ -387,7 +457,7 @@ change.
 
 ## D012 — `UnpinnedPackageIndex` {#d012}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.30.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.30.0
 
 > pyproject.toml does not pin PyPI as the default uv index, so a machine-wide index can rewrite uv.lock
 
@@ -404,6 +474,14 @@ the proxy, fails at dependency install with 401 Unauthorized on a different pack
 run. The connector's release stalls behind a failure that reads as an outage in someone
 else's infrastructure, and the cause is invisible in the diff that produced it — no
 version moved, no hash moved, only the URLs.
+
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app pyproject.toml — `[[tool.uv.index]]` names pypi at
+  https://pypi.org/simple with `default = true`, above a comment recording which
+  machine-wide index the pin displaces and why it cannot move to a project-level
+  uv.toml. Declared in pyproject.toml, so the repo's [tool.uv] constraint-dependencies
+  keep being read.
 
 The repo's root `pyproject.toml` must declare PyPI as the resolver's default index:
 
@@ -437,7 +515,7 @@ rule pins the index; `D013` checks whether a non-PyPI host has already reached
 
 ## D013 — `NonPyPILockfileIndex` {#d013}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `supply-chain` · **Autofixable:** — · **Since:** 0.30.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** — · **Since:** 0.30.0
 
 > uv.lock resolves packages from a host that is not PyPI, or embeds an index credential
 
@@ -453,6 +531,13 @@ that has to be rotated before anything else is done. Customer impact: the connec
 cannot be built or released at all until the lock is repaired, and the pre-release gates
 that would have caught real defects never run, because they fail before reaching the
 code.
+
+### What correct looks like
+
+- **Compliant example:** atlan-hello-world-app uv.lock — every download URL names files.pythonhosted.org, because
+  that repo's D012 pin was in place before the lock was last resolved. A lock that has
+  already picked up a proxy host is repaired by restoring the committed one, not by
+  re-locking on the machine that rewrote it.
 
 Every download URL in the repo's `uv.lock` must name a PyPI host —
 `files.pythonhosted.org` or `pypi.org`.  Two branches:
@@ -482,7 +567,7 @@ inert must not read as a clean result.  Cite: FND-1928.
 
 ## D014 — `AbsoluteResolverFence` {#d014}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `supply-chain` · **Autofixable:** — · **Since:** 0.31.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** — · **Since:** 0.31.0
 
 > pyproject.toml pins [tool.uv] exclude-newer to a fixed date, freezing every resolve in the repo
 
@@ -503,6 +588,15 @@ than failing visibly. Measured 2026-09-14: three fleet repos, the oldest fence 3
 stale, one of them 12 conformance minors and 4 SDK minors behind. FND-414 cleaned eleven
 repos of this in August; two of the three found in September were written AFTER that
 cleanup, which is why this is a rule and not another sweep.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app pyproject.toml — no `[tool.uv] exclude-newer` and no
+  `exclude-newer-package`. That repo's release-age cooldown lives in renovate.json,
+  which extends the SDK's shared preset: a rolling window bounds the lanes Renovate
+  resolves itself, and the lock-refresh driver bounds its own re-resolve — leaving a
+  human's `uv lock` and the CVE-fix workflow unfenced, which a date in pyproject.toml
+  would not.
 
 The repo's root `pyproject.toml` must not fence uv's resolver to an absolute date.  Both
 places one can be declared are checked, and each yields its own finding:
@@ -553,7 +647,7 @@ FND-2000, FND-2001.
 
 ## D015 — `PyrightExcludeClobbersDefaults` {#d015}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `tooling-baseline` · **Autofixable:** yes · **Since:** 0.32.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `tooling-baseline` · **Autofixable:** yes · **Since:** 0.32.0
 
 > pyproject.toml declares [tool.pyright] exclude without restating the dot-directory default, so a bare pyright run walks .venv
 
@@ -578,6 +672,15 @@ to catch. Measured 2026-09-17 across all 115 atlan-*-app repos: 73 declare an 'e
 that clobbers the defaults with no scoped 'include' to save them, 3 more are latent
 behind an 'include', and application-sdk itself is in the first group -- which is why
 the scope is 'both' and not 'app'.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `[tool.pyright]` sets venvPath, venv,
+  typeCheckingMode and two report levels, and declares no `exclude` at all, so pyright's
+  built-in defaults stay in force and `**/.*` keeps .venv out of the walk. A repo that
+  does need an exclude restates `**/.*` beside its own entries; atlan-mysql-app and
+  atlan-metabase-app both exclude `.github/**` without it and are open findings, which
+  is why neither is cited here.
 
 `[tool.pyright].exclude` **replaces** pyright's built-in defaults -- `**/node_modules`,
 `**/__pycache__` and `**/.*` -- rather than appending to them.  Losing the first two

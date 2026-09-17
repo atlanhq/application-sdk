@@ -12,6 +12,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E001",
+        canonical_reference=(
+            "atlan-metabase-app app/extracts/questions.py — "
+            "`fetch_question_queries_single` catches broadly, logs with exc_info=True and "
+            "appends a residual record before returning. Tolerating a failure and "
+            "discarding it are different things."
+        ),
         scope=RuleScope.BOTH,
         name="BareExceptPass",
         tier=EnforcementTier.BLOCK,
@@ -40,6 +46,19 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E002",
+        canonical_reference=(
+            "atlan-metabase-app app/api_types.py — `_to_millis` catches ValueError around "
+            "timestamp parsing and logs the offending value with exc_info=True before "
+            "returning None. Naming the exception type does not excuse an empty body."
+        ),
+        terminal_state=(
+            "Control flow must not change — the swallow is existing, deliberate "
+            "behaviour and the fix only stops the cause being discarded. Resolve the "
+            "module's logger from its own source rather than assuming the name "
+            "`logger`, and check it is bound ABOVE the handler: a bootstrap shim "
+            "binds its logger below an import-time try/except, so logging there "
+            "raises NameError inside the very block being made observable."
+        ),
         scope=RuleScope.BOTH,
         name="TypedExceptPass",
         tier=EnforcementTier.BLOCK,
@@ -67,6 +86,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E003",
+        canonical_reference=(
+            "atlan-metabase-app app/residuals.py — `record_residual_failure`. No reference "
+            "app uses contextlib.suppress; a deliberately tolerated failure is narrowed to "
+            "one condition and written to residual/failures.jsonl, so the swallow leaves "
+            "evidence a reviewer can find."
+        ),
         scope=RuleScope.BOTH,
         name="BroadContextlibSuppress",
         tier=EnforcementTier.WARN,
@@ -91,6 +116,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E004",
+        canonical_reference=(
+            "atlan-openapi-app app/api_client.py — `_parse_zip` catches Exception per "
+            "archive member and logs with exc_info=True. Where breadth really is the "
+            "point, atlan-mysql-app app/handler.py `preflight_check` carries an inline "
+            "ignore[E004] naming the boundary it guards; both shapes are accepted, an "
+            "unexplained bare breadth is not."
+        ),
         scope=RuleScope.BOTH,
         name="BroadExceptClause",
         tier=EnforcementTier.WARN,
@@ -122,6 +154,10 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E005",
+        canonical_reference=(
+            "atlan-mysql-app app/mysql.py — `_epoch_ms` carries exc_info=True even on its "
+            "DEBUG line. The level is a volume decision; keeping the traceback is not."
+        ),
         scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfo",
         tier=EnforcementTier.WARN,
@@ -150,6 +186,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E006",
+        canonical_reference=(
+            "atlan-openapi-app app/api_client.py — every handler in `validate_spec_url` "
+            "and `_parse_zip` names a type. A bare `except:` appears nowhere in the four "
+            "reference apps, so SystemExit and KeyboardInterrupt still unwind the worker."
+        ),
         scope=RuleScope.BOTH,
         name="BareExceptWithBody",
         tier=EnforcementTier.BLOCK,
@@ -175,6 +216,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E007",
+        canonical_reference=(
+            "atlan-metabase-app app/extracts/databases.py — `fetch_databases_summaries` "
+            "logs the HTTP status and records a residual before returning []. Where the "
+            "sentinel really is the contract, atlan-openapi-app app/api_client.py "
+            "`redact_url` carries an inline ignore[E007] saying so."
+        ),
         scope=RuleScope.BOTH,
         name="ErrorToReturnValue",
         tier=EnforcementTier.WARN,
@@ -198,6 +245,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E008",
+        canonical_reference=(
+            "atlan-openapi-app tests/e2e/test_connection_create.py — the module guard "
+            "binds `except ImportError as _exc` and carries the text into the pytest.skip "
+            "reason, so a missing SDK export is readable from the run instead of appearing "
+            "as an empty skip."
+        ),
         scope=RuleScope.BOTH,
         name="ImportErrorWithoutLogging",
         tier=EnforcementTier.WARN,
@@ -222,6 +275,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E009",
+        canonical_reference=(
+            "atlan-metabase-app app/credentials.py — `build_credential_ref` binds the "
+            "routing error, logs it, and then takes the inline-credentials path. A bound "
+            "name that is never read is the tell that the handler is a placeholder."
+        ),
         scope=RuleScope.BOTH,
         name="ExceptBlockOnlyAssigns",
         tier=EnforcementTier.WARN,
@@ -246,6 +304,15 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E010",
+        canonical_reference=(
+            "No reference app calls asyncio.gather(return_exceptions=True); per-item "
+            "failure is decided at the item, as in atlan-metabase-app "
+            "app/extracts/collections.py. Where an app genuinely needs concurrency, the "
+            "app-facing seam is application_sdk/execution/heartbeat.py — run_in_thread / "
+            "run_fault_isolated / run_best_effort, which surface per-unit failures for you "
+            "(`_runtime.offload` is the SDK-internal path; importing it from an app is "
+            "what P005 exists to catch)."
+        ),
         scope=RuleScope.BOTH,
         name="AsyncioGatherExceptionsUnexamined",
         tier=EnforcementTier.WARN,
@@ -271,6 +338,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E011",
+        canonical_reference=(
+            "No app writes a logging.Filter. Filtering, redaction and Temporal-context "
+            "enrichment belong to application_sdk/observability/logger_adaptor.py, reached "
+            "through `get_logger`; atlan-mysql-app app/client.py shows the whole of an "
+            "app's logging setup — one import and one module-level logger."
+        ),
         scope=RuleScope.BOTH,
         name="LoggingFilterUnsafeBody",
         tier=EnforcementTier.WARN,
@@ -300,6 +373,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E012",
+        canonical_reference=(
+            "atlan-mysql-app app/failures.py — six leaves, each subclassing an SDK "
+            "category (`InvalidInputError`, `AuthError`, `InternalError`, "
+            "`PreconditionError`) and owning a `code`. Raise one of these, never a bare "
+            "ValueError or RuntimeError."
+        ),
         scope=RuleScope.BOTH,
         name="UntypedBuiltinRaise",
         tier=EnforcementTier.WARN,
@@ -327,6 +406,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E013",
+        canonical_reference=(
+            "atlan-metabase-app app/errors.py — every error is imported from "
+            "`application_sdk.errors`. The deprecated AtlanError stack (ClientError, "
+            "ApiError, …) appears nowhere in the four reference apps."
+        ),
         scope=RuleScope.BOTH,
         name="LegacyAtlanErrorRaise",
         tier=EnforcementTier.BLOCK,
@@ -355,6 +439,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E014",
+        canonical_reference=(
+            "atlan-metabase-app app/lineage/qi_reader.py — `iter_qi_records` skips an "
+            "unparseable line only after logging it with exc_info=True. A bare `continue` "
+            "in an except block turns a shrinking result set into a mystery."
+        ),
         scope=RuleScope.BOTH,
         name="ExceptLoopControlSwallow",
         tier=EnforcementTier.WARN,
@@ -382,6 +471,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E015",
+        canonical_reference=(
+            "atlan-mysql-app app/client.py — `get_iam_role_token` raises "
+            "IamTokenGenerationError with a fixed operator-facing message and passes the "
+            "original as `cause=e`. The caught exception's text never lands in `message=`."
+        ),
         scope=RuleScope.BOTH,
         name="ExceptionTextInErrorMessage",
         tier=EnforcementTier.WARN,
@@ -413,6 +507,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E016",
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — `fetch_metadata` ends `raise "
+            "MetadataFetchError(cause=e) from e`. Both halves are there: the SDK-visible "
+            "cause and the Python chain."
+        ),
         scope=RuleScope.BOTH,
         name="MissingExceptionChaining",
         tier=EnforcementTier.WARN,
@@ -444,6 +543,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E017",
+        canonical_reference=(
+            "atlan-openapi-app app/connector.py — `download_cloud_spec` raises with "
+            "service / retryable / suggested_action as its evidence. Evidence describes "
+            "the failure, never the credential that produced it; "
+            "application_sdk/errors/wire.py rejects secret-named keys at runtime."
+        ),
         scope=RuleScope.BOTH,
         name="SecretNamedEvidenceKey",
         tier=EnforcementTier.BLOCK,
@@ -476,6 +581,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E018",
+        canonical_reference=(
+            "atlan-openapi-app app/errors.py — every raise site uses a connector-specific "
+            "subclass with its own `code`, so failures bucket per connector on the "
+            "dashboard instead of collapsing into the bare category leaf."
+        ),
         scope=RuleScope.BOTH,
         name="BareParentLeafRaise",
         tier=EnforcementTier.WARN,
@@ -509,6 +619,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E019",
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — `test_auth` returns the fixed message "
+            '"Authentication failed"; the exception text goes to the log with '
+            "exc_info=True, not into the contract field a caller renders."
+        ),
         scope=RuleScope.BOTH,
         name="ExceptionTextInContractField",
         tier=EnforcementTier.WARN,
@@ -553,6 +668,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E020",
+        canonical_reference=(
+            "atlan-metabase-app app/extracts/databases.py — the one place an HTTP failure "
+            "returns an empty sentinel carries an inline ignore[E020] naming the residual "
+            "file that records it. Seven such sites exist across app/extracts/, each "
+            "justified. Without that evidence trail the empty return has to raise."
+        ),
         scope=RuleScope.APP,
         name="HttpFailureToEmptyReturn",
         tier=EnforcementTier.WARN,
