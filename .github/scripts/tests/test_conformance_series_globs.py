@@ -153,9 +153,9 @@ def test_t_series_watches_dot_github(legs: dict[str, str]) -> None:
     Kept as its own case so the failure names the rules at stake rather than
     only the generic invariant.
     """
-    assert _covers_root(legs["T"], ".github"), (
-        "T-series leg would skip a workflow-only PR — the diff shape T020-T022 grade"
-    )
+    assert _covers_root(
+        legs["T"], ".github"
+    ), "T-series leg would skip a workflow-only PR — the diff shape T020-T022 grade"
 
 
 def test_f_series_watches_deployment_trees(legs: dict[str, str]) -> None:
@@ -165,9 +165,9 @@ def test_f_series_watches_deployment_trees(legs: dict[str, str]) -> None:
     invariant above never sees the roots they read; pin them here.
     """
     for root in (".github", "deploy", "deployment", "helm", "k8s"):
-        assert _covers_root(legs["F"], root), (
-            f"F-series leg would skip a PR that only touches {root}/ — F015 reads it"
-        )
+        assert _covers_root(
+            legs["F"], root
+        ), f"F-series leg would skip a PR that only touches {root}/ — F015 reads it"
 
 
 def test_wildcard_prefix_does_not_count_as_covering_a_dot_root() -> None:

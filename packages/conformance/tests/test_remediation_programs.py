@@ -166,9 +166,9 @@ def test_every_area_forwards_rule_ids_into_every_runner_call(area: str) -> None:
 
 @pytest.mark.parametrize("area", ALL_AREAS)
 def test_every_area_declares_rule_ids(area: str) -> None:
-    assert "`rule_ids`" in _read(f"areas/{area}.prose.md"), (
-        f"{area} forwards rule_ids but never declares it as a parameter"
-    )
+    assert "`rule_ids`" in _read(
+        f"areas/{area}.prose.md"
+    ), f"{area} forwards rule_ids but never declares it as a parameter"
 
 
 def test_remediate_finding_declares_the_evidence_field() -> None:
@@ -338,9 +338,9 @@ def test_uncited_fix_is_rejected_before_it_is_applied(loop: str) -> None:
     """
     evidence_at = loop.index("require_cited_evidence and")
     apply_at = loop.index("apply result.edit")
-    assert evidence_at < apply_at, (
-        "the cited-evidence check must run before the edit is applied"
-    )
+    assert (
+        evidence_at < apply_at
+    ), "the cited-evidence check must run before the edit is applied"
 
 
 def test_unverifiable_always_routes_to_residue(loop: str) -> None:
