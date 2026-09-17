@@ -389,6 +389,8 @@ def input_type_supports_gate(input_type: type) -> bool:
 if TYPE_CHECKING:
     from application_sdk.execution.errors import ApplicationError
     from application_sdk.handler.base import Handler
+    from application_sdk.infrastructure.secrets import SecretStore
+    from application_sdk.storage.preflight import ObjectStoreCheckResult
 
 
 class PreflightGateInput(BaseModel):
@@ -444,7 +446,7 @@ class PreflightGateInput(BaseModel):
 
     @classmethod
     def from_extraction_input(
-        cls, input_data: Any, entrypoint: str
+        cls, input_data: object, entrypoint: str
     ) -> PreflightGateInput:
         """Build the gate input from a workflow extraction input — never raises.
 
@@ -831,7 +833,7 @@ def resolve_gate_mode(app_cls: type | None) -> PreflightGateMode:
     return coerce_gate_mode(getattr(app_cls, "preflight_gate_mode", None))
 
 
-def gate_retry_policy(attempts: Any) -> RetryPolicy:
+def gate_retry_policy(attempts: int | str | None) -> RetryPolicy:
     """The gate's retry policy for one app, from its declared attempts."""
     resolved, _ = gate_attempts(attempts)
     return RetryPolicy(maximum_attempts=resolved, backoff_coefficient=2)
@@ -853,7 +855,7 @@ def gate_heartbeat_timings(start_to_close_seconds: float) -> tuple[float, float]
 
 
 def gate_timeouts(
-    budget_seconds: Any, attempts: Any = None
+    budget_seconds: int | str | None, attempts: int | str | None = None
 ) -> tuple[timedelta, timedelta]:
     """Derive ``(start_to_close, schedule_to_close)`` from the budget and attempts.
 
@@ -1363,7 +1365,7 @@ def emit_preflight_crash_outcome(
     )
 
 
-def _activity_info() -> Any:
+def _activity_info() -> activity.Info | None:
     """``activity.info()``, or ``None`` when it cannot be read.
 
     The single tolerant read every gate helper routes through: no activity
@@ -1576,7 +1578,9 @@ def _unverified_storage_check(message: str, *, app_owner: bool) -> PreflightChec
     )
 
 
-def _storage_failure_details(result: Any, *, sdr_mode: bool) -> Any:
+def _storage_failure_details(
+    result: ObjectStoreCheckResult, *, sdr_mode: bool
+) -> FailureDetails:
     """Map a failed storage probe onto typed ``FailureDetails`` for a gate check.
 
     In SDR mode the deployment store is the customer's own bucket, so the
@@ -1781,7 +1785,7 @@ async def _append_storage_checks(
         return False
 
 
-def _require_secret_store() -> Any:
+def _require_secret_store() -> SecretStore:
     """Return the secret store, or raise so the gate fails open.
 
     A credential ref exists but there is no store to dereference it — an infra
