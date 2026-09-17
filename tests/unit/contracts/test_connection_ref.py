@@ -318,6 +318,10 @@ class TestNullAdminListsAreAValue:
 # ---------------------------------------------------------------------------
 
 
+ABSENT = "<absent>"
+"""Sentinel for "this key is not in the mapping at all"."""
+
+
 def _bare_conn() -> Any:
     """A ``Connection`` struct with *no* ``admin_*`` field touched at all.
 
@@ -330,78 +334,131 @@ def _bare_conn() -> Any:
 class TestAdminListStatesEndToEnd:
     """What each ``admin_users`` state becomes at every hop.
 
-    Four states on the ``pyatlan_v9`` struct, and they are not four distinct
-    outputs — the table below is the contract, lossy leg included:
+    Four states on the ``pyatlan_v9`` struct, each distinct at every hop:
 
-    ===================  ===================  ==========  ==================
-    struct               ``to_atlas_format``  model       ``model_dump``
-    ===================  ===================  ==========  ==================
-    ``UNSET``            absent               ``[]``      ``[]``
-    ``= None``           ``null``             ``None``    ``null``
-    ``= []``             ``[]``               ``[]``      ``[]``
-    ``= ["alice"]``      ``["alice"]``        ``["alice"]``  ``["alice"]``
-    ===================  ===================  ==========  ==================
+    ===============  ===================  =============  ===============
+    struct           ``to_atlas_format``  model          ``model_dump``
+    ===============  ===================  =============  ===============
+    ``UNSET``        absent               ``[]``         absent
+    ``= None``       ``null``             ``None``       ``null``
+    ``= []``         ``[]``               ``[]``         ``[]``
+    ``= ["alice"]``  ``["alice"]``        ``["alice"]``  ``["alice"]``
+    ===============  ===================  =============  ===============
 
-    Pinned as a table rather than as scattered cases because the interesting
-    assertions are the *collisions*, and a test per state cannot see them:
+    Pinned as a table rather than as scattered cases because the property
+    worth defending is that no two rows **collide**, and a test per state
+    cannot see a collision. Both near-misses are real regressions this file
+    has already caught once:
 
     * ``None`` is the only clear. Writing ``conn.admin_users = None`` is what
       expresses "remove every admin user"; leaving the field alone does not.
       It survives every hop, which is what pyatlan 11.3.0 bought — see
       ``TestPyatlanFlattenContract`` in
       ``tests/unit/common/test_entity_envelope.py``.
-    * ``UNSET`` and ``[]`` **collapse**. A connection that never mentioned
-      ``adminUsers`` serialises as ``[]``, an explicit empty ACL it never
-      claimed. That is this model's default, not the encoder's: it predates
-      the 11.3 work and is left alone deliberately, because widening the
-      default to ``None`` would change what every ``connection:
-      ConnectionRef = Field(default_factory=ConnectionRef)`` contract reads
-      today. It is safe only because the one write path
-      (``testing/e2e/base.py``) always sets admins explicitly — see the
-      assertion at ``base.py:2524``. Anything that starts round-tripping a
-      *real* connection through this model has to revisit it first.
+    * ``UNSET`` is absent, not ``[]``. The model column is deliberately *not*
+      the dump column: the default is there so Python readers can iterate
+      without a ``None`` check, and it is not a claim about the Connection.
+      ``ConnectionAttributes._omit_unset_fields`` is what keeps the two apart.
     """
 
     @pytest.mark.parametrize(
-        ("mutate", "expected_atlas", "expected_py"),
+        ("mutate", "expected_atlas", "expected_py", "expected_dump"),
         [
-            pytest.param(lambda c: None, "<absent>", [], id="unset"),
+            pytest.param(lambda c: None, ABSENT, [], ABSENT, id="unset"),
             pytest.param(
-                lambda c: setattr(c, "admin_users", None), None, None, id="cleared"
+                lambda c: setattr(c, "admin_users", None),
+                None,
+                None,
+                None,
+                id="cleared",
             ),
-            pytest.param(lambda c: setattr(c, "admin_users", []), [], [], id="empty"),
+            pytest.param(
+                lambda c: setattr(c, "admin_users", []), [], [], [], id="empty"
+            ),
             pytest.param(
                 lambda c: setattr(c, "admin_users", ["alice"]),
+                ["alice"],
                 ["alice"],
                 ["alice"],
                 id="populated",
             ),
         ],
     )
-    def test_state_reaches_the_model_intact(
-        self, mutate: Any, expected_atlas: Any, expected_py: Any
+    def test_state_survives_every_hop(
+        self,
+        mutate: Any,
+        expected_atlas: Any,
+        expected_py: Any,
+        expected_dump: Any,
     ) -> None:
         conn = _bare_conn()
         mutate(conn)
 
-        atlas = to_atlas_format(conn)["attributes"].get("adminUsers", "<absent>")
+        atlas = to_atlas_format(conn)["attributes"].get("adminUsers", ABSENT)
         ref = ConnectionRef.from_connection(conn)
+        dumped = ref.model_dump(by_alias=True)["attributes"].get("adminUsers", ABSENT)
 
         assert atlas == expected_atlas
         assert ref.attributes.admin_users == expected_py
+        assert dumped == expected_dump
 
-    def test_a_connection_with_no_admin_fields_serialises(self) -> None:
-        """The bare case: nothing raises, and the three land as ``[]``.
+    def test_a_connection_with_no_admin_fields_mentions_none_of_them(self) -> None:
+        """A key the Connection never had must not appear in the dump.
 
-        ``[]`` rather than absent is the collapse described above.
+        The defaults are for Python readers, not claims about the Connection.
+        Before ``_omit_unset_fields`` this emitted all three as ``[]`` — plus
+        ``connectorName: null`` and ``category: null``, two fabricated clears.
         """
         ref = ConnectionRef.from_connection(_bare_conn())
 
         dumped = ref.model_dump(by_alias=True)["attributes"]
 
-        assert dumped["adminUsers"] == []
-        assert dumped["adminRoles"] == []
-        assert dumped["adminGroups"] == []
+        assert "adminUsers" not in dumped
+        assert "adminRoles" not in dumped
+        assert "adminGroups" not in dumped
+        assert "connectorName" not in dumped
+        assert "category" not in dumped
+
+    def test_the_python_default_is_still_a_list(self) -> None:
+        """Omitted from the *dump*, not taken away from the reader.
+
+        ``attrs.admin_users`` still iterates without a ``None`` check; that is
+        what the default is for.
+        """
+        attrs = ConnectionRef.from_connection(_bare_conn()).attributes
+
+        assert attrs.admin_users == []
+        assert attrs.connector_name is None
+
+    def test_an_unmentioned_field_stays_unset_through_a_round_trip(self) -> None:
+        """absent → absent, all the way back to the struct."""
+        back = ConnectionRef.from_connection(_bare_conn()).to_connection()
+
+        assert repr(back.admin_users) == "UNSET"
+        assert repr(back.connector_name) == "UNSET"
+
+    def test_an_explicitly_empty_list_is_still_emitted(self) -> None:
+        """``[]`` is a claim the caller made; only *absence* is dropped."""
+        conn = _bare_conn()
+        conn.admin_users = []
+
+        dumped = ConnectionRef.from_connection(conn).model_dump(by_alias=True)
+
+        assert dumped["attributes"]["adminUsers"] == []
+
+    def test_extras_are_never_dropped(self) -> None:
+        """An extra exists only because it was in the input, so it is set."""
+        ref = ConnectionRef.model_validate(
+            {
+                "typeName": "Connection",
+                "attributes": {"qualifiedName": "q", "sourceLogo": "logo.png"},
+            }
+        )
+
+        dumped = ref.model_dump(by_alias=True)["attributes"]
+
+        assert dumped["sourceLogo"] == "logo.png"
+        assert "adminUsers" not in dumped
 
     def test_a_cleared_list_serialises_to_json_null(self) -> None:
         """Asserted as bytes, because "serialises as null" is a wire claim.

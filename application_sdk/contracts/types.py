@@ -20,7 +20,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 from pydantic.alias_generators import to_camel
 
 from application_sdk.common._listing import safe_list_directory
@@ -515,15 +522,35 @@ class ConnectionAttributes(BaseModel, frozen=True):
     The three ``admin_*`` fields are different. A ``null`` there is a *value*,
     not an absence — clearing ``admin_roles`` while granting ``admin_groups``
     is an ordinary ACL edit, and Atlas accepts clearing all three (which
-    leaves the connection editable by nobody, but the API permits it). So the
-    distinction is preserved end to end: **absent** stays ``[]``, an explicit
-    **null** stays ``None``.
+    leaves the connection editable by nobody, but the API permits it). So an
+    explicit **null** stays ``None`` rather than becoming ``[]``.
 
     That distinction only became observable at pyatlan 11.3.0. Up to 11.2.0
     ``to_atlas_format`` dropped explicit nulls, so a cleared field reached
     :meth:`ConnectionRef.from_connection` indistinguishable from one that was
     never set. Collapsing it back to ``[]`` here would reintroduce exactly
     that loss on the SDK's side of the boundary.
+
+    Absence
+    -------
+
+    A field the input never mentioned is **omitted from the dump**, not
+    emitted as its default. The defaults exist so Python readers get a usable
+    value (``attrs.admin_users`` iterates without a ``None`` check); they are
+    not claims about the Connection, and serialising them as though they were
+    is how a model invents wire data.
+
+    Concretely, before :meth:`_omit_unset_fields`, an AE payload carrying only
+    ``qualifiedName`` and ``name`` round-tripped out of here as::
+
+        {"qualifiedName": ..., "name": ..., "connectorName": null,
+         "category": null, "adminUsers": [], "adminRoles": [], "adminGroups": []}
+
+    — five keys it never had, two of them fabricated *clears*. ``UNSET`` is
+    absent all the way through ``to_atlas_format``; the loss was entirely this
+    model's ``default_factory``. So all three states now survive a round trip:
+    **absent stays absent**, an explicit **null** stays ``null``, and ``[]``
+    stays ``[]``.
     """
 
     qualified_name: str = ""
@@ -540,6 +567,33 @@ class ConnectionAttributes(BaseModel, frozen=True):
         alias_generator=to_camel,
         populate_by_name=True,
     )
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_fields(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> dict[str, Any]:
+        """Drop declared fields the caller never set. See **Absence** above.
+
+        Implemented here rather than by passing ``exclude_unset=True`` at the
+        call sites: this is a property of the contract, not of one caller's
+        taste, and the call sites are spread across
+        ``testing/e2e``, ``templates/contracts`` and every Temporal payload
+        conversion. A serializer also covers ``model_dump_json`` and the
+        pydantic-core path Temporal takes, which a call-site flag would miss.
+
+        ``extra="allow"`` values are untouched — an extra only exists because
+        it was in the input, so it is set by definition.
+        """
+        data = handler(self)
+        if info.exclude_unset:
+            return data
+        for field_name, field in type(self).model_fields.items():
+            if field_name in self.model_fields_set:
+                continue
+            data.pop(field_name, None)
+            if field.alias:
+                data.pop(field.alias, None)
+        return data
 
 
 class ConnectionRef(BaseModel, frozen=True):
