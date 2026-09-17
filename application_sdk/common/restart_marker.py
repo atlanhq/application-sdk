@@ -8,6 +8,13 @@ worker that resumes polling takes work straight back onto a pod that cannot hold
 it. So a restarted worker idles instead, for a bounded time, and resumes either
 way.
 
+Kubernetes 1.33 made a running pod's resources mutable through ``pods/resize``,
+so the spec is no longer immutable in general. On the vcluster platform this
+deploys to, a resize is accepted and never actuated: VPA in ``InPlaceOrRecreate``
+and a direct patch of the subresource both leave ``allocatedResources`` and the
+container's own ``memory.max`` unchanged, and no ``PodResizePending`` condition
+is ever set. Replacing the pod remains the only thing that changes its memory.
+
 The marker is written on a start and removed on a clean return, so an abnormal
 exit is what leaves it behind. Written at birth rather than at death because the
 kill arrives without warning and no handler runs.
@@ -115,7 +122,7 @@ def check_and_update_the_marker() -> int:
         restarted_count = max(0, int(path.read_text()))
     except FileNotFoundError:
         restarted_count = 0  # a fresh pod, not an error - and it still needs its marker
-    except (OSError, ValueError, UnicodeDecodeError):
+    except (OSError, ValueError):  # UnicodeDecodeError is a ValueError
         # The file is there but unreadable, which still means an earlier container
         # started here. One is the answer that changes behaviour.
         logger.warning(
