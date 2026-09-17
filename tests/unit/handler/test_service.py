@@ -153,6 +153,25 @@ class _AuthUnhandledExceptionHandler(Handler):
         return SqlMetadataOutput(objects=[])
 
 
+class _SourceDownHandler(Handler):
+    """Handler whose source probes raise the typed SOURCE_UNAVAILABLE leaf."""
+
+    @staticmethod
+    def _down() -> Exception:
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        return SourceUnavailableError(message="the warehouse did not answer")
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        raise self._down()
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        raise self._down()
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        raise self._down()
+
+
 class _FailingHandler(Handler):
     """Handler that raises HandlerError."""
 
@@ -366,6 +385,14 @@ class TestAuthEndpoint:
         body = response.json()
         assert body["detail"] == "Internal server error"
         assert "RuntimeError" not in str(body)
+
+    def test_auth_source_unavailable_returns_503(self) -> None:
+        """The category-to-status map serves every handler route, so the
+        SOURCE_UNAVAILABLE entry added for /check applies here too."""
+        client = _make_client(handler=_SourceDownHandler())
+        response = client.post("/workflows/v1/auth", json={"credentials": []})
+        assert response.status_code == 503
+        assert response.json()["detail"] == "the warehouse did not answer"
 
     # -- AuthStatus.http_status / is_success properties -------------------
 
@@ -1209,6 +1236,12 @@ class TestPreflightEndpoint:
 
 class TestMetadataEndpoint:
     """Tests for POST /workflows/v1/metadata."""
+
+    def test_metadata_source_unavailable_returns_503(self) -> None:
+        client = _make_client(handler=_SourceDownHandler())
+        response = client.post("/workflows/v1/metadata", json={"credentials": []})
+        assert response.status_code == 503
+        assert response.json()["detail"] == "the warehouse did not answer"
 
     def test_metadata_sql_empty_returns_empty_list(self) -> None:
         """SqlMetadataOutput with no objects → empty list in data."""

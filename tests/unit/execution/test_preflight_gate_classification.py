@@ -1374,3 +1374,41 @@ class TestTheRowReportsTheBudgetTheHandlerGot:
         ):
             await gate(PreflightGateInput())
         assert _outcome(mock_logger)[GATE_TIMEOUT_KEY] == 5
+
+
+class TestALeafThatCannotSerialiseStillBlocks:
+    """A typed leaf whose ``FailureDetails`` cannot be built is still a source fault.
+
+    The shared result builder used to call ``to_failure_details()`` unguarded;
+    a raise there escaped the activity untyped, the workflow read ``gate_broken``
+    and hard mode proceeded. The leaf now degrades to the untyped branch, an
+    ``INTERNAL`` fault with ``classification_pending``, and the mode applies.
+    """
+
+    async def test_hard_mode_blocks_as_an_app_fault(self) -> None:
+        gate = _gate(
+            _RaisingHandler(_Unserialisable(message="x", service="warehouse")),
+            mode=PreflightGateMode.HARD,
+        )
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        primary = _primary_details(excinfo.value)
+        assert primary.category is FailureCategory.INTERNAL
+        assert primary.evidence["classification_pending"] is True
+        row = _outcome(mock_logger)
+        assert row["outcome"] == "blocked"
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
+
+    async def test_soft_mode_reports_would_block(self) -> None:
+        gate = _gate(
+            _RaisingHandler(_Unserialisable(message="x", service="warehouse")),
+            mode=PreflightGateMode.SOFT,
+        )
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        assert _outcome(mock_logger)["outcome"] == "would_block"

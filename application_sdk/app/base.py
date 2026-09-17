@@ -2571,10 +2571,11 @@ async def _run_preflight_gate(
         duration_ms: float,
         *,
         attempt: int,
-        checks: list[PreflightCheck] = [],
+        checks: list[PreflightCheck] | None = None,
         audience: str | None = None,
         exc_info: bool = False,
     ) -> None:
+        checks = checks or []
         row = gate_outcome_row(
             app_name=app_name,
             entrypoint=entry,

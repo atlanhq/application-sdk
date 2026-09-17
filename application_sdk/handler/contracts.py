@@ -594,10 +594,13 @@ def unverifiable_preflight_result(
     ``include_cause=False`` drops ``cause_repr``, which is the raw exception text
     after secret redaction and still names hosts, ports and accounts. An HTTP
     caller must not receive it; Temporal history and the store may.
+
+    Never raises: a typed leaf whose own details cannot be built degrades to
+    the untyped branch rather than escaping, because every caller sits on a
+    path where an escape fails the gate open or the HTTP route with a 500.
     """
-    if isinstance(exc, AppError):
-        details = exc.to_failure_details()
-    else:
+    details = _leaf_details(exc)
+    if details is None:
         details = InternalError(
             message=f"Preflight could not be verified: {sanitize_cause_repr(exc)}",
             app_name=app_name,
@@ -620,6 +623,15 @@ def unverifiable_preflight_result(
             PreflightCheck(name=UNVERIFIABLE_CHECK_NAME, passed=False, error=details)
         ],
     )
+
+
+def _leaf_details(exc: BaseException) -> FailureDetails | None:
+    if not isinstance(exc, AppError):
+        return None
+    try:
+        return exc.to_failure_details()
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------

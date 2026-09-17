@@ -55,5 +55,4 @@ __all__ = [
     "SqlMetadataOutput",
     "create_app_handler_service",
     "run_app_handler_service",
-    "PreflightGateMode",
 ]
