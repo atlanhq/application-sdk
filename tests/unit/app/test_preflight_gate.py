@@ -790,9 +790,8 @@ class TestAMalformedMarkerPayloadFailsOpen:
     @pytest.fixture(
         params=[
             "extra_field_on_details",
-            "envelope_is_a_list",
-            "check_is_not_a_dict",
             "details_is_a_string",
+            "details_is_empty",
         ]
     )
     def malformed(self, request) -> ApplicationError:
@@ -801,9 +800,8 @@ class TestAMalformedMarkerPayloadFailsOpen:
             "extra_field_on_details": _marker_with_payload(
                 {**good, "added_in_a_newer_sdk": 1}, {"checks": []}
             ),
-            "envelope_is_a_list": _marker_with_payload(good, ["not", "a", "dict"]),
-            "check_is_not_a_dict": _marker_with_payload(good, {"checks": ["x"]}),
             "details_is_a_string": _marker_with_payload("just text", {"checks": []}),
+            "details_is_empty": _marker_with_payload(),
         }[request.param]
 
     @pytest.mark.parametrize("mode", ["hard", "soft"])
@@ -819,6 +817,98 @@ class TestAMalformedMarkerPayloadFailsOpen:
         row = _row(safe_log)
         assert row["outcome"] == "no_verdict"
         assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
+
+    @pytest.mark.parametrize("mode", ["hard", "soft"])
+    async def test_a_chain_link_with_unreadable_fields_never_raises(
+        self, safe_log, mode: str
+    ) -> None:
+        """``details`` and ``last_heartbeat_details`` are read as sequences; a
+        link where they are not must classify, not escape as a task failure."""
+
+        class _OddLink(Exception):
+            type = PREFLIGHT_NO_VERDICT_ERROR_TYPE
+            details = 42
+            last_heartbeat_details = 7
+
+        _, exec_patch = _exec(side_effect=_real_activity_error(_OddLink("odd")))
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", gate_mode=mode
+            )
+        assert result is None
+        row = _row(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
+        assert row[GATE_ATTEMPTS_KEY] == 0
+
+
+class TestAnUnreadableCheckDoesNotVetoTheEvidence:
+    """``details[0]`` is the SDK's typed fault; the checks are handler rows.
+
+    A check that does not survive the JSON boundary (a ``duration_ms`` the
+    encoder wrote as ``null``, an envelope of the wrong shape) is dropped from
+    the row, and the block still stands on the primary evidence. Before, one
+    such check emptied the whole payload and a real source block failed open.
+    """
+
+    _good = SourceUnavailableError(message="no answer").to_failure_details()
+
+    @pytest.fixture(
+        params=["envelope_is_a_list", "check_is_not_a_dict", "check_duration_is_null"]
+    )
+    def marker(self, request) -> tuple[ApplicationError, list[str]]:
+        good = self._good.model_dump(mode="json")
+        readable = {"name": "connectivity", "passed": False}
+        unreadable = {"name": "auth", "passed": False, "duration_ms": None}
+        return {
+            "envelope_is_a_list": (
+                _marker_with_payload(good, ["not", "a", "dict"]),
+                [],
+            ),
+            "check_is_not_a_dict": (
+                _marker_with_payload(good, {"checks": ["x", readable]}),
+                ["connectivity"],
+            ),
+            "check_duration_is_null": (
+                _marker_with_payload(good, {"checks": [readable, unreadable]}),
+                ["connectivity"],
+            ),
+        }[request.param]
+
+    async def test_hard_mode_blocks_on_the_primary_and_keeps_the_readable_checks(
+        self, safe_log, marker
+    ) -> None:
+        error, expected_checks = marker
+        _, exec_patch = _exec(side_effect=_real_activity_error(error))
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(
+                    _ResolvableInput(), "myapp", "crawl", gate_mode="hard"
+                )
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert excinfo.value.details[0].category is FailureCategory.SOURCE_UNAVAILABLE
+        assert [
+            c["name"] for c in excinfo.value.details[1]["checks"]
+        ] == expected_checks
+        row = _row(safe_log)
+        assert row["outcome"] == "blocked"
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
+
+    async def test_soft_mode_reports_would_block(self, safe_log, marker) -> None:
+        error, _ = marker
+        _, exec_patch = _exec(side_effect=_real_activity_error(error))
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", gate_mode="soft"
+            )
+        assert result is None
+        row = _row(safe_log)
+        assert row["outcome"] == "would_block"
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
 
 
 class TestWorkflowRowsCarryTheRealAttempt:

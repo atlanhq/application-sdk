@@ -172,27 +172,51 @@ def _gate_failure_evidence(
     """The typed evidence a gate attempt left in the failure chain, if any.
 
     A non-final attempt that could not reach a verdict raises the
-    ``PreflightNoVerdict`` marker carrying the same payload as a block. When
-    Temporal later kills the retry, that marker is the last attempt's failure in
-    the chain, and its ``details[0]`` is the source fault the gate had already
-    classified. ``None`` when no attempt got that far, and ``None`` for a payload
+    ``PreflightNoVerdict`` marker carrying the same payload as a block. Today
+    its only producer is the storage-probe deferral: a failed store check
+    downgrades the verdict to ``NOT_READY``, and the gate defers the block to
+    the next attempt rather than fail a hard run on one flaky probe. When
+    Temporal kills that retry, the marker is the last attempt's failure in the
+    chain and its ``details[0]`` is the fault the gate had already classified.
+    ``None`` when no attempt got that far, and ``None`` for a ``details[0]``
     this reader cannot parse: the workflow frame must never raise, and a newer
     producer's shape is the gate's problem to report, not the run's to fail on.
+
+    ``details[0]`` and the checks are judged separately. The primary is the
+    SDK's own typed failure; the checks are handler-authored rows that have
+    crossed a JSON boundary, and one of them not fitting (a ``duration_ms`` the
+    encoder wrote as ``null``) must not turn a real source block into a
+    fail-open.
     """
-    try:
-        for link in _iter_chain(exc):
-            if getattr(link, "type", None) != PREFLIGHT_NO_VERDICT_ERROR_TYPE:
-                continue
-            details = list(getattr(link, "details", ()) or ())
-            if not details:
-                return None
+    for link in _iter_chain(exc):
+        if getattr(link, "type", None) != PREFLIGHT_NO_VERDICT_ERROR_TYPE:
+            continue
+        details = _sequence(getattr(link, "details", None))
+        if not details:
+            return None
+        try:
             primary = FailureDetails.model_validate(details[0])
-            wire_checks = details[1].get("checks", []) if len(details) > 1 else []
-            checks = [PreflightCheck.model_validate(c) for c in wire_checks]
-            return primary, checks
-    except Exception:
-        return None
+        except Exception:
+            return None
+        envelope = details[1] if len(details) > 1 else None
+        return primary, _readable_checks(envelope)
     return None
+
+
+def _readable_checks(envelope: object) -> list[PreflightCheck]:
+    """Every wire check in ``envelope`` this reader can parse; the rest are dropped."""
+    wire = envelope.get("checks") if isinstance(envelope, dict) else None
+    checks: list[PreflightCheck] = []
+    for raw in _sequence(wire):
+        try:
+            checks.append(PreflightCheck.model_validate(raw))
+        except Exception:
+            continue
+    return checks
+
+
+def _sequence(value: object) -> list[Any]:
+    return list(value) if isinstance(value, (list, tuple)) else []
 
 
 def _gate_attempt(exc: BaseException | None) -> int:
@@ -201,14 +225,15 @@ def _gate_attempt(exc: BaseException | None) -> int:
     The gate stamps its attempt on every error it raises (``details[1]``) and on
     every heartbeat, so a killed frame reports it through Temporal's
     ``last_heartbeat_details``. An attempt no worker ever started leaves neither.
+    Runs inside the workflow's ``except``, so it reads every field tolerantly.
     """
     for link in _iter_chain(exc):
-        details = list(getattr(link, "details", ()) or ())
+        details = _sequence(getattr(link, "details", None))
         if len(details) > 1 and isinstance(details[1], dict):
             attempt = details[1].get("attempt")
             if isinstance(attempt, int):
                 return attempt
-        beats = list(getattr(link, "last_heartbeat_details", ()) or ())
+        beats = _sequence(getattr(link, "last_heartbeat_details", None))
         if beats and isinstance(beats[0], int):
             return beats[0]
     return 0
