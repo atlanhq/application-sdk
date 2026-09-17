@@ -44,7 +44,11 @@ from pathlib import Path
 
 import httpx
 
-from application_sdk.constants import DIRTY_RESTART_IDLE_MAX_SECONDS, OOM_RESTART_CHECK
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    DIRTY_RESTART_IDLE_MAX_SECONDS,
+    OOM_RESTART_CHECK,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -69,10 +73,6 @@ CHECK_API = "api"
 #: a file, which needs no permission of any kind.
 SERVICE_ACCOUNT_DIR = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 
-#: Names this process has to be told, because a process cannot ask the kernel
-#: which pod or container it is in. Both come from the downward API in the chart.
-POD_NAME_ENV = "K8S_POD_NAME"
-CONTAINER_NAME_ENV = "K8S_CONTAINER_NAME"
 
 
 #: Where to ask what this restart earns. The rerouter serves it; a worker that
@@ -278,17 +278,19 @@ async def ask_what_this_restart_earns() -> tuple[bool, str, int] | None:
     itself.
     """
     url = os.getenv(ADVICE_URL_ENV, "").strip()
-    pod = os.getenv(POD_NAME_ENV, "").strip()
-    container = os.getenv(CONTAINER_NAME_ENV, "").strip()
+    # Same source the OTel resource attributes and the sizing interceptor use, so
+    # a pod names itself one way across the SDK. HOSTNAME is the kubelet's own
+    # copy of the pod name, which makes the explicit variable optional.
+    pod = (os.getenv("K8S_POD_NAME") or os.getenv("HOSTNAME") or "").strip()
+    # The chart names the container after the app, so this is already known.
+    container = APPLICATION_NAME.strip()
     if not url or not pod or not container:
         logger.info(
-            "cannot ask what this restart earns (%s=%r, %s=%r, %s=%r), so this worker "
-            "starts polling",
+            "cannot ask what this restart earns (%s=%r, pod=%r, container=%r), so this "
+            "worker starts polling",
             ADVICE_URL_ENV,
             url,
-            POD_NAME_ENV,
             pod,
-            CONTAINER_NAME_ENV,
             container,
         )
         return None

@@ -216,8 +216,8 @@ def advice(monkeypatch, tmp_path):
     (tmp_path / "namespace").write_text("athena-app")
     monkeypatch.setattr(rm, "SERVICE_ACCOUNT_DIR", tmp_path)
     monkeypatch.setenv(rm.ADVICE_URL_ENV, "http://rerouter/restart-advice")
-    monkeypatch.setenv(rm.POD_NAME_ENV, "athena-worker-1")
-    monkeypatch.setenv(rm.CONTAINER_NAME_ENV, "athena")
+    monkeypatch.setenv("K8S_POD_NAME", "athena-worker-1")
+    monkeypatch.setattr(rm, "APPLICATION_NAME", "athena")
     monkeypatch.setattr(rm, "OOM_RESTART_CHECK", rm.CHECK_API)
 
     state: dict = {
@@ -361,10 +361,28 @@ async def test_without_the_check_nothing_is_asked(
     assert advice["asked"] == [], "the check being off must cost no call at all"
 
 
+async def test_hostname_names_the_pod_when_the_variable_is_unset(
+    marker_dir, monkeypatch, advice, prompt_polling
+):
+    """The kubelet sets HOSTNAME to the pod name for every pod, so a deployment
+    that never wired K8S_POD_NAME can still ask about itself. Same fallback the
+    OTel attributes and the sizing interceptor use."""
+    monkeypatch.delenv("K8S_POD_NAME", raising=False)
+    monkeypatch.setenv("HOSTNAME", "athena-worker-9")
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+    assert advice["asked"], "HOSTNAME alone must be enough to name this pod"
+    _, params = advice["asked"][0]
+    assert params["pod"] == "athena-worker-9"
+
+
 async def test_a_pod_that_cannot_name_itself_asks_nothing(
     marker_dir, monkeypatch, advice, prompt_polling
 ):
-    monkeypatch.delenv(rm.POD_NAME_ENV, raising=False)
+    # Both sources of the pod's own name, since HOSTNAME backs the explicit one.
+    monkeypatch.delenv("K8S_POD_NAME", raising=False)
+    monkeypatch.delenv("HOSTNAME", raising=False)
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     rm.check_and_update_the_marker()
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
