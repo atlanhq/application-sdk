@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**14 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**15 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -29,6 +29,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D012](#d012) | `UnpinnedPackageIndex` | `warn` | `both` | `supply-chain` | yes | 0.30.0 |
 | [D013](#d013) | `NonPyPILockfileIndex` | `warn` | `both` | `supply-chain` | — | 0.30.0 |
 | [D014](#d014) | `AbsoluteResolverFence` | `warn` | `both` | `supply-chain` | — | 0.31.0 |
+| [D015](#d015) | `PyrightExcludeClobbersDefaults` | `warn` | `both` | `tooling-baseline` | yes | 0.32.0 |
 
 ---
 
@@ -547,5 +548,73 @@ The fleet does need a release-age bound — it is applied centrally and rolling,
 `minimumReleaseAge` in `renovate-config/default.json` and by the bounded driver in
 `postUpgradeTasks`, neither of which can rot in a repo. Cite: FND-1985, FND-1999,
 FND-2000, FND-2001.
+
+---
+
+## D015 — `PyrightExcludeClobbersDefaults` {#d015}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `tooling-baseline` · **Autofixable:** yes · **Since:** 0.32.0
+
+> pyproject.toml declares [tool.pyright] exclude without restating the dot-directory default, so a bare pyright run walks .venv
+
+**Rationale:** pyright's 'exclude' REPLACES its built-in defaults rather than adding to them, and one
+of those defaults -- '**/.*' -- is the only thing keeping .venv out of the analysis.
+Nothing in the repo says so: the protection is incidental, earned because the directory
+happens to start with a dot. So the first time anyone excludes a path of their own --
+'.github/**', 'app/generated/**', a fixture tree -- the virtualenv silently joins the
+set of files pyright type-checks, and the edit that caused it looks entirely reasonable
+in review. .gitignore does not save it. pyright has no .gitignore integration at all;
+measured on 1.1.410 against a gitignored NON-dot directory, so the dot-dir default could
+not be the cause, pyright analysed it anyway. ruff does respect .gitignore, which is
+exactly why the wrong intuition is so common. The failure is invisible under every
+normal invocation. pre-commit passes filenames to the hook and an editor checks one
+file, so both stay fast; only a bare 'uv run pyright' walks the root. That is the
+invocation an agent types. Measured on one such run: argument-scoped invocations
+returned in 12-19s while two bare ones ran 553s and 912s without returning, the second
+exhausting the lane's 900s no-progress budget and escalating the whole run to a human.
+Customer impact is indirect -- no connector ships differently -- but a type checker
+nobody can afford to run is a gate that stops catching the contract mismatches it exists
+to catch. Measured 2026-09-17 across all 115 atlan-*-app repos: 73 declare an 'exclude'
+that clobbers the defaults with no scoped 'include' to save them, 3 more are latent
+behind an 'include', and application-sdk itself is in the first group -- which is why
+the scope is 'both' and not 'app'.
+
+`[tool.pyright].exclude` **replaces** pyright's built-in defaults -- `**/node_modules`,
+`**/__pycache__` and `**/.*` -- rather than appending to them.  Losing the first two
+costs nothing in a Python repo.  Losing `**/.*` is what matters: it is the only reason
+`.venv` is not type-checked:
+
+```python
+[tool.pyright]
+exclude = [".github/**"]      # .venv is now in scope
+```
+
+**Only the dot-directory protection is graded**, not all three defaults, so a repo that
+deliberately restates just `**/.*` passes.  Either spelling clears the rule -- `**/.*`
+itself, or an explicit `.venv`/`.venv/`/`.venv/**` entry.
+
+**An empty list is still a clobber.**  `exclude = []` reads as a no-op and is not one:
+declaring the key replaces the defaults with nothing at all, which is the worst case
+rather than the neutral one.  It is reported like any other unprotected list.
+
+**A scoped `include` is a complete defence and is honoured.** With `include` set,
+pyright only ever walks the listed roots and never reaches `.venv`, so `exclude` cannot
+matter and no finding is raised.  This is a real pattern in the fleet, not a
+hypothetical -- three repos rely on it.
+
+`ignore` does **not** clear the rule.  It suppresses diagnostics for matched files but
+still parses them, so it does nothing for the walk cost that is the entire problem.
+
+Graded on `pyproject.toml` only.  A repo configuring pyright through
+`pyrightconfig.json` is out of scope: the D-series CI leg watches `**/pyproject.toml`,
+and a checker must not read a tree its leg's path filter does not watch.
+
+Autofixable: the remedy is to append the three defaults to the existing list, preserving
+the repo's own entries.  The prescription never introduces an `include` key -- scoping
+`include` is a legitimate alternative a human may choose, but it changes *what gets
+type-checked*, which is not a safe automatic rewrite.
+
+Scope is `both`: application-sdk's own `pyproject.toml` carries this exact shape.  Cite:
+FND-2229.
 
 ---
