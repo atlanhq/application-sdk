@@ -24,6 +24,9 @@ extra webhook events.
 
 Auto-merge policy mirrors renovate-config/default.json:
   - lock-maintenance:    automerge=true  (uv.lock-only, in-range)
+  - sdk-package:         automerge=true  (FND-359 — an SDK release must reach
+                         the fleet in minutes; majors are `enabled: false`
+                         upstream, so they raise no PR to classify)
   - github-actions:      automerge=true  (all update types, incl. major)
   - contract-toolkit:    automerge=true  (majors are `enabled: false` in the
                          preset, so a contract-toolkit major PR never exists)
@@ -452,10 +455,23 @@ def auto_merge_expected(
 
     lock-maintenance → always auto (uv.lock refresh, in-range)
     github-actions   → always auto (incl. major; validated by CI gate)
-    contract-toolkit → always auto (see below)
-    conformance-pkg  → always auto (see below)
-    sdk-package      → always human (runtime SDK bumps are a deliberate merge)
+    contract-toolkit → always auto (majors are `enabled: false` upstream)
+    conformance-pkg  → always auto (every update type — FND-378)
+    sdk-package      → always auto for minor/patch (FND-359); majors are
+                       `enabled: false` in the preset, so they raise no PR
     python-dep       → always human (edits pyproject.toml constraint → out-of-range)
+
+    The SDK arm read "always human (runtime SDK bumps are a deliberate merge)"
+    until FND-2201, which was true when it was written and stopped being true at
+    FND-359: the preset's SDK lane carries automerge/platformAutomerge true, on
+    the reasoning that an SDK release must reach the fleet in minutes and this is
+    the only lane that can deliver it promptly now the lock refresh is
+    release-age bounded. A repo not ready for that opts out in its own
+    renovate.json, which arrives here as ``repo_automerge_mode == "soft"`` and is
+    handled above — so the lane rule does not need to hedge for it. Reporting the
+    lane as human-review meant every stranded SDK bump classified as
+    AWAITING_HUMAN_REVIEW, i.e. "blocked by design", which is exactly the
+    verdict that stops the dashboard raising it.
 
     NO UPDATE TYPE. This used to take one and gate both toolkit and conformance
     on ``update_type not in (MAJOR, UNKNOWN)``. Both arms were wrong against the
@@ -485,7 +501,9 @@ def auto_merge_expected(
         return True
     if category == Category.CONFORMANCE_PACKAGE:
         return True
-    # sdk-package, python-dep, unknown
+    if category == Category.SDK_PACKAGE:
+        return True
+    # python-dep, unknown
     return False
 
 

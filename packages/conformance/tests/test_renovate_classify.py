@@ -236,8 +236,26 @@ def test_conformance_package_classified_end_to_end_from_branch_and_body() -> Non
     assert pr.auto_merge_expected is True
 
 
-def test_auto_merge_expected_sdk_package_is_human() -> None:
+def test_auto_merge_expected_sdk_package() -> None:
+    """FND-359: the SDK lane auto-merges on green.
+
+    The classifier said "always human" until FND-2201 — true when written, false
+    from FND-359 onward. Every stranded SDK bump therefore classified as
+    AWAITING_HUMAN_REVIEW, the verdict that stops the dashboard raising it.
+    """
     pr = classify(make_pr(branch="renovate/atlan-application-sdk-3.x-lockfile"))
+    assert pr.category is Category.SDK_PACKAGE
+    assert pr.auto_merge_expected is True
+
+
+def test_sdk_package_in_a_soft_repo_is_still_human() -> None:
+    """A repo's own opt-out outranks the lane rule and must keep doing so."""
+    pr = classify(
+        make_pr(
+            branch="renovate/atlan-application-sdk-3.x-lockfile",
+            repo_automerge_mode="soft",
+        )
+    )
     assert pr.category is Category.SDK_PACKAGE
     assert pr.auto_merge_expected is False
 
@@ -641,9 +659,17 @@ def test_category_sdk_does_not_steal_conformance() -> None:
     assert pr.category is Category.CONFORMANCE_PACKAGE
 
 
-def test_auto_merge_expected_sdk_package() -> None:
-    # Runtime SDK bumps are a deliberate human merge regardless of update type.
-    pr = classify(make_pr(labels=["sdk-package-update", "update:patch"]))
+def test_python_dep_is_awaiting_human_review() -> None:
+    """The lane that genuinely is a human merge: it edits a pyproject constraint.
+
+    This assertion used to be written as an SDK-lane test, with the category
+    supplied by an `sdk-package-update` label and the branch left at the
+    `renovate/foo-1.x` default. It therefore classified as PYTHON_DEP and passed
+    for the wrong reason — and, sharing a name with the real SDK test, shadowed
+    it. Keep the branch as the category lever so the subject is unambiguous.
+    """
+    pr = classify(make_pr(branch="renovate/foo-1.x"))
+    assert pr.category is Category.PYTHON_DEP
     assert pr.auto_merge_expected is False
     assert pr.blocking_reason is BlockingReason.AWAITING_HUMAN_REVIEW
 
