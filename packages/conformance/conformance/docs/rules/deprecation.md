@@ -35,7 +35,7 @@ reassigned.
 
 ## B001 — `DeprecatedSdkSymbolUsage` {#b001}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `deprecated-symbol-usage` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `deprecated-symbol-usage` · **Autofixable:** — · **Since:** 0.5.0
 
 > Imports, subclasses, or calls an SDK symbol the SDK has marked deprecated
 
@@ -274,7 +274,7 @@ before the first deploy.
 
 ## B007 — `DaftOnlyDataframeApiUsage` {#b007}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `daft-removal` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `daft-removal` · **Autofixable:** — · **Since:** 0.18.0
 
 > Calls a daft-only DataFrame API (count_rows/to_pylist/.names) — dead on the daft-less SDK runtime
 

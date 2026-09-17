@@ -82,23 +82,19 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P029",
         canonical_reference=(
             "atlan-metabase-app app/generated/manifest.json — `agent_json` and "
-            "`extraction_method` are top-level keys of $.dag.extract.inputs.args. Both are "
-            "emitted by the toolkit renderer, so no app-side edit produces them; an app "
-            "missing them needs a toolkit bump and a regenerate."
+            "`extraction_method` are top-level keys of $.dag.extract.inputs.args. The "
+            "toolkit emits both defensively for any app that does not model the widgets "
+            "itself, so an app missing them is generating on a toolkit that predates "
+            "that: bump the pin and regenerate."
         ),
         rule_interactions=(
-            "Not a toolkit-version gap: bumping an affected app to the newest toolkit "
-            "and regenerating does NOT add the field. It comes from the renderer's "
-            "per-widget emission."
+            "A toolkit-version gap, not a renderer gap: contract-toolkit emits "
+            "`agent_json` unconditionally, and `extraction_method` alongside it since "
+            "#3633. Bumping the app's toolkit pin and regenerating is what adds them — "
+            "run the repo's OWN generate task, not a bare `pkl eval`, which skips "
+            "post-processing and rewrites unrelated generated files."
         ),
-        terminal_state=(
-            "The toolkit emits agent_json defensively but historically not "
-            "extraction_method, so an SDR app with no extraction-method widget is "
-            "half-wired through no fault of its own. Fix the renderer; adding the "
-            "widget app-side also switches the Self-Deployed Runtime option on in the "
-            "form, which is a product decision rather than a conformance fix."
-        ),
-        fix_locus=FixLocus.TOOLKIT,
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrManifestMissingAgentJson",
         tier=EnforcementTier.BLOCK,
@@ -152,11 +148,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "  passed; adopting ``BaseSDRIntegrationTest.manifest_path`` (T003)\n"
             "  closes the test gap, this rule closes the static gap.\n"
             "\n"
-            "**Remediation:** surface ``agent_json`` + ``extraction_method`` at the\n"
-            "extract-args top level in the app's ``contract/app.pkl`` (keep them\n"
-            "under ``metadata`` too if the connector reads there) and re-run\n"
-            "``pkl eval`` to regenerate ``app/generated/<name>/manifest.json``.  Do\n"
-            "not hand-edit the generated manifest — C002 tracks drift.\n"
+            "**Remediation:** bump the app's contract-toolkit pin and re-run the\n"
+            "repo's OWN generate task — not a bare ``pkl eval``, which skips\n"
+            "post-processing and rewrites unrelated generated files.  The current\n"
+            "toolkit emits both fields at the extract-args top level for any app\n"
+            "that does not model the widgets itself.  Where the app does model\n"
+            "them, declare them at the extract-args top level in\n"
+            "``contract/app.pkl`` (keep them under ``metadata`` too if the\n"
+            "connector reads there) and regenerate the same way.  Do not hand-edit\n"
+            "the generated manifest — C002 tracks drift.\n"
             "\n"
             "Toolkit-version notes (from fleet remediation):\n"
             "\n"
@@ -188,15 +188,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "unreachable, so the e2e leg greens without moving a byte to the tenant "
             "bucket."
         ),
-        rule_interactions=(
-            "The finding may anchor on generated output (app/generated/**), which is "
-            "not editable — a hand-edit is erased by the next regeneration and turns "
-            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
-            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
-            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
-            "regeneration can silently strip hand-written comments from."
-        ),
-        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrUploadNotCalled",
         tier=EnforcementTier.BLOCK,
@@ -355,7 +346,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "(agent_json) modes from one call. Resolving by credential_guid alone works in "
             "direct mode and silently ignores agent_json in SDR mode."
         ),
-        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrAgentJsonNotConsumed",
         tier=EnforcementTier.WARN,
@@ -429,15 +419,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "APPLICATION_NAME. An input field named application_name defaults to empty, so "
             "rooting the prefix from it silently writes to the bucket root."
         ),
-        rule_interactions=(
-            "The finding may anchor on generated output (app/generated/**), which is "
-            "not editable — a hand-edit is erased by the next regeneration and turns "
-            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
-            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
-            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
-            "regeneration can silently strip hand-written comments from."
-        ),
-        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrArtifactMisrooted",
         tier=EnforcementTier.BLOCK,
@@ -627,7 +608,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "re-implements the routing to upstream_storage and then has to track it as the "
             "SDK changes."
         ),
-        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrHandRolledUploadBridge",
         tier=EnforcementTier.WARN,
@@ -732,7 +712,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "that carries interactive setup (test auth, preflight, metadata browsing). The "
             "declared range in pyproject.toml is what lets the lock reach it."
         ),
-        fix_locus=FixLocus.CONTRACT,
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="SdrPreflightUnavailable",
         tier=EnforcementTier.WARN,

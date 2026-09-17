@@ -50,7 +50,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "What counts as deprecated is not a judgement call: it is the manifest this "
             "rule reads, regenerated from SDK source by `gen-deprecations`."
         ),
-        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="DeprecatedSdkSymbolUsage",
         tier=EnforcementTier.WARN,
@@ -374,7 +373,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "daft was removed from the SDK in 3.20.0, so they are dead on any current "
             "runtime."
         ),
-        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="DaftOnlyDataframeApiUsage",
         tier=EnforcementTier.WARN,

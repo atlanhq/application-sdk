@@ -26,7 +26,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -46,7 +45,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "ledger (sunset, never delete) and the docs together, since the "
             "entrypoint is only the visible end of it."
         ),
-        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="EntryPointContractCodeDrift",
         tier=EnforcementTier.BLOCK,

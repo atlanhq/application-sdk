@@ -654,7 +654,7 @@ conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
 
 ## P016 — `EntryPointContractCodeDrift` {#p016}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `entrypoint-alignment` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `entrypoint-alignment` · **Autofixable:** — · **Since:** 0.6.0
 
 > Entry-point names in @entrypoint code do not match app/generated/ contract dirs
 
@@ -1258,7 +1258,7 @@ ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
 
 ## P029 — `SdrManifestMissingAgentJson` {#p029}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `toolkit` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR agent manifest must surface agent_json + extraction_method at the top level of dag.extract.inputs.args
 
@@ -1277,15 +1277,13 @@ where their metadata went.
 ### What correct looks like
 
 - **Compliant example:** atlan-metabase-app app/generated/manifest.json — `agent_json` and `extraction_method`
-  are top-level keys of $.dag.extract.inputs.args. Both are emitted by the toolkit
-  renderer, so no app-side edit produces them; an app missing them needs a toolkit bump
-  and a regenerate.
-- **Interacts with:** Not a toolkit-version gap: bumping an affected app to the newest toolkit and
-  regenerating does NOT add the field. It comes from the renderer's per-widget emission.
-- **Already correct when:** The toolkit emits agent_json defensively but historically not extraction_method, so an
-  SDR app with no extraction-method widget is half-wired through no fault of its own.
-  Fix the renderer; adding the widget app-side also switches the Self-Deployed Runtime
-  option on in the form, which is a product decision rather than a conformance fix.
+  are top-level keys of $.dag.extract.inputs.args. The toolkit emits both defensively
+  for any app that does not model the widgets itself, so an app missing them is
+  generating on a toolkit that predates that: bump the pin and regenerate.
+- **Interacts with:** A toolkit-version gap, not a renderer gap: contract-toolkit emits `agent_json`
+  unconditionally, and `extraction_method` alongside it since #3633. Bumping the app's
+  toolkit pin and regenerating is what adds them — run the repo's OWN generate task, not
+  a bare `pkl eval`, which skips post-processing and rewrites unrelated generated files.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, every *agent
 extraction* `manifest.json` under `app/generated/` must surface both `agent_json` and
@@ -1308,10 +1306,13 @@ directly, bypassing the manifest, so it   passed; adopting
 `BaseSDRIntegrationTest.manifest_path` (T003)   closes the test gap, this rule closes
 the static gap.
 
-**Remediation:** surface `agent_json` + `extraction_method` at the extract-args top
-level in the app's `contract/app.pkl` (keep them under `metadata` too if the connector
-reads there) and re-run `pkl eval` to regenerate `app/generated/<name>/manifest.json`.
-Do not hand-edit the generated manifest — C002 tracks drift.
+**Remediation:** bump the app's contract-toolkit pin and re-run the repo's OWN generate
+task — not a bare `pkl eval`, which skips post-processing and rewrites unrelated
+generated files.  The current toolkit emits both fields at the extract-args top level
+for any app that does not model the widgets itself.  Where the app does model them,
+declare them at the extract-args top level in `contract/app.pkl` (keep them under
+`metadata` too if the connector reads there) and regenerate the same way.  Do not
+hand-edit the generated manifest — C002 tracks drift.
 
 Toolkit-version notes (from fleet remediation):
 
@@ -1330,7 +1331,7 @@ alone does not clear the   runtime failure.
 
 ## P030 — `SdrUploadNotCalled` {#p030}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR app has no self.upload()/self.upload_refs() call in source — ENABLE_ATLAN_UPLOAD path unreachable
 
@@ -1355,11 +1356,6 @@ them to look.
   `raise_on_empty=True`, and uploads residual/ separately. An SDR app with no
   self.upload() call leaves the ENABLE_ATLAN_UPLOAD path unreachable, so the e2e leg
   greens without moving a byte to the tenant bucket.
-- **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
-  hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
-  contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
-  the post-processing step and rewrites unrelated generated files. Diff atlan.yaml
-  afterwards, which regeneration can silently strip hand-written comments from.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one Python
 source file (outside `tests/`) must contain a `self.upload(` or `self.upload_refs(`
@@ -1665,7 +1661,7 @@ never touches the worker) with `# conformance: ignore[P036] <reason>`.
 
 ## P037 — `SdrAgentJsonNotConsumed` {#p037}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR app resolves credentials by credential_guid only and never routes through an agent-aware resolver — agent_json is ignored
 
@@ -1720,7 +1716,7 @@ the agent-aware call.
 
 ## P038 — `SdrArtifactMisrooted` {#p038}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR object-store prefix rooted from the empty-defaulting input application_name field instead of APPLICATION_NAME
 
@@ -1742,11 +1738,6 @@ because the publish step reads a prefix nothing was ever written to.
   `base_result.transformed_data_prefix`, which the SDK roots from APPLICATION_NAME. An
   input field named application_name defaults to empty, so rooting the prefix from it
   silently writes to the bucket root.
-- **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
-  hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
-  contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
-  the post-processing step and rewrites unrelated generated files. Diff atlan.yaml
-  afterwards, which regeneration can silently strip hand-written comments from.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, the object-store
 output path/prefix (`artifacts/apps/<identity>/workflows/...`) must be rooted from the
@@ -1948,7 +1939,7 @@ render identically, so the upgrade is the fix and the template edit is unnecessa
 
 ## P042 — `SdrHandRolledUploadBridge` {#p042}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
 
 > SDR app performs the tenant-bucket transfer through a hand-rolled upload_to_atlan bridge instead of App.upload()
 
@@ -2469,7 +2460,7 @@ SARIF.
 
 ## P051 — `SdrPreflightUnavailable` {#p051}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
 
 > SDR app locks application-sdk below the 3.30.0 floor for interactive setup (test auth / preflight / metadata browsing)
 
