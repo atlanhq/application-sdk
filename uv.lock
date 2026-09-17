@@ -240,7 +240,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.34.3"
+version = "3.35.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
