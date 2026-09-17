@@ -18,7 +18,7 @@ findings in the working tree, as reported by `suite.runner --series D`.
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
 include WARNING results in strict mode —
-D002/D003/D004/D006/D007/D008/D012/D013/D014 are WARN-tier, so they are
+D002/D003/D004/D006/D007/D008/D012/D013/D014/D015 are WARN-tier, so they are
 processed in strict mode; D001, D005, D009, D010 and D011 are BLOCK-tier and
 processed in both modes.
 
@@ -197,6 +197,28 @@ fix.  The re-detection gate is authoritative for this area — see
 - **D008 WeakenedTypeChecking** — raise `[tool.pyright].typeCheckingMode` to
   `"standard"` (leave `"strict"` untouched; only `"off"`/`"basic"` are flagged).
   Replace only the mode value.
+
+- **D015 PyrightExcludeClobbersDefaults** (`classification = "mechanical"`) —
+  `finding.line` points at the `[tool.pyright].exclude` key.  **Append** the
+  three built-in defaults pyright stopped applying the moment the key was
+  declared — `"**/.*"`, `"**/node_modules"`, `"**/__pycache__"` — to the
+  existing array, keeping every entry the repo already wrote and matching the
+  array's current formatting (one entry per line if it is multi-line, inline if
+  it is not).  `exclude = []` takes the same treatment: the empty list is a
+  clobber, not a no-op, so it is filled rather than deleted.
+
+  **Never delete the `exclude` key** to "restore the defaults".  The repo's own
+  entries are there for a reason — `.github/**`, `app/generated/**`, scale
+  fixtures — and dropping them trades a slow run for a noisy one.
+
+  **Never introduce an `include` key.**  Scoping `include` to the source roots
+  also clears this rule and is a perfectly good fix, but it changes *what gets
+  type-checked* rather than what gets skipped, so it is a judgment call an app
+  owner makes and not one the loop may make for them.  If a finding's repo
+  already has `include`, the detector will not have raised it at all.
+
+  Only `**/.*` is graded, so a repo that already excludes `.venv` by name is
+  never a finding here — do not "normalise" such a file.
 
 - **D009 RemoteDaprComponentFetch** — `finding.line` points at the offending
   URL; find the enclosing `[tool.poe.tasks.*]` entry (whichever form it's
