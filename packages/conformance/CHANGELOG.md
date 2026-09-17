@@ -2,6 +2,20 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.32.0] - 2026-09-17
+
+### Features
+
+- every app-facing rule names a compliant file; fix_locus only where it is not the obvious place (#3637) ([d0dd826](https://github.com/atlanhq/application-sdk/commit/d0dd826))
+- add D015 for a pyright exclude that clobbers the defaults (#3811) ([3fc60e0](https://github.com/atlanhq/application-sdk/commit/3fc60e0))
+- add a bootstrap prelude with a two-run fixpoint cap (#3808) ([f2ab040](https://github.com/atlanhq/application-sdk/commit/f2ab040))
+
+### Bug fixes
+
+- B005 stops reporting the four changes that are not breaks (#3640) ([77e6e8f](https://github.com/atlanhq/application-sdk/commit/77e6e8f))
+- stop Renovate PRs stalling unmerged and unreported (#3813) ([38e8c08](https://github.com/atlanhq/application-sdk/commit/38e8c08))
+- mirror transformed_files on the extraction output contracts (#3812) ([9e6a769](https://github.com/atlanhq/application-sdk/commit/9e6a769))
+
 ## [0.31.1] - 2026-09-16
 
 ### Bug fixes
