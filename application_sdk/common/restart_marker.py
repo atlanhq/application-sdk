@@ -118,7 +118,11 @@ def check_and_update_the_marker() -> int:
     except (OSError, ValueError, UnicodeDecodeError):
         # The file is there but unreadable, which still means an earlier container
         # started here. One is the answer that changes behaviour.
-        logger.warning("%s is not readable as a marker; treating it as one start", path)
+        logger.warning(
+            "%s is not readable as a marker; treating it as one start",
+            path,
+            exc_info=True,
+        )
         restarted_count = 1
 
     try:
@@ -208,7 +212,9 @@ async def wait_if_pod_restarted(shutdown_event: asyncio.Event) -> None:
     except Exception:
         # The worst outcome of this whole feature has to be a worker that starts
         # normally, so nothing raised in here reaches the caller.
-        logger.exception("could not hold this worker back; starting it normally")
+        logger.error(
+            "could not hold this worker back; starting it normally", exc_info=True
+        )
 
 
 async def act_on_restart(shutdown_event: asyncio.Event, budget: int) -> None:
@@ -331,7 +337,11 @@ async def wait_for_pod_to_get_replaced(
         except TimeoutError:  # conformance: ignore[E002] the timeout is the sleep expiring, not a failure: it fires every RECHECK_SECONDS for the whole wait and means nobody asked us to stop
             pass
         else:
-            logger.info("shutdown requested while waiting, which is this pod going away")
+            # conformance: ignore[L006] fires once and returns: this is the loop
+            # ending, not a row per pass through it.
+            logger.info(
+                "shutdown requested while waiting, which is this pod going away"
+            )
             return
         now = time.monotonic()
         if now - last_beat >= HEARTBEAT_SECONDS:
