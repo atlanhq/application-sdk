@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -264,6 +265,10 @@ def test_normalize_open_pr_full_shape():
     }
     out = rfs.normalize_open_pr(pr)
     assert out == {
+        # No repo_modes passed → "unknown", which the classifier treats exactly as
+        # it did before the field existed (single-repo dashboard runs skip
+        # discovery and therefore always land here).
+        "repoAutomergeMode": "unknown",
         "number": 42,
         "url": "https://github.com/atlanhq/atlan-mysql-app/pull/42",
         "title": "Update foo to v2",
@@ -979,3 +984,244 @@ def test_the_scan_entrypoint_uses_the_sliced_fetch_with_measured_page_sizes():
 def test_main_delegates_to_run():
     # The pin above reads run(); this is what makes run() the real entrypoint.
     assert "run(" in inspect.getsource(rfs.main)
+
+
+# ---------------------------------------------------------------------------
+# Repo auto-merge mode stamp
+# ---------------------------------------------------------------------------
+#
+# Discovery's {repo: mode} map rides onto each open PR record so the classifier
+# can separate "this repo never arms auto-merge by policy" from "Renovate failed
+# to arm this PR". Unknown must stay inert: it is what single-repo runs (which
+# skip discovery) and any stored scan predating the field produce.
+
+
+def test_normalize_open_pr_stamps_the_repos_automerge_mode():
+    pr = {
+        "number": 1,
+        "url": "https://x/1",
+        "title": "t",
+        "createdAt": "2026-06-01T00:00:00Z",
+        "updatedAt": "2026-06-01T00:00:00Z",
+        "repository": {"nameWithOwner": "atlanhq/atlan-soft-app"},
+    }
+    out = rfs.normalize_open_pr(pr, {"atlanhq/atlan-soft-app": "soft"})
+    assert out["repoAutomergeMode"] == "soft"
+
+
+def test_normalize_open_pr_stamps_unknown_for_a_repo_outside_the_map():
+    # A repo the modes file does not mention must not inherit another repo's
+    # verdict or default to "auto" — either would assert a policy nobody read.
+    pr = {
+        "number": 1,
+        "url": "https://x/1",
+        "title": "t",
+        "createdAt": "2026-06-01T00:00:00Z",
+        "updatedAt": "2026-06-01T00:00:00Z",
+        "repository": {"nameWithOwner": "atlanhq/atlan-unlisted-app"},
+    }
+    out = rfs.normalize_open_pr(pr, {"atlanhq/atlan-mysql-app": "auto"})
+    assert out["repoAutomergeMode"] == "unknown"
+
+
+def test_run_stamps_modes_onto_the_written_open_pr_files(tmp_path):
+    # End to end through run(): the map has to reach the per-repo files, which is
+    # the only path the dashboard actually reads.
+    open_dir = tmp_path / "open"
+    merged_dir = tmp_path / "merged"
+
+    def fake_post(token, payload):
+        if "is:open" in payload["query"]:
+            return _page(
+                [
+                    {
+                        "number": 1,
+                        "url": "https://x/1",
+                        "title": "t",
+                        "createdAt": "2026-06-01T00:00:00Z",
+                        "updatedAt": "2026-06-01T00:00:00Z",
+                        "repository": {"nameWithOwner": "atlanhq/a"},
+                    }
+                ],
+                has_next=False,
+            )
+        return _page([], has_next=False)
+
+    rfs.run(
+        scope="org:atlanhq",
+        since="2026-06-01",
+        open_dir=open_dir,
+        merged_dir=merged_dir,
+        known_repos=["atlanhq/a"],
+        token="tok",
+        post=fake_post,
+        repo_modes={"atlanhq/a": "auto"},
+    )
+
+    written = json.loads((open_dir / "atlanhq_a.json").read_text())
+    assert [pr["repoAutomergeMode"] for pr in written] == ["auto"]
+
+
+# ---------------------------------------------------------------------------
+# Merged-search date windows
+# ---------------------------------------------------------------------------
+#
+# Author slicing alone stopped fitting under the search API's 1000-result cap on
+# 2026-09-17: `app/atlan-app-fleet is:merged` over the dashboard's 30-day window
+# matched 1366, and every scheduled full-fleet run died on the truncation guard.
+
+
+def test_merged_date_windows_tile_the_range_without_overlap():
+    windows = rfs.merged_date_windows("2026-09-01", "2026-09-21", window_days=7)
+    assert windows == [
+        "is:merged merged:2026-09-01..2026-09-07",
+        "is:merged merged:2026-09-08..2026-09-14",
+        "is:merged merged:2026-09-15..2026-09-21",
+    ]
+
+
+def test_merged_date_windows_are_inclusive_at_both_ends():
+    # GitHub's merged:A..B includes both endpoints, so consecutive windows must
+    # start the day AFTER the previous one ends. A shared boundary date would
+    # double-count every PR merged on it.
+    windows = rfs.merged_date_windows("2026-09-01", "2026-09-14", window_days=7)
+    ends = [w.split("..")[1] for w in windows]
+    starts = [w.split(":")[-1].split("..")[0] for w in windows]
+    assert ends[0] == "2026-09-07" and starts[1] == "2026-09-08"
+
+
+def test_merged_date_windows_truncates_the_last_window_at_until():
+    # The tail must not query into the future: a window ending after `until`
+    # would quietly widen the reported period.
+    windows = rfs.merged_date_windows("2026-09-01", "2026-09-10", window_days=7)
+    assert windows[-1] == "is:merged merged:2026-09-08..2026-09-10"
+
+
+def test_merged_date_windows_covers_a_single_day():
+    windows = rfs.merged_date_windows("2026-09-10", "2026-09-10", window_days=7)
+    assert windows == ["is:merged merged:2026-09-10..2026-09-10"]
+
+
+def test_merged_date_windows_never_returns_empty_on_clock_skew():
+    # `since` computed on a machine a few hours ahead of the one evaluating
+    # `until` must still scan a day, not nothing.
+    windows = rfs.merged_date_windows("2026-09-11", "2026-09-10", window_days=7)
+    assert windows == ["is:merged merged:2026-09-11..2026-09-11"]
+
+
+def test_merged_date_windows_defaults_until_to_today():
+    windows = rfs.merged_date_windows("2026-01-01", None, window_days=365_000)
+    assert windows[-1].endswith(date.today().isoformat())
+
+
+def test_fetch_merged_prs_queries_each_window_once_per_author():
+    queries = []
+
+    def fake_post(token, payload):
+        queries.append(payload["query"])
+        return _page([], has_next=False)
+
+    rfs.fetch_merged_prs(
+        "tok",
+        "org:atlanhq",
+        "2026-09-01",
+        "number",
+        post=fake_post,
+        window_days=7,
+        until="2026-09-14",
+    )
+    # 2 windows x 2 Renovate authors.
+    assert len(queries) == 4
+    assert sum("merged:2026-09-01..2026-09-07" in q for q in queries) == 2
+    assert sum("merged:2026-09-08..2026-09-14" in q for q in queries) == 2
+    # The open-ended form is what blew the cap; it must not survive anywhere.
+    assert not any("merged:>=" in q for q in queries)
+
+
+def test_fetch_merged_prs_unions_the_windows():
+    def fake_post(token, payload):
+        query = payload["query"]
+        if "2026-09-01..2026-09-07" in query and "app/renovate" in query:
+            return _page([{"url": "https://x/1"}], has_next=False)
+        if "2026-09-08..2026-09-14" in query and "app/renovate" in query:
+            return _page([{"url": "https://x/2"}], has_next=False)
+        return _page([], has_next=False)
+
+    out = rfs.fetch_merged_prs(
+        "tok",
+        "org:atlanhq",
+        "2026-09-01",
+        "number",
+        post=fake_post,
+        window_days=7,
+        until="2026-09-14",
+    )
+    assert [pr["url"] for pr in out] == ["https://x/1", "https://x/2"]
+
+
+def test_fetch_merged_prs_dedupes_a_pr_seen_in_two_windows():
+    # Windows are disjoint by construction, so this can only happen via a
+    # slicing bug — which must not silently inflate every merged-PR number.
+    def fake_post(token, payload):
+        return _page([{"url": "https://x/dup"}], has_next=False)
+
+    out = rfs.fetch_merged_prs(
+        "tok",
+        "org:atlanhq",
+        "2026-09-01",
+        "number",
+        post=fake_post,
+        window_days=7,
+        until="2026-09-14",
+    )
+    assert [pr["url"] for pr in out] == ["https://x/dup"]
+
+
+def test_fetch_merged_prs_still_raises_when_ONE_window_is_truncated():
+    # The cap guard stays loud rather than being absorbed by an adaptive retry:
+    # one author merging >1000 PRs inside a single window is a fact a human
+    # should read, and --merged-window-days is the knob.
+    capped = [{"url": f"u{n}"} for n in range(rfs.SEARCH_RESULT_CAP)]
+
+    def fake_post(token, payload):
+        return _page(capped, has_next=False, issue_count=1366)
+
+    try:
+        rfs.fetch_merged_prs(
+            "tok",
+            "org:atlanhq",
+            "2026-09-01",
+            "number",
+            post=fake_post,
+            window_days=7,
+            until="2026-09-14",
+        )
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "1366" in str(exc)
+
+
+def test_run_uses_windowed_merged_queries(tmp_path):
+    # The live regression, end to end: before windowing, run() issued
+    # `is:merged merged:>=<since>` once per author and the 30-day fleet volume
+    # tripped the cap guard, failing every scheduled dashboard run.
+    queries = []
+
+    def fake_post(token, payload):
+        queries.append(payload["query"])
+        return _page([], has_next=False)
+
+    rfs.run(
+        scope="org:atlanhq",
+        since=(date.today() - timedelta(days=30)).isoformat(),
+        open_dir=tmp_path / "open",
+        merged_dir=tmp_path / "merged",
+        known_repos=[],
+        token="tok",
+        post=fake_post,
+    )
+
+    merged_queries = [q for q in queries if "is:merged" in q]
+    assert not any("merged:>=" in q for q in merged_queries)
+    # 30 days at the 7-day default = 5 windows, x2 authors.
+    assert len(merged_queries) == 10
