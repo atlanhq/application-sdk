@@ -2760,3 +2760,157 @@ def test_d014_a_sub_table_anchors_each_package_on_its_own_line(
     assert len({f.line for f in findings}) == 2, "each key anchored on its own line"
     assert all(f.discriminator is not None for f in findings)
     assert all(f.line > 1 for f in findings), "never anchored at the top of the file"
+
+
+# ── D015 — pyright exclude clobbering the built-in defaults (FND-2229) ───────
+
+
+def _pyright_scan(
+    tmp_path: Path, pyright_block: str, *, name: str = "demo-app"
+) -> list:
+    """Write a root pyproject carrying *pyright_block*; return its D015 findings.
+
+    Routed through ``scan_all`` (not ``scan_text``) on purpose: D015 is
+    ``scope=both``, so it must run outside the self-check guard that exempts
+    the SDK from the per-file D rules.  *name* exists so one test can prove
+    exactly that.
+    """
+    head = (
+        f'[project]\nname = "{name}"\nversion = "0.1.0"\n'
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n]\n'
+    )
+    body = head + _PINNED_INDEX + pyright_block
+    return _index_scan(tmp_path, body, rule="D015")
+
+
+def test_d015_clean_with_no_pyright_table(tmp_path: Path) -> None:
+    assert _pyright_scan(tmp_path, "") == []
+
+
+def test_d015_clean_when_pyright_declares_no_exclude(tmp_path: Path) -> None:
+    """The defaults are only lost by *declaring* the key, not by using pyright."""
+    block = '\n[tool.pyright]\ntypeCheckingMode = "standard"\n'
+    assert _pyright_scan(tmp_path, block) == []
+
+
+def test_d015_fires_on_an_exclude_without_the_dotdir_default(tmp_path: Path) -> None:
+    block = '\n[tool.pyright]\nexclude = [\n    ".github/**",\n]\n'
+    findings = _pyright_scan(tmp_path, block)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule_id == "D015"
+    assert not f.suppressed
+    assert f.line > 1, "never anchored at the top of the file"
+
+
+def test_d015_fires_on_an_empty_exclude_list(tmp_path: Path) -> None:
+    """``exclude = []`` reads as a no-op and is the worst case.
+
+    Declaring the key replaces the defaults with *nothing*, so a rule that
+    skipped empty lists would miss the most complete loss of protection there
+    is.
+    """
+    assert len(_pyright_scan(tmp_path, "\n[tool.pyright]\nexclude = []\n")) == 1
+
+
+def test_d015_clean_when_the_dotdir_glob_is_restated(tmp_path: Path) -> None:
+    block = '\n[tool.pyright]\nexclude = [".github/**", "**/.*"]\n'
+    assert _pyright_scan(tmp_path, block) == []
+
+
+@pytest.mark.parametrize("entry", [".venv", ".venv/", ".venv/**", "**/.venv"])
+def test_d015_clean_when_the_venv_is_named_explicitly(
+    tmp_path: Path, entry: str
+) -> None:
+    """Only the dot-directory protection is graded, however it is spelled.
+
+    A repo that never restates ``**/.*`` but does exclude the virtualenv by
+    name has solved the problem this rule exists for, and flagging it would
+    push it towards a change that gains nothing.
+    """
+    block = f'\n[tool.pyright]\nexclude = [".github/**", "{entry}"]\n'
+    assert _pyright_scan(tmp_path, block) == []
+
+
+def test_d015_clean_when_include_is_scoped(tmp_path: Path) -> None:
+    """A scoped ``include`` is a complete defence, so ``exclude`` cannot matter.
+
+    pyright walks only the listed roots and never reaches ``.venv``.  Three
+    fleet repos rely on this; a rule that ignored ``include`` would report
+    every one of them.
+    """
+    block = (
+        "\n[tool.pyright]\n" 'include = ["app", "tests"]\n' 'exclude = [".github/**"]\n'
+    )
+    assert _pyright_scan(tmp_path, block) == []
+
+
+def test_d015_does_not_accept_ignore_as_protection(tmp_path: Path) -> None:
+    """``ignore`` silences diagnostics but still parses the files.
+
+    It does nothing about the walk cost that is the entire problem, so it must
+    not clear the rule — the red half of the ``include`` pair above.
+    """
+    block = "\n[tool.pyright]\n" 'ignore = [".venv/**"]\n' 'exclude = [".github/**"]\n'
+    assert len(_pyright_scan(tmp_path, block)) == 1
+
+
+def test_d015_anchors_on_the_pyright_exclude_not_another_tools(
+    tmp_path: Path,
+) -> None:
+    """``[tool.ruff]`` almost always declares its own ``exclude`` too.
+
+    ``_line_of`` is section-bounded, and this pins that: the finding must
+    point at the pyright key, not at whichever ``exclude`` appears first.
+    """
+    block = (
+        '\n[tool.ruff]\nexclude = ["build"]\n'
+        '\n[tool.pyright]\nexclude = [".github/**"]\n'
+    )
+    findings = _pyright_scan(tmp_path, block)
+    assert len(findings) == 1
+    text = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
+    anchored = text.splitlines()[findings[0].line - 1]
+    assert anchored.strip() == 'exclude = [".github/**"]'
+    assert "build" not in anchored
+
+
+def test_d015_anchors_a_dotted_key_below_line_one(tmp_path: Path) -> None:
+    """TOML permits ``[tool]`` plus ``pyright.exclude = [...]``.
+
+    That parses but never matches a bare ``exclude =``, so the naive anchor
+    falls back to line 1 — the one place no reader would think to write the
+    suppression directive.
+    """
+    block = '\n[tool]\npyright.exclude = [".github/**"]\n'
+    findings = _pyright_scan(tmp_path, block)
+    assert len(findings) == 1
+    assert findings[0].line > 1
+    text = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
+    assert "pyright.exclude" in text.splitlines()[findings[0].line - 1]
+
+
+def test_d015_honours_an_inline_suppression(tmp_path: Path) -> None:
+    block = (
+        "\n[tool.pyright]\n"
+        'exclude = [".github/**"]  # conformance: ignore[D015] agent lanes only\n'
+    )
+    findings = _pyright_scan(tmp_path, block)
+    assert len(findings) == 1
+    assert findings[0].suppressed
+
+
+def test_d015_still_fires_on_the_sdks_own_pyproject(tmp_path: Path) -> None:
+    """scope=both regression guard — the reason this check is in ``scan_all``.
+
+    ``scan_text`` returns ``[]`` outright for an SDK-named project, which is
+    why D008 (the other ``[tool.pyright]`` rule) is ``scope=app``.  Moving
+    D015 there would silently exempt application-sdk, whose own pyproject
+    carries exactly this shape.  The live repo cannot carry this guarantee:
+    once its config is fixed, a clean run no longer distinguishes "compliant"
+    from "never ran".
+    """
+    block = '\n[tool.pyright]\nexclude = [".github/**"]\n'
+    findings = _pyright_scan(tmp_path, block, name="atlan-application-sdk")
+    assert len(findings) == 1
+    assert findings[0].rule_id == "D015"
