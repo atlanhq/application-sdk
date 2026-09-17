@@ -1385,29 +1385,35 @@ def _effective_budget(budget_seconds: float) -> float:
 def _attempt_is_live(beats: _Beats | None = None) -> bool:
     """Whether this activity attempt is still the one Temporal is waiting on.
 
+    Guards the outcome row and the store write only, never the hard-mode
+    raise. A dead attempt's raise is rejected by Temporal exactly like its
+    return, so raising is free; a live attempt misjudged as dead that skipped
+    the raise would return ``NOT_READY`` as a successful completion and the
+    run would proceed against a source the gate refused. The asymmetry is
+    deliberate: a duplicate row is recoverable, a silent proceed is not.
+
     An abandoned attempt (its ``start_to_close`` window closed, the retry
     already scheduled) that emits a verdict row corrupts the outcome series
     the next attempt also writes to: both rows land under one
     ``workflow_run_id`` with *different* outcomes, so deduping on
     ``(workflow_run_id, gate_attempt)`` — see the emit site's note — is what
     keeps the highest attempt's verdict rather than an arbitrary one
-    (CONNECT-1170 gap 1). Two signals, most reliable first: Temporal's own
-    cancellation flag — delivered in heartbeat responses, no clocks involved —
-    marks the abandoned attempt directly now that the gate beats. The deadline
-    check is the fallback for the attempt cancellation cannot reach (a worker
-    whose loop stopped yielding stops beating too); it compares a
-    server-stamped ``started_time`` to the worker's clock, so it carries
-    ``GATE_LIVENESS_CLOCK_GRACE_SECONDS`` of skew allowance rather than
-    trusting two clocks to agree — over-suppressing a *live* attempt's verdict
-    is the worse failure. Tolerant of no activity context (direct calls, unit
-    tests) and of missing fields, mirroring ``_effective_budget``.
-    A third signal needs no server round trip: the attempt's own heartbeats.
-    ``heartbeat_timeout`` is measured by the server from the last beat it
-    received, and a beat cannot arrive before it was sent, so an attempt that
-    has not sent one for longer than that timeout has certainly been timed out.
-    This is the signal that covers a worker frozen mid-attempt and resumed: its
-    probe can fail in the first second back, before the heartbeat loop has had
-    a chance to learn from the server that the attempt is gone.
+    (CONNECT-1170 gap 1). Three signals. Temporal's cancellation flag is
+    checked first but is rarely observable here: the worker delivers a cancel
+    as ``CancelledError`` at the coroutine's next ``await``, so the gate
+    usually dies before it can read the flag. The attempt's own heartbeats
+    need no server round trip: ``heartbeat_timeout`` is measured by the server
+    from the last beat it *received*, and a beat cannot arrive before it was
+    sent, so an attempt silent for longer than that timeout has been timed out.
+    This covers a worker frozen mid-attempt and resumed, whose probe can fail
+    in the first second back before the heartbeat loop learns the attempt is
+    gone. The deadline check compares a server-stamped ``started_time`` to the
+    worker's clock. Both clock comparisons carry
+    ``GATE_LIVENESS_CLOCK_GRACE_SECONDS``: the server's view trails the
+    worker's by one-way latency plus its timeout sweep, and over-suppressing a
+    *live* attempt's row is the worse failure. Tolerant of no activity context
+    (direct calls, unit tests) and of missing fields, mirroring
+    ``_effective_budget``.
     """
     try:
         cancelled = activity.is_cancelled()
@@ -1418,7 +1424,11 @@ def _attempt_is_live(beats: _Beats | None = None) -> bool:
     info = _activity_info()
     heartbeat_timeout = getattr(info, "heartbeat_timeout", None)
     if beats is not None and isinstance(heartbeat_timeout, timedelta):
-        if time.monotonic() - beats.last_sent > heartbeat_timeout.total_seconds():
+        silent_for = time.monotonic() - beats.last_sent
+        if (
+            silent_for
+            > heartbeat_timeout.total_seconds() + GATE_LIVENESS_CLOCK_GRACE_SECONDS
+        ):
             return False
     started_time = getattr(info, "started_time", None)
     start_to_close = getattr(info, "start_to_close_timeout", None)
@@ -2015,7 +2025,7 @@ def build_preflight_gate_activity(
                 # nothing — on the one path where the cause is the whole diagnostic.
                 exc_info=exc,
             )
-            if enforce and _attempt_is_live(beats):
+            if enforce:
                 raise block_error
             return unverifiable
 
@@ -2208,7 +2218,7 @@ def build_preflight_gate_activity(
                     PreflightClassification.VERDICT,
                     audience=block_error.details[0].audience.value,
                 )
-                if enforce and _attempt_is_live(beats):
+                if enforce:
                     raise block_error
                 # Soft: the verdict stays honest NOT_READY; the gate just does not
                 # enforce it. The would_block row above is the loud record.

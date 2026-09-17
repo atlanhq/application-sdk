@@ -1098,31 +1098,52 @@ class TestHandlerIsCancelledAtTheAdvertisedBudget:
         assert "2s budget" in result.checks[0].resolved_message
 
 
-class TestADeadAttemptNeverBlocks:
-    """An attempt Temporal has abandoned emits no row and raises no block.
+class TestADeadAttemptSuppressesTheRowButNotTheBlock:
+    """Liveness guards the outcome row, never the hard-mode raise.
 
-    Its result is inert either way, and a block with no row behind it is a red
-    run with no record of why.
+    A genuinely dead attempt's raise is rejected by Temporal exactly like its
+    return, so raising costs nothing. A live attempt the local clocks misjudged
+    as dead would otherwise return ``NOT_READY`` as a successful completion,
+    the workflow would discard the value, and extraction would run against a
+    source the gate refused. The block carries the full payload into Temporal
+    history, so a block without a row is still a run with a record of why.
     """
 
-    async def test_not_ready_verdict_on_a_dead_attempt_returns_quietly(self) -> None:
-        output = PreflightOutput(
+    @staticmethod
+    def _not_ready() -> PreflightOutput:
+        return PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
         )
-        gate = _gate(_ReturningHandler(output), mode=PreflightGateMode.HARD)
+
+    async def test_not_ready_verdict_on_a_dead_attempt_still_blocks(self) -> None:
+        gate = _gate(_ReturningHandler(self._not_ready()), mode=PreflightGateMode.HARD)
         with (
             mock.patch(f"{_GATE}._attempt_is_live", return_value=False),
             mock.patch(f"{_GATE}.logger") as mock_logger,
         ):
-            result = await gate(PreflightGateInput())
-        assert result.status is PreflightStatus.NOT_READY
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert excinfo.value.details[1]["status"] == "not_ready"
         assert _no_outcome(mock_logger)
 
-    async def test_handler_raise_on_a_dead_attempt_returns_quietly(self) -> None:
+    async def test_handler_raise_on_a_dead_attempt_still_blocks(self) -> None:
         gate = _gate(
             _RaisingHandler(AuthError(message="bad")), mode=PreflightGateMode.HARD
         )
+        with (
+            mock.patch(f"{_GATE}._attempt_is_live", return_value=False),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert _primary_details(excinfo.value).category is FailureCategory.AUTH
+        assert _no_outcome(mock_logger)
+
+    async def test_soft_mode_on_a_dead_attempt_returns_quietly(self) -> None:
+        gate = _gate(_ReturningHandler(self._not_ready()), mode=PreflightGateMode.SOFT)
         with (
             mock.patch(f"{_GATE}._attempt_is_live", return_value=False),
             mock.patch(f"{_GATE}.logger") as mock_logger,
@@ -1167,6 +1188,25 @@ class TestAnAttemptThatStoppedBeatingIsDead:
         ):
             assert _attempt_is_live(beats) is False
 
+    def test_overdue_within_the_clock_grace_stays_live(self) -> None:
+        """The server measures from receipt, the worker from send; the gap is
+        one-way latency plus the timeout sweep. Over-suppressing a live attempt
+        is the worse failure, so the heartbeat signal carries the same grace as
+        the deadline signal."""
+        from application_sdk.execution._temporal.preflight_gate import (
+            GATE_LIVENESS_CLOCK_GRACE_SECONDS,
+            _attempt_is_live,
+            _Beats,
+        )
+
+        beats = _Beats()
+        beats.last_sent -= 1.0 + GATE_LIVENESS_CLOCK_GRACE_SECONDS / 2
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=self._info(1.0)),
+            mock.patch(f"{_GATE}.activity.is_cancelled", return_value=False),
+        ):
+            assert _attempt_is_live(beats) is True
+
     def test_recent_heartbeat_means_live(self) -> None:
         from application_sdk.execution._temporal.preflight_gate import (
             _attempt_is_live,
@@ -1193,7 +1233,7 @@ class TestAnAttemptThatStoppedBeatingIsDead:
         ):
             assert _attempt_is_live(beats) is True
 
-    async def test_a_silent_attempt_emits_no_row_and_raises_no_block(self) -> None:
+    async def test_a_silent_attempt_emits_no_row_but_still_blocks(self) -> None:
         output = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
@@ -1209,11 +1249,13 @@ class TestAnAttemptThatStoppedBeatingIsDead:
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=self._info(0.1)),
             mock.patch(f"{_GATE}.activity.is_cancelled", return_value=False),
+            mock.patch(f"{_GATE}.GATE_LIVENESS_CLOCK_GRACE_SECONDS", 0),
             mock.patch(f"{_GATE}.gate_heartbeat_timings", return_value=(60.0, 600.0)),
             mock.patch(f"{_GATE}.logger") as mock_logger,
         ):
-            result = await gate(PreflightGateInput())
-        assert result.status is PreflightStatus.NOT_READY
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
         assert _no_outcome(mock_logger)
 
 
