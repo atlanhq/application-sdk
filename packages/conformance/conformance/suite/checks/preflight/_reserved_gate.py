@@ -1,8 +1,8 @@
-"""P032 ReservedPreflightActivityName + P033 DuplicateInWorkflowPreflight.
+"""F001 ReservedPreflightActivityName + F002 DuplicateInWorkflowPreflight.
 
-Both consume the same ``@task``-name pass. P032 fires on a task whose effective
+Both consume the same ``@task``-name pass. F001 fires on a task whose effective
 activity name is exactly ``preflight`` (collides with the SDK-reserved gate
-name). P033 fires on a task whose name carries a ``preflight`` token but is not
+name). F002 fires on a task whose name carries a ``preflight`` token but is not
 that exact name, and only when the app also defines a ``Handler.preflight_check``
 (the two implementations drift). The two are mutually exclusive.
 """
@@ -25,8 +25,8 @@ from ._common import (
     task_decorator,
 )
 
-_P032 = "P032"
-_P033 = "P033"
+_P032 = "F001"
+_P033 = "F002"
 
 
 def _handler_site_for(
@@ -37,7 +37,7 @@ def _handler_site_for(
     """Pick the preflight_check site to reference for a task in *cls*.
 
     Prefer a handler co-located in the same class, then the same source, and
-    only then fall back to the first site — so the P033 message points at the
+    only then fall back to the first site — so the F002 message points at the
     implementation the offending task actually drifts from.
     """
     if not sites:

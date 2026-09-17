@@ -55,7 +55,7 @@ def run_behavior(
     """Run marked tests; missing, skipped, failed or unsupported cases cannot pass."""
     if timeout <= 0 or not timeout < float("inf"):
         raise ValueError("Preflight test timeout must be positive and finite")
-    applicable = {"P063", "P064"} if scope == "sdk" else {"P062"}
+    applicable = {"F017", "F018"} if scope == "sdk" else {"F016"}
     selected = applicable & (rule_ids if rule_ids is not None else applicable)
     if not selected:
         return BehaviorResult([], {})

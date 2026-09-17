@@ -1,19 +1,22 @@
-"""Preflight-gate rule definitions (P-series, BLDX-1545).
+"""Preflight-gate rule definitions (F-series, BLDX-1545 and CONNECT-812).
 
 The SDK injects a mandatory ``{app_name}:preflight`` activity as the first step
 of every extraction workflow; it runs the app's ``Handler.preflight_check`` and
 blocks the run on a ``NOT_READY`` verdict (application-sdk PRs #2361, #2626).
 These rules make the gate pattern statically enforceable across the fleet:
-they surface a boot-time collision at review time (P032), the app-owned duplicate
-that drifts from the gate (P033), untyped failure results that lose their wire
-metadata (P034), the silent metadata/contract drift that no runtime signal
-can catch (P035), and preflight failures logged below the customer's default
-ERROR filter (P047, FND-901).
+they surface a boot-time collision at review time (F001), the app-owned duplicate
+that drifts from the gate (F002), untyped failure results that lose their wire
+metadata (F003), the silent metadata/contract drift that no runtime signal
+can catch (F004), and preflight failures logged below the customer's default
+ERROR filter (F005, FND-901).
 
-The detector lives in ``suite.checks.preflight``; these rules reuse the ``P``
-series so they run on the existing P leg of the fleet CI matrix with no workflow
-change. Per the P-series stability policy (see ``prescriptions.py``) a P-id is a
-permanent public contract and is never renumbered or reused.
+F006-F020 add the CONNECT-812 contract, lifetime and behavioral rules.
+
+The detector lives in ``suite.checks.preflight`` and runs on the F leg of the
+fleet CI matrix. F001-F005 were published as P032-P035 and P047 and moved here
+in PR #3710 before any fleet suppression referenced them; the vacated P-ids are
+retired and never reused. From here on the rule-id stability policy in
+``prescriptions.py`` applies to F-ids unchanged.
 """
 
 from __future__ import annotations
@@ -27,12 +30,12 @@ from conformance.suite.schema.disposition import (
 
 _HELP_BASE = (
     "https://github.com/atlanhq/application-sdk/blob/main/"
-    "packages/conformance/conformance/docs/rules/prescriptions.md"
+    "packages/conformance/conformance/docs/rules/preflight.md"
 )
 
 _EXISTING_RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
-        id="P032",
+        id="F001",
         scope=RuleScope.APP,
         name="ReservedPreflightActivityName",
         tier=EnforcementTier.BLOCK,
@@ -67,10 +70,10 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "``Handler.preflight_check`` (which the gate already calls). A non-literal "
             "``@task(name=<expr>)`` is not statically resolvable and is not flagged."
         ),
-        help_uri=f"{_HELP_BASE}#p032",
+        help_uri=f"{_HELP_BASE}#f001",
     ),
     RuleDefinition(
-        id="P033",
+        id="F002",
         scope=RuleScope.APP,
         name="DuplicateInWorkflowPreflight",
         tier=EnforcementTier.WARN,
@@ -92,17 +95,17 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "When an app declares a ``Handler.preflight_check`` and also registers its "
             "own preflight-named ``@task`` (any ``@task`` whose effective name contains "
             "``preflight`` as a token but is not the reserved gate name — that exact "
-            "case is P032), the two preflight paths diverge over time. The SDK gate "
+            "case is F001), the two preflight paths diverge over time. The SDK gate "
             "invokes ``Handler.preflight_check``; the app-owned activity is dead weight "
             "that silently rots.\n"
             "\n"
             "Remediation: delete the app-owned preflight activity and keep the single "
             "``Handler.preflight_check`` implementation the gate calls."
         ),
-        help_uri=f"{_HELP_BASE}#p033",
+        help_uri=f"{_HELP_BASE}#f002",
     ),
     RuleDefinition(
-        id="P034",
+        id="F003",
         scope=RuleScope.APP,
         name="UntypedPreflightCheckFailure",
         tier=EnforcementTier.BLOCK,
@@ -131,13 +134,13 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Supported SDK public imports, literal values, local boolean bindings, "
             "and the default false value are recognized. An unresolved dynamic "
-            "``passed`` without an error produces P065 instead of a proven violation. "
+            "``passed`` without an error produces F019 instead of a proven violation. "
             "A locally-defined non-SDK class named ``PreflightCheck`` is not flagged."
         ),
-        help_uri=f"{_HELP_BASE}#p034",
+        help_uri=f"{_HELP_BASE}#f003",
     ),
     RuleDefinition(
-        id="P035",
+        id="F004",
         scope=RuleScope.APP,
         name="PreflightMetadataContractParity",
         tier=EnforcementTier.WARN,
@@ -168,7 +171,7 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "silently dropped).\n"
             "\n"
             "When dispatch cannot be narrowed, the existing union fallback applies; "
-            "P065 reports unresolved contract definitions. "
+            "F019 reports unresolved contract definitions. "
             "Remediation: declare the key as a field on the extraction input contract "
             "(matching the UI form), or stop reading it in ``preflight_check``. Keys are "
             "compared to contract field names with underscore/hyphen normalization; field "
@@ -178,10 +181,10 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "via either ``model_config`` form: "
             '``ConfigDict(extra="allow")`` or ``{"extra": "allow"}``.'
         ),
-        help_uri=f"{_HELP_BASE}#p035",
+        help_uri=f"{_HELP_BASE}#f004",
     ),
     RuleDefinition(
-        id="P047",
+        id="F005",
         scope=RuleScope.APP,
         name="PreflightFailureLoggedAsWarning",
         tier=EnforcementTier.WARN,
@@ -217,14 +220,14 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "``logging``). Supported class handlers, module callbacks, and directly "
             "resolvable helpers are scanned; dynamic dispatch requires behavioral evidence."
         ),
-        help_uri=f"{_HELP_BASE}#p047",
+        help_uri=f"{_HELP_BASE}#f005",
     ),
 )
 
 
 _CONTRACT_RULES = (
     RuleDefinition(
-        id="P052",
+        id="F006",
         name="PreflightHandlerContract",
         scope=RuleScope.APP,
         tier=EnforcementTier.BLOCK,
@@ -235,10 +238,10 @@ _CONTRACT_RULES = (
         short_description="Declare SDK PreflightInput and PreflightOutput on every supported handler.",
         full_description="Declare SDK PreflightInput and PreflightOutput on every supported handler.",
         rationale="Customer impact: Missing types and legacy output dictionaries hide contract drift from both UI and workflow consumers.",
-        help_uri=f"{_HELP_BASE}#p052",
+        help_uri=f"{_HELP_BASE}#f006",
     ),
     RuleDefinition(
-        id="P053",
+        id="F007",
         name="PreflightFailureAction",
         scope=RuleScope.APP,
         tier=EnforcementTier.BLOCK,
@@ -249,10 +252,10 @@ _CONTRACT_RULES = (
         short_description="Provide nonblank failure messages and audience-appropriate suggested actions.",
         full_description="Provide nonblank failure messages and audience-appropriate suggested actions.",
         rationale="Customer impact: A typed error with no action still leaves a blocked workflow without a usable next step.",
-        help_uri=f"{_HELP_BASE}#p053",
+        help_uri=f"{_HELP_BASE}#f007",
     ),
     RuleDefinition(
-        id="P054",
+        id="F008",
         name="PreflightExpectedFailureRaised",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -263,10 +266,10 @@ _CONTRACT_RULES = (
         short_description="Return expected typed preflight failures rather than letting them escape.",
         full_description="Return expected typed preflight failures rather than letting them escape.",
         rationale="The target origin-based gate applies hard mode to handler raises; a raised transient is no longer a fail-open request.",
-        help_uri=f"{_HELP_BASE}#p054",
+        help_uri=f"{_HELP_BASE}#f008",
     ),
     RuleDefinition(
-        id="P055",
+        id="F009",
         name="PreflightVerdictAggregation",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -277,10 +280,10 @@ _CONTRACT_RULES = (
         short_description="Keep READY, PARTIAL and NOT_READY consistent with check outcomes.",
         full_description="Keep READY, PARTIAL and NOT_READY consistent with check outcomes.",
         rationale="Advisory failures must not become mandatory blocks and a successful status must not hide failed checks.",
-        help_uri=f"{_HELP_BASE}#p055",
+        help_uri=f"{_HELP_BASE}#f009",
     ),
     RuleDefinition(
-        id="P056",
+        id="F010",
         name="PreflightGateInputParity",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -291,10 +294,10 @@ _CONTRACT_RULES = (
         short_description="Preserve the selected entrypoint and supply routable credentials before the gate.",
         full_description="Preserve the selected entrypoint and supply routable credentials before the gate.",
         rationale="The injected gate runs before workflow-body normalization, so a UI check can succeed while the gate sees different inputs.",
-        help_uri=f"{_HELP_BASE}#p056",
+        help_uri=f"{_HELP_BASE}#f010",
     ),
     RuleDefinition(
-        id="P057",
+        id="F011",
         name="PreflightBlockingProbe",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -305,10 +308,10 @@ _CONTRACT_RULES = (
         short_description="Keep source probes awaitable and bounded across every connection phase.",
         full_description="Keep source probes awaitable and bounded across every connection phase.",
         rationale="Blocking I/O or unbounded executor waits can outlive the gate and stall worker activities.",
-        help_uri=f"{_HELP_BASE}#p057",
+        help_uri=f"{_HELP_BASE}#f011",
     ),
     RuleDefinition(
-        id="P058",
+        id="F012",
         name="PreflightBudgetOverride",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -319,10 +322,10 @@ _CONTRACT_RULES = (
         short_description="Keep probe and retry deadlines inside the remaining gate budget.",
         full_description="Keep probe and retry deadlines inside the remaining gate budget.",
         rationale="Floors, extra margins and equal nested timeout boundaries turn healthy probes into timeout races.",
-        help_uri=f"{_HELP_BASE}#p058",
+        help_uri=f"{_HELP_BASE}#f012",
     ),
     RuleDefinition(
-        id="P059",
+        id="F013",
         name="PreflightCancellationCleanup",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -333,10 +336,10 @@ _CONTRACT_RULES = (
         short_description="Release owned preflight resources without blocking the event loop.",
         full_description="Release owned preflight resources without blocking the event loop.",
         rationale="Cancellation of an await does not terminate a driver thread or release its resources.",
-        help_uri=f"{_HELP_BASE}#p059",
+        help_uri=f"{_HELP_BASE}#f013",
     ),
     RuleDefinition(
-        id="P060",
+        id="F014",
         name="PreflightFailureExposure",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -347,10 +350,10 @@ _CONTRACT_RULES = (
         short_description="Keep raw exception and credential values out of preflight outputs and logs.",
         full_description="Keep raw exception and credential values out of preflight outputs and logs.",
         rationale="Typed wire fields and traceback locals are independent channels through which secrets can escape.",
-        help_uri=f"{_HELP_BASE}#p060",
+        help_uri=f"{_HELP_BASE}#f014",
     ),
     RuleDefinition(
-        id="P061",
+        id="F015",
         name="PreflightRemovedGateContract",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -361,10 +364,10 @@ _CONTRACT_RULES = (
         short_description="Migrate removed mode overrides and private gate-classification helpers.",
         full_description="Migrate removed mode overrides and private gate-classification helpers.",
         rationale="SDK PR #3685 removes the old gate contract. Until its release floor is established this is an upgrade advisory, not proof of current incompatibility.",
-        help_uri=f"{_HELP_BASE}#p061",
+        help_uri=f"{_HELP_BASE}#f015",
     ),
     RuleDefinition(
-        id="P062",
+        id="F016",
         name="PreflightBehaviorContract",
         scope=RuleScope.APP,
         tier=EnforcementTier.BLOCK,
@@ -375,10 +378,10 @@ _CONTRACT_RULES = (
         short_description="Execute registered real-handler scenarios for each applicable entrypoint.",
         full_description="Execute registered real-handler scenarios for each applicable entrypoint.",
         rationale="Customer impact: Static shape checks cannot prove verdict semantics, probe coverage, recovery, or resource lifetime. Missing and skipped scenarios are incomplete evidence.",
-        help_uri=f"{_HELP_BASE}#p062",
+        help_uri=f"{_HELP_BASE}#f016",
     ),
     RuleDefinition(
-        id="P063",
+        id="F017",
         name="PreflightWorkflowEnforcement",
         scope=RuleScope.SDK,
         tier=EnforcementTier.BLOCK,
@@ -389,10 +392,10 @@ _CONTRACT_RULES = (
         short_description="Verify gate enforcement through real Temporal workflow histories.",
         full_description="Verify gate enforcement through real Temporal workflow histories.",
         rationale="Customer impact: Only execution history can prove extraction was never scheduled after a hard gate failure, including activity death.",
-        help_uri=f"{_HELP_BASE}#p063",
+        help_uri=f"{_HELP_BASE}#f017",
     ),
     RuleDefinition(
-        id="P064",
+        id="F018",
         name="PreflightExitEvidence",
         scope=RuleScope.SDK,
         tier=EnforcementTier.BLOCK,
@@ -403,10 +406,10 @@ _CONTRACT_RULES = (
         short_description="Verify typed verdicts, outcome fields and safe evidence handoff on every exit.",
         full_description="Verify typed verdicts, outcome fields and safe evidence handoff on every exit.",
         rationale="Customer impact: Activity and workflow failures must preserve cause and status, and logging must not silently discard the evidence.",
-        help_uri=f"{_HELP_BASE}#p064",
+        help_uri=f"{_HELP_BASE}#f018",
     ),
     RuleDefinition(
-        id="P065",
+        id="F019",
         name="PreflightAnalysisCoverage",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -417,10 +420,10 @@ _CONTRACT_RULES = (
         short_description="Report unresolved preflight dispatch and contracts instead of a clean result.",
         full_description="Report unresolved preflight dispatch and contracts instead of a clean result.",
         rationale="An undiscovered handler or unresolved contract must not be mistaken for conforming code.",
-        help_uri=f"{_HELP_BASE}#p065",
+        help_uri=f"{_HELP_BASE}#f019",
     ),
     RuleDefinition(
-        id="P066",
+        id="F020",
         name="DeprecatedPartialPreflight",
         scope=RuleScope.APP,
         tier=EnforcementTier.BLOCK,
@@ -431,7 +434,7 @@ _CONTRACT_RULES = (
         short_description="Replace deprecated PARTIAL preflight results with an explicit readiness decision.",
         full_description="PARTIAL is deprecated for app preflight results. Return NOT_READY for blocking failures or READY when extraction can proceed, preserving truthful typed check evidence. Recognizes literal and enum values, conditional expressions, and single local assignments in supported handler paths. Dynamic construction requires behavioral validation.",
         rationale="Customer impact: PARTIAL allows extraction to proceed and can conceal a blocking source failure behind a degraded verdict. Explicit readiness decisions prevent this ambiguity.",
-        help_uri=f"{_HELP_BASE}#p066",
+        help_uri=f"{_HELP_BASE}#f020",
     ),
 )
 

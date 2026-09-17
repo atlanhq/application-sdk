@@ -59,7 +59,7 @@
 #     annotations.  Use this for production code in the SDK/app that has a
 #     legitimate, site-specific carve-out.
 #
-#   exclude-paths-c / exclude-paths-e / exclude-paths-p / exclude-paths-o / exclude-paths-i / exclude-paths-k
+#   exclude-paths-c / exclude-paths-e / exclude-paths-p / exclude-paths-f / exclude-paths-o / exclude-paths-i / exclude-paths-k
 #     A path prefix removed from scanning entirely.  Nothing from that path
 #     appears in the SARIF report.  Use this only for code that is categorically
 #     outside the SDK/app surface — tooling, migration scripts, generated files,
@@ -121,6 +121,13 @@ on:
         description: >
           Comma-separated repo-root-relative path prefixes to exclude from P-series
           (prescription) checks only, e.g. 'tools/,contract-toolkit/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      exclude-paths-f:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from F-series
+          (preflight-gate) checks only, e.g. 'tools/'.  Default: nothing excluded.
         required: false
         default: ""
         type: string
@@ -296,6 +303,16 @@ jobs:
             # with a single paths filter entry and no template change.
             paths: "{**/*.py,app/generated/**,contract/**}"
             exclude_paths: ${{ inputs.exclude-paths-p }}
+          # F-series is the preflight gate.  F015 reads deployment declarations
+          # under .github/workflows/, deploy/, deployment/, helm/ and k8s/ for
+          # gate configuration removed by SDK PR #3685, so a manifest-only PR
+          # must still trigger this leg (picomatch never matches a leading dot
+          # with a wildcard, hence the explicit .github/** entry).
+          - series: F
+            name: "Preflight"
+            slug: preflight
+            paths: "{**/*.py,.github/**,deploy/**,deployment/**,helm/**,k8s/**}"
+            exclude_paths: ${{ inputs.exclude-paths-f }}
           - series: O
             name: "Optimizations"
             slug: optimizations

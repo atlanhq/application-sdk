@@ -97,4 +97,4 @@ def test_parse_failure_is_incomplete(tmp_path):
     from conformance.suite.checks.preflight._common import coverage_findings
 
     reg = registry(tmp_path, {"handler.py": "async def preflight_check(:"})
-    assert [f.rule_id for f in coverage_findings(reg)] == ["P065"]
+    assert [f.rule_id for f in coverage_findings(reg)] == ["F019"]

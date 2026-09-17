@@ -5,18 +5,21 @@ from conformance.suite.schema.disposition import (
     RuleScope,
 )
 
+BLOCKING = {"F006", "F007", "F016", "F017", "F018", "F020"}
+SDK_SCOPED = {"F017", "F018"}
+BEHAVIORAL = {"F016", "F017", "F018"}
+
 
 def test_preflight_contract_rules_have_evidence_based_enforcement():
-    for number in range(52, 67):
-        rule = get_rule(f"P{number:03}")
+    for number in range(6, 21):
+        rule_id = f"F{number:03}"
+        rule = get_rule(rule_id)
         assert rule.tier is (
-            EnforcementTier.BLOCK
-            if number in {52, 53, 62, 63, 64, 66}
-            else EnforcementTier.WARN
+            EnforcementTier.BLOCK if rule_id in BLOCKING else EnforcementTier.WARN
         )
-        assert rule.scope is (RuleScope.SDK if number in {63, 64} else RuleScope.APP)
+        assert rule.scope is (RuleScope.SDK if rule_id in SDK_SCOPED else RuleScope.APP)
         assert rule.mechanism is (
-            RuleMechanism.TEST if number in {62, 63, 64} else RuleMechanism.STATIC
+            RuleMechanism.TEST if rule_id in BEHAVIORAL else RuleMechanism.STATIC
         )
         assert rule.help_uri
         assert rule.rationale

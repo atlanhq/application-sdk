@@ -1,4 +1,4 @@
-"""P035 PreflightMetadataContractParity.
+"""F004 PreflightMetadataContractParity.
 
 On the gate path ``PreflightInput.metadata`` is rebuilt from the extraction
 input's ``model_dump()`` (``by_alias=False`` → field *names*, plus the
@@ -25,7 +25,7 @@ from conformance.suite.schema.findings import Finding
 
 from ._common import Registry, contracts_for_site, find_preflight_check_sites, norm_key
 
-_P035 = "P035"
+_P035 = "F004"
 
 
 def scan(reg: Registry) -> list[Finding]:
@@ -145,7 +145,7 @@ def _opts_into_extra_keys(name: str, reg: Registry, seen: set[str]) -> bool:
     or ``{"extra": "allow"}``). Note that ``allow_unbounded_fields=True`` does NOT: it only
     skips payload-safety type validation (``application_sdk/contracts/base.py``
     ``__init_subclass__``); the extra policy stays pydantic-default ``"ignore"``, so
-    undeclared metadata keys are still dropped — exactly the drift P035 must keep catching.
+    undeclared metadata keys are still dropped — exactly the drift F004 must keep catching.
     """
     if name in seen:
         return False

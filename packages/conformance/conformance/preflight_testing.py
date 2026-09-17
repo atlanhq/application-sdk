@@ -1,7 +1,7 @@
 """Preflight scenario registration and assertions for app-owned source adapters.
 
 Load with ``pytest -p conformance.preflight_testing``. Mark real-handler tests
-with ``preflight_conformance(rule="P062", scenario="healthy", entrypoint="default")``.
+with ``preflight_conformance(rule="F016", scenario="healthy", entrypoint="default")``.
 The runner checks execution coverage; these assertions check observed behavior.
 Registration alone cannot prove that a test uses the real handler.
 """
@@ -28,7 +28,7 @@ def _record(kind: str) -> None:
 
 
 SCENARIOS = {
-    "P062": (
+    "F016": (
         "healthy",
         "mandatory_failure",
         "advisory_failure",
@@ -43,7 +43,7 @@ SCENARIOS = {
         "budget_retry",
         "typed_safe_output",
     ),
-    "P063": (
+    "F017": (
         "ready_partial",
         "not_ready",
         "typed_handler_failures",
@@ -60,7 +60,7 @@ SCENARIOS = {
         "old_history_replay",
         "mode_attempt_agreement",
     ),
-    "P064": (
+    "F018": (
         "http_success_failure",
         "sdr_dispatch",
         "activity_result_block",
@@ -231,7 +231,7 @@ def assert_extraction_scheduled(
 
 def pytest_addoption(parser: Any) -> None:
     parser.addoption("--preflight-report")
-    parser.addoption("--preflight-rules", default="P062,P063,P064")
+    parser.addoption("--preflight-rules", default="F016,F017,F018")
 
 
 def pytest_configure(config: Any) -> None:
@@ -284,9 +284,9 @@ def pytest_runtest_makereport(item: Any, call: Any):
     record = item.config._preflight_evidence["tests"].get(item.nodeid)
     if record is not None:
         required = {
-            {"P062": "result", "P063": "history", "P064": "exit"}[record["rule"]]
+            {"F016": "result", "F017": "history", "F018": "exit"}[record["rule"]]
         }
-        if record["rule"] == "P062" and record["scenario"] in {
+        if record["rule"] == "F016" and record["scenario"] in {
             "hung_probe",
             "cancellation_cleanup",
             "budget_retry",

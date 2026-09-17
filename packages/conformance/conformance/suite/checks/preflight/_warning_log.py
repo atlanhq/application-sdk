@@ -1,4 +1,4 @@
-"""P047 PreflightFailureLoggedAsWarning (FND-901).
+"""F005 PreflightFailureLoggedAsWarning (FND-901).
 
 Flags ``logger.warning(...)`` / ``logger.warn(...)`` calls inside a
 ``Handler.preflight_check`` override. The customer-facing log view filters at
@@ -17,7 +17,7 @@ from conformance.suite.schema.findings import Finding
 
 from ._common import Registry, iter_function_nodes, reachable_preflight_sites
 
-_P047 = "P047"
+_P047 = "F005"
 
 _WARNING_METHODS = frozenset({"warning", "warn"})
 

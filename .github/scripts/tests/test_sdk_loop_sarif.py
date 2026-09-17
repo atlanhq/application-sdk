@@ -326,6 +326,6 @@ def test_the_suppression_set_is_only_the_blocked_ids() -> None:
 
 def test_opt_in_preflight_rules_do_not_suppress_sdk_review():
     catalog = load_catalog()
-    for rule_id in ("P063", "P064"):
+    for rule_id in ("F017", "F018"):
         assert catalog[rule_id].tier == "block"
         assert not catalog[rule_id].suppresses_prose

@@ -70,7 +70,7 @@ class Rule:
         return (
             self.tier == "block"
             and self.scope in SDK_SCOPES
-            and self.rule_id not in {"P063", "P064"}
+            and self.rule_id not in {"F017", "F018"}
         )
 
 

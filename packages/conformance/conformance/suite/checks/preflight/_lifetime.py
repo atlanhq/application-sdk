@@ -110,7 +110,7 @@ def scan(reg: Registry) -> list[Finding]:
                 emit(
                     src,
                     node,
-                    "P057",
+                    "F011",
                     "Blocking source operation executes on the preflight event loop. Use a bounded async client or move the operation off the loop under the remaining deadline.",
                 )
             is_executor = (
@@ -122,7 +122,7 @@ def scan(reg: Registry) -> list[Finding]:
                 emit(
                     src,
                     node,
-                    "P057",
+                    "F011",
                     "Executor probe has no recognized enclosing deadline. Bound every connection phase to the remaining preflight budget; cancellation does not stop the underlying thread.",
                 )
             if isinstance(node.func, ast.Attribute) and node.func.attr in {
@@ -135,7 +135,7 @@ def scan(reg: Registry) -> list[Finding]:
                     emit(
                         src,
                         node,
-                        "P059",
+                        "F013",
                         "Synchronous cleanup on the preflight path may block the event loop. Verify resource ownership and use bounded off-loop cleanup for synchronous drivers.",
                     )
             for kw in node.keywords:
@@ -169,7 +169,7 @@ def scan(reg: Registry) -> list[Finding]:
                     emit(
                         src,
                         node,
-                        "P058",
+                        "F012",
                         "Probe timeout can exceed input.timeout_seconds. Use remaining time with headroom instead of extending the deadline or imposing a positive floor.",
                     )
             if qualified == "asyncio.wait_for" and node.args:
@@ -186,7 +186,7 @@ def scan(reg: Registry) -> list[Finding]:
                             emit(
                                 src,
                                 node,
-                                "P058",
+                                "F012",
                                 "Driver request timeout equals the whole probe deadline. Give completion and cleanup headroom; equal nested bounds can turn completion into a timing race.",
                             )
             caught = {
@@ -206,7 +206,7 @@ def scan(reg: Registry) -> list[Finding]:
                         emit(
                             src,
                             node,
-                            "P060",
+                            "F014",
                             "Raw caught exception reaches a preflight wire field. Use a safe message/action and the SDK's sanitized cause; verify with synthetic-secret tests.",
                         )
             if isinstance(node.func, ast.Attribute) and node.func.attr in {
@@ -242,7 +242,7 @@ def scan(reg: Registry) -> list[Finding]:
                     emit(
                         src,
                         node,
-                        "P060",
+                        "F014",
                         "Traceback logging accompanies credential reads in the protected operation or log expression and may expose values when diagnostic rendering is enabled. Disable diagnostic-local rendering and verify that synthetic secrets do not reach the log sink.",
                     )
     for src in reg.sources:
@@ -280,7 +280,7 @@ def scan(reg: Registry) -> list[Finding]:
                 emit(
                     src,
                     node,
-                    "P061",
+                    "F015",
                     "Legacy gate configuration or private helper is removed by SDK PR #3685. Migration advisory until the release floor is known: declare App.preflight_gate_mode and test public verdict behavior.",
                 )
     return findings
@@ -319,7 +319,7 @@ def scan_removed_config(root: Path) -> list[Finding]:
                 }:
                     findings.append(
                         Finding(
-                            rule_id="P061",
+                            rule_id="F015",
                             file=path.relative_to(root).as_posix(),
                             line=line_number,
                             column=1,

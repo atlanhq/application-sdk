@@ -14,6 +14,10 @@ domain series (S/B/T/A/…) later subsumes the same topic.  When a domain series
 takes over an area, the P-rule is retired in place (kept documented, no longer
 firing) and the new rule gets a fresh id — the original P-id is never reused or
 reassigned.  The same policy applies to O-ids.
+
+P032–P035 and P047 vacated to the F-series (F001–F005) in PR #3710: the fleet
+held no machine-read suppression of them, so they were renamed rather than
+retired in place.  Those five P-ids stay vacant.
 """
 
 from __future__ import annotations

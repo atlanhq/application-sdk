@@ -1,4 +1,4 @@
-"""Shared parsing and detection helpers for the preflight-gate checks (P032–P035).
+"""Shared parsing and detection helpers for the preflight-gate checks (F001–F004).
 
 One :class:`Source` per scanned file carries the parsed tree, import aliases,
 suppression directives, and import provenance so the four rule passes share a
@@ -400,7 +400,7 @@ def coverage_findings(reg: Registry):
     findings = [
         make_finding(
             filename=rel,
-            rule_id="P065",
+            rule_id="F019",
             node=ast.Pass(lineno=1, col_offset=0),
             message="Source could not be parsed or read; preflight analysis is incomplete.",
             directives={},
@@ -422,7 +422,7 @@ def coverage_findings(reg: Registry):
                 findings.append(
                     make_finding(
                         filename=src.rel,
-                        rule_id="P065",
+                        rule_id="F019",
                         node=node,
                         message="Declared preflight_check is not resolved as a supported async SDK handler; analysis is incomplete.",
                         directives=src.directives,
@@ -439,7 +439,7 @@ def coverage_findings(reg: Registry):
                 findings.append(
                     make_finding(
                         filename=src.rel,
-                        rule_id="P065",
+                        rule_id="F019",
                         node=node,
                         message="Dynamic preflight callback binding is unresolved; register behavioral scenarios and use a statically resolvable callback.",
                         directives=src.directives,
@@ -451,7 +451,7 @@ def coverage_findings(reg: Registry):
             findings.append(
                 make_finding(
                     filename=src.rel,
-                    rule_id="P065",
+                    rule_id="F019",
                     node=func,
                     message="Preflight input contract fields are unresolved; metadata parity has not been evaluated.",
                     directives=src.directives,

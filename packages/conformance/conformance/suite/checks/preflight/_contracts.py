@@ -207,7 +207,7 @@ class _Checker:
             self.emit(
                 src,
                 error,
-                "P065",
+                "F019",
                 "Expanded failure constructor arguments are unresolved; verify message and suggested_action in an executed failed-check scenario.",
             )
             return
@@ -219,7 +219,7 @@ class _Checker:
                 self.emit(
                     src,
                     error,
-                    "P065",
+                    "F019",
                     "Computed suggested_action is unresolved; verify the final failed-check action is nonblank and appropriate in an executed scenario.",
                 )
             if (
@@ -232,7 +232,7 @@ class _Checker:
                 self.emit(
                     src,
                     error,
-                    "P053",
+                    "F007",
                     f"Preflight failure has missing or blank {field}; provide a meaningful explanation and audience-appropriate next action. Unresolved factory values require behavioral validation.",
                 )
 
@@ -242,7 +242,7 @@ class _Checker:
             self.emit(
                 src,
                 call,
-                "P052",
+                "F006",
                 "PreflightCheck has no status field; supply passed as a boolean. An ignored status keyword leaves passed at its false default.",
             )
         if not _sdk(src, call.func, "PreflightOutput"):
@@ -272,7 +272,7 @@ class _Checker:
                 self.emit(
                     src,
                     call,
-                    "P066",
+                    "F020",
                     "PARTIAL preflight results are deprecated. Return NOT_READY for a blocking failure or READY when extraction can proceed; preserve truthful typed check evidence. Do not replace PARTIAL blindly.",
                 )
                 break
@@ -282,7 +282,7 @@ class _Checker:
                 self.emit(
                     src,
                     call,
-                    "P065",
+                    "F019",
                     "Computed preflight aggregation is unresolved: mandatory/advisory roles, short-circuiting, and retry/fallback semantics need executed handler scenarios. This is not a proven verdict violation.",
                 )
             return
@@ -291,7 +291,7 @@ class _Checker:
                 self.emit(
                     src,
                     call,
-                    "P055",
+                    "F009",
                     "Handler NOT_READY result has no failed check evidence; include the evaluated blocking check.",
                 )
             return
@@ -310,7 +310,7 @@ class _Checker:
             self.emit(
                 src,
                 call,
-                "P055",
+                "F009",
                 "Preflight status contradicts its literal check results; aggregate mandatory and advisory checks explicitly and test both outcomes.",
             )
 
@@ -425,7 +425,7 @@ class _Checker:
                     self.emit(
                         src,
                         node,
-                        "P054",
+                        "F008",
                         "Expected typed preflight failure escapes the handler. Return a typed PreflightOutput verdict; the strict gate does not preserve the legacy raised-error fail-open behavior.",
                     )
             if isinstance(node, ast.Call):
@@ -454,7 +454,7 @@ class _Checker:
             self.emit(
                 src,
                 func,
-                "P052",
+                "F006",
                 "Preflight handler must declare SDK PreflightInput and PreflightOutput annotations, including aliases; optional HandlerContext is supported.",
             )
         for node in _nodes(func):
@@ -466,7 +466,7 @@ class _Checker:
                 self.emit(
                     src,
                     node,
-                    "P052",
+                    "F006",
                     "Preflight handler returns a legacy dictionary or boolean; return the SDK PreflightOutput contract.",
                 )
         self.body(src, func)
@@ -501,7 +501,7 @@ class _Checker:
                         self.emit(
                             src,
                             node,
-                            "P056",
+                            "F010",
                             "Workflow-constructed PreflightInput does not preserve its known entrypoint; pass the selected entrypoint and resolve credentials before the SDK gate. Interactive inputs may omit entrypoint.",
                         )
 

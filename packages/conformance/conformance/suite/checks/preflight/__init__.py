@@ -2,8 +2,7 @@
 
 Cross-file only: ``scan_path`` is a no-op and ``scan_all`` builds one shared
 :class:`~._common.Registry` (single parse + import walk) then runs all rule
-passes over it. Reuses the ``P`` series so it runs on the existing P leg of the
-fleet CI matrix with no workflow change.
+passes over it. Owns the ``F`` series and its leg of the fleet CI matrix.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from . import (
 )
 from ._common import build_registry, coverage_findings
 
-SERIES = "P"
+SERIES = "F"
 
 __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
 
@@ -51,9 +50,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 main = make_cli_main(
     scan_all=scan_all,
     description=(
-        "Preflight-gate conformance (P032-P035): reserved gate-name collision, "
-        "duplicate in-workflow preflight, untyped check failures, and "
-        "metadata/input-contract parity (BLDX-1545)."
+        "Preflight-gate conformance (F-series): gate-name collision, duplicate "
+        "preflight, typed failures, contract parity, actionable verdicts, probe "
+        "lifetime and safe output (BLDX-1545, CONNECT-812)."
     ),
 )
 

@@ -40,7 +40,7 @@ on:
       slugs:
         description: >-
           JSON array of `{"slug": …, "name": …}` objects, one per SARIF artifact
-          to upload. Defaults to the four series a consumer app's conformance
+          to upload. Defaults to the five series a consumer app's conformance
           run produces; application-sdk's own caller passes its longer list.
         type: string
         required: false
@@ -48,6 +48,7 @@ on:
           [{"slug": "ci", "name": "Upload CI SARIF"},
            {"slug": "error-handling", "name": "Upload Error-handling SARIF"},
            {"slug": "prescriptions", "name": "Upload Prescriptions SARIF"},
+           {"slug": "preflight", "name": "Upload Preflight SARIF"},
            {"slug": "optimizations", "name": "Upload Optimizations SARIF"}]
       sdk_ref:
         description: >-

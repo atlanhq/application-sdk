@@ -150,7 +150,6 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/app_name_alignment.py, "
             "conformance/suite/rules/transform_templates.py, "
             "conformance/suite/rules/portability.py, "
-            "conformance/suite/rules/preflight.py, "
             "conformance/suite/rules/atomic_publish.py"
         ),
         output_filename="prescriptions.md",
@@ -166,12 +165,33 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), "
             "`suite.checks.transform_templates` (P040, scans template YAML), "
             "`suite.checks.text_io_encoding` (P046), "
-            "`suite.checks.preflight` (P047), "
             "`suite.checks.atomic_publish` (P050) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
         stability_note=_ID_STABILITY_NOTE,
+    ),
+    SeriesMeta(
+        title="Preflight-Gate Rules (F-series)",
+        prefix="F",
+        source_module="conformance/suite/rules/preflight.py",
+        output_filename="preflight.md",
+        checker=(
+            "`suite.checks.preflight` (F001–F015, F019–F020: cross-file AST over "
+            "the preflight handler, its helpers and the entrypoint contracts; F015 "
+            "also reads deployment manifests) and the opt-in `--with-tests` "
+            "scenario runner (F016–F018: registered pytest scenarios executed in a "
+            "bounded subprocess via `conformance.preflight_testing`)"
+        ),
+        suppression_example=(
+            "# conformance: ignore[F005] intentional: progress log, not a failure"
+        ),
+        stability_note=(
+            _ID_STABILITY_NOTE
+            + " F001–F005 were published as P032–P035 and P047 and moved to this "
+            "series in PR #3710 before any fleet suppression referenced them; the "
+            "vacated P-ids are retired and never reused."
+        ),
     ),
     SeriesMeta(
         title="Optimisation / Recommendation Rules (O-series)",

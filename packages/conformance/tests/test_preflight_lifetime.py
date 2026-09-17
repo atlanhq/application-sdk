@@ -25,7 +25,7 @@ def findings(tmp_path: Path, body: str, imports: str = ""):
     ],
 )
 def test_blocking_source_calls(tmp_path, call):
-    assert "P057" in {
+    assert "F011" in {
         f.rule_id for f in findings(tmp_path, call, "import time, requests, pyodbc\n")
     }
 
@@ -35,7 +35,7 @@ def test_unrelated_method_named_get(tmp_path):
 
 
 def test_thread_requires_outer_deadline(tmp_path):
-    assert "P057" in {
+    assert "F011" in {
         f.rule_id
         for f in findings(
             tmp_path, "await asyncio.to_thread(probe)", "import asyncio\n"
@@ -63,7 +63,7 @@ def test_async_timeout_context_is_valid(tmp_path):
     "expr", ["max(input.timeout_seconds, 120)", "input.timeout_seconds + 5"]
 )
 def test_budget_enlargement(tmp_path, expr):
-    assert "P058" in {
+    assert "F012" in {
         f.rule_id for f in findings(tmp_path, f"await probe(timeout={expr})")
     }
 
@@ -76,7 +76,7 @@ def test_blocking_cleanup(tmp_path):
     result = findings(
         tmp_path, "try:\n    await probe()\nfinally:\n    engine.dispose()"
     )
-    assert "P059" in {f.rule_id for f in result}
+    assert "F013" in {f.rule_id for f in result}
 
 
 def test_bounded_cleanup_off_loop(tmp_path):
@@ -93,7 +93,7 @@ def test_exception_exposed_in_preflight_message(tmp_path):
         'try:\n    await probe()\nexcept Exception as exc:\n    return PreflightCheck(passed=False, message=f"Failed: {exc}")',
         "from application_sdk.handler.contracts import PreflightCheck\n",
     )
-    assert "P060" in {f.rule_id for f in result}
+    assert "F014" in {f.rule_id for f in result}
 
 
 def test_redacted_exception_message(tmp_path):
@@ -108,7 +108,7 @@ def test_removed_contract_is_upgrade_warning(tmp_path):
     result = findings(
         tmp_path, 'return os.getenv("ATLAN_PREFLIGHT_GATE_MODE")', "import os\n"
     )
-    assert [f.rule_id for f in result] == ["P061"]
+    assert [f.rule_id for f in result] == ["F015"]
     assert "#3685" in result[0].message
 
 
@@ -119,7 +119,7 @@ def test_documenting_removed_name_does_not_fire(tmp_path):
 
 
 def test_eager_thread_argument_runs_on_loop(tmp_path):
-    assert "P059" in {
+    assert "F013" in {
         f.rule_id
         for f in findings(
             tmp_path,
@@ -130,7 +130,7 @@ def test_eager_thread_argument_runs_on_loop(tmp_path):
 
 
 def test_sync_helper_blocks_loop(tmp_path):
-    assert "P057" in {
+    assert "F011" in {
         f.rule_id
         for f in findings(
             tmp_path, "probe()", "import time\ndef probe():\n    time.sleep(5)\n"
@@ -147,7 +147,7 @@ def test_unrelated_credential_names_do_not_flag_traceback(tmp_path, prefix):
         prefix
         + '\ntry:\n    await probe()\nexcept Exception as exc:\n    logger.exception("failed")',
     )
-    assert "P060" not in {row.rule_id for row in rows}
+    assert "F014" not in {row.rule_id for row in rows}
 
 
 @pytest.mark.parametrize(
@@ -158,7 +158,7 @@ def test_unrelated_credential_names_do_not_flag_traceback(tmp_path, prefix):
     ],
 )
 def test_traceback_credential_reads_remain_visible(tmp_path, body):
-    assert "P060" in {row.rule_id for row in findings(tmp_path, body)}
+    assert "F014" in {row.rule_id for row in findings(tmp_path, body)}
 
 
 def test_other_except_branch_does_not_taint_traceback(tmp_path):
@@ -166,4 +166,4 @@ def test_other_except_branch_does_not_taint_traceback(tmp_path):
         tmp_path,
         'try:\n    await probe()\nexcept ValueError:\n    consume(token)\nexcept Exception as exc:\n    logger.exception("failed")',
     )
-    assert "P060" not in {row.rule_id for row in rows}
+    assert "F014" not in {row.rule_id for row in rows}

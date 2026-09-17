@@ -1581,7 +1581,7 @@ def build_preflight_gate_activity(
             source, whose failure is real in both modes — must be the ERROR
             record itself, not a WARN beside one. A ``proceeded`` run carrying a
             failed check is the advisory case WARNING is semantically for
-            (P047 bans the handler from logging it, so the gate must). Keyed on
+            (F005 bans the handler from logging it, so the gate must). Keyed on
             the checks rather than ``PreflightStatus.PARTIAL`` because PARTIAL
             is documented display-only — a handler may return READY with a
             failed advisory row. Clean proceeds, skips and soft-mode verdict

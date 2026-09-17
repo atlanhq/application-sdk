@@ -759,7 +759,7 @@ class TestPreflightGateOutcomeEvent:
         assert ev["outcome"] == "proceeded" and ev["reason"] == "partial"
         assert ev["entrypoint"] == "<implicit>"
         # Advisory failure: WARNING is the one level semantically for it, and
-        # P047 bans the handler from emitting it — so the gate must.
+        # F005 bans the handler from emitting it — so the gate must.
         assert _outcome_level(ml) == "warning"
 
     async def test_ready_with_failed_advisory_check_warns(self) -> None:

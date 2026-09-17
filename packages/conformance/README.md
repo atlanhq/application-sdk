@@ -25,7 +25,7 @@ uv run atlan-application-sdk-conformance programs-dir
 uv run atlan-application-sdk-conformance gen-rule-docs
 ```
 
-See [preflight conformance](conformance/docs/preflight-testing.md) for static checks, opt-in behavior scenarios, and their coverage limits.
+See [preflight conformance](conformance/docs/preflight-testing.md) for static checks, opt-in behavior scenarios, and their coverage limits, and the [F-series rule catalog](conformance/docs/rules/preflight.md) for the rules themselves.
 
 ## Suppressing a finding
 

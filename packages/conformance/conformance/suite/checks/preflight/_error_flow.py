@@ -204,14 +204,14 @@ class ErrorFlow:
                             self.checker.emit(
                                 src,
                                 node,
-                                "P055",
+                                "F009",
                                 "Passed preflight check can carry typed failure evidence; clear errors on the success path.",
                             )
                         elif errors:
                             self.checker.emit(
                                 src,
                                 node,
-                                "P065",
+                                "F019",
                                 "Success-path error expression is unresolved; verify passed checks do not carry failure evidence.",
                             )
                     continue
@@ -227,7 +227,7 @@ class ErrorFlow:
                     self.checker.emit(
                         src,
                         node,
-                        "P065",
+                        "F019",
                         "Failed-check error flow is unresolved; suggested_action and typing are not verified. Execute a real-handler scenario for this output.",
                     )
             child = self.child(context, node)

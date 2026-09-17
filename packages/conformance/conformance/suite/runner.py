@@ -672,7 +672,7 @@ def main(argv: list[str] | None = None) -> int:
         rid: {"execution": "not_evaluated", "complete": False}
         for rid in sorted(test_rules)
     }
-    if "P061" in selected_rules:
+    if "F015" in selected_rules:
         from conformance.suite.checks.preflight._lifetime import scan_removed_config
 
         all_findings.extend(
@@ -740,7 +740,7 @@ def main(argv: list[str] | None = None) -> int:
         rule_ids=rule_ids,
     )
     for result in report.runs[0].results:
-        if result.rule_id == "P065":
+        if result.rule_id == "F019":
             result.properties["atlan/analysisStatus"] = "unresolved"
     if behavior_summary:
         report.runs[0].properties["atlan/preflightTests"] = behavior_summary

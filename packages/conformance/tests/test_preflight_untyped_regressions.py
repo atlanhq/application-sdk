@@ -18,7 +18,7 @@ def test_dynamic_verdict_reports_unresolved(tmp_path, expression):
         f'def make(ok, failed):\n    return PreflightCheck(name="probe", passed={expression})\n',
         "from application_sdk.handler.contracts import PreflightCheck",
     )
-    assert [finding.rule_id for finding in result] == ["P065"]
+    assert [finding.rule_id for finding in result] == ["F019"]
 
 
 @pytest.mark.parametrize(
@@ -35,7 +35,7 @@ def test_public_reexport_is_recognized(tmp_path, imports, constructor):
         f'def make():\n    return {constructor}(name="probe", passed=False)\n',
         imports,
     )
-    assert [finding.rule_id for finding in result] == ["P034"]
+    assert [finding.rule_id for finding in result] == ["F003"]
 
 
 def test_invalid_status_does_not_replace_passed(tmp_path):
@@ -44,7 +44,7 @@ def test_invalid_status_does_not_replace_passed(tmp_path):
         'def make():\n    return PreflightCheck(name="probe", status="READY")\n',
         "from application_sdk.handler import PreflightCheck",
     )
-    assert [finding.rule_id for finding in result] == ["P034"]
+    assert [finding.rule_id for finding in result] == ["F003"]
 
 
 def test_local_true_binding_is_clean(tmp_path):
@@ -62,7 +62,7 @@ def test_negated_local_true_is_failed(tmp_path):
         'def make():\n    failed = True\n    return PreflightCheck(name="probe", passed=not failed)\n',
         "from application_sdk.handler import PreflightCheck",
     )
-    assert [finding.rule_id for finding in result] == ["P034"]
+    assert [finding.rule_id for finding in result] == ["F003"]
 
 
 def test_dynamic_verdict_with_error_is_clean(tmp_path):

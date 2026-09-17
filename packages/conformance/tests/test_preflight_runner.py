@@ -12,7 +12,7 @@ def test_static_run_explicitly_reports_behavior_not_evaluated(tmp_path: Path):
                 "--repo",
                 str(tmp_path),
                 "--rule",
-                "P062",
+                "F016",
                 "--static",
                 "--output",
                 str(output),
@@ -22,7 +22,7 @@ def test_static_run_explicitly_reports_behavior_not_evaluated(tmp_path: Path):
     )
     report = json.loads(output.read_text())
     assert (
-        report["runs"][0]["properties"]["atlan/preflightTests"]["P062"]["execution"]
+        report["runs"][0]["properties"]["atlan/preflightTests"]["F016"]["execution"]
         == "not_evaluated"
     )
 
@@ -39,7 +39,7 @@ def test_full_run_reports_missing_behavior_scenarios(tmp_path: Path):
                 "--repo",
                 str(tmp_path),
                 "--rule",
-                "P062",
+                "F016",
                 "--with-tests",
                 "--output",
                 str(output),
@@ -49,7 +49,7 @@ def test_full_run_reports_missing_behavior_scenarios(tmp_path: Path):
     )
     report = json.loads(output.read_text())
     assert report["runs"][0]["results"]
-    assert not report["runs"][0]["properties"]["atlan/preflightTests"]["P062"][
+    assert not report["runs"][0]["properties"]["atlan/preflightTests"]["F016"][
         "complete"
     ]
 
@@ -59,10 +59,10 @@ def test_new_static_rule_reaches_sarif(tmp_path: Path):
         "from application_sdk.handler import Handler\nclass H(Handler):\n    async def preflight_check(self, input):\n        return True\n"
     )
     output = tmp_path / "report.json"
-    main(["--repo", str(tmp_path), "--rule", "P052", "--output", str(output)])
+    main(["--repo", str(tmp_path), "--rule", "F006", "--output", str(output)])
     assert {
         row["ruleId"] for row in json.loads(output.read_text())["runs"][0]["results"]
-    } == {"P052"}
+    } == {"F006"}
 
 
 def test_unresolved_analysis_is_machine_identifiable(tmp_path):
@@ -71,9 +71,9 @@ def test_unresolved_analysis_is_machine_identifiable(tmp_path):
         'from application_sdk.handler import PreflightCheck\ndef check(ok):\n return PreflightCheck(name="probe", passed=ok)\n'
     )
     output = tmp_path / "report.sarif"
-    main(["--repo", str(tmp_path), "--rule", "P034,P065", "--output", str(output)])
+    main(["--repo", str(tmp_path), "--rule", "F003,F019", "--output", str(output)])
     results = json.loads(output.read_text())["runs"][0]["results"]
-    assert results[0]["ruleId"] == "P065"
+    assert results[0]["ruleId"] == "F019"
     assert results[0]["properties"]["atlan/analysisStatus"] == "unresolved"
 
 
@@ -92,7 +92,7 @@ def test_preflight_selection_does_not_run_unrelated_p_checks(tmp_path, monkeypat
             "--repo",
             str(tmp_path),
             "--rule",
-            "P034,P065",
+            "F003,F019",
             "--output",
             str(tmp_path / "report.sarif"),
         ]
@@ -104,7 +104,7 @@ def test_typed_failure_errors_preserve_soft_exit_mode(tmp_path):
         'from application_sdk.handler import PreflightCheck\ndef check():\n return PreflightCheck(name="probe", passed=False)\n'
     )
     output = tmp_path / "report.sarif"
-    args = ["--repo", str(tmp_path), "--rule", "P034", "--output", str(output)]
+    args = ["--repo", str(tmp_path), "--rule", "F003", "--output", str(output)]
     assert main(args) == 1
     assert main([*args, "--exit-zero"]) == 0
     run = json.loads(output.read_text())["runs"][0]
