@@ -814,4 +814,94 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/dependency.md#d014"
         ),
     ),
+    RuleDefinition(
+        id="D015",
+        scope=RuleScope.BOTH,
+        name="PyrightExcludeClobbersDefaults",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="tooling-baseline",
+        autofixable=True,
+        since="0.32.0",
+        rationale=(
+            "pyright's 'exclude' REPLACES its built-in defaults rather than adding to "
+            "them, and one of those defaults -- '**/.*' -- is the only thing keeping "
+            ".venv out of the analysis. Nothing in the repo says so: the protection is "
+            "incidental, earned because the directory happens to start with a dot. So "
+            "the first time anyone excludes a path of their own -- '.github/**', "
+            "'app/generated/**', a fixture tree -- the virtualenv silently joins the "
+            "set of files pyright type-checks, and the edit that caused it looks "
+            "entirely reasonable in review. "
+            ".gitignore does not save it. pyright has no .gitignore integration at all; "
+            "measured on 1.1.410 against a gitignored NON-dot directory, so the dot-dir "
+            "default could not be the cause, pyright analysed it anyway. ruff does "
+            "respect .gitignore, which is exactly why the wrong intuition is so common. "
+            "The failure is invisible under every normal invocation. pre-commit passes "
+            "filenames to the hook and an editor checks one file, so both stay fast; "
+            "only a bare 'uv run pyright' walks the root. That is the invocation an "
+            "agent types. Measured on one such run: argument-scoped invocations "
+            "returned in 12-19s while two bare ones ran 553s and 912s without "
+            "returning, the second exhausting the lane's 900s no-progress budget and "
+            "escalating the whole run to a human. Customer impact is indirect -- no "
+            "connector ships differently -- but a type checker nobody can afford to run "
+            "is a gate that stops catching the contract mismatches it exists to catch. "
+            "Measured 2026-09-17 across all 115 atlan-*-app repos: 72 declare an "
+            "'exclude' that clobbers the defaults with no scoped 'include' to save "
+            "them, 3 more are latent behind an 'include', and application-sdk itself is "
+            "in the first group -- which is why the scope is 'both' and not 'app'."
+        ),
+        short_description=(
+            "pyproject.toml declares [tool.pyright] exclude without restating the "
+            "dot-directory default, so a bare pyright run walks .venv"
+        ),
+        full_description=(
+            "``[tool.pyright].exclude`` **replaces** pyright's built-in\n"
+            "defaults -- ``**/node_modules``, ``**/__pycache__`` and\n"
+            "``**/.*`` -- rather than appending to them.  Losing the first\n"
+            "two costs nothing in a Python repo.  Losing ``**/.*`` is what\n"
+            "matters: it is the only reason ``.venv`` is not type-checked::\n"
+            "\n"
+            "    [tool.pyright]\n"
+            '    exclude = [".github/**"]      # .venv is now in scope\n'
+            "\n"
+            "**Only the dot-directory protection is graded**, not all three\n"
+            "defaults, so a repo that deliberately restates just ``**/.*``\n"
+            "passes.  Either spelling clears the rule -- ``**/.*`` itself, or\n"
+            "an explicit ``.venv``/``.venv/``/``.venv/**`` entry.\n"
+            "\n"
+            "**An empty list is still a clobber.**  ``exclude = []`` reads as\n"
+            "a no-op and is not one: declaring the key replaces the defaults\n"
+            "with nothing at all, which is the worst case rather than the\n"
+            "neutral one.  It is reported like any other unprotected list.\n"
+            "\n"
+            "**A scoped ``include`` is a complete defence and is honoured.**\n"
+            "With ``include`` set, pyright only ever walks the listed roots\n"
+            "and never reaches ``.venv``, so ``exclude`` cannot matter and no\n"
+            "finding is raised.  This is a real pattern in the fleet, not a\n"
+            "hypothetical -- four repos rely on it.\n"
+            "\n"
+            "``ignore`` does **not** clear the rule.  It suppresses\n"
+            "diagnostics for matched files but still parses them, so it does\n"
+            "nothing for the walk cost that is the entire problem.\n"
+            "\n"
+            "Graded on ``pyproject.toml`` only.  A repo configuring pyright\n"
+            "through ``pyrightconfig.json`` is out of scope: the D-series CI\n"
+            "leg watches ``**/pyproject.toml``, and a checker must not read a\n"
+            "tree its leg's path filter does not watch.\n"
+            "\n"
+            "Autofixable: the remedy is to append the three defaults to the\n"
+            "existing list, preserving the repo's own entries.  The\n"
+            "prescription never introduces an ``include`` key -- scoping\n"
+            "``include`` is a legitimate alternative a human may choose, but\n"
+            "it changes *what gets type-checked*, which is not a safe\n"
+            "automatic rewrite.\n"
+            "\n"
+            "Scope is ``both``: application-sdk's own ``pyproject.toml``\n"
+            "carries this exact shape.  Cite: FND-2229."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d015"
+        ),
+    ),
 )
