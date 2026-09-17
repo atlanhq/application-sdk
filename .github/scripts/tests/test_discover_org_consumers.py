@@ -299,3 +299,138 @@ def test_main_writes_no_roster_at_all_when_a_read_fails(tmp_path, monkeypatch, c
     err = capsys.readouterr().err
     assert "::error::Fleet discovery failed" in err
     assert "rate limit" in err
+
+
+# --- auto-merge mode ------------------------------------------------------
+#
+# The mode rides along on the renovate.json read membership already pays for. It
+# exists so the dashboard can tell a repo that never arms GitHub-native
+# auto-merge BY POLICY from one that failed to: without it, a green unarmed PR in
+# a soft-rollout repo looks exactly like a Renovate arming fault, and the soft
+# half of the fleet buries the real instances.
+
+SOFT_CONFIG = json.dumps(
+    {
+        "extends": [f"github>{MARKER}"],
+        "lockFileMaintenance": {"automerge": False, "platformAutomerge": False},
+        "packageRules": [
+            {
+                "description": "Soft rollout: Renovate raises PRs but does not auto-merge.",
+                "matchPackageNames": ["*"],
+                "automerge": False,
+                "platformAutomerge": False,
+            }
+        ],
+    }
+)
+AUTO_CONFIG = json.dumps({"extends": [f"github>{MARKER}"]})
+
+
+def test_automerge_mode_reads_the_soft_rollout_template_as_soft():
+    assert doc.automerge_mode(SOFT_CONFIG) == "soft"
+
+
+def test_automerge_mode_reads_a_bare_preset_extend_as_auto():
+    assert doc.automerge_mode(AUTO_CONFIG) == "auto"
+
+
+def test_automerge_mode_reads_a_top_level_optout_as_soft():
+    assert doc.automerge_mode(json.dumps({"automerge": False})) == "soft"
+
+
+def test_automerge_mode_reads_a_lockfile_only_optout_as_soft():
+    # The soft template's other half, on its own: the lock lane's automerge comes
+    # from the preset's lockFileMaintenance block, so an override there is a
+    # blanket opt-out for it.
+    config = json.dumps({"lockFileMaintenance": {"automerge": False}})
+    assert doc.automerge_mode(config) == "soft"
+
+
+def test_automerge_mode_treats_a_per_package_optout_as_auto():
+    # Deliberately NOT soft: this repo still auto-merges every other lane, so its
+    # unarmed PRs are worth reporting. Narrowing the verdict to the lane the PR
+    # is actually in is a refinement this does not attempt.
+    config = json.dumps(
+        {
+            "packageRules": [
+                {"matchPackageNames": ["atlan-application-sdk"], "automerge": False}
+            ]
+        }
+    )
+    assert doc.automerge_mode(config) == "auto"
+
+
+def test_automerge_mode_treats_a_matcherless_optout_as_soft():
+    # No matchPackageNames at all means the rule applies to every package.
+    config = json.dumps({"packageRules": [{"automerge": False}]})
+    assert doc.automerge_mode(config) == "soft"
+
+
+@pytest.mark.parametrize("bad", ["not json at all", "[1, 2, 3]", ""])
+def test_automerge_mode_is_unknown_rather_than_a_guess(bad):
+    # "unknown" classifies exactly as a repo did before this signal existed. A
+    # guess either way would invent a fault or hide one.
+    assert doc.automerge_mode(bad) == "unknown"
+
+
+def test_discover_fleet_with_modes_reads_each_repo_once():
+    # The mode must not cost a second read per repo: discovery is already the
+    # dominant API cost at fleet scale (see the workflow's discovery step).
+    reads = []
+    base = _fake_gh(
+        ["atlanhq/atlan-mysql-app", "atlanhq/atlan-soft-app"],
+        {
+            "atlanhq/atlan-mysql-app": AUTO_CONFIG,
+            "atlanhq/atlan-soft-app": SOFT_CONFIG,
+        },
+    )
+
+    def run(args: list) -> tuple:
+        if args[0] == "api":
+            reads.append(args[-1])
+        return base(args)
+
+    fleet, modes = doc.discover_fleet_with_modes(
+        "atlanhq", doc.DEFAULT_NAME_PATTERN, MARKER, set(), run=run
+    )
+    assert fleet == ["atlanhq/atlan-mysql-app", "atlanhq/atlan-soft-app"]
+    assert modes == {
+        "atlanhq/atlan-mysql-app": "auto",
+        "atlanhq/atlan-soft-app": "soft",
+    }
+    assert len(reads) == len(set(reads)) == 2
+
+
+def test_main_writes_modes_file_when_asked(tmp_path, monkeypatch):
+    output_file = tmp_path / "github_output"
+    output_file.write_text("")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    modes_file = tmp_path / "modes.json"
+
+    run = _fake_gh(
+        ["atlanhq/atlan-mysql-app", "atlanhq/atlan-soft-app"],
+        {
+            "atlanhq/atlan-mysql-app": AUTO_CONFIG,
+            "atlanhq/atlan-soft-app": SOFT_CONFIG,
+        },
+    )
+    rc = doc.main(["--owner", "atlanhq", "--modes-out", str(modes_file)], run=run)
+    assert rc == 0
+    assert json.loads(modes_file.read_text()) == {
+        "atlanhq/atlan-mysql-app": "auto",
+        "atlanhq/atlan-soft-app": "soft",
+    }
+
+
+def test_main_writes_an_empty_modes_file_when_the_fleet_is_empty(tmp_path, monkeypatch):
+    # Written even when empty, like `repos=`: a consumer branching on the file's
+    # presence cannot tell "found nothing" from "the run never got that far".
+    output_file = tmp_path / "github_output"
+    output_file.write_text("")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    modes_file = tmp_path / "modes.json"
+
+    run = _fake_gh(["atlanhq/atlan-legacy-app"], {})
+    rc = doc.main(["--owner", "atlanhq", "--modes-out", str(modes_file)], run=run)
+    assert rc == 0
+    assert json.loads(modes_file.read_text()) == {}

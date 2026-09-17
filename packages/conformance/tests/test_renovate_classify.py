@@ -45,6 +45,7 @@ def make_pr(
     is_draft: bool = False,
     body: str = "",
     auto_merge_enabled: bool = False,
+    repo_automerge_mode: str = "unknown",
     head_committed_at: datetime | None = None,
     lock_refusal_window: str = "",
     lock_refusal_reason: str = "",
@@ -65,6 +66,7 @@ def make_pr(
         is_draft=is_draft,
         body=body,
         auto_merge_enabled=auto_merge_enabled,
+        repo_automerge_mode=repo_automerge_mode,
         head_committed_at=head_committed_at,
         lock_refusal_window=lock_refusal_window,
         lock_refusal_reason=lock_refusal_reason,
@@ -273,8 +275,13 @@ def test_blocking_non_dep_files() -> None:
 
 
 def test_blocking_awaiting_approval() -> None:
-    # github-actions, all green, no conflict, dep-only, freshly opened and not yet
-    # approved → transient wait for the atlan-ci approval, not stuck.
+    # github-actions, all green, no conflict, dep-only, armed, freshly opened and
+    # not yet approved → transient wait for the atlan-ci approval, not stuck.
+    #
+    # Armed matters: waiting on approval is only transient if something is going
+    # to act on it. Renovate arms auto-merge at PR CREATION and never revisits an
+    # existing PR, so an unarmed PR that is already green is not waiting for
+    # anything — it is the NOT_ARMED fault, whatever its age.
     pr = classify(
         make_pr(
             labels=["update:github-actions"],
@@ -282,6 +289,7 @@ def test_blocking_awaiting_approval() -> None:
             mergeable="MERGEABLE",
             checks_state=ChecksState.GREEN,
             review_decision="",
+            auto_merge_enabled=True,
             created_at=_NOW,
         )
     )
@@ -319,6 +327,57 @@ def test_blocking_automerge_not_armed() -> None:
     assert pr.blocking_reason is BlockingReason.AUTOMERGE_NOT_ARMED
 
 
+def test_soft_mode_repo_is_never_auto_merge_expected() -> None:
+    # A soft-rollout repo appends a blanket `automerge: false` rule after the
+    # preset's, so NO lane auto-merges there however the shared policy reads.
+    # Its green unarmed PRs are waiting on a human by design — reporting them as
+    # stuck is what buried the one real instance among 27 on 2026-09-17.
+    pr = classify(
+        make_pr(
+            labels=["update:lock-maintenance"],
+            files=["uv.lock"],
+            review_decision="",
+            auto_merge_enabled=False,
+            repo_automerge_mode="soft",
+            created_at=_OLD,
+        )
+    )
+    assert pr.auto_merge_expected is False
+    assert pr.blocking_reason is BlockingReason.AWAITING_HUMAN_REVIEW
+
+
+def test_auto_mode_repo_still_reports_not_armed() -> None:
+    # Same PR in a repo that DOES arm auto-merge: this is the fault the signal
+    # exists for, and the soft-mode gate above must not swallow it.
+    pr = classify(
+        make_pr(
+            labels=["update:lock-maintenance"],
+            files=["uv.lock"],
+            review_decision="",
+            auto_merge_enabled=False,
+            repo_automerge_mode="auto",
+            created_at=_OLD,
+        )
+    )
+    assert pr.auto_merge_expected is True
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_NOT_ARMED
+
+
+def test_unknown_mode_classifies_as_before_the_field_existed() -> None:
+    # Back-compat: a stored scan or hand-rolled dump with no repoAutomergeMode
+    # must classify on lane policy alone, exactly as it did before the field.
+    pr = classify(
+        make_pr(
+            labels=["update:lock-maintenance"],
+            files=["uv.lock"],
+            auto_merge_enabled=True,
+            repo_automerge_mode="unknown",
+            created_at=_NOW,
+        )
+    )
+    assert pr.auto_merge_expected is True
+
+
 def test_blocking_automerge_not_armed_wins_over_stale() -> None:
     # Precise not-armed signal takes priority over the age backstop when both hold.
     pr = classify(
@@ -333,15 +392,36 @@ def test_blocking_automerge_not_armed_wins_over_stale() -> None:
     assert pr.blocking_reason is BlockingReason.AUTOMERGE_NOT_ARMED
 
 
-def test_blocking_automerge_stale_unapproved_old() -> None:
-    # Age backstop: eligible + green but still open past the threshold and never
-    # approved → the auto-approval pipeline is likely down. Caught without needing
-    # to model the specific failure. (Backstop is not gated on approval.)
+def test_blocking_automerge_not_armed_without_approval() -> None:
+    # The fleet's actual shape: a ruleset requiring 0 approving reviews leaves
+    # reviewDecision EMPTY even with the atlan-ci approval posted (52 of 60 open
+    # lane PRs on 2026-09-17). Armed-state is the whole claim, so an empty
+    # decision must still report NOT_ARMED — when this branch required APPROVED
+    # it was unreachable fleet-wide and cosmosdb#97 sat for 14 days reported as
+    # merely stale.
     pr = classify(
         make_pr(
             labels=["update:github-actions"],
             files=[".github/workflows/test.yaml"],
             review_decision="",
+            auto_merge_enabled=False,
+            created_at=_OLD,
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_NOT_ARMED
+
+
+def test_blocking_automerge_stale_unapproved_old() -> None:
+    # Age backstop: eligible + green + ARMED but still open past the threshold and
+    # never approved → the auto-approval pipeline is likely down. Caught without
+    # needing to model the specific failure. (Backstop is not gated on approval.)
+    # Armed so the not-armed branch above is skipped and the backstop is isolated.
+    pr = classify(
+        make_pr(
+            labels=["update:github-actions"],
+            files=[".github/workflows/test.yaml"],
+            review_decision="",
+            auto_merge_enabled=True,
             created_at=_OLD,
         )
     )
@@ -365,13 +445,14 @@ def test_blocking_automerge_stale_armed_but_wedged() -> None:
 def test_blocking_automerge_stale_at_exact_threshold() -> None:
     # Boundary: age == STALE_AFTER_DAYS must trip the backstop (the `>=` in
     # classify.py). Anchored to STALE_AFTER_DAYS so a future `>=` → `>` regression
-    # fails here. Unapproved so the not-armed branch is skipped and the stale
-    # backstop is isolated.
+    # fails here. Armed so the not-armed branch is skipped and the stale backstop
+    # is isolated.
     pr = classify(
         make_pr(
             labels=["update:github-actions"],
             files=[".github/workflows/test.yaml"],
             review_decision="",
+            auto_merge_enabled=True,
             created_at=_NOW - timedelta(days=STALE_AFTER_DAYS),
         )
     )
@@ -381,11 +462,14 @@ def test_blocking_automerge_stale_at_exact_threshold() -> None:
 def test_blocking_automerge_not_stale_just_under_threshold() -> None:
     # Boundary: just under a full day (age 0 after `.days` truncation) is NOT
     # stale yet — the freshly-eligible PR is still expected to merge imminently.
+    # Armed, so the not-armed branch (which has no age threshold) cannot mask the
+    # boundary being tested.
     pr = classify(
         make_pr(
             labels=["update:github-actions"],
             files=[".github/workflows/test.yaml"],
             review_decision="",
+            auto_merge_enabled=True,
             created_at=_NOW - timedelta(hours=23),
         )
     )

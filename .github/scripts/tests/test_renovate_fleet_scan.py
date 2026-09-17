@@ -264,6 +264,10 @@ def test_normalize_open_pr_full_shape():
     }
     out = rfs.normalize_open_pr(pr)
     assert out == {
+        # No repo_modes passed → "unknown", which the classifier treats exactly as
+        # it did before the field existed (single-repo dashboard runs skip
+        # discovery and therefore always land here).
+        "repoAutomergeMode": "unknown",
         "number": 42,
         "url": "https://github.com/atlanhq/atlan-mysql-app/pull/42",
         "title": "Update foo to v2",
@@ -979,3 +983,80 @@ def test_the_scan_entrypoint_uses_the_sliced_fetch_with_measured_page_sizes():
 def test_main_delegates_to_run():
     # The pin above reads run(); this is what makes run() the real entrypoint.
     assert "run(" in inspect.getsource(rfs.main)
+
+
+# ---------------------------------------------------------------------------
+# Repo auto-merge mode stamp
+# ---------------------------------------------------------------------------
+#
+# Discovery's {repo: mode} map rides onto each open PR record so the classifier
+# can separate "this repo never arms auto-merge by policy" from "Renovate failed
+# to arm this PR". Unknown must stay inert: it is what single-repo runs (which
+# skip discovery) and any stored scan predating the field produce.
+
+
+def test_normalize_open_pr_stamps_the_repos_automerge_mode():
+    pr = {
+        "number": 1,
+        "url": "https://x/1",
+        "title": "t",
+        "createdAt": "2026-06-01T00:00:00Z",
+        "updatedAt": "2026-06-01T00:00:00Z",
+        "repository": {"nameWithOwner": "atlanhq/atlan-soft-app"},
+    }
+    out = rfs.normalize_open_pr(pr, {"atlanhq/atlan-soft-app": "soft"})
+    assert out["repoAutomergeMode"] == "soft"
+
+
+def test_normalize_open_pr_stamps_unknown_for_a_repo_outside_the_map():
+    # A repo the modes file does not mention must not inherit another repo's
+    # verdict or default to "auto" — either would assert a policy nobody read.
+    pr = {
+        "number": 1,
+        "url": "https://x/1",
+        "title": "t",
+        "createdAt": "2026-06-01T00:00:00Z",
+        "updatedAt": "2026-06-01T00:00:00Z",
+        "repository": {"nameWithOwner": "atlanhq/atlan-unlisted-app"},
+    }
+    out = rfs.normalize_open_pr(pr, {"atlanhq/atlan-mysql-app": "auto"})
+    assert out["repoAutomergeMode"] == "unknown"
+
+
+def test_run_stamps_modes_onto_the_written_open_pr_files(tmp_path):
+    # End to end through run(): the map has to reach the per-repo files, which is
+    # the only path the dashboard actually reads.
+    open_dir = tmp_path / "open"
+    merged_dir = tmp_path / "merged"
+
+    def fake_post(token, payload):
+        if "is:open" in payload["query"]:
+            return _page(
+                [
+                    {
+                        "number": 1,
+                        "url": "https://x/1",
+                        "title": "t",
+                        "createdAt": "2026-06-01T00:00:00Z",
+                        "updatedAt": "2026-06-01T00:00:00Z",
+                        "repository": {"nameWithOwner": "atlanhq/a"},
+                    }
+                ],
+                has_next=False,
+            )
+        return _page([], has_next=False)
+
+    rfs.run(
+        scope="org:atlanhq",
+        since="2026-06-01",
+        open_dir=open_dir,
+        merged_dir=merged_dir,
+        known_repos=["atlanhq/a"],
+        token="tok",
+        post=fake_post,
+        repo_modes={"atlanhq/a": "auto"},
+    )
+
+    written = json.loads((open_dir / "atlanhq_a.json").read_text())
+    assert [pr["repoAutomergeMode"] for pr in written] == ["auto"]
+

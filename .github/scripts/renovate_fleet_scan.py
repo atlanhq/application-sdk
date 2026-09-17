@@ -512,9 +512,21 @@ def fetch_lock_texts(token: str, prs: list[dict], post: PostFn = _post_graphql) 
     return fetched
 
 
-def normalize_open_pr(pr: dict) -> dict:
-    """Map a GraphQL PullRequest node to the `gh pr list --json ...` shape renovate-scan expects."""
+def normalize_open_pr(pr: dict, repo_modes: Optional[dict] = None) -> dict:
+    """Map a GraphQL PullRequest node to the `gh pr list --json ...` shape renovate-scan expects.
+
+    ``repo_modes`` is discovery's {repo: 'auto'|'soft'|'unknown'} map (see
+    discover_org_consumers.automerge_mode). A repo missing from it — including
+    every repo in single-repo mode, which skips discovery — stamps ``unknown``,
+    which the classifier treats exactly as it did before the field existed.
+    """
+    repo = ((pr.get("repository") or {}).get("nameWithOwner")) or ""
     return {
+        # Whether THIS repo's Renovate config arms auto-merge at all. Without it
+        # an unarmed green PR in a soft-rollout repo (working as intended) is
+        # indistinguishable from one Renovate failed to arm (a fault needing a
+        # human merge) — see conformance.renovate.classify.auto_merge_expected.
+        "repoAutomergeMode": (repo_modes or {}).get(repo, "unknown"),
         "number": pr["number"],
         "url": pr["url"],
         "title": pr["title"],
@@ -616,6 +628,7 @@ def run(
     known_repos: Optional[list[str]],
     token: str,
     post: PostFn = _post_graphql,
+    repo_modes: Optional[dict[str, str]] = None,
 ) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
     # Sliced per author and paged at a size the API can actually serve — see
     # fetch_prs_by_author for the 1000-result cap and OPEN_PAGE_SIZE for the
@@ -641,7 +654,9 @@ def run(
             f"Fetched uv.lock for {fetched} lock-refusal candidate(s)", file=sys.stderr
         )
 
-    open_grouped = group_by_repo(open_nodes, normalize_open_pr)
+    open_grouped = group_by_repo(
+        open_nodes, lambda pr: normalize_open_pr(pr, repo_modes)
+    )
     merged_grouped = group_by_repo(merged_nodes, normalize_merged_pr)
 
     write_repo_files(open_grouped, open_dir, known_repos)
@@ -685,9 +700,26 @@ def main(argv: Optional[list[str]] = None) -> int:
             "search found; a file holding [] writes nothing."
         ),
     )
+    parser.add_argument(
+        "--repo-modes-file",
+        type=Path,
+        default=None,
+        help=(
+            "JSON object {repo: 'auto'|'soft'|'unknown'} from "
+            "discover_org_consumers.py --modes-out. Stamped onto each open PR "
+            "record so the classifier can tell a repo that never arms "
+            "auto-merge by policy from one that failed to. A missing file or "
+            "absent repo stamps 'unknown', which classifies as it did before "
+            "this flag existed."
+        ),
+    )
     args = parser.parse_args(argv)
 
     token = os.environ["GH_TOKEN"]
+
+    repo_modes: dict[str, str] = {}
+    if args.repo_modes_file and args.repo_modes_file.exists():
+        repo_modes = json.loads(args.repo_modes_file.read_text())
 
     # None means "no scope passed"; an empty list means "the scope is empty".
     # write_repo_files treats them differently and must not see them merged.
@@ -702,6 +734,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         merged_dir=args.merged_dir,
         known_repos=known_repos,
         token=token,
+        repo_modes=repo_modes,
     )
 
     open_count = sum(len(v) for v in open_grouped.values())

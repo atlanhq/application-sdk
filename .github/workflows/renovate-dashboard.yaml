@@ -115,6 +115,7 @@ jobs:
           python3 .github/scripts/discover_org_consumers.py \
             --owner atlanhq \
             --name-pattern '^(atlan-[a-z0-9-]+-app|application-sdk)$' \
+            --modes-out /tmp/renovate-repo-modes.json \
             --fail-on-empty
 
       - name: Gather Renovate PR data
@@ -142,7 +143,8 @@ jobs:
             --since "$SINCE" \
             --open-dir /tmp/renovate-input/open \
             --merged-dir /tmp/renovate-input/merged \
-            --known-repos-file /tmp/renovate-known-repos.json
+            --known-repos-file /tmp/renovate-known-repos.json \
+            --repo-modes-file /tmp/renovate-repo-modes.json
 
           echo "Open PR files:   $(ls /tmp/renovate-input/open   | wc -l)"
           echo "Merged PR files: $(ls /tmp/renovate-input/merged | wc -l)"

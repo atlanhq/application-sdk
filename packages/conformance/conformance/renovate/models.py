@@ -134,6 +134,13 @@ class RenovatePR:
     # Defaulted so pre-existing RenovatePR constructions stay valid; scan._parse_pr
     # populates it from the fetched field.
     auto_merge_enabled: bool = False
+    # Raw: does this PR's REPO arm auto-merge at all — "auto", "soft" (the repo
+    # blanket-disables it on top of the fleet preset) or "unknown". Supplied by
+    # renovate_fleet_scan.py from discovery's renovate.json read. "unknown" is
+    # the behaviour before this field existed: lane policy alone decides. Without
+    # it, a green unarmed PR in a soft-rollout repo — working as designed,
+    # waiting on a human — is indistinguishable from one Renovate failed to arm.
+    repo_automerge_mode: str = "unknown"
     # Raw: committedDate of the branch head. The clock the bounded-lock refusal
     # signal expires against — created_at is wrong for it, because Renovate
     # rewrites a lock branch in place across many pushes without reopening the PR.
