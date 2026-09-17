@@ -29,7 +29,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.12.13"
+          version: "0.12.15"
 
       - name: Install dependencies
         shell: bash
@@ -197,7 +197,7 @@ jobs:
         # each successful sync, which is what makes a failed sync self-healing
         # (see the soft-fail note above). Leaving base_ref pinned here would
         # defeat that and re-attach the same issues to every later release.
-        uses: linear/linear-release-action@53ad0f863963e7f8e270fba18426bbb55ef55384 # v0.17.2
+        uses: linear/linear-release-action@d4af10092984f9bc6d5efa075b242bdf01333463 # v0.18.0
         with:
           access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
           version: ${{ steps.meta.outputs.version }}
