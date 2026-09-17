@@ -1350,3 +1350,27 @@ class TestTheRowShapeIsOne:
             await gate(PreflightGateInput())
         row = _outcome(mock_logger)
         assert set(GATE_OUTCOME_ROW_KEYS) <= row.keys()
+
+
+class TestTheRowReportsTheBudgetTheHandlerGot:
+    """``gate_timeout`` on the row is the enforced budget, not the declared one.
+
+    ``_effective_budget`` clamps the declared budget under the ``start_to_close``
+    Temporal actually scheduled, which differs during a rolling deploy. A row
+    stamped with the declared number would make a consumer compute headroom
+    against a budget the handler never had.
+    """
+
+    async def test_a_clamped_budget_is_what_the_row_carries(self) -> None:
+        info = mock.MagicMock()
+        info.attempt = 1
+        info.started_time = None
+        info.heartbeat_timeout = None
+        info.start_to_close_timeout = timedelta(seconds=10)
+        gate = _gate(_RecordingHandler(), mode=PreflightGateMode.SOFT, budget=300)
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=info),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome(mock_logger)[GATE_TIMEOUT_KEY] == 5

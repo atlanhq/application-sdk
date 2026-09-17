@@ -10,10 +10,14 @@ attributed to preflight — for anything it can attribute to the **source** whil
 app is in hard mode: a ``NOT_READY`` verdict, anything the handler raises (a typed
 leaf is its statement about the source, an untyped crash is an app fault), a probe
 overrunning the budget, or a provably absent credential. Failures of the gate's own
-**plumbing** — its credential-resolution frame and its store probes — propagate
-instead, so the workflow fails open in either mode; a platform blip must never
-fail a healthy run. The line is drawn by *who raised*, never by the error's
-category: a handler cannot declare its source to be plumbing.
+**plumbing** — its credential-resolution frame and the secret-store lookups inside
+it — propagate instead, so the workflow fails open in either mode; a platform blip
+must never fail a healthy run. The line is drawn by *who raised*, never by the
+error's category: a handler cannot declare its source to be plumbing. The opt-in
+artifact-store verification (``preflight_verify_storage``) is *not* plumbing: a
+store that refuses the probe is a verdict on the run, deferred once to the next
+attempt and then blocking in hard mode, including when that retry is killed and
+only the deferred evidence survives in the chain.
 
 Enforcement lives here because the activity bounds the handler itself and so
 usually survives to classify the failure. When it does not — a probe that stalls
@@ -206,13 +210,15 @@ def _gate_failure_evidence(
 def _readable_checks(envelope: object) -> list[PreflightCheck]:
     """Every wire check in ``envelope`` this reader can parse; the rest are dropped."""
     wire = envelope.get("checks") if isinstance(envelope, dict) else None
-    checks: list[PreflightCheck] = []
-    for raw in _sequence(wire):
-        try:
-            checks.append(PreflightCheck.model_validate(raw))
-        except Exception:
-            continue
-    return checks
+    parsed = (_readable_check(raw) for raw in _sequence(wire))
+    return [check for check in parsed if check is not None]
+
+
+def _readable_check(raw: object) -> PreflightCheck | None:
+    try:
+        return PreflightCheck.model_validate(raw)
+    except Exception:
+        return None
 
 
 def _sequence(value: object) -> list[Any]:
@@ -337,9 +343,10 @@ def underlying_error_type(exc: BaseException) -> str:
     closed. Reporting the wrapper name ("ActivityError") for either — as this did
     before — is the same uninformative label this function exists to remove.
 
-    Falls back to the top-level class name only when the chain offers neither
-    (e.g. a bare ``ApplicationError`` with no ``type`` set, or a plain
-    ``RuntimeError``). Every return is a ``str``: ``reason`` is a field every
+    Falls back to the innermost cause's class name only when the chain offers
+    neither (e.g. a bare ``ApplicationError`` with no ``type`` set, a plain
+    ``RuntimeError``, or a ``CancelledError`` under the ``ActivityError``
+    wrapper). Every return is a ``str``: ``reason`` is a field every
     consumer reads as a string, so an enum object must never reach it.
 
     Used for the fail-open ``no_verdict`` outcome row's ``reason`` so a
@@ -347,13 +354,15 @@ def underlying_error_type(exc: BaseException) -> str:
     ``DaprSidecarUnreachableError``) instead of an uninformative wrapper name.
     """
     timeout_reason: str | None = None
+    innermost: BaseException = exc
     for link in _iter_chain(exc):
         found = getattr(link, "type", None)
         if isinstance(found, str) and found:
             return found
         if timeout_reason is None and isinstance(found, TimeoutType):
             timeout_reason = f"Timeout:{found.name}"
-    return timeout_reason or type(exc).__name__
+        innermost = link
+    return timeout_reason or type(innermost).__name__
 
 
 def input_type_supports_gate(input_type: type) -> bool:
@@ -1982,7 +1991,7 @@ def build_preflight_gate_activity(
                 mode=mode,
                 classification=classification,
                 duration_ms=round((time.monotonic() - started) * 1000, 1),
-                budget_seconds=int(budget_seconds),
+                budget_seconds=int(budget),
                 attempt=_current_attempt(),
                 audience=audience,
             )

@@ -417,8 +417,9 @@ class TestUnderlyingErrorType:
 
     def test_an_unrecognised_non_string_type_still_falls_through(self) -> None:
         # The enum branch is scoped to TimeoutType specifically. Any other
-        # non-string `type` must keep falling through to the class name rather
-        # than being stringified into `reason` on spec.
+        # non-string `type` must keep falling through to a class name rather
+        # than being stringified into `reason` on spec. The class named is the
+        # innermost cause, the real fault, not the wrapper around it.
         from application_sdk.execution._temporal.preflight_gate import (
             underlying_error_type,
         )
@@ -429,7 +430,7 @@ class TestUnderlyingErrorType:
                 self.type = object()
 
         result = underlying_error_type(_ActivityErrorStub(_OddType()))
-        assert result == "_ActivityErrorStub"
+        assert result == "_OddType"
         assert isinstance(result, str)
 
     def test_is_cycle_safe(self) -> None:
@@ -679,6 +680,7 @@ class TestWorkflowAppliesTheModeToADeadFrame:
         assert "300" in details.message
         assert "lost worker" in details.message
         assert excinfo.value.details[1]["status"] == "not_ready"
+        assert excinfo.value.details[1]["checks"] == []
         (row,) = _rows(safe_log)
         assert row["outcome"] == "blocked"
         assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.FRAME_LOST
@@ -1001,3 +1003,87 @@ class TestWorkflowRowsAreLevelledLikeTheActivitys:
                 _ResolvableInput(), "myapp", "crawl", gate_mode="soft"
             )
         assert self._level(safe_log) == "error"
+
+
+class TestALostStorageRetryBlocksOnTheStoreEvidence:
+    """The storage deferral gives a flaky probe one retry, not a pass.
+
+    The only producer of the ``PreflightNoVerdict`` marker is the opt-in store
+    verification: a failed probe downgrades the verdict and defers the block to
+    the next attempt. When that attempt is killed, the deferred evidence is what
+    the chain holds, and a store that refused the probe is a verdict on the run,
+    not gate plumbing. Hard mode blocks on it with the store's own audience.
+    """
+
+    @staticmethod
+    def _killed_after_storage_deferral():
+        from temporalio.exceptions import TimeoutType
+
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        store = DependencyUnavailableError(
+            message="the artifact store refused the probe", service="object_store"
+        ).to_failure_details()
+        marker = _marker_with_payload(
+            store,
+            {
+                "status": "not_ready",
+                "checks": [{"name": "storage:artifacts", "passed": False}],
+                "attempt": 1,
+            },
+        )
+        timeout = _temporal_timeout(TimeoutType.START_TO_CLOSE)
+        timeout.__cause__ = marker
+        return _real_activity_error(timeout)
+
+    async def test_hard_mode_blocks_with_the_stores_audience(self, safe_log) -> None:
+        _, exec_patch = _exec(side_effect=self._killed_after_storage_deferral())
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(
+                    _ResolvableInput(), "myapp", "crawl", gate_mode="hard"
+                )
+        details = excinfo.value.details[0]
+        assert details.category is FailureCategory.DEPENDENCY_UNAVAILABLE
+        assert details.audience is Audience.PLATFORM
+        row = _row(safe_log)
+        assert row["outcome"] == "blocked"
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
+        assert row[GATE_ATTEMPTS_KEY] == 1
+
+    async def test_soft_mode_reports_would_block(self, safe_log) -> None:
+        _, exec_patch = _exec(side_effect=self._killed_after_storage_deferral())
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", gate_mode="soft"
+            )
+        assert result is None
+        assert _row(safe_log)["outcome"] == "would_block"
+
+
+class TestACancelledGateActivityFailsOpen:
+    """A cancel is the workflow's statement, not the source's.
+
+    ``CancelledError`` matches neither timeout the frame-death check reads and
+    carries no evidence, so it classifies as ``gate_broken`` in both modes. Named
+    here because it is the one enforcement gap hard mode accepts on purpose.
+    """
+
+    @pytest.mark.parametrize("mode", ["hard", "soft"])
+    async def test_cancellation_is_gate_broken(self, safe_log, mode: str) -> None:
+        from temporalio.exceptions import CancelledError
+
+        _, exec_patch = _exec(
+            side_effect=_real_activity_error(CancelledError("workflow cancelled"))
+        )
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", gate_mode=mode
+            )
+        assert result is None
+        row = _row(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
+        assert row["reason"] == "CancelledError"
