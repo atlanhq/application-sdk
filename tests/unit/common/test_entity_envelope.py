@@ -84,38 +84,45 @@ class TestPyatlanFlattenContract:
         assert "appendRelationshipAttributes" not in out
         assert "removeRelationshipAttributes" not in out
 
-    def test_nulls_dropped_from_attributes(self):
+    def test_explicit_nulls_kept_in_attributes(self):
         asset = _table()
         asset.description = None
 
-        assert "description" not in to_atlas_format(asset)["attributes"]
+        assert to_atlas_format(asset)["attributes"]["description"] is None
 
     def test_nulls_kept_inside_custom_attributes(self):
-        """The asymmetry postgres relies on for v2 parity.
+        """The null postgres relies on for v2 parity.
 
         A null in ``customAttributes`` is a value the source reported as empty
         and the v2 baseline carried. Dropping it is a diff against every
-        previously published entity.
+        previously published entity. ``customAttributes`` is forwarded as an
+        opaque dict, so this holds independently of how the *attribute*
+        partition treats nulls.
         """
         asset = _table()
         asset.custom_attributes = {"engine": "InnoDB", "row_format": None}
 
         assert to_atlas_format(asset)["customAttributes"]["row_format"] is None
 
-    def test_to_atlas_format_collapses_explicit_none_into_absent(self):
-        """Pinned because it is lossy, and the loss is easy to misattribute.
+    def test_to_atlas_format_preserves_the_three_state_distinction(self):
+        """The pin that says which pyatlan the envelope's nulls come from.
 
         ``pyatlan_v9`` fields are three-state
-        (``Union[str, None, UnsetType] = UNSET``), so an asset *can* express
-        an explicit null — ``to_nested_bytes`` preserves it as ``null``.
-        ``to_atlas_format`` does not: it renders ``None`` and ``UNSET``
-        identically, as an absent key.
+        (``Union[str, None, UnsetType] = UNSET``), so an asset can distinguish
+        "never set" from "set to null". Both encoders honour that: ``UNSET``
+        is an absent key, an explicit ``None`` serialises as ``null``.
 
-        Tolerable here only because ``atlan-publish-app``'s
-        ``calculate_attributes_diff`` re-synthesises the clear from its cache.
-        If this assertion ever flips — pyatlan starting to preserve the null —
-        that is a wire-format change for every connector on the flattened
-        default, not a test to update.
+        This is version-dependent, not structural. Up to pyatlan 11.2.0
+        ``to_atlas_format`` dropped explicit nulls too — one ``if value is
+        None: continue`` in its key partition — so the flattened envelope and
+        ``to_nested_bytes`` disagreed. pyatlan 11.3.0 removed it
+        (AICHAT-1884), which is why ``pyproject.toml`` floors at ``>=11.3``:
+        the range alone would let an older resolve silently reintroduce the
+        drop, and every ``asset.<field> = record.get(...)`` in the fleet's
+        mappers would flip a key from ``null`` to absent.
+
+        If this assertion ever flips back, that is a wire-format change for
+        every connector on the flattened default, not a test to update.
         """
         unset = _table()
         explicit_null = _table()
@@ -133,9 +140,9 @@ class TestPyatlanFlattenContract:
             is None
         )
 
-        # ...and to_atlas_format loses it.
+        # ...and so does to_atlas_format.
         assert "description" not in to_atlas_format(unset)["attributes"]
-        assert "description" not in to_atlas_format(explicit_null)["attributes"]
+        assert to_atlas_format(explicit_null)["attributes"]["description"] is None
 
     def test_status_and_custom_attributes_stay_at_the_root(self):
         asset = _table()
@@ -215,10 +222,12 @@ class TestFlattenEnvelope:
     def test_nulls_are_left_alone(self):
         """Flattening moves refs and touches nothing else.
 
-        An earlier revision dropped ``None`` here to mirror
-        ``to_atlas_format``. That silently deleted values a dict-returning
-        mapper had emitted on purpose — see
-        ``TestDictMapperNullsSurvive`` for the shape that caught it.
+        An earlier revision dropped ``None`` here to mirror what
+        ``to_atlas_format`` did up to pyatlan 11.2.0. That silently deleted
+        values a dict-returning mapper had emitted on purpose — see
+        ``TestDictMapperNullsSurvive`` for the shape that caught it. pyatlan
+        11.3.0 stopped dropping them on its side too, so the two paths now
+        agree here rather than merely both being defensible.
         """
         entity = flatten_envelope(
             {
@@ -287,11 +296,15 @@ class TestFlattenEnvelope:
 class TestBothFlattenPathsAgree:
     """The two paths agree on **ref placement** — the question the envelope settles.
 
-    They deliberately diverge on null handling; see
-    ``TestDictMapperNullsSurvive``. These fixtures carry no explicit nulls, so
-    the envelopes match exactly, which is the useful comparison: an
-    asset-returning and a dict-returning mapper describing the same entity put
-    their refs in the same place.
+    An asset-returning and a dict-returning mapper describing the same entity
+    put their refs in the same place.
+
+    They agree on nulls too, from pyatlan 11.3.0. Up to 11.2.0 they did not:
+    ``to_atlas_format`` dropped an explicit ``None`` and
+    :func:`flatten_envelope` kept it, so this comparison only held for
+    fixtures carrying no explicit nulls. The floor in ``pyproject.toml`` is
+    what keeps ``test_the_paths_agree_on_an_explicit_null`` meaningful — on an
+    older resolve it is the assertion that fails first.
     """
 
     @pytest.mark.parametrize("factory", [_table, _column, _view])
@@ -301,6 +314,16 @@ class TestBothFlattenPathsAgree:
         via_pyatlan = to_atlas_format(asset)
         via_generic = flatten_envelope(orjson.loads(asset.to_nested_bytes()))
 
+        assert via_generic == via_pyatlan
+
+    def test_the_paths_agree_on_an_explicit_null(self):
+        asset = _table()
+        asset.description = None
+
+        via_pyatlan = to_atlas_format(asset)
+        via_generic = flatten_envelope(orjson.loads(asset.to_nested_bytes()))
+
+        assert via_pyatlan["attributes"]["description"] is None
         assert via_generic == via_pyatlan
 
 

@@ -224,6 +224,75 @@ class TestFromConnection:
         assert isinstance(ref.attributes, ConnectionAttributes)
 
 
+class TestNullAttributesAreTreatedAsAbsent:
+    """A ``Connection`` carrying an explicit null must still decode.
+
+    ``qualified_name``, ``name`` and the three admin lists are non-optional
+    with a default, so a ``null`` in the input is a hard ``ValidationError``
+    rather than a fall-through to the default.
+
+    This was unreachable through :meth:`ConnectionRef.from_connection` until
+    pyatlan 11.3.0: up to 11.2.0 ``to_atlas_format`` dropped explicit nulls,
+    so the key never arrived. 11.3.0 preserves them. The drop was the only
+    thing standing between this model and a crash, and it was never a
+    property anyone chose — see ``TestPyatlanFlattenContract`` in
+    ``tests/unit/common/test_entity_envelope.py``.
+    """
+
+    def test_from_connection_survives_a_null_admin_list(self) -> None:
+        conn = _make_conn(admin_users=["alice"])
+        conn.admin_roles = None  # type: ignore[attr-defined]
+
+        ref = ConnectionRef.from_connection(conn)
+
+        assert ref.attributes.admin_roles == []
+        assert set(ref.attributes.admin_users) == {"alice"}
+
+    def test_null_scalars_fall_through_to_the_default(self) -> None:
+        ref = ConnectionRef.model_validate(
+            {
+                "typeName": "Connection",
+                "attributes": {
+                    "qualifiedName": None,
+                    "name": None,
+                    "adminUsers": None,
+                    "adminRoles": None,
+                    "adminGroups": None,
+                },
+            }
+        )
+
+        assert ref.attributes.qualified_name == ""
+        assert ref.attributes.name == ""
+        assert ref.attributes.admin_users == []
+        assert ref.attributes.admin_roles == []
+        assert ref.attributes.admin_groups == []
+
+    def test_a_real_value_is_still_taken(self) -> None:
+        """The normalisation must not swallow values, only nulls."""
+        ref = ConnectionRef.model_validate(
+            {
+                "typeName": "Connection",
+                "attributes": {"name": "my-conn", "adminUsers": ["alice"]},
+            }
+        )
+
+        assert ref.attributes.name == "my-conn"
+        assert ref.attributes.admin_users == ["alice"]
+
+    def test_optional_fields_keep_an_explicit_null(self) -> None:
+        """``connector_name`` / ``category`` are ``str | None`` — untouched."""
+        ref = ConnectionRef.model_validate(
+            {
+                "typeName": "Connection",
+                "attributes": {"connectorName": None, "category": None},
+            }
+        )
+
+        assert ref.attributes.connector_name is None
+        assert ref.attributes.category is None
+
+
 # ---------------------------------------------------------------------------
 # to_connection
 # ---------------------------------------------------------------------------
