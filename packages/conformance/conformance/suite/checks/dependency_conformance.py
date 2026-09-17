@@ -2170,7 +2170,7 @@ def _scan_pyright_excludes(text: str, rel_pyproject: str) -> list[Finding]:
 
     A scoped ``include`` is a complete defence and exits early: pyright then
     walks only the listed roots and never reaches ``.venv``, so whatever
-    ``exclude`` says cannot matter.  Four fleet repos rely on this, and a rule
+    ``exclude`` says cannot matter.  Three fleet repos rely on this, and a rule
     that ignored it would report every one of them.
 
     ``ignore`` is deliberately not consulted.  It silences diagnostics for the

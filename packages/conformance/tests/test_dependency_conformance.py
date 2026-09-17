@@ -2835,7 +2835,7 @@ def test_d015_clean_when_the_venv_is_named_explicitly(
 def test_d015_clean_when_include_is_scoped(tmp_path: Path) -> None:
     """A scoped ``include`` is a complete defence, so ``exclude`` cannot matter.
 
-    pyright walks only the listed roots and never reaches ``.venv``.  Four
+    pyright walks only the listed roots and never reaches ``.venv``.  Three
     fleet repos rely on this; a rule that ignored ``include`` would report
     every one of them.
     """

@@ -574,7 +574,7 @@ returned in 12-19s while two bare ones ran 553s and 912s without returning, the 
 exhausting the lane's 900s no-progress budget and escalating the whole run to a human.
 Customer impact is indirect -- no connector ships differently -- but a type checker
 nobody can afford to run is a gate that stops catching the contract mismatches it exists
-to catch. Measured 2026-09-17 across all 115 atlan-*-app repos: 72 declare an 'exclude'
+to catch. Measured 2026-09-17 across all 115 atlan-*-app repos: 73 declare an 'exclude'
 that clobbers the defaults with no scoped 'include' to save them, 3 more are latent
 behind an 'include', and application-sdk itself is in the first group -- which is why
 the scope is 'both' and not 'app'.
@@ -600,7 +600,7 @@ rather than the neutral one.  It is reported like any other unprotected list.
 **A scoped `include` is a complete defence and is honoured.** With `include` set,
 pyright only ever walks the listed roots and never reaches `.venv`, so `exclude` cannot
 matter and no finding is raised.  This is a real pattern in the fleet, not a
-hypothetical -- four repos rely on it.
+hypothetical -- three repos rely on it.
 
 `ignore` does **not** clear the rule.  It suppresses diagnostics for matched files but
 still parses them, so it does nothing for the walk cost that is the entire problem.
