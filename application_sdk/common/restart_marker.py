@@ -66,7 +66,6 @@ RECHECK_SECONDS = 5
 CHECK_API = "api"
 
 
-
 #: Where to ask what this restart earns. The rerouter serves it; a worker that
 #: cannot reach it polls, so an unset value turns the question off rather than
 #: breaking a start.
