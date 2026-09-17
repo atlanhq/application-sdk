@@ -44,11 +44,7 @@ from pathlib import Path
 
 import httpx
 
-from application_sdk.constants import (
-    APPLICATION_NAME,
-    DIRTY_RESTART_IDLE_MAX_SECONDS,
-    OOM_RESTART_CHECK,
-)
+from application_sdk.constants import DIRTY_RESTART_IDLE_MAX_SECONDS, OOM_RESTART_CHECK
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -68,10 +64,6 @@ RECHECK_SECONDS = 5
 #: The one value of the check switch that does anything. The other is the
 #: default, so only this needs naming.
 CHECK_API = "api"
-
-#: The namespace this pod runs in, mounted by the kubelet for every pod. Read as
-#: a file, which needs no permission of any kind.
-SERVICE_ACCOUNT_DIR = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 
 
 
@@ -278,30 +270,28 @@ async def ask_what_this_restart_earns() -> tuple[bool, str, int] | None:
     itself.
     """
     url = os.getenv(ADVICE_URL_ENV, "").strip()
+    # Its own name is all this pod has to say. Which namespace it is in and which
+    # container died are things the rerouter recorded when it saw the kill, so
+    # sending them would be repeating what is already known - and would let a pod
+    # ask about a pod that is not itself.
+    #
     # Same source the OTel resource attributes and the sizing interceptor use, so
     # a pod names itself one way across the SDK. HOSTNAME is the kubelet's own
     # copy of the pod name, which makes the explicit variable optional.
     pod = (os.getenv("K8S_POD_NAME") or os.getenv("HOSTNAME") or "").strip()
-    # The chart names the container after the app, so this is already known.
-    container = APPLICATION_NAME.strip()
-    if not url or not pod or not container:
+    if not url or not pod:
         logger.info(
-            "cannot ask what this restart earns (%s=%r, pod=%r, container=%r), so this "
-            "worker starts polling",
+            "cannot ask what this restart earns (%s=%r, pod=%r), so this worker "
+            "starts polling",
             ADVICE_URL_ENV,
             url,
             pod,
-            container,
         )
         return None
 
     try:
-        namespace = (SERVICE_ACCOUNT_DIR / "namespace").read_text().strip()
         async with httpx.AsyncClient(timeout=ADVICE_TIMEOUT_SECONDS) as client:
-            response = await client.get(
-                url,
-                params={"namespace": namespace, "pod": pod, "container": container},
-            )
+            response = await client.get(url, params={"pod": pod})
         response.raise_for_status()
         body = response.json()
         return (

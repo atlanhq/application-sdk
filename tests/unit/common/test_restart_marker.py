@@ -213,11 +213,8 @@ async def test_a_failure_setting_up_the_wait_starts_the_worker_anyway(
 def advice(monkeypatch, tmp_path):
     """Everything the ask needs, plus a place to put the answer and a record of
     what was asked."""
-    (tmp_path / "namespace").write_text("athena-app")
-    monkeypatch.setattr(rm, "SERVICE_ACCOUNT_DIR", tmp_path)
     monkeypatch.setenv(rm.ADVICE_URL_ENV, "http://rerouter/restart-advice")
     monkeypatch.setenv("K8S_POD_NAME", "athena-worker-1")
-    monkeypatch.setattr(rm, "APPLICATION_NAME", "athena")
     monkeypatch.setattr(rm, "OOM_RESTART_CHECK", rm.CHECK_API)
 
     state: dict = {
@@ -280,11 +277,9 @@ async def test_the_ask_names_this_pod_and_nothing_else(
     assert len(advice["asked"]) == 1, "exactly one call, on the restart path only"
     url, params = advice["asked"][0]
     assert url == "http://rerouter/restart-advice"
-    assert params == {
-        "namespace": "athena-app",
-        "pod": "athena-worker-1",
-        "container": "athena",
-    }
+    # Its own name and nothing else: the rerouter knows which namespace the pod is
+    # in and which container died, so sending either would repeat what it has.
+    assert params == {"pod": "athena-worker-1"}
     assert advice["timeout"] == rm.ADVICE_TIMEOUT_SECONDS
 
 
