@@ -203,6 +203,10 @@ def test_paused_resource_class_survives_and_is_distinct(monkeypatch):
     msg = str(excinfo.value)
     assert "resource_paused" in msg
     assert "request_failed" not in msg
+    # Only the allowlisted class may reach the message: the body's resource_id
+    # (like any other body field) must not, since this write happens before any
+    # masking. Guards the security contract if error construction ever changes.
+    assert "abc" not in msg
 
 
 def test_no_credential_source_class_survives(monkeypatch):
@@ -214,8 +218,13 @@ def test_no_credential_source_class_survives(monkeypatch):
         "urlopen",
         lambda req, timeout=0: (_ for _ in ()).throw(_http_error(404, body)),
     )
-    with pytest.raises(fds.DataforgeSourceError, match="no_credential_source"):
+    with pytest.raises(fds.DataforgeSourceError) as excinfo:
         fds._http_get("https://b/api/v1/resources/res-1", "k")
+    msg = str(excinfo.value)
+    assert "no_credential_source" in msg
+    # The whole point of allowlisting this class is to distinguish it from a
+    # generic failure, so it must NOT also collapse to request_failed.
+    assert "request_failed" not in msg
 
 
 # ── Resolution: resource mode ─────────────────────────────────────────────────
