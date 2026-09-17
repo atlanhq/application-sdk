@@ -142,3 +142,9 @@ Retryability alone does not justify returning `READY` after a failed probe. Demo
 **Verify:** Exercise both outcomes with real-handler scenarios. F016 rejects PARTIAL at runtime, including dynamically constructed statuses.
 
 Static detection covers supported PreflightOutput construction with literals, enum members, conditional expressions, and single local assignments. Arbitrary factories and mutations require behavioral tests. The SDK enum remains available for compatibility; this is a conformance deprecation.
+
+## F021
+
+**Contract:** a `# conformance: ignore[...]` directive that cites P032, P033, P034, P035 or P047 suppresses nothing. Those ids moved to F001 to F005 when the preflight rules got their own series, and the parser matches ids as plain strings.
+
+**Investigate:** find the finding the directive was written for and confirm it still fires under the new id on the same line. A directive whose finding is gone is dead weight, not a carve-out. **Fix:** replace the retired id with the one named in the message and keep the justification; delete the directive if the finding no longer fires. **Verify:** rerun `--series F`. F021 disappears, and the renamed rule is suppressed with its justification counted in `atlan/summary.suppressing`.

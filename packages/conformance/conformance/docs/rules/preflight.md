@@ -5,7 +5,7 @@
 
 # Preflight-Gate Rules (F-series)
 
-**20 rules** · Checker: `suite.checks.preflight` (F001–F015, F019–F020: cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests) and the opt-in `--with-tests` scenario runner (F016–F018: registered pytest scenarios executed in a bounded subprocess via `conformance.preflight_testing`)
+**21 rules** · Checker: `suite.checks.preflight` (F001–F015, F019–F021: cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests) and the opt-in `--with-tests` scenario runner (F016–F018: registered pytest scenarios executed in a bounded subprocess via `conformance.preflight_testing`)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -45,6 +45,7 @@ never reused.
 | [F018](#f018) | `PreflightExitEvidence` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [F019](#f019) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F020](#f020) | `DeprecatedPartialPreflight` | `block` | `app` | `preflight-gate` | — | 0.27.0 |
+| [F021](#f021) | `RetiredPreflightSuppression` | `warn` | `app` | `preflight-gate` | — | 0.32.0 |
 
 ---
 
@@ -433,5 +434,26 @@ validation.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f020).
+
+---
+
+## F021 — `RetiredPreflightSuppression` {#f021}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.32.0
+
+> A conformance suppression cites a retired preflight id (P032-P035, P047).
+
+**Rationale:** Customer impact: a reviewed, justified carve-out silently turns into an unexplained
+finding on the next conformance run, and the developer has no signal that the stale
+directive is the cause.
+
+The preflight rules moved from the P-series to the F-series: P032-P035 became F001-F004
+and P047 became F005. The suppression parser matches ids as plain strings, so a `#
+conformance: ignore[...]` directive that still cites a retired id suppresses nothing and
+the renamed rule fires with no hint why. Cite the new id named in the message, keeping
+the justification, or delete the directive if the finding it covered is gone.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f021).
 
 ---

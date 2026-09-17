@@ -115,7 +115,7 @@ contract, how to investigate, the fix, and how to verify it.  The guide is the
 prescription; do not invent a probe, a category, an audience or a suggested
 action the source does not support.
 
-- **F001–F015, F020** — static findings.  Draft the edit the guide's **Fix**
+- **F001–F015, F020, F021** — static findings.  Draft the edit the guide's **Fix**
   paragraph describes, cite the **Verify** paragraph in `result.evidence`, and
   return `outcome = "fix"`.  Never suggest a `# conformance: ignore[F0xx]` for
   a BLOCK-tier finding; for a WARN-tier finding in strict mode a suppression is

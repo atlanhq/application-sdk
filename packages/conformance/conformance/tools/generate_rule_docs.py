@@ -177,7 +177,7 @@ _SERIES_META: list[SeriesMeta] = [
         source_module="conformance/suite/rules/preflight.py",
         output_filename="preflight.md",
         checker=(
-            "`suite.checks.preflight` (F001–F015, F019–F020: cross-file AST over "
+            "`suite.checks.preflight` (F001–F015, F019–F021: cross-file AST over "
             "the preflight handler, its helpers and the entrypoint contracts; F015 "
             "also reads deployment manifests) and the opt-in `--with-tests` "
             "scenario runner (F016–F018: registered pytest scenarios executed in a "

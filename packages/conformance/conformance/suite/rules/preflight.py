@@ -436,6 +436,31 @@ _CONTRACT_RULES = (
         rationale="Customer impact: PARTIAL allows extraction to proceed and can conceal a blocking source failure behind a degraded verdict. Explicit readiness decisions prevent this ambiguity.",
         help_uri=f"{_HELP_BASE}#f020",
     ),
+    RuleDefinition(
+        id="F021",
+        name="RetiredPreflightSuppression",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.32.0",
+        short_description="A conformance suppression cites a retired preflight id (P032-P035, P047).",
+        full_description=(
+            "The preflight rules moved from the P-series to the F-series: P032-P035 "
+            "became F001-F004 and P047 became F005. The suppression parser matches "
+            "ids as plain strings, so a ``# conformance: ignore[...]`` directive that "
+            "still cites a retired id suppresses nothing and the renamed rule fires "
+            "with no hint why. Cite the new id named in the message, keeping the "
+            "justification, or delete the directive if the finding it covered is gone."
+        ),
+        rationale=(
+            "Customer impact: a reviewed, justified carve-out silently turns into an "
+            "unexplained finding on the next conformance run, and the developer has "
+            "no signal that the stale directive is the cause."
+        ),
+        help_uri=f"{_HELP_BASE}#f021",
+    ),
 )
 
 _GUIDE_BASE = (

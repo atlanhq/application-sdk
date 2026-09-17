@@ -31,7 +31,7 @@ def test_every_preflight_rule_links_to_a_packaged_investigation_section():
     from conformance.suite.rules.preflight import RULES
 
     guide = files("conformance").joinpath("docs/preflight-guide.md").read_text()
-    assert len(RULES) == 20
+    assert len(RULES) == 21
     for rule in RULES:
         assert f"## {rule.id}\n" in guide
         assert f"preflight-guide.md#{rule.id.lower()}" in rule.full_description

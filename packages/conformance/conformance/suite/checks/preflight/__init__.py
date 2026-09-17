@@ -18,6 +18,7 @@ from . import (
     _lifetime,
     _metadata_parity,
     _reserved_gate,
+    _retired_suppression,
     _untyped_failure,
     _warning_log,
 )
@@ -43,6 +44,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     findings.extend(_warning_log.scan(reg))
     findings.extend(_contracts.scan(reg))
     findings.extend(_lifetime.scan(reg))
+    findings.extend(_retired_suppression.scan(reg))
     findings.extend(coverage_findings(reg))
     return findings
 
