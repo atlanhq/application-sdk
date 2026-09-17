@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**20 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
+**21 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -35,6 +35,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K018](#k018) | `ManifestArgNotDeclaredOnInputContract` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 | [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 | [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
+| [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | — | 0.26.0 |
 
 ---
 
@@ -234,11 +235,16 @@ is justified.
 > contract/app.pkl exists but an expected generated artifact (atlan.yaml / manifest.json / _input.py) is missing — regenerate
 
 **Rationale:** An app that defines contract/app.pkl commits the pkl eval outputs (atlan.yaml,
-app/generated/manifest.json, app/generated/_input.py) so that deployment and CI consume
-them without a pkl toolchain.  When one of those outputs is absent while the contract
-exists, the app was never generated (or the artifact was deleted): the platform reads a
-manifest that does not exist, and the app fails to deploy or register.  File existence
-is a fully deterministic check that needs no pkl (BLDX-1414).
+manifest.json, _input.py) so that deployment and CI consume them without a pkl
+toolchain.  When one of those outputs is absent while the contract exists, the app was
+never generated (or the artifact was deleted): the platform reads a manifest that does
+not exist, and the app fails to deploy or register.  File existence is a fully
+deterministic check that needs no pkl (BLDX-1414).  The two app/generated artifacts are
+resolved against BOTH layouts — the single-entrypoint app/generated/ path and a bundle's
+per-entrypoint app/generated/<entrypoint>/ path — because hard-coding the
+single-entrypoint prefix made the rule unsatisfiable on every bundle: the finding named
+a path the contract never emits, and its remedy (regenerate and commit) could not clear
+it.
 
 ### What correct looks like
 
@@ -250,10 +256,23 @@ is a fully deterministic check that needs no pkl (BLDX-1414).
 The app defines `contract/app.pkl` but one or more of the artifacts `pkl eval` is
 expected to produce is absent:
 
-* `atlan.yaml` * `app/generated/manifest.json` * `app/generated/_input.py`
+* `atlan.yaml` * `manifest.json` * `_input.py`
 
 These are the outputs the deployment pipeline and the SDK read at runtime; a missing one
 means the contract was never generated (or an output was deleted).
+
+**Both contract layouts satisfy this rule.**  A single-entrypoint contract emits
+`manifest.json` and `_input.py` at `app/generated/`; a contract declaring an
+`entrypoints` block (a multi-entrypoint bundle) emits one copy per entrypoint at
+`app/generated/<entrypoint>/` and nothing at the top level.  The check requires the path
+the contract actually declares: a non-bundle must carry the top-level file (a same-named
+file in a subdirectory does not count), and a bundle must carry a copy under *every*
+declared entrypoint (one generated copy does not cover the rest).  `atlan.yaml` stays in
+scope for both — a bundle root emits it too.
+
+Unlike K010, which exempts bundles outright, this rule checks the declared layout so its
+coverage is preserved: a bundle that was never generated has no per-entrypoint copy
+either, and still fires.
 
 **Fix:** regenerate from the contract —
 
@@ -939,6 +958,16 @@ model, so a key there could not name a real field.
 Never hand-edit the generated `artifact_schemas.json`: it is a pkl eval output and the
 next toolkit run reverts the edit.
 
+**Model-declared fields are exempt, and need no suppression.** A `FileReference` field
+carrying the SDK's `AssetArtifact` marker is already declared -- by `pyatlan_v9`'s
+`Asset` rather than by a field map -- and the SDK's interceptor validates it against the
+whole model. The asset hand-off is 500+ types and 4000+ properties, so any envelope
+authored for one is a partial restatement of `Asset`, and picking `required` from what
+one connector happens to emit encodes a connector-local observation as a cross-app
+contract. The commonest case needs nothing from the app at all:
+`ExtractionOutput.transformed_files` is the SDK's own field, so every subclass of it
+inherits the exemption (FND-1863).
+
 **Suppress** with `# conformance: ignore[K016] <reason>` on the field declaration, or on
 the contract class definition for a field inherited from a base. Suppressing states that
 this hand-off is deliberately unchecked -- which is a defensible call for an artifact no
@@ -1231,5 +1260,72 @@ eval` output and the next toolkit run reverts the edit.
 **Suppress** with `// conformance: ignore[K020] <reason>` in `contract/app.pkl` when an
 app is deliberately staying on the legacy envelope for now — a suppression here is a
 statement that the migration is scheduled, not that the shape is fine.
+
+---
+
+## K021 — `FilterFieldRejectsAeString` {#k021}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.26.0
+
+> An entrypoint Input contract types an include_*/exclude_* filter as a strict dict that rejects the flat JSON string the Automation Engine sends
+
+**Rationale:** K018 checks that an include_*/exclude_* arg is declared on the entrypoint's Input
+contract; it deliberately does not look at the field's type. That leaves the type half
+of the same hand-off unchecked, and the type is what breaks next. Since contract-toolkit
+0.9.0 the Automation Engine renders filters as flat top-level JSON strings — '{}' or
+'{"^db$": ["^schema$"]}' — not structured objects. A contract that types the field as a
+strict dict with no string-acceptance path rejects that string, and the run dies at
+Pydantic validation. Where K018's failure is fail-open (a dropped key silently defaults,
+and an empty include-filter crawls everything), K021's is fail-closed: the whole
+workflow crashes before it starts. Nothing else catches it statically — pkl compiles the
+manifest with no visibility into the Python model, and the model itself is well-formed;
+the mismatch only surfaces at runtime, on the tenant, as a crash the customer sees. It
+is the class atlan-looker-app and atlan-fabric-app hit (CONNECT-1333 / CONNECT-1389).
+The rule keys on two exact, structural acceptance conditions — a str union (including a
+bare ExtractionInput subclass that inherits FilterMap | str), or an app-local
+mode='before' validator — and stays silent whenever the contract chain cannot be fully
+resolved, so it prefers a false negative to a false positive. Redeclaring a strict dict
+under ExtractionInput is not safe: the live SDK coercer opts out when the type override
+drops json_schema_extra.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/generated/_input.py — `AppInputContract` subclasses
+  `ExtractionInput` and redeclares no filter field, so it inherits `include_filter:
+  FilterMap | str` and the SDK's mode="before" coercer. Re-typing the field locally is
+  what drops the json_schema_extra that coercer keys on, which is why the inherited
+  shape is the compliant one.
+
+An `include_*` / `exclude_*` filter field on the entrypoint's Python `Input` contract is
+typed as a (possibly `Annotated`) strict `dict` — with no `str` union and no
+`mode="before"` validator — so it cannot accept the value the Automation Engine actually
+sends.
+
+Since contract-toolkit 0.9.0 the AE renders include/exclude filters as flat top-level
+JSON **strings** (`'{}'`, `'{"^db$": ["^schema$"]}'`), not structured objects. Pydantic
+validates the incoming string against a strict `dict` field, the coercion fails, and the
+workflow crashes at validation before it does any work — the fail-closed sibling of
+K018's fail-open dropped-key case. This is the CONNECT-1333 / CONNECT-1389 class.
+
+**Fix** — make the field accept the string, any one of:
+
+* **union with `str`** — `include_filter: FilterMap | str` (or `dict[str, list[str]] |
+str`). Pydantic then tries the `str` arm and the JSON string validates; * **mix in
+`ExtractionInput` without redeclaring a strict dict** —
+`application_sdk.templates.contracts.sql_metadata.ExtractionInput` already types the
+fields as `FilterMap | str`. A type override (`include_filter: dict[str, Any]`) drops
+the SDK `json_schema_extra` the live `_coerce_filter` keys on, so the inherited
+validator does **not** coerce the AE string; or * **add your own before-validator** — a
+`@field_validator("<field>", mode="before")` (or a `mode="before"` `@model_validator`)
+on the contract that coerces the string yourself. An `after`-mode validator does **not**
+count: it runs after field validation, so the string is already rejected.
+
+This is the type half of the same hand-off K018 guards by field name; an app can pass
+K018 (the field is declared) and still fail K021 (the declared type is wrong). Both are
+WARN and app-scoped, and both no-op on any repo without `app/generated/`.
+
+**Suppress** with `# conformance: ignore[K021] <reason>` on the `Input` class definition
+(or the comment-only line directly above it) — for example when the string is genuinely
+coerced by a path the static check cannot follow.
 
 ---

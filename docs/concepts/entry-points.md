@@ -310,6 +310,82 @@ Without a query param, `GET /workflows/v1/manifest` serves the first candidate w
 
 > **Configmap discovery** also benefits from the subfolder layout: the handler uses `rglob("*.json")` so configmap files can live inside per-entry subfolders alongside the manifests.
 
+### One authority for the generated tree's shape
+
+Three facts about `app/generated/` are needed in more than one place, so they
+live in `application_sdk/app/_generated_tree.py` and nowhere else:
+
+| Function | Answers |
+| --- | --- |
+| `generated_layout(dir)` | `multi` (per-entry-point subdirectories), `single` (flat), or `unknown` (nothing generated) |
+| `is_form_configmap(stem)` | Is this sibling `*.json` a setup form, or one of the non-form documents — the DAG `manifest`, `artifact_schemas`, a `{atlan,csa}-connectors-*` credential template? |
+| `pick_form_configmap(dir, ep)` | Which file in *this* directory is the form: one that names the entry point, else the only eligible one, else the alphabetically first |
+| `form_configmap(dir, ep)` | Which file is *this* entry point's setup form, given the layout |
+
+Everything that needs one of those reads it from there: the configmap
+endpoint's default-entrypoint fallback (`application_sdk.handler.service`), the
+artifact-schema registration guard (`_artifact_schema_guard`), and the
+tenant-side setup-route check (`application_sdk.testing.setup_routes`).
+
+The exclusion in `is_form_configmap` is load-bearing rather than cosmetic. For
+a flat app, `atlan-connectors-<source>.json` sorts alphabetically **before**
+`<source>.json`, so any file-discovery that globs `*.json` and takes the first
+match picks the credential template on every single-entry-point connector.
+
+But an exclusion list can only ever name the siblings the toolkit emits
+*today*. FND-1682 is what a stale one cost: adopting conformance K016 makes the
+toolkit emit `artifact_schemas.json`, which is neither the manifest nor a
+credential template and sorts before every real form stem. Every adopting app
+served the schema document as its form — no `config` key, no `properties`, so
+the setup wizard rendered blank behind an HTTP 200 with nothing in the logs,
+the network tab, or pod stderr.
+
+So `pick_form_configmap` reaches for an *identification* before a guess, in
+three steps:
+
+1. **A form that names the entry point** — `<entry-point>.json`, or the
+   connector convention `<source>-<entry-point>.json` (`crawler` →
+   `snowflake-crawler.json`). The suffix spelling carries the connector fleet:
+   its entry points are named for the role (`crawler`, `miner`) while its files
+   are named for the source, so exact matching alone would fire almost nowhere.
+2. **The only eligible file**, when exactly one survives the exclusion. There
+   is nothing else it could be. This is what answers a route/card-split app,
+   whose form is named for the app (`metabase.json`) and relates to its entry
+   points by no rule at all.
+3. **The alphabetically first**, otherwise.
+
+**Step 3 is a guess, and it stays.** It is the compatibility path for apps
+whose form name the SDK cannot recognise, and turning it into a 404 would break
+apps that work today to defend against a sibling the toolkit does not yet emit
+— a census of the fleet's committed `app/generated` trees found no directory
+with two eligible files. What the guess owed an operator was visibility, not
+removal: the configmap endpoint now logs a WARNING naming the file it served
+and the candidates it rejected whenever step 3 decides, so the next
+unrecognised sibling appears in the logs on the first request rather than only
+as a blank wizard.
+
+Layout is read from the tree, never from `len(entry_points)`. A
+**route/card-split** app has several `@entrypoint`s behind one marketplace card
+and therefore one *flat* generated tree, so counting Python entry points calls
+it a bundle and sends every consumer looking under a subdirectory the toolkit
+will never write for it.
+
+### The setup page resolves on two independent lookups
+
+`/workflows/setup/<id>` in the UI spends its `id` segment twice: once to find
+the marketplace card (`app.id == id`) and once to fetch the form
+(`GET /api/service/configmaps/<id>`, which Heracles proxies to this SDK's
+`GET /workflows/v1/configmap/{id}`). The route therefore resolves **only when
+the card's `id` is a name the configmap endpoint also answers to**.
+
+Those two names come from different places, and a contract change can move one
+without the other — setting `Entrypoint.packageId` moves the card's identity
+onto the marketplace package while the form stays under the workflow config's
+`id`, which 404s the setup page with every generated artifact still
+self-consistent and every static gate still green. `application_sdk.testing.setup_routes`
+asserts that join against a live tenant; see
+`docs/standards/connector-ci-e2e.md` for where it runs in CI.
+
 ### Per-entry-point handler & core modules
 
 A multi-entry-point app can ship **per-entry-point** lifecycle code next to its hand-written package, discovered by convention:
@@ -350,3 +426,67 @@ against the wrong workflow rather than an error:
   `app/generated/<ep>/_e2e_base.py`. Conformance rule `T025` reports any bundle
   entry point without one. See
   [Connector CI e2e — Multi-entrypoint apps](../standards/connector-ci-e2e.md#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).
+
+## Contract types
+
+An entry point's `input`/return contracts are its public boundary, and a few of
+their field types carry meaning the annotation alone does not. All of them live in
+`application_sdk.contracts.types`:
+
+| Type | What it says |
+|---|---|
+| `FileReference` | The payload is a file, referenced rather than embedded (Temporal caps a payload at 2 MB). The activity interceptor materialises it before your task runs and persists it after |
+| `Lazy` | `Annotated[FileReference \| None, Lazy()]` — do **not** auto-materialise this one; the task calls `fetch(ref, store)` itself when it turns out to need the bytes |
+| `MaxItems` | The collection is bounded, and by how much |
+| `AssetArtifact` | This `FileReference` field's artifact declaration **is** a typed model — see below |
+
+### `AssetArtifact`: a field whose declaration is a model
+
+Every `FileReference` field on an entry point's boundary needs a declared shape,
+and today that means an `artifactSchemas` entry in the pkl contract — a warning
+now, an error in **v4.0**. See
+[Apps — Declaring artifact schemas](apps.md#declaring-artifact-schemas).
+
+`AssetArtifact` is the exception, for fields carrying Atlas assets:
+
+```python
+from typing import Annotated
+
+from application_sdk.contracts.types import AssetArtifact, FileReference
+
+class MyOutput(Output):
+    transformed_files: Annotated[list[FileReference], AssetArtifact()] = []
+```
+
+The marker goes in the field's `Annotated` metadata, alongside `MaxItems` if the
+field has one; order does not matter. What it changes:
+
+* **The runtime check gets stronger, not weaker.** The interceptor validates a
+  marked field against the whole `pyatlan_v9` `Asset` backbone — every record
+  decoded and `.validate()`d, plus a referential/orphan pass — instead of against
+  a field map. The outcome row reads `artifact_schema_source=model`.
+* **Nothing is left to author.** The registration-time guard and conformance
+  `K016` treat a marked field as declared, so no `artifactSchemas` entry is
+  required for it, at v4.0 either.
+
+**You are very unlikely to need to write this.** `ExtractionOutput.transformed_files`
+is the SDK's own field and already carries the marker, so any contract inheriting
+from it is covered:
+
+```python
+class MyExtractionOutput(ExtractionOutput):   # inherits the marker
+    row_count: int = 0
+```
+
+Redeclaring the field — narrowing its type, adding your own `Field(...)` — keeps
+the marker too: it is resolved across the class's MRO, so a subclass cannot
+silently undeclare an inherited artifact. Marking a field of your own is only
+right when its bytes really are one Atlas entity per line in the nested format
+`Asset.validate()` reads.
+
+**Migrating off a hand-written envelope.** If your contract already declares an
+`artifactSchemas` entry for a field that is now model-declared, delete it. A
+declaration for a marked field is *ignored* — a field cannot have two, and of the
+two the model is the stronger — so removing it changes nothing at runtime, and
+leaving it in place only invites someone to maintain a partial restatement of a
+500-type model.

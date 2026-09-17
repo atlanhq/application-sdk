@@ -16,9 +16,9 @@ name: Stale issues and PRs (Reusable)
 # was introduced. Mirrors this repo's own stale job (schedule.yaml),
 # including debug-only: true: that's a deliberate choice here (observe,
 # don't auto-close) so activating this for the first time across the whole
-# fleet doesn't immediately close a large accumulated backlog. Flip
-# debug-only off per-repo (via a fork of this file, or once this input is
-# added) if a caller wants real closure.
+# fleet doesn't immediately close a large accumulated backlog. A caller that
+# wants real closure passes `debug-only: false` and a `days-before-close`
+# (FND-1973); the defaults keep every other caller label-only.
 #
 # When flipping debug-only off, mind write permissions: the permissions block
 # below declares the maximum this reusable workflow can use, but for a caller
@@ -32,6 +32,40 @@ name: Stale issues and PRs (Reusable)
 
 on:
   workflow_call:
+    inputs:
+      # Opt-in closure (FND-1973). A pull request that sits open and stale is
+      # not just untidy: until FND-1973 it could be *sampled* by the fleet
+      # gate-arrival probe and read as a conclusive miss, because its head
+      # commit ran whatever CI existed when it was pushed. That scanner now
+      # excludes stale and draft samples itself, so closure is hygiene rather
+      # than correctness -- which is exactly why it is exposed as an input at
+      # today's values instead of switched on here. Flipping real closure on
+      # for every caller at once would close an accumulated backlog across the
+      # whole fleet on the next scheduled run, from a change no caller made.
+      #
+      # To actually close, a caller passes `debug-only: false` AND a
+      # `days-before-close`, and must grant the writes this needs -- see the
+      # permissions note in the header comment above.
+      days-before-stale:
+        description: "Days of inactivity before an issue or PR is labelled Stale."
+        required: false
+        default: 60
+        type: number
+      days-before-close:
+        description: >
+          Days after the Stale label before closing. -1 (the default) never
+          closes, which is actions/stale's own "label only" value.
+        required: false
+        default: -1
+        type: number
+      debug-only:
+        description: >
+          Dry run: log what would be labelled or closed and write nothing.
+          Defaults true, so a caller that passes no inputs behaves exactly as
+          it did before these inputs existed.
+        required: false
+        default: true
+        type: boolean
     secrets:
       FLEET_APP_ID:
         required: false
@@ -73,5 +107,12 @@ jobs:
           stale-pr-message: 'Stale Pull Request'
           stale-issue-label: 'Stale'
           stale-pr-label: 'Stale'
-          days-before-stale: 60
-          debug-only: 'true'
+          days-before-stale: ${{ inputs.days-before-stale }}
+          # actions/stale reads -1 as "never close", so the default input
+          # reproduces the label-only behaviour every current caller has.
+          days-before-close: ${{ inputs.days-before-close }}
+          close-pr-message: >
+            Closing as stale. Reopen it if this is still wanted -- nothing here
+            is lost, and a stale pull request is excluded from the fleet
+            gate-arrival probe either way.
+          debug-only: ${{ inputs.debug-only }}

@@ -9,6 +9,13 @@ A boundary artifact with no declaration is the defect this rule exists to catch
 independent beliefs, and nothing in either language's own tooling notices when
 they diverge.
 
+One kind of field is exempt and it is not a hole: a field carrying the SDK's
+``AssetArtifact`` marker is already declared, by an executable model rather than
+by a field map, and is validated against the whole of it at runtime. That fact
+arrives on ``_FieldInfo.model_declared``, resolved by
+:func:`resolve_contract_fields` from wherever the marker was actually declared —
+never inferred from a field's name (FND-1863).
+
 Structure mirrors K006 (``manifest_contract``) closely, because the shape of the
 problem is the same — a committed generated artifact cross-referenced against a
 Python contract resolved through its MRO — and sharing that shape is what lets
@@ -205,6 +212,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                 if not _FILE_REFERENCE_RE.search(field.canonical_type):
                     continue
                 if field.name in declared:
+                    continue
+                if field.model_declared:
+                    # The declaration is an executable model, not a field map, so
+                    # there is nothing for the app to author and nothing here to
+                    # report. `resolve_contract_fields` carries that provenance
+                    # from wherever the marker was declared — this rule never
+                    # matches a field name, because a name is not a marker.
                     continue
                 findings.append(
                     make_finding(

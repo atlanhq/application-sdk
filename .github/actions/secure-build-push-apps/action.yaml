@@ -43,7 +43,8 @@ inputs:
   cache-to:
     description: 'List of cache export destinations.'
     required: false
-    default: 'type=gha,mode=min'
+    # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
+    default: 'type=gha,mode=min,ignore-error=true'
   cgroup-parent:
     description: 'Optional parent cgroup for the container.'
     required: false

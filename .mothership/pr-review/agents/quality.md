@@ -7,9 +7,9 @@ Your domain spans: code quality, test coverage, and developer experience.
 
 ## Reference Rules — read these first
 
-- `.mothership/pr-review/references/code-quality-rules.md`
-- `.mothership/pr-review/references/test-quality-rules.md`
-- `.mothership/pr-review/references/dx-rules.md`
+- `.mothership/rules/code-quality-rules.md`
+- `.mothership/rules/test-quality-rules.md`
+- `.mothership/rules/dx-rules.md`
 - `.mothership/pr-review/references/retro-log.md`
 
 These are yours to read; the orchestrator no longer loads every reference file
@@ -62,7 +62,7 @@ better, worse, or the same?"
 - Import depth logical? (`from application_sdk.app import App` not 5 levels deep)
 - **Docs sync?** For each `application_sdk/<area>/` prefix with
   substantive changes in the diff, check whether the mapped
-  `docs/concepts/*.md` (per `references/dx-rules.md` §5
+  `docs/concepts/*.md` (per `../rules/dx-rules.md` §5
   "Conceptual Doc Sync") was also touched. If not, raise a
   `[DX] docs-drift` finding scoped PATCH unless one of the escape
   hatches in §5 applies (internal-only change, `docs-not-needed`

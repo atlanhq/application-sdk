@@ -206,6 +206,12 @@
     },
     {
       "contract": "ExtractionOutput",
+      "field": "transformed_files",
+      "status": "active",
+      "type": "list[FileReference]"
+    },
+    {
+      "contract": "ExtractionOutput",
       "field": "views_extracted",
       "status": "active",
       "type": "int"
@@ -497,6 +503,12 @@
       "field": "transformed_data_prefix",
       "status": "active",
       "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "transformed_files",
+      "status": "active",
+      "type": "list[FileReference]"
     },
     {
       "contract": "IncrementalExtractionOutput",

@@ -5,9 +5,12 @@ Separate from the SDR activity tests — the gate is its own module/concern.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import warnings
 from contextlib import ExitStack, contextmanager
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -24,20 +27,27 @@ from application_sdk.errors.leaves import (
     DependencyUnavailableError,
 )
 from application_sdk.execution._temporal.preflight_gate import (
+    _INTERACTIVE_ROW_IS_LOUD,
     _LOG_ROW_IS_ONLY_CHANNEL,
+    EMPTY_CHECK_MATRIX,
     FAILURE_AUDIENCE_KEY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
+    INTERACTIVE_RAISE_OUTCOMES,
     PREFLIGHT_CHECK_EVENT,
     PreflightGateInput,
     PreflightSurface,
     _config_from_snapshot,
     build_preflight_gate_activity,
     emit_preflight_check_outcome,
+    emit_preflight_crash_outcome,
+    gate_heartbeat_timings,
+    gate_timeouts,
     input_type_supports_gate,
+    is_preflight_block,
     preflight_gate_activity_name,
 )
 from application_sdk.execution.errors import ApplicationError
-from application_sdk.handler.base import DefaultHandler, Handler
+from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
@@ -960,21 +970,24 @@ class TestPreflightGateOutcomeEvent:
             }
         ]
 
-    async def test_check_matrix_nonfinite_duration_coerced(self) -> None:
-        # orjson emits null for nan/inf; we normalize to 0.0 so the ClickHouse
-        # row stays numeric, never raised (a raise here would fail the gate
-        # open and lose the whole event).
+    async def test_check_matrix_implausible_duration_coerced_to_sentinel(self) -> None:
+        # nan/inf (orjson would emit null) and negatives collapse to the -1.0
+        # "not measured" sentinel so the ClickHouse row stays numeric and
+        # garbage never reads as a real duration; never raised (a raise here
+        # would fail the gate open and lose the whole event).
         out = PreflightOutput(
             status=PreflightStatus.PARTIAL,
             checks=[
                 PreflightCheck(name="auth", passed=False, duration_ms=float("nan")),
                 PreflightCheck(name="tables", passed=True, duration_ms=float("inf")),
+                PreflightCheck(name="views", passed=True, duration_ms=-52.0),
+                PreflightCheck(name="perms", passed=True),
             ],
         )
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out)(PreflightGateInput())
         matrix = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])  # must parse
-        assert [row["duration_ms"] for row in matrix] == [0.0, 0.0]
+        assert [row["duration_ms"] for row in matrix] == [-1.0, -1.0, -1.0, -1.0]
 
     async def test_check_matrix_empty_checks(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
@@ -1338,6 +1351,17 @@ class TestEmitPreflightCheckOutcome:
         # reportArgumentType = "warning".
         assert set(_LOG_ROW_IS_ONLY_CHANNEL) == set(PreflightSurface)
 
+    def test_every_interactive_outcome_has_a_level_policy(self) -> None:
+        # The same enforcing half for the *outcome* vocabulary. Adding a member
+        # to INTERACTIVE_RAISE_OUTCOMES without routing it at both surfaces
+        # fails here; _INTERACTIVE_ROW_IS_LOUD defaults a miss to loud, so
+        # runtime would silently mis-level it instead.
+        assert set(_INTERACTIVE_ROW_IS_LOUD) == {
+            (outcome, only_channel)
+            for outcome in INTERACTIVE_RAISE_OUTCOMES
+            for only_channel in (False, True)
+        }
+
     @pytest.mark.parametrize("surface", list(PreflightSurface))
     def test_every_surface_emits_one_row_carrying_its_wire_string(
         self, surface: PreflightSurface
@@ -1359,6 +1383,406 @@ class TestEmitPreflightCheckOutcome:
         ).kwargs
         assert kwargs[PREFLIGHT_SURFACE_KEY] == surface.value
         assert type(kwargs[PREFLIGHT_SURFACE_KEY]) is str
+
+
+class TestEmitPreflightCrashOutcome:
+    """CONNECT-1170 gap 6: a handler crash still produces a crash-marked row."""
+
+    def test_typed_error_crash_row_attributes(self) -> None:
+        log = mock.MagicMock()
+        exc = DependencyUnavailableError(message="x", service="warehouse")
+        emit_preflight_crash_outcome(
+            log,
+            "myapp",
+            exc,
+            surface=PreflightSurface.HTTP,
+            request_id="r-1",
+        )
+        log.error.assert_called_once()
+        kwargs = log.error.call_args.kwargs
+        assert log.error.call_args.args[0] == PREFLIGHT_CHECK_EVENT
+        assert kwargs["outcome"] == "crashed"
+        assert kwargs["reason"] == DependencyUnavailableError.code
+        assert kwargs["checks"] == 0
+        assert kwargs[CHECK_MATRIX_KEY] == EMPTY_CHECK_MATRIX
+        assert kwargs[PREFLIGHT_SURFACE_KEY] == "http"
+        assert kwargs[FAILURE_AUDIENCE_KEY] == DependencyUnavailableError.audience.value
+        assert kwargs["request_id"] == "r-1"
+
+    def test_client_fault_is_counted_but_not_a_crash(self) -> None:
+        # A wrong password (AUTH -> 401) is the response working as designed,
+        # not a handler crash; in the crash series it would let setup-form
+        # typos dominate, but dropping it entirely would re-open the
+        # denominator hole. So it gets its own outcome, at the surface's
+        # level policy: INFO on HTTP (the response carries the failure),
+        # ERROR on SDR (the row is the only channel).
+        log = mock.MagicMock()
+        emit_preflight_crash_outcome(
+            log, "myapp", AuthError(message="x"), surface=PreflightSurface.HTTP
+        )
+        log.error.assert_not_called()
+        row = log.info.call_args.kwargs
+        assert row["outcome"] == "client_fault"
+        assert row["reason"] == AuthError.code
+        assert row[FAILURE_AUDIENCE_KEY] == AuthError.audience.value
+
+        log = mock.MagicMock()
+        emit_preflight_crash_outcome(
+            log,
+            "myapp",
+            HandlerError("bad request", http_status=400),
+            surface=PreflightSurface.SDR,
+        )
+        log.info.assert_not_called()
+        assert log.error.call_args.kwargs["outcome"] == "client_fault"
+
+    def test_untyped_error_crash_row_attributes(self) -> None:
+        log = mock.MagicMock()
+        exc = ValueError("boom")
+        emit_preflight_crash_outcome(log, "myapp", exc, surface=PreflightSurface.SDR)
+        log.error.assert_called_once()
+        kwargs = log.error.call_args.kwargs
+        assert kwargs["outcome"] == "crashed"
+        assert kwargs["reason"] == "ValueError"
+        assert kwargs[PREFLIGHT_SURFACE_KEY] == "sdr"
+        assert FAILURE_AUDIENCE_KEY not in kwargs
+        assert "request_id" not in kwargs
+
+
+class TestOrphanedAttemptEmission:
+    """CONNECT-1170 gap 1: an attempt Temporal already abandoned still emits.
+
+    On a production run, attempt 1 was killed at ``start_to_close`` but kept
+    running (no heartbeat, so cancellation is never delivered) and wrote its
+    ``would_block`` verdict row seconds after the deadline; attempt 2 then
+    wrote ``proceeded``. The documented dedupe key ``(workflow_run_id,
+    outcome)`` keeps both rows, so a consumer records a block for a run that
+    passed — corrupting the series hard mode is decided from.
+    """
+
+    async def test_attempt_past_its_deadline_emits_no_verdict_row(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        # activity.info() as the abandoned attempt sees it: its start_to_close
+        # deadline passed minutes ago, so Temporal has stopped waiting and may
+        # already be running the next attempt.
+        dead_attempt = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=300),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+
+
+class TestHeartbeatCleanupCannotOutrankTheVerdict:
+    """CONNECT-1170 Round 1 Must fix 1: cleanup must never replace the verdict.
+
+    A heartbeat task that ignores its stop event and swallows cancellation
+    makes ``finally`` raise ``CancelledError`` — a ``BaseException`` that
+    replaces the block the gate just decided on, turning a hard-mode block
+    into a fail-open proceed.
+    """
+
+    @staticmethod
+    async def _unstoppable_loop(**kwargs):
+        while True:
+            await asyncio.sleep(60)
+
+    async def test_hard_mode_block_survives_a_stuck_heartbeat_task(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=True)
+        with (
+            mock.patch(
+                "application_sdk.execution.heartbeat.auto_heartbeat_loop",
+                self._unstoppable_loop,
+            ),
+            mock.patch(f"{_GATE}.gate_heartbeat_timings", return_value=(60.0, 0.01)),
+        ):
+            with pytest.raises(BaseException) as excinfo:
+                await gate(PreflightGateInput())
+        assert is_preflight_block(excinfo.value) is True
+        assert not isinstance(excinfo.value, asyncio.CancelledError)
+
+    async def test_soft_mode_ready_survives_a_stuck_heartbeat_task(self) -> None:
+        gate = _verdict_gate(
+            PreflightOutput(status=PreflightStatus.READY, checks=[]), enforce=False
+        )
+        with (
+            mock.patch(
+                "application_sdk.execution.heartbeat.auto_heartbeat_loop",
+                self._unstoppable_loop,
+            ),
+            mock.patch(f"{_GATE}.gate_heartbeat_timings", return_value=(60.0, 0.01)),
+        ):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+
+
+class TestLiveAttemptStillEmits:
+    """CONNECT-1170 gap 1: the liveness guard must not over-suppress.
+
+    A live attempt — one inside its start_to_close window — keeps its verdict
+    row; suppression is only for attempts Temporal has already abandoned.
+    """
+
+    async def test_live_attempt_still_emits_verdict_row(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        live_attempt = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=live_attempt),
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        event = _outcome_event(m)
+        assert event is not None
+        assert event["outcome"] == "would_block"
+
+    async def test_attempt_near_its_deadline_still_emits_verdict_row(self) -> None:
+        # Production geometry: the gate emits ~5s before the deadline (the
+        # headroom GATE_ACTIVITY_HEADROOM_SECONDS reserves). A guard that
+        # suppresses there is the over-suppression that would actually bite.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        near_deadline = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=55),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=near_deadline),
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        event = _outcome_event(m)
+        assert event is not None
+        assert event["outcome"] == "would_block"
+
+
+class TestGateHeartbeat:
+    """CONNECT-1170 gap 3: the activity heartbeats while the handler runs."""
+
+    async def test_heartbeat_sent_while_handler_runs(self) -> None:
+        beat = asyncio.Event()
+
+        def _record_beat() -> None:
+            beat.set()
+
+        class _WaitingReadyHandler(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                await beat.wait()
+                return PreflightOutput(status=PreflightStatus.READY, checks=[])
+
+        gate = build_preflight_gate_activity(
+            _WaitingReadyHandler(), app_name="myapp", enforce=False, budget_seconds=2
+        )
+        with (
+            mock.patch(f"{_GATE}.gate_heartbeat_timings", return_value=(60.0, 0.01)),
+            mock.patch(f"{_GATE}.activity.heartbeat", side_effect=_record_beat),
+        ):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+
+    async def test_min_budget_heartbeat_still_fits_inside_start_to_close(self) -> None:
+        # The knobs are derived, not fixed: at the 5s budget floor a fixed 60s
+        # timeout would be server-capped to start_to_close and never fire
+        # first, silently disabling stall detection for short-budget apps.
+        start_to_close, _ = gate_timeouts(5, 1)
+        timeout, interval = gate_heartbeat_timings(start_to_close.total_seconds())
+        assert timeout < start_to_close.total_seconds()
+        assert 0 < interval < timeout
+
+    async def test_default_budget_reproduces_the_sdk_wide_pair(self) -> None:
+        start_to_close, _ = gate_timeouts(None, None)
+        timeout, interval = gate_heartbeat_timings(start_to_close.total_seconds())
+        assert (timeout, interval) == (60.0, 10.0)
+
+
+class TestCancelledAttemptSuppression:
+    """Cancellation is the primary liveness signal — no clocks involved."""
+
+    async def test_cancelled_attempt_emits_no_verdict_row(self) -> None:
+        # Temporal delivers cancellation in heartbeat responses; a cancelled
+        # attempt is abandoned even while still inside its deadline window.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        inside_deadline = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=inside_deadline),
+            mock.patch(f"{_GATE}.activity.is_cancelled", return_value=True),
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+
+    async def test_naive_started_time_live_and_expired(self) -> None:
+        # temporalio stamps aware datetimes today; the naive branch is the
+        # compatibility path and must judge liveness the same way.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        for age_seconds, expect_row in ((0, True), (300, False)):
+            gate = _verdict_gate(out, enforce=False)
+            naive = SimpleNamespace(
+                attempt=1,
+                start_to_close_timeout=timedelta(seconds=60),
+                started_time=datetime.now(timezone.utc).replace(tzinfo=None)
+                - timedelta(seconds=age_seconds),
+            )
+            with (
+                mock.patch(f"{_GATE}.activity.info", return_value=naive),
+                mock.patch(_LOGGER) as m,
+            ):
+                await gate(PreflightGateInput())
+            assert (_outcome_event(m) is not None) is expect_row
+
+    async def test_incident_geometry_is_suppressed(self) -> None:
+        # The row that motivated gap 1 landed 3.2s past its deadline. The
+        # 2s skew grace must not wave it through — a 5s grace did, which is
+        # why the grace is tighter than the 5s emit headroom.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        incident = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=155),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=158.2),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=incident),
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+
+
+class TestAnAbandonedAttemptWritesNothingAnywhere:
+    """The suppression covers the store, not only the log.
+
+    Gap 1 was an orphaned attempt corrupting the outcome *series*; once the
+    verdict is also persisted (CONNECT-1142) the same attempt can corrupt the
+    *store* the same way — appending a stale verdict beside the live attempt's
+    row. These assert the converse of "an outcome row implies a store row":
+    no row means no write, on both abandonment signals.
+    """
+
+    @staticmethod
+    def _not_ready() -> PreflightOutput:
+        return PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+
+    async def test_an_attempt_past_its_deadline_does_not_persist(self) -> None:
+        gate = _verdict_gate(self._not_ready(), enforce=False)
+        dead_attempt = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=300),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
+            mock.patch(f"{_GATE}.persist_check_result") as persist,
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+        persist.assert_not_called()
+
+    async def test_a_cancelled_attempt_does_not_persist(self) -> None:
+        gate = _verdict_gate(self._not_ready(), enforce=False)
+        inside_deadline = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=inside_deadline),
+            mock.patch(f"{_GATE}.activity.is_cancelled", return_value=True),
+            mock.patch(f"{_GATE}.persist_check_result") as persist,
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+        persist.assert_not_called()
+
+    async def test_an_abandoned_proceed_does_not_persist(self) -> None:
+        # The READY path too: it reaches _emit_outcome by a different branch,
+        # and a stale "this source is fine" row is the worse one to leave.
+        gate = _verdict_gate(
+            PreflightOutput(status=PreflightStatus.READY, checks=[]), enforce=False
+        )
+        dead_attempt = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=300),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
+            mock.patch(f"{_GATE}.persist_check_result") as persist,
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+        persist.assert_not_called()
+
+    async def test_an_abandoned_unverifiable_source_does_not_persist(self) -> None:
+        # And the no_verdict path, the third _emit_outcome call site.
+        class _Crashing(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise RuntimeError("driver blew up")
+
+        # attempts=1 so this abandoned attempt is also the final one: on a
+        # non-final attempt _no_verdict defers by raising and never reaches the
+        # emit site, which would make the assertion below vacuous.
+        gate = build_preflight_gate_activity(
+            _Crashing(), app_name="myapp", enforce=False, attempts=1
+        )
+        dead_attempt = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=300),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
+            mock.patch(f"{_GATE}.persist_check_result") as persist,
+            mock.patch(_LOGGER) as m,
+        ):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        assert _outcome_event(m) is None
+        persist.assert_not_called()
 
 
 class TestTheVerdictIsPersisted:

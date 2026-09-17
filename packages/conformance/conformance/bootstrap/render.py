@@ -70,7 +70,14 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
 # shim's shape was wrong outright.  Every call therefore failed at startup:
 # conclusion ``failure``, zero jobs, no check run, no logs.  Retired rather
 # than repointed — the check is not wanted on connectors.
-RETIRED_WORKFLOWS: tuple[str, ...] = ("docstring-coverage.yaml",)
+# Retirements are repo-root-relative so the same mechanism can remove a
+# previously-managed hook or script, not only a workflow.
+RETIRED_FILES: tuple[str, ...] = (".github/workflows/docstring-coverage.yaml",)
+RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
+    path.removeprefix(".github/workflows/")
+    for path in RETIRED_FILES
+    if path.startswith(".github/workflows/")
+)
 
 # Non-workflow files that must also be vendored into every consumer repo,
 # keyed by (repo-root-relative dest path, template filename in templates/).
@@ -111,6 +118,28 @@ MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     (".github/scripts/probe_code_scanning.py", "probe_code_scanning.py"),
 )
 
+# Local connector-review kit. These paths are owned by bootstrap once a repo
+# opts in, via ``bootstrap --connector-review-kit`` or the ``bootstrap
+# --resync`` that implies it.
+# (destination, template, must be executable)
+MANAGED_CONNECTOR_REVIEW_FILES: tuple[tuple[str, str, bool], ...] = (
+    ("scripts/fetch-review-rules.sh", "fetch-review-rules.sh", True),
+    (
+        ".claude/hooks/connector-review-reminder.sh",
+        "connector-review-reminder.sh",
+        True,
+    ),
+    (".claude/skills/connector-review/SKILL.md", "connector-review.md", False),
+)
+
+# Retire the marker and PreToolUse gate only when the opt-in kit is requested.
+# They were self-attestation: an agent could write PASS without proving review.
+RETIRED_CONNECTOR_REVIEW_FILES: tuple[str, ...] = (
+    "scripts/write-connector-review-marker.sh",
+    ".claude/hooks/check-review-before-commit.sh",
+    ".claude/hooks/review-rules-freshness.sh",
+)
+
 
 def _load_template(name: str) -> str:
     """Read a template file from the embedded templates directory."""
@@ -126,7 +155,10 @@ def _load_template(name: str) -> str:
 # variable-start delimiter (Jinja matches it starting at the *second* `<`,
 # then fails deep in the following line looking for the closing ` >>`).
 _STATIC_TEMPLATES: frozenset[str] = frozenset(
-    template_name for _, template_name in MANAGED_ACTION_FILES
+    [
+        *(template_name for _, template_name in MANAGED_ACTION_FILES),
+        *(template_name for _, template_name, _ in MANAGED_CONNECTOR_REVIEW_FILES),
+    ]
 )
 
 
@@ -143,8 +175,29 @@ def render(
     automerge: str = "true",
     unit_coverage_fail_under: str = "",
     use_ghcr_base: str = "",
+    vuln_scan_lfs: str = "",
+    build_publish_lfs: str = "",
     force_external_runtime: str = "",
     secrets_block: str = "",
+    test_paths_block: str = "",
+    pytest_args_block: str = "",
+    timeout_minutes: str = "",
+    apt_packages: str = "",
+    private_git_deps: str = "",
+    git_lfs_skip_smudge: str = "",
+    lfs: str = "",
+    health_check_timeout_seconds: str = "",
+    container_health_timeout_seconds: str = "",
+    runtime_sdk_ref: str = "",
+    harness_sdk_ref: str = "",
+    e2e_test_path: str = "",
+    source_available: str = "",
+    source_available_overrides: str = "",
+    dataforge_datasource: str = "",
+    dataforge_mode: str = "",
+    dataforge_env_tier: str = "",
+    dataforge_output_prefix: str = "",
+    dataforge_hermetic_fallback: str = "",
 ) -> str:
     """Render template *name* with the given substitution variables.
 
@@ -195,6 +248,43 @@ def render(
       FND-604 added, hugged onto their tags' lines for the same byte-identity
       reason.  ``secrets_block`` carries no trailing newline of its own — the
       template's line supplies it, so the no-override render is unchanged.
+
+      FND-1143 adds a slot for every remaining input of
+      ``tests-reusable.yaml``, in one ``<% endif %><% if … %>`` chain between
+      ``app-image-name`` and the ``enable-e2e`` block: ``test_paths_block``,
+      ``pytest_args_block``, ``timeout_minutes``, ``apt_packages``,
+      ``private_git_deps``, ``git_lfs_skip_smudge``, ``lfs`` (the e2e
+      image-build checkout's LFS fetch, distinct from the smudge skip),
+      ``health_check_timeout_seconds``,
+      ``container_health_timeout_seconds``, ``runtime_sdk_ref``,
+      ``harness_sdk_ref``, ``e2e_test_path``, ``source_available``,
+      ``source_available_overrides`` (FND-1865 — the per-suite overrides of
+      the repo-wide ``source-available``) and the five ``dataforge_*``
+      values.  All default ``""`` — no line, so the reusable's
+      own default applies — and the chain emits nothing at all when every one
+      of them is empty, which is what keeps the no-override render
+      byte-identical to the pre-FND-1143 one for the whole bootstrapped fleet.
+
+      Why the whole set rather than the five ``dataforge_*`` ones FND-1143 was
+      filed about: a slot is what makes a declaration *preservable*, so an
+      input with no slot freezes any repo that passes it — ``--resync`` refuses
+      the whole file rather than delete the line (FND-604), and every
+      structural update the template carries is withheld with it.  At the time
+      this landed that was 25 of the 80 connector repos with a ``tests.yaml``,
+      across 13 different inputs; the four nobody had declared yet
+      (``source-available``, ``container-health-timeout-seconds``,
+      ``runtime-sdk-ref``, ``harness-sdk-ref``) are slotted too so the next
+      repo to need one does not re-open the trap.
+
+      ``test_paths_block`` and ``pytest_args_block`` are verbatim splices
+      rather than values, for the reason ``secrets_block`` is: both inputs are
+      written as ``>-`` block scalars in the wild (a folded list of pytest
+      target paths, a folded argument line), and a value-shaped param would
+      read the scalar *header* back as the value.  Like ``secrets_block`` they
+      carry their own key and indentation and no trailing newline.  Every other
+      new param is a single value, quoted or bare in the spelling the fleet
+      hand-wrote it (bare for the numeric and boolean inputs, quoted for the
+      strings).
     - ``.gitignore``: static template, no substitution.
 
     All other keyword arguments are accepted but unused, so callers can pass
@@ -220,6 +310,27 @@ def render(
         automerge=automerge,
         unit_coverage_fail_under=unit_coverage_fail_under,
         use_ghcr_base=use_ghcr_base,
+        vuln_scan_lfs=vuln_scan_lfs,
+        build_publish_lfs=build_publish_lfs,
         force_external_runtime=force_external_runtime,
         secrets_block=secrets_block,
+        test_paths_block=test_paths_block,
+        pytest_args_block=pytest_args_block,
+        timeout_minutes=timeout_minutes,
+        apt_packages=apt_packages,
+        private_git_deps=private_git_deps,
+        git_lfs_skip_smudge=git_lfs_skip_smudge,
+        lfs=lfs,
+        health_check_timeout_seconds=health_check_timeout_seconds,
+        container_health_timeout_seconds=container_health_timeout_seconds,
+        runtime_sdk_ref=runtime_sdk_ref,
+        harness_sdk_ref=harness_sdk_ref,
+        e2e_test_path=e2e_test_path,
+        source_available=source_available,
+        source_available_overrides=source_available_overrides,
+        dataforge_datasource=dataforge_datasource,
+        dataforge_mode=dataforge_mode,
+        dataforge_env_tier=dataforge_env_tier,
+        dataforge_output_prefix=dataforge_output_prefix,
+        dataforge_hermetic_fallback=dataforge_hermetic_fallback,
     )

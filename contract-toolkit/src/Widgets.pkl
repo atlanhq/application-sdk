@@ -15,6 +15,15 @@ module com.atlan.app.contract.Widgets
 /// Visual style variants supported by the workflows v2 InfoBanner component.
 typealias InfoBannerType = "info"|"warning"|"error"|"prerequisites"|"side-note"
 
+/// Escape a string for embedding in a double-quoted JSON literal.
+const local function escapeJsonStr(s: String): String =
+  s.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n").replaceAll("\r", "\\r").replaceAll("\t", "\\t")
+
+/// Render a list of strings as a compact JSON array *string* — the shape the
+/// frontend's multi-select widget reads a pre-selection from.
+const local function jsonStringArray(values: List<String>): String =
+  "[" + values.map((v) -> "\"\(escapeJsonStr(v))\"").join(",") + "]"
+
 /// External link shown inside widgets such as `InfoBanner`.
 class WidgetLink {
   /// Button/link label.
@@ -830,6 +839,55 @@ class DropDown extends UIElementWithEnum {
   required: Boolean? = false
 
   hidden multiSelect: Boolean = false
+
+  /// Keys from `possibleValues` to pre-select. Multi-select only.
+  ///
+  /// The frontend's multi-select widget reads its pre-selection from `default`
+  /// as a *JSON-stringified array*. Declare the keys structurally here and the
+  /// toolkit generates that string — a contract never hand-writes it:
+  ///
+  /// ```pkl
+  /// possibleValues { ["Table"] = "Table"; ["View"] = "View" }
+  /// defaultSelection { "Table"; "View" }
+  /// multiSelect = true
+  /// ```
+  ///
+  /// renders `"default": "[\"Table\",\"View\"]"`, and types the generated
+  /// `_e2e_substitutions.py` field `list[str]` with those keys as its default.
+  /// A single-select DropDown sets `default` directly instead.
+  hidden defaultSelection: Listing<String>?
+
+  /// (Generated on a multi-select) The JSON-stringified `defaultSelection`.
+  ///
+  /// Set this directly only on a single-select DropDown. On a multi-select it is
+  /// generated from `defaultSelection`, and assigning it by hand is rejected.
+  ///
+  /// The constraint may only name properties declared on `DropDown` itself —
+  /// inherited ones (`possibleValues`) do not resolve inside a constraint — so
+  /// the `possibleValues` membership check lives in the value expression below.
+  default: String?(
+    if (!multiSelect || this == null)
+      true
+    else if (defaultSelection == null)
+      throw("DropDown `default` cannot be set by hand when `multiSelect` is true — the widget needs a JSON-stringified array, which the toolkit generates for you. Replace it with `defaultSelection { \"key1\"; \"key2\" }`.")
+    else if (this != jsonStringArray(defaultSelection!!.toList()))
+      // Both were set. Without this branch the hand-written value would simply
+      // override the generated one and `defaultSelection` would be ignored in
+      // silence — the exact footgun this property exists to remove.
+      throw("DropDown `default` is generated from `defaultSelection` when `multiSelect` is true; remove the `default` assignment and keep `defaultSelection` alone.")
+    else true
+  ) =
+    if (defaultSelection == null)
+      null
+    else if (!multiSelect)
+      throw("DropDown `defaultSelection` is multi-select only. Set `multiSelect = true`, or use `default` for a single-select DropDown.")
+    else
+      let (selected = defaultSelection!!.toList())
+        let (unknownKeys = selected.filter((v) -> !possibleValues.keys.contains(v)))
+          if (!unknownKeys.isEmpty)
+            throw("DropDown `defaultSelection` may only contain keys declared in `possibleValues`. Unknown: \(unknownKeys.join(", ")).")
+          else
+            jsonStringArray(selected)
 
   hidden openByDefault: Boolean?
 

@@ -37,6 +37,7 @@ from application_sdk.handler.contracts import (
     SubscriptionConfig,
 )
 from application_sdk.handler.service import (
+    _CATEGORY_TO_HTTP,
     _flatten_to_pairs,
     _normalize_credentials,
     _normalize_preflight_request,
@@ -454,6 +455,153 @@ class TestPreflightEndpoint:
             json={"credentials": []},
         )
         assert response.status_code == 500
+
+    def test_unmeasured_duration_is_omitted_from_the_response(self) -> None:
+        # The -1.0 sentinel belongs to the telemetry row; the display payload
+        # shows no duration rather than a negative one.
+        from application_sdk.handler.contracts import PreflightCheck
+        from application_sdk.handler.service import _summarize_check
+
+        unmeasured = _summarize_check(PreflightCheck(name="auth", passed=True))
+        assert "duration_ms" not in unmeasured
+        measured = _summarize_check(
+            PreflightCheck(name="auth", passed=True, duration_ms=50.0)
+        )
+        assert measured["duration_ms"] == 50.0
+
+    def test_wrong_password_is_not_a_crash(self) -> None:
+        # AuthError -> 401: the response working as designed, the single most
+        # common preflight failure. It must never enter the crash series.
+        from application_sdk.errors.leaves import AuthError
+
+        class _WrongPasswordHandler(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise AuthError(message="wrong password")
+
+        client = _make_client(handler=_WrongPasswordHandler())
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 401
+        crashed = [
+            c
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert crashed == []
+        counted = [
+            c.kwargs
+            for c in ml.info.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert len(counted) == 1
+        assert counted[0]["outcome"] == "client_fault"
+
+    def test_client_fault_set_matches_the_http_mapping(self) -> None:
+        # The crash-row guard and the HTTP status mapping encode the same
+        # judgement ("is this the client's input, or our failure?"). Pin them
+        # together so neither can drift without this failing.
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.execution._temporal.preflight_gate import (
+            _CLIENT_FAULT_CATEGORIES,
+        )
+
+        for category in FailureCategory:
+            maps_to_4xx = _CATEGORY_TO_HTTP.get(category, 500) < 500
+            assert (category in _CLIENT_FAULT_CATEGORIES) == maps_to_4xx, category
+
+    def test_preflight_handler_crash_emits_outcome_row(self) -> None:
+        client = _make_client(handler=_FailingHandler())
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 500
+        rows = [
+            c
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert len(rows) == 1
+        kwargs = rows[0].kwargs
+        assert kwargs["outcome"] == "crashed"
+        assert kwargs["preflight_surface"] == "http"
+
+    def test_a_5xx_httpexception_still_emits_a_crash_row(self) -> None:
+        # An HTTPException is not proof of a deliberate client-facing response.
+        # A 5xx raised inside the body reaches none of the other boundary
+        # handlers, so without a row it leaves the funnel's denominator — the
+        # defect gap 3 closed for handler raises, on the same surface.
+        from fastapi import HTTPException
+
+        class _ServiceUnavailableHandler(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise HTTPException(status_code=503, detail="upstream is down")
+
+        client = _make_client(handler=_ServiceUnavailableHandler())
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 503
+        rows = [
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "crashed"
+        assert rows[0]["preflight_surface"] == "http"
+
+    def test_a_4xx_httpexception_emits_no_row(self) -> None:
+        # The other half: a deliberate client-facing status stays unrecorded,
+        # because the response itself is the channel.
+        from fastapi import HTTPException
+
+        class _ConflictHandler(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise HTTPException(status_code=409, detail="already connected")
+
+        client = _make_client(handler=_ConflictHandler())
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 409
+        for level in ("info", "warning", "error"):
+            for c in getattr(ml, level).call_args_list:
+                if c.args:
+                    assert c.args[0] != "Preflight check outcome"
+
+    def test_crash_row_names_the_requested_entrypoint(self) -> None:
+        # The raise must land BEFORE _validated_entrypoint reassigns
+        # `entrypoint`, because that window is the only one the seed governs.
+        client = _make_client(handler=_FailingHandler())
+        with (
+            patch(
+                "application_sdk.handler.service._validated_entrypoint",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch("application_sdk.handler.service.logger") as ml,
+        ):
+            response = client.post(
+                "/workflows/v1/check",
+                json={"credentials": [], "entrypoint": "alpha"},
+            )
+        assert response.status_code == 500
+        rows = [
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert len(rows) == 1
+        assert rows[0]["entrypoint"] == "alpha"
+
+    def test_malformed_entrypoint_400_emits_no_crash_row(self) -> None:
+        client = _make_client()
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post(
+                "/workflows/v1/check",
+                json={"credentials": [], "entrypoint": "Bad Name!"},
+            )
+        assert response.status_code == 400
+        for level in ("info", "warning", "error"):
+            for c in getattr(ml, level).call_args_list:
+                if c.args:
+                    assert c.args[0] != "Preflight check outcome"
 
     def test_preflight_metadata_forwarded_to_handler(self) -> None:
         """metadata survives _normalize_credentials and reaches the handler.
@@ -1966,6 +2114,104 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    # ── Build identity (FND-1684) ────────────────────────────────────────
+    #
+    # The e2e version check used to read LM's marketplace install record — the
+    # same record the install writes and then skips on — so once that record
+    # existed for a build the check could only agree with it, whatever the
+    # cluster was actually serving.
+    # This route is the fix: it is the one answer only a RUNNING POD can give,
+    # and it rides the already-proxied configmap route so no new Heracles rule
+    # is needed.
+
+    def test_build_identity_is_served_from_the_image_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.app.build_identity import (
+            BUILD_ID_ENV,
+            BUILD_IDENTITY_CONFIGMAP_ID,
+        )
+        from application_sdk.handler import service as svc_module
+
+        monkeypatch.setenv(BUILD_ID_ENV, "sdr-test-abc12345")
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get(
+                f"/workflows/v1/configmap/{BUILD_IDENTITY_CONFIGMAP_ID}"
+            )
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["metadata"]["name"] == BUILD_IDENTITY_CONFIGMAP_ID
+            # Both halves, because the CI reader accepts either: `data.config`
+            # is the envelope every other configmap uses, and the flattened
+            # keys spare a client that does not unwrap it.
+            assert data["data"]["build_id"] == "sdr-test-abc12345"
+            assert json.loads(data["data"]["config"])["build_id"] == (
+                "sdr-test-abc12345"
+            )
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_build_identity_is_empty_not_404_for_an_unstamped_image(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ "No stamp" and "no such route" need opposite next steps.
+
+        A 404 would collapse an image built without the stamp into the same
+        answer as an SDK too old to serve the route, and the CI check decides
+        differently on each.
+        """
+        from application_sdk.app.build_identity import (
+            BUILD_ID_ENV,
+            BUILD_IDENTITY_CONFIGMAP_ID,
+        )
+        from application_sdk.handler import service as svc_module
+
+        monkeypatch.delenv(BUILD_ID_ENV, raising=False)
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get(
+                f"/workflows/v1/configmap/{BUILD_IDENTITY_CONFIGMAP_ID}"
+            )
+            assert response.status_code == 200
+            assert response.json()["data"]["data"]["build_id"] == ""
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_a_generated_file_cannot_shadow_the_build_identity(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reserved id is answered before the generated-file scan.
+
+        A committed file cannot distinguish this build from one shipped months
+        ago, which is the whole reason this route exists — so an app that ships
+        a file of this name must not be able to answer in the pod's place.
+        """
+        from application_sdk.app.build_identity import (
+            BUILD_ID_ENV,
+            BUILD_IDENTITY_CONFIGMAP_ID,
+        )
+        from application_sdk.handler import service as svc_module
+
+        (tmp_path / f"{BUILD_IDENTITY_CONFIGMAP_ID}.json").write_text(
+            json.dumps({"config": {"build_id": "committed-lie"}})
+        )
+        monkeypatch.setenv(BUILD_ID_ENV, "sdr-test-abc12345")
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get(
+                f"/workflows/v1/configmap/{BUILD_IDENTITY_CONFIGMAP_ID}"
+            )
+            assert response.json()["data"]["data"]["build_id"] == "sdr-test-abc12345"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_configmap_returns_wrapped_k8s_shape(self, tmp_path: Path) -> None:
         from application_sdk.handler import service as svc_module
 
@@ -2200,6 +2446,207 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_configmap_default_fallback_skips_artifact_schemas(
+        self, tmp_path: Path
+    ) -> None:
+        """App-id request must not serve ``artifact_schemas.json`` as the form.
+
+        Regression, FND-1682. Once an app declares an ``artifactSchemas`` block
+        (conformance K016) the toolkit emits ``artifact_schemas.json`` beside
+        the form. It is neither the manifest nor a credential template, and it
+        sorts before every plausible form stem, so the fallback's sorted scan
+        picked it and the handler returned ``raw.get("config", raw)`` — the
+        whole schema document, which carries no ``properties``. HTTP 200, blank
+        setup wizard, nothing in the logs or the network tab. Latent for every
+        app adopting K016; ``atlan-metabase-app`` was the first confirmed one
+        (FND-1681).
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Flat single-entrypoint layout, in the order `sorted()` sees it:
+        # artifact_schemas < atlan-connectors-* < manifest < the form.
+        (tmp_path / "artifact_schemas.json").write_text(
+            json.dumps({"version": "1.0", "artifacts": {}})
+        )
+        (tmp_path / "atlan-connectors-metabase.json").write_text(
+            json.dumps({"config": {"key": "credential-schema"}})
+        )
+        (tmp_path / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (tmp_path / "metabase.json").write_text(
+            json.dumps({"config": {"key": "form-config"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="metabase", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-metabase")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "form-config"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_prefers_entrypoint_named_form(
+        self, tmp_path: Path
+    ) -> None:
+        """An unrecognised sibling that sorts first does not become the form.
+
+        The exclusion list can only name the siblings the toolkit emits today,
+        so the fallback identifies the form by name first — ``<ep.name>.json``,
+        or the connector convention ``<source>-<ep.name>.json`` — and only then
+        falls back to the sorted scan. ``aaa-unknown-sibling.json`` stands in
+        for whatever the toolkit emits next: on no exclusion list, sorting
+        first. Without the naming step this is FND-1682 again with a different
+        filename.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "aaa-unknown-sibling.json").write_text(
+            json.dumps({"config": {"key": "not-a-form"}})
+        )
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "crawler.json").write_text(
+            json.dumps({"config": {"key": "form-config"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="metabase", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-metabase")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "form-config"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_matches_connector_suffix_form(
+        self, tmp_path: Path
+    ) -> None:
+        """``crawler`` resolves ``snowflake-crawler.json`` over a first-sorting sibling.
+
+        The connector convention names the entry point for the *role* and the
+        file for the source, so exact-name matching alone never fires across the
+        connector fleet — every one of them would ride the alphabetical guess.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "aaa-unknown-sibling.json").write_text(
+            json.dumps({"config": {"key": "not-a-form"}})
+        )
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "form-config"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "form-config"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_alphabetical_last_resort_serves_and_warns(
+        self, tmp_path: Path
+    ) -> None:
+        """Several candidates, none named for the entrypoint → serve + WARN.
+
+        The alphabetical pick is the compatibility path for apps whose form name
+        the SDK cannot recognise, so it still answers rather than 404ing. What
+        it owes an operator is visibility: FND-1682 was invisible precisely
+        because the wrong file came back as an HTTP 200. The warning names the
+        file served and the candidates rejected, so the next unrecognised
+        sibling shows up on the first request instead of in a blank wizard.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _SplitApp(App):
+            @entrypoint
+            async def extract_metadata(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Route/card-split shape: the form is named for the app, not the entry
+        # point, so nothing here identifies itself and both files are eligible.
+        (tmp_path / "aaa-unknown-sibling.json").write_text(
+            json.dumps({"config": {"key": "guessed"}})
+        )
+        (tmp_path / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (tmp_path / "metabase.json").write_text(
+            json.dumps({"config": {"key": "the-real-form"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="metabase", app_class=_SplitApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            with patch("application_sdk.handler.service.logger") as mock_logger:
+                response = client.get("/workflows/v1/configmap/atlan-metabase")
+            assert response.status_code == 200
+            # Still served — the guess is the compatibility path, not an error.
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "guessed"
+
+            warned = [
+                call
+                for call in mock_logger.warning.call_args_list
+                if "chosen alphabetically" in call.args[0]
+            ]
+            assert len(warned) == 1
+            # The rejected candidates are the diagnostic: they are what tells an
+            # operator which file they meant to serve.
+            assert warned[0].args[1:] == (
+                "extract-metadata",
+                2,
+                "aaa-unknown-sibling",
+                ["aaa-unknown-sibling", "metabase"],
+            )
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_configmap_default_fallback_prefers_nested_over_flat_form(
         self, tmp_path: Path
     ) -> None:
@@ -2341,6 +2788,62 @@ class TestConfigMapEndpoints:
             assert "manifest" not in configmaps
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmaps_lists_the_names_the_endpoint_answers_to(
+        self, tmp_path: Path
+    ) -> None:
+        """The listing is "what can be fetched", not "which file is the form".
+
+        Those two rules look interchangeable and are not, so both halves are
+        pinned here. A credential template must stay LISTED — the setup form's
+        `credential` widget fetches `atlan-connectors-<source>` as a configmap
+        in its own right, so filtering it out would advertise fewer names than
+        the endpoint actually serves. The manifest must stay OUT, because
+        `/workflows/v1/manifest` owns it.
+
+        `artifact_schemas` is listed too, and deliberately: this endpoint does
+        serve it by exact stem. What FND-1682 fixed was the *fallback* picking
+        it when asked for something else, which is a different question from
+        which names resolve.
+        """
+        from application_sdk.handler import service as svc_module
+
+        for name in (
+            "artifact_schemas.json",
+            "atlan-connectors-snowflake.json",
+            "manifest.json",
+            "snowflake.json",
+        ):
+            (tmp_path / name).write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            response = _make_client().get("/workflows/v1/configmaps")
+            assert response.status_code == 200
+            configmaps = response.json()["data"]["configmaps"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+        assert sorted(configmaps) == [
+            "artifact_schemas",
+            "atlan-connectors-snowflake",
+            "snowflake",
+        ]
+
+    def test_the_excluded_stem_is_the_shared_one(self) -> None:
+        """One vocabulary, not a literal re-spelled at each site.
+
+        A hand-written `"manifest"` here was the last copy of that vocabulary
+        left in this module after FND-1682, and one divergent spelling is all
+        the artifact_schemas bug needed. If `_generated_tree` renames the stem,
+        this endpoint has to move with it rather than quietly keep listing a
+        file the rest of the SDK stopped calling a manifest.
+        """
+        from application_sdk.app._generated_tree import MANIFEST_STEM
+        from application_sdk.handler import service as svc_module
+
+        assert svc_module.MANIFEST_STEM is MANIFEST_STEM
 
     def test_configmaps_empty_when_dir_missing(self, tmp_path: Path) -> None:
         from application_sdk.handler import service as svc_module

@@ -19,7 +19,7 @@ sidecar). Local:
 
     docker run -d --rm -p 9000:9000 \\
         -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \\
-        minio/minio server /data
+        quay.io/minio/minio server /data
     AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \\
         aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-customer-objectstore
     AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \\

@@ -85,11 +85,41 @@ The only permitted bypass is *no declaration at all*, and only for app-internal 
 | --- | --- | --- |
 | Every entrypoint's `input_type` / `output_type` | **Required** for every `FileReference` field | A public, external-facing interface by definition — another app or the DAG reads it |
 | Internal `@task` contracts | **Optional** | Purely app-internal processing; the app decides whether it wants the check or accepts the risk |
+| A field marked `AssetArtifact` | **Already declared** | The declaration is the model, not a field map — see below |
 
 The boundary needs no special-casing, which is what makes it cheap to enforce: the default `run()`
 method is registered as an *implicit* entrypoint carrying the same `EntryPointMetadata` as an
 explicit `@entrypoint`. "The public boundary" is therefore uniformly every `EntryPointMetadata`'s
 `input_type` and `output_type` — one rule, explicit and implicit alike.
+
+#### Which source a field gets is a fact about the field (FND-1863)
+
+"App-authored" is the rule for artifacts the app owns. It is the wrong rule for an artifact the SDK
+declares, populates and writes — `ExtractionOutput.transformed_files`, which `SqlApp.run()` fills and
+`SqlApp._transform_entity` writes, and which no connector authors any part of. The boundary path
+originally built a `ContractSource` **unconditionally**, so that field reported `not_declared` on a
+public boundary unless every SQL connector hand-authored an envelope for it — while the upload path
+was already validating the same bytes against the full `Asset` model. One of three canonical apps had
+written the envelope; the other two would have broken at 4.0.
+
+The `AssetArtifact` marker (`application_sdk.contracts.types`) is where that fact now lives. It sits
+in the field's `Annotated` metadata, exactly as `Lazy` does, and **one reader** answers for it —
+`asset_artifact_marker` — consumed by both enforcement points:
+
+| Reader | Marked field | Unmarked field |
+| --- | --- | --- |
+| Activity interceptor | `ModelSource(model=Asset)` — the full backbone, `artifact_schema_source=model` | `ContractSource` |
+| Registration guard / K016 | declared; nothing to author | must be declared |
+
+One reader is not a tidiness preference: a field the guard exempted but the interceptor did not
+model-validate would be a boundary nothing checks at all. A `ContractSource` envelope that exists for
+a marked field is ignored — a field cannot have two declarations, and of the two the model is the
+stronger, so the marker only ever raises the standard of the check.
+
+The offload follows the source rather than the caller: a field map is pure Python over bytes and
+rides `run_in_thread`, while a model decode enters `msgspec` via `pyatlan_v9` — where a native fault
+took a whole Temporal worker down once (CNCT-85) — and rides `run_best_effort` in an isolated child
+process, bounded by the same timeout `App.upload()`'s scan uses on the same bytes.
 
 Three enforcement layers, because each catches what the others cannot:
 

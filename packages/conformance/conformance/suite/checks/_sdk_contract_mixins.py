@@ -42,6 +42,7 @@ SDK_CONTRACT_BASE_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("workflow_id", "str", "active"),
         SdkField("correlation_id", "str", "active"),
         SdkField("app_name", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "Output": (
         SdkField("status", "OutputStatus", "active"),
@@ -115,6 +116,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("temp_table_regex", "str", "active"),
         SdkField("total_batches", "int", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "ExecuteColumnBatchOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -138,6 +140,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "ExtractionOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -175,6 +178,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "ExtractionTaskOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -201,6 +205,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchColumnsInput": (
         SdkField("app_name", "str", "active"),
@@ -215,6 +220,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchColumnsOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -236,6 +242,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchDatabasesOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -254,6 +261,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("prepone_enabled", "bool", "active"),
         SdkField("prepone_hours", "float", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchIncrementalMarkerOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -275,6 +283,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchProceduresOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -296,6 +305,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchSchemasOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -322,6 +332,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchTablesInput": (
         SdkField("app_name", "str", "active"),
@@ -336,6 +347,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchTablesOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -358,6 +370,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "FetchViewsOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -388,6 +401,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("temp_table_regex", "str", "active"),
         SdkField("upload_concurrency", "int", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "IncrementalExtractionOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -435,6 +449,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "PrepareColumnQueriesInput": (
         SdkField("app_name", "str", "active"),
@@ -457,6 +472,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("source_tag_prefix", "str", "active"),
         SdkField("temp_table_regex", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "PrepareColumnQueriesOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -486,6 +502,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
             "workflow_args", "dict[str, str | int | float | bool | None]", "active"
         ),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "QueryBatchOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -507,6 +524,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("output_path", "str", "active"),
         SdkField("output_prefix", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "QueryExtractionOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -528,6 +546,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
             "workflow_args", "dict[str, str | int | float | bool | None]", "active"
         ),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "QueryFetchOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -543,6 +562,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("connection_qualified_name", "str", "active"),
         SdkField("correlation_id", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "ReadCurrentStateOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -570,6 +590,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("temp_table_regex", "str", "active"),
         SdkField("typename", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "TransformOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -587,6 +608,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("correlation_id", "str", "active"),
         SdkField("next_marker_timestamp", "str", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
     ),
     "UpdateMarkerOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -617,6 +639,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("temp_table_regex", "str", "active"),
         SdkField("upload_concurrency", "int", "active"),
         SdkField("workflow_id", "str", "active"),
+        SdkField("workflow_slug", "str", "active"),
         SdkField("workflow_run_id", "str", "active"),
     ),
     "WriteCurrentStateOutput": (
@@ -631,3 +654,52 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("status", "OutputStatus", "active"),
     ),
 }
+
+# ── Model-declared artifact fields ────────────────────────────────────────────
+# A ``FileReference`` field can carry the SDK's ``AssetArtifact`` marker
+# (``application_sdk.contracts.types``), which says its declaration *is* an
+# executable model — ``pyatlan_v9``'s ``Asset`` — rather than a hand-authored
+# field map in ``artifactSchemas``. The SDK's registration-time guard exempts
+# such a field, and its activity interceptor validates it against the whole
+# model instead, so K016 must exempt it too: a rule demanding a declaration the
+# SDK does not want, for an artifact it already checks more strictly, would be
+# asking every app to author a partial restatement of ``Asset`` (FND-1863).
+#
+# Names, not a per-class map, and that is a deliberate accuracy trade. The
+# marker lives in ``Annotated`` metadata, which ``_canonical_type`` strips, so a
+# field *inherited* from an SDK contract arrives at the check as a bare name with
+# no annotation left to inspect — the same reason ``SDK_TEMPLATE_CONTRACT_FIELDS``
+# exists at all. A field an app declares itself is matched on its own annotation
+# instead (see ``artifact_schema_declared._check``), so the only case this set
+# answers is the inherited one, where the app has nothing of its own to mark.
+#
+# The residual false negative is an app declaring an unrelated boundary field
+# that happens to share one of these names *and* inheriting it from a base this
+# scan cannot see. K016 is a WARN-tier rule that errs toward a false negative by
+# design, and this gap is narrower than the import-alias one it already accepts.
+#
+# ``tests/test_sdk_contract_mixins.py`` rebuilds this set from an AST scan of the
+# installed SDK's contract modules, so a newly marked field cannot ship without
+# the rule learning about it, and a name the SDK has stopped marking cannot sit
+# here exempting fields forever — see the ahead-of-pin allowlist below for the one
+# window in which an entry may have no live marker backing it.
+SDK_MODEL_BACKED_ARTIFACT_FIELDS: frozenset[str] = frozenset({"transformed_files"})
+
+#: Entries of :data:`SDK_MODEL_BACKED_ARTIFACT_FIELDS` the *pinned* SDK does not
+#: mark yet, because the marker landed in the SDK after this package's pin.
+#:
+#: The two drift directions need different rules, and this is what lets both be
+#: checked. A name the SDK marks and the mirror omits is a fleet-wide false
+#: positive, so that direction is absolute. A mirror entry with no live marker is
+#: either (a) this window — the marker is on the SDK's ``main`` and the pin has
+#: not caught up — or (b) genuine staleness, where a removed or renamed marker
+#: leaves a name behind that goes on exempting every inherited field sharing it,
+#: silently and with the test still green. Only (a) is legitimate, and only (a) is
+#: listed here.
+#:
+#: **Every entry is a deletion waiting for a pin bump.** Once
+#: ``packages/conformance/uv.lock`` moves to an SDK that carries the marker, the
+#: drift test sees it live and fails until the name is removed from this
+#: allowlist — which is the point: the exemption stays, the temporary excuse for
+#: it does not.
+MODEL_BACKED_FIELDS_AHEAD_OF_PIN: frozenset[str] = frozenset({"transformed_files"})

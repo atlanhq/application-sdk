@@ -210,6 +210,16 @@ class AppContext:
 
     app_name: str
     app_version: str
+    #: The build identity of the image this process runs from, or "" when the
+    #: image carries no stamp (FND-1684).
+    #:
+    #: Distinct from ``app_version`` and not interchangeable with it:
+    #: ``app_version`` is the semver the app declares in its own source, so it is
+    #: identical across every build of that source; this changes whenever the
+    #: image content does, which is what makes it able to answer "is this pod
+    #: running the build under test?". Defaulted so no existing construction site
+    #: has to change. See :mod:`application_sdk.app.build_identity`.
+    build_id: str = ""
     run_id: str = field(default_factory=lambda: str(uuid4()))
     workflow_id: str = field(default=LOCAL_WORKFLOW_ID)
     correlation_id: str = field(default="")

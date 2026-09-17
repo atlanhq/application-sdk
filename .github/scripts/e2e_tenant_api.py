@@ -77,6 +77,13 @@ RELEASE_SCAN_PATH = (
     f"{_SERVICE_PREFIX}/marketplace/apps/{{app_id}}/releases/{{release_id}}"
 )
 
+#: Heracles' configmap proxy: it forwards to the app pod's own
+#: ``GET /workflows/v1/configmap/{id}``, so a 200 here is an answer from the
+#: RUNNING POD rather than from a marketplace record. That is what makes it the
+#: route the build-identity check reads (FND-1684) — and it is already proxied,
+#: so reading it needs no new Heracles rule.
+CONFIGMAP_PATH = f"{_SERVICE_PREFIX}/configmaps/{{name}}"
+
 #: AE submit / create. `submit=false` creates the workflow without executing it,
 #: which still drives Heracles' server-side manifest fetch from the deployed pod.
 PACKAGE_WORKFLOWS_PATH = f"{_SERVICE_PREFIX}/package-workflows"

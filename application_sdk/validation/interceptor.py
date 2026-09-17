@@ -46,16 +46,29 @@ added to protect is worse than no check at all. And an *undeclared* artifact off
 public boundary never blocks, because ADR-0020 makes declaration optional on
 app-internal ``@task`` contracts on purpose.
 
-**Off the event loop.** Validators are plain synchronous scans, so per ADR-0020 the
-interceptor — not each validator — owns the offload decision. Everything reachable
-from here is contract-sourced, because this module only ever builds a
-:class:`~application_sdk.validation.sources.ContractSource`: an NDJSON stream over
-``orjson``, or a parquet footer read. Both ride
-:func:`~application_sdk._runtime.offload.run_in_thread`. The model-sourced cell is
-the one that needs a child process rather than a thread — its decode enters
-third-party C extensions, where a native fault kills the worker instead of raising —
-and it owns that isolation itself, inside the asset cell (FND-690). Nothing here has
-to know about it, which is the point of the two-seam split.
+**Off the event loop, and the offload depends on the source.** Validators are plain
+synchronous scans, so per ADR-0020 the interceptor — not each validator — owns the
+offload decision, and it makes two different ones:
+
+* A :class:`~application_sdk.validation.sources.ContractSource` field map is an
+  NDJSON stream over ``orjson`` or a parquet footer read — pure Python over bytes,
+  so it rides :func:`~application_sdk._runtime.offload.run_in_thread`.
+* A :class:`~application_sdk.validation.sources.ModelSource` decode enters
+  third-party C extensions (``msgspec`` via ``pyatlan_v9``), where a native fault is
+  not a Python exception and would take the whole Temporal worker with it (as one
+  did, CNCT-85). That cell rides
+  :func:`~application_sdk._runtime.offload.run_best_effort`, which isolates it in a
+  child process, bounds it with a timeout and degrades a crash to a warning — the
+  same posture ``App.upload()``'s transformed-asset scan has always used for the
+  same bytes.
+
+Which source a reference gets is not a choice this module makes per app: it is read
+off the contract field, from the
+:class:`~application_sdk.contracts.types.AssetArtifact` marker (FND-1863). An
+SDK-owned asset artifact — ``ExtractionOutput.transformed_files`` — is declared by
+the ``Asset`` model itself, so the boundary check is the full typed model rather
+than a field map an app could only partially restate. Everything else is
+contract-sourced.
 """
 
 from __future__ import annotations
@@ -65,6 +78,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Iterable, Iterator, Mapping
 
+from application_sdk.contracts.types import asset_artifact_marker
 from application_sdk.errors.leaves import DataIntegrityError
 from application_sdk.observability.events import (
     ARTIFACT_VALIDATION_EVENT,
@@ -78,11 +92,16 @@ from application_sdk.validation.artifacts import (
     artifact_validation_event_fields,
     artifact_validation_mode,
 )
-from application_sdk.validation.sources import ArtifactDeclarationError, ContractSource
+from application_sdk.validation.sources import (
+    ArtifactDeclarationError,
+    ContractSource,
+    ModelSource,
+)
 
 if TYPE_CHECKING:
     from application_sdk.app.registry import AppMetadata
     from application_sdk.storage.file_ref_sync import NamedFileRef
+    from application_sdk.validation.protocols import SchemaSource
 
 logger = get_logger(__name__)
 
@@ -582,16 +601,56 @@ def _unique(named: Iterable["NamedFileRef"]) -> Iterator["NamedFileRef"]:
         yield item
 
 
+def _source_for(item: "NamedFileRef", *, entrypoint: str) -> "SchemaSource":
+    """Which declaration this reference is checked against.
+
+    Read off the contract field, never inferred from the storage path — path-shape
+    inference is precisely what made the earlier upload-time hook match nothing.
+    The walk already knows the field and the class that declares it, which is both
+    what a declaration is keyed on and where the
+    :class:`~application_sdk.contracts.types.AssetArtifact` marker lives.
+
+    A marked field resolves to a :class:`~application_sdk.validation.sources.ModelSource`
+    over the marker's own model: the artifact is Atlas assets the SDK wrote, the
+    model *is* its declaration, and a generated field map could only restate part
+    of it (FND-1863). Every other field resolves to a
+    :class:`~application_sdk.validation.sources.ContractSource`, which is the
+    app-authored case and stays the default.
+
+    A ``ContractSource`` envelope that happens to exist for a marked field is not
+    consulted. A field cannot have two declarations, and of the two the model is
+    the stronger — resolving the field map instead would trade the full ``Asset``
+    backbone for a partial restatement of it.
+
+    Raises:
+        ImportError: The marker's model cannot be imported. Left to propagate to
+            :func:`validate_artifacts`, which classifies it ``validator_broken``:
+            the SDK failing to load its own model is not evidence about the app's
+            artifact, and must never block a hand-off.
+    """
+    marker = asset_artifact_marker(item.owner, item.field)
+    if marker is not None:
+        return ModelSource(model=marker.model())
+    return ContractSource(field=item.field, entrypoint=entrypoint)
+
+
 async def _report_for(
     item: "NamedFileRef", *, entrypoint: str, boundary: bool
 ) -> ArtifactValidationReport:
     """Resolve one reference to exactly one report.
 
-    Nothing is inferred from the shape of the storage path — path-shape inference is
-    precisely what made the earlier upload-time hook match nothing. The contract
-    field the reference was reached through is what the declaration is keyed on, and
-    the walk already knows it.
+    The source comes from :func:`_source_for` and it decides the offload too: a
+    field map is pure Python over bytes and rides a thread, while a model decode
+    enters C extensions and rides an isolated child process. See the module
+    docstring.
     """
+    source = _source_for(item, entrypoint=entrypoint)
+    local_path = item.ref.local_path
+    if not local_path:
+        return _no_local_artifact(source, boundary=boundary)
+    if isinstance(source, ModelSource):
+        return await _model_report(Path(local_path), source, boundary=boundary)
+
     from application_sdk._runtime.offload import (  # noqa: PLC0415 — circular: _runtime loads observability which loads constants
         run_in_thread,
     )
@@ -599,10 +658,6 @@ async def _report_for(
         validate_artifact,
     )
 
-    source = ContractSource(field=item.field, entrypoint=entrypoint)
-    local_path = item.ref.local_path
-    if not local_path:
-        return _no_local_artifact(source, boundary=boundary)
     # Synchronous by design (ADR-0020): the scan is a plain streaming read, so the
     # interceptor owns the offload rather than every validator re-deciding it.
     return await run_in_thread(
@@ -610,8 +665,62 @@ async def _report_for(
     )
 
 
+async def _model_report(
+    path: Path, source: ModelSource, *, boundary: bool
+) -> ArtifactValidationReport:
+    """Run the model-sourced cell in an isolated child process.
+
+    A thread is not enough here and the reason is not performance. The decode runs
+    ``msgspec`` via ``pyatlan_v9``, and a native fault in a C extension is not a
+    Python exception: in-process it kills the Temporal worker rather than raising
+    (CNCT-85). :func:`~application_sdk._runtime.offload.run_best_effort` puts the
+    scan in a child, bounds it with the same timeout ``App.upload()``'s
+    transformed-asset scan uses on the same bytes, and returns ``None`` for every
+    failure it absorbed — crash, timeout or ordinary error — having already logged
+    it.
+
+    That ``None`` becomes ``absent`` with ``validator_broken=True``, which is the
+    honest classification and the one that matters under a hard posture: the child
+    dying tells us nothing about the artifact, so a hard-mode app must not fail its
+    activity for it. Contrast the ``absent`` that
+    :func:`_no_local_artifact` returns for a declared field with nothing to read,
+    which *is* about the hand-off and does block.
+    """
+    from application_sdk._runtime.offload import (  # noqa: PLC0415 — circular: _runtime loads observability which loads constants
+        run_best_effort,
+    )
+    from application_sdk.constants import (  # noqa: PLC0415 — deferred so a deployment can retune the bound under test, mirroring VALIDATE_ARTIFACTS
+        VALIDATE_ASSETS_TIMEOUT_SECONDS,
+    )
+    from application_sdk.validation.wrapper import (  # noqa: PLC0415 — keeps the parquet validator's pyarrow floor off a JSON-only caller's import path
+        validate_artifact,
+    )
+
+    report = await run_best_effort(
+        validate_artifact,
+        path,
+        source,
+        boundary=boundary,
+        label="Model-sourced artifact validation",
+        logger=logger,
+        timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+    )
+    if report is None:
+        return ArtifactValidationReport.absent(
+            reason=(
+                "the model-sourced scan crashed, timed out or errored in its "
+                "isolated child process"
+            ),
+            artifact_format=source.artifact_format,
+            schema_source=source.kind,
+            boundary=boundary,
+            validator_broken=True,
+        )
+    return report
+
+
 def _no_local_artifact(
-    source: ContractSource, *, boundary: bool
+    source: "SchemaSource", *, boundary: bool
 ) -> ArtifactValidationReport:
     """The outcome for a reference carrying no local artifact to scan.
 
@@ -627,6 +736,12 @@ def _no_local_artifact(
       a hard posture it blocks — the app asked for a check it could not be given.
     * "it is declared and the SDK could not read the *declaration*" is ``absent``
       too, but ``validator_broken``, so it never blocks.
+
+    A model-sourced field only ever reaches the second of those three: the model
+    *is* the declaration, so ``resolve()`` cannot return ``None`` and the
+    ``not_declared`` branch is unreachable for it. A marked field with nothing
+    materialised is therefore ``absent`` and blockable — which is right, because
+    the SDK wrote that artifact and a hard-mode app asked for a check on it.
 
     That last split is this function's twin of the wrapper's own
     ``ArtifactDeclarationError`` branch, and it has to agree with it: the same

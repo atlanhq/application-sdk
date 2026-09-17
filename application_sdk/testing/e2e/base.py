@@ -39,7 +39,7 @@ run is graded against. The plumbing it composes is
 :mod:`application_sdk.testing.harness`:
 
 * :mod:`~application_sdk.testing.harness.identity` mints the run id and the
-  ephemeral connection name — including the qualified name teardown purges,
+  ephemeral connection name — including the qualified name teardown deletes,
   which used to come back from ``Connection.creator`` at one-second resolution
   and could collide between two matrix legs;
 * :mod:`~application_sdk.testing.harness.starters` publishes the seed version;
@@ -50,7 +50,9 @@ run is graded against. The plumbing it composes is
   qualified-name depths;
 * :mod:`~application_sdk.testing.harness.preconditions` is the worker-health
   probe behind :meth:`BaseE2ETest.assert_worker_up`;
-* :mod:`~application_sdk.testing.harness.teardown` purges;
+* :mod:`~application_sdk.testing.harness.teardown` reclaims — through the
+  tenant's ``connection-delete`` app, which owns the byte-stores a runner
+  cannot reach, with the ``pyatlan`` purge as its fallback;
 * :mod:`~application_sdk.testing.harness.budgets` carries every timing this
   class' ``ClassVar`` declarations carry.
 
@@ -95,8 +97,10 @@ from application_sdk.common.task_queue import (
     derive_task_queue,
 )
 from application_sdk.contracts.types import ConnectionRef
-from application_sdk.errors.base import safe_traceback
+from application_sdk.errors.base import safe_traceback, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage.binding import create_store_from_binding_optional
+from application_sdk.storage.ops import delete as delete_object
 from application_sdk.testing.e2e._errors import (
     AmbiguousDAGRunError,
     AtlasReadIndeterminateError,
@@ -134,6 +138,7 @@ from application_sdk.testing.e2e.payload import (
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.harness import atlas
+from application_sdk.testing.harness import seed as harness_seed
 from application_sdk.testing.harness._errors import MissingTenantEnvError
 from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.bridge import run_sync
@@ -145,13 +150,21 @@ from application_sdk.testing.harness.evidence import (
 )
 from application_sdk.testing.harness.expectations import (
     UNREADABLE,
+    AssetAttributes,
     AssetExpectations,
+    AssetRef,
+    AttributeExpectationValue,
+    AttributeSampleRead,
     CountRead,
     Finding,
     SampleRead,
     Unreadable,
+    evaluate_attributes,
+    evaluate_attributes_at,
     evaluate_counts,
     evaluate_locations,
+    normalise_attribute_expectations,
+    normalise_attribute_expectations_at,
 )
 from application_sdk.testing.harness.identity import (
     Minter,
@@ -162,6 +175,7 @@ from application_sdk.testing.harness.outcome import (
     Indeterminate,
     Outcome,
     Settled,
+    as_attribute_samples,
     as_count,
     as_counts,
     as_samples,
@@ -176,13 +190,32 @@ from application_sdk.testing.harness.starters import (
     SubmitRetry,
     publish_seed_version,
 )
-from application_sdk.testing.harness.teardown import purge_connection
+from application_sdk.testing.harness.teardown import (
+    ConnectionDeletePlan,
+    ConnectionDeleteReport,
+    DeleteType,
+    connection_delete_task_queue,
+    delete_connection,
+    purge_connection,
+)
 from application_sdk.testing.harness.waiting import poll_until
 
-if TYPE_CHECKING:  # pragma: no cover - typing only; pyatlan is a lazy import
+if TYPE_CHECKING:  # pragma: no cover - typing only; both are lazy imports
+    from obstore.store import ObjectStore
     from pyatlan.client.aio.client import AsyncAtlanClient
 
+    from application_sdk.testing.harness.temporal import PollerInfo
+
 logger = get_logger(__name__)
+
+# Where the sdr-e2e composite action selects the CI Dapr components, and the
+# name the atlan-configurator emits the tenant blobstorage binding under. Both
+# are the CI convention rather than a rule, which is why each has an env
+# override (``E2E_SEED_COMPONENTS_DIR`` / ``E2E_SEED_STORE_BINDING``) and the
+# whole resolution sits behind an overridable method — a leg whose layout
+# differs is a per-leg env var, not an edit here.
+_DEFAULT_SEED_COMPONENTS_DIR = "ci-deploy/components"
+_DEFAULT_SEED_STORE_BINDING = "atlan-objectstore"
 
 # Version that drops the deprecated ``DatabaseSpec.connector_config_name``
 # fallback in :meth:`BaseE2ETest.resolved_connector_config_name`. Every
@@ -234,6 +267,9 @@ _FINDING_TEMPLATES = {
     "nonempty": "  - {detail}",
     "depth": "  - {subject} {detail}",
     "nesting": "  - {subject} {detail}",
+    "attribute": "  - {subject} {detail}",
+    "missing": "  - {subject}: {detail}",
+    "ambiguous": "  - {subject}: {detail}",
     UNREADABLE: "  - {subject}: {detail}",
 }
 
@@ -357,6 +393,78 @@ class NodeDispatch:
     task_queue: str
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class QueuePollerReading:
+    """What Temporal answered when asked who is holding one dispatched queue.
+
+    Recorded per task-queue name when the poll stops early, so a stuck-node
+    line can say whether anything ever *claimed* the task rather than inferring
+    it from AE's status. AE reports ``Running`` for a task that was dispatched
+    and never claimed by any poller exactly as it does for one a worker picked
+    up and stalled on (FND-1880), and the two need opposite investigations —
+    "the worker/queue wiring is wrong" against "the activity is hanging".
+
+    Attributes:
+        task_queue: The queue asked about.
+        namespace: Temporal namespace the read was scoped to.
+        pollers: Every poller Temporal reported. **Empty is the finding, not a
+            failed read**: a read that raised is never recorded at all (see
+            :meth:`BaseE2ETest._read_queue_pollers`), so an empty tuple means
+            Temporal answered "nobody is holding this queue".
+    """
+
+    task_queue: str
+    namespace: str
+    pollers: tuple[PollerInfo, ...]
+
+    @property
+    def unclaimed(self) -> bool:
+        """Whether Temporal reported no poller at all on the queue.
+
+        Returns:
+            True when nothing is holding the queue, which is the observed form
+            of "no worker ever claimed this task".
+        """
+        return not self.pollers
+
+    @property
+    def held_halves(self) -> str:
+        """Which halves of the queue have pollers, as a clause.
+
+        A task-queue *name* addresses two queues — workflow tasks and activity
+        tasks — and the read covers both, so a non-empty result can mean either
+        is held. Naming which is what makes the half-polling zombie legible: a
+        worker whose workflow poll loop died while its activity loop lives holds
+        one half, and a union count reports that as "1 poller" exactly as a
+        healthy worker does. See :class:`TaskQueueType`.
+
+        Returns:
+            ``both halves`` when every half is held, else ``the <Half> half
+            only``. Empty when :attr:`unclaimed`.
+        """
+        halves = {poller.task_queue_type for poller in self.pollers}
+        if not halves:
+            return ""
+        if len(halves) > 1:
+            return "both halves"
+        return f"the {next(iter(halves)).value} half only"
+
+    @property
+    def identities(self) -> str:
+        """The pollers as ``identity (Workflow, build X)``, comma-separated.
+
+        Returns:
+            One clause per poller, in the order Temporal reported them. Empty
+            when :attr:`unclaimed` — no caller renders it in that case.
+        """
+        return ", ".join(
+            f"{poller.identity} ({poller.task_queue_type.value}"
+            + (f", build {poller.build_id}" if poller.build_id else "")
+            + ")"
+            for poller in self.pollers
+        )
+
+
 @dataclass(frozen=True)
 class FullDAGOutcome:
     """Combined result of a single full-DAG run.
@@ -382,6 +490,12 @@ class FullDAGOutcome:
             the types in ``expected_asset_qn_depth``); used to assert assets
             landed at the correct hierarchy depth. Empty when location
             validation isn't requested or the Connection probe didn't succeed.
+        asset_attribute_samples: A few sampled assets per type with the
+            attribute values they carry (only for the types in
+            ``expected_asset_attributes``); used to assert an asset's
+            *contents*, which the counts and depths cannot see. Empty when
+            attribute validation isn't requested or the Connection probe didn't
+            succeed.
     """
 
     ae_result: DAGRunResult
@@ -406,6 +520,29 @@ class FullDAGOutcome:
     used to fail *open* — a failed sample read arrived as an empty list, which is
     also how "this type landed nothing" is spelled, and an empty list is skipped.
     Keeping the distinction here is what closes finding C4 on FND-224."""
+    asset_attribute_samples: dict[str, list[AssetAttributes]] = field(
+        default_factory=dict
+    )
+    """Sampled assets and their attribute values, settled-only, for a connector
+    suite that wants to assert something beyond the declared matchers."""
+    asset_attribute_reads: Mapping[str, AttributeSampleRead] = field(
+        default_factory=dict
+    )
+    """Sampled attribute values as the reader answered them, so an unreadable
+    search is an
+    :class:`~application_sdk.testing.harness.expectations.Unreadable` here rather
+    than an empty sample the attribute check would skip. Same fail-open shape as
+    :attr:`asset_qn_reads`, closed the same way."""
+    addressed_attribute_reads: Mapping[AssetRef, AttributeSampleRead] = field(
+        default_factory=dict
+    )
+    """Every asset matching each addressed ref's qualifiedName suffix, as read.
+
+    Holds *all* the matches rather than the one the suite meant, because zero
+    and several are the two answers that have to reach the grader intact: an
+    addressed asset that is not there is a finding, and a suffix matching two
+    assets is a different finding. Resolving either here would decide them
+    silently."""
     connection_read: Outcome[bool] | None = None
     """The Connection poll's verdict, or ``None`` when it never ran.
 
@@ -490,6 +627,19 @@ class DAGSpec:
         expected_exact_counts: Per-type exact-count parity.
         expected_asset_qn_depth: Per-type qualifiedName depth below the
             connection.
+        expected_asset_attributes: Per-type attribute-value claims.
+        expected_asset_attributes_at: Per-asset attribute-value claims, keyed by
+            type then qualifiedName suffix.
+        connection_qualified_name: The connection this run is submitted and
+            graded against. ``None`` — the default, and what every run did
+            before FND-1648 — means the suite's own minted connection, which is
+            still the right answer whenever the runs are sequenced *because they
+            share state on one connection*. Set it when they are sequenced for
+            the opposite reason: a run that prepares a **different** connection
+            for a later one to reference (a lineage parent another source owns).
+            The QN is registered for teardown when this run activates, so a
+            connection named here is purged with the rest even if the run that
+            was to consume it never got that far.
         label: Short name for this run, used in logs, in the failure evidence
             bundle and — for any run that is not the suite's own default — in
             the AE workflow name, so N runs in one leg stay N distinguishable
@@ -506,6 +656,13 @@ class DAGSpec:
     expected_min_asset_counts: Mapping[str, int] | None = None
     expected_exact_counts: Mapping[str, int] | None = None
     expected_asset_qn_depth: Mapping[str, int] | None = None
+    expected_asset_attributes: (
+        Mapping[str, Mapping[str, AttributeExpectationValue]] | None
+    ) = None
+    expected_asset_attributes_at: (
+        Mapping[str, Mapping[str, Mapping[str, AttributeExpectationValue]]] | None
+    ) = None
+    connection_qualified_name: str | None = None
     label: str = ""
 
 
@@ -531,6 +688,13 @@ class ResolvedDAG:
     expected_min_asset_counts: Mapping[str, int]
     expected_exact_counts: Mapping[str, int]
     expected_asset_qn_depth: Mapping[str, int]
+    expected_asset_attributes: Mapping[str, Mapping[str, AttributeExpectationValue]] = (
+        field(default_factory=dict)
+    )
+    expected_asset_attributes_at: Mapping[
+        str, Mapping[str, Mapping[str, AttributeExpectationValue]]
+    ] = field(default_factory=dict)
+    connection_qualified_name: str = ""
 
 
 class BaseE2ETest:
@@ -612,6 +776,13 @@ class BaseE2ETest:
     # never mutated in place, so the class-level empty default is not shared
     # state.
     _node_dispatch: dict[str, NodeDispatch] = {}
+    # Task queue -> what Temporal said was polling it when the poll stopped
+    # early. Populated by _capture_stop_point_pollers, which is a no-op unless
+    # a Temporal address is configured, and read only by _claim_clause. Empty
+    # therefore means "not observed", never "no pollers" — the observed
+    # no-pollers answer is a recorded reading whose tuple is empty. Plain
+    # instance field, same reason as source_available above.
+    _queue_pollers: dict[str, QueuePollerReading] = {}
     # Node name -> the identity the app under test declares for that node,
     # captured from the manifest-derived seed DAG in _bootstrap_workflow and
     # read only by _assert_deployed_manifest_matches. Empty means there is
@@ -772,12 +943,18 @@ class BaseE2ETest:
     # assert different things, and a single "did the suite pass" boolean is
     # exactly the shape that lets one of them stop meaning anything.
     #
-    # All runs share this suite's minted ``connection_qualified_name`` — that
-    # sharing is the point, and it is why this is a list on one suite rather
-    # than two ordered CI legs, which would have to move teardown out of
-    # ``teardown_method`` (guaranteed on pass, fail AND error) into an
-    # ``if: always()`` job a cancelled workflow can still skip, on a leased
-    # shared tenant. Teardown stays one purge here however many runs there are.
+    # By default all runs share this suite's minted
+    # ``connection_qualified_name`` — that sharing is the point, and it is why
+    # this is a list on one suite rather than two ordered CI legs, which would
+    # have to move teardown out of ``teardown_method`` (guaranteed on pass, fail
+    # AND error) into an ``if: always()`` job a cancelled workflow can still
+    # skip, on a leased shared tenant.
+    #
+    # A run that prepares a *different* connection for a later one to reference
+    # — a lineage parent another source owns — names it on
+    # ``DAGSpec.connection_qualified_name``. That QN joins the same teardown
+    # registry ``seed_assets`` writes to, so however many connections the suite
+    # touches, ``teardown_method`` still reclaims all of them.
     #
     # Cost: the runs are serial by nature, so each one adds its own wall clock
     # to the leg (a crawl is minutes, a miner plus its lineage poll is minutes
@@ -862,6 +1039,39 @@ class BaseE2ETest:
     # int to pin the window; setup_method rejects a pinned value that is not
     # strictly below ae_poll_timeout_seconds.
     dag_progress_stall_seconds: ClassVar[int | None] = None
+    # ---- Teardown, which runs through the ``connection-delete`` app --------
+    #
+    # Teardown submits one ``connection-delete`` DAG per connection the run
+    # touched (see :mod:`application_sdk.testing.harness.teardown`), so it needs
+    # its own two budgets rather than the run's. Both are deliberately smaller
+    # than the DAG budgets above: teardown is post-verdict, its failures never
+    # red a leg, and a leg that sits in cleanup is a leg holding a CI runner for
+    # nothing.
+    #
+    # Ceiling on one connection's delete. Wide enough for the app to drain a
+    # crawl's worth of assets (its own search-and-delete loop is budgeted in
+    # tens of thousands per call), narrow enough that a wedged delete does not
+    # outlast the run that created it. The DAG-progress watchdog is NOT armed on
+    # this poll — connection-delete is a single node that legitimately sits
+    # Running while it drains, which a glyph comparison cannot tell from a wedge
+    # — so this ceiling is the only bound.
+    connection_delete_poll_timeout_seconds: ClassVar[int] = 900
+    # How long to wait for the delete node to be picked up before concluding
+    # that nothing polls the connection-delete queue, and why it is far shorter
+    # than ae_stall_grace_seconds: when nothing does — a scale-to-zero worker
+    # that will not wake, or a tenant without the app installed — EVERY
+    # connection would otherwise burn the full ceiling above before the pyatlan
+    # fallback gets to reclaim the Atlas half. It still has to clear a cold
+    # start: connection-delete's atlan.yaml sets ``keda.minReplicaCount: 0``, so
+    # its queue is legitimately unpolled between runs and KEDA has to scale it
+    # up on queue depth. 0 disables the latch, which means an unpolled queue
+    # waits out the ceiling instead.
+    connection_delete_stall_grace_seconds: ClassVar[int] = 120
+    # How thoroughly teardown deletes. PURGE because that is what the pyatlan
+    # purge this replaced did, and an ephemeral connection is never coming back;
+    # the app's own default is SOFT, which would leave every run's assets
+    # recoverable-and-still-indexed on a shared tenant.
+    connection_delete_type: ClassVar[DeleteType] = DeleteType.PURGE
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
     # Probe errors that can never heal by retrying: a deterministic bug in the
@@ -957,6 +1167,101 @@ class BaseE2ETest:
     #     slashes would mis-count — don't enable it there without adjusting.
     expected_asset_qn_depth: ClassVar[dict[str, int]] = {}
 
+    # Opt-in: validate the VALUES published assets carry, not just how many
+    # landed and where. Maps typeName -> attribute name (as Atlan spells it) ->
+    # the claim its value must satisfy. A bare scalar is sugar for
+    # ``Exactly(scalar)``; the matcher vocabulary is Exactly / Present / Absent /
+    # AtLeast / AtMost, from
+    # :mod:`application_sdk.testing.harness.expectations`::
+    #
+    #     expected_asset_attributes = {
+    #         "Schema":   {"tableCount": 8, "viewsCount": 0},
+    #         "Database": {"schemaCount": AtLeast(1)},
+    #     }
+    #
+    # Why it exists: the three knobs above are all about SHAPE. A connector can
+    # publish a structurally perfect asset tree in which every computed
+    # attribute is 0 and every e2e suite in the fleet stays green (FND-2094).
+    # Two failure modes are invisible without this:
+    #
+    #   * a DEGRADED value published as fact — a connector that swallows a
+    #     permissions error and substitutes 0 is indistinguishable, in published
+    #     output, from a genuinely empty source;
+    #   * an attribute that SILENTLY STOPS being set — 0 and absent are the same
+    #     number to a count assertion and different states in Atlas.
+    #
+    # Present-but-zero and absent are therefore kept apart end to end: the
+    # reader records which attributes the search payload actually carried, so
+    # ``Exactly(0)`` fails on an unset attribute and ``Present()`` is the matcher
+    # that catches the silent drop. ``Absent()`` pins the inverse, for a
+    # connector whose rule is "leave it unset rather than claim 0".
+    #
+    # Scope + contract (same shape as expected_asset_qn_depth, and the same
+    # reasons — read that attr's docstring too):
+    #   * Samples a few assets per type (no sort) and requires EVERY sampled
+    #     asset to satisfy every matcher. So a value declared here has to be one
+    #     EVERY asset of that type carries. Crawl five schemas, one with no
+    #     views and one with ten, and there is no per-type claim about
+    #     viewsCount left to make beyond Present() — pin the numbers with
+    #     expected_asset_attributes_at below, and keep this knob for the claim
+    #     that does hold across the type ("it is set at all").
+    #   * A FULLY-DROPPED type is invisible here (no samples -> the type is
+    #     skipped). Pair every type you put here with an
+    #     expected_min_asset_counts floor for the same type.
+    #   * The harness can only see what Atlas INDEXED. An attribute name that is
+    #     misspelled, or that the type does not carry, reads as absent — which
+    #     is a finding, not a silent pass, but check the spelling before
+    #     believing a connector dropped it.
+    #
+    # Empty = skip (no extra Atlas call).
+    expected_asset_attributes: ClassVar[
+        dict[str, dict[str, AttributeExpectationValue]]
+    ] = {}
+
+    # Opt-in: the same claims about ONE NAMED ASSET rather than about every
+    # asset of a type. Maps typeName -> qualifiedName suffix -> attribute ->
+    # matcher (a bare scalar is sugar for Exactly)::
+    #
+    #     expected_asset_attributes_at = {
+    #         "Schema": {
+    #             "sch_empty": {"viewsCount": 0,  "tableCount": 3},
+    #             "sch_busy":  {"viewsCount": 10, "tableCount": 8},
+    #         },
+    #     }
+    #
+    # This is the knob that makes a value assertable when it DIFFERS within a
+    # type, which is the ordinary case for anything computed per asset. The
+    # per-type knob above can only carry a claim the whole type shares.
+    #
+    # Addressed by SUFFIX because a qualifiedName is not writable: the
+    # connection carries a freshly minted epoch, so no class attribute can name
+    # an asset under it. The suffix is matched on a path-segment boundary, so
+    # "sch" matches ".../db/sch" and never ".../db/other_sch", and a Column can
+    # be named "col" rather than "db/sch/tbl/col".
+    #
+    # Scope + contract:
+    #   * A suffix that matches NOTHING is a finding, not a skip — unlike the
+    #     per-type sampler, where an empty sample is the count floors' job. The
+    #     suite named this asset, so its absence is the claim under test.
+    #   * A suffix matching TWO OR MORE assets is also a finding: grading the
+    #     first would make the verdict depend on Atlas's result ordering.
+    #     Lengthen the suffix until it names exactly one.
+    #   * Costs one Atlas search per addressed asset, so it is for the handful
+    #     of assets whose values a fixture pins — not for asserting a whole
+    #     type asset by asset.
+    #
+    # Empty = skip (no extra Atlas call).
+    expected_asset_attributes_at: ClassVar[
+        dict[str, dict[str, dict[str, AttributeExpectationValue]]]
+    ] = {}
+
+    # How many assets to sample per type for the attribute check. Separate from
+    # the location sampler's fixed 3 because the tradeoff is different: the
+    # location check is a systematic-drift detector where three assets prove as
+    # much as thirty, while an attribute check may be pinning a value only some
+    # assets share. Raising it widens coverage at one search's cost.
+    asset_attribute_sample_size: ClassVar[int] = 3
+
     # ------------------------------------------------------------------
     # Setup
     # ------------------------------------------------------------------
@@ -995,6 +1300,7 @@ class BaseE2ETest:
                 )
 
         self._node_dispatch = {}
+        self._queue_pollers = {}
         self._expected_node_identities = {}
         self._seed_version = None
         self._admin_reading = None
@@ -1003,7 +1309,21 @@ class BaseE2ETest:
         # single-DAG suite ever sees.
         self._active_dag = None
         self.dag_outcomes = []
+        # Whether the seed *completed* — the create landed AND the connection
+        # became searchable. This is the idempotency flag ``seed_connection``
+        # reads to reuse rather than re-create, and it is deliberately NOT what
+        # teardown gates on: it lands after the searchability poll, so a create
+        # that committed and then failed to become searchable would read as
+        # "nothing exists here". The two flags below are the existence ones.
         self._connection_seeded = False
+        # Whether anything has been sent that can bring this run's own
+        # connection into being: the create write, and a DAG submit. Both are
+        # set on the way *in* to the call, for the reason
+        # :meth:`_own_connection_may_exist` gives.
+        self._connection_create_attempted = False
+        self._dag_submitted = False
+        self._seeded_connection_qns: list[str] = []
+        self._seeded_prefixes: list[str] = []
         self._validate_dag_runs()
 
         # A pinned progress-stall window that is not strictly below the poll
@@ -1399,42 +1719,344 @@ class BaseE2ETest:
         run_sync(self._teardown_method_async(method))
 
     async def _teardown_method_async(self, method: Any) -> None:
-        """Purge this run's connection, then close the clients it opened.
+        """Reclaim this run's connections, then close the clients it opened.
 
-        The purge itself is
-        :func:`~application_sdk.testing.harness.teardown.purge_connection`, which
-        reports rather than raises: the batching that is a correctness bound
-        (``purge_by_guid`` puts one ``guid=`` parameter per asset into one
-        DELETE, and httpx refuses a URL whose query exceeds 64 KiB, so an
-        unbatched purge deletes *nothing*), the read-everything-before-deleting
-        order that offset pagination makes mandatory, and the two independently
-        guarded phases all live there now.
+        The reclaim itself is
+        :func:`~application_sdk.testing.harness.teardown.delete_connection`,
+        which submits a one-node ``connection-delete`` DAG the same way
+        :meth:`seed_assets` submits its publish node — because the app owns the
+        artifacts and runs *on the tenant*, where the byte-stores the harness
+        cannot reach through the s3proxy are ordinary object-store keys. What
+        the harness still deletes itself is the seed NDJSON it wrote, which is
+        no app's to clean up.
+
+        Nothing here raises. Every step reports, and the module those two
+        functions live in explains why that is a stronger guarantee than
+        remembering to wrap the call.
 
         Args:
             method: The test method pytest just ran. Unused; part of the xunit
                 signature.
         """
         try:
-            await self._purge_this_run()
+            await self._delete_connections()
+            await self._delete_seed_objects()
         finally:
             await self._close_clients()
 
-    async def _purge_this_run(self) -> None:
-        """Delete the ephemeral connection this run minted, if there is one."""
+    async def _delete_connections(self) -> None:
+        """Delete every ephemeral connection this run touched, if there are any.
+
+        The run's own connection first, then every lineage-parent connection
+        :meth:`seed_assets` registered — in that order because the run's assets
+        hold lineage *references* into the seeded skeletons, and deleting the
+        referrer before the referent is the direction that cannot strand an
+        edge. That ordering is also why each connection gets its own single-node
+        run rather than all of them sharing one graph: chained ``depends_on``
+        nodes would keep the order and let one stuck delete orphan every later
+        one, parallel nodes would keep them independent and lose the order, and
+        one run per connection keeps both.
+
+        A delete that does not complete falls back to
+        :func:`~application_sdk.testing.harness.teardown.purge_connection`,
+        which reclaims the Atlas half from the runner and nothing else. The
+        fallback is transitional — see the teardown module's docstring for the
+        two silences it covers (a tier with no AE client, and a scale-to-zero
+        worker that does not wake) and for when it should go.
+        """
         conn_qn = getattr(self, "connection_qualified_name", "")
-        if not conn_qn:
+        if conn_qn and not self._own_connection_may_exist():
+            logger.info(
+                "e2e cleanup: no cleanup needed for %s — this run seeded no "
+                "connection and submitted no DAG, so nothing was ever created "
+                "under that name",
+                conn_qn,
+            )
+            # Emptied rather than filtered out of the loop below, so the
+            # ordinals a seeding suite's teardown workflow names are built from
+            # do not shift when the run's own connection is skipped.
+            conn_qn = ""
+        seeded = tuple(getattr(self, "_seeded_connection_qns", ()))
+        for ordinal, target in enumerate((conn_qn, *seeded), start=1):
+            if not target:
+                continue
+            report = await self._delete_connection_via_app(target, ordinal=ordinal)
+            if report is not None and report.complete:
+                continue
+            self._warn_connection_delete_incomplete(target, report)
+            await self._purge_connection_from_runner(target)
+
+    def _own_connection_may_exist(self) -> bool:
+        """Whether anything this run did could have created its own connection.
+
+        ``setup_method`` mints ``connection_qualified_name`` before the test
+        body runs, so by teardown it is always non-empty — non-emptiness is
+        therefore no evidence that a connection exists under it. Two calls
+        create one, and nothing else does:
+
+        * the Atlas create :meth:`seed_connection` issues;
+        * a DAG submit, whose run mints the Connection on the tenant.
+
+        A run that made neither call holds a freshly minted name under which,
+        by construction, nothing can exist — a suite that skipped in
+        :meth:`seed_prerequisites`, a leg where the source-availability tier
+        wired no AE client at all, or a test that errored before it submitted.
+        Deleting that name costs an AE workflow publish, a submit and a
+        minute of polling to reclaim nothing, on every leg of every push
+        (FND-1873).
+
+        **Both flags are set on the way in to the call, not on its way out**,
+        and each for the same reason: a call whose response never arrived is
+        not a call that did not happen. A submit that times out is a run
+        executing orphaned, and an Atlas create whose reply is lost may still
+        have committed. Recording success instead would turn each of those into
+        a connection nobody reclaims on a shared tenant. Over-deleting is the
+        harmless direction: the delete path already tolerates a connection that
+        is not there.
+
+        ``_connection_seeded`` is deliberately not consulted. It is
+        :meth:`seed_connection`'s *idempotency* flag and lands only after the
+        searchability poll, so a seed whose create committed and whose poll
+        then timed out (:class:`SeededConnectionNotSearchableError`) reads as
+        unseeded — which is precisely the half-set-up left-over teardown exists
+        for.
+
+        The one shape this cannot see is a suite that creates its connection
+        by hand rather than through :meth:`seed_connection`. Seed through the
+        hook and teardown follows; that is why the hook exists.
+
+        Returns:
+            Whether teardown has anything to reclaim under
+            ``self.connection_qualified_name``.
+        """
+        return bool(getattr(self, "_connection_create_attempted", False)) or bool(
+            getattr(self, "_dag_submitted", False)
+        )
+
+    async def _delete_connection_via_app(
+        self, qualified_name: str, *, ordinal: int
+    ) -> ConnectionDeleteReport | None:
+        """Run the ``connection-delete`` node for one connection.
+
+        Args:
+            qualified_name: The connection to delete.
+            ordinal: Its position in this run's teardown, which is what keeps
+                two teardown runs' AE workflow names apart — see
+                :meth:`_connection_delete_plan`.
+
+        Returns:
+            The report, or ``None`` when this tier has no AE client to submit
+            through at all. ``None`` is a distinct answer from a failed report:
+            there is no missing app to name and nothing to link to, only the
+            fallback.
+        """
+        ae = getattr(self, "_ae", None)
+        if ae is None:
+            # The worker-up-only tier (source_available=False) wires no AE
+            # client. A run there still mints a connection name, and a suite
+            # that created one by other means still needs it reclaimed.
+            return None
+        try:
+            plan = self._connection_delete_plan(ordinal=ordinal)
+        # conformance: ignore[E004] teardown boundary — resolving the plan reads the suite's own class attrs and can raise on a suite that never finished setup; a cleanup failure must never replace the run's verdict
+        except Exception as error:
+            # Reported as a failed delete rather than as "no AE client": the
+            # client is there, and saying otherwise would send a reader looking
+            # at the wrong tier. Logged here for the traceback, which the
+            # report's redacted one-liner cannot carry.
+            logger.warning(
+                "e2e cleanup: could not resolve how to address the "
+                "connection-delete app for %s",
+                qualified_name,
+                exc_info=True,
+            )
+            return ConnectionDeleteReport(
+                qualified_name=qualified_name,
+                errors=(
+                    "could not resolve how to address the connection-delete "
+                    f"app: {sanitize_cause_repr(error)}",
+                ),
+            )
+        return await delete_connection(qualified_name, ae=ae, plan=plan)
+
+    def _warn_connection_delete_incomplete(
+        self, qualified_name: str, report: ConnectionDeleteReport | None
+    ) -> None:
+        """Say what the app did not clean up, and — when it can — why.
+
+        A missing ``connection-delete`` app is called out by name rather than
+        folded into a generic cleanup warning, because it is the failure mode
+        that otherwise reads exactly like a passing run: the leg is green, the
+        assets are gone (the fallback took them), and the byte-stores quietly
+        accumulate on a shared tenant forever. A *superseded* DAG
+        (:attr:`~application_sdk.testing.harness.teardown.ConnectionDeleteReport.dag_superseded`)
+        gets the same treatment for a sharper reason: it reads like a tenant
+        problem while being an SDK one, and since FND-1775 it should not be
+        reachable at all. It stays a warning all the same —
+        tenant cleanliness is not what the test is asserting, and a cleanup
+        failure must never become the run's verdict.
+
+        Args:
+            qualified_name: The connection whose delete did not complete.
+            report: What the delete managed, or ``None`` when no AE client
+                existed to run it.
+        """
+        if report is None:
+            logger.warning(
+                "e2e cleanup: no AE client on this tier, so %s could not be "
+                "deleted through the connection-delete app. Falling back to the "
+                "runner-side purge, which reclaims the Atlas assets and leaves "
+                "the connection's byte-stores (connection-cache/%s.sqlite and "
+                "persistent-artifacts/apps/atlan-publish-app/state/%s/) behind",
+                qualified_name,
+                qualified_name,
+                qualified_name,
+            )
             return
+        if report.app_absent:
+            logger.warning(
+                "e2e cleanup: nothing polled %s, so %s could not be deleted "
+                "through the connection-delete app — either its scale-to-zero "
+                "worker did not wake (keda.minReplicaCount is 0) or the app is "
+                "not installed on this tenant (Global Marketplace app_id "
+                "019ef7f4-de9a-77c3-bad1-7f201fc97052). Falling back to the "
+                "runner-side purge, which reclaims the Atlas assets and leaves "
+                "connection-cache/%s.sqlite and "
+                "persistent-artifacts/apps/atlan-publish-app/state/%s/ behind — "
+                "publish never cleans up its own cache, so those grow without "
+                "bound on a shared tenant. Details: %s",
+                self._connection_delete_task_queue(),
+                qualified_name,
+                qualified_name,
+                qualified_name,
+                "; ".join(report.errors),
+            )
+            return
+        if report.dag_superseded:
+            logger.warning(
+                "e2e cleanup: %s was not deleted through the connection-delete "
+                "app because the graph AE ran was not the delete node the "
+                "teardown published (slug=%s run_id=%s). The teardown submits "
+                "its own published version straight to AE, which fetches no "
+                "manifest, so something republished over that version — an "
+                "SDK-side or AE-side problem, not a tenant one, and one that "
+                "should be impossible. Until it is understood this leg falls "
+                "back to the runner-side purge and leaks "
+                "connection-cache/%s.sqlite and "
+                "persistent-artifacts/apps/atlan-publish-app/state/%s/. "
+                "Details: %s",
+                qualified_name,
+                report.ae_workflow_slug or "<none>",
+                report.ae_run_id or "<none>",
+                qualified_name,
+                qualified_name,
+                "; ".join(report.errors),
+            )
+            return
+        logger.warning(
+            "e2e cleanup: the connection-delete run for %s did not complete "
+            "(slug=%s run_id=%s), so its byte-stores may remain. Falling back to "
+            "the runner-side purge. Details: %s",
+            qualified_name,
+            report.ae_workflow_slug or "<none>",
+            report.ae_run_id or "<none>",
+            "; ".join(report.errors),
+        )
+
+    async def _purge_connection_from_runner(self, qualified_name: str) -> None:
+        """Reclaim the Atlas half of one connection with ``pyatlan``.
+
+        The degraded path, run only when the app could not. Independently
+        guarded, for the same reason the two phases inside
+        :func:`~application_sdk.testing.harness.teardown.purge_connection` are:
+        one connection that will not purge must not orphan the others.
+
+        Args:
+            qualified_name: The connection to purge.
+        """
         try:
             async with self._atlas_client() as client:
-                await purge_connection(client, conn_qn)
+                await purge_connection(client, qualified_name)
         # conformance: ignore[E004] teardown boundary — this runs after the assertions have decided the verdict, so a cleanup failure must never replace a real one; it is logged at WARNING with exc_info
         except Exception:
             logger.warning(
                 "e2e cleanup: could not reach the tenant to purge %s — manual "
                 "purge may be needed",
-                conn_qn,
+                qualified_name,
                 exc_info=True,
             )
+
+    async def _delete_seed_objects(self) -> None:
+        """Delete the object-store keys each :meth:`seed_assets` call wrote.
+
+        The one artifact ``connection-delete`` does not cover: its
+        ``archive_storage`` clears the *app-owned* per-connection stores
+        (``connection-cache/``, ``argo-artifacts/``, ``delta/``, publish's
+        state root), and the seed NDJSON under ``artifacts/apps/<app>/e2e-seed/``
+        is harness-specific — nothing on the tenant knows it exists.
+
+        **By key, never by prefix** — though on current evidence neither
+        reaches the store. ``delete_prefix`` is a LIST plus a bulk
+        ``POST ?delete``, both *bucket-level* URLs, and the tenant's Kong
+        s3proxy path-matches against an allowlist it cannot apply to a URL
+        whose keys live in the request body, so it came back
+        ``403 code 1009``. The per-key DELETE was the fix for that — the
+        allowlist can read a path — and a live e2e run on 2026-09-07
+        (FND-1766's three-cloud A/B) came back ``403`` on it too. The
+        allowlist does not grant DELETE under ``/artifacts/apps/`` to a runner
+        in any request shape.
+
+        This method therefore expects to fail, and is written to fail
+        harmlessly: each key is attempted, a refusal is logged with the key
+        named, and the run's verdict is untouched. Keeping it is still worth
+        more than deleting it — it will start working the moment the allowlist
+        or the store binding changes, and its log line is what names the
+        leftover.
+
+        **The actual fix is on the tenant, not here.** ``connection-delete``'s
+        ``archive_storage`` already clears the app-owned per-connection stores
+        from inside the cluster, where no proxy sits in front of the bucket;
+        bringing the seed root into its scope deletes these keys and publish's
+        own state under the same root (``.../publish-state/``,
+        ``.../current-state/``) in one go. Both are bounded per seed. A third
+        URL shape from the runner is not the answer.
+
+        Run after the connections, on the same ordering rule as before: the
+        entities are what a stranded run trips over, the NDJSON is only bytes,
+        and a store the harness cannot reach must not stop the deletes.
+        """
+        prefixes = tuple(getattr(self, "_seeded_prefixes", ()))
+        if not prefixes:
+            return
+        try:
+            store = self.seed_object_store()
+        # conformance: ignore[E004] teardown boundary — see _purge_connection_from_runner; a store the harness cannot resolve leaves bytes behind, which is strictly less harmful than replacing the run's verdict
+        except Exception:
+            logger.warning(
+                "e2e cleanup: no usable seed object store, so the seed NDJSON "
+                "under %s was left behind — manual cleanup may be needed",
+                ", ".join(prefixes),
+                exc_info=True,
+            )
+            return
+        for prefix in prefixes:
+            for key in harness_seed.seed_object_keys(root=prefix):
+                try:
+                    deleted = await delete_object(key, store)
+                # conformance: ignore[E004] teardown boundary — see above
+                except Exception:
+                    logger.warning(
+                        "e2e cleanup: could not delete the seed object %s — "
+                        "manual cleanup may be needed",
+                        key,
+                        exc_info=True,
+                    )
+                    continue
+                logger.info(
+                    "e2e cleanup: %s seed object %s",
+                    "deleted" if deleted else "found no",
+                    key,
+                )
 
     async def _close_clients(self) -> None:
         """Release the AE pool this test opened, on the loop that opened it.
@@ -1672,6 +2294,10 @@ class BaseE2ETest:
                 await self._retry_seed_probe_async(probe)
             return qualified_name
         async with self._atlas_client() as client:
+            # Before the write, not after: a create whose reply never arrived
+            # may still have committed, and teardown must reclaim it. See
+            # :meth:`_own_connection_may_exist`.
+            self._connection_create_attempted = True
             await atlas.create_connection(
                 client,
                 qualified_name=qualified_name,
@@ -1803,6 +2429,397 @@ class BaseE2ETest:
             actual_state="seed probe reached no verdict",
             cause=cause,
         )
+
+    def seed_assets(self, spec: harness_seed.SeedSpec) -> harness_seed.SeededConnection:
+        """Seed a lineage parent another *source* owns, through a real publish run.
+
+        For the ``ATLAS-404-00-00A`` class of failure (FND-402 / FND-1648): a
+        lineage-only connector (coalesce, adf, mode) publishes Process /
+        ColumnProcess entities whose refs name *another source's* assets, and on
+        a connector-scoped e2e tenant nothing has ever crawled that source. Call
+        this from :meth:`seed_prerequisites` with the exact tree the connector's
+        refs will name.
+
+        **Use it only when that source is not reachable inside the leg.** When it
+        is — the postgres miner's warehouse is the same app's other entrypoint,
+        with a hermetic container already in the job — declare a real crawl in
+        :attr:`dag_runs` instead. A crawl seeds from the real producer and its QN
+        parity holds by construction; this does not.
+
+        The seed writes transformed NDJSON and submits one ``PublishWorkflow``
+        node, so publish owns both the entities *and* the connection cache the
+        consuming connector resolves its refs against — see
+        :mod:`application_sdk.testing.harness.seed` for why seeding Atlas
+        directly cannot produce the second half.
+
+        Unlike :meth:`seed_connection`, which seeds *this run's own* connection,
+        the tree here hangs under a **second** ephemeral connection for the
+        referenced source. When ``spec.qualified_name`` is ``None`` this run's
+        minter names it, exactly as it named the run's own — same uniqueness,
+        same predictability. Either way the QN lands on
+        ``self._seeded_connection_qns`` and the object-store prefix on
+        ``self._seeded_prefixes``, both of which :meth:`teardown_method` cleans
+        up after the run's own connection — closing the gap where a suite that
+        seeded a second connection had nothing that would ever tear it down.
+
+        Args:
+            spec: What to seed. When its ``qualified_name`` is ``None``, one is
+                minted from ``spec.connector_type`` (the display name follows
+                unless the spec pinned its own). The admin ACL defaults to the
+                one ``setup_method`` resolved when the spec declares none.
+
+        Returns:
+            The :class:`~application_sdk.testing.harness.seed.SeededConnection`,
+            whose ``qualified_name`` is the prefix to rebase the connector's refs
+            onto.
+
+        Raises:
+            UnknownConnectorTypeError: ``spec.connector_type`` is not a pyatlan
+                ``AtlanConnectorType``.
+            SeedSegmentInvalidError: A segment cannot compose the qualified name
+                the spec declares.
+            SeedStoreUnavailableError: No object-store binding the tenant's
+                publish app reads — see :meth:`seed_object_store`.
+            SeedTreeInvalidError: The serialised batch would not survive publish.
+            SeedPublishFailedError: The seed's publish run did not succeed.
+            SeedPublishEmptyError: The publish run succeeded and Atlas holds
+                nothing under the seeded connection. Publish is handed a
+                *prefix*, and one it cannot read is an empty batch rather than
+                an error — so this is the shape a node-status check cannot see,
+                and the read-back is what turns it into a failure here instead
+                of the connector's ``ATLAS-404`` cascade minutes later.
+        """
+        return run_sync(self._seed_assets_async(spec))
+
+    async def _seed_assets_async(
+        self, spec: harness_seed.SeedSpec
+    ) -> harness_seed.SeededConnection:
+        """Resolve the identity, register what teardown must reclaim, then hand off.
+
+        Both registrations happen *before* the seed runs, not after: a seed that
+        uploads its NDJSON and then fails in publish has left a prefix and
+        (possibly) a connection behind, and registering on success would leave
+        exactly those half-set-up artifacts on a shared tenant.
+        """
+        identity = self._minter.connection_identity(spec.connector_type)
+        # ``is None``, not ``or``. ``SeedSpec`` documents ``None`` as the one
+        # omission sentinel, so ``""`` is a *supplied* value — and one
+        # ``validate_resolved_spec`` rejects. Falling back on it would mint a
+        # valid QN over the caller's mistake, and the seed would then publish
+        # under a connection nobody asked for while the refs still named the
+        # empty one. The empty-as-omitted collapse is the shape this spec
+        # dropped its ``""`` sentinels to avoid.
+        resolved = spec.resolve(
+            qualified_name=(
+                identity.qualified_name
+                if spec.qualified_name is None
+                else spec.qualified_name
+            ),
+            display_name=(
+                identity.display_name
+                if spec.display_name is None
+                else spec.display_name
+            ),
+        )
+        if not (resolved.admin_users or resolved.admin_groups or resolved.admin_roles):
+            resolved = resolved.with_admins(
+                admin_users=tuple(
+                    self.connection_admin_users or self._auto_admin_users
+                ),
+                admin_groups=tuple(self.connection_admin_groups),
+                admin_roles=tuple(
+                    self.connection_admin_roles or self._auto_admin_roles
+                ),
+            )
+
+        # What keeps two seeds' AE workflow names apart — see
+        # :meth:`_seed_publish_plan`. It is the teardown registry's length, so
+        # it counts every connection this run touched (a ``DAGSpec``-named one
+        # included), not only the seeds. That is deliberate and sufficient: the
+        # registry is append-only within a run, so the value is strictly
+        # increasing and no two seeds can ever read the same one.
+        plan = self._seed_publish_plan(
+            resolved, ordinal=len(self._seeded_connection_qns) + 1
+        )
+        self._seeded_connection_qns.append(resolved.qualified_name)
+        self._seeded_prefixes.append(
+            harness_seed.seed_prefix_root(
+                app_name=plan.app_name, qualified_name=resolved.qualified_name
+            )
+        )
+        return await harness_seed.seed_assets(
+            resolved,
+            store=self.seed_object_store(),
+            ae=self._ae,
+            plan=plan,
+            verify=self._count_seeded_assets,
+        )
+
+    async def _count_seeded_assets(
+        self, qualified_name: str, expected: int
+    ) -> int | None:
+        """Poll Atlas until *expected* assets are visible under the seeded connection.
+
+        The read-back that turns "the publish node succeeded" into "the seed
+        landed". Two things it must not do, and both were wrong when this waited
+        on the run's own short inventory budget:
+
+        * **Give up in seconds.** The trees this exists for run to thousands of
+          entities (the coalesce seed is ~130), and Elasticsearch does not index
+          them instantly. ``atlas_asset_poll_timeout_seconds`` is 15s because a
+          *crawl's* assets are already indexed by the time the DAG reports
+          success; a seed's are not. This uses
+          :meth:`_seed_readback_budget` instead.
+        * **Report "ran out of time" as "found zero".** The wait's verdict and
+          the last reading are different facts. Returning the reading alone let
+          an expired poll whose last count was 0 raise ``SeedPublishEmptyError``
+          — failing a large seed for being slow, as the unreadable-prefix
+          failure it is not.
+
+        Waiting for the full count rather than for "more than zero" is what
+        makes the returned number worth grading: a partial answer is reported as
+        partial rather than rounded up to success.
+
+        Args:
+            qualified_name: The seeded connection's QN.
+            expected: How many assets the seed published; the poll exits as soon
+                as the count reaches it.
+
+        Returns:
+            The last count read, or ``None`` when no probe ever produced a
+            readable one — which the caller grades as unverified, never as zero.
+        """
+        last: int | None = None
+
+        async def _probe() -> int | None:
+            nonlocal last
+            async with self._atlas_client() as client:
+                reading = await atlas.count_total_assets(client, qualified_name)
+            # An unreadable search leaves ``last`` at its previous value rather
+            # than overwriting it with None: one blip late in the wait must not
+            # erase a count the earlier probes did read.
+            if isinstance(reading, Settled):
+                last = reading.value
+            return last
+
+        await poll_until(
+            _probe,
+            settled=lambda count: count is not None and count >= expected,
+            budget=self._seed_readback_budget(),
+            label=f"{expected} seeded asset(s) under {qualified_name}",
+        )
+        return last
+
+    def _seed_readback_budget(self) -> Budget:
+        """Allowance for a seed's published assets to become countable.
+
+        The connection poll's timings rather than the inventory poll's: this
+        waits for Elasticsearch to index a batch that was written moments ago,
+        which is minutes-scale for a large tree, not the seconds the run's own
+        inventory needs. The wait exits as soon as the expected count is
+        reached, so a small seed pays nothing for the wider ceiling.
+
+        Returns:
+            The budget.
+        """
+        return Budget(
+            timeout=timedelta(seconds=self.atlas_poll_timeout_seconds),
+            poll_interval=timedelta(seconds=self.atlas_asset_poll_interval_seconds),
+            # The probe returns a reading rather than raising, and a count that
+            # is still climbing is the expected answer here — spending a
+            # transient streak on it would end the wait early on exactly the
+            # large seed the wider ceiling exists for.
+            heartbeat=None,
+        )
+
+    def _seed_publish_plan(
+        self, spec: harness_seed.ResolvedSeedSpec, *, ordinal: int
+    ) -> harness_seed.SeedPublishPlan:
+        """Resolve how this leg dispatches and waits on a seed's publish run.
+
+        Every value is the one this suite's own run uses, so a seed cannot be
+        polled on a different budget or dispatched to a different tenant than the
+        run it exists to unblock. The AE workflow name is the exception, and it
+        has to be unique twice over, because ``create_workflow`` is idempotent on
+        the name:
+
+        * against **the suite's own run** — sharing that name would publish the
+          seed's one-node graph over the connector's DAG. Hence ``-seed-``.
+        * against **another seed in the same run** — a suite that seeds two
+          connections of the same type (two warehouses, two accounts) would
+          otherwise reuse one slug, publish each graph over the other, and leave
+          an AE run list in which the two are indistinguishable. This is the
+          collision :meth:`_ae_workflow_name_suffix` already had to solve for
+          multi-``DAGSpec`` runs.
+
+        *ordinal* rather than a rendering of the QN: AE's own constraints on
+        workflow names are not ours to guess, and a QN's segments are
+        caller-supplied, so any flattening of them into a name is a second
+        encoding that can collide (``a/b`` and ``a-b`` both read as ``a-b``).
+        The position in the run is unique by construction and needs no escaping.
+        The QN is not lost — it is on the workflow's description, and on the
+        ``SeededConnection`` the call returns.
+
+        Args:
+            spec: The resolved spec, whose connector type names the workflow.
+            ordinal: A number unique to this seed within the run. The caller
+                takes it from the teardown registry's length, which counts every
+                connection the run touched rather than only its seeds — the
+                values are not contiguous, and do not need to be.
+
+        Returns:
+            The plan.
+        """
+        return harness_seed.SeedPublishPlan(
+            app_name=self.connector_short_name,
+            publish_task_queue=self._publish_task_queue(),
+            ae_workflow_name=(
+                f"{self.connector_short_name}-{self.connection_name_prefix}-"
+                f"{self.run_id}-seed-{ordinal}-{spec.connector_type}"
+            ),
+            run_id=self.run_id,
+            # No cold-start budget and no app address. Since FND-1766 the seed
+            # submits straight to AE and calls no app pod, so there is nothing
+            # to cold-start-wait on — the suite's own submit still carries
+            # ``_submit_retry()``, which is where waiting on the app under test
+            # belongs. Leaving ``submit_retry`` unset takes
+            # ``submit_published_version``'s publish-replication budget, which
+            # is the only wait this submit actually has.
+            poll_interval_seconds=self.ae_poll_interval_seconds,
+            poll_timeout_seconds=self.ae_poll_timeout_seconds,
+            progress_stall_seconds=self._resolved_progress_stall_seconds(),
+            minter=self._minter,
+        )
+
+    def _publish_task_queue(self) -> str:
+        """Task queue the tenant's ``publish`` app polls.
+
+        Derived from :meth:`resolved_tenant_deployment_name` rather than pinned,
+        for the reason that method exists: which deployment the system apps are
+        registered under is a property of the tenant, and one suite runs against
+        several tenants in one CI run.
+        """
+        return f"atlan-publish-{self.resolved_tenant_deployment_name()}"
+
+    def _connection_delete_task_queue(self) -> str:
+        """Task queue the tenant's ``connection-delete`` app polls.
+
+        Derived from :meth:`resolved_tenant_deployment_name` on the same rule as
+        :meth:`_publish_task_queue`: which deployment the tenant registers its
+        apps under is a property of the tenant, and one suite runs against
+        several tenants in one CI run. Resolves to
+        ``atlan-connection-delete-production`` on a standard tenant, mirroring
+        ``atlan-publish-production``.
+
+        Returns:
+            The queue name.
+        """
+        return connection_delete_task_queue(self.resolved_tenant_deployment_name())
+
+    def _connection_delete_plan(self, *, ordinal: int) -> ConnectionDeletePlan:
+        """Resolve how this leg dispatches and waits on one connection's delete.
+
+        Every value is the one this suite's own run uses, so teardown cannot be
+        dispatched to a different tenant than the run it is cleaning up after.
+        The envelope names the delete app
+        (:mod:`application_sdk.testing.harness.teardown._dag`), so whichever
+        graph wins Heracles' submit-time republish is a delete; ``app_service_url``
+        stays omitted because a teardown submit has no service URL to name. Of
+        what the plan does carry, two values are deliberately not the run's:
+
+        * **The budgets** are teardown's own
+          (:attr:`connection_delete_poll_timeout_seconds`,
+          :attr:`connection_delete_stall_grace_seconds`) rather than the run's.
+          Teardown is post-verdict, so a leg that sits in cleanup is holding a
+          CI runner for nothing — and the stall grace here is the app-absent
+          detector, which has to be short for exactly that reason.
+        * **The AE workflow name** has to be unique twice over, because
+          ``create_workflow`` is idempotent on the name: against the suite's own
+          run (hence ``-teardown-``) and against the other connections this same
+          teardown deletes (hence *ordinal*). It is the same collision
+          :meth:`_seed_publish_plan` solves, for the same reason, and *ordinal*
+          is used there too rather than a rendering of the QN: a QN's segments
+          are caller-supplied, so any flattening of them into a name is a second
+          encoding that can collide. The QN is not lost — it is on the
+          workflow's description.
+
+        Args:
+            ordinal: This connection's position in the run's teardown, counting
+                from one.
+
+        Returns:
+            The plan.
+        """
+        return ConnectionDeletePlan(
+            connector_short_name=self.connector_short_name,
+            task_queue=self._connection_delete_task_queue(),
+            ae_workflow_name=(
+                f"{self.connector_short_name}-{self.connection_name_prefix}-"
+                f"{self.run_id}-teardown-{ordinal}"
+            ),
+            run_id=self.run_id,
+            delete_type=self.connection_delete_type,
+            # No cold-start budget. Since FND-1775 the teardown submits straight
+            # to AE and calls no app pod, so there is nothing to cold-start-wait
+            # on — whether the delete app's worker is up is asked by
+            # ``stall_grace_seconds`` below, and leaving ``submit_retry`` unset
+            # takes ``submit_published_version``'s publish-replication budget,
+            # which is the only wait this submit actually has. Same reasoning as
+            # ``_seed_publish_plan``.
+            poll_interval_seconds=self.ae_poll_interval_seconds,
+            poll_timeout_seconds=self.connection_delete_poll_timeout_seconds,
+            stall_grace_seconds=self.connection_delete_stall_grace_seconds,
+            minter=getattr(self, "_minter", None),
+        )
+
+    def seed_object_store(self) -> ObjectStore:
+        """The object store a seed writes its transformed NDJSON into.
+
+        Must be a store the **tenant's** ``publish`` app reads, not the
+        connector's deployment store: publish is handed a prefix, and a prefix in
+        a bucket it cannot see fails as an empty batch rather than as a missing
+        file. In CI that store is the configurator-emitted ``atlan-objectstore``
+        Dapr component — the tenant blobstorage binding the sdr-e2e action
+        selects into ``ci-deploy/components`` and mounts into the worker — so the
+        default resolves exactly that, from the runner's own copy.
+
+        Override on a suite whose leg names the binding differently or has to
+        supply secrets explicitly; :envvar:`E2E_SEED_COMPONENTS_DIR` and
+        :envvar:`E2E_SEED_STORE_BINDING` cover the common cases without a code
+        change.
+
+        Returns:
+            An obstore-compatible store.
+
+        Raises:
+            SeedStoreUnavailableError: The named component is absent or
+                unusable, so there is nowhere to point publish at.
+        """
+        components_dir = (
+            os.environ.get("E2E_SEED_COMPONENTS_DIR", "").strip()
+            or _DEFAULT_SEED_COMPONENTS_DIR
+        )
+        binding = (
+            os.environ.get("E2E_SEED_STORE_BINDING", "").strip()
+            or _DEFAULT_SEED_STORE_BINDING
+        )
+        store = create_store_from_binding_optional(
+            binding, components_dir=components_dir
+        )
+        if store is None:
+            raise harness_seed.SeedStoreUnavailableError(
+                message=(
+                    f"no usable Dapr component {binding!r} under {components_dir!r}, "
+                    "so a lineage-parent seed has nowhere to write the transformed "
+                    "NDJSON the tenant's publish app reads. On the CI path this is "
+                    "the configurator-emitted tenant blobstorage binding; point "
+                    "E2E_SEED_COMPONENTS_DIR / E2E_SEED_STORE_BINDING at it, or "
+                    "override seed_object_store() on this suite"
+                ),
+                resource=f"{components_dir}/{binding}",
+                actual_state="component absent or unusable",
+            )
+        return store
 
     # ------------------------------------------------------------------
     # Subclass hooks — override these
@@ -2072,6 +3089,35 @@ class BaseE2ETest:
                 if spec.expected_asset_qn_depth is None
                 else spec.expected_asset_qn_depth
             ),
+            expected_asset_attributes={
+                type_name: dict(attributes)
+                for type_name, attributes in (
+                    self.expected_asset_attributes
+                    if spec.expected_asset_attributes is None
+                    else spec.expected_asset_attributes
+                ).items()
+            },
+            expected_asset_attributes_at={
+                type_name: {
+                    suffix: dict(attributes) for suffix, attributes in by_suffix.items()
+                }
+                for type_name, by_suffix in (
+                    self.expected_asset_attributes_at
+                    if spec.expected_asset_attributes_at is None
+                    else spec.expected_asset_attributes_at
+                ).items()
+            },
+            # ``getattr`` rather than the attribute: ``_validate_dag_runs``
+            # resolves every declared run inside ``setup_method``, *before* the
+            # minter has named this run's connection. Both sides of the
+            # comparisons it makes see the same empty string, so the check is
+            # unaffected — and by the time a run is submitted the attribute is
+            # set.
+            connection_qualified_name=(
+                getattr(self, "connection_qualified_name", "")
+                if spec.connection_qualified_name is None
+                else spec.connection_qualified_name
+            ),
         )
 
     @property
@@ -2093,6 +3139,16 @@ class BaseE2ETest:
         ``run_full_dag()`` called with no spec from inside an outer block runs
         that block's DAG rather than resetting to the class's.
 
+        A run that names its own ``connection_qualified_name`` also *rebinds*
+        ``self.connection_qualified_name`` for the block, and restores it after.
+        Rebinding the attribute rather than threading the resolved value through
+        every reader is deliberate: the connection is read at two dozen sites
+        (the submit payload, every Atlas probe, the outcome, the evidence
+        bundle), they all mean "the connection this run is about", and a
+        parameter added to each is a parameter the next site can forget to
+        forward. The QN is registered for teardown on the way in, so a run that
+        prepares a different connection cannot leave one behind.
+
         Args:
             spec: The run to activate, or ``None`` to leave the active one
                 alone.
@@ -2104,11 +3160,18 @@ class BaseE2ETest:
             yield self._dag
             return
         previous = getattr(self, "_active_dag", None)
+        previous_qn = getattr(self, "connection_qualified_name", "")
         self._active_dag = self.resolve_dag(spec)
+        run_qn = self._active_dag.connection_qualified_name
+        if run_qn and run_qn != previous_qn:
+            self.connection_qualified_name = run_qn
+            if run_qn not in self._seeded_connection_qns:
+                self._seeded_connection_qns.append(run_qn)
         try:
             yield self._active_dag
         finally:
             self._active_dag = previous
+            self.connection_qualified_name = previous_qn
 
     def _resolved_entrypoint(self) -> str:
         """App-entrypoint for AE's manifest fetch: explicit ``entrypoint`` if set,
@@ -2593,8 +3656,8 @@ class BaseE2ETest:
           the child workflow to read, and asserts no cause (see
           :attr:`~application_sdk.testing.e2e.client.DAGNodeStatus.is_not_started`);
         * dispatched but never finished (``Running`` where the poll stopped) —
-          the worker took it and stopped making progress, so the queue is named
-          too;
+          which does not say whether a worker ever claimed it, so the line names
+          the queue and hands off to :meth:`_claim_clause` for the cause;
         * ran and failed — the error message is the whole story.
 
         Both places the poll can stop early read the same: the ceiling and the
@@ -2627,10 +3690,84 @@ class BaseE2ETest:
         if node.status is DAGNodeStatus.RUNNING and ae_result.stopped_watching:
             return (
                 f"  - {node.name}: STILL RUNNING{stop_point} — "
-                f"dispatched to {self._dispatch_note(node.name)}{stall_clause}. A "
-                "worker took it and stopped making progress (or died holding it)."
+                f"dispatched to {self._dispatch_note(node.name)}{stall_clause}. "
+                f"{self._claim_clause(node.name, ae_result)}"
             )
         return f"  - {node.name}: status={node.status.value} error={node.error_message}"
+
+    def _claim_clause(self, node_name: str, ae_result: DAGRunResult) -> str:
+        """Whether anything ever *claimed* a still-Running node's task.
+
+        The sentence this replaced asserted one of the two causes as fact — "a
+        worker took it and stopped making progress (or died holding it)" — on
+        the strength of AE reporting ``Running``. AE reports ``Running`` for a
+        task that was dispatched and never claimed by any poller just as it does
+        for one a worker picked up and stalled on, and the two need opposite
+        investigations: a queue-name mismatch against a hanging activity. On the
+        run behind FND-1880 the real cause was the first (the worker polled
+        ``atlan-<app>-<deployment>`` while the harness dispatched to
+        ``atlan-<app_with_underscores>-<deployment>``), and the assertion was
+        read as evidence against that hypothesis — costing a round trip in the
+        extraction path before it was reconsidered.
+
+        Only the *negative* is decidable from a poller read: a queue with no
+        pollers is the observed form of "nothing ever claimed it". The converse
+        is not — ``DescribeTaskQueue`` answers who is holding the queue name
+        now, not whether this node's task was ever claimed, so a non-empty read
+        rules the mismatch out and stops there rather than repeating this
+        method's own bug on the measured path. Without that read — the default, and
+        what a connector CI leg always gets, since the runner has no route into
+        the tenant vcluster — it hedges honestly and names the one check that
+        settled FND-1284: the dispatched queue against the queue the owning
+        app's worker prints in its own startup line.
+
+        Args:
+            node_name: The node whose queue to answer for.
+            ae_result: The snapshot the line is being rendered from, for the
+                child workflow id (``{ae_run_id}-{node_id}``).
+
+        Returns:
+            One sentence naming the cause when it was observed, else the honest
+            either-or plus what to check first.
+        """
+        dispatch = self._node_dispatch.get(node_name)
+        reading = (
+            self._queue_pollers.get(dispatch.task_queue)
+            if dispatch is not None and dispatch.task_queue
+            else None
+        )
+        child = f"'{ae_result.run_id}-{node_name}'"
+        if reading is None:
+            return (
+                "AE reports Running BOTH for a task no poller ever claimed and "
+                "for one a worker claimed and stalled on, so this does not say "
+                "which. Check the dispatched queue above against the queue the "
+                "owning app's worker names in its own startup line (queue=...): a "
+                "mismatch means nothing ever claimed it. If they match, read the "
+                f"child workflow {child} on the tenant's Temporal — a history that "
+                "stopped growing is a worker that took it and stopped making "
+                "progress (or died holding it)."
+            )
+        if reading.unclaimed:
+            return (
+                "NO poller has claimed it: Temporal reports 0 pollers on "
+                f"{reading.task_queue!r} in namespace {reading.namespace!r}, so "
+                "nothing ever picked this task up — the deployed worker's queue "
+                "does not match the dispatched one (or the worker is not running). "
+                "The activity's own code is not implicated."
+            )
+        return (
+            f"Something IS holding {reading.task_queue!r} in namespace "
+            f"{reading.namespace!r}: Temporal reports {len(reading.pollers)} "
+            f"poller(s), {reading.held_halves} ({reading.identities}). That rules "
+            "out a queue-name mismatch, but a poller on the queue is not proof "
+            "THIS task was claimed — the read answers who is holding the queue "
+            f"now. Read the child workflow {child} on the tenant's Temporal: a "
+            "history that stopped growing is a worker that took it and stopped "
+            "making progress (or died holding it); a workflow task still pending "
+            "means nothing has picked it up, which is what a worker polling only "
+            "the other half of the queue looks like."
+        )
 
     def _describe_dag_nodes(self, ae_result: DAGRunResult) -> str:
         """Per-node breakdown, every node — succeeded ones included.
@@ -2914,6 +4051,11 @@ class BaseE2ETest:
             self.mode.value,
             self.connection_qualified_name,
         )
+        # Set before the submit, not after: a submit that times out is a run
+        # executing orphaned rather than one that never happened, and that run
+        # creates the connection teardown has to reclaim. See
+        # :meth:`_own_connection_may_exist`.
+        self._dag_submitted = True
         run_id = await self._submit(payload, slug=slug)
         logger.info("AE submit returned run_id=%s", run_id)
 
@@ -2973,7 +4115,7 @@ class BaseE2ETest:
                 when a Temporal address is configured.
         """
         try:
-            return await self._ae.poll_native_status(
+            ae_result = await self._ae.poll_native_status(
                 run_id,
                 interval_seconds=self.ae_poll_interval_seconds,
                 timeout_seconds=self.ae_poll_timeout_seconds,
@@ -2984,6 +4126,10 @@ class BaseE2ETest:
         except DAGProgressStalledError as stalled:
             if stalled.result is None:
                 raise
+            # Before the message is built, not after: this is what lets the
+            # per-node line say whether anything claimed the task instead of
+            # asserting one of the two causes. See _claim_clause.
+            await self._capture_stop_point_pollers(stalled.result)
             raise DAGProgressStalledError(
                 message=(
                     f"Full-DAG e2e stalled for connector={self.connector_short_name}\n"
@@ -3011,6 +4157,45 @@ class BaseE2ETest:
             unpolled.observed_pollers = observed
             unpolled.add_note(f"Temporal was asked directly: {observed}")
             raise
+        # The ceiling path returns rather than raising, and its Running-node line
+        # has the same question to answer as the watchdog's.
+        await self._capture_stop_point_pollers(ae_result)
+        return ae_result
+
+    async def _capture_stop_point_pollers(self, ae_result: DAGRunResult) -> None:
+        """Record who is holding the queues of the nodes still Running at the stop.
+
+        Only the queues the diagnostic will actually ask about — one read per
+        distinct queue among the nodes AE still reports ``Running`` — so a wide
+        DAG does not turn a failure message into a fan of frontend calls, and a
+        run that finished does no reads at all.
+
+        Assigned wholesale, never mutated in place — this run's stop point is
+        the only observation that may answer for it. A multi-DAG suite calls
+        ``run_full_dag`` more than once on the same instance, so an accumulating
+        dict would let the crawl's reading render as the verdict on the mine's
+        node; and the class-level default is shared until ``setup_method``
+        replaces it, so an in-place write would reach every other suite too.
+
+        Args:
+            ae_result: The snapshot the failure will be rendered from.
+        """
+        self._queue_pollers = {}
+        if not ae_result.stopped_watching or not self._resolved_temporal_address():
+            return
+        queues = {
+            dispatch.task_queue
+            for node in ae_result.nodes
+            if node.status is DAGNodeStatus.RUNNING
+            and (dispatch := self._node_dispatch.get(node.name)) is not None
+            and dispatch.task_queue
+        }
+        readings: dict[str, QueuePollerReading] = {}
+        for queue in sorted(queues):
+            reading = await self._read_queue_pollers(queue)
+            if reading is not None:
+                readings[queue] = reading
+        self._queue_pollers = readings
 
     async def _observed_pollers(self) -> str | None:
         """Read who is actually polling the extract queue, when that is possible.
@@ -3036,10 +4221,48 @@ class BaseE2ETest:
             original diagnostic exactly as it was: a Temporal that cannot be
             read must never turn a real finding into a harness error.
         """
+        reading = await self._read_queue_pollers(self._extract_task_queue())
+        if reading is None:
+            return None
+        if reading.unclaimed:
+            return (
+                f"Temporal confirms it: {reading.task_queue!r} in namespace "
+                f"{reading.namespace!r} has NO pollers at all. Nothing is holding "
+                "that queue, so the agent_spec().agent_name and the deployed "
+                "worker's queue do not match (or the worker is not running)."
+            )
+        return (
+            f"Temporal reports {len(reading.pollers)} poller(s) on "
+            f"{reading.task_queue!r} in namespace {reading.namespace!r}, "
+            f"{reading.held_halves}: {reading.identities}. Something IS holding "
+            "that queue, so the node was not picked up for another reason — read "
+            "the child workflow's history rather than hunting a queue-name "
+            "mismatch."
+        )
+
+    async def _read_queue_pollers(self, queue: str) -> QueuePollerReading | None:
+        """Ask Temporal who is polling *queue*, when that is possible at all.
+
+        The one poller read in this class, with the queue as a parameter: the
+        stall guard asks about the extract queue it inferred against, and the
+        stuck-node diagnostic asks about whichever queue the seed DAG routed
+        that node to — two questions, the same read, so a change to how the
+        frontend is reached cannot land on one of them only.
+
+        Args:
+            queue: Task-queue name to describe.
+
+        Returns:
+            What Temporal answered, or ``None`` when no address is configured or
+            the read itself failed. ``None`` is "not observed" and never "no
+            pollers": the empty answer is a reading whose
+            :attr:`QueuePollerReading.pollers` is empty, and conflating the two
+            would let an unreachable frontend manufacture the exact finding this
+            read exists to deliver.
+        """
         address = self._resolved_temporal_address()
         if not address:
             return None
-        queue = self._extract_task_queue()
         namespace = self._resolved_temporal_namespace()
         try:
             from application_sdk.testing.harness.temporal import (  # noqa: PLC0415
@@ -3055,30 +4278,14 @@ class BaseE2ETest:
         except Exception:
             logger.warning(
                 "could not read Temporal at %s for task queue %s, so the "
-                "no-worker diagnosis stays an inference from the stall grace",
+                "diagnosis for that queue stays an inference",
                 address,
                 queue,
                 exc_info=True,
             )
             return None
-        if not pollers:
-            return (
-                f"Temporal confirms it: {queue!r} in namespace {namespace!r} has "
-                "NO pollers at all. Nothing is holding that queue, so the "
-                "agent_spec().agent_name and the deployed worker's queue do not "
-                "match (or the worker is not running)."
-            )
-        identities = ", ".join(
-            f"{poller.identity} ({poller.task_queue_type.value}"
-            + (f", build {poller.build_id}" if poller.build_id else "")
-            + ")"
-            for poller in pollers
-        )
-        return (
-            f"Temporal reports {len(pollers)} poller(s) on {queue!r} in namespace "
-            f"{namespace!r}: {identities}. Something IS holding that queue, so "
-            "the node was not picked up for another reason — read the child "
-            "workflow's history rather than hunting a queue-name mismatch."
+        return QueuePollerReading(
+            task_queue=queue, namespace=namespace, pollers=tuple(pollers)
         )
 
     def _resolved_temporal_address(self) -> str:
@@ -3185,19 +4392,21 @@ class BaseE2ETest:
         # Atlas counts and the post-loop location sample reads populated data
         # once those types have indexed.
         #
-        # NOTE: adding a location type here does NOT by itself make the poll
-        # WAIT for that type — the loop only stays alive via a per-type floor or
-        # the non-empty backstop (total == 0), so a location-only type with no
-        # floor can still be zero when the loop exits (the moment any other type
-        # makes total > 0). The real wait-for-this-type safeguard is pairing each
-        # expected_asset_qn_depth type with an expected_min_asset_counts floor —
-        # see that attr's docstring.
+        # NOTE: adding a location or attribute type here does NOT by itself make
+        # the poll WAIT for that type — the loop only stays alive via a per-type
+        # floor or the non-empty backstop (total == 0), so a sample-only type
+        # with no floor can still be zero when the loop exits (the moment any
+        # other type makes total > 0). The real wait-for-this-type safeguard is
+        # pairing each expected_asset_qn_depth / expected_asset_attributes type
+        # with an expected_min_asset_counts floor — see those attrs' docstrings.
         dag = self._dag
         probe_types = tuple(
             {
                 *dag.expected_min_asset_counts,
                 *dag.expected_exact_counts,
                 *dag.expected_asset_qn_depth,
+                *dag.expected_asset_attributes,
+                *dag.expected_asset_attributes_at,
             }
         )
         count_reads: Mapping[str, CountRead] = {}
@@ -3259,6 +4468,52 @@ class BaseE2ETest:
                 dict(sample_reads),
             )
 
+        # Sample attribute VALUES for the contents assertion (opt-in). Its own
+        # search rather than a widening of the one above: the two knobs name
+        # different type sets, and a suite that declares only depths must not
+        # start paying for attribute includes it never asked for.
+        attribute_reads: Mapping[str, AttributeSampleRead] = {}
+        if dag.expected_asset_attributes:
+            attribute_reads = as_attribute_samples(
+                await atlas.sample_asset_attributes(
+                    client,
+                    self.connection_qualified_name,
+                    {
+                        type_name: tuple(attributes)
+                        for type_name, attributes in dag.expected_asset_attributes.items()
+                    },
+                    per_type=self.asset_attribute_sample_size,
+                ),
+                tuple(dag.expected_asset_attributes),
+            )
+            logger.info(
+                "Atlas attribute samples under %s: %s",
+                self.connection_qualified_name,
+                dict(attribute_reads),
+            )
+
+        # Read the individually addressed assets (opt-in). One search per ref,
+        # which is why this is for the handful of assets a fixture pins rather
+        # than a way to walk a type.
+        addressed_reads: Mapping[AssetRef, AttributeSampleRead] = {}
+        addressed = normalise_attribute_expectations_at(
+            dag.expected_asset_attributes_at
+        )
+        if addressed:
+            addressed_reads = as_attribute_samples(
+                await atlas.read_asset_attributes(
+                    client,
+                    self.connection_qualified_name,
+                    {ref: tuple(matchers) for ref, matchers in addressed.items()},
+                ),
+                tuple(addressed),
+            )
+            logger.info(
+                "Atlas addressed-asset attributes under %s: %s",
+                self.connection_qualified_name,
+                {str(ref): value for ref, value in addressed_reads.items()},
+            )
+
         return self._outcome(
             ae_result,
             connection_in_atlas=True,
@@ -3267,6 +4522,8 @@ class BaseE2ETest:
             total_read=total_read,
             lineage_read=lineage_read,
             sample_reads=sample_reads,
+            attribute_reads=attribute_reads,
+            addressed_reads=addressed_reads,
         )
 
     async def _poll_asset_counts(
@@ -3335,6 +4592,8 @@ class BaseE2ETest:
         total_read: CountRead | None = None,
         lineage_read: bool | Unreadable | None = None,
         sample_reads: Mapping[str, SampleRead] | None = None,
+        attribute_reads: Mapping[str, AttributeSampleRead] | None = None,
+        addressed_reads: Mapping[AssetRef, AttributeSampleRead] | None = None,
     ) -> FullDAGOutcome:
         """Assemble the outcome, projecting each reading into its settled half.
 
@@ -3347,6 +4606,8 @@ class BaseE2ETest:
             lineage_read: Whether any lineage asset was observed, or the fact
                 that the count could not be read.
             sample_reads: Sampled qualified names as read.
+            attribute_reads: Sampled attribute values as read.
+            addressed_reads: Addressed assets' attribute values as read.
 
         Returns:
             The outcome. Every reading is carried in both shapes: the settled
@@ -3355,6 +4616,7 @@ class BaseE2ETest:
         """
         counts = dict(count_reads or {})
         samples = dict(sample_reads or {})
+        attributes = dict(attribute_reads or {})
         return FullDAGOutcome(
             ae_result=ae_result,
             connection_qualified_name=self.connection_qualified_name,
@@ -3371,9 +4633,16 @@ class BaseE2ETest:
                 for name, value in samples.items()
                 if not isinstance(value, Unreadable)
             },
+            asset_attribute_samples={
+                name: list(value)
+                for name, value in attributes.items()
+                if not isinstance(value, Unreadable)
+            },
             asset_count_reads=counts,
             total_asset_read=total_read,
             asset_qn_reads=samples,
+            asset_attribute_reads=attributes,
+            addressed_attribute_reads=dict(addressed_reads or {}),
             connection_expected=self._dag.expect_connection,
         )
 
@@ -3395,6 +4664,13 @@ class BaseE2ETest:
             floors=dict(dag.expected_min_asset_counts),
             exacts=dict(dag.expected_exact_counts),
             depths=dict(dag.expected_asset_qn_depth),
+            # Coerced here, once, at the boundary between what a suite writes
+            # (a bare scalar is sugar for ``Exactly``) and what the evaluator
+            # grades (always a matcher).
+            attributes=normalise_attribute_expectations(dag.expected_asset_attributes),
+            attributes_at=normalise_attribute_expectations_at(
+                dag.expected_asset_attributes_at
+            ),
             require_nonempty=dag.require_nonempty_assets,
             # getattr, because the count half of this is a pure function of the
             # class attributes and is unit-tested on an instance that never ran
@@ -3441,6 +4717,35 @@ class BaseE2ETest:
             nested at the wrong depth.
         """
         return evaluate_locations(samples, self._asset_expectations())
+
+    def _attribute_findings(
+        self, samples: Mapping[str, AttributeSampleRead]
+    ) -> Sequence[Finding]:
+        """Grade the sampled attribute values against the declared matchers.
+
+        Args:
+            samples: Sampled assets and their attribute values, as read.
+
+        Returns:
+            One finding per (asset, attribute) whose value did not satisfy its
+            matcher.
+        """
+        return evaluate_attributes(samples, self._asset_expectations())
+
+    def _addressed_attribute_findings(
+        self, reads: Mapping[AssetRef, AttributeSampleRead]
+    ) -> Sequence[Finding]:
+        """Grade the individually addressed assets against their matchers.
+
+        Args:
+            reads: Each addressed ref -> every asset whose qualifiedName matched
+                its suffix, as read.
+
+        Returns:
+            One finding per unmet matcher, plus one per ref that matched no
+            asset or more than one.
+        """
+        return evaluate_attributes_at(reads, self._asset_expectations())
 
     def _evaluate_asset_expectations(
         self,
@@ -3520,6 +4825,64 @@ class BaseE2ETest:
         return [
             _render_finding(finding)
             for finding in self._location_findings(asset_qn_samples)
+        ]
+
+    def _validate_asset_attributes(
+        self, asset_attribute_samples: Mapping[str, AttributeSampleRead]
+    ) -> list[str]:
+        """Validate sampled assets carry the declared attribute values.
+
+        The sibling of :meth:`_evaluate_asset_expectations` and
+        :meth:`_validate_asset_locations` for the third question — not *how
+        many* assets landed, nor *where*, but *what they contain*. The logic is
+        :func:`~application_sdk.testing.harness.expectations.evaluate_attributes`.
+
+        The gap it closes: a connector that computes an attribute — a count, a
+        size, a partition flag, ``lastSyncRunAt`` — can publish a structurally
+        perfect tree in which the computed value is a degraded ``0``, or stops
+        being set at all, and every count and depth assertion passes. Both are
+        the same number to a count check and different states in Atlas, so this
+        check keeps present-but-zero and absent apart all the way from the
+        search payload into the failure line.
+
+        Args:
+            asset_attribute_samples: Sampled assets and their values, as read.
+
+        Returns:
+            Human-readable failure lines, empty when every sampled asset
+            satisfied every matcher. Types with no sampled assets are skipped —
+            "too few / none" is the COUNT check's job, which is why every type
+            declared in ``expected_asset_attributes`` should carry a floor too.
+        """
+        return [
+            _render_finding(finding)
+            for finding in self._attribute_findings(asset_attribute_samples)
+        ]
+
+    def _validate_addressed_asset_attributes(
+        self, addressed_attribute_reads: Mapping[AssetRef, AttributeSampleRead]
+    ) -> list[str]:
+        """Validate individually addressed assets carry the declared values.
+
+        The per-asset half of the attribute check, and the one that can pin a
+        value differing *within* a type — five schemas at five different view
+        counts share no per-type claim about ``viewsCount`` beyond
+        ``Present()``. The logic is
+        :func:`~application_sdk.testing.harness.expectations.evaluate_attributes_at`.
+
+        Args:
+            addressed_attribute_reads: Each addressed ref -> every asset whose
+                qualifiedName matched its suffix, as read.
+
+        Returns:
+            Human-readable failure lines, empty when every addressed asset
+            resolved to exactly one match satisfying every matcher. Unlike the
+            per-type check, a ref matching **nothing** is a failure line rather
+            than a skip: the suite named the asset, so its absence is the claim.
+        """
+        return [
+            _render_finding(finding)
+            for finding in self._addressed_attribute_findings(addressed_attribute_reads)
         ]
 
     # ------------------------------------------------------------------
@@ -3643,10 +5006,14 @@ class BaseE2ETest:
              the non-empty backstop (see ``_evaluate_asset_expectations``).
           4. Asset locations: sampled assets are nested under the connection at
              the depth declared in ``expected_asset_qn_depth`` (opt-in).
-          5. At least one Process/ColumnProcess exists (unless ``expect_lineage``
+          5. Asset attribute values: sampled assets satisfy the matchers
+             declared in ``expected_asset_attributes`` (opt-in) — the only
+             assertion about what an asset *contains* rather than how many
+             landed or where.
+          6. At least one Process/ColumnProcess exists (unless ``expect_lineage``
              is False).
 
-        Assertions 2-5 are all about published inventory, so ``expect_connection
+        Assertions 2-6 are all about published inventory, so ``expect_connection
         = False`` drops them and leaves assertion 1 as the verdict. That is the
         whole gate for an entrypoint that publishes nothing; such a suite is
         expected to add its own terminal evidence on top. Every expectation the
@@ -3782,14 +5149,14 @@ class BaseE2ETest:
             )
 
         if not self._dag.expect_connection:
-            # Assertions 2-5 are all about published inventory, and the probes
+            # Assertions 2-6 are all about published inventory, and the probes
             # that feed them never ran. Evaluating them against empty counts
             # would fail every run — the zero-asset backstop in
             # _evaluate_asset_expectations most obviously. The DAG gate above is
             # the verdict; anything further is the suite's own to assert.
             logger.info(
                 "%s declares expect_connection=False — DAG succeeded; skipping the "
-                "asset-count, asset-location and lineage assertions",
+                "asset-count, asset-location, asset-attribute and lineage assertions",
                 type(self).__name__,
             )
             return
@@ -3805,12 +5172,20 @@ class BaseE2ETest:
         location_findings = self._location_findings(
             outcome.asset_qn_reads or outcome.asset_qn_samples
         )
+        attribute_findings = [
+            *self._attribute_findings(
+                outcome.asset_attribute_reads or outcome.asset_attribute_samples
+            ),
+            *self._addressed_attribute_findings(outcome.addressed_attribute_reads),
+        ]
         # Ungraded before unmet, always. A finding that exists because a search
         # could not be READ is not evidence about the connector, and reporting it
         # as one is what sent an Atlas outage to the connector team as "the
         # floors were not met". It is raised first, and as a leaf that is not an
         # AssertionError, so pytest marks the leg an error rather than a failure.
-        self._raise_if_ungraded([*count_findings, *location_findings])
+        self._raise_if_ungraded(
+            [*count_findings, *location_findings, *attribute_findings]
+        )
 
         asset_failures = [_render_finding(finding) for finding in count_findings]
         if asset_failures:
@@ -3828,6 +5203,18 @@ class BaseE2ETest:
                 f"{outcome.connection_qualified_name} (extract succeeded and the "
                 "counts may look right, but the qualifiedName hierarchy is "
                 "wrong):\n" + "\n".join(location_failures)
+            )
+
+        attribute_failures = [
+            _render_finding(finding) for finding in attribute_findings
+        ]
+        if attribute_failures:
+            raise AssertionError(
+                "Published assets carry the wrong attribute values under "
+                f"{outcome.connection_qualified_name} (the right number of "
+                "assets landed in the right place, but what they contain is "
+                "wrong — a computed value degraded, or an attribute stopped "
+                "being set):\n" + "\n".join(attribute_failures)
             )
 
         # `lineage_present` is False for both "no Process exists" and "never

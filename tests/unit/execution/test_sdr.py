@@ -299,6 +299,87 @@ class TestBuildSdrActivities:
         assert event["outcome"] == "not_ready"
         assert "Secret store" in event["check_matrix"]
 
+    async def test_preflight_handler_crash_emits_crash_row_and_raises(self) -> None:
+        # CONNECT-1170 gap 6: a raising handler must still produce one
+        # crash-marked row before the raise propagates to the workflow.
+        class _CrashingHandler(_StubHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise RuntimeError("boom")
+
+        handler = _CrashingHandler()
+        activities = build_sdr_activities(handler, app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        preflight = by_name[SDR_PREFLIGHT_ACTIVITY]
+        with (
+            mock.patch("application_sdk.execution._temporal.sdr.logger") as ml,
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            await preflight(PreflightInput(credentials=[]))
+        event = next(
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["outcome"] == "crashed"
+        assert event["preflight_surface"] == "sdr"
+        assert event["reason"] == "RuntimeError"
+
+    async def test_client_fault_from_handler_is_counted_not_crashed(self) -> None:
+        # A typed 4xx-class error (wrong password) must still raise and must
+        # not enter the crash series — but on SDR the row is the only channel,
+        # so it is counted as its own outcome at ERROR.
+        from application_sdk.errors.leaves import AuthError
+
+        class _WrongPasswordHandler(_StubHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise AuthError(message="wrong password")
+
+        activities = build_sdr_activities(_WrongPasswordHandler(), app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        with (
+            mock.patch("application_sdk.execution._temporal.sdr.logger") as ml,
+            pytest.raises(AuthError),
+        ):
+            await by_name[SDR_PREFLIGHT_ACTIVITY](PreflightInput(credentials=[]))
+        event = next(
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["outcome"] == "client_fault"
+        assert event["reason"] == AuthError.code
+
+    async def test_crash_outside_the_handler_still_emits_crash_row(self) -> None:
+        # The crash boundary covers the whole surface, not only the handler
+        # call: a raise during agent-json credential resolution must also
+        # reach the funnel's denominator.
+        activities = build_sdr_activities(_StubHandler(), app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                side_effect=RuntimeError("store probe exploded"),
+            ),
+            mock.patch("application_sdk.execution._temporal.sdr.logger") as ml,
+            pytest.raises(RuntimeError, match="store probe exploded"),
+        ):
+            await by_name[SDR_PREFLIGHT_ACTIVITY](
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+        event = next(
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["outcome"] == "crashed"
+        assert event["reason"] == "RuntimeError"
+
     async def test_fetch_metadata_activity_dispatches(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
@@ -314,6 +395,32 @@ class TestBuildSdrActivities:
         assert handler.metadata_input is input_obj
         with pytest.raises(AppContextError):
             _ = handler.context
+
+    async def test_fetch_metadata_mirrors_template_key_onto_object_filter(self) -> None:
+        # Parity with the HTTP /metadata route: the widget routing key must reach
+        # handlers that read the legacy object_filter (e.g. the warehouse widget),
+        # otherwise SDR runs the default fetch and the dropdown renders nothing.
+        handler = _StubHandler()
+        activities = build_sdr_activities(handler, app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        fetch_metadata = by_name[SDR_FETCH_METADATA_ACTIVITY]
+
+        await fetch_metadata(
+            MetadataInput(credentials=[], metadata_template_key="warehouse")
+        )
+        assert handler.metadata_input.object_filter == "warehouse"
+
+        # An explicit object_filter is authoritative and never overwritten.
+        await fetch_metadata(
+            MetadataInput(
+                credentials=[],
+                metadata_template_key="warehouse",
+                object_filter="schemata",
+            )
+        )
+        assert handler.metadata_input.object_filter == "schemata"
 
     async def test_context_app_name_and_credentials_are_populated(self) -> None:
         handler = _StubHandler()

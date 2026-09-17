@@ -336,6 +336,229 @@ def test_k018_ignores_platform_injected_credential_arg(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# K018 — bundle apps: one `AppInputContract` per entrypoint (FND-1791)
+# ---------------------------------------------------------------------------
+#
+# `pkl eval` names every entrypoint's generated Input contract
+# `AppInputContract`, so a bundle app declares that one name once per
+# entrypoint. Both class registries are keyed by bare name, so the first
+# declaration the filesystem walk reaches wins — and every field that lives
+# only on one of the others reads as undeclared. Observed live: 5 K018 findings
+# on a two-entrypoint app, all five present in `model_fields` at runtime, and
+# all five exactly the fields missing from the *other* entrypoint's same-named
+# contract. B005 already carries the fix (`by_name_all`); these pin it for K018.
+
+
+def _generated_input(fields: str) -> str:
+    """One entrypoint's `pkl eval` output — always the name `AppInputContract`."""
+    return (
+        "from application_sdk.templates.contracts.sql_metadata import "
+        "ExtractionInput\n"
+        "\n"
+        "class AppInputContract(ExtractionInput):\n"
+        f"{fields}"
+    )
+
+
+_BUNDLE_APP_SRC = """\
+from application_sdk.app import App, entrypoint
+
+from app.generated.crawler._input import AppInputContract as CrawlerInput
+from app.generated.miner._input import AppInputContract as MinerInput
+
+
+class CrawlOutput:
+    status: str
+
+
+class MineOutput:
+    status: str
+
+
+class QueryExtractionInput(MinerInput):
+    chunk_size: int = 10000
+
+
+class MyApp(App):
+    @entrypoint(name="crawler")
+    async def crawl(self, input: CrawlerInput) -> CrawlOutput:
+        pass
+
+    @entrypoint(name="miner")
+    async def mine(self, input: QueryExtractionInput) -> MineOutput:
+        pass
+"""
+
+
+def _write_bundle(tmp_path: Path, *, miner_args: dict) -> list[Path]:
+    """A two-entrypoint app, both entrypoints' contracts named the same."""
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/generated/crawler/_input.py": _generated_input(
+                "    preflight_check: bool = True\n    output_dir: str = ''\n"
+            ),
+            "app/generated/miner/_input.py": _generated_input(
+                "    preflight_check: bool = True\n"
+                "    miner_start_time_epoch: int = 0\n"
+                "    advanced_config: dict = {}\n"
+            ),
+            "app/connector.py": _BUNDLE_APP_SRC,
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "crawler" / "manifest.json",
+        {"extract": _extract_node({"output_dir": "{{output-dir}}"})},
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "miner" / "manifest.json",
+        {"extract": _extract_node(miner_args)},
+    )
+    return paths
+
+
+def test_k018_silent_for_fields_on_the_bound_entrypoints_own_contract(
+    tmp_path: Path,
+) -> None:
+    """The miner's fields are declared — on the miner's `AppInputContract`.
+
+    Before the fix the crawler's same-named declaration won the registry and
+    every miner-only field was reported as undeclared. `preflight_check` was
+    never reported, because it happens to exist on both — the tell that the
+    resolution, not the app, was wrong.
+    """
+    paths = _write_bundle(
+        tmp_path,
+        miner_args={
+            "preflight_check": "{{preflight-check}}",
+            "miner_start_time_epoch": "{{miner-start-time-epoch}}",
+            "advanced_config": "{{advanced-config}}",
+        },
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+def test_k018_still_fires_on_a_bundle_app_for_a_genuinely_undeclared_arg(
+    tmp_path: Path,
+) -> None:
+    """Widening is presence-only: a key on neither declaration still reports."""
+    paths = _write_bundle(
+        tmp_path,
+        miner_args={
+            "advanced_config": "{{advanced-config}}",
+            "not_on_either_contract": "{{nope}}",
+        },
+    )
+    assert _flagged(scan_all(paths, tmp_path), "K018") == {"not_on_either_contract"}
+
+
+def test_k018_silent_when_the_losing_declaration_sets_extra_allow(
+    tmp_path: Path,
+) -> None:
+    """`extra="allow"` on the *losing* declaration must still silence the check.
+
+    `_walk_chain` reads the same bare-name registry, so which declaration
+    supplies the `extra="allow"` verdict was walk-order luck too. Here the
+    crawler is parsed first and the open one is the miner's — the declaration
+    the runtime import actually resolves to, and the one the old registry threw
+    away. An ambiguous name that any declaration opens is treated as open: the
+    false-negative direction this check already prefers over guessing.
+    """
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/generated/crawler/_input.py": _generated_input(
+                "    output_dir: str = ''\n"
+            ),
+            "app/generated/miner/_input.py": (
+                "from pydantic import ConfigDict\n"
+                "from application_sdk.templates.contracts.sql_metadata import "
+                "ExtractionInput\n"
+                "\n"
+                "class AppInputContract(ExtractionInput):\n"
+                "    model_config = ConfigDict(extra='allow')\n"
+            ),
+            "app/connector.py": _BUNDLE_APP_SRC,
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "crawler" / "manifest.json",
+        {"extract": _extract_node({})},
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "miner" / "manifest.json",
+        {"extract": _extract_node({"anything_at_all": "{{anything-at-all}}"})},
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+_DIRECT_BIND_APP_SRC = """\
+from application_sdk.app import App, entrypoint
+
+from app.generated.crawler._input import AppInputContract as CrawlerInput
+from app.generated.miner._input import AppInputContract as MinerInput
+
+
+class CrawlOutput:
+    status: str
+
+
+class MineOutput:
+    status: str
+
+
+class MyApp(App):
+    @entrypoint(name="crawler")
+    async def crawl(self, input: CrawlerInput) -> CrawlOutput:
+        pass
+
+    @entrypoint(name="miner")
+    async def mine(self, input: MinerInput) -> MineOutput:
+        pass
+"""
+
+
+def test_k018_silent_when_a_directly_bound_contract_sibling_sets_extra_allow(
+    tmp_path: Path,
+) -> None:
+    """Both entrypoints bind the generated contract itself — the root is ambiguous.
+
+    With no app-side subclass to give it a distinct name, the record
+    `_pair_manifests_with_contracts` hands to `_walk_chain` *is* the ambiguous
+    one, and its first-wins lookup can only ever reach the crawler's. Seeding
+    that node directly would read `extra="allow"` off the wrong declaration;
+    starting the walk at the name unions both. Same hazard as the base-chain
+    case above, one level up.
+    """
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/generated/crawler/_input.py": _generated_input(
+                "    output_dir: str = ''\n"
+            ),
+            "app/generated/miner/_input.py": (
+                "from pydantic import ConfigDict\n"
+                "from application_sdk.templates.contracts.sql_metadata import "
+                "ExtractionInput\n"
+                "\n"
+                "class AppInputContract(ExtractionInput):\n"
+                "    model_config = ConfigDict(extra='allow')\n"
+            ),
+            "app/connector.py": _DIRECT_BIND_APP_SRC,
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "crawler" / "manifest.json",
+        {"extract": _extract_node({})},
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "miner" / "manifest.json",
+        {"extract": _extract_node({"anything_at_all": "{{anything-at-all}}"})},
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+# ---------------------------------------------------------------------------
 # K018 — arg-shape handling
 # ---------------------------------------------------------------------------
 

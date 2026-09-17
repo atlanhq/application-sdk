@@ -8,6 +8,8 @@ Key types:
 - ConnectionRef: Typed replacement for connection: dict[str, Any]
 - MaxItems: Constraint marker for bounded collections
 - BoundedList/BoundedDict: Type aliases with size bounds
+- Lazy: Marker for a FileReference field the interceptor must not auto-download
+- AssetArtifact: Marker for a FileReference field whose declaration is a typed model
 """
 
 from __future__ import annotations
@@ -28,6 +30,31 @@ from application_sdk.credentials.ref import CredentialRef
 T = TypeVar("T")
 K = TypeVar("K")
 V = TypeVar("V")
+
+
+class StoreTarget(StrEnum):
+    """Which object store an operation addresses.
+
+    Atlan deployments come in two shapes and the SDK talks to a different
+    store in each:
+
+    * ``DEPLOYMENT`` — the store bound to this deployment
+      (``context.storage``).  This is where the activity interceptor
+      persists and materialises every ``FileReference`` on the
+      task-to-task path, in **both** deployment shapes.
+    * ``UPSTREAM`` — Atlan's own bucket (``context.upstream_storage``),
+      configured only in SDR deployments and the destination
+      ``App.upload`` / ``App.download`` route to when it is present.
+      Falls back to the deployment store when no upstream binding
+      exists, mirroring ``App.upload``'s routing.
+
+    Pick ``DEPLOYMENT`` to assert something about what the interceptor
+    wrote; pick ``UPSTREAM`` to assert something about what the publish
+    app will read.
+    """
+
+    DEPLOYMENT = "deployment"
+    UPSTREAM = "upstream"
 
 
 class StorageTier(StrEnum):
@@ -193,6 +220,170 @@ class Lazy:
     """
 
     __slots__ = ()
+
+
+class AssetArtifact:
+    """Marker: this ``FileReference`` field's declaration **is** a typed model.
+
+    Use with ``Annotated`` on a ``FileReference``-bearing field whose artifact is
+    Atlas assets written by the SDK itself:
+
+        class ExtractionOutput(Output):
+            transformed_files: Annotated[
+                list[FileReference], MaxItems(1000), AssetArtifact()
+            ] = Field(default_factory=list)
+
+    An artifact declaration normally comes from the app's generated
+    ``artifact_schemas.json`` — a hand-authored field map, keyed by field name
+    (ADR-0020).  For an Atlas asset artifact that is the wrong instrument, and
+    :mod:`application_sdk.validation.sources` already says why: the asset case is
+    500+ types and 4000+ properties with diamond inheritance, so *the model
+    already is the declaration* and nothing should be authored at all.  The
+    generated envelope carries field maps only, so an app asked to declare one of
+    these fields can produce nothing better than a partial restatement of
+    ``Asset`` — strictly weaker than the check the SDK runs on the same bytes
+    elsewhere.
+
+    This marker is what tells the two readers of that declaration apart:
+
+    * :func:`~application_sdk.validation.interceptor.validate_artifacts` builds a
+      :class:`~application_sdk.validation.sources.ModelSource` for a marked field
+      instead of a
+      :class:`~application_sdk.validation.sources.ContractSource`, so the
+      hand-off is checked against the full ``pyatlan_v9`` ``Asset`` backbone.
+    * :func:`~application_sdk.app._artifact_schema_guard.warn_undeclared_artifact_schemas`
+      treats a marked field as declared, so the field it cannot usefully describe
+      is not one the app is asked to hand-write — including at v4.0, when a
+      missing boundary declaration becomes an error.
+
+    A marked field is therefore *more* strongly checked than a hand-declared one,
+    never less: the marker swaps a field map for an executable model, it never
+    turns a check off.  A ``ContractSource`` envelope that also exists for a
+    marked field is ignored at the boundary — the model wins, because it is the
+    stronger of the two and a field cannot have two declarations.
+
+    Marking is not restricted to SDK contracts: a connector whose own contract
+    field carries SDK-transformed Atlas assets can mark it and get the same
+    check.  What the marker asserts is a fact about the *bytes* — one Atlas
+    entity per line, in the nested format ``Asset.validate()`` reads.
+    """
+
+    __slots__ = ()
+
+    @staticmethod
+    def model() -> type:
+        """The typed model this field's records are validated against.
+
+        ``pyatlan_v9``'s ``Asset``, imported here rather than at module scope:
+        this module is on the import path of every contract in the SDK, and
+        ``pyatlan_v9`` must stay off the import path of an app that never
+        touches transformed assets (the same rule
+        :func:`application_sdk.app.base._warn_on_invalid_transformed_assets`
+        follows at the upload boundary).
+
+        Raises:
+            ImportError: ``pyatlan_v9`` is not installed.  Both readers treat
+                that as the SDK's own failure — a ``validator_broken`` outcome
+                that never blocks a hand-off — rather than as a finding against
+                the app.
+        """
+        from pyatlan_v9.model.assets import (  # noqa: PLC0415 — deferred: pyatlan_v9 stays off every contract's import path
+            Asset,
+        )
+
+        return Asset
+
+
+def _marker_on_class(contract: type, field: str) -> AssetArtifact | None:
+    """One class's own ``model_fields`` entry for *field*, marker or ``None``."""
+    model_fields = getattr(contract, "model_fields", None)
+    if not isinstance(model_fields, dict):
+        return None
+    field_info = model_fields.get(field)
+    metadata = getattr(field_info, "metadata", None) or ()
+    for entry in metadata:
+        if isinstance(entry, AssetArtifact):
+            return entry
+    return None
+
+
+def asset_artifact_marker(contract: type | None, field: str) -> AssetArtifact | None:
+    """The :class:`AssetArtifact` marker on ``contract``'s *field*, or ``None``.
+
+    **One reader, two callers, on purpose.**  The activity interceptor and the
+    registration-time guard both act on this answer, and they have to act on the
+    *same* answer: a field the guard exempts from hand-declaration but the
+    interceptor does not model-validate is a boundary nobody checks at all.  Read
+    the same way ``Lazy`` is read in
+    :mod:`application_sdk.storage.file_ref_sync` — off the field's
+    ``Annotated`` metadata, which is where a contract records facts about a field
+    that Pydantic itself has no opinion about.
+
+    **Resolved across the MRO, because one lookup is not enough.**  Pydantic
+    carries an inherited field's metadata through unchanged, so a subclass that
+    merely *inherits* a marked field answers correctly from its own
+    ``model_fields``.  A subclass that **redeclares** it does not: redeclaring
+    builds a fresh metadata tuple from the new annotation, and the marker is gone
+    from it (measured — ``Redeclare(Base).model_fields[f].metadata == []``).  A
+    connector narrowing a type or attaching its own ``Field(...)`` would then have
+    silently dropped the declaration: the interceptor would fall back to a
+    ``ContractSource`` and the guard would start demanding an envelope again, on a
+    field the app was told it could stop declaring.  That is the one shape the
+    fleet-wide claim rests on, so it is the one this may not get wrong.
+
+    **A redeclaration therefore cannot unmark a field, deliberately.**  The marker
+    asserts a fact about the *bytes* — one Atlas entity per line, written by the
+    SDK — and narrowing a Python annotation does not change what wrote them.  A
+    subclass that genuinely hands off something else needs a different field, not
+    a quieter one.
+
+    Args:
+        contract: The model class declaring *field*, or ``None`` for a bare
+            reference reached with no owning contract — which carries no
+            annotation and therefore no marker.
+        field: The field name.
+
+    Returns:
+        The marker instance from the most derived class that carries one, or
+        ``None`` when no class in the MRO marks the field, the field is absent, or
+        *contract* is not a Pydantic model.  Never raises: this sits under two
+        advisory paths, neither of which may break a hand-off or a registration.
+    """
+    if contract is None:
+        return None
+    # `__mro__` is absent on non-classes; the single-class tuple keeps a stray
+    # instance or a plain object answering `None` instead of raising into a
+    # hand-off.
+    for klass in getattr(contract, "__mro__", (contract,)):
+        marker = _marker_on_class(klass, field)
+        if marker is not None:
+            return marker
+    return None
+
+
+def asset_artifact_fields(contract: type) -> frozenset[str]:
+    """Every field on *contract* carrying the :class:`AssetArtifact` marker.
+
+    ``model_fields`` enumerates inherited fields as well as own ones, and each
+    name is resolved through :func:`asset_artifact_marker`, so a field marked on
+    an SDK base is reported for every subclass — including one that redeclares
+    it, where the subclass's own metadata no longer carries the marker.  That is
+    what makes a connector's ``MyExtractionOutput(ExtractionOutput)`` exempt
+    without the connector restating anything.
+
+    The set form exists for callers that need the whole picture rather than one
+    field: the conformance suite's static mirror of this fact is drift-tested
+    against it, so the rule that suppresses a review finding and the marker that
+    suppresses the runtime warning cannot come to disagree.
+    """
+    model_fields = getattr(contract, "model_fields", None)
+    if not isinstance(model_fields, dict):
+        return frozenset()
+    return frozenset(
+        name
+        for name in model_fields
+        if asset_artifact_marker(contract, name) is not None
+    )
 
 
 BoundedList = Annotated[list[T], MaxItems]

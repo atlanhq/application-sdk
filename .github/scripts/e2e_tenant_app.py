@@ -113,6 +113,7 @@ import random
 import re
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -120,6 +121,7 @@ from e2e_tenant_api import (
     APP_EVENTS_PATH,
     APP_FAILURE_PATH,
     APP_INFO_PATH,
+    CONFIGMAP_PATH,
     DEPLOYMENT_PATH,
     INSTALL_PATH,
     PUBLISH_PATH,
@@ -441,6 +443,56 @@ _DESCRIBE_POD_MAX_LINES = 120
 _DESCRIBE_MAX_PODS = 6
 
 
+#: The configmap id the app pod answers with its build identity (FND-1684).
+#:
+#: Must match ``application_sdk.app.build_identity.BUILD_IDENTITY_CONFIGMAP_ID``.
+#: Spelled here as a literal rather than imported, because this script must stay
+#: stdlib-only: ``install`` runs on the runner's system Python, where the SDK is
+#: not importable at all. ``test_build_identity_ids_agree`` asserts the two
+#: spellings match, so a rename cannot silently degrade this check to "the pod
+#: reports nothing".
+BUILD_IDENTITY_CONFIGMAP_ID = "atlan-build-identity"
+
+#: Statuses on the build-identity route that mean "ask again", not "no".
+#:
+#: Same reasoning as ``setup_routes._RETRYABLE_STATUSES``, and deliberately the
+#: same set: a 5xx or a 429 is the edge not having a pod to route to yet, while
+#: every 4xx is the route answering. Kept as a literal here rather than imported
+#: for the reason ``BUILD_IDENTITY_CONFIGMAP_ID`` is — this module must import on
+#: a bare interpreter with no SDK.
+_POD_TRANSIENT_STATUSES = (429, 500, 502, 503, 504)
+
+#: How long ``verify`` keeps asking a pod that is not answering (FND-2057), and
+#: the gap between asks.
+#:
+#: Spent inside the **e2e leg**, which has a 120-minute job budget, and not
+#: inside ``prepare-tenant``, which does not have the room: the guard in
+#: ``test_job_timeout_stays_above_the_scripts_own_waits`` sums this script's
+#: waits against that job's `timeout-minutes`, and at 240 + 600 + 600 + 90 the
+#: sum already lands exactly on its 50-minute ceiling. So ``install`` still
+#: takes one reading and ``verify`` is where the waiting happens — which is also
+#: where the race bites, since ``verify`` runs in the leg immediately before the
+#: pod-served routes that FND-2057 watched time out.
+#:
+#: 300 matches ``setup_routes.DEFAULT_POD_RECONCILE_WAIT_SECONDS``, which bounds
+#: the same wait one step later in the same leg; that constant carries the
+#: derivation. Two different numbers for one physical event would only invite
+#: the question of which is right.
+DEFAULT_POD_WAIT_SECONDS = 300
+_POD_POLL_SECONDS = 10
+
+#: Where the SDK's build-identity module lives, for the diagnostic probe in
+#: :func:`_local_sdk_serves_build_identity`. A dotted path rather than an import:
+#: see that function for why it must not import anything.
+_BUILD_IDENTITY_MODULE = "application_sdk.app.build_identity"
+
+#: Keys carrying a deployment id in an ``/apps/{id}/info`` payload. LM does not
+#: document the shape, so this reads whichever of them is present rather than
+#: asserting one — an absent id degrades to "the deployment layer could not be
+#: consulted", which is a stated outcome here, not a failure.
+_DEPLOYMENT_ID_KEYS = ("deployment_id", "deploymentId")
+
+
 class TenantAppError(RuntimeError):
     """The install or verification failed."""
 
@@ -466,6 +518,62 @@ class DeploymentFailed(TenantAppError):
     """
 
 
+#: The layers an installed version can be established at, weakest first. Named
+#: rather than boolean because "verified" was the word that hid FND-1684: the
+#: step said "verified: tenant runs X" while having read only LM's install
+#: record — the same record the install had just written and then skipped on.
+#:
+#: ``install-record``
+#:     LM says the tenant's install record names this version. Says nothing
+#:     about any pod: the record is written at install time and never revisited.
+#: ``deployment``
+#:     LM additionally reports ``deployment_status: SUCCEEDED`` for the
+#:     deployment. Stronger, but LM reporting SUCCEEDED while nothing moves is a
+#:     known shape (uninstall reports success and deletes nothing, DISTR-921),
+#:     so this can lie in the same direction as the record.
+#: ``pod``
+#:     The app pod itself reported the build identity stamped into the image
+#:     under test. The only layer a tenant whose pods did not move cannot fake.
+LAYER_INSTALL_RECORD = "install-record"
+LAYER_DEPLOYMENT = "deployment"
+LAYER_POD = "pod"
+
+
+@dataclass(frozen=True)
+class PodIdentity:
+    """What the app pod said when asked which build it is.
+
+    Three outcomes, and they must not be collapsed:
+
+    * ``reachable=False`` — the route did not answer (an SDK predating it, or
+      Heracles/the pod not serving). Nothing was established either way.
+    * ``reachable=True, build_id=""`` — the pod answered, and the image it runs
+      carries no build identity. Also establishes nothing about the version, but
+      it does establish that the route works, which is a different next step.
+    * ``reachable=True, build_id="…"`` — the answer this whole change exists for.
+    """
+
+    reachable: bool
+    build_id: str = ""
+    app_name: str = ""
+    detail: str = ""
+    #: Is the unreachability worth waiting out? (FND-2057)
+    #:
+    #: The three outcomes above say what was established. This says what to DO
+    #: about the first of them, and the two must not be collapsed either.
+    #:
+    #: ``True`` — nothing answered: a read timeout, a connection fault, a 5xx.
+    #: That is the ordinary shape of a deployment still reconciling onto the
+    #: pod, or of a KEDA scale-to-zero cold start, and it is worth re-asking.
+    #:
+    #: ``False`` — the route ANSWERED, with a rejection (a 404 from an image
+    #: whose SDK predates the route, say). Re-asking a 404 buys nothing but
+    #: delay: it is a verdict, and waiting for it to change is how a wait meant
+    #: to absorb a race turns into a hang on every app with an older pin. The
+    #: 404-versus-timeout split is the whole point.
+    transient: bool = False
+
+
 @dataclass(frozen=True)
 class InstallOutcome:
     """What an install actually did, for the step log and $GITHUB_OUTPUT."""
@@ -477,6 +585,12 @@ class InstallOutcome:
     installed_version: str = ""
     release_status: str = ""
     skipped: bool = False
+    #: LM's terminal verdict for the deployment, when one could be read.
+    deployment_status: str = ""
+    #: What the pod reported, when it reported anything.
+    pod_build_id: str = ""
+    #: The strongest layer this outcome was established at. See LAYER_*.
+    verified_layer: str = LAYER_INSTALL_RECORD
 
     def as_outputs(self) -> dict[str, str]:
         return {
@@ -487,6 +601,9 @@ class InstallOutcome:
             "installed_version": self.installed_version,
             "release_status": self.release_status,
             "skipped": "true" if self.skipped else "false",
+            "deployment_status": self.deployment_status,
+            "pod_build_id": self.pod_build_id,
+            "verified_layer": self.verified_layer,
         }
 
 
@@ -598,6 +715,19 @@ def _installed_version(client: TenantClient, app_id: str) -> str:
     treat those the same way: install. Distinguishing them would require LM to
     commit to a shape it has not.
     """
+    return _read_install_record(client, app_id)[0]
+
+
+def _read_install_record(
+    client: TenantClient, app_id: str
+) -> tuple[str, dict[str, object]]:
+    """One ``/info`` read, returning ``(installed version, raw payload)``.
+
+    Both halves come from one request because a caller that needs the payload as
+    well as the version — ``verify``, which then looks up the deployment id in it
+    — would otherwise fetch the same document twice and could see two different
+    snapshots of a tenant another run is mutating.
+    """
     response = client.get(APP_INFO_PATH.format(app_id=path_segment(app_id)))
     if not response.ok:
         # Not fatal: a 404 is the "never installed on this tenant" case, which
@@ -606,7 +736,7 @@ def _installed_version(client: TenantClient, app_id: str) -> str:
             f"::notice::app info returned HTTP {response.status} for {app_id} — "
             "treating as not installed"
         )
-        return ""
+        return "", {}
     data = response.data()
     version = _extract_version(data) or resolve_version_via_catalog(data)
     if not version:
@@ -621,13 +751,267 @@ def _installed_version(client: TenantClient, app_id: str) -> str:
             _INFO_DIAGNOSTIC_MAX_LINES,
             "head",
         )
-    return version
+    return version, data
 
 
 def _app_info(client: TenantClient, app_id: str) -> dict[str, object]:
     """Return the app's info payload, or ``{}`` when it cannot be read."""
     response = client.get(APP_INFO_PATH.format(app_id=path_segment(app_id)))
     return response.data() if response.ok else {}
+
+
+# ---------------------------------------------------------------------------
+# What the pod itself says (FND-1684)
+# ---------------------------------------------------------------------------
+
+
+def parse_pod_identity(payload: dict[str, object]) -> PodIdentity:
+    """Read a build identity out of a configmap envelope.
+
+    The handler serves the same shape as any other configmap — ``data.config``
+    is a JSON string — with the parsed keys repeated beside it. Both are read,
+    ``data`` first, so neither a client that only forwards ``config`` nor one
+    that flattens it can make a reachable pod look unreachable.
+    """
+    data = payload.get("data")
+    fields: dict[str, object] = dict(data) if isinstance(data, dict) else {}
+
+    raw_config = fields.get("config")
+    if isinstance(raw_config, str) and raw_config.strip():
+        try:
+            decoded = json.loads(raw_config)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, dict):
+            # The flattened keys win when both are present: they are what this
+            # handler writes directly, and `config` is a re-encoding of them.
+            fields = {**decoded, **fields}
+
+    return PodIdentity(
+        reachable=True,
+        build_id=str(fields.get("build_id") or "").strip(),
+        app_name=str(fields.get("app_name") or "").strip(),
+    )
+
+
+def read_pod_build_identity(client: TenantClient) -> PodIdentity:
+    """Ask the running pod which build it is.
+
+    ``/api/service/configmaps/<name>`` is Heracles proxying to the app pod's own
+    ``GET /workflows/v1/configmap/{id}``, so unlike every other read in this file
+    a 200 here comes from the POD rather than from a marketplace record. That is
+    the whole point: the install record and the deployment record are both
+    written by the install and never revisited, so a check that reads them can
+    pass on a tenant the deployment never actually reached.
+
+    Never raises. Every failure mode collapses to ``reachable=False`` carrying
+    the reason, because the caller's decision is the same for all of them — fall
+    back to the record layers and say so — and because a transport error here
+    must not turn a leg red for a diagnostic the leg can do without.
+    """
+    path = CONFIGMAP_PATH.format(name=path_segment(BUILD_IDENTITY_CONFIGMAP_ID))
+    try:
+        response = client.get(path)
+    except TenantApiError as exc:
+        # No status line at all — DNS, connection, read timeout. Nothing
+        # answered, so this may simply be too early. See PodIdentity.transient.
+        return PodIdentity(reachable=False, detail=str(exc), transient=True)
+    if not response.ok:
+        return PodIdentity(
+            reachable=False,
+            detail=f"HTTP {response.status} from {path}",
+            transient=response.status in _POD_TRANSIENT_STATUSES,
+        )
+    try:
+        payload = response.data()
+    except TenantApiError as exc:
+        # A 200 whose body will not parse is the route answering, badly. That is
+        # not a race and re-reading it is not going to fix it.
+        return PodIdentity(reachable=False, detail=str(exc))
+    return parse_pod_identity(payload)
+
+
+def _progress(message: str) -> None:
+    """Print one poll-progress line, flushed.
+
+    Flushed explicitly because Python block-buffers stdout when it is not a TTY,
+    and a GitHub Actions step's ``run:`` is a pipe. Without it a patient wait and
+    a hung step produce the identical log — nothing — until the step ends, and
+    the wait this file just gained is up to five minutes long.
+
+    Only the new loop uses it. Making the whole module line-buffered at import
+    would be the broader fix and is a bigger change than this one needs.
+    """
+    print(message, flush=True)
+
+
+def await_pod_build_identity(
+    client: TenantClient,
+    wait_seconds: int = DEFAULT_POD_WAIT_SECONDS,
+    on_progress: Callable[[str], None] | None = None,
+) -> PodIdentity:
+    """Ask the pod, and keep asking while the silence is worth waiting out.
+
+    FND-2057. :func:`read_pod_build_identity` asks once, and one read lands in a
+    window it cannot see the shape of: the install record flips the moment LM
+    writes it, while the HelmRelease rollout that actually replaces the pod is
+    still in flight, and the pod that will answer may not be running yet. A
+    single read taken inside that window reports "the pod did not answer" and
+    the caller falls back to the record layers — which is how a leg comes to
+    announce, accurately and uselessly, that it verified at the INSTALL-RECORD
+    layer and that *the pod itself was NOT asked*. The pod was asked. It was
+    asked once, too early.
+
+    So the read is repeated while, and only while, nothing is answering. A
+    rejection — the 404 every image whose SDK predates the route returns — ends
+    the loop on the first read, because it is an answer and no amount of waiting
+    will change it. That split is what keeps this from adding minutes to every
+    leg of every app still on an older pin: those pay one read, exactly as
+    before.
+
+    Never raises, for the same reason :func:`read_pod_build_identity` does not.
+    """
+    deadline = time.monotonic() + max(wait_seconds, 0)
+    while True:
+        identity = read_pod_build_identity(client)
+        if not identity.transient or time.monotonic() >= deadline:
+            return identity
+        if on_progress is not None:
+            on_progress(
+                f"the app pod is not answering the build-identity route yet "
+                f"({identity.detail}); the deployment is still reconciling onto "
+                f"it. Retrying in {_POD_POLL_SECONDS}s"
+            )
+        time.sleep(_POD_POLL_SECONDS)
+
+
+def _local_sdk_serves_build_identity() -> bool:
+    """True when the SDK synced on THIS runner carries the build-identity route.
+
+    Diagnostic only — it never decides pass or fail. What it buys is the
+    difference between two unreadable-pod messages that need opposite next
+    steps: an SDK too old to serve the route, versus a pod that is not running
+    the build under test at all.
+
+    It is not proof, and the message says so. The e2e action can pin the
+    *harness* SDK independently of the connector's runtime pin
+    (``harness-sdk-ref``), so a runner carrying the module does not by itself
+    establish that the image under test carries it too.
+
+    ``find_spec`` rather than an import: this module must stay importable on the
+    runner's bare system Python, where ``install`` runs and no SDK exists.
+    ``ModuleNotFoundError`` is what a missing PARENT package raises.
+    """
+    try:
+        import importlib.util  # noqa: PLC0415 — lazy: diagnostic-only, and this module must import on a bare interpreter
+
+        return importlib.util.find_spec(_BUILD_IDENTITY_MODULE) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _unreadable_pod_hint(identity: PodIdentity, waited: int = 0) -> str:
+    """Explain an unreadable pod identity, and say what it does NOT establish.
+
+    Args:
+        identity: What the last read got back.
+        waited: Seconds already spent re-asking, when the caller waited. Named
+            in the message because the two silences need different next steps
+            and only the elapsed time tells them apart: a 404 that came back on
+            the first read is an SDK pin, and a route that stayed silent through
+            a five-minute wait is a deployment problem. Without this, both
+            printed the same sentence and the reader picked the wrong one — see
+            FND-2057, where the run's own notice said the pod was not asked.
+    """
+    if identity.transient and waited > 0:
+        return (
+            f"The app pod never answered the build-identity route across {waited}s "
+            f"of retries ({identity.detail}). Nothing answered — no status, no "
+            "body — which is a pod that is not serving, not an image whose SDK "
+            "predates the route: that returns a prompt 404. Look at the "
+            "deployment: a rollout that never replaced the pod, a crash loop, or "
+            "a cold start longer than the wait."
+        )
+    if identity.reachable:
+        return (
+            "The pod answered but reports no build identity, so the image it "
+            "runs was built without the ATLAN_BUILD_ID stamp "
+            "(.github/actions/build-app-image in application-sdk adds it). That "
+            "is consistent with a correctly reconciled tenant AND with a stale "
+            "one; it distinguishes neither."
+        )
+    carried = (
+        " The SDK synced on this runner DOES carry the route, which makes "
+        "'the pod is not running the build under test' the likelier of the two "
+        "— though not proof, since the harness SDK can be pinned ahead of the "
+        "connector's runtime pin (harness-sdk-ref)."
+        if _local_sdk_serves_build_identity()
+        else " The SDK synced on this runner does not carry the route either, "
+        "so this is most likely a pin that predates it and closes on its own "
+        "when the connector bumps."
+    )
+    return (
+        f"The pod did not answer the build-identity route ({identity.detail}), "
+        "so either the deployed image runs an SDK predating it, or the pod is "
+        f"not the one this run deployed.{carried}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# What LM's deployment record says
+# ---------------------------------------------------------------------------
+
+
+def deployment_id_from_info(payload: dict[str, object], _depth: int = 0) -> str:
+    """Find a deployment id in an ``/apps/{id}/info`` payload, or "".
+
+    Same depth-bounded walk as :func:`_extract_version`, and for the same reason:
+    LM nests the install state under ``installed`` and wraps payloads in ``data``
+    inconsistently, and an unbounded walk over a self-referential payload would
+    crash the step rather than degrade.
+
+    "" is a normal outcome, not an error. LM does not commit to exposing a
+    deployment id here, so the deployment layer is consulted when it can be and
+    reported as unavailable when it cannot.
+    """
+    if _depth >= _WALK_MAX_DEPTH:
+        return ""
+    for key in _DEPLOYMENT_ID_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for nest in _VERSION_NESTS:
+        inner = payload.get(nest)
+        if isinstance(inner, dict):
+            found = deployment_id_from_info(inner, _depth + 1)
+            if found:
+                return found
+    return ""
+
+
+def read_deployment_status(client: TenantClient, deployment_id: str) -> str:
+    """Return LM's terminal verdict for one deployment, or "" when unreadable.
+
+    A single read, not a poll: every caller here is asking about a deployment
+    that already reached a terminal state, so there is nothing to wait for.
+    :func:`_poll_deployment` remains the one that waits.
+    """
+    if not deployment_id:
+        return ""
+    try:
+        response = client.get(
+            DEPLOYMENT_PATH.format(deployment_id=path_segment(deployment_id))
+        )
+    except TenantApiError as exc:
+        print(f"::warning::deployment status read failed for {deployment_id}: {exc}")
+        return ""
+    if not response.ok:
+        print(
+            f"::warning::deployment status read returned HTTP {response.status} "
+            f"for {deployment_id}"
+        )
+        return ""
+    return str(response.data().get("deployment_status") or "")
 
 
 def _registered_source_repo(info: dict[str, object], _depth: int = 0) -> str:
@@ -1987,6 +2371,84 @@ def _tolerate_pod_churn(
     return reason
 
 
+def _converged_outcome(
+    read_client: TenantClient,
+    app_id: str,
+    version: str,
+    info: dict[str, object],
+    current: str,
+) -> InstallOutcome:
+    """The no-op path: LM's install record already names the version under test.
+
+    This is the path FND-1684 was about. Returning here on the record alone made
+    the version check read its own input — ``verify`` read the same record
+    ``install`` had just skipped on — so once the record existed for a connector
+    SHA, every later run on that SHA skipped the install AND passed the verify,
+    whatever the cluster was actually running. One connector SHA can also resolve
+    to more than one image — the tag carries an optional digest suffix — so the
+    record can go on naming a build the tenant no longer runs.
+
+    It still skips. Re-publishing and re-installing would land in LM's "App
+    already installed" branch, which starts no deployment, so forcing it through
+    would establish nothing new at real cost. What changes is that the skip is
+    now **corroborated where it can be**, and the outcome says which layer did
+    it, so a skip resting on the record alone is reported as exactly that rather
+    than as a verification.
+    """
+    pod = read_pod_build_identity(read_client)
+    if pod.reachable and pod.build_id and pod.build_id != version:
+        raise TenantAppError(
+            f"LM's install record says {app_id} is at {version}, but the running "
+            f"pod reports build {pod.build_id}. The record is written at install "
+            "time and never revisited, so it can name a version the cluster "
+            "never reconciled to; the pod cannot. Failing here rather than "
+            "letting the legs test a version this tenant does not serve."
+        )
+
+    deployment_id = deployment_id_from_info(info)
+    status = read_deployment_status(read_client, deployment_id)
+
+    if pod.reachable and pod.build_id == version:
+        layer = LAYER_POD
+        print(
+            f"tenant already runs {app_id} at {version} — nothing to do "
+            "(confirmed by the pod's own build identity)"
+        )
+    elif status == _SUCCEEDED:
+        layer = LAYER_DEPLOYMENT
+        print(
+            f"tenant already runs {app_id} at {version} — nothing to do "
+            f"(LM's deployment {deployment_id} reports {status}; the pod could "
+            "not be asked)"
+        )
+        print(f"::warning::{_unreadable_pod_hint(pod)}")
+    else:
+        layer = LAYER_INSTALL_RECORD
+        deployment_note = (
+            f" LM's deployment {deployment_id} reports {status or '<unreadable>'}."
+            if deployment_id
+            else " No deployment id is exposed in the app info payload, so the "
+            "deployment layer could not be consulted either."
+        )
+        print(
+            f"::warning::skipping the install for {app_id} at {version} on the "
+            "strength of LM's install record ALONE. Neither the pod nor a "
+            "SUCCEEDED deployment record corroborates it, so this run has NOT "
+            "established that the tenant serves the version under test. "
+            f"{_unreadable_pod_hint(pod)}{deployment_note}"
+        )
+
+    return InstallOutcome(
+        version=version,
+        installed_version=current,
+        skipped=True,
+        deployment_id=deployment_id,
+        deployment_status=status,
+        pod_build_id=pod.build_id,
+        verified_layer=layer,
+    )
+
+
 def install(args: argparse.Namespace) -> InstallOutcome:
     """Register + install + wait, converging by version."""
     # app_id is a free-text workflow input that lands in request paths; the
@@ -2009,10 +2471,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     # instead of taking the no-op path.
     current = _extract_version(info) or resolve_version_via_catalog(info)
     if current and current == args.version:
-        print(f"tenant already runs {app_id} at {args.version} — nothing to do")
-        return InstallOutcome(
-            version=args.version, installed_version=current, skipped=True
-        )
+        return _converged_outcome(read_client, app_id, args.version, info, current)
     if current:
         print(f"tenant runs {current}; installing {args.version}")
     else:
@@ -2066,6 +2525,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         app_configs=args.app_configs,
         release_model=args.release_model,
         created_by=args.created_by,
+        commit_sha=args.commit_sha,
     )
     version_id, release_id = _publish(
         publish_client, request, retry_seconds=args.publish_retry_seconds
@@ -2097,11 +2557,18 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     # authority anyway.
     foreign: list[str] = []
     churn = ""
+    #: LM's own terminal verdict, recorded rather than inferred: the two
+    #: tolerance paths below carry on past a FAILED one, and reporting that as
+    #: SUCCEEDED in the outcome would put back exactly the kind of
+    #: pass-shaped-record FND-1684 is about.
+    deploy_verdict = ""
     if deployment_id:
         print(f"install accepted, deployment_id={deployment_id}")
         try:
             _poll_deployment(read_client, deployment_id, args.timeout_seconds)
+            deploy_verdict = _SUCCEEDED
         except DeploymentFailed as exc:
+            deploy_verdict = _FAILED
             diagnostics = _dump_failure(read_client, app_id)
             foreign = foreign_failure(diagnostics, args.image)
             if foreign:
@@ -2195,6 +2662,42 @@ def install(args: argparse.Namespace) -> InstallOutcome:
             f"{', '.join(foreign)}, not this install. Those pods should still be "
             "cleaned up — they will fail this check on every future install."
         )
+
+    # Ask the pod itself (FND-1684). This is the last thing the install does and
+    # the strongest thing it can establish: everything above it — LM's install
+    # record, LM's deployment verdict — is written by the install and never
+    # revisited, and LM reporting SUCCEEDED while nothing moves is a known shape
+    # (DISTR-921). A disagreement here is fatal, because the whole purpose of
+    # this job is to leave the tenant serving the version under test.
+    #
+    # One read, not the wait `verify` does (FND-2057), and the reason is budget
+    # rather than principle: `test_job_timeout_stays_above_the_scripts_own_waits`
+    # sums this script's defaults against prepare-tenant's `timeout-minutes`, and
+    # 240 + 600 + 600 + 90 already lands exactly on its 50-minute ceiling — so a
+    # wait here would force that ceiling, and the tenant lease TTL behind it, up
+    # for every run. `verify` runs inside the e2e leg, which budgets 120 minutes
+    # and is where the race actually costs a leg. If the reconcile window is ever
+    # measured to outlast a leg's own wait, this is the place to spend it, and
+    # raising the job's ceiling is the price.
+    pod = read_pod_build_identity(read_client)
+    if pod.reachable and pod.build_id and pod.build_id != args.version:
+        raise TenantAppError(
+            f"the tenant's install record and deployment both report "
+            f"{args.version}, but the running pod reports build {pod.build_id}. "
+            "The deployment did not reconcile onto the pod serving traffic, so "
+            "the legs would test whatever that pod runs. Nothing above this "
+            "could have caught it: both records are written by the install and "
+            "never revisited."
+        )
+    if pod.reachable and pod.build_id == args.version:
+        pod_layer = LAYER_POD
+        print(f"pod reports build {pod.build_id} — it is running this image")
+    else:
+        pod_layer = (
+            LAYER_DEPLOYMENT if deploy_verdict == _SUCCEEDED else LAYER_INSTALL_RECORD
+        )
+        print(f"::warning::{_unreadable_pod_hint(pod)}")
+
     return InstallOutcome(
         version=args.version,
         version_id=version_id,
@@ -2202,41 +2705,128 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         deployment_id=deployment_id,
         installed_version=installed,
         release_status=status,
+        deployment_status=deploy_verdict,
+        pod_build_id=pod.build_id,
+        verified_layer=pod_layer,
     )
 
 
 def verify(args: argparse.Namespace) -> str:
-    """Assert the tenant runs ``--expected``. Returns the installed version."""
+    """Assert the tenant runs ``--expected``. Returns the installed version.
+
+    Reads three layers, strongest first, and says which one decided (FND-1684).
+    It used to read exactly one — LM's install record — which is the record
+    ``install`` writes and then skips on, so the check was reading its own
+    input: once that record existed for a build it could only agree with itself,
+    whatever the cluster was serving.
+
+    ``pod``
+        ``/api/service/configmaps/atlan-build-identity``, which Heracles proxies
+        to the app pod's own handler. The image under test is stamped with its
+        tag at build time, so a matching answer here is proof the pod serving
+        traffic IS the build under test. **Decides on its own, both ways.**
+
+        Asked repeatedly, not once (FND-2057). One read samples an instant, and
+        the instant this runs at is inside the window the layers below it are
+        wrong about: LM's install record flips when the install lands, while the
+        rollout that replaces the pod is still in flight. A read taken there
+        reports silence, this function falls through to the records, and the leg
+        proceeds against a pod nobody established anything about — then fails
+        moments later in the setup-route check, whose reads go to that same pod.
+        A *rejection* still decides immediately; only silence is waited out. See
+        :func:`await_pod_build_identity`.
+    ``deployment``
+        LM's ``deployment_status``. Consulted only when the pod could not
+        answer, and never on its own evidence: LM reporting SUCCEEDED while
+        nothing moves is a known shape (DISTR-921).
+    ``install-record``
+        The version LM says is installed. The weakest layer and the one that was
+        being reported as a verification; it is still checked, because a
+        disagreement here is real, but a pass at this layer alone now says so.
+    """
     # See install(): resolve from atlan.yaml first, then validate the result.
     app_id = validate_app_id(resolve_app_id(args.app_id))
     base_url = validate_tenant_base_url(args.base_url)
     _, read_client = _clients(base_url)
-    installed = _installed_version(read_client, app_id)
-    if installed != args.expected:
-        # Two different situations, and the message has to distinguish them or
-        # the reader chases the wrong one. An empty read means the tenant could
-        # not tell us what it runs — which is NOT the same as running the wrong
-        # thing, and LM reports it for a perfectly reconciled install whenever
-        # Atlas has no `atlanAppCurrentVersion` attribute (see
-        # _PLACEHOLDER_VERSIONS). The shape dump above says which.
-        cause = (
-            "the tenant did not report a version at all — see the info dump "
-            "above. LM falls back to a placeholder when Atlas carries no "
-            "`atlanAppCurrentVersion` attribute, so this can happen after a "
-            "deployment that reconciled fine; it means the version is "
-            "unverifiable here, not that the wrong one is installed."
-            if not installed
-            else "A concurrent e2e run against this tenant, or a manual deploy, "
-            "is the usual cause."
+
+    pod_wait = int(getattr(args, "pod_wait_seconds", DEFAULT_POD_WAIT_SECONDS))
+    pod = await_pod_build_identity(read_client, pod_wait, _progress)
+    if pod.reachable and pod.build_id:
+        if pod.build_id != args.expected:
+            raise TenantAppError(
+                f"the app pod on this tenant reports build {pod.build_id}, but "
+                f"this leg tests {args.expected}. Read from the pod itself "
+                f"(/api/service/configmaps/{BUILD_IDENTITY_CONFIGMAP_ID}), not "
+                "from a marketplace record, so this is what the cluster is "
+                "actually serving: the deployment did not reach the pod, or a "
+                "concurrent run replaced it. Heracles fetches the DAG from the "
+                "deployed pod at AE submit, so continuing would test that build "
+                "rather than this one."
+            )
+        print(
+            f"verified at the POD layer: the app pod reports build "
+            f"{pod.build_id}, which is the version under test"
         )
-        raise TenantAppError(
-            f"tenant is running {installed or '<nothing / unreported>'} for app "
-            f"{app_id}, but this leg tests {args.expected}. Heracles fetches "
-            "the DAG from the deployed pod at AE submit, so continuing would "
-            f"test a different version than the one under test. {cause}"
+        return pod.build_id
+
+    # The pod could not answer — and, when the silence was the waitable kind, it
+    # could not answer for `pod_wait` seconds of asking rather than for the
+    # instant one read happened to sample. Everything below reads marketplace
+    # records, which are written by the install and never revisited — so a pass
+    # here is weaker than it looks, and the log has to say so rather than
+    # printing the bare "verified" that hid this for as long as it did.
+    print(f"::warning::{_unreadable_pod_hint(pod, pod_wait)}")
+
+    installed, info = _read_install_record(read_client, app_id)
+    if installed and installed == args.expected:
+        deployment_id = deployment_id_from_info(info)
+        status = read_deployment_status(read_client, deployment_id)
+        if deployment_id and status and status != _SUCCEEDED:
+            raise TenantAppError(
+                f"LM's install record names {installed}, but its deployment "
+                f"{deployment_id} reports {status} rather than {_SUCCEEDED}. The "
+                "install record is written before the deployment reconciles, so "
+                "it can name a version the cluster never reached."
+            )
+        layer = LAYER_DEPLOYMENT if status == _SUCCEEDED else LAYER_INSTALL_RECORD
+        checked = (
+            f"LM's install record AND deployment {deployment_id} ({status})"
+            if layer == LAYER_DEPLOYMENT
+            else "LM's install record ALONE"
         )
-    print(f"verified: tenant runs {installed}")
-    return installed
+        print(
+            f"verified at the {layer.upper()} layer: {checked} name "
+            f"{installed}. The pod itself was NOT asked, so this does not "
+            "establish that the cluster reconciled onto it — see the warning "
+            "above."
+        )
+        return installed
+
+    # Reached only when the install record disagrees: the matching case returned
+    # above, at whichever layer established it.
+    #
+    # Two different situations, and the message has to distinguish them or the
+    # reader chases the wrong one. An empty read means the tenant could not tell
+    # us what it runs — which is NOT the same as running the wrong thing, and LM
+    # reports it for a perfectly reconciled install whenever Atlas has no
+    # `atlanAppCurrentVersion` attribute (see _PLACEHOLDER_VERSIONS). The shape
+    # dump above says which.
+    cause = (
+        "the tenant did not report a version at all — see the info dump "
+        "above. LM falls back to a placeholder when Atlas carries no "
+        "`atlanAppCurrentVersion` attribute, so this can happen after a "
+        "deployment that reconciled fine; it means the version is "
+        "unverifiable here, not that the wrong one is installed."
+        if not installed
+        else "A concurrent e2e run against this tenant, or a manual deploy, "
+        "is the usual cause."
+    )
+    raise TenantAppError(
+        f"tenant is running {installed or '<nothing / unreported>'} for app "
+        f"{app_id}, but this leg tests {args.expected}. Heracles fetches "
+        "the DAG from the deployed pod at AE submit, so continuing would "
+        f"test a different version than the one under test. {cause}"
+    )
 
 
 def _write_outputs(outputs: dict[str, str]) -> None:
@@ -2291,6 +2881,16 @@ def main(argv: list[str] | None = None) -> int:
     p_install.add_argument("--app-configs", default="")
     p_install.add_argument("--release-model", default="")
     p_install.add_argument("--created-by", default="")
+    p_install.add_argument(
+        "--commit-sha",
+        default="",
+        help=(
+            "Full git SHA the image was built from. Forwarded to GM so a "
+            "worker's baked commit_sha resolves to this version. Omit when "
+            "unknown — the field is absent rather than blank, matching the "
+            "release workflow."
+        ),
+    )
     p_install.add_argument(
         "--scan-wait-seconds",
         type=int,
@@ -2348,6 +2948,15 @@ def main(argv: list[str] | None = None) -> int:
     p_verify = sub.add_parser("verify", help="assert the installed version")
     _add_common(p_verify)
     p_verify.add_argument("--expected", required=True)
+    p_verify.add_argument(
+        "--pod-wait-seconds",
+        type=int,
+        default=DEFAULT_POD_WAIT_SECONDS,
+        help=(
+            "How long to keep asking the app pod for its build identity while "
+            "it is not answering at all. 0 reads once."
+        ),
+    )
 
     args = parser.parse_args(argv)
 

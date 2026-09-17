@@ -440,7 +440,7 @@ runs:
         set -uo pipefail
         artifact_id=$(gh api \
           "repos/atlanhq/${REPO_NAME}/actions/runs/${RUN_ID}/artifacts" \
-          --jq '.artifacts[] | select(.name | test("results$")) | .id' \
+          --jq '.artifacts[] | select(.name | test("results(-retry)?$")) | .id' \
           | head -1)
         body_path=""
         if [ -n "${artifact_id}" ]; then

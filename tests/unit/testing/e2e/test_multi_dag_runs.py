@@ -57,8 +57,10 @@ from application_sdk.testing.e2e.client import (
     PublishedVersion,
 )
 from application_sdk.testing.harness import atlas as atlas_api
+from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.identity import Minter
 from application_sdk.testing.harness.outcome import Settled
+from application_sdk.testing.harness.teardown import CONNECTION_DELETE_NODE_ID
 
 # ---------------------------------------------------------------------------
 # Fixtures for the two things a run reads from outside itself
@@ -139,6 +141,7 @@ class _FakeAE:
         self.created_names: list[str] = []
         self.published: list[tuple[str, int]] = []
         self.submits: list[_Submit] = []
+        self.submitted_versions: list[str] = []
 
     async def create_workflow(self, *, name: str, description: str) -> str:
         self.created_names.append(name)
@@ -162,11 +165,24 @@ class _FakeAE:
         )
         return f"run-{len(self.submits)}"
 
+    async def submit_published_version(self, slug: str, **_kwargs: Any) -> str:
+        """The teardown's submit since FND-1775 — its own list, not
+        :attr:`submits`, because it is a different endpoint with no envelope to
+        read an entrypoint off. The connector's own submit stays on
+        ``submit_workflow`` above, so a test can tell which path a call took.
+        """
+        self.submitted_versions.append(slug)
+        return f"run-{len(self.submits) + len(self.submitted_versions)}"
+
     async def poll_native_status(self, run_id: str, **_kwargs: Any) -> DAGRunResult:
         return self._results.pop(0) if len(self._results) > 1 else self._results[0]
 
     async def get_published_version(self, slug: str) -> None:
         return None
+
+    # The real guard, over this fake's scripted read — see
+    # ``_PublishingAE``, which is the subclass that makes it answer something.
+    foreign_published_dag = AEClient.foreign_published_dag
 
     async def probe_run_is_listed(self, slug: str, run_id: str) -> None:
         return None
@@ -265,6 +281,8 @@ def _wire(
     harness._auto_admin_users = ()  # type: ignore[attr-defined]
     harness._active_dag = None  # type: ignore[attr-defined]
     harness._connection_seeded = False  # type: ignore[attr-defined]
+    harness._connection_create_attempted = False  # type: ignore[attr-defined]
+    harness._dag_submitted = False  # type: ignore[attr-defined]
     harness._seed_version = None  # type: ignore[attr-defined]
     harness._node_dispatch = {}  # type: ignore[attr-defined]
     harness._expected_node_identities = {}  # type: ignore[attr-defined]
@@ -575,17 +593,85 @@ class TestDeclaredRuns:
             "default/bundle/1"
         }
 
-    def test_teardown_is_still_one_purge(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_teardown_is_still_one_delete(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """N runs, one cleanup — and it stays in ``teardown_method``, which
-        pytest runs on pass, fail and error alike."""
+        pytest runs on pass, fail and error alike.
+
+        One ``connection-delete`` run since FND-1724, not one ``pyatlan`` purge:
+        the shared connection is registered once however many DAGs touched it,
+        and the runner-side purge fires only when the app's run did not
+        complete — which is what ``calls.purged`` being empty says here.
+
+        The third scripted reading is the teardown's, and it has to carry the
+        ``connection-delete`` node: a reading whose nodes are the connector's
+        says the graph AE ran was published over the teardown's DAG, which
+        ``delete_connection`` reports as a supersede rather than as a delete.
+        """
         harness = _CrawlThenMine()
-        ae = _FakeAE(_succeeded("extract", "publish"), _succeeded("extract"))
+        ae = _FakeAE(
+            _succeeded("extract", "publish"),
+            _succeeded("extract"),
+            _succeeded(CONNECTION_DELETE_NODE_ID),
+        )
         calls = _wire(harness, ae, monkeypatch, total=4)
 
         harness.test_full_dag_runs_end_to_end()
         harness.teardown_method(None)
 
-        assert calls.purged == ["default/bundle/1"]
+        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        assert len(teardowns) == 1
+        assert calls.purged == []
+        # And it went to AE's own submit, not through Heracles: the delete's
+        # graph is the one the harness published, which is FND-1775.
+        assert len(ae.submitted_versions) == 1
+        assert [s.entrypoint for s in ae.submits] == ["crawler", "miner"]
+
+    def test_a_submit_that_times_out_still_gets_its_connection_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-1873's gate is recorded on the way *in* to the submit.
+
+        A submit whose response never arrives is a run executing orphaned, not
+        a run that never happened — so the connection it mints is real and has
+        to be reclaimed. Recording the flag after the ``await`` instead would
+        leave this leg's connection on a shared tenant, and this is the only
+        test that would notice: it drives ``_run_full_dag_async`` for real
+        rather than presetting the flag.
+        """
+        harness = _Crawler()
+        ae = _FakeAE(_succeeded(CONNECTION_DELETE_NODE_ID))
+
+        async def _times_out(_payload: dict[str, Any], **_kwargs: Any) -> str:
+            raise TimeoutError("read timeout on submit")
+
+        monkeypatch.setattr(ae, "submit_workflow", _times_out)
+        calls = _wire(harness, ae, monkeypatch)
+
+        with pytest.raises(TimeoutError):
+            harness.run_full_dag()
+        harness.teardown_method(None)
+
+        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        assert len(teardowns) == 1
+        assert calls.purged == []
+
+    def test_a_run_that_never_submitted_reclaims_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other side of the same gate, through the same real wiring: a
+        suite that skipped before ``run_full_dag`` submits no teardown DAG and
+        does not fall back to the runner purge either."""
+        harness = _Crawler()
+        ae = _FakeAE(_succeeded(CONNECTION_DELETE_NODE_ID))
+        calls = _wire(harness, ae, monkeypatch)
+
+        harness.teardown_method(None)
+
+        assert ae.created_names == []
+        assert ae.submitted_versions == []
+        assert calls.purged == []
 
     def test_a_failing_run_stops_the_sequence(
         self, monkeypatch: pytest.MonkeyPatch

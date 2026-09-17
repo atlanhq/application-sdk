@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.31.0
-source-sha:    b8b3aa596e605d1c40adff57e4367a123771cf9c
-source-date:   2026-09-02T11:49:20+01:00
+sdk-version:   3.34.3
+source-sha:    af576016582a9598b36d2073373e76ba9438e1ca
+source-date:   2026-09-16T09:10:49Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,23 +18,24 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 43 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 27 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 45 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 65 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 45 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 67 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
+| `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
-| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 327 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
+| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 403 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -257,6 +258,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Wrap @task methods on an instance to execute as Temporal activities.
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `build_identity`
+
+- **Import:** `from application_sdk.app.build_identity import build_identity`
+- **Signature:** `build_identity() -> str`
+- **Summary:** Return this image's build identity, or ``""`` when it carries none.
+- **Defined in:** `application_sdk/app/build_identity.py`
+
 #### `canonical_workflow_type`
 
 - **Import:** `from application_sdk.app import canonical_workflow_type`
@@ -300,6 +308,27 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `_app_state_lock`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/app/base.py`
+
+#### `BUILD_ID_ENV`
+
+- **Import:** `from application_sdk.app.build_identity import BUILD_ID_ENV`
+- **Signature:** `BUILD_ID_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/build_identity.py`
+
+#### `BUILD_IDENTITY_CONFIGMAP_ID`
+
+- **Import:** `from application_sdk.app.build_identity import BUILD_IDENTITY_CONFIGMAP_ID`
+- **Signature:** `BUILD_IDENTITY_CONFIGMAP_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/build_identity.py`
+
+#### `BUILD_INFO_BUILD_ID_KEY`
+
+- **Import:** `from application_sdk.app.build_identity import BUILD_INFO_BUILD_ID_KEY`
+- **Signature:** `BUILD_INFO_BUILD_ID_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/build_identity.py`
 
 #### `InteractionUnfinishedPolicy`
 
@@ -464,6 +493,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Enumeration of dataframe types.
 - **Defined in:** `application_sdk/common/types.py`
 
+#### `EntityDecorations`
+
+- **Import:** `from application_sdk.common.entity_envelope import EntityDecorations`
+- **Signature:** `class EntityDecorations(default_catalog_name: str | None = None, default_schema_name: str | None = None) -> None`
+- **Summary:** Top-level entity fields that no pyatlan model field can hold.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `EntityEnvelopePolicy`
+
+- **Import:** `from application_sdk.common.entity_envelope import EntityEnvelopePolicy`
+- **Signature:** `class EntityEnvelopePolicy(shape: EnvelopeShape = EnvelopeShape.FLATTENED, sql_dialect: str | None = None) -> None`
+- **Summary:** How one connector's serialised entities are shaped.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `EnvelopeShape`
+
+- **Import:** `from application_sdk.common.entity_envelope import EnvelopeShape`
+- **Signature:** `class EnvelopeShape`
+- **Summary:** Where relationship references live in the serialised entity.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
 #### `FilterPattern`
 
 - **Import:** `from application_sdk.common import FilterPattern`
@@ -471,6 +521,41 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `class FilterPattern(include: list[re.Pattern[str]], exclude: list[re.Pattern[str]])`
 - **Summary:** A compiled include/exclude filter with uniform regex-or-exact semantics.
 - **Defined in:** `application_sdk/common/filter_matching.py`
+
+#### `LastSyncDetails`
+
+- **Import:** `from application_sdk.common.last_sync import LastSyncDetails`
+- **Signature:** `class LastSyncDetails(run: str, workflow_name: str, run_at_ms: int) -> None`
+- **Summary:** Resolved last-sync values for a single end-to-end run.
+- **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `LastSyncStampable`
+
+- **Import:** `from application_sdk.common.last_sync import LastSyncStampable`
+- **Signature:** `class LastSyncStampable`
+- **Summary:** Any asset object that declares the three run-identity fields.
+- **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `ModelDumpAsset`
+
+- **Import:** `from application_sdk.common.asset_serialization import ModelDumpAsset`
+- **Signature:** `class ModelDumpAsset`
+- **Summary:** A pydantic-style model exposing ``model_dump()``.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
+#### `NestedBytesAsset`
+
+- **Import:** `from application_sdk.common.asset_serialization import NestedBytesAsset`
+- **Signature:** `class NestedBytesAsset`
+- **Summary:** An asset that encodes itself straight to Atlas nested-format JSON bytes.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
+#### `NestedDictAsset`
+
+- **Import:** `from application_sdk.common.asset_serialization import NestedDictAsset`
+- **Signature:** `class NestedDictAsset`
+- **Summary:** An asset that renders itself as an Atlas nested-format ``dict``.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
 
 #### `TaskResult`
 
@@ -486,7 +571,21 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Statistics produced by a completed task.
 - **Defined in:** `application_sdk/common/models.py`
 
+#### `UnserializableValue`
+
+- **Import:** `from application_sdk.common.asset_serialization import UnserializableValue`
+- **Signature:** `class UnserializableValue(type_name: str) -> None`
+- **Summary:** A nested value ``orjson_default`` cannot render, naming its type.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
 ### Functions
+
+#### `apply_envelope`
+
+- **Import:** `from application_sdk.common.entity_envelope import apply_envelope`
+- **Signature:** `apply_envelope(entity: dict[str, *, ...)`
+- **Summary:** Apply *policy* and *decorations* to one serialised entity dict.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `atomic_copy`
 
@@ -530,6 +629,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Fail before a large write that the filesystem plainly cannot hold.
 - **Defined in:** `application_sdk/common/atomic.py`
 
+#### `entity_bytes`
+
+- **Import:** `from application_sdk.common.asset_serialization import entity_bytes`
+- **Signature:** `entity_bytes(asset: object, *, ...)`
+- **Summary:** Serialise a mapper's return value to one Atlas wire-shape JSON line.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
 #### `extract_epoch_id_from_qualified_name`
 
 - **Import:** `from application_sdk.common.incremental import extract_epoch_id_from_qualified_name`
@@ -551,6 +657,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `filter_matches(candidate: str, *, ...)`
 - **Summary:** Convenience one-shot: compile ``include``/``exclude`` and test ``candidate``.
 - **Defined in:** `application_sdk/common/filter_matching.py`
+
+#### `flatten_envelope`
+
+- **Import:** `from application_sdk.common.entity_envelope import flatten_envelope`
+- **Signature:** `flatten_envelope(entity: dict[str, Any]) -> dict[str, Any]`
+- **Summary:** Merge a nested-format entity's relationship refs into ``attributes``.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `get_actual_cpu_count`
 
@@ -608,6 +721,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
+#### `orjson_default`
+
+- **Import:** `from application_sdk.common.asset_serialization import orjson_default`
+- **Signature:** `orjson_default(obj: Any) -> Any`
+- **Summary:** Fallback serialiser for orjson — covers types it doesn't handle natively.
+- **Defined in:** `application_sdk/common/asset_serialization.py`
+
 #### `persist_marker_to_storage`
 
 - **Import:** `from application_sdk.common.incremental import persist_marker_to_storage`
@@ -643,7 +763,42 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Read all SQL files from a directory and return as a name→content mapping.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
+#### `resolve_last_sync_details`
+
+- **Import:** `from application_sdk.common.last_sync import resolve_last_sync_details`
+- **Signature:** `resolve_last_sync_details(*, *, ...)`
+- **Summary:** Resolve last-sync values from the current execution + correlation
+- **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `set_last_sync_details_on_asset`
+
+- **Import:** `from application_sdk.common.last_sync import set_last_sync_details_on_asset`
+- **Signature:** `set_last_sync_details_on_asset(asset: LastSyncStampable, *, ...)`
+- **Summary:** Stamp last-sync details onto an asset (mutating in place).
+- **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `set_last_sync_details_on_assets_bulk`
+
+- **Import:** `from application_sdk.common.last_sync import set_last_sync_details_on_assets_bulk`
+- **Signature:** `set_last_sync_details_on_assets_bulk(assets: Iterable[LastSyncStampable], *, ...)`
+- **Summary:** Stamp last-sync details on every asset in ``assets``.
+- **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `to_atlas_format_dict`
+
+- **Import:** `from application_sdk.common.entity_envelope import to_atlas_format_dict`
+- **Signature:** `to_atlas_format_dict(asset: object) -> dict[str, Any] | None`
+- **Summary:** ``pyatlan_v9.to_atlas_format(asset)``, or ``None`` if it doesn't apply.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
 ### Constants and Enums
+
+#### `DEFAULT_ENVELOPE`
+
+- **Import:** `from application_sdk.common.entity_envelope import DEFAULT_ENVELOPE`
+- **Signature:** `DEFAULT_ENVELOPE: Final[EntityEnvelopePolicy]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `PARTIAL_DIRNAME`
 
@@ -657,6 +812,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 Typed Pydantic Input/Output base classes, payload safety, storage and type helpers
 
 ### Classes
+
+#### `AssetArtifact`
+
+- **Import:** `from application_sdk.contracts import AssetArtifact`
+- **Signature:** `class AssetArtifact`
+- **Summary:** Marker: this ``FileReference`` field's declaration **is** a typed model.
+- **Defined in:** `application_sdk/contracts/types.py`
 
 #### `CompatibilityError`
 
@@ -685,6 +847,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Signature:** `class ContractValidationError(message: str, ...)`
 - **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
 - **Defined in:** `application_sdk/contracts/base.py`
+
+#### `DeclaredFile`
+
+- **Import:** `from application_sdk.contracts import DeclaredFile`
+- **Signature:** `class DeclaredFile`
+- **Summary:** One entry in a producer's declaration of what it wrote.
+- **Defined in:** `application_sdk/contracts/storage.py`
 
 #### `DownloadInput`
 
@@ -805,6 +974,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Storage lifecycle tier for a ``FileReference``.
 - **Defined in:** `application_sdk/contracts/types.py`
 
+#### `StoreTarget`
+
+- **Import:** `from application_sdk.contracts import StoreTarget`
+- **Signature:** `class StoreTarget`
+- **Summary:** Which object store an operation addresses.
+- **Defined in:** `application_sdk/contracts/types.py`
+
 #### `UploadInput`
 
 - **Import:** `from application_sdk.contracts import UploadInput`
@@ -819,6 +995,34 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Output from ``App.upload``.
 - **Defined in:** `application_sdk/contracts/storage.py`
 
+#### `UploadRefsInput`
+
+- **Import:** `from application_sdk.contracts import UploadRefsInput`
+- **Signature:** `class UploadRefsInput`
+- **Summary:** Input for ``App.upload_refs``.
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `UploadRefsOutput`
+
+- **Import:** `from application_sdk.contracts import UploadRefsOutput`
+- **Signature:** `class UploadRefsOutput`
+- **Summary:** Output from ``App.upload_refs``.
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `VerifyRefsInput`
+
+- **Import:** `from application_sdk.contracts import VerifyRefsInput`
+- **Signature:** `class VerifyRefsInput`
+- **Summary:** Input for ``App.verify_refs``.
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `VerifyRefsOutput`
+
+- **Import:** `from application_sdk.contracts import VerifyRefsOutput`
+- **Signature:** `class VerifyRefsOutput`
+- **Summary:** Output from ``App.verify_refs``.
+- **Defined in:** `application_sdk/contracts/storage.py`
+
 ### Functions
 
 #### `assert_backwards_compatible`
@@ -827,6 +1031,20 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Signature:** `assert_backwards_compatible(old_cls: type, new_cls: type) -> None`
 - **Summary:** Assert *new_cls* is backwards-compatible with *old_cls*, raising on failure.
 - **Defined in:** `application_sdk/contracts/compat.py`
+
+#### `asset_artifact_fields`
+
+- **Import:** `from application_sdk.contracts import asset_artifact_fields`
+- **Signature:** `asset_artifact_fields(contract: type)`
+- **Summary:** Every field on *contract* carrying the :class:`AssetArtifact` marker.
+- **Defined in:** `application_sdk/contracts/types.py`
+
+#### `asset_artifact_marker`
+
+- **Import:** `from application_sdk.contracts import asset_artifact_marker`
+- **Signature:** `asset_artifact_marker(contract: type | None, field: str)`
+- **Summary:** The :class:`AssetArtifact` marker on ``contract``'s *field*, or ``None``.
+- **Defined in:** `application_sdk/contracts/types.py`
 
 #### `canonical_type_str`
 
@@ -1670,6 +1888,20 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `STORAGE_GATEWAY_AUTH`
+
+- **Import:** `from application_sdk.errors import STORAGE_GATEWAY_AUTH`
+- **Signature:** `STORAGE_GATEWAY_AUTH`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_HANDOFF_INCOMPLETE`
+
+- **Import:** `from application_sdk.errors import STORAGE_HANDOFF_INCOMPLETE`
+- **Signature:** `STORAGE_HANDOFF_INCOMPLETE`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `STORAGE_INTEGRITY`
 
 - **Import:** `from application_sdk.errors import STORAGE_INTEGRITY`
@@ -1776,7 +2008,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `NoopHeartbeatController`
 
 - **Import:** `from application_sdk.execution.heartbeat import NoopHeartbeatController`
-- **Signature:** `class NoopHeartbeatController() -> None`
+- **Signature:** `class NoopHeartbeatController(fallback_details: tuple[Any, ...] = ()) -> None`
 - **Summary:** No-op HeartbeatController for local execution and testing.
 - **Defined in:** `application_sdk/execution/heartbeat.py`
 
@@ -1858,7 +2090,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `TemporalHeartbeatController`
 
 - **Import:** `from application_sdk.execution.heartbeat import TemporalHeartbeatController`
-- **Signature:** `class TemporalHeartbeatController() -> None`
+- **Signature:** `class TemporalHeartbeatController(fallback_details: tuple[Any, ...] = ()) -> None`
 - **Summary:** HeartbeatController that uses Temporal's activity.heartbeat().
 - **Defined in:** `application_sdk/execution/heartbeat.py`
 
@@ -2016,6 +2248,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any)`
 - **Summary:** Last-resort escape hatch: run a blocking function in a thread pool.
 - **Defined in:** `application_sdk/_runtime/offload.py`
+
+#### `stop_heartbeat_task`
+
+- **Import:** `from application_sdk.execution.heartbeat import stop_heartbeat_task`
+- **Signature:** `stop_heartbeat_task(task: asyncio.Task, stop_event: asyncio.Event, task_name: str) -> None`
+- **Summary:** Stop an ``auto_heartbeat_loop`` task, letting nothing escape.
+- **Defined in:** `application_sdk/execution/heartbeat.py`
 
 #### `submit_in_thread`
 
@@ -2755,6 +2994,19 @@ Output collectors and record models for Automation Engine
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
 
+## `application_sdk.pkl_version`
+
+The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate
+
+### Constants and Enums
+
+#### `PKL_VERSION`
+
+- **Import:** `from application_sdk.pkl_version import PKL_VERSION`
+- **Signature:** `PKL_VERSION: str`
+- **Summary:** The pkl version CI renders every contract with.
+- **Defined in:** `application_sdk/pkl_version.py`
+
 ## `application_sdk.server`
 
 FastAPI server, MCP integration, middleware, health endpoint
@@ -2872,6 +3124,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import StorageError`
 - **Signature:** `class StorageError(message: str, ...)`
 - **Summary:** Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageGatewayAuthUnavailableError`
+
+- **Import:** `from application_sdk.storage import StorageGatewayAuthUnavailableError`
+- **Signature:** `class StorageGatewayAuthUnavailableError(message: str, ...)`
+- **Summary:** A request was rejected by the object-store gateway's own auth backend.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageIntegrityError`
@@ -3158,11 +3417,27 @@ SQL metadata extractor templates and their contracts
 - **Summary:** Abstract base class for SQL query extraction apps.
 - **Defined in:** `application_sdk/templates/sql_query_extractor.py`
 
+### Constants and Enums
+
+#### `FilterMap`
+
+- **Import:** `from application_sdk.templates.contracts import FilterMap`
+- **Signature:** `FilterMap`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
 ## `application_sdk.testing`
 
 Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers
 
 ### Classes
+
+#### `Absent`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Absent`
+- **Signature:** `class Absent() -> None`
+- **Summary:** The attribute is not set on this asset.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `AdminIdentity`
 
@@ -3223,6 +3498,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
+#### `AppIdentity`
+
+- **Import:** `from application_sdk.testing.setup_routes import AppIdentity`
+- **Signature:** `class AppIdentity(name: str, display_name: str = '') -> None`
+- **Summary:** The committed names a marketplace card may be listed under.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `AppNotReadyError`
 
 - **Import:** `from application_sdk.testing.harness.automation_engine import AppNotReadyError`
@@ -3244,6 +3526,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AppUnderTest(app_name: str, namespace: str, handler_port: int = 8000)`
 - **Summary:** Where to find the app under test inside a cluster.
 - **Defined in:** `application_sdk/testing/harness/spec.py`
+
+#### `AssetAttributes`
+
+- **Import:** `from application_sdk.testing.harness.atlas import AssetAttributes`
+- **Also importable from:** `application_sdk.testing.harness.expectations`
+- **Signature:** `class AssetAttributes(*, qualified_name: str, values: Mapping[str, AttributeValue] = dict())`
+- **Summary:** The attribute values one sampled asset carries.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `AssetDiff`
 
@@ -3267,6 +3557,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AssetMismatch(key: str, field_diffs: tuple[FieldDiff, ...])`
 - **Summary:** An asset present on both sides whose fields differ.
 - **Defined in:** `application_sdk/testing/golden.py`
+
+#### `AssetRef`
+
+- **Import:** `from application_sdk.testing.harness.atlas import AssetRef`
+- **Also importable from:** `application_sdk.testing.harness.expectations`
+- **Signature:** `class AssetRef(*, type_name: str, qualified_name_suffix: str)`
+- **Summary:** Which single asset an attribute expectation is about.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `AssetValidationFailure`
 
@@ -3309,6 +3607,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AtlanApiTimeoutError(*, ...)`
 - **Summary:** No response received from the AE API before the timeout elapsed.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AtLeast`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AtLeast`
+- **Signature:** `class AtLeast(minimum: float) -> None`
+- **Summary:** The attribute is a number greater than or equal to *minimum*.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AtMost`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AtMost`
+- **Signature:** `class AtMost(maximum: float) -> None`
+- **Summary:** The attribute is a number less than or equal to *maximum*.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AttributeMatcher`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeMatcher`
+- **Signature:** `class AttributeMatcher`
+- **Summary:** One claim about a single attribute value on a single asset.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `AutomationEngineNotDispatchingError`
 
@@ -3369,6 +3688,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The outbound call shapes a run makes, as profile keys.
 - **Defined in:** `application_sdk/testing/harness/budgets.py`
 
+#### `Card`
+
+- **Import:** `from application_sdk.testing.setup_routes import Card`
+- **Signature:** `class Card(id: str = '', name: str = '', entrypoint: str = '') -> None`
+- **Summary:** One marketplace card, trimmed to the fields the check reads.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `CategoryResult`
 
 - **Import:** `from application_sdk.testing.parity import CategoryResult`
@@ -3389,6 +3715,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class ClusterReadFailedError(*, ...)`
 - **Summary:** A cluster read reached the API server and did not come back with data.
 - **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
+
+#### `ConnectionDeletePlan`
+
+- **Import:** `from application_sdk.testing.harness.teardown import ConnectionDeletePlan`
+- **Signature:** `class ConnectionDeletePlan(*, ...)`
+- **Summary:** How one connection's delete run is addressed, dispatched and waited on.
+- **Defined in:** `application_sdk/testing/harness/teardown/__init__.py`
+
+#### `ConnectionDeleteReport`
+
+- **Import:** `from application_sdk.testing.harness.teardown import ConnectionDeleteReport`
+- **Signature:** `class ConnectionDeleteReport(*, ...)`
+- **Summary:** What one ``connection-delete`` run managed to do, and what it did not.
+- **Defined in:** `application_sdk/testing/harness/teardown/__init__.py`
 
 #### `ConnectionIdentity`
 
@@ -3486,12 +3826,26 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** One entrypoint DAG run, as a suite *declares* it.
 - **Defined in:** `application_sdk/testing/e2e/base.py`
 
+#### `DatabaseSpec`
+
+- **Import:** `from application_sdk.testing.harness.seed import DatabaseSpec`
+- **Signature:** `class DatabaseSpec(*, name: str, schemas: tuple[SchemaSpec, ...] = ())`
+- **Summary:** One database and the schemas under it.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
 #### `DataForgeSource`
 
 - **Import:** `from application_sdk.testing.integration import DataForgeSource`
 - **Signature:** `class DataForgeSource(datasource: str, fields: Mapping[str, str])`
 - **Summary:** The integration source's credential fields, read uniformly from env.
 - **Defined in:** `application_sdk/testing/integration/source.py`
+
+#### `DeleteType`
+
+- **Import:** `from application_sdk.testing.harness.teardown import DeleteType`
+- **Signature:** `class DeleteType`
+- **Summary:** How thoroughly ``connection-delete`` removes the assets it finds.
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
 
 #### `DeploymentState`
 
@@ -3516,6 +3870,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** What a non-unique join key on either side does to the comparison.
 - **Defined in:** `application_sdk/testing/golden.py`
 
+#### `Entrypoint`
+
+- **Import:** `from application_sdk.testing.setup_routes import Entrypoint`
+- **Signature:** `class Entrypoint(name: str, ...)`
+- **Summary:** One entry point, as the committed artifacts describe it.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `EvidenceBundle`
 
 - **Import:** `from application_sdk.testing.harness.evidence import EvidenceBundle`
@@ -3529,6 +3890,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class EvidenceLog(label: str) -> None`
 - **Summary:** A mutable builder for one test's :class:`EvidenceBundle`.
 - **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `Exactly`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Exactly`
+- **Signature:** `class Exactly(expected: AttributeValue) -> None`
+- **Summary:** The attribute is present and equal to *expected*.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `Expired`
 
@@ -3589,6 +3957,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class FixtureNotConfiguredError(*, ...)`
 - **Summary:** A composer requested a harness fixture without declaring what it needs.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `FormStep`
+
+- **Import:** `from application_sdk.testing.setup_routes import FormStep`
+- **Signature:** `class FormStep(id: str, properties: frozenset[str] = frozenset()) -> None`
+- **Summary:** One panel of the setup wizard, as the served schema describes it.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `FullDAGOutcome`
 
@@ -3921,6 +4296,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A stand-in for the gate's logger that keeps the rows it was handed.
 - **Defined in:** `application_sdk/testing/preflight.py`
 
+#### `Present`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Present`
+- **Signature:** `class Present() -> None`
+- **Summary:** The attribute is present and not null — any value will do.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `PublishedVersion`
 
 - **Import:** `from application_sdk.testing.e2e.client import PublishedVersion`
@@ -3932,9 +4314,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `PurgeReport`
 
 - **Import:** `from application_sdk.testing.harness.teardown import PurgeReport`
-- **Signature:** `class PurgeReport(*, purged: int = 0, orphaned: Sequence[str] = tuple(), errors: Sequence[str] = tuple()) -> None`
+- **Signature:** `class PurgeReport(*, purged: int = 0, orphaned: Sequence[str] = tuple(), errors: Sequence[str] = tuple())`
 - **Summary:** What a purge managed to delete, and what it did not.
-- **Defined in:** `application_sdk/testing/harness/teardown.py`
+- **Defined in:** `application_sdk/testing/harness/teardown/_purge.py`
 
 #### `QueueWorkflowSpec`
 
@@ -3972,12 +4354,33 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A :class:`DAGSpec` with every field settled against the class attributes.
 - **Defined in:** `application_sdk/testing/e2e/base.py`
 
+#### `ResolvedSeedSpec`
+
+- **Import:** `from application_sdk.testing.harness.seed import ResolvedSeedSpec`
+- **Signature:** `class ResolvedSeedSpec(*, ...)`
+- **Summary:** A :class:`SeedSpec` whose identity is settled and whose segments passed.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
 #### `ResourceRef`
 
 - **Import:** `from application_sdk.testing.harness.cluster import ResourceRef`
 - **Signature:** `class ResourceRef(group: str, version: str, plural: str)`
 - **Summary:** Identifies a custom-resource kind by its API coordinates.
 - **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `RouteCheckSkipped`
+
+- **Import:** `from application_sdk.testing.setup_routes import RouteCheckSkipped`
+- **Signature:** `class RouteCheckSkipped`
+- **Summary:** There is no setup route to check, and that is not a failure.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `RouteReader`
+
+- **Import:** `from application_sdk.testing.setup_routes import RouteReader`
+- **Signature:** `class RouteReader`
+- **Summary:** The two reads :func:`verify` needs from a tenant.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `RunLookup`
 
@@ -4009,12 +4412,103 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Result of executing a single scenario.
 - **Defined in:** `application_sdk/testing/integration/models.py`
 
+#### `SchemaSpec`
+
+- **Import:** `from application_sdk.testing.harness.seed import SchemaSpec`
+- **Signature:** `class SchemaSpec(*, name: str, tables: tuple[TableSpec, ...] = ())`
+- **Summary:** One schema and the tables/views under it.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
+#### `SeedDagSupersededError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedDagSupersededError`
+- **Signature:** `class SeedDagSupersededError(*, ...)`
+- **Summary:** AE ran some other app's graph in place of the seed's one node.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
+#### `SeededConnection`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeededConnection`
+- **Signature:** `class SeededConnection(*, ...)`
+- **Summary:** What one seeding pass created, for the report and the teardown registry.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
 #### `SeededWorkflow`
 
 - **Import:** `from application_sdk.testing.harness.starters import SeededWorkflow`
 - **Signature:** `class SeededWorkflow(*, slug: str, seed_version: int | None = None)`
 - **Summary:** An AE workflow with a published version, ready to be submitted against.
 - **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `SeedPrefixes`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedPrefixes`
+- **Signature:** `class SeedPrefixes(*, root: str)`
+- **Summary:** The three object-store prefixes one seed publish reads and writes.
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
+#### `SeedPublishEmptyError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedPublishEmptyError`
+- **Signature:** `class SeedPublishEmptyError(*, ...)`
+- **Summary:** The seed's publish run succeeded and landed nothing in Atlas.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
+#### `SeedPublishFailedError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedPublishFailedError`
+- **Signature:** `class SeedPublishFailedError(*, ...)`
+- **Summary:** The seed's ``PublishWorkflow`` run did not succeed on every node.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
+#### `SeedPublishPlan`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedPublishPlan`
+- **Signature:** `class SeedPublishPlan(*, ...)`
+- **Summary:** How one seed's publish run is addressed, dispatched and waited on.
+- **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
+
+#### `SeedSegmentInvalidError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedSegmentInvalidError`
+- **Signature:** `class SeedSegmentInvalidError(*, ...)`
+- **Summary:** A spec segment cannot compose the qualified name it claims to.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
+#### `SeedSpec`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedSpec`
+- **Signature:** `class SeedSpec(*, ...)`
+- **Summary:** Everything the seed needs, as a suite *declares* it.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
+#### `SeedStoreUnavailableError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedStoreUnavailableError`
+- **Signature:** `class SeedStoreUnavailableError(*, ...)`
+- **Summary:** No object store to write the seed's transformed NDJSON into.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
+#### `SeedTreeInvalidError`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedTreeInvalidError`
+- **Signature:** `class SeedTreeInvalidError(*, ...)`
+- **Summary:** The seed's own NDJSON would not survive publish, so it is not submitted.
+- **Defined in:** `application_sdk/testing/harness/seed/_errors.py`
+
+#### `SeedVerifier`
+
+- **Import:** `from application_sdk.testing.harness.seed import SeedVerifier`
+- **Signature:** `class SeedVerifier`
+- **Summary:** Reads back how many assets a seed actually landed under its connection.
+- **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
+
+#### `ServedForm`
+
+- **Import:** `from application_sdk.testing.setup_routes import ServedForm`
+- **Signature:** `class ServedForm(properties: frozenset[str] = frozenset(), steps: tuple[FormStep, ...] = ()) -> None`
+- **Summary:** The setup form a tenant serves, in the two parts the UI renders from.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `ServiceTarget`
 
@@ -4030,6 +4524,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class Settled(*, label: str, attempts: int, elapsed: timedelta, value: T)`
 - **Summary:** The probe reached the settled state inside its budget.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `SetupRouteError`
+
+- **Import:** `from application_sdk.testing.setup_routes import SetupRouteError`
+- **Signature:** `class SetupRouteError`
+- **Summary:** A setup route is broken, or the tenant could not be asked.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `SQLAppE2EFullTest`
 
@@ -4081,6 +4582,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class SyncBridgeInAsyncContextError(*, ...)`
 - **Summary:** :func:`~application_sdk.testing.harness.run_sync` was called from a running loop.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `TableSpec`
+
+- **Import:** `from application_sdk.testing.harness.seed import TableSpec`
+- **Signature:** `class TableSpec(*, name: str, type_name: Literal['Table', 'View'] = 'Table', columns: tuple[str, ...] = ())`
+- **Summary:** One table-level asset, typed strictly as ``Table`` or ``View``.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
 
 #### `TaskQueueType`
 
@@ -4139,6 +4647,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class TenantAuth(base_url: str, ...)`
 - **Summary:** How a run authenticates against the tenant under test.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `TenantRoutes`
+
+- **Import:** `from application_sdk.testing.setup_routes import TenantRoutes`
+- **Signature:** `class TenantRoutes(base_url: str, bearer: str) -> None`
+- **Summary:** Reads the two routes the setup page walks, with one bearer credential.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `TenantUnreachable`
+
+- **Import:** `from application_sdk.testing.setup_routes import TenantUnreachable`
+- **Signature:** `class TenantUnreachable`
+- **Summary:** One GET got no answer at all — no status line, no body (FND-2057).
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `TypenameDiff`
 
@@ -4301,6 +4823,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** AppContext wired with MockStateStore and MockSecretStore.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
+#### `as_attribute_samples`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_attribute_samples`
+- **Signature:** `as_attribute_samples(reading: Outcome[Mapping[K, ...)`
+- **Summary:** Project an attribute read the same way :func:`as_samples` does.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
 #### `as_count`
 
 - **Import:** `from application_sdk.testing.harness.outcome import as_count`
@@ -4314,6 +4843,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `as_counts(reading: Outcome[Mapping[str, int]], type_names: Sequence[str]) -> Mapping[str, CountRead]`
 - **Summary:** Project a per-type count read, spreading an unreadable one over its types.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `as_matcher`
+
+- **Import:** `from application_sdk.testing.harness.expectations import as_matcher`
+- **Signature:** `as_matcher(declared: AttributeExpectationValue) -> AttributeMatcher`
+- **Summary:** Coerce one declared right-hand side into a matcher.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `as_samples`
 
@@ -4367,12 +4903,26 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Deprecated (v4.0) — AE submit body; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
+#### `build_connection_delete_dag`
+
+- **Import:** `from application_sdk.testing.harness.teardown import build_connection_delete_dag`
+- **Signature:** `build_connection_delete_dag(*, *, ...)`
+- **Summary:** Build the single-node DAG that deletes one connection and its artifacts.
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
 #### `build_seed_dag`
 
 - **Import:** `from application_sdk.testing.full_dag import build_seed_dag`
 - **Signature:** `build_seed_dag(*, *, ...)`
 - **Summary:** Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
+
+#### `build_seed_publish_dag`
+
+- **Import:** `from application_sdk.testing.harness.seed import build_seed_publish_dag`
+- **Signature:** `build_seed_publish_dag(*, spec: ResolvedSeedSpec, prefixes: SeedPrefixes, publish_task_queue: str)`
+- **Summary:** Build the single-node DAG that publishes the seed.
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
 
 #### `capture_preflight_outcomes`
 
@@ -4456,6 +5006,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Compare actual extracted metadata against an expected baseline.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `connection_delete_task_queue`
+
+- **Import:** `from application_sdk.testing.harness.teardown import connection_delete_task_queue`
+- **Signature:** `connection_delete_task_queue(deployment_name: str)`
+- **Summary:** Compose the task queue the tenant's ``connection-delete`` app polls.
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
+#### `connection_entity`
+
+- **Import:** `from application_sdk.testing.harness.seed import connection_entity`
+- **Signature:** `connection_entity(spec: ResolvedSeedSpec)`
+- **Summary:** Build the Connection entity publish creates the seeded connection from.
+- **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
+
 #### `connection_exists`
 
 - **Import:** `from application_sdk.testing.harness.atlas import connection_exists`
@@ -4513,6 +5077,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Create a custom assertion from a user-provided function.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `declared_inputs`
+
+- **Import:** `from application_sdk.testing.setup_routes import declared_inputs`
+- **Signature:** `declared_inputs(workflow_config: dict[str, Any]) -> frozenset[str]`
+- **Summary:** Return the input names a generated workflow config declares.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `delete_connection`
+
+- **Import:** `from application_sdk.testing.harness.teardown import delete_connection`
+- **Signature:** `delete_connection(qualified_name: str, *, ae: AEClient, plan: ConnectionDeletePlan) -> ConnectionDeleteReport`
+- **Summary:** Delete one connection, its assets and its byte-stores, via the app.
+- **Defined in:** `application_sdk/testing/harness/teardown/__init__.py`
+
 #### `diff_golden`
 
 - **Import:** `from application_sdk.testing import diff_golden`
@@ -4548,6 +5126,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `equals(expected: Any, *, description: str | None = None)`
 - **Summary:** Assert that the actual value equals the expected value.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `evaluate_attributes`
+
+- **Import:** `from application_sdk.testing.harness.expectations import evaluate_attributes`
+- **Signature:** `evaluate_attributes(samples: Mapping[str, AttributeSampleRead], expectations: AssetExpectations) -> Sequence[Finding]`
+- **Summary:** Evaluate sampled attribute values against the declared matchers.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `evaluate_attributes_at`
+
+- **Import:** `from application_sdk.testing.harness.expectations import evaluate_attributes_at`
+- **Signature:** `evaluate_attributes_at(reads: Mapping[AssetRef, ...)`
+- **Summary:** Evaluate the attribute values of individually addressed assets.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `evaluate_counts`
 
@@ -4590,6 +5182,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `first_outcome_or_none(mock_logger: MagicMock)`
 - **Summary:** The first outcome row, or ``None`` — for paths asserting no row was emitted.
 - **Defined in:** `application_sdk/testing/preflight.py`
+
+#### `foreign_form`
+
+- **Import:** `from application_sdk.testing.setup_routes import foreign_form`
+- **Signature:** `foreign_form(entrypoint: Entrypoint, siblings: Sequence[Entrypoint], served_name: object) -> str | None`
+- **Summary:** Whether the tenant served a DIFFERENT entry point's form, or ``None``.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `form_shortfall`
+
+- **Import:** `from application_sdk.testing.setup_routes import form_shortfall`
+- **Signature:** `form_shortfall(entrypoint: Entrypoint, served: ServedForm) -> str | None`
+- **Summary:** Why this entry point's setup form will not render, or ``None``.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `format_validation_report`
 
@@ -4995,6 +5601,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Load expected metadata from a JSON file.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `locate_cards`
+
+- **Import:** `from application_sdk.testing.setup_routes import locate_cards`
+- **Signature:** `locate_cards(identity: AppIdentity, ...)`
+- **Summary:** Pick this app's cards out of the whole catalog, keyed by entry point.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `matches`
 
 - **Import:** `from application_sdk.testing.integration import matches`
@@ -5044,12 +5657,33 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Fresh MockStateStore instance.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
+#### `ndjson_bytes`
+
+- **Import:** `from application_sdk.testing.harness.seed import ndjson_bytes`
+- **Signature:** `ndjson_bytes(assets: Sequence[Asset])`
+- **Summary:** Serialise *assets* as one NDJSON payload in transformed-output shape.
+- **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
+
 #### `none_of`
 
 - **Import:** `from application_sdk.testing.integration import none_of`
 - **Signature:** `none_of(*predicates: Predicate, description: str | None = None)`
 - **Summary:** Assert that none of the predicates pass.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `normalise_attribute_expectations`
+
+- **Import:** `from application_sdk.testing.harness.expectations import normalise_attribute_expectations`
+- **Signature:** `normalise_attribute_expectations(declared: Mapping[str, ...)`
+- **Summary:** Coerce a whole declaration into matchers.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `normalise_attribute_expectations_at`
+
+- **Import:** `from application_sdk.testing.harness.expectations import normalise_attribute_expectations_at`
+- **Signature:** `normalise_attribute_expectations_at(declared: Mapping[str, ...)`
+- **Summary:** Flatten a per-asset declaration into matchers keyed by :class:`AssetRef`.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `not_contains`
 
@@ -5141,9 +5775,37 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `purge_connection`
 
 - **Import:** `from application_sdk.testing.harness.teardown import purge_connection`
-- **Signature:** `purge_connection(client: AsyncAtlanClient, connection_qualified_name: str) -> PurgeReport`
+- **Signature:** `purge_connection(client: AsyncAtlanClient, connection_qualified_name: str)`
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
-- **Defined in:** `application_sdk/testing/harness/teardown.py`
+- **Defined in:** `application_sdk/testing/harness/teardown/_purge.py`
+
+#### `read_app_identity`
+
+- **Import:** `from application_sdk.testing.setup_routes import read_app_identity`
+- **Signature:** `read_app_identity(repo_root: Path) -> AppIdentity`
+- **Summary:** Return the names ``atlan.yaml`` commits, as cards may report them.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `read_asset_attributes`
+
+- **Import:** `from application_sdk.testing.harness.atlas import read_asset_attributes`
+- **Signature:** `read_asset_attributes(client: AsyncAtlanClient, ...)`
+- **Summary:** Read named attributes off individually addressed assets.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `read_entrypoint_names`
+
+- **Import:** `from application_sdk.testing.setup_routes import read_entrypoint_names`
+- **Signature:** `read_entrypoint_names(repo_root: Path) -> list[str]`
+- **Summary:** Return the ``entrypoints[].name`` values that should have a setup page.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `read_entrypoints`
+
+- **Import:** `from application_sdk.testing.setup_routes import read_entrypoints`
+- **Signature:** `read_entrypoints(repo_root: Path, generated_dir: str = 'app/generated') -> list[Entrypoint]`
+- **Summary:** Read every entry point's committed workflow config.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `read_records`
 
@@ -5196,6 +5858,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Stop a test that reset the logger's init state from leaking it forward.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
+#### `route_mismatch`
+
+- **Import:** `from application_sdk.testing.setup_routes import route_mismatch`
+- **Signature:** `route_mismatch(entrypoint: Entrypoint, card: Card) -> str | None`
+- **Summary:** Why this entry point's setup page will 404, or ``None`` if it resolves.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `run_comparison`
 
 - **Import:** `from application_sdk.testing.parity import run_comparison`
@@ -5226,6 +5895,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** POST to the handler's workflow endpoint and return the workflow ID.
 - **Defined in:** `application_sdk/testing/e2e/workflows.py`
 
+#### `sample_asset_attributes`
+
+- **Import:** `from application_sdk.testing.harness.atlas import sample_asset_attributes`
+- **Signature:** `sample_asset_attributes(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Sample up to *per_type* assets per type, reading the named attributes.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `sample_qualified_names`
 
 - **Import:** `from application_sdk.testing.harness.atlas import sample_qualified_names`
@@ -5240,12 +5916,47 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Collect the literal values a run is holding, for :func:`redact`'s ``secrets``.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
+#### `seed_assets`
+
+- **Import:** `from application_sdk.testing.harness.seed import seed_assets`
+- **Signature:** `seed_assets(spec: ResolvedSeedSpec, *, ...)`
+- **Summary:** Serialise *spec*, validate it offline, and publish it as a real run.
+- **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
+
+#### `seed_object_keys`
+
+- **Import:** `from application_sdk.testing.harness.seed import seed_object_keys`
+- **Signature:** `seed_object_keys(*, root: str)`
+- **Summary:** Every object-store key the *harness* wrote under one seed root.
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
+#### `seed_prefix_root`
+
+- **Import:** `from application_sdk.testing.harness.seed import seed_prefix_root`
+- **Signature:** `seed_prefix_root(*, app_name: str, qualified_name: str)`
+- **Summary:** Compose the object-store root for one seeded connection.
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
+#### `served_form`
+
+- **Import:** `from application_sdk.testing.setup_routes import served_form`
+- **Signature:** `served_form(body: dict[str, Any]) -> ServedForm`
+- **Summary:** Unwrap a ConfigMap response into the form the tenant serves.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
 #### `single_outcome`
 
 - **Import:** `from application_sdk.testing import single_outcome`
 - **Signature:** `single_outcome(mock_logger: MagicMock)`
 - **Summary:** The single outcome row from a ``MagicMock`` gate logger, asserting exactly one.
 - **Defined in:** `application_sdk/testing/preflight.py`
+
+#### `skeleton_assets`
+
+- **Import:** `from application_sdk.testing.harness.seed import skeleton_assets`
+- **Signature:** `skeleton_assets(spec: ResolvedSeedSpec)`
+- **Summary:** Build the skeleton entities for *spec*, parents strictly before children.
+- **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
 
 #### `stale_version_pollers`
 
@@ -5310,6 +6021,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `validate_resolved_spec`
+
+- **Import:** `from application_sdk.testing.harness.seed import validate_resolved_spec`
+- **Signature:** `validate_resolved_spec(spec: ResolvedSeedSpec)`
+- **Summary:** Reject a spec that cannot compose the qualified names it declares.
+- **Defined in:** `application_sdk/testing/harness/seed/_spec.py`
+
 #### `validate_transformed_dir`
 
 - **Import:** `from application_sdk.testing.integration import validate_transformed_dir`
@@ -5323,6 +6041,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `validate_with_pandera(schema_base_path: str, extracted_output_path: str, subdirectory: str = 'transformed')`
 - **Summary:** Validate extracted output against pandera YAML schemas.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
+
+#### `verify`
+
+- **Import:** `from application_sdk.testing.setup_routes import verify`
+- **Signature:** `verify(repo_root: Path, *, ...)`
+- **Summary:** Check every entry point's setup route. Returns the lines to report.
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `wait_for_workflow`
 
@@ -5345,6 +6070,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Redact *bundle* and write it under *output_dir*.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
+#### `write_transformed_dir`
+
+- **Import:** `from application_sdk.testing.harness.seed import write_transformed_dir`
+- **Signature:** `write_transformed_dir(spec: ResolvedSeedSpec, root: Path)`
+- **Summary:** Write *spec*'s NDJSON under ``root/transformed`` and count what landed.
+- **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
+
 ### Constants and Enums
 
 #### `ADMIN_ROLE_NAME`
@@ -5360,6 +6092,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `APPLICATION_NAME_ENV`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `AttributeExpectationValue`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeExpectationValue`
+- **Signature:** `AttributeExpectationValue: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AttributeSampleRead`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeSampleRead`
+- **Signature:** `AttributeSampleRead: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AttributeValue`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeValue`
+- **Signature:** `AttributeValue: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `Authorizer`
 
@@ -5384,6 +6137,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Env var gating ``App.on_complete()``'s file and object-store cleanup.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
+#### `CONNECTION_DELETE_APP_NAME`
+
+- **Import:** `from application_sdk.testing.harness.teardown import CONNECTION_DELETE_APP_NAME`
+- **Signature:** `CONNECTION_DELETE_APP_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
+#### `CONNECTION_DELETE_NODE_ID`
+
+- **Import:** `from application_sdk.testing.harness.teardown import CONNECTION_DELETE_NODE_ID`
+- **Signature:** `CONNECTION_DELETE_NODE_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
+#### `CONNECTION_DELETE_WORKFLOW_TYPE`
+
+- **Import:** `from application_sdk.testing.harness.teardown import CONNECTION_DELETE_WORKFLOW_TYPE`
+- **Signature:** `CONNECTION_DELETE_WORKFLOW_TYPE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/teardown/_dag.py`
+
 #### `CONNECTOR_CI`
 
 - **Import:** `from application_sdk.testing.harness import CONNECTOR_CI`
@@ -5398,6 +6172,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `CountRead: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `DEFAULT_CATALOG_WAIT_SECONDS`
+
+- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_CATALOG_WAIT_SECONDS`
+- **Signature:** `DEFAULT_CATALOG_WAIT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
+
+- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_POD_RECONCILE_WAIT_SECONDS`
+- **Signature:** `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/setup_routes.py`
 
 #### `DEFAULT_TYPE_NAMES`
 
@@ -5496,7 +6284,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.teardown import PURGE_BATCH_SIZE`
 - **Signature:** `PURGE_BATCH_SIZE`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/harness/teardown.py`
+- **Defined in:** `application_sdk/testing/harness/teardown/_purge.py`
 
 #### `Reading`
 
@@ -5527,6 +6315,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
+#### `SEED_PUBLISH_NODE_ID`
+
+- **Import:** `from application_sdk.testing.harness.seed import SEED_PUBLISH_NODE_ID`
+- **Signature:** `SEED_PUBLISH_NODE_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
 #### `SUPPORTED_SUFFIXES`
 
 - **Import:** `from application_sdk.testing.integration import SUPPORTED_SUFFIXES`
@@ -5534,6 +6329,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `SUPPORTED_SUFFIXES`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/integration/corpus.py`
+
+#### `TRANSFORMED_FILE_NAME`
+
+- **Import:** `from application_sdk.testing.harness.seed import TRANSFORMED_FILE_NAME`
+- **Signature:** `TRANSFORMED_FILE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
 
 #### `UNREADABLE`
 
@@ -6192,6 +6994,15 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `error_code: ErrorCode`
 - **Defined in:** `application_sdk/contracts/base.py`
 
+#### `DeclaredFile`
+
+- **Import:** `from application_sdk.contracts import DeclaredFile`
+- **Summary:** One entry in a producer's declaration of what it wrote.
+- **Fields:**
+  - `ref: FileReference`
+  - `label: str` `= ''`
+- **Defined in:** `application_sdk/contracts/storage.py`
+
 #### `DownloadInput`
 
 - **Import:** `from application_sdk.contracts import DownloadInput`
@@ -6313,6 +7124,48 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `ref: FileReference` `= Field(default_factory=FileReference)`
   - `synced: bool` `= False`
   - `reason: str` `= ''`
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `UploadRefsInput`
+
+- **Import:** `from application_sdk.contracts import UploadRefsInput`
+- **Summary:** Input for ``App.upload_refs``.
+- **Fields:**
+  - `files: Annotated[list[DeclaredFile], MaxItems(10000)]` `= Field(default_factory=list)`
+  - `prefix: str` `= ''`
+  - `source_prefix: str` `= ''`
+  - `tier: StorageTier` `= StorageTier.RETAINED`
+  - `verify: bool` `= True`
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `UploadRefsOutput`
+
+- **Import:** `from application_sdk.contracts import UploadRefsOutput`
+- **Summary:** Output from ``App.upload_refs``.
+- **Fields:**
+  - `prefix: str` `= ''`
+  - `refs: Annotated[list[FileReference], MaxItems(10000)]` `= Field(default_factory=list)`
+  - `file_count: int` `= 0`
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `VerifyRefsInput`
+
+- **Import:** `from application_sdk.contracts import VerifyRefsInput`
+- **Summary:** Input for ``App.verify_refs``.
+- **Fields:**
+  - `refs: Annotated[list[FileReference], MaxItems(10000)]` `= Field(default_factory=list)`
+  - `prefix: str` `= ''`
+  - `store: StoreTarget` `= StoreTarget.DEPLOYMENT`
+- **Defined in:** `application_sdk/contracts/storage.py`
+
+#### `VerifyRefsOutput`
+
+- **Import:** `from application_sdk.contracts import VerifyRefsOutput`
+- **Summary:** Output from ``App.verify_refs``.
+- **Fields:**
+  - `verified_count: int` `= 0`
+  - `verified_file_count: int` `= 0`
+  - `prefix: str` `= ''`
 - **Defined in:** `application_sdk/contracts/storage.py`
 
 ### `application_sdk.handler.contracts`
@@ -6496,7 +7349,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `passed: bool` `= False` — Whether the check passed.
   - `message: str` `= ''` — Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
   - `error: FailureDetails | None` — Typed failure for a failed check — set only on failed checks.
-  - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
+  - `duration_ms: float` `= -1.0` — How long the check took in milliseconds. ``-1.0`` means not measured —
   - `resolved_message: str` — Message under the precedence rule: a failed check's ``error`` wins.
   - `resolved_suggested_action: str` — Suggested action from a failed check's ``error``; empty otherwise.
 - **Defined in:** `application_sdk/handler/contracts.py`
@@ -6622,6 +7475,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `records_uploaded: int` `= 0`
   - `error: str` `= ''`
   - `output_path: str` `= ''` — Resolved local base path used during extraction. Subclasses that need
+  - `transformed_files: Annotated[list[FileReference], MaxItems(1000), AssetArtifact()]` `= Field(default_factory=list)` — The producer's declaration of what the transform step actually wrote.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `ExtractionTaskInput`

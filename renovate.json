@@ -22,7 +22,36 @@
       "/^\\.github/workflow-templates/.+\\.ya?ml$/"
     ]
   },
+  "customManagers": [
+    {
+      "description": "Pkl toolchain pin: track PKL_VERSION in application_sdk/pkl_version.py, the single place the version is declared (FND-1864). Repo-local rather than in the fleet preset because the file is SDK-only — connector repos consume the pin through the SDK package and the reusable workflows, and have nothing of their own to bump. github-tags rather than github-releases: apple/pkl tags each release as a bare version (`0.32.1`, no `v`), which `semver` versioning reads directly, and the tags datasource is the one the fleet's release-age handling is exercised against (see the app-contract-toolkit manager in the preset).",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^application_sdk/pkl_version\\.py$/"
+      ],
+      "matchStrings": [
+        "PKL_VERSION\\s*:\\s*str\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "pkl",
+      "packageNameTemplate": "apple/pkl",
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "semver"
+    }
+  ],
   "packageRules": [
+    {
+      "description": "Pkl toolchain bumps are reviewed, never auto-merged — deliberately unlike every other lane in the fleet preset. pkl is a language, not a pinned library: one line here changes the renderer that every contract in the fleet is evaluated with, and a release that alters generated output would drift 22 connector repos at once with no PR of their own to notice it on. The SDK's own CI does prove the bump is safe — application_sdk/pkl_version.py is in sdk-gate.yaml's `toolkit` filter, so contract-toolkit-reusable.yaml regenerates every examples/ tree with the new pkl and fails on any diff — but 'green' there means 'the toolkit examples are unchanged', which is evidence for a human to weigh against the real contracts, not a substitute for weighing it. Also excluded from the release-age cooldown's PyPI lane by construction (different datasource), so the review IS the hold.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "pkl"
+      ],
+      "automerge": false,
+      "platformAutomerge": false,
+      "semanticCommitType": "chore",
+      "commitMessageTopic": "the pinned pkl toolchain"
+    },
     {
       "description": "Action bumps inside the shipped conformance bootstrap templates are conformance-package source changes: the PR-title gate requires a fix(conformance) scope for anything under packages/conformance/ (except tests/ and lock files), and these bumps change the package's scaffolded output so they should version it. Give them their own group + semantic type/scope so the PR title is deterministic and never collides with plain .github/workflows or .github/workflow-templates action bumps (which stay chore(deps)). Repo-local packageRules are appended after the fleet preset, so this overrides both the preset's force-chore rule and its github-actions groupName — but only for deps whose file lives under the templates dir (matchFileNames).",
       "matchManagers": [

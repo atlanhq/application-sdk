@@ -44,6 +44,7 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.execution._temporal.preflight_gate import (
         PreflightSurface,
         emit_preflight_check_outcome,
+        emit_preflight_crash_outcome,
     )
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
@@ -609,6 +610,24 @@ def build_sdr_activities(
 
     @activity.defn(name=SDR_PREFLIGHT_ACTIVITY)
     async def preflight_check(input: PreflightInput) -> PreflightOutput:
+        # One crash boundary for the whole surface: a raise anywhere on this
+        # path — the secret-store probe, credential resolution, or the handler
+        # itself — must reach the funnel's denominator, not only the handler
+        # call. emit_preflight_crash_outcome declines typed client-input
+        # errors itself, so a wrong credential stays a verdict, not a crash.
+        try:
+            return await _preflight_check_body(input)
+        except Exception as e:
+            emit_preflight_crash_outcome(
+                logger,
+                binding.app_name,
+                e,
+                surface=PreflightSurface.SDR,
+                entrypoint=input.entrypoint,
+            )
+            raise
+
+    async def _preflight_check_body(input: PreflightInput) -> PreflightOutput:
         secret_row: PreflightCheck | None = None
         if input.agent_json is not None and input.agent_json.is_populated():
             # SDR-only: verify the customer secret store first. A failure is
@@ -675,6 +694,11 @@ def build_sdr_activities(
     async def fetch_metadata(input: MetadataInput) -> MetadataOutput:
         if input.agent_json is not None and input.agent_json.is_populated():
             input.credentials = await _resolve_agent_credentials(input.agent_json)
+        # Mirror the widget routing key onto object_filter when that's empty, matching
+        # the HTTP /metadata route, so per-entrypoint hooks reading the legacy field
+        # keep working over SDR (e.g. the warehouse-vs-schema-tree metadata widget).
+        if not input.object_filter and input.metadata_template_key:
+            input.object_filter = input.metadata_template_key
         with bind_invocation_context(binding.app_name, input.credentials):
             return await binding.handler.fetch_metadata(input)
 

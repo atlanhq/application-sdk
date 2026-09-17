@@ -129,7 +129,22 @@ tree drifts.
 
 This repo guarantees the `pkl` toolchain — there is no dependency on an external
 CLI. Run every command from the **app repo root** (not from inside `contract/`).
-Prereq: `pkl >= 0.25.1` (`brew install pkl`).
+
+**Prereq: the pinned pkl, not a floor.** pkl is a language, so a version other
+than CI's can reject a contract CI accepts, or accept one CI rejects — a clean
+local render on the wrong version is not evidence the freshness gate will pass
+(FND-1864). The pin lives in `application_sdk/pkl_version.py` and the SDK hands
+you that exact build:
+
+```bash
+python -m application_sdk.dev.pkl print-version   # what CI renders with
+python -m application_sdk.dev.pkl check           # has your PATH pkl drifted?
+PKL="$(python -m application_sdk.dev.pkl path)"   # download + cache that build
+```
+
+Substitute `"$PKL"` for `pkl` in the commands below, or prefix them with
+`python -m application_sdk.dev.pkl run --`. `brew install pkl` is fine for
+exploring, but do not trust it to predict CI.
 
 ```bash
 # Resolve / refresh the dependency lock (writes contract/PklProject.deps.json):
@@ -390,7 +405,7 @@ git ls-files 'contract-toolkit/examples/*/app.pkl' | sed 's#.*/examples/##;s#/ap
 At the time of writing the tracked set is: `minimal` (smallest contract, start
 here), `full` (every overridable feature), `bundle` (multi-entrypoint), `card-split`
 (multi-entrypoint where only one entrypoint is a card), `connection-ref`
-(ConnectionRefInput), `publish-controls` (publish toggles), `fanin` (fan-in via
+(ConnectionRefInput), `publish-controls` (publish toggles, zero-out spec), `fanin` (fan-in via
 `dependsOn`), `deploy` (single-pool KEDA/resources), `pools` (named worker
 pools), `scheduled` (cron background job), `behind-the-scenes`
 (`marketplaceCard = false`), `agent-e2e` (agent-mode codegen). Re-run the command

@@ -1,0 +1,72 @@
+name: Pre-commit Checks (reusable)
+
+# Body of the fleet's `checks.yml`, hoisted out of the consumer repos (FND-1994).
+#
+# `checks.yml` and `conformance-upload-sarif.yaml` were the only two bootstrap
+# templates in which a consumer repo carried a third-party action pin. Every
+# other template is already a thin `atlanhq/application-sdk/...@main` caller.
+# Moving the two pins here puts them where Mend already maintains them, instead
+# of in ~80 copies that no fleet engine is permitted to rewrite.
+#
+# Runs in the CALLER's context — `actions/checkout` checks out the consumer
+# repo, `setup-deps` syncs the consumer's lock, and `pre-commit/action` runs the
+# consumer's `.pre-commit-config.yaml`. That is the same property
+# `renovate-auto-approve-reusable.yml` already depends on; it is not re-derived
+# here.
+#
+# `setup-deps` is referenced by its full `atlanhq/application-sdk/...@main`
+# path, NOT as `uses: ./.github/actions/setup-deps`. A relative `uses:` inside a
+# reusable workflow resolves against the CALLER's checkout, not this
+# repository's — the trap `MANAGED_ACTION_FILES` in `conformance.bootstrap.
+# render` exists to work around — so the local form would look for the action in
+# the consumer repo and fail with "Can't find action.yml".
+#
+# Caller visibility: this workflow is public (application-sdk) and its callers
+# are private fleet repos. Private caller → public reusable is supported. The
+# unsupported direction is the reverse, which fails as a `startup_failure`:
+# zero jobs, no check run, invisible to `gh pr checks`.
+
+on:
+  workflow_call:
+    inputs:
+      system_deps:
+        description: >-
+          Space-separated apt packages to install before `setup-deps` runs
+          `uv sync`: a dependency with no manylinux wheel is built from sdist on
+          the runner and needs its C headers present first. Empty (the default)
+          skips the step entirely. Managed per-repo by `bootstrap`'s
+          `--system-deps`, which validates every token against a Debian package
+          name before it is ever rendered into the caller.
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  pre-commit:
+    name: Pre-commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The package list crosses a repository boundary as a workflow input, so
+      # it is passed through `env:` rather than interpolated into the `run:`
+      # line: an expression interpolated into shell is expanded before the shell
+      # ever parses it, an env var is not. `normalize_system_deps` already
+      # rejects anything outside `APT_PACKAGE_RE` on the way in; this keeps that
+      # from being the only thing standing between a hand-edited caller and the
+      # runner. Unquoted on purpose — the value is a package *list* and word
+      # splitting is what turns it into separate arguments.
+      - name: Install system dependencies
+        if: inputs.system_deps != ''
+        env:
+          SYSTEM_DEPS: ${{ inputs.system_deps }}
+        run: |
+          sudo apt-get update
+          # shellcheck disable=SC2086  # deliberate word splitting: package list
+          sudo apt-get install -y $SYSTEM_DEPS
+
+      - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1

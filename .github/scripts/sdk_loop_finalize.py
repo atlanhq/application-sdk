@@ -36,6 +36,18 @@ STOP_TEXT = {
         "**Merge-ready.** The review returned `READY_TO_MERGE` with an empty "
         "`### Findings` — no findings of any tier, nits included."
     ),
+    "fast_track": (
+        "**Merge-ready without a review.** This PR's own diff is byte-identical "
+        "to the one already reviewed `READY_TO_MERGE` — every commit since came "
+        "from base — so the verdict was re-stamped on the live head and no round "
+        "ran. Push a change and the next `@sdk-loop` reviews it properly."
+    ),
+    "review_only": (
+        "**Review only.** One review ran and stopped by request: no fixes were "
+        "attempted, no approval was cast, and the verdict carries the A/B marker "
+        "so nothing downstream acts on it. Compare it with the review the PR "
+        "actually received."
+    ),
     "no_progress": (
         "**Stalled.** A resolve round changed nothing and contested nothing, so "
         "another identical round could not do better."

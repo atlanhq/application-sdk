@@ -287,6 +287,151 @@ def test_post_generate_failure_warns_and_returns(tree, capsys):
     assert "post-generate.sh failed" in capsys.readouterr().out
 
 
+# ── unwired post-processing (FND-1777) ───────────────────────────────────────
+#
+# Regeneration replaces app/generated/ wholesale and runs only
+# post-generate.sh, so post-processing wired anywhere else is dropped into the
+# shipped image with no signal. These pin the heuristic that says so.
+
+
+def _pyproject(tree: Path, generate_body: str) -> None:
+    (tree / "pyproject.toml").write_text(
+        "[tool.poe.tasks]\ngenerate = " + generate_body + "\n"
+    )
+
+
+def test_unwired_warns_on_contract_templates_helper(tree, capsys):
+    """The live case: contract/templates/merge.py, called only from a poe task."""
+    _write(tree / "contract" / "templates" / "merge.py", "# merge\n")
+
+    mod.run_post_generate("contract")
+
+    out = capsys.readouterr().out
+    assert "::warning::No contract/post-generate.sh" in out
+    assert "contract/templates/merge.py" in out
+
+
+def test_unwired_silent_when_post_generate_script_wires_it(tree, capsys):
+    """A helper plus a post-generate.sh is the wired-in shape — no warning."""
+    _write(tree / "contract" / "templates" / "merge.py", "# merge\n")
+    _write(tree / "contract" / mod.POST_GENERATE_SCRIPT, "true\n")
+
+    mod.run_post_generate("contract")
+
+    assert "::warning::" not in capsys.readouterr().out
+
+
+def test_unwired_warns_on_command_after_pkl_eval_in_generate_task(tree, capsys):
+    (tree / "contract").mkdir()
+    _pyproject(
+        tree,
+        '"""\n'
+        "cd contract && pkl project resolve && cd ..\n"
+        "pkl eval --project-dir contract -m . contract/app.pkl\n"
+        "python contract/templates/merge.py\n"
+        '"""',
+    )
+
+    mod.run_post_generate("contract")
+
+    out = capsys.readouterr().out
+    assert "python contract/templates/merge.py" in out
+    assert "pyproject.toml generate task" in out
+
+
+def test_unwired_warns_on_command_chained_after_pkl_eval_with_and(tree, capsys):
+    """A generate task is as likely to be one `&&`-joined line as one command per
+    line, and the live second case (atlan-dbt-app) is the `&&` shape."""
+    (tree / "contract").mkdir()
+    _pyproject(
+        tree,
+        '"pkl eval --project-dir contract -m app/generated contract/app.pkl '
+        '&& python contract/templates/merge.py && touch app/generated/__init__.py"',
+    )
+
+    signals = mod.unwired_post_generate("contract")
+
+    assert any("python contract/templates/merge.py" in s for s in signals)
+
+
+def test_unwired_ignores_placement_and_navigation_after_the_eval(tree, capsys):
+    """Most connectors move files after the eval; regeneration does that placement
+    itself, so warning on it would train authors to ignore the annotation. A
+    sweep of 20 connectors found 15 with something after the eval and only 6
+    transforming anything — hence the interpreter allowlist."""
+    (tree / "contract").mkdir()
+    _pyproject(
+        tree,
+        '"cd contract && pkl eval -m generated app.pkl '
+        "&& mkdir -p ../app/generated && cp generated/*.json ../app/generated/ "
+        '&& mv ../app/generated/atlan.yaml ../atlan.yaml && rm -rf generated && cd .."',
+    )
+
+    mod.run_post_generate("contract")
+
+    assert capsys.readouterr().out == ""
+
+
+def test_unwired_warns_on_an_interpreter_behind_a_runner(tree):
+    """`uv run python …` is the same merge step with a launcher in front."""
+    (tree / "contract").mkdir()
+    _pyproject(
+        tree,
+        '"pkl eval -m . contract/app.pkl && uv run python contract/merge_manifest.py"',
+    )
+
+    signals = mod.unwired_post_generate("contract")
+
+    assert any("merge_manifest.py" in s for s in signals)
+
+
+def test_unwired_silent_when_generate_task_ends_at_pkl_eval(tree, capsys):
+    (tree / "contract").mkdir()
+    _pyproject(tree, '"pkl eval -m . contract/app.pkl"')
+
+    mod.run_post_generate("contract")
+
+    assert capsys.readouterr().out == ""
+
+
+def test_unwired_ignores_a_trailing_formatter(tree, capsys):
+    """CI formats the generated Python itself, so a ruff line after the eval is
+    not a transformation regeneration drops."""
+    (tree / "contract").mkdir()
+    _pyproject(
+        tree,
+        '"""\npkl eval -m . contract/app.pkl\nuvx ruff format app/generated\n"""',
+    )
+
+    mod.run_post_generate("contract")
+
+    assert capsys.readouterr().out == ""
+
+
+def test_unwired_reads_poe_sequence_and_cmd_shapes(tree):
+    """Which poe shape an app used says nothing about whether it post-processes."""
+    (tree / "contract").mkdir()
+    (tree / "pyproject.toml").write_text(
+        "[tool.poe.tasks.generate]\n"
+        'sequence = ["pkl eval -m . contract/app.pkl", "python contract/patch.py"]\n'
+    )
+
+    signals = mod.unwired_post_generate("contract")
+
+    assert any("python contract/patch.py" in s for s in signals)
+
+
+def test_unwired_survives_an_unparseable_pyproject(tree, capsys):
+    """A heuristic that cannot read the file withholds the warning; it must never
+    raise and take a regeneration down with it."""
+    (tree / "contract").mkdir()
+    (tree / "pyproject.toml").write_text("this is not toml [[[\n")
+
+    mod.run_post_generate("contract")
+
+    assert capsys.readouterr().out == ""
+
+
 # ── override detection (app-post-processed files) ────────────────────────────
 
 

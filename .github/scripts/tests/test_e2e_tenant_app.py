@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import argparse
 import builtins
+import json
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,6 +22,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import e2e_tenant_app as app  # noqa: E402
+import stamp_build_identity  # noqa: E402
 from e2e_tenant_api import Response, TenantApiError, TenantClient  # noqa: E402
 
 _TENANT = "https://example-tenant.atlan.test"
@@ -97,9 +100,14 @@ def _ok(payload: dict[str, object]) -> Response:
     return Response(status=200, body=payload)
 
 
-@pytest.fixture(autouse=True)
-def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app.time, "sleep", lambda _s: None)
+# There is no `_no_sleep` fixture here any more, deliberately. This file used to
+# stub `app.time.sleep` to a no-op of its own, which — running after the suite's
+# `_no_retry_sleep` in conftest — replaced that fixture's clock-advancing stub
+# while leaving its patched `time.monotonic` in place. Every deadline-bounded
+# wait then ran without a clock that moves: `test_transport_failure_surfaces_as_
+# an_error_not_a_traceback` spun for the full 300s pod budget at 100% of a core
+# and peaked at 9.5 GB RSS, because `capsys` buffers a progress line per
+# iteration. One fixture owns the clock; see conftest.
 
 
 @pytest.fixture(autouse=True)
@@ -112,8 +120,44 @@ def _creds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(app, "mint_oauth_token", lambda *_a, **_k: "stub.jwt.token")
 
 
+def _pod_identity(build_id: str, app_name: str = "openapi") -> Response:
+    """The envelope the app pod's configmap handler serves (FND-1684)."""
+    payload = {"build_id": build_id, "app_name": app_name}
+    return _ok(
+        {
+            "data": {
+                "kind": "ConfigMap",
+                "apiVersion": "v1",
+                "metadata": {"name": app.BUILD_IDENTITY_CONFIGMAP_ID},
+                "data": {"config": json.dumps(payload), **payload},
+            }
+        }
+    )
+
+
+#: The pod-unreachable answer every test gets unless it says otherwise.
+#:
+#: 404 rather than a match, deliberately: it is what a tenant running an SDK
+#: that predates the build-identity route returns, which is the whole fleet on
+#: the day this lands. Defaulting to it keeps each test below exercising the
+#: layer it was written for, and makes a test that wants the pod layer say so.
+_POD_UNREACHABLE = StubRoute(
+    "GET",
+    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+    Response(status=404, body={"detail": "not found"}),
+)
+
+
 def _wire(monkeypatch: pytest.MonkeyPatch, transport: StubTransport) -> StubTransport:
     monkeypatch.setattr(TenantClient, "request", transport.request)
+    # Appended, not prepended: a test that scripts its own build-identity route
+    # (sticky or one-shot) still wins, because StubTransport consumes `routes`
+    # before consulting `sticky` and scans `sticky` in order.
+    if not any(
+        _POD_UNREACHABLE.path_fragment in route.path_fragment
+        for route in (*transport.routes, *transport.sticky)
+    ):
+        transport.sticky.append(_POD_UNREACHABLE)
     return transport
 
 
@@ -133,6 +177,7 @@ def _install_args(**overrides: object) -> argparse.Namespace:
         "app_configs": "",
         "release_model": "",
         "created_by": "",
+        "commit_sha": "",
         "scan_wait_seconds": 0,
         # Both retry budgets default to 0 here, and every test that wants a retry
         # opts in. `time.sleep` is stubbed but `time.monotonic` is not, so a
@@ -233,6 +278,31 @@ def test_install_scopes_the_registration_to_the_one_tenant(
         "example-tenant"
     ], "a per-PR e2e version must be reachable only by its own e2e tenant"
     assert "target_channel" not in body
+    assert "commit_sha" not in body
+
+
+def test_install_forwards_commit_sha_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The release path always sends commit_sha; e2e must register the same shape."""
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({"version": "older"})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(commit_sha=sha))
+    assert transport.body_for("/marketplace/publish")["commit_sha"] == sha
 
 
 # ── The scan gate ────────────────────────────────────────────────────────────
@@ -508,7 +578,11 @@ class _PublishTimesOutThen:
 
 
 def test_publish_retries_a_transport_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = _PublishTimesOutThen(inner=_publish_after(), failures=2)
+    # `_wire` on the INNER transport, for its default build-identity route only;
+    # the outer patch below is what TenantClient actually calls.
+    transport = _PublishTimesOutThen(
+        inner=_wire(monkeypatch, _publish_after()), failures=2
+    )
     monkeypatch.setattr(TenantClient, "request", transport.request)
     outcome = app.install(_install_args(publish_retry_seconds=240))
     assert outcome.deployment_id == "d1"
@@ -628,8 +702,18 @@ def test_transient_deployment_read_is_retried_not_fatal(
 # ── verify ───────────────────────────────────────────────────────────────────
 
 
-def _verify_args(expected: str) -> argparse.Namespace:
-    return argparse.Namespace(base_url=_TENANT, app_id=_APP_ID, expected=expected)
+def _verify_args(expected: str, pod_wait_seconds: int = 0) -> argparse.Namespace:
+    # 0 by default so a test that says nothing about the pod wait gets the one
+    # read it is actually about, and the tests that ARE about the wait name it.
+    # The budget is cheap either way — `_no_retry_sleep` advances the clock by
+    # whatever the loop sleeps — but a test reading one pod response should not
+    # have to think about thirty.
+    return argparse.Namespace(
+        base_url=_TENANT,
+        app_id=_APP_ID,
+        expected=expected,
+        pod_wait_seconds=pod_wait_seconds,
+    )
 
 
 def test_verify_passes_on_a_match(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -666,6 +750,306 @@ def test_verify_fails_when_nothing_is_installed(
     )
     with pytest.raises(app.TenantAppError, match="nothing"):
         app.verify(_verify_args(_VERSION))
+
+
+# ── The check must not read its own input (FND-1684) ─────────────────────────
+#
+# `install` skips when LM's install record already names the expected version,
+# and `verify` used to read the SAME record. Since the expected version is stable
+# per connector SHA, once that record existed every later run on that SHA skipped
+# the install AND passed the verify — permanently, whatever the cluster ran. One
+# connector SHA can also resolve to more than one image — the tag carries an
+# optional digest suffix — so the record can go on naming a build the tenant no
+# longer runs.
+#
+# The tests below pin the three things that had to become true: the pod is asked
+# first and decides both ways, a skipped install is not reported as a verified
+# one, and the log names the layer that actually established the version.
+
+
+def test_verify_fails_when_the_pod_reports_a_different_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The install record can agree while the pod disagrees. The pod wins.
+
+    LM's record names the version under test while the pod reports a different
+    build. Under the old check that was a pass.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity("sdr-test-44daysago"),
+                ),
+                # Agrees with `--expected`, which is precisely the trap.
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.verify(_verify_args(_VERSION))
+    message = str(excinfo.value)
+    assert "sdr-test-44daysago" in message and _VERSION in message
+    assert app.BUILD_IDENTITY_CONFIGMAP_ID in message, (
+        "the message has to say which layer answered, or the next reader goes "
+        "back to the marketplace record that agreed"
+    )
+    assert transport.paths("GET")[0].endswith(app.BUILD_IDENTITY_CONFIGMAP_ID), (
+        "the pod is asked FIRST: a record read that happens to agree must not be "
+        "able to short-circuit the one layer it cannot fake"
+    )
+
+
+def test_verify_passes_on_the_pod_layer_without_reading_the_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity(_VERSION),
+                )
+            ],
+        ),
+    )
+    assert app.verify(_verify_args(_VERSION)) == _VERSION
+    assert not [p for p in transport.paths("GET") if p.endswith("/info")], (
+        "a pod that reports the build under test settles it; reading the "
+        "install record as well could only weaken the answer"
+    )
+
+
+def test_verify_says_which_layer_decided(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A pass on the record alone must not print the word the pod earns.
+
+    The step used to print `verified: tenant runs X` after reading an install
+    record. That sentence is what let the defect survive review twice.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[], sticky=[StubRoute("GET", "/info", _ok({"version": _VERSION}))]
+        ),
+    )
+    assert app.verify(_verify_args(_VERSION)) == _VERSION
+    out = capsys.readouterr().out
+    assert app.LAYER_INSTALL_RECORD.upper() in out
+    assert "The pod itself was NOT asked" in out
+
+
+def test_verify_fails_when_the_deployment_never_reconciled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LM writes the install record before the deployment reconciles.
+
+    So a record naming the right version, beside a deployment that FAILED, is
+    not a pass — and the deployment record is a layer `verify` did not consult
+    at all before this.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute(
+                    "GET",
+                    "/info",
+                    _ok({"installed": {"version": _VERSION, "deployment_id": "d9"}}),
+                ),
+                StubRoute(
+                    "GET",
+                    "/deployments/d9",
+                    _ok({"deployment_status": "FAILED"}),
+                ),
+            ],
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.verify(_verify_args(_VERSION))
+    assert "FAILED" in str(excinfo.value) and "d9" in str(excinfo.value)
+
+
+def test_a_skipped_install_reports_the_layer_it_rested_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The converge path is where the circularity started."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[], sticky=[StubRoute("GET", "/info", _ok({"version": _VERSION}))]
+        ),
+    )
+    outcome = app.install(_install_args())
+    assert outcome.skipped is True
+    assert outcome.verified_layer == app.LAYER_INSTALL_RECORD, (
+        "no pod answer and no deployment record means nothing corroborated the "
+        "install record, and the outcome has to say so"
+    )
+    assert outcome.as_outputs()["verified_layer"] == app.LAYER_INSTALL_RECORD
+
+
+def test_a_skipped_install_is_corroborated_by_the_pod(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity(_VERSION),
+                ),
+            ],
+        ),
+    )
+    outcome = app.install(_install_args())
+    assert outcome.skipped is True
+    assert outcome.verified_layer == app.LAYER_POD
+    assert outcome.pod_build_id == _VERSION
+
+
+def test_a_skip_is_refused_when_the_pod_contradicts_the_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity("sdr-test-stale111"),
+                ),
+            ],
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="sdr-test-stale111"):
+        app.install(_install_args())
+
+
+def test_install_fails_when_the_pod_never_took_the_new_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both records can report success while the pod serving traffic does not.
+
+    LM reporting SUCCEEDED without anything moving is a known shape (DISTR-921),
+    so the deployment verdict cannot be the last word either.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(status=404, body={})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/d1", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[
+                StubRoute("GET", "/releases/", Response(status=404, body={})),
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity("sdr-test-previous"),
+                ),
+            ],
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.install(_install_args())
+    assert "sdr-test-previous" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"deployment_id": "d1"}, id="top-level"),
+        pytest.param({"installed": {"deployment_id": "d1"}}, id="installed-nest"),
+        pytest.param({"data": {"deploymentId": "d1"}}, id="camel-in-data"),
+    ],
+)
+def test_deployment_id_is_found_wherever_lm_puts_it(payload: dict[str, object]) -> None:
+    """LM does not commit to a shape, so the walk reads whichever key is there."""
+    assert app.deployment_id_from_info(payload) == "d1"
+
+
+def test_no_deployment_id_is_a_stated_outcome_not_a_crash() -> None:
+    assert app.deployment_id_from_info({"installed": {"version": _VERSION}}) == ""
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        pytest.param(
+            {"data": {"data": {"build_id": "t1", "app_name": "openapi"}}},
+            "t1",
+            id="flattened-keys",
+        ),
+        pytest.param(
+            {"data": {"data": {"config": '{"build_id": "t2"}'}}},
+            "t2",
+            id="config-string-only",
+        ),
+        pytest.param(
+            {"data": {"data": {"config": "not json"}}}, "", id="unparseable-config"
+        ),
+        pytest.param({"data": {"data": {}}}, "", id="unstamped-image"),
+    ],
+)
+def test_pod_identity_is_read_from_either_half_of_the_envelope(
+    body: dict[str, object], expected: str
+) -> None:
+    """`data.config` is a JSON string and the keys are repeated beside it.
+
+    Both are read so neither a client that forwards only `config` nor one that
+    flattens it can make a reachable pod look unreachable — which would silently
+    demote the check to the record layer it exists to stop trusting.
+    """
+    identity = app.parse_pod_identity(body["data"])  # type: ignore[arg-type]
+    assert identity.reachable is True
+    assert identity.build_id == expected
+
+
+def test_an_unreachable_pod_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A transport fault here must not red a leg for a diagnostic it can skip."""
+
+    def _boom(*_a: object, **_k: object) -> Response:
+        raise TenantApiError("connection refused")
+
+    monkeypatch.setattr(TenantClient, "request", _boom)
+    identity = app.read_pod_build_identity(TenantClient(base_url=_TENANT, bearer="t"))
+    assert identity.reachable is False
+    assert "connection refused" in identity.detail
+
+
+def test_build_identity_ids_agree() -> None:
+    """One spelling on both sides of the wire, or the check silently degrades.
+
+    A rename on either side would not fail: the pod would 404 and `verify` would
+    fall back to the marketplace records with a warning. That is the failure mode
+    this whole change removes, so it gets a test rather than a comment.
+    """
+    root = Path(__file__).resolve().parents[3]
+    sdk = (root / "application_sdk" / "app" / "build_identity.py").read_text()
+    assert f'BUILD_IDENTITY_CONFIGMAP_ID = "{app.BUILD_IDENTITY_CONFIGMAP_ID}"' in sdk
+    assert f'BUILD_ID_ENV = "{stamp_build_identity.BUILD_ID_ARG}"' in sdk
 
 
 # ── app_id resolution ────────────────────────────────────────────────────────
@@ -3165,3 +3549,227 @@ def test_verify_still_names_the_race_on_a_real_mismatch(
         app.verify(
             argparse.Namespace(base_url=_TENANT, app_id=_APP_ID, expected=_VERSION)
         )
+
+
+# ── FND-2057: asking the pod once samples an instant ─────────────────────────
+# `verify` runs in the e2e leg immediately before the pod-served setup-route
+# reads that FND-2057 watched time out on two of three clouds. Its pod probe
+# took one reading, and one reading lands somewhere inside the window the
+# layers below it are wrong about: LM's install record flips when the install
+# lands, while the rollout that replaces the pod is still in flight. Taken
+# there, the read reports silence, `verify` falls through to the records, and
+# the leg announces — accurately and uselessly — that it verified at the
+# INSTALL-RECORD layer and that the pod itself was NOT asked.
+
+
+class _FlakyPod:
+    """Raises a transport fault *fails* times, then serves *then*."""
+
+    def __init__(self, fails: int, then: Response) -> None:
+        self.fails = fails
+        self.then = then
+        self.reads = 0
+        self.other: list[str] = []
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, object] | None = None,
+        timeout: int = 60,
+    ) -> Response:
+        if app.BUILD_IDENTITY_CONFIGMAP_ID not in path:
+            self.other.append(path)
+            return _ok({"version": _VERSION})
+        self.reads += 1
+        if self.reads <= self.fails:
+            raise TenantApiError(
+                f"GET {path} could not reach {_TENANT}: The read operation timed out"
+            )
+        return self.then
+
+
+def test_a_pod_still_reconciling_is_waited_for_not_written_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two silences then the right answer: the POD layer decides, as it should.
+
+    Before this, the first silence ended it and the leg fell through to LM's
+    install record — the record the install wrote and never revisited.
+    """
+    pod = _FlakyPod(fails=2, then=_pod_identity(_VERSION))
+    monkeypatch.setattr(TenantClient, "request", pod.request)
+
+    assert app.verify(_verify_args(_VERSION, pod_wait_seconds=300)) == _VERSION
+    assert pod.reads == 3
+    assert not pod.other, (
+        "the pod answered, so no marketplace record should have been consulted "
+        "at all — a record read here means the fallback still fired"
+    )
+
+
+def test_without_the_wait_the_same_tenant_degrades_to_the_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The control: `pod_wait_seconds=0` is the pre-FND-2057 behaviour exactly.
+
+    A passing test above proves nothing unless the same fixture fails without
+    the fix. Here the identical flaky pod is asked once, the answer is silence,
+    and the verdict comes from the install record instead — while the pod that
+    would have answered on the next read is never asked again.
+    """
+    pod = _FlakyPod(fails=2, then=_pod_identity(_VERSION))
+    monkeypatch.setattr(TenantClient, "request", pod.request)
+
+    assert app.verify(_verify_args(_VERSION, pod_wait_seconds=0)) == _VERSION
+    assert pod.reads == 1
+    assert pod.other, "it fell back to the marketplace records, as it used to"
+
+
+def test_a_404_is_not_waited_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An image whose SDK predates the route must not pay the wait.
+
+    That is most of the fleet, and it is the failure mode a wait invites: a
+    404 is the route ANSWERING, so re-asking it buys nothing but minutes. The
+    split between "nothing answered" and "answered no" is the whole design.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[], sticky=[StubRoute("GET", "/info", _ok({"version": _VERSION}))]
+        ),
+    )
+
+    assert app.verify(_verify_args(_VERSION, pod_wait_seconds=600)) == _VERSION
+
+    asked = [p for p in transport.paths("GET") if app.BUILD_IDENTITY_CONFIGMAP_ID in p]
+    assert len(asked) == 1, (
+        "a 404 was re-asked; every app on an older pin would now pay the full "
+        f"pod wait on every leg (asked {len(asked)} times)"
+    )
+
+
+def test_a_5xx_is_waited_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 503 is the edge having no pod to route to yet, not a verdict."""
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    Response(status=503, body={"detail": "no healthy upstream"}),
+                ),
+            ],
+            sticky=[
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity(_VERSION),
+                ),
+            ],
+        ),
+    )
+
+    assert app.verify(_verify_args(_VERSION, pod_wait_seconds=300)) == _VERSION
+
+    asked = [p for p in transport.paths("GET") if app.BUILD_IDENTITY_CONFIGMAP_ID in p]
+    assert len(asked) == 2
+
+
+def test_a_pod_that_never_answers_is_bounded_and_says_it_waited(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The wait must end, and the warning must not read like a stale SDK pin.
+
+    Both silences printed the same sentence before — "either the deployed image
+    runs an SDK predating it, or the pod is not the one this run deployed" —
+    and a reader picking the first of those, on a leg where it was the second,
+    is FND-2057's day in the VPN.
+    """
+    pod = _FlakyPod(fails=10**9, then=_pod_identity(_VERSION))
+    monkeypatch.setattr(TenantClient, "request", pod.request)
+    # The budget is spent against a clock the suite's `_no_retry_sleep` fixture
+    # advances by whatever the loop sleeps, so 300s of waiting costs 30 reads
+    # and no wall-clock time. Were the sleep merely discarded, this test would
+    # spin at full speed for the real 300 seconds — see that fixture.
+
+    assert app.verify(_verify_args(_VERSION, pod_wait_seconds=300)) == _VERSION
+
+    warning = capsys.readouterr().out
+    assert "never answered the build-identity route across 300s of retries" in warning
+    assert "not an image whose SDK predates the route" in warning
+    # It really polled, and it really stopped: 300s of budget at a 10s cadence.
+    assert 2 <= pod.reads <= 32
+
+
+def test_pod_wait_defaults_agree_across_the_two_files() -> None:
+    """One physical event, one number — or the next reader asks which is right.
+
+    The leg waits for the same reconcile twice: here, on the build-identity
+    route, and a step later in `application_sdk.testing.setup_routes` on the
+    pod-served configmap routes. Two different ceilings for one event would be
+    a question with no answer, and the SDK constant is the one carrying the
+    derivation.
+    """
+    root = Path(__file__).resolve().parents[3]
+    sdk = (root / "application_sdk" / "testing" / "setup_routes.py").read_text()
+    assert f"DEFAULT_POD_RECONCILE_WAIT_SECONDS = {app.DEFAULT_POD_WAIT_SECONDS}" in sdk
+
+
+def test_the_cli_path_is_bounded_too(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A pod wait entered through `main` must end, not spin.
+
+    Every other test here builds its own Namespace, so all of them pick their
+    own budget. `main` does not: the parser supplies `--pod-wait-seconds`'
+    default of 300, which is the number a real leg runs with — and the only way
+    to exercise the wait as CI exercises it. This is the test that would have
+    caught what the suite actually did for 300 wall-clock seconds per run,
+    holding a capsys buffer the whole time, before `_no_retry_sleep` started
+    advancing the clock.
+
+    Bounded by READ COUNT rather than by elapsed time: the clock the loop reads
+    is the fixture's, so wall time proves nothing here and would only make the
+    assertion flaky on a slow runner.
+    """
+    pod = _FlakyPod(fails=10**9, then=_pod_identity(_VERSION))
+    monkeypatch.setattr(TenantClient, "request", pod.request)
+
+    assert (
+        app.main(
+            [
+                "verify",
+                "--base-url",
+                _TENANT,
+                "--app-id",
+                _APP_ID,
+                "--expected",
+                _VERSION,
+            ]
+        )
+        == 0
+    ), "the pod stayed silent but the install record answered, which is a pass"
+
+    # 300s of budget at a 10s cadence, plus the read that finds the deadline
+    # spent. A spin would be in the millions.
+    assert pod.reads <= 32, f"the pod wait did not bound itself ({pod.reads} reads)"
+    out = capsys.readouterr().out
+    assert "never answered the build-identity route across 300s" in out
+    assert (
+        "verified at the INSTALL-RECORD layer" in out
+    ), "the leg must still say the pod was not the thing it verified against"
+
+
+def test_a_stubbed_sleep_still_moves_the_clock() -> None:
+    """The fixture contract every deadline loop in this suite depends on.
+
+    Stated as a test because it is load-bearing and invisible: a future edit
+    restoring the simpler `lambda: None` stub would pass every other test in
+    this file and quietly reintroduce a 300-second busy spin.
+    """
+    before = time.monotonic()
+    time.sleep(120)
+    assert time.monotonic() - before >= 120

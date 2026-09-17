@@ -15,24 +15,31 @@ whatever it is handed, so only that test can prove the fields reach OTLP.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-from unittest.mock import patch
+from typing import Annotated, Any
+from unittest.mock import AsyncMock, patch
 
 import orjson
 import pytest
+from pyatlan_v9.model.assets import Asset, Database, Table
 
 from application_sdk.contracts.base import Input, Output
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.types import AssetArtifact, FileReference
 from application_sdk.observability.events import ARTIFACT_VALIDATION_EVENT
 from application_sdk.storage.file_ref_sync import _find_file_refs, iter_named_file_refs
 from application_sdk.validation import interceptor as interceptor_module
+from application_sdk.validation.artifacts import ArtifactValidationReport
 from application_sdk.validation.interceptor import (
     ARTIFACT_SIDE_HANDOFF,
     ARTIFACT_SIDE_INGEST,
+    _source_for,
     boundary_contract_types,
     entrypoint_index,
     validate_artifacts,
 )
+from application_sdk.validation.sources import ContractSource, ModelSource
+
+_CONN = "default/snow/123"
+_SCHEMA_QN = f"{_CONN}/DB/SCHEMA"
 
 # ---------------------------------------------------------------------------
 # Contracts under test
@@ -491,3 +498,229 @@ class TestBookkeeping:
     ) -> None:
         with patch("application_sdk.constants.VALIDATE_ARTIFACTS", False):
             assert await _run(_BoundaryOut(queries=FileReference())) == []
+
+
+# ---------------------------------------------------------------------------
+# Model-declared fields — the AssetArtifact marker (FND-1863)
+# ---------------------------------------------------------------------------
+
+
+class _AssetOut(Output, allow_unbounded_fields=True):
+    """An SDK-shaped contract: the asset artifact is declared by the model.
+
+    Stands in for ``ExtractionOutput.transformed_files`` — same marker, same
+    reason, without pinning this file to a template contract's field list.
+    """
+
+    transformed: Annotated[FileReference | None, AssetArtifact()] = None
+
+
+def _write_assets(base: Path, entity: str, assets: list[Any]) -> str:
+    """Write a real transformed asset subtree and return its directory."""
+    out_dir = base / "transformed" / entity
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with open(out_dir / "entities.json", "wb") as handle:
+        for asset in assets:
+            handle.write(asset.to_nested_bytes())
+            handle.write(b"\n")
+    return str(out_dir)
+
+
+class TestModelDeclaredFields:
+    """A marked field is checked against the model, not against a field map.
+
+    The defect these cover is one the fleet was living with: the boundary path
+    built a ``ContractSource`` unconditionally, so an artifact the SDK writes
+    and already model-validates on the upload path reported ``not_declared``
+    unless every connector hand-authored an envelope for it — an envelope that
+    could only ever restate part of ``Asset`` (FND-1863).
+    """
+
+    def test_a_marked_field_selects_the_model_source(self) -> None:
+        item = next(iter_named_file_refs(_AssetOut(transformed=FileReference())))
+        source = _source_for(item, entrypoint="extract")
+        assert isinstance(source, ModelSource)
+        assert source.kind == "model"
+        assert source.model is Asset
+
+    def test_an_unmarked_field_still_selects_the_contract_source(self) -> None:
+        item = next(iter_named_file_refs(_BoundaryOut(queries=FileReference())))
+        source = _source_for(item, entrypoint="extract")
+        assert isinstance(source, ContractSource)
+        assert (source.field, source.entrypoint) == ("queries", "extract")
+
+    def test_a_bare_ref_with_no_owner_selects_the_contract_source(self) -> None:
+        """No owning contract means no annotation, so no marker to read."""
+        item = next(iter_named_file_refs(FileReference()))
+        assert isinstance(_source_for(item, entrypoint=""), ContractSource)
+
+    @pytest.mark.asyncio
+    async def test_a_marked_field_is_validated_against_the_real_model(
+        self, tmp_path: Path, generated_dir: Path
+    ) -> None:
+        """End to end, with no declaration file anywhere: a real report.
+
+        The empty generated tree is the whole point — before this change the
+        field reported ``not_declared`` on a public boundary unless the app
+        hand-authored an envelope. The scan runs for real, in a child process,
+        against ``pyatlan_v9``'s own ``Asset``.
+        """
+        local = _write_assets(
+            tmp_path,
+            "Database",
+            [Database.creator(name="DB", connection_qualified_name=_CONN)],
+        )
+        events = await _run(_AssetOut(transformed=FileReference(local_path=local)))
+        assert len(events) == 1
+        assert events[0]["outcome"] == "clean"
+        assert events[0]["artifact_schema_source"] == "model"
+        assert events[0]["artifact_format"] == "ndjson"
+        assert events[0]["artifact_total"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_broken_asset_is_flagged_rather_than_undeclared(
+        self, tmp_path: Path, generated_dir: Path
+    ) -> None:
+        """The upgrade this buys: a real finding where there was no check."""
+        table = Table.creator(name="T1", schema_qualified_name=_SCHEMA_QN)
+        table.qualified_name = None
+        local = _write_assets(tmp_path, "Table", [table])
+        events = await _run(_AssetOut(transformed=FileReference(local_path=local)))
+        assert events[0]["outcome"] == "flagged"
+        assert events[0]["artifact_schema_source"] == "model"
+
+    @pytest.mark.asyncio
+    async def test_a_hand_written_envelope_does_not_win_over_the_model(
+        self, tmp_path: Path, generated_dir: Path
+    ) -> None:
+        """A leftover declaration for a marked field is not consulted.
+
+        A field cannot have two declarations, and of the two the model is the
+        stronger. An app mid-migration off the hand-written envelope must not
+        silently drop back to a nine-key field map.
+        """
+        _write_declarations(
+            generated_dir,
+            {
+                "transformed": {
+                    "format": "ndjson",
+                    "fields": [{"name": "typeName", "type": "string"}],
+                }
+            },
+        )
+        local = _write_assets(
+            tmp_path,
+            "Database",
+            [Database.creator(name="DB", connection_qualified_name=_CONN)],
+        )
+        events = await _run(_AssetOut(transformed=FileReference(local_path=local)))
+        assert events[0]["artifact_schema_source"] == "model"
+
+    @pytest.mark.asyncio
+    async def test_the_model_scan_runs_isolated_not_on_a_thread(
+        self, tmp_path: Path, generated_dir: Path
+    ) -> None:
+        """A model decode may never ride a thread — a native fault kills the worker.
+
+        ``msgspec`` via ``pyatlan_v9`` is a C extension, and CNCT-85 was a
+        segfault in one taking a whole Temporal worker with it. The choice of
+        offload is therefore load-bearing rather than a tuning detail, so it is
+        asserted here instead of only stated in the module docstring.
+        """
+        local = _write_assets(
+            tmp_path,
+            "Database",
+            [Database.creator(name="DB", connection_qualified_name=_CONN)],
+        )
+        with (
+            patch(
+                "application_sdk._runtime.offload.run_best_effort",
+                new_callable=AsyncMock,
+            ) as best_effort,
+            patch(
+                "application_sdk._runtime.offload.run_in_thread",
+                new_callable=AsyncMock,
+            ) as in_thread,
+        ):
+            best_effort.return_value = ArtifactValidationReport()
+            await _run(_AssetOut(transformed=FileReference(local_path=local)))
+        assert best_effort.await_count == 1
+        assert in_thread.await_count == 0
+        assert isinstance(best_effort.await_args.args[2], ModelSource)
+        assert best_effort.await_args.kwargs["timeout"] is not None
+
+    @pytest.mark.asyncio
+    async def test_a_field_map_still_rides_a_thread(
+        self, tmp_path: Path, generated_dir: Path
+    ) -> None:
+        """The cheap path is unchanged: pure Python over bytes, one thread."""
+        _write_declarations(generated_dir, _NDJSON_QUERIES)
+        local = _ndjson(tmp_path, "queries.json", [{"QUERY_ID": "q1"}])
+        with (
+            patch(
+                "application_sdk._runtime.offload.run_best_effort",
+                new_callable=AsyncMock,
+            ) as best_effort,
+            patch(
+                "application_sdk._runtime.offload.run_in_thread",
+                new_callable=AsyncMock,
+            ) as in_thread,
+        ):
+            in_thread.return_value = ArtifactValidationReport()
+            await _run(_BoundaryOut(queries=FileReference(local_path=local)))
+        assert in_thread.await_count == 1
+        assert best_effort.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_a_swallowed_child_failure_is_absent_and_never_blocks(
+        self, tmp_path: Path, generated_dir: Path
+    ) -> None:
+        """``run_best_effort`` returning ``None`` is our failure, not the app's.
+
+        A crashed or timed-out child says nothing about the artifact, so even a
+        hard-mode app proceeds — the same rule that keeps a defect in this hook
+        from failing a healthy run.
+        """
+        local = _write_assets(
+            tmp_path,
+            "Database",
+            [Database.creator(name="DB", connection_qualified_name=_CONN)],
+        )
+        with patch(
+            "application_sdk._runtime.offload.run_best_effort",
+            new_callable=AsyncMock,
+        ) as best_effort:
+            best_effort.return_value = None
+            events = await _run(
+                _AssetOut(transformed=FileReference(local_path=local)),
+                enforce=True,
+            )
+        assert events[0]["outcome"] == "absent"
+        assert events[0]["artifact_schema_source"] == "model"
+        # The classification, not just the enforcement, because it is what makes
+        # the fail-open safe: every plumbing failure degrades to `absent`, which
+        # it shares with the honest "the artifact was not there" — and only this
+        # attribute tells a reader which of the two happened. Asserting the
+        # enforcement alone would still pass if the report started claiming the
+        # artifact was unverifiable, quietly turning a broken validator into
+        # evidence against the app.
+        assert events[0]["artifact_classification"] == "validator_broken"
+        assert events[0]["artifact_enforcement"] != "blocked"
+
+    @pytest.mark.asyncio
+    async def test_a_marked_field_with_nothing_local_is_absent_not_undeclared(
+        self, generated_dir: Path
+    ) -> None:
+        """The model is the declaration, so ``not_declared`` is unreachable here.
+
+        A durable reference nobody materialised is "declared, and we could not
+        check it" — which is what ``absent`` means and what a hard posture
+        exists to catch.
+        """
+        events = await _run(
+            _AssetOut(
+                transformed=FileReference(storage_path="artifacts/x", is_durable=True)
+            )
+        )
+        assert events[0]["outcome"] == "absent"
+        assert events[0]["artifact_schema_source"] == "model"

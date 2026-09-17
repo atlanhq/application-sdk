@@ -330,6 +330,7 @@ class MockHeartbeatController(NoopHeartbeatController):
         """Clear recorded heartbeat calls."""
         self._heartbeat_calls.clear()
         self._details = ()
+        self._sent = False
 
 
 class MockCredentialStore:

@@ -52,6 +52,23 @@ sys.path.insert(0, str(Path(__file__).parent))
 from renovate_pkl_sync import OUTPUT_PATHS, eval_roots, regenerate  # noqa: E402
 
 
+def _pkl_runtime_label() -> str:
+    """A human-readable label for the pkl that just ran, for the error message.
+
+    Best-effort by design: this is called only on the failure path, to say which
+    pkl produced the failure, and an unreadable banner must not replace the real
+    eval error with an error about reading a version.
+    """
+    try:
+        result = subprocess.run(["pkl", "--version"], text=True, capture_output=True)
+    except OSError:
+        return "an unidentifiable pkl (could not run 'pkl --version')"
+    if result.returncode != 0:
+        return "an unidentifiable pkl ('pkl --version' failed)"
+    banner = result.stdout.strip().splitlines()
+    return banner[0] if banner else "an unidentifiable pkl (empty version banner)"
+
+
 def _changed_output_paths() -> list[str] | None:
     """Return generated-output paths that regeneration changed or created.
 
@@ -174,12 +191,25 @@ def main(argv: list[str] | None = None) -> int:
     status, changed = check_freshness(args.contract_dir)
 
     if status == "eval_failed":
+        # Name BOTH causes, and name the pkl version. The message used to assert
+        # a single one ("almost certainly stale — a toolkit bump merged without
+        # regenerating"), which misdirected the FND-1864 report outright: the
+        # contract was fine and freshly generated, and the eval failed only
+        # because this runner's pkl was four minor versions behind the
+        # contributor's and rejected syntax theirs accepted. A gate whose value
+        # is that a local run predicts it must say which pkl it ran.
         print(
-            "::error::the contract has an evaluable pkl root but 'pkl eval' failed — the "
-            "committed generated artifacts cannot be verified and are almost "
-            "certainly stale (a toolkit bump merged without regenerating). Fix "
-            "the contract so 'pkl eval -m . contract/app.pkl' (or "
-            "'uv run poe generate') succeeds, then commit the refreshed output."
+            f"::error::the contract has an evaluable pkl root but 'pkl eval' failed "
+            f"with {_pkl_runtime_label()}, so the committed generated artifacts "
+            f"cannot be verified. Two causes, both worth checking: (1) VERSION SKEW "
+            f"— pkl is a language, and syntax your local pkl accepts can be "
+            f"rejected here (backslash line-continuations inside a multi-line "
+            f"string are valid from 0.28 on and an 'Invalid character escape "
+            f"sequence' before it); render with this exact version via "
+            f"'python -m application_sdk.dev.pkl run -- eval --project-dir contract "
+            f"-m . contract/app.pkl'. (2) A STALE CONTRACT — a toolkit bump merged "
+            f"without regenerating. The eval error itself is logged above; fix it, "
+            f"then commit the refreshed output."
         )
         return 1
 

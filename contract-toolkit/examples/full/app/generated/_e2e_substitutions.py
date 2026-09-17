@@ -21,6 +21,10 @@ class FullFeaturedMustacheSubstitutions(SQLMustacheSubstitutions):
         default="INFO",
         alias="{{log_level}}",
     )
+    asset_types: list[str] = Field(
+        default_factory=lambda: ["Table", "View"],
+        alias="{{asset_types}}",
+    )
     lineage_depth: int = Field(default=3, alias="{{lineage_depth}}")
     table_prefix: str = Field(default="", alias="{{table_prefix}}")
     custom_attributes: str = Field(default="", alias="{{custom_attributes}}")

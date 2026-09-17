@@ -73,15 +73,20 @@ jobs:
           python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.12.9"
+          version: "0.12.13"
 
       - name: Compute version, bump pyproject + __init__, update CHANGELOG
         id: versions
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # The commit the closed PR produced; empty on workflow_dispatch (the
+          # guard then fails open). release_guard sets skip=true when it is not
+          # on origin/main — a stacked PR merging into its parent feature branch
+          # fires this workflow exactly like a merge into main (#3794).
+          PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: python .github/scripts/conformance_release.py
 
       - name: Sanity-build package

@@ -1,0 +1,49 @@
+/// Fixture: cross-connection enricher whose typed publish step declares a
+/// zero-out spec.
+///
+/// Exercises the pipeline path with `pipeline.publish.zeroOutConfig` set, which
+/// must thread the spec through `generateDAG()` onto the generated publish node
+/// as `args["zero_out_config"]` — serialized through a `RenderDirective` so the
+/// spec's own `null` zero values survive the manifest renderer while the node's
+/// sibling args keep being rendered normally.
+amends "../../src/App.pkl"
+
+name = "publish-zero-out"
+displayName = "Publish Zero Out"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline = new Pipeline {
+  publish = new PublishStep {
+    zeroOutConfig = new ZeroOutSpec {
+      // Lineage entities this connector owns outright: hard-delete them.
+      exclude { "Process"; "ColumnProcess" }
+      // Everything else in the stale diff keeps its asset and gets only the
+      // connector-namespaced attributes cleared.
+      attrs {
+        ["sqlCoalesceNodeStatus"] = null
+        ["sqlCoalesceProjectId"] = null
+        // A non-null zero: publish writes the value as-is, so a list-valued
+        // attribute zeroes to an empty list, not to null.
+        ["sqlCoalesceTags"] = new Listing {}
+        // A falsy-but-valid scalar, which publish preserves rather than drops.
+        ["sqlCoalesceProjectName"] = ""
+      }
+      rootAttrs {
+        ["classifications"] = new Listing {}
+      }
+    }
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

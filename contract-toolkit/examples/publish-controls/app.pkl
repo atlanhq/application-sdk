@@ -1,6 +1,7 @@
 /// Minimal example demonstrating publish input opt-out, publish executor
-/// templating, the optional non-data prefix hand-off, compact activity labels,
-/// and workflow-safe error handling for toolkit-managed extract/publish nodes.
+/// templating, the optional non-data prefix hand-off, the typed zero-out spec,
+/// compact activity labels, and workflow-safe error handling for
+/// toolkit-managed extract/publish nodes.
 ///
 /// The app keeps the standard extract -> publish DAG, suppresses toolkit
 /// scaffolding fields from _input.py, and declares its own load-to-atlan UI
@@ -30,6 +31,24 @@ pipeline {
     // `transformed_nondata_prefix` output alongside the asset rows. Apps that
     // emit only asset rows leave this unset and the arg is omitted.
     transformedNonDataPrefix = "$.extract.outputs.transformed_nondata_prefix"
+    // Zero-out instead of hard-delete for assets that fall out of a run. This
+    // is the cross-connection-enricher control: publish clears the listed
+    // attributes on the stale asset rather than deleting an asset this app only
+    // enriches. `exclude` names the types it does own outright, which keep
+    // being hard-deleted. Apps that own everything they publish leave
+    // `zeroOutConfig` unset and the arg is omitted.
+    zeroOutConfig = new ZeroOutSpec {
+      exclude { "Process"; "ColumnProcess" }
+      // attribute -> zero value, written as-is: `null` for a scalar, an empty
+      // listing for a list-valued attribute.
+      attrs {
+        ["trinoJobStatus"] = null
+        ["trinoJobRunAt"] = null
+      }
+      rootAttrs {
+        ["classifications"] = new Listing {}
+      }
+    }
     errorHandling = new ErrorHandlingConfig {
       startToCloseTimeoutSeconds = 14400
     }

@@ -123,6 +123,15 @@ def compute_bump(subjects, bodies):
 def bump_version(current, bump):
     major, minor, patch = (int(x) for x in current.split("."))
     if bump == "major":
+        # Semver §4: while the major version is zero the public API is not
+        # declared stable, so a breaking change bumps the MINOR, not the major.
+        # Cutting 1.0.0 is a deliberate stability declaration about the whole
+        # package and must stay a human decision — never a side effect of one
+        # `feat!:` commit landing. The changelog still files the change under
+        # "Breaking changes" (categorise() reads the commits, not this bump),
+        # so the signal survives the smaller version bump.
+        if major == 0:
+            return f"0.{minor + 1}.0"
         return f"{major + 1}.0.0"
     if bump == "minor":
         return f"{major}.{minor + 1}.0"
@@ -272,6 +281,20 @@ def main():
     bump = compute_bump(subjects, bodies)
     new_version = bump_version(current, bump)
     new_tag = f"{TAG_PREFIX}{new_version}"
+
+    # The PR that fired this run may have merged into a *parent feature branch*
+    # (a GitHub stacked PR) while the event still reads as a merge into main —
+    # in which case this checkout is that feature branch, not main. Ask git
+    # whether the merged commit is an ancestor of origin/main before anything
+    # else; the version check below cannot tell the two apart
+    # (application-sdk#3794). Empty on workflow_dispatch, which fails open.
+    merged_sha = os.environ.get(release_guard.MERGE_COMMIT_ENV, "")
+    landed, detail = release_guard.landed_on_branch(merged_sha)
+    if not landed:
+        print(release_guard.not_landed_message(merged_sha))
+        _set_output("skip", "true")
+        return
+    print(f"Merge commit check: {detail}")
 
     # This run may be looking at a frozen merge ref that predates an already
     # merged-and-published release, in which case `current` is stale and we are

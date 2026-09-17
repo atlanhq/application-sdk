@@ -74,25 +74,30 @@ than a green build on the wrong base.
 ### Redirecting app CI to the GHCR mirror
 
 App Dockerfiles keep `FROM registry.atlan.com/public/app-runtime-base:3` — that
-reference is the public interface, and it stays put. Callers of
-`build-and-publish-app.yaml` opt in with `use_ghcr_base: true`, and a BuildKit named
-context rewrites *where the layers come from* without changing what is built.
+reference is the public interface, and it stays put. (Conformance I001 accepts the
+GHCR mirror `ghcr.io/atlanhq/app-runtime-base:3` as an equal spelling, so a Dockerfile
+that names GHCR directly is not reverted; the redirect then has nothing to do and says so.) `build-and-publish-app.yaml`'s `use_ghcr_base` input, **default `true`**, drives a
+BuildKit named context that rewrites *where the layers come from* without changing what
+is built.
 
-Each app self-selects, on its own schedule — the input's default stays `false` until the
-fleet has soaked. The opt-in is safe to keep in an app's `build-and-publish.yaml` even
-though `bootstrap` fully manages that file: the value is read back off the file on every
-re-run (or set with `atlan-application-sdk-conformance bootstrap --use-ghcr-base true`),
-so a re-sync preserves it instead of reverting the app to Harbor, and conformance C002
-does not report an opted-in app as drifted. To go back to Harbor, delete the line or pass
-`--use-ghcr-base false`.
+The default was `false` through the soak, one app at a time. It is now on for the whole
+fleet: GHCR pulls are free from GitHub-hosted runners, Harbor's S3-backed blobs are not,
+and the base is the same image either way. An app can pin itself back to Harbor by
+passing `use_ghcr_base: false` to the reusable workflow.
 
-The opt-in runs `.github/scripts/resolve_base_redirect.py` first, which fails the
-build rather than let the redirect fail quietly:
+Because the default now covers apps nobody checked individually, the preflight's
+**match-coverage** gate degrades rather than fails: a Dockerfile the redirect cannot
+rewrite — a pinned patch tag, a digest-pinned base — warns and builds from Harbor. A
+digest-pinned base is the case that forced this; conformance I001 approves it, and it
+cannot match a tag mapping, so a fail-closed gate would have broken those builds the
+moment the default turned on. The **parity** gate still fails closed, because that one
+asks whether the image is right, not whether the redirect applies:
 
 | Situation | Outcome |
 |---|---|
 | Dockerfile's base reference matches, digests agree | Redirect applied, **pinned to the immutable digest** |
-| No `FROM` matches the supported reference | **Build fails** — the opt-in would be a silent no-op |
+| Dockerfile already names the GHCR mirror (`ghcr.io/atlanhq/app-runtime-base`) | Redirect not needed — builds from GHCR directly, nothing emitted |
+| No `FROM` matches the supported reference (pinned patch tag, digest-pinned base) | Warns, builds from Harbor |
 | Harbor and GHCR serve different digests for the tag | **Build fails** — see the recovery above |
 | Base reference only resolves inside BuildKit (`ARG` with no default) | Warns, builds from Harbor |
 | GHCR unreachable | Warns, builds from Harbor |

@@ -27,10 +27,27 @@ No handler overrides needed. Just commit the generated files.
 
 ## Prerequisites
 
-Install `pkl`:
+Use the **pinned** `pkl` — the one CI renders contracts with — not whatever
+`brew` last shipped:
+
 ```bash
-brew install pkl
-pkl --version   # 0.27+ recommended
+python -m application_sdk.dev.pkl print-version   # the version CI uses
+PKL="$(python -m application_sdk.dev.pkl path)"   # download + cache that build
+"$PKL" --version
+```
+
+`pkl` is a language, not just a renderer, so versions disagree about what your
+contract *means*: backslash line-continuations inside a multi-line string are
+valid from 0.28 on and a hard `Invalid character escape sequence` before it. A
+clean render on a different version is therefore not evidence the
+`Generated Artifact Freshness` gate will pass — which is the whole reason that
+gate exists (FND-1864). The pin lives in one place,
+`application_sdk/pkl_version.py`.
+
+Already have a `pkl` you like? Keep it, but check it:
+
+```bash
+python -m application_sdk.dev.pkl check   # exit 1 if it has drifted from CI
 ```
 
 ## Project Structure
@@ -243,6 +260,46 @@ extraNodes {
   }
 }
 ```
+
+### Zero-Out Instead of Delete (Cross-Connection Enrichers)
+
+If your app enriches assets another connector owns — writing its own namespaced
+attributes onto them rather than creating them — publish's default handling of an
+asset that falls out of a run is wrong for you. It issues a hard Atlas DELETE,
+destroying a still-live asset along with its downstream lineage and its
+user-curated tags and descriptions.
+
+Declare a `ZeroOutSpec` so publish clears just your attributes instead:
+
+```pkl
+pipeline {
+  publish {
+    zeroOutConfig = new ZeroOutSpec {
+      // Types your app owns outright — these keep being hard-deleted.
+      exclude { "Process"; "ColumnProcess" }
+      // attribute -> zero value, written as-is inside entity.attributes.
+      attrs {
+        ["myConnectorNodeStatus"] = null
+        ["myConnectorProjectId"] = null
+      }
+      // Same shape, for entity-root fields.
+      rootAttrs { ["classifications"] = new Listing {} }
+    }
+  }
+}
+```
+
+Also settable directly on `PublishNode` when you override the node via
+`extraNodes["publish"]`. Leave it unset and the arg is omitted, which is how
+zero-out stays off — do not build an empty spec to disable it.
+
+Do **not** hand-write this as a raw JSON string in Pkl: a string is spliced
+unparsed, so a typo yields a broken manifest with no error at generation time,
+and it needs a post-generate merge script that CI's single hook may not run. The
+typed spec type-checks and needs no post-processing. See
+[the toolkit reference](https://github.com/atlanhq/application-sdk/blob/main/contract-toolkit/docs/reference.md)
+for the full semantics, including why `attrs` is a value map rather than a list
+of names.
 
 ## Widget Reference
 

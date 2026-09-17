@@ -286,6 +286,11 @@ jobs:
           SKIPPED: ${{ steps.install.outputs.skipped }}
           INSTALLED: ${{ steps.install.outputs.installed_version }}
           DEPLOYMENT_ID: ${{ steps.install.outputs.deployment_id }}
+          # FND-1684: which layer actually established the installed version.
+          # `install-record` means nothing corroborated LM's own record, so the
+          # run has NOT established that any pod moved.
+          LAYER: ${{ steps.install.outputs.verified_layer }}
+          POD_BUILD_ID: ${{ steps.install.outputs.pod_build_id }}
         run: |
           {
             echo "### E2E tenant install — ${CLOUD}"
@@ -299,4 +304,6 @@ jobs:
             echo "| Release status at install | \`${RELEASE_STATUS:-unreadable}\` |"
             echo "| Deployment | \`${DEPLOYMENT_ID:-none}\` |"
             echo "| Tenant reports installed | \`${INSTALLED:-unreported}\` |"
+            echo "| Established at layer | \`${LAYER:-unknown}\` |"
+            echo "| Pod reports build | \`${POD_BUILD_ID:-not reported}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

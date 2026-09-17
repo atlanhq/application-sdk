@@ -31,6 +31,7 @@ OUT = pathlib.Path(".github/workflows/sdk-loop.yml")
 HEADER = """# @sdk-loop — drive a PR to merge-ready without supervision.
 #
 #   fence -> review 1 -> resolve 1 -> review 2 -> ... -> review 8 -> finalize
+#   fence -> review 1 -> finalize                    (workflow_dispatch review_only)
 #
 # One workflow run, one job per phase, up to 8 review/resolve pairs. The review
 # phase runs on xai/grok-4.6 — the same model the existing lanes review with
@@ -94,6 +95,14 @@ on:
       pr:
         description: 'PR number to drive'
         required: true
+      review_only:
+        description: >-
+          Review once and stop. Accepts a merged or closed PR, runs no
+          resolver, casts no approval. The A/B's instrument: it reviews PRs
+          whose human outcome is already known.
+        type: boolean
+        required: false
+        default: false
 
 # Keyed on the PR alone: loops on different PRs never contend. `cancel-in-
 # progress: false` because cancelling could kill a resolve phase mid-push —
@@ -137,6 +146,12 @@ jobs:
       head_ref: ${{ steps.fence.outputs.head_ref }}
       base_sha: ${{ steps.fence.outputs.base_sha }}
       reason: ${{ steps.fence.outputs.reason }}
+      # 'true' | 'false', on both triggers. The round gates read THIS, not
+      # `inputs.review_only`: `inputs` is empty on an issue_comment run, and a
+      # dispatch boolean arrives as a string, so `!inputs.review_only` would be
+      # false for the literal 'false'. The fence normalises once; every gate
+      # compares against one string.
+      review_only: ${{ steps.fence.outputs.review_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -153,6 +168,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WORKFLOW_FILE: sdk-loop.yml
+          REVIEW_ONLY: ${{ inputs.review_only }}
         run: python3 .github/scripts/sdk_loop_fence.py
 
       # The same acknowledgement the other two lanes give: an emoji within
@@ -205,12 +221,20 @@ def prep_job() -> str:
     reported and left alone.
 
     Deterministic for a healthy PR — a few `gh` reads and no model at all.
+
+    Skipped on a review-only run, for two reasons that are the same reason:
+    it pushes, and its fast track cancels the review. A review-only run's PR
+    is usually merged, so a push lands on a branch nobody is driving, and the
+    review is the one thing the run exists to produce. Review 1 already falls
+    back to the fence's baseline when prep did not run.
     """
     return """
   prep:
     name: Prep
     needs: [fence]
-    if: needs.fence.outputs.proceed == 'true'
+    if: >-
+      needs.fence.outputs.proceed == 'true' &&
+      needs.fence.outputs.review_only != 'true'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -234,7 +258,16 @@ def review_job(n: int) -> str:
         # `!cancelled()` rather than a dependency on prep SUCCEEDING: a prep
         # that could not tidy the branch must not cost the review. A branch
         # left behind still reviews correctly.
-        gate = "!cancelled() && needs.fence.outputs.proceed == 'true'"
+        # The fast track is the one prep outcome that CANCELS the chain
+        # rather than informing it: prep has already re-stamped the previous
+        # verdict on the live head, so a review would re-read a diff whose
+        # verdict is posted. Every other prep outcome — including a failure —
+        # still reviews, which is why this tests for one value rather than
+        # requiring success.
+        gate = (
+            "!cancelled() && needs.fence.outputs.proceed == 'true' && "
+            "needs.prep.outputs.outcome != 'fast_track'"
+        )
         needs = "[fence, prep]"
         # Fall back to the fence when prep skipped or failed — an empty
         # `new_base_sha` would checkout `ref: ''`.
@@ -251,8 +284,11 @@ def review_job(n: int) -> str:
         prev_res, prev_rev = f"resolve-{n - 1}", f"review-{n - 1}"
         # Continue when the previous resolve made progress, or when either
         # phase of the previous pair lost the branch and needs a fresh review.
+        # `!= 'true'`, not `== 'false'`: a fence from before this output
+        # existed emits nothing, and '' must keep looping.
         gate = (
-            f"!cancelled() && needs.fence.outputs.proceed == 'true' && ("
+            f"!cancelled() && needs.fence.outputs.proceed == 'true' && "
+            f"needs.fence.outputs.review_only != 'true' && ("
             f"needs.{prev_res}.outputs.outcome == 'ok' || "
             f"needs.{prev_res}.outputs.outcome == 'reaim' || "
             f"needs.{prev_rev}.outputs.outcome == 'reaim')"
@@ -290,6 +326,7 @@ def review_job(n: int) -> str:
       prior_sha: {prior_sha}
       spent_so_far: {spent}
       reaims_so_far: {reaims}
+      review_only: ${{{{ needs.fence.outputs.review_only || 'false' }}}}
 """
 
 
@@ -299,6 +336,10 @@ def resolve_job(n: int) -> str:
     `outcome == 'ok'` is exactly NEEDS_FIXES. A clean verdict, a terminal
     verdict, a re-aim and a failure all skip this job, which is what makes
     "resolve only if required" true rather than aspirational.
+
+    A review-only run skips it whatever the verdict: that run exists to
+    measure the review, and its PR is usually merged — the one branch the
+    resolver must never push to.
     """
     prev = f"review-{n}"
     prev_res = f"resolve-{n - 1}" if n > 1 else None
@@ -313,7 +354,8 @@ def resolve_job(n: int) -> str:
     name: Resolve {n}
     needs: {needs}
     if: >-
-      !cancelled() && needs.{prev}.outputs.outcome == 'ok'
+      !cancelled() && needs.fence.outputs.review_only != 'true' &&
+      needs.{prev}.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -334,7 +376,16 @@ def _stop_expr() -> str:
     Read newest-first so the outcome that ended the run wins over the earlier
     rounds that merely continued it.
     """
-    parts = []
+    # A fast track ends the run in prep, so no review or resolve outcome
+    # exists to describe it. Without this the chain falls through to its
+    # 'failed' default and the summary tells the author a phase broke on the
+    # run that did exactly what it was supposed to. Guarded to the one value:
+    # prep's ordinary outcomes describe branch hygiene, not why a run ended.
+    parts = ["needs.prep.outputs.outcome == 'fast_track' && 'fast_track'"]
+    # A review-only run has one review outcome and no resolve. Left to the
+    # round scan, an 'ok' (NEEDS_FIXES) review would be reported as the reason
+    # the run stopped — true of the verdict, false of the run. Name the mode.
+    parts.append("needs.fence.outputs.review_only == 'true' && 'review_only'")
     for n in range(MAX_ROUNDS, 0, -1):
         parts.append("needs.resolve-%d.outputs.outcome" % n)
         parts.append("needs.review-%d.outputs.outcome" % n)
@@ -342,7 +393,11 @@ def _stop_expr() -> str:
 
 
 def _rounds_expr() -> str:
-    rows = []
+    rows = [
+        '{"number":0,"phase":"prep","outcome":"${{ needs.prep.outputs.outcome }}",'
+        '"verdict":"","sha":"${{ needs.prep.outputs.new_base_sha }}",'
+        '"detail":"${{ needs.prep.outputs.detail }}","cost":"","usage":""}'
+    ]
     for n in range(1, MAX_ROUNDS + 1):
         for phase in ("review", "resolve"):
             job = f"{phase}-{n}"

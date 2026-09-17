@@ -393,12 +393,18 @@ RULES: tuple[RuleDefinition, ...] = (
         orthogonal_gate="pkl-eval",
         rationale=(
             "An app that defines contract/app.pkl commits the pkl eval outputs "
-            "(atlan.yaml, app/generated/manifest.json, app/generated/_input.py) so "
-            "that deployment and CI consume them without a pkl toolchain.  When one "
-            "of those outputs is absent while the contract exists, the app was never "
-            "generated (or the artifact was deleted): the platform reads a manifest "
-            "that does not exist, and the app fails to deploy or register.  File "
-            "existence is a fully deterministic check that needs no pkl (BLDX-1414)."
+            "(atlan.yaml, manifest.json, _input.py) so that deployment and CI "
+            "consume them without a pkl toolchain.  When one of those outputs is "
+            "absent while the contract exists, the app was never generated (or the "
+            "artifact was deleted): the platform reads a manifest that does not "
+            "exist, and the app fails to deploy or register.  File existence is a "
+            "fully deterministic check that needs no pkl (BLDX-1414).  The two "
+            "app/generated artifacts are resolved against BOTH layouts — the "
+            "single-entrypoint app/generated/ path and a bundle's per-entrypoint "
+            "app/generated/<entrypoint>/ path — because hard-coding the "
+            "single-entrypoint prefix made the rule unsatisfiable on every bundle: "
+            "the finding named a path the contract never emits, and its remedy "
+            "(regenerate and commit) could not clear it."
         ),
         short_description=(
             "contract/app.pkl exists but an expected generated artifact "
@@ -409,12 +415,28 @@ RULES: tuple[RuleDefinition, ...] = (
             "artifacts ``pkl eval`` is expected to produce is absent:\n"
             "\n"
             "* ``atlan.yaml``\n"
-            "* ``app/generated/manifest.json``\n"
-            "* ``app/generated/_input.py``\n"
+            "* ``manifest.json``\n"
+            "* ``_input.py``\n"
             "\n"
             "These are the outputs the deployment pipeline and the SDK read at "
             "runtime; a missing one means the contract was never generated (or an "
             "output was deleted).\n"
+            "\n"
+            "**Both contract layouts satisfy this rule.**  A single-entrypoint "
+            "contract emits ``manifest.json`` and ``_input.py`` at "
+            "``app/generated/``; a contract declaring an ``entrypoints`` block (a "
+            "multi-entrypoint bundle) emits one copy per entrypoint at "
+            "``app/generated/<entrypoint>/`` and nothing at the top level.  The "
+            "check requires the path the contract actually declares: a non-bundle "
+            "must carry the top-level file (a same-named file in a subdirectory "
+            "does not count), and a bundle must carry a copy under *every* "
+            "declared entrypoint (one generated copy does not cover the rest).  "
+            "``atlan.yaml`` stays in scope for both — a bundle root emits it "
+            "too.\n"
+            "\n"
+            "Unlike K010, which exempts bundles outright, this rule checks the "
+            "declared layout so its coverage is preserved: a bundle that was never "
+            "generated has no per-entrypoint copy either, and still fires.\n"
             "\n"
             "**Fix:** regenerate from the contract —\n"
             "\n"
@@ -1395,6 +1417,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "Never hand-edit the generated ``artifact_schemas.json``: it is a "
             "pkl eval output and the next toolkit run reverts the edit.\n"
             "\n"
+            "**Model-declared fields are exempt, and need no suppression.** A "
+            "``FileReference`` field carrying the SDK's ``AssetArtifact`` marker "
+            "is already declared -- by ``pyatlan_v9``'s ``Asset`` rather than by "
+            "a field map -- and the SDK's interceptor validates it against the "
+            "whole model. The asset hand-off is 500+ types and 4000+ properties, "
+            "so any envelope authored for one is a partial restatement of "
+            "``Asset``, and picking ``required`` from what one connector happens "
+            "to emit encodes a connector-local observation as a cross-app "
+            "contract. The commonest case needs nothing from the app at all: "
+            "``ExtractionOutput.transformed_files`` is the SDK's own field, so "
+            "every subclass of it inherits the exemption (FND-1863).\n"
+            "\n"
             "**Suppress** with ``# conformance: ignore[K016] <reason>`` on the "
             "field declaration, or on the contract class definition for a field "
             "inherited from a base. Suppressing states that this hand-off is "
@@ -1812,6 +1846,101 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k020"
+        ),
+    ),
+    RuleDefinition(
+        id="K021",
+        canonical_reference=(
+            "atlan-mysql-app app/generated/_input.py — `AppInputContract` subclasses "
+            "`ExtractionInput` and redeclares no filter field, so it inherits "
+            '`include_filter: FilterMap | str` and the SDK\'s mode="before" coercer. '
+            "Re-typing the field locally is what drops the json_schema_extra that "
+            "coercer keys on, which is why the inherited shape is the compliant one."
+        ),
+        fix_locus=FixLocus.CONTRACT,
+        scope=RuleScope.APP,
+        name="FilterFieldRejectsAeString",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.26.0",
+        orthogonal_gate="tests",
+        rationale=(
+            "K018 checks that an include_*/exclude_* arg is declared on the "
+            "entrypoint's Input contract; it deliberately does not look at the "
+            "field's type. That leaves the type half of the same hand-off "
+            "unchecked, and the type is what breaks next. Since "
+            "contract-toolkit 0.9.0 the Automation Engine renders filters as flat "
+            "top-level JSON strings — '{}' or '{\"^db$\": [\"^schema$\"]}' — not "
+            "structured objects. A contract that types the field as a strict dict "
+            "with no string-acceptance path rejects that string, and the run dies "
+            "at Pydantic validation. Where K018's failure is fail-open (a dropped "
+            "key silently defaults, and an empty include-filter crawls "
+            "everything), K021's is fail-closed: the whole workflow crashes before "
+            "it starts. Nothing else catches it statically — pkl compiles the "
+            "manifest with no visibility into the Python model, and the model "
+            "itself is well-formed; the mismatch only surfaces at runtime, on the "
+            "tenant, as a crash the customer sees. It is the class atlan-looker-app "
+            "and atlan-fabric-app hit (CONNECT-1333 / CONNECT-1389). The rule keys "
+            "on two exact, structural acceptance conditions — a str union "
+            "(including a bare ExtractionInput subclass that inherits "
+            "FilterMap | str), or an app-local mode='before' validator — and "
+            "stays silent whenever the contract chain cannot be fully resolved, "
+            "so it prefers a false negative to a false positive. Redeclaring a "
+            "strict dict under ExtractionInput is not safe: the live SDK coercer "
+            "opts out when the type override drops json_schema_extra."
+        ),
+        short_description=(
+            "An entrypoint Input contract types an include_*/exclude_* filter as a "
+            "strict dict that rejects the flat JSON string the Automation Engine "
+            "sends"
+        ),
+        full_description=(
+            "An ``include_*`` / ``exclude_*`` filter field on the entrypoint's "
+            "Python ``Input`` contract is typed as a (possibly ``Annotated``) "
+            'strict ``dict`` — with no ``str`` union and no ``mode="before"`` '
+            "validator — so it cannot accept the value the Automation Engine "
+            "actually sends.\n"
+            "\n"
+            "Since contract-toolkit 0.9.0 the AE renders include/exclude filters "
+            "as flat top-level JSON **strings** (``'{}'``, "
+            '``\'{"^db$": ["^schema$"]}\'``), not structured objects. Pydantic '
+            "validates the incoming string against a strict ``dict`` field, the "
+            "coercion fails, and the workflow crashes at validation before it does "
+            "any work — the fail-closed sibling of K018's fail-open dropped-key "
+            "case. This is the CONNECT-1333 / CONNECT-1389 class.\n"
+            "\n"
+            "**Fix** — make the field accept the string, any one of:\n"
+            "\n"
+            "* **union with ``str``** — ``include_filter: FilterMap | str`` (or "
+            "``dict[str, list[str]] | str``). Pydantic then tries the ``str`` arm "
+            "and the JSON string validates;\n"
+            "* **mix in ``ExtractionInput`` without redeclaring a strict dict** — "
+            "``application_sdk.templates.contracts.sql_metadata.ExtractionInput`` "
+            "already types the fields as ``FilterMap | str``. A type override "
+            "(``include_filter: dict[str, Any]``) drops the SDK "
+            "``json_schema_extra`` the live ``_coerce_filter`` keys on, so the "
+            "inherited validator does **not** coerce the AE string; or\n"
+            "* **add your own before-validator** — a "
+            '``@field_validator("<field>", mode="before")`` (or a '
+            '``mode="before"`` ``@model_validator``) on the contract that coerces '
+            "the string yourself. An ``after``-mode validator does **not** count: "
+            "it runs after field validation, so the string is already rejected.\n"
+            "\n"
+            "This is the type half of the same hand-off K018 guards by field name; "
+            "an app can pass K018 (the field is declared) and still fail K021 (the "
+            "declared type is wrong). Both are WARN and app-scoped, and both no-op "
+            "on any repo without ``app/generated/``.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K021] <reason>`` on the "
+            "``Input`` class definition (or the comment-only line directly above "
+            "it) — for example when the string is genuinely coerced by a path the "
+            "static check cannot follow.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k021"
         ),
     ),
 )

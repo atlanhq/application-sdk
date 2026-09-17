@@ -22,6 +22,14 @@ existing one, a second config path, a parallel error hierarchy. Two ways means
 every future reader must learn which is current, and every future change must be
 made twice or diverge.
 
+**The error scheme is deliberate.** `NonRetryableError` and `RetryableError` are
+intentionally the only two base classes, and `AAF-{COMPONENT}-{ID:03d}` is the
+intentional code format. A proposal for a third base, a deeper hierarchy or a
+different scheme is not a finding. A handler that raises the wrong leaf, or
+swallows the original exception, is — and it will use the same nouns. You can
+tell those apart from the code; nothing downstream of you can from the sentence,
+so do not soften a defect report into something that reads as a suggestion.
+
 ## What earns a finding here
 
 Structural opinions are the easiest to inflate and the easiest to ignore, so

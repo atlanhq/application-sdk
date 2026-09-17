@@ -15,6 +15,7 @@
           "app_name": "miner",
           "credential": "{{credential}}",
           "agent_json": "{{agent-json}}",
+          "extraction_method": "{{extraction-method}}",
           "credential_guid": "{{credential-guid}}",
           "lookback_days": "{{lookback-days}}",
           "max_queries": "{{max-queries}}"

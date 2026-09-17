@@ -1,0 +1,43 @@
+/// Fixture: NativeApp that models `extraction-method` so the properties loop
+/// emits it and the default-emit guard skips (no duplicate key).
+/// Pair of `native_app_pipeline.pkl`, which does not model the widget.
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Connectors.pkl"
+import "../../src/Config.pkl"
+
+name = "native-app-extraction-method"
+connector = Connectors.POSTGRES
+icon = "https://assets.atlan.com/assets/postgres.svg"
+workflowType = "PostgresWorkflow"
+
+credentialCommonFields {
+  new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
+    }
+  }
+}
+
+uiConfig = new Config.UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["extraction-method"] = new Config.TextInput {
+          title = "Extraction method"
+          defaultValue = "direct"
+          hide = true
+        }
+        ["credential-guid"] = new Config.CredentialInput {
+          credType = "atlan-connectors-native-app-extraction-method"
+        }
+      }
+    }
+  }
+}

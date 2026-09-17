@@ -87,6 +87,21 @@ For detailed documentation, see:
 
 from typing import TYPE_CHECKING
 
+# Imported eagerly, unlike every other re-export below, because ``lazy`` is both
+# an exported function and the name of the submodule defining it. Python binds
+# a submodule onto its package the first time that submodule is loaded, so if
+# the first load happened anywhere other than here — a consumer importing
+# ``application_sdk.testing.integration.lazy`` directly, or ``__getattr__``
+# resolving ``Lazy`` / ``is_lazy`` first — ``integration.lazy`` would be the
+# module and ``from application_sdk.testing.integration import lazy`` would hand
+# back something that is not callable. Loading it here means the first load
+# always happens before anyone can observe it, and the ``from`` rebinds the
+# name to the function. The module is a few stdlib imports, none of the cost
+# the lazy conversion protects against. The names stay in ``_LAZY_EXPORTS``
+# and the ``TYPE_CHECKING`` block so the three parallel lists remain complete;
+# ``__getattr__`` simply never fires for them.
+from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
+
 if TYPE_CHECKING:
     # The eager form, for static readers only. griffe builds
     # docs/agents/sdk-capabilities.md from this file's AST and pyright resolves
@@ -270,13 +285,16 @@ def __getattr__(name: str) -> object:
     """Import the submodule owning *name* on first access (PEP 562)."""
     from importlib import import_module  # noqa: PLC0415
 
-    if name in _LAZY_SUBMODULES:
-        value: object = import_module(f".{name}", __name__)
+    # Exports are checked before the submodule shortcut so that a name shared
+    # by a submodule and one of its functions resolves to the function — the
+    # documented import — never to the module.
+    module_name = _LAZY_EXPORTS.get(name)
+    if module_name is not None:
+        value: object = getattr(import_module(module_name, __name__), name)
+    elif name in _LAZY_SUBMODULES:
+        value = import_module(f".{name}", __name__)
     else:
-        module_name = _LAZY_EXPORTS.get(name)
-        if module_name is None:
-            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-        value = getattr(import_module(module_name, __name__), name)
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     # Cache on the module so repeat access skips this path entirely.
     globals()[name] = value
     return value

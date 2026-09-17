@@ -20,6 +20,7 @@ from uuid import uuid4
 from temporalio import activity
 
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
+from application_sdk.app.build_identity import build_identity
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
@@ -35,6 +36,10 @@ from application_sdk.observability.logger_adaptor import get_logger
 if TYPE_CHECKING:
     from application_sdk.errors.base import AppError
     from application_sdk.execution.errors import ApplicationError
+    from application_sdk.execution.heartbeat import (
+        NoopHeartbeatController,
+        TemporalHeartbeatController,
+    )
 
 logger = get_logger(__name__)
 
@@ -200,6 +205,78 @@ class TaskContext:
     inherit the fleet-wide one. Resolved alongside
     :attr:`progress_watchdog`, for the same reasons."""
 
+    evicted_heartbeat_details: list[Any] | None = None
+    """Heartbeat details the previous attempt last sent before a worker eviction.
+
+    Set by the workflow-side eviction retry loop when it re-dispatches this task
+    as a new activity execution. Temporal scopes heartbeat details to an
+    execution, so the new execution's ``activity.info().heartbeat_details`` is
+    empty; the heartbeat controller falls back to these so
+    ``get_heartbeat_details()`` keeps resuming from the last checkpoint across
+    pod shutdowns. ``None`` (the default, and for runs dispatched by a workflow
+    that predates this field) means nothing to carry."""
+
+
+def _evicted_heartbeat_details(
+    controller: TemporalHeartbeatController | NoopHeartbeatController,
+) -> tuple[Any, ...]:
+    """The heartbeat details to attach to this attempt's ``WorkerEvicted`` failure.
+
+    Best effort, and it has to be: these details ride on the failure so the
+    workflow-side eviction loop can hand them to the re-dispatched execution,
+    but the failure itself is what makes that re-dispatch happen. If attaching
+    them fails the eviction must still be reported cleanly, so every branch here
+    degrades to ``()`` rather than raising.
+
+    Two states, not one: ``last_sent_details()`` returns ``None`` when this
+    attempt never beat (carry forward what the previous one left) and ``()``
+    when it beat with no details (carry nothing — it superseded the checkpoint).
+
+    The encodability check is the load-bearing part. ``ApplicationError.details``
+    are serialised by the data converter at completion time, and temporalio
+    handles a converter failure by discarding the whole failure and substituting
+    a bare ``ApplicationFailureInfo`` with **no type** — which
+    ``_is_worker_evicted`` then does not recognise, so the eviction silently
+    stops being re-dispatched and burns the task's retry budget instead. That is
+    strictly worse than carrying nothing. Details are unvalidated on the
+    ``heartbeat_timeout_seconds=None`` path in particular, where a
+    ``NoopHeartbeatController`` holds values Temporal has never encoded.
+    """
+    try:
+        sent = controller.last_sent_details()
+        details = sent if sent is not None else controller.get_last_heartbeat_details()
+    except Exception:
+        logger.warning(
+            "Could not read heartbeat details while reporting a worker eviction; "
+            "the re-dispatched execution will restart from its last durable "
+            "checkpoint instead of resuming",
+            exc_info=True,
+        )
+        return ()
+
+    if not details:
+        return ()
+
+    try:
+        converter = activity.payload_converter()
+    except RuntimeError:  # not inside an activity context
+        return details  # conformance: ignore[E007] no activity context means no failure conversion ahead; there is nothing for the encodability check to guard
+
+    try:
+        converter.to_payloads(details)
+    except Exception:
+        logger.warning(
+            "Heartbeat details for task could not be serialised onto the worker-"
+            "eviction failure and were dropped; the re-dispatched execution will "
+            "restart from its last durable checkpoint. Heartbeat with values the "
+            "Temporal data converter can encode (a HeartbeatDetails model, or "
+            "plain JSON-native values)",
+            exc_info=True,
+        )
+        return ()
+
+    return details
+
 
 def _current_workflow_type() -> str:
     """The run's workflow type, or ``""`` outside an activity context.
@@ -293,6 +370,7 @@ def create_activity_from_task(
             NoopHeartbeatController,
             TemporalHeartbeatController,
             auto_heartbeat_loop,
+            stop_heartbeat_task,
         )
         from application_sdk.execution.progress_telemetry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             closed_hold_observer,
@@ -318,6 +396,9 @@ def create_activity_from_task(
         app_context = AppContext(
             app_name=context.app_name,
             app_version=app_metadata.version,
+            # Activities run outside the workflow sandbox, so the image ENV is
+            # readable directly here (FND-1684).
+            build_id=build_identity(),
             run_id=run_id,
             workflow_id=context.workflow_id,
             correlation_id=correlation_id,
@@ -337,12 +418,15 @@ def create_activity_from_task(
         app_instance._context = app_context
 
         # Create heartbeat controller based on configuration
+        carried_details = tuple(context.evicted_heartbeat_details or ())
         if context.heartbeat_timeout_seconds is not None:
             heartbeat_controller: (
                 TemporalHeartbeatController | NoopHeartbeatController
-            ) = TemporalHeartbeatController()
+            ) = TemporalHeartbeatController(fallback_details=carried_details)
         else:
-            heartbeat_controller = NoopHeartbeatController()
+            heartbeat_controller = NoopHeartbeatController(
+                fallback_details=carried_details
+            )
 
         task_exec_context = TaskExecutionContext(
             app_context=app_context,
@@ -642,8 +726,15 @@ def create_activity_from_task(
                     )
 
                     _sever_cause_chain(e)
+                    # Carry this attempt's last heartbeat details on the failure:
+                    # the workflow-side eviction loop re-dispatches the task as a
+                    # NEW activity execution, and Temporal does not carry
+                    # heartbeat details across executions. Fall back to what the
+                    # previous attempt left behind when this one never beat.
+                    evicted_details = _evicted_heartbeat_details(heartbeat_controller)
                     raise ApplicationError(
                         "Activity terminated because the worker pod is shutting down",
+                        *evicted_details,
                         type=WORKER_EVICTED_TYPE,
                         non_retryable=True,
                     ) from e
@@ -662,20 +753,9 @@ def create_activity_from_task(
             finally:
                 try:
                     if heartbeat_task is not None:
-                        stop_event.set()
-                        try:
-                            await asyncio.wait_for(heartbeat_task, timeout=1.0)
-                        # conformance: ignore[E004] cleanup path cancelling heartbeat task in finally; all exceptions handled by inner cancel+log
-                        except (TimeoutError, Exception):
-                            heartbeat_task.cancel()
-                            try:
-                                await heartbeat_task
-                            # conformance: ignore[E004] heartbeat cancel cleanup in finally; debug-logged with exc_info; swallow is intentional
-                            except Exception:
-                                logger.debug(
-                                    "Heartbeat task did not cancel cleanly",
-                                    exc_info=True,
-                                )
+                        await stop_heartbeat_task(
+                            heartbeat_task, stop_event, context.task_name
+                        )
                 finally:
                     # Nested so the app-instance clears survive the heartbeat
                     # cleanup above raising — in particular a ``CancelledError``,
@@ -748,6 +828,9 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
     else:
         retry_policy = TemporalRetryPolicy(
             maximum_attempts=task_metadata.retry_max_attempts,
+            initial_interval=timedelta(
+                seconds=task_metadata.retry_initial_interval_seconds
+            ),
             maximum_interval=timedelta(
                 seconds=task_metadata.retry_max_interval_seconds
             ),

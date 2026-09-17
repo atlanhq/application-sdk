@@ -2,7 +2,9 @@
 
 I001 — DockerfileWrongBaseImage
     The final-stage FROM must resolve to exactly
-    ``registry.atlan.com/public/app-runtime-base:3``.  Any other base image —
+    ``registry.atlan.com/public/app-runtime-base:3`` or its GHCR mirror
+    ``ghcr.io/atlanhq/app-runtime-base:3`` (the same image, published to both
+    registries at one digest).  Any other base image —
     wrong registry, wrong tag (including ``:latest``), or raw upstream Python —
     is flagged.  A build-arg base (``ARG BASE_IMAGE=<approved>`` +
     ``FROM ${BASE_IMAGE}``) is accepted when the ARG's default is the approved
@@ -76,7 +78,23 @@ RULE_I003 = "I003"
 RULE_I004 = "I004"
 RULE_I005 = "I005"
 
+# The approved base image, in both registries it is published to.
+#
+# Harbor's is the canonical spelling: it is what remediation writes, and what
+# the build-and-publish workflow's ``use_ghcr_base`` redirect rewrites at build
+# time. GHCR's is the same image -- harbor-release.yaml pushes both registries
+# at an identical digest -- accepted so a Dockerfile that names the mirror
+# directly is not "fixed" back to Harbor by a remediation run. Until this
+# accepted the mirror, pointing a Dockerfile at GHCR failed I001 and the
+# 4-hourly connector-pulse remediation restored the Harbor pin: the migration
+# reverted itself six times a day.
 _REQUIRED_BASE = "registry.atlan.com/public/app-runtime-base:3"
+_GHCR_BASE = "ghcr.io/atlanhq/app-runtime-base:3"
+_APPROVED_BASES = (_REQUIRED_BASE, _GHCR_BASE)
+# ``<repo>:`` prefixes, lower-cased, for the "right image, wrong tag" branch.
+_APPROVED_REPO_PREFIXES = tuple(
+    b.rsplit(":", 1)[0].lower() + ":" for b in _APPROVED_BASES
+)
 
 __all__ = [
     "SERIES",
@@ -369,7 +387,9 @@ def _check_i001(
     file: str,
     directives: dict[int, tuple[frozenset[str] | None, str | None]],
 ) -> list[Finding]:
-    """I001: final-stage FROM must be ``registry.atlan.com/public/app-runtime-base:3``."""
+    """I001: final-stage FROM must be the approved base -- Harbor's
+    ``registry.atlan.com/public/app-runtime-base:3`` or its GHCR mirror
+    ``ghcr.io/atlanhq/app-runtime-base:3`` -- optionally digest-pinned."""
     final_from: _Instruction | None = None
     for instr in instructions:
         if instr.keyword == "FROM":
@@ -405,32 +425,32 @@ def _check_i001(
             )
             return [_make_finding(RULE_I001, file, final_from.line, msg, directives)]
 
-    # Accept the canonical base image with or without a digest pin.
+    # Accept either approved base image with or without a digest pin.
     # Digest pinning is strictly stronger than the v3 major tag alone —
     # it still guarantees the same base while adding content-addressability.
     _DIGEST_RE = re.compile(r"@sha256:[a-f0-9]{64}$", re.IGNORECASE)
-    if image == _REQUIRED_BASE or (
-        image.startswith(_REQUIRED_BASE + "@") and _DIGEST_RE.search(image)
-    ):
-        return []
+    for base in _APPROVED_BASES:
+        if image == base or (image.startswith(base + "@") and _DIGEST_RE.search(image)):
+            return []
 
+    approved = f"'{_REQUIRED_BASE}' (or its GHCR mirror '{_GHCR_BASE}')"
     image_lower = image.lower()
-    if image_lower.startswith("registry.atlan.com/public/app-runtime-base:"):
+    if image_lower.startswith(_APPROVED_REPO_PREFIXES):
         tag = image.split(":")[-1]
         msg = (
-            f"FROM uses tag ':{tag}' for app-runtime-base; must be exactly "
-            f"'{_REQUIRED_BASE}' (v3 major tag only). "
+            f"FROM uses tag ':{tag}' for app-runtime-base; must be the v3 major "
+            f"tag only: {approved}. "
             "':latest', dev-branch tags, and pinned patch versions are rejected."
         )
     elif "app-runtime-base" in image_lower:
         msg = (
             f"FROM '{image}' references app-runtime-base from the wrong registry "
-            f"or path; must be '{_REQUIRED_BASE}'."
+            f"or path; must be {approved}."
         )
     else:
         msg = (
             f"FROM '{image}' is not the approved base image; must be "
-            f"'{_REQUIRED_BASE}'. Raw upstream images, cgr.dev images, and "
+            f"{approved}. Raw upstream images, cgr.dev images, and "
             "other registries are not permitted for app containers."
         )
     return [_make_finding(RULE_I001, file, final_from.line, msg, directives)]

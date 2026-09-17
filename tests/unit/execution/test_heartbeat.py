@@ -25,6 +25,7 @@ from application_sdk.execution.heartbeat import (
     NoopHeartbeatController,
     TemporalHeartbeatController,
     auto_heartbeat_loop,
+    stop_heartbeat_task,
 )
 from application_sdk.execution.progress import ProgressWatchdogMode
 
@@ -950,3 +951,116 @@ class TestStallWatchdogWiring:
             assert not stalls.calls, f"budget={bad_budget} enforced a stall"
             assert not run.stall_infos and not run.recorded
             assert run.beats == 3
+
+
+class TestStopHeartbeatTask:
+    """The shared shutdown: contain the task's own death, never the caller's."""
+
+    async def test_obedient_task_stops_gracefully(self) -> None:
+        stop = asyncio.Event()
+
+        async def obedient() -> None:
+            await stop.wait()
+
+        task = asyncio.ensure_future(obedient())
+        await stop_heartbeat_task(task, stop, "obedient")
+        assert task.done() and not task.cancelled()
+
+    async def test_stuck_task_is_cancelled_without_escaping(self) -> None:
+        stop = asyncio.Event()
+
+        async def stuck() -> None:
+            await asyncio.sleep(60)
+
+        task = asyncio.ensure_future(stuck())
+        await stop_heartbeat_task(task, stop, "stuck")
+        assert task.cancelled()
+
+    async def test_outer_cancellation_is_not_swallowed(self) -> None:
+        # A cancellation aimed at the CALLER while it waits here must
+        # propagate — swallowing it would make a cancelled activity report
+        # completion. The heartbeat task's own CancelledError (the other
+        # tests) must still be contained.
+        stop = asyncio.Event()
+
+        async def stuck() -> None:
+            await asyncio.sleep(60)
+
+        heartbeat = asyncio.ensure_future(stuck())
+
+        async def caller() -> str:
+            await stop_heartbeat_task(heartbeat, stop, "stuck")
+            return "completed"
+
+        caller_task = asyncio.ensure_future(caller())
+        await asyncio.sleep(0.05)
+        caller_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller_task
+        assert heartbeat.cancelled()
+
+
+# ---------------------------------------------------------------------------
+# Fallback details carried across a worker-eviction re-dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestCarriedHeartbeatDetails:
+    """A re-dispatched execution has no Temporal heartbeat details of its own;
+    the controller falls back to the details the evicted attempt last sent."""
+
+    def test_temporal_controller_falls_back_when_temporal_has_none(
+        self, fake_temporalio
+    ) -> None:
+        fake_temporalio.info.return_value.heartbeat_details = ()
+        ctl = TemporalHeartbeatController(fallback_details=({"position": 7},))
+        assert ctl.get_last_heartbeat_details() == ({"position": 7},)
+
+    def test_temporal_details_win_over_fallback(self, fake_temporalio) -> None:
+        # Same-execution retry: Temporal's own details are fresher than anything carried.
+        ctl = TemporalHeartbeatController(fallback_details=("stale",))
+        assert ctl.get_last_heartbeat_details() == ("resumed", 42)
+
+    def test_temporal_last_sent_details_tracks_this_attempt(
+        self, fake_temporalio
+    ) -> None:
+        ctl = TemporalHeartbeatController()
+        assert ctl.last_sent_details() is None
+        ctl.heartbeat("p", 1)
+        assert ctl.last_sent_details() == ("p", 1)
+
+    def test_noop_controller_fallback_and_last_sent(self) -> None:
+        ctl = NoopHeartbeatController(fallback_details=("carried",))
+        assert ctl.last_sent_details() is None
+        assert ctl.get_last_heartbeat_details() == ("carried",)
+        ctl.heartbeat("x")
+        assert ctl.get_last_heartbeat_details() == ("x",)
+        assert ctl.last_sent_details() == ("x",)
+
+    # "never beat" and "beat with no details" are different answers, and an
+    # empty tuple cannot hold both. Collapsing them lets an attempt that has
+    # already moved past the carried checkpoint re-carry it on the next
+    # eviction, so the execution after that redoes completed work.
+
+    def test_temporal_empty_beat_supersedes_the_carried_checkpoint(
+        self, fake_temporalio
+    ) -> None:
+        ctl = TemporalHeartbeatController(fallback_details=({"position": 7},))
+        ctl.heartbeat()
+        assert ctl.last_sent_details() == ()
+
+    def test_noop_empty_beat_supersedes_the_carried_checkpoint(self) -> None:
+        ctl = NoopHeartbeatController(fallback_details=({"position": 7},))
+        ctl.heartbeat()
+        assert ctl.last_sent_details() == ()
+        # get_last_heartbeat_details() still reads the carried value: like
+        # Temporal's own, it answers "what did the previous attempt leave",
+        # which an empty beat by this attempt does not change.
+        assert ctl.get_last_heartbeat_details() == ({"position": 7},)
+
+    def test_keepalive_alone_is_not_a_beat(self, fake_temporalio) -> None:
+        # heartbeat_keepalive() re-sends whatever heartbeat() last set; on its
+        # own it establishes nothing, so the carried checkpoint still stands.
+        ctl = TemporalHeartbeatController(fallback_details=({"position": 7},))
+        ctl.heartbeat_keepalive()
+        assert ctl.last_sent_details() is None

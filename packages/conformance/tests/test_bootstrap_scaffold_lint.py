@@ -29,7 +29,12 @@ import sys
 import tomllib
 
 import pytest
-from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import (
+    MANAGED_ACTION_FILES,
+    MANAGED_CONNECTOR_REVIEW_FILES,
+    MANAGED_WORKFLOWS,
+    render,
+)
 from conformance.cli import _cmd_bootstrap
 
 # The strictest ruff lint selection seen in the fleet, plus "I" (import
@@ -63,8 +68,10 @@ _PY_SCAFFOLDS = tuple(
 # test_force_written_system_deps_file_is_whitespace_clean below.
 _TEMPLATE_RENDERED_FORCE_WRITTEN = (
     *MANAGED_ACTION_FILES,
+    *((dest, template) for dest, template, _ in MANAGED_CONNECTOR_REVIEW_FILES),
     *((f".github/workflows/{name}", name) for name in MANAGED_WORKFLOWS),
     (".claude/skills/remediate/SKILL.md", "remediate.md"),
+    ("CLAUDE.md", "connector-review-claude.md"),
 )
 
 # Per-repo render parameters to check the templates under, beyond the

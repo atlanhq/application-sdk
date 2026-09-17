@@ -72,6 +72,10 @@ class PublishRequest:
             ``app/generated/``. LM materialises each entry as a ConfigMap.
         release_model: ``semver`` or empty.
         created_by: Actor attribution.
+        commit_sha: Full git SHA the image was built from. GM stores it on the
+            version so a worker's baked ``commit_sha`` resolves to a release
+            even for semver apps, whose ``version``/``image`` carry no SHA.
+            Omitted when empty, matching the release workflow.
     """
 
     app_id: str
@@ -88,6 +92,7 @@ class PublishRequest:
     app_configs: str = ""
     release_model: str = ""
     created_by: str = ""
+    commit_sha: str = ""
 
 
 class PublishBodyError(ValueError):
@@ -161,6 +166,9 @@ def build(request: PublishRequest) -> dict[str, object]:
     if request.created_by.strip():
         body["created_by"] = request.created_by.strip()
 
+    if request.commit_sha.strip():
+        body["commit_sha"] = request.commit_sha.strip()
+
     return body
 
 
@@ -186,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--app-configs", default="")
     parser.add_argument("--release-model", default="")
     parser.add_argument("--created-by", default="")
+    parser.add_argument("--commit-sha", default="")
     args = parser.parse_args(argv)
 
     request = PublishRequest(
@@ -203,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         app_configs=args.app_configs,
         release_model=args.release_model,
         created_by=args.created_by,
+        commit_sha=args.commit_sha,
     )
     try:
         print(json.dumps(build(request), indent=2, sort_keys=True))

@@ -113,6 +113,21 @@ What the connector supplies is the part that is genuinely per-source: the endpoi
 
 **Two counters, two scopes.** `reset_http_fake_sources` is autouse, so every test starts with a clean `requests`, `unmatched` and `hits(pattern)` — per-test questions. `unused_routes()` reads a separate lifetime counter the reset does not clear, because "is this route dead fixture weight?" can only be answered once the whole suite has run. Assert it from a session-scoped teardown, not from inside a test.
 
+### Serving the fake to a peer, not just in-process
+
+`start()` binds loopback on an ephemeral port by default, which is what a fixture wants and what `http_fake_source_factory` gives you. The e2e tier needs the other shape: the same fake, reachable by a *different container* on a compose network, so the connector under test dials it by service name instead of a vendor host.
+
+```python
+fake = HttpFakeSource(name="my-source", bind_host="0.0.0.0", port=8080)
+```
+
+Two things follow from a wildcard bind, both deliberate:
+
+- **`base_url` reports loopback, not the wildcard.** `0.0.0.0` is an accept-on-every-interface instruction, not an address anything can connect to; echoing it back would hand callers a URL that fails at connect time, far from its cause.
+- **A peer cannot use `base_url` at all.** There is nothing in the process from which its reachable name could be derived, so tell it out of band — the compose service name in the environment variable the connector already reads for its host.
+
+This is what lets one corpus and one fake back both tiers: the integration suite starts the fake in-process on loopback, and e2e runs the identical route table in a container. Reverse-engineering the source's envelopes is the expensive part, and it is done once.
+
 **Two assertions worth making in every fake-source suite.** `assert not fake.unmatched` catches an extract calling an endpoint the fake does not model — without it the test asserted against a 404. `assert not fake.unused_routes()` catches the reverse: a route carried in the fixture that nothing exercises.
 
 ### Why a star-import and not a `pytest11` plugin

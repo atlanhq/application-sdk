@@ -1,5 +1,119 @@
 # Changelog
 
+## v3.34.3 (September 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.2...v3.34.3
+
+### Bug Fixes
+
+- raise instead of publishing raw source rows for an Asset mapper (FND-2056) (#3785) (by @cmgrote in [2c567bf](https://github.com/atlanhq/application-sdk/commit/2c567bf))
+- wait out a pod that has not reconciled instead of failing the leg (#3788) (by @cmgrote in [ee7ac71](https://github.com/atlanhq/application-sdk/commit/ee7ac71))
+- survive a blobstorage gateway that cannot reach Keycloak (FND-2076) (#3790) (by @cmgrote in [d07199c](https://github.com/atlanhq/application-sdk/commit/d07199c))
+
+
+## v3.34.2 (September 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.1...v3.34.2
+
+### Bug Fixes
+
+- bake app_version + commit_sha into images and report them on worker events (#3746) (by @Lalit3716-atlan in [f6c9ee8](https://github.com/atlanhq/application-sdk/commit/f6c9ee8))
+- carry heartbeat details across worker-eviction re-dispatch (#3757) (by @rishab-atlan in [1526b12](https://github.com/atlanhq/application-sdk/commit/1526b12))
+- stop materialising an empty prefix as a single file (#3760) (by @vaibhavatlan in [ca06059](https://github.com/atlanhq/application-sdk/commit/ca06059))
+- let DAPR_LOG_LEVEL win over LOG_LEVEL for forwarded daprd lines (#3721) (by @Lalit3716-atlan in [ea58297](https://github.com/atlanhq/application-sdk/commit/ea58297))
+
+
+## v3.34.1 (September 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.0...v3.34.1
+
+### Bug Fixes
+
+- mirror metadata_template_key onto object_filter in sdr:fetch_metadata (#3748) (by @Lalit3716-atlan in [e55bf3b](https://github.com/atlanhq/application-sdk/commit/e55bf3b))
+- publish directly to Event Ingress when the Dapr eventstore binding fails (#3745) (by @Lalit3716-atlan in [8abf16c](https://github.com/atlanhq/application-sdk/commit/8abf16c))
+
+
+## v3.34.0 (September 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.33.2...v3.34.0
+
+### Features
+
+- declare SDK-owned asset artifacts with the model, not a hand-written envelope (#3725) (by @cmgrote in [2d85710](https://github.com/atlanhq/application-sdk/commit/2d85710))
+
+### Bug Fixes
+
+- surface the Dapr error body in BindingError (#3716) (by @Lalit3716-atlan in [9904283](https://github.com/atlanhq/application-sdk/commit/9904283))
+- skip the teardown connection-delete when the run created nothing (#3723) (by @cmgrote in [c8b0d87](https://github.com/atlanhq/application-sdk/commit/c8b0d87))
+- make the pkl pin one readable value so a local eval predicts CI (#3726) (by @cmgrote in [8532754](https://github.com/atlanhq/application-sdk/commit/8532754))
+- stop asserting a worker claimed a stalled DAG node (#3734) (by @cmgrote in [7b96773](https://github.com/atlanhq/application-sdk/commit/7b96773))
+
+
+## v3.33.2 (September 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.33.1...v3.33.2
+
+### Bug Fixes
+
+- bind `lazy` eagerly so the package export is the function, not its submodule (#3693) (by @prateek11rai in [d724b0e](https://github.com/atlanhq/application-sdk/commit/d724b0e))
+- keep the transform tasks' FileReferences and verify the tree before handing the prefix on (#3700) (by @cmgrote in [02589f9](https://github.com/atlanhq/application-sdk/commit/02589f9))
+
+
+## v3.33.1 (September 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.33.0...v3.33.1
+
+### Bug Fixes
+
+- FND-1766 submit the seed's DAG to AE, not through Heracles (#3684) (by @cmgrote in [08e1155](https://github.com/atlanhq/application-sdk/commit/08e1155))
+
+
+## v3.33.0 (September 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.32.1...v3.33.0
+
+### Features
+
+- verify workflow-setup routes resolve on the tenant (FND-1667) (#3666) (by @cmgrote in [c6689e6](https://github.com/atlanhq/application-sdk/commit/c6689e6))
+- seed lineage parents through publish, not pyatlan (FND-1648) (#3661) (by @hritika-atlan in [229babc](https://github.com/atlanhq/application-sdk/commit/229babc))
+- correct the build-identity evidence, keep the argument (FND-1683) (#3673) (by @cmgrote in [750c913](https://github.com/atlanhq/application-sdk/commit/750c913))
+- teardown through connection-delete, not a hand-rolled purge (FND-1724) (#3676) (by @cmgrote in [b3ba5ad](https://github.com/atlanhq/application-sdk/commit/b3ba5ad))
+
+### Bug Fixes
+
+- stop serving artifact_schemas.json as the setup form (FND-1682) (#3669) (by @cmgrote in [b0cd1b3](https://github.com/atlanhq/application-sdk/commit/b0cd1b3))
+- setup-route check must assert the form renders, not just resolve (FND-1680) (#3668) (by @cmgrote in [69577e7](https://github.com/atlanhq/application-sdk/commit/69577e7))
+- e2e version verify must stop reading its own input (FND-1684) (#3670) (by @cmgrote in [bd11110](https://github.com/atlanhq/application-sdk/commit/bd11110))
+- tell a respelled setup-form field from a stale image (FND-1683) (#3675) (by @cmgrote in [796397e](https://github.com/atlanhq/application-sdk/commit/796397e))
+- teardown must name no app, or its DAG is replaced (FND-1724) (#3677) (by @cmgrote in [affecc8](https://github.com/atlanhq/application-sdk/commit/affecc8))
+- FND-1725 read the setup form from the app pod, past LM's cache (#3679) (by @sachi-atlan in [e9aabae](https://github.com/atlanhq/application-sdk/commit/e9aabae))
+
+
+## v3.32.1 (September 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.32.0...v3.32.1
+
+### Bug Fixes
+
+- let HttpFakeSource bind beyond loopback (#3654) (by @vaibhavatlan in [0a6a298](https://github.com/atlanhq/application-sdk/commit/0a6a298))
+- let HttpFakeSource serve TLS (#3657) (by @vaibhavatlan in [bb94049](https://github.com/atlanhq/application-sdk/commit/bb94049))
+
+
+## v3.32.0 (September 02, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.31.0...v3.32.0
+
+### Features
+
+- FND-1125 integration-kit fidelity — workflow_id stamp, local-scratch fixture, pre-run guards, shared preflight capture (#3579) (by @sachi-atlan in [5325ecd](https://github.com/atlanhq/application-sdk/commit/5325ecd))
+- persist the gate's verdict to the results store (CONNECT-1142) (#3529) (by @prateek11rai in [8f65ab4](https://github.com/atlanhq/application-sdk/commit/8f65ab4))
+
+### Bug Fixes
+
+- carry the backend verdict on storage failures instead of losing it (#3469) (by @vaibhavatlan in [fc02866](https://github.com/atlanhq/application-sdk/commit/fc02866))
+- orphaned-attempt rows, gate heartbeat, crash-marked outcome rows (#3521) (by @fyzanshaik-atlan in [d5b1d21](https://github.com/atlanhq/application-sdk/commit/d5b1d21))
+
+
 ## v3.31.0 (August 31, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.30.0...v3.31.0
