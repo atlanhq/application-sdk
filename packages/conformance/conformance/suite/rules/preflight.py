@@ -36,6 +36,12 @@ _HELP_BASE = (
 _EXISTING_RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="F001",
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — the preflight logic is the Handler's own "
+            "`preflight_check` method. No @task in the four reference apps registers the "
+            "activity name 'preflight'; that name belongs to the SDK gate, and registering it "
+            "shadows the gate itself."
+        ),
         scope=RuleScope.APP,
         name="ReservedPreflightActivityName",
         tier=EnforcementTier.BLOCK,
@@ -74,6 +80,12 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="F002",
+        canonical_reference=(
+            "atlan-metabase-app app/handler.py — `preflight_check` is the single "
+            "implementation and app/connector.py declares no preflight-named @task beside it. "
+            "Two implementations drift, and only one of them is the one the gate actually "
+            "runs."
+        ),
         scope=RuleScope.APP,
         name="DuplicateInWorkflowPreflight",
         tier=EnforcementTier.WARN,
@@ -106,6 +118,12 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="F003",
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — a failing check is "
+            "`PreflightCheck(passed=False, error=AuthError(message=..., suggested_action=..., "
+            "cause=e))`. A `passed=False` with no typed error gives the customer a red row "
+            "and no reason for it."
+        ),
         scope=RuleScope.APP,
         name="UntypedPreflightCheckFailure",
         tier=EnforcementTier.BLOCK,
@@ -141,6 +159,12 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="F004",
+        canonical_reference=(
+            "atlan-openapi-app app/handler.py — `preflight_check` reads only fields the "
+            "entrypoint's Input contract declares. A metadata key the contract does not carry "
+            "is one the orchestrator has no way to send, so the check silently evaluates an "
+            "absent value."
+        ),
         scope=RuleScope.APP,
         name="PreflightMetadataContractParity",
         tier=EnforcementTier.WARN,
@@ -185,6 +209,13 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="F005",
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — the failed auth probe inside `preflight_check` "
+            "logs at DEBUG and puts the customer-facing outcome in the PreflightCheck's typed "
+            "error instead. The comment there states why: the gate levels the verdict row "
+            "itself, and a handler-authored WARNING is both a duplicate and invisible under "
+            "the customer's default ERROR filter."
+        ),
         scope=RuleScope.APP,
         name="PreflightFailureLoggedAsWarning",
         tier=EnforcementTier.WARN,
@@ -228,6 +259,12 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
 _CONTRACT_RULES = (
     RuleDefinition(
         id="F006",
+        canonical_reference=(
+            "atlan-metabase-app app/handler.py — `async def preflight_check(self, input: "
+            "PreflightInput) -> PreflightOutput`, both types imported from "
+            "application_sdk.handler.contracts. The gate and the setup UI both read the "
+            "result through those types, so a legacy dict return drifts from both at once."
+        ),
         name="PreflightHandlerContract",
         scope=RuleScope.APP,
         tier=EnforcementTier.BLOCK,
@@ -242,6 +279,13 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F007",
+        canonical_reference=(
+            "atlan-openapi-app app/handler.py — every failed row is built from a typed error "
+            "that sets both message and suggested_action, e.g. "
+            "`SpecUrlRequiredError(message=..., suggested_action='Set spec_url to the OpenAPI "
+            "spec's HTTPS URL ...').to_failure_details()`, so the blocked customer reads a "
+            "next step, not only a reason."
+        ),
         name="PreflightFailureAction",
         scope=RuleScope.APP,
         tier=EnforcementTier.BLOCK,
@@ -256,6 +300,12 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F008",
+        canonical_reference=(
+            "atlan-openapi-app app/handler.py — `_check_spec_source` catches AppError and "
+            "returns the failed row with `exc.to_failure_details()`; only the gate-transient "
+            "categories are re-raised, on purpose, so the gate fails open on a blip instead "
+            "of the handler crashing on an expected failure."
+        ),
         name="PreflightExpectedFailureRaised",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -270,6 +320,12 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F009",
+        canonical_reference=(
+            "atlan-openapi-app app/handler.py — the verdict is derived from the same check "
+            "list that is returned: any failed name in `_MANDATORY_CHECKS` gives NOT_READY, "
+            "otherwise the advisory rows stay visible without flipping the status, so status "
+            "and rows cannot contradict each other."
+        ),
         name="PreflightVerdictAggregation",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -284,6 +340,12 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F010",
+        canonical_reference=(
+            "atlan-mysql-app tests/unit/test_handler.py — "
+            "`test_gate_path_input_gives_the_same_verdict` builds the PreflightInput the gate "
+            "builds (credentials, credentials_by_name, entrypoint, timeout_seconds) and "
+            "asserts the handler reaches the same verdict as the setup-form path."
+        ),
         name="PreflightGateInputParity",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -298,6 +360,12 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F011",
+        canonical_reference=(
+            "atlan-openapi-app app/handler.py — the probe is awaited through "
+            "`OpenAPIApiClient(timeout=...)`, an async client constructed with a deadline "
+            "sized from `input.timeout_seconds`; no synchronous driver call runs on the event "
+            "loop and no executor wait is left without a deadline."
+        ),
         name="PreflightBlockingProbe",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -312,6 +380,12 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F012",
+        canonical_reference=(
+            "atlan-openapi-app app/handler.py — `_probe_timeout` returns `max(1.0, min(30.0, "
+            "budget * 0.8))`, so the probe's own timeout stays strictly inside the enforced "
+            "gate budget; the module comment explains that a floor above the budget makes the "
+            "deadline decorative."
+        ),
         name="PreflightBudgetOverride",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -326,6 +400,11 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F013",
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — `preflight_check` closes its SQLClient in a "
+            "`finally: await client.close()`, so cleanup is awaited, bounded and runs on "
+            "every exit path, including the typed-failure early return."
+        ),
         name="PreflightCancellationCleanup",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -340,6 +419,12 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F014",
+        canonical_reference=(
+            "atlan-openapi-app app/handler.py — failed rows carry `exc.to_failure_details()`, "
+            "never `str(exc)` or a traceback, so the redacted and capped `cause_repr` is all "
+            "that leaves the handler; tests/unit/test_handler.py pins that a presigned URL's "
+            "signature does not reach the check row."
+        ),
         name="PreflightFailureExposure",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -354,6 +439,12 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F015",
+        canonical_reference=(
+            "application_sdk/execution/_temporal/preflight_gate.py — the gate's live "
+            "configuration surface. A manifest key or helper import that this module no "
+            "longer reads is dead configuration, and the SDK version it was removed in "
+            "decides whether a finding applies."
+        ),
         name="PreflightRemovedGateContract",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -368,6 +459,13 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F016",
+        canonical_reference=(
+            "atlan-openapi-app tests/unit/test_handler.py — drives the real "
+            "`OpenAPIConnectorHandler.preflight_check` per verdict: READY on a reachable URL, "
+            "NOT_READY with typed rows on 403, connect error, redirect and missing spec_url, "
+            "and no signature leak on a presigned URL. Registering those under "
+            "`pytest.mark.preflight_conformance` is what turns them into F016 coverage."
+        ),
         name="PreflightBehaviorContract",
         scope=RuleScope.APP,
         tier=EnforcementTier.BLOCK,
@@ -410,6 +508,12 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F019",
+        canonical_reference=(
+            "atlan-openapi-app app/handler.py — `preflight_check` is an async method on the "
+            "Handler subclass, calls helpers defined in the same module, and builds "
+            "PreflightCheck rows with literal names: the shape static analysis resolves "
+            "fully, so nothing on it is reported as unresolved."
+        ),
         name="PreflightAnalysisCoverage",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
@@ -424,6 +528,12 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F020",
+        canonical_reference=(
+            "application_sdk/handler/contracts.py — `PreflightStatus` documents PARTIAL as "
+            "display-only: the gate treats it exactly like READY. An app that wants a failed "
+            "check to mean anything returns NOT_READY; one that wants the run to proceed "
+            "returns READY and keeps the typed failed row visible."
+        ),
         name="DeprecatedPartialPreflight",
         scope=RuleScope.APP,
         tier=EnforcementTier.BLOCK,
@@ -438,6 +548,11 @@ _CONTRACT_RULES = (
     ),
     RuleDefinition(
         id="F021",
+        canonical_reference=(
+            "atlan-mysql-app app/handler.py — its inline directives cite live ids "
+            "(E004) with a named owner and a review date. A directive that cited P034 "
+            "now cites F003 the same way; the id is the only part that changes."
+        ),
         name="RetiredPreflightSuppression",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,

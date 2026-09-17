@@ -63,6 +63,13 @@ impact: the worker never comes up, so every workflow the customer runs on that a
 down from the moment the release deploys into their tenant — a full-app outage caused by
 a name collision no test exercises and no build gate sees.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — the preflight logic is the Handler's own
+  `preflight_check` method. No @task in the four reference apps registers the activity
+  name 'preflight'; that name belongs to the SDK gate, and registering it shadows the
+  gate itself.
+
 The SDK reserves the activity name `{app_name}:preflight` for the injected preflight
 gate and registers it unconditionally on the worker. An app `@task` whose effective
 activity name is `preflight` (an explicit `@task(name="preflight")` or a bare `@task` on
@@ -88,6 +95,12 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 preflight implementations that inevitably drift. The gate runs preflight_check, so the
 app-owned activity is redundant — the exact anti-pattern the SDK-native gate eliminates.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/handler.py — `preflight_check` is the single implementation and
+  app/connector.py declares no preflight-named @task beside it. Two implementations
+  drift, and only one of them is the one the gate actually runs.
+
 When an app declares a `Handler.preflight_check` and also registers its own
 preflight-named `@task` (any `@task` whose effective name contains `preflight` as a
 token but is not the reserved gate name — that exact case is F001), the two preflight
@@ -112,6 +125,12 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 PREFLIGHT_CHECK_FAILED code, so the Automation Engine and the UI lose the
 category/code/audience/suggested_action the typed form carries on the wire. Customer
 impact: failed workflows lose actionable typed failure details.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — a failing check is `PreflightCheck(passed=False,
+  error=AuthError(message=..., suggested_action=..., cause=e))`. A `passed=False` with
+  no typed error gives the customer a red row and no reason for it.
 
 A `PreflightCheck` with proven or default `passed=False` and no typed `error=` (absent,
 or the literal `None`) is an untyped failure: the gate falls back to the generic
@@ -141,6 +160,12 @@ metadata key that is not a field on any entrypoint Input contract is silently ab
 defensive input.metadata.get(key, default) read then passes vacuously with the wrong
 config. No runtime signal can catch this class of silent drift; the static check is the
 only guard.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/handler.py — `preflight_check` reads only fields the entrypoint's
+  Input contract declares. A metadata key the contract does not carry is one the
+  orchestrator has no way to send, so the check silently evaluates an absent value.
 
 The preflight gate does not forward the live UI form: it rebuilds
 `PreflightInput.metadata` from the extraction input's `model_dump()`
@@ -177,6 +202,14 @@ why the source was not ready (FND-901). The SDK gate emits the single 'Preflight
 outcome' row and levels it from the verdict — a handler-authored WARNING is both the
 wrong level and a duplicate record.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — the failed auth probe inside `preflight_check` logs at
+  DEBUG and puts the customer-facing outcome in the PreflightCheck's typed error
+  instead. The comment there states why: the gate levels the verdict row itself, and a
+  handler-authored WARNING is both a duplicate and invisible under the customer's
+  default ERROR filter.
+
 A `logger.warning(...)` call inside a `Handler.preflight_check` override logs below the
 customer log view's default ERROR filter, so a failed probe reported this way never
 reaches the customer. The gate owns preflight outcome logging: it emits one `Preflight
@@ -204,6 +237,13 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 **Rationale:** Customer impact: Missing types and legacy output dictionaries hide contract drift from
 both UI and workflow consumers.
 
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/handler.py — `async def preflight_check(self, input:
+  PreflightInput) -> PreflightOutput`, both types imported from
+  application_sdk.handler.contracts. The gate and the setup UI both read the result
+  through those types, so a legacy dict return drifts from both at once.
+
 Declare SDK PreflightInput and PreflightOutput on every supported handler.
 
 [Investigation, remediation and verification
@@ -219,6 +259,14 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Rationale:** Customer impact: A typed error with no action still leaves a blocked workflow without a
 usable next step.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/handler.py — every failed row is built from a typed error that
+  sets both message and suggested_action, e.g. `SpecUrlRequiredError(message=...,
+  suggested_action='Set spec_url to the OpenAPI spec's HTTPS URL
+  ...').to_failure_details()`, so the blocked customer reads a next step, not only a
+  reason.
 
 Provide nonblank failure messages and audience-appropriate suggested actions.
 
@@ -236,6 +284,13 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 **Rationale:** The target origin-based gate applies hard mode to handler raises; a raised transient is
 no longer a fail-open request.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/handler.py — `_check_spec_source` catches AppError and returns the
+  failed row with `exc.to_failure_details()`; only the gate-transient categories are
+  re-raised, on purpose, so the gate fails open on a blip instead of the handler
+  crashing on an expected failure.
+
 Return expected typed preflight failures rather than letting them escape.
 
 [Investigation, remediation and verification
@@ -251,6 +306,13 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Rationale:** Advisory failures must not become mandatory blocks and a successful status must not hide
 failed checks.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/handler.py — the verdict is derived from the same check list that
+  is returned: any failed name in `_MANDATORY_CHECKS` gives NOT_READY, otherwise the
+  advisory rows stay visible without flipping the status, so status and rows cannot
+  contradict each other.
 
 Keep READY, PARTIAL and NOT_READY consistent with check outcomes.
 
@@ -268,6 +330,13 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 **Rationale:** The injected gate runs before workflow-body normalization, so a UI check can succeed
 while the gate sees different inputs.
 
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app tests/unit/test_handler.py —
+  `test_gate_path_input_gives_the_same_verdict` builds the PreflightInput the gate
+  builds (credentials, credentials_by_name, entrypoint, timeout_seconds) and asserts the
+  handler reaches the same verdict as the setup-form path.
+
 Preserve the selected entrypoint and supply routable credentials before the gate.
 
 [Investigation, remediation and verification
@@ -283,6 +352,13 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Rationale:** Blocking I/O or unbounded executor waits can outlive the gate and stall worker
 activities.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/handler.py — the probe is awaited through
+  `OpenAPIApiClient(timeout=...)`, an async client constructed with a deadline sized
+  from `input.timeout_seconds`; no synchronous driver call runs on the event loop and no
+  executor wait is left without a deadline.
 
 Keep source probes awaitable and bounded across every connection phase.
 
@@ -300,6 +376,12 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 **Rationale:** Floors, extra margins and equal nested timeout boundaries turn healthy probes into
 timeout races.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/handler.py — `_probe_timeout` returns `max(1.0, min(30.0, budget *
+  0.8))`, so the probe's own timeout stays strictly inside the enforced gate budget; the
+  module comment explains that a floor above the budget makes the deadline decorative.
+
 Keep probe and retry deadlines inside the remaining gate budget.
 
 [Investigation, remediation and verification
@@ -314,6 +396,12 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 > Release owned preflight resources without blocking the event loop.
 
 **Rationale:** Cancellation of an await does not terminate a driver thread or release its resources.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — `preflight_check` closes its SQLClient in a `finally:
+  await client.close()`, so cleanup is awaited, bounded and runs on every exit path,
+  including the typed-failure early return.
 
 Release owned preflight resources without blocking the event loop.
 
@@ -331,6 +419,13 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 **Rationale:** Typed wire fields and traceback locals are independent channels through which secrets
 can escape.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/handler.py — failed rows carry `exc.to_failure_details()`, never
+  `str(exc)` or a traceback, so the redacted and capped `cause_repr` is all that leaves
+  the handler; tests/unit/test_handler.py pins that a presigned URL's signature does not
+  reach the check row.
+
 Keep raw exception and credential values out of preflight outputs and logs.
 
 [Investigation, remediation and verification
@@ -347,6 +442,13 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 **Rationale:** SDK PR #3685 removes the old gate contract. Until its release floor is established this
 is an upgrade advisory, not proof of current incompatibility.
 
+### What correct looks like
+
+- **Compliant example:** application_sdk/execution/_temporal/preflight_gate.py — the gate's live configuration
+  surface. A manifest key or helper import that this module no longer reads is dead
+  configuration, and the SDK version it was removed in decides whether a finding
+  applies.
+
 Migrate removed mode overrides and private gate-classification helpers.
 
 [Investigation, remediation and verification
@@ -362,6 +464,14 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Rationale:** Customer impact: Static shape checks cannot prove verdict semantics, probe coverage,
 recovery, or resource lifetime. Missing and skipped scenarios are incomplete evidence.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app tests/unit/test_handler.py — drives the real
+  `OpenAPIConnectorHandler.preflight_check` per verdict: READY on a reachable URL,
+  NOT_READY with typed rows on 403, connect error, redirect and missing spec_url, and no
+  signature leak on a presigned URL. Registering those under
+  `pytest.mark.preflight_conformance` is what turns them into F016 coverage.
 
 Execute registered real-handler scenarios for each applicable entrypoint.
 
@@ -410,6 +520,13 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Rationale:** An undiscovered handler or unresolved contract must not be mistaken for conforming code.
 
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/handler.py — `preflight_check` is an async method on the Handler
+  subclass, calls helpers defined in the same module, and builds PreflightCheck rows
+  with literal names: the shape static analysis resolves fully, so nothing on it is
+  reported as unresolved.
+
 Report unresolved preflight dispatch and contracts instead of a clean result.
 
 [Investigation, remediation and verification
@@ -425,6 +542,13 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Rationale:** Customer impact: PARTIAL allows extraction to proceed and can conceal a blocking source
 failure behind a degraded verdict. Explicit readiness decisions prevent this ambiguity.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk/handler/contracts.py — `PreflightStatus` documents PARTIAL as
+  display-only: the gate treats it exactly like READY. An app that wants a failed check
+  to mean anything returns NOT_READY; one that wants the run to proceed returns READY
+  and keeps the typed failed row visible.
 
 PARTIAL is deprecated for app preflight results. Return NOT_READY for blocking failures
 or READY when extraction can proceed, preserving truthful typed check evidence.
@@ -446,6 +570,12 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 **Rationale:** Customer impact: a reviewed, justified carve-out silently turns into an unexplained
 finding on the next conformance run, and the developer has no signal that the stale
 directive is the cause.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — its inline directives cite live ids (E004) with a named
+  owner and a review date. A directive that cited P034 now cites F003 the same way; the
+  id is the only part that changes.
 
 The preflight rules moved from the P-series to the F-series: P032-P035 became F001-F004
 and P047 became F005. The suppression parser matches ids as plain strings, so a `#

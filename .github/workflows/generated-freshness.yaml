@@ -61,9 +61,16 @@ permissions:
   pull-requests: write
 
 # One in-flight run per PR: avoid duplicate sticky comments on rapid pushes.
+#
+# Queued, not cancelled, for the reason spelled out in commits.yaml: a cancelled
+# run leaves a `cancelled` check run on the head SHA, and Renovate treats any
+# check run that is not success/skipped/neutral as a yellow branch and refuses
+# to merge — permanently, since that SHA never re-runs. This is the other
+# reusable consumer repos call that carries a concurrency group, so it can
+# strand a Renovate PR the same way.
 concurrency:
   group: generated-freshness-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   freshness:
@@ -93,7 +100,7 @@ jobs:
       # were committed).
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.12.13"
+          version: "0.12.15"
 
       # Absolute ref, not `./…`: this is a reusable workflow, so a relative
       # action path would resolve against the CONSUMER repo's workspace, which

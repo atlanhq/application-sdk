@@ -37,6 +37,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P040",
+        canonical_reference=(
+            "atlan-mysql-app app/sql/ — ten extraction templates, none of which references "
+            "a bare DuckDB reserved keyword as an identifier. Where the source's own "
+            "column name collides, quote it in the template; the failure otherwise appears "
+            "only at transform time, on the customer's data."
+        ),
         scope=RuleScope.APP,
         name="TransformTemplateReservedKeyword",
         tier=EnforcementTier.WARN,

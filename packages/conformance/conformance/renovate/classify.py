@@ -426,9 +426,21 @@ def extract_deps(pr: RenovatePR) -> tuple[PRDep, ...]:
     return ()
 
 
-def auto_merge_expected(category: Category, update_type: UpdateType) -> bool:
+def auto_merge_expected(
+    category: Category,
+    update_type: UpdateType,
+    repo_automerge_mode: str = "unknown",
+) -> bool:
     """
     Mirror renovate-config/default.json auto-merge policy.
+
+    ``repo_automerge_mode`` is the REPO's own posture (see
+    discover_org_consumers.automerge_mode): a "soft" repo appends a blanket
+    ``automerge: false`` rule after the preset's, so no lane auto-merges there
+    however this function reads the shared policy. "auto"/"unknown" defer to the
+    lane rules below. This gates first because a soft repo's green unarmed PR is
+    the design — reporting it as stuck buried the one real instance among 27 on
+    2026-09-17.
 
     lock-maintenance → always auto (uv.lock refresh, in-range)
     github-actions   → always auto (incl. major; validated by CI gate)
@@ -436,6 +448,8 @@ def auto_merge_expected(category: Category, update_type: UpdateType) -> bool:
     sdk-package      → always human (runtime SDK bumps are a deliberate merge)
     python-dep       → always human (edits pyproject.toml constraint → out-of-range)
     """
+    if repo_automerge_mode == "soft":
+        return False
     if category == Category.LOCK_MAINTENANCE:
         return True
     if category == Category.GITHUB_ACTIONS:
@@ -474,7 +488,7 @@ def blocking_reason(
     because classify() computes them after the model is first constructed.
     """
     now = now or datetime.now(timezone.utc)
-    if not auto_merge_expected(category, update_type):
+    if not auto_merge_expected(category, update_type, pr.repo_automerge_mode):
         return BlockingReason.AWAITING_HUMAN_REVIEW
 
     # For auto-merge-eligible PRs, check gate conditions in priority order.
@@ -504,13 +518,20 @@ def blocking_reason(
     # parked — it falls through to AWAITING_APPROVAL as it did before these
     # signals existed. Is anything actually driving a green PR to merge?
     if pr.checks_state == ChecksState.GREEN:
-        approved = pr.review_decision == "APPROVED"
-
-        # Precise signal: approval is in and every gate is green, yet auto-merge
-        # was never armed. With a required merge queue nothing will ever merge it
-        # — the dangerous "looks healthy, parked forever" case. Detected
-        # immediately (no age threshold) because there is nothing left to wait for.
-        if approved and not pr.auto_merge_enabled:
+        # Precise signal: every gate is green, yet auto-merge was never armed.
+        # Nothing will ever merge it — the dangerous "looks healthy, parked
+        # forever" case. Detected immediately (no age threshold) because there is
+        # nothing left to wait for: Renovate arms at PR CREATION, long before any
+        # check could have gone green, so green-and-unarmed is already anomalous.
+        #
+        # This used to also require review_decision == "APPROVED", which made it
+        # unreachable across most of the fleet: GitHub returns an EMPTY
+        # reviewDecision when the repo's ruleset requires 0 approving reviews,
+        # even with an atlan-ci approval posted. 52 of 60 open lane PRs sampled
+        # on 2026-09-17 read empty, so the real instances all fell through to the
+        # age backstop and reported as merely stale. The approval was never part
+        # of the claim anyway — arming does not wait on it.
+        if not pr.auto_merge_enabled:
             return BlockingReason.AUTOMERGE_NOT_ARMED
 
         # Age backstop: green + eligible but still open past the staleness
@@ -532,7 +553,7 @@ def classify(pr: RenovatePR) -> RenovatePR:
     """
     cat = categorize(pr)
     ut = derive_update_type(pr)
-    ame = auto_merge_expected(cat, ut)
+    ame = auto_merge_expected(cat, ut, pr.repo_automerge_mode)
 
     now = datetime.now(timezone.utc)
     # pr.created_at may be tz-aware or naive; normalise.
