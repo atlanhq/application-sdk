@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.34.3
-source-sha:    819296c70cad734c0143547270100ea581ee61d3
-source-date:   2026-09-08T06:08:14+05:30
+source-sha:    20f139637065242e55ce7f7991e0c662b90882c0
+source-date:   2026-09-17T17:03:23+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2400,7 +2400,6 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `PreflightGateMode`
 
 - **Import:** `from application_sdk.handler import PreflightGateMode`
-- **Also importable from:** `application_sdk.handler`
 - **Signature:** `class PreflightGateMode`
 - **Summary:** The gate's posture for one app: what it does with a source it cannot certify.
 - **Defined in:** `application_sdk/handler/contracts.py`
