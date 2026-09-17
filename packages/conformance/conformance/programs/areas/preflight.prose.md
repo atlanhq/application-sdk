@@ -60,7 +60,9 @@ no fix of its own and routes to residue as an investigation pointer.
 
 ### Continuity
 
-Input-driven: re-render when any `*.py` file under `scope` changes.
+Input-driven: re-render when any `*.py` file under `scope` changes, or any
+file under `.github/workflows/`, `deploy/`, `deployment/`, `helm/` or `k8s/`
+(the deployment declarations F015 reads).
 
 ### Execution
 

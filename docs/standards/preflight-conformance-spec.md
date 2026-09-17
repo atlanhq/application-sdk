@@ -79,7 +79,7 @@ Implementation references:
 
 ## Proposed rule allocation
 
-P043 through P049 from the latest comment are already occupied. The inspected catalog allocates P050 and P051 as well. F006 through F019 below are allocated in the executable catalog. Catalog tests enforce uniqueness.
+The preflight rules occupy their own F-series: F001–F005 (formerly P032–P035 and P047) and F006–F020. The vacated P-ids stay unused. Catalog tests enforce uniqueness and pin the F-series to exactly F001–F020.
 
 Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level corresponding to BLOCK. F001, F003, F006, F007, and F016–F018 use BLOCK (SARIF `error`). F003/F006/F007 enforce typed failures, handler contracts, and definite missing failure guidance. Behavioral rules require complete passing scenarios when explicitly run with `--with-tests`; missing or skipped scenarios are errors. Static-only runs still report behavioral checks as not evaluated. Other preflight rules remain WARN because their findings include heuristics, unresolved analysis, or SDK-version-dependent advice. `--exit-zero` preserves error findings while returning a successful process exit for soft enforcement. Further BLOCK promotions require the graduation criteria below. Do not promote heuristic findings merely because a rollout deadline arrives.
 

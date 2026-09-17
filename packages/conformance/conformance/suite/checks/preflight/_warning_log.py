@@ -17,7 +17,7 @@ from conformance.suite.schema.findings import Finding
 
 from ._common import Registry, iter_function_nodes, reachable_preflight_sites
 
-_P047 = "F005"
+_F005 = "F005"
 
 _WARNING_METHODS = frozenset({"warning", "warn"})
 
@@ -46,7 +46,7 @@ def scan(reg: Registry) -> list[Finding]:
             findings.append(
                 make_finding(
                     filename=src.rel,
-                    rule_id=_P047,
+                    rule_id=_F005,
                     node=node,
                     message=(
                         "logger.warning() inside preflight_check — a preflight "

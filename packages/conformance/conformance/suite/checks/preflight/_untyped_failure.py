@@ -9,7 +9,7 @@ from conformance.suite.schema.findings import Finding
 
 from ._common import Registry, is_preflightcheck_call, sdk_preflightcheck_locals
 
-_P034 = "F003"
+_F003 = "F003"
 _MISSING = object()
 
 
@@ -128,7 +128,7 @@ def scan(reg: Registry) -> list[Finding]:
             findings.append(
                 make_finding(
                     filename=src.rel,
-                    rule_id=_P034 if definite_failure else "F019",
+                    rule_id=_F003 if definite_failure else "F019",
                     node=node,
                     message=message,
                     directives=src.directives,

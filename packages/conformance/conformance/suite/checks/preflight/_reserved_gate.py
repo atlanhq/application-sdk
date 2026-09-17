@@ -25,8 +25,8 @@ from ._common import (
     task_decorator,
 )
 
-_P032 = "F001"
-_P033 = "F002"
+_F001 = "F001"
+_F002 = "F002"
 
 
 def _handler_site_for(
@@ -68,7 +68,7 @@ def scan(reg: Registry) -> list[Finding]:
                     findings.append(
                         make_finding(
                             filename=src.rel,
-                            rule_id=_P032,
+                            rule_id=_F001,
                             node=func,
                             message=(
                                 "@task registers the activity name 'preflight', which "
@@ -84,7 +84,7 @@ def scan(reg: Registry) -> list[Finding]:
                     findings.append(
                         make_finding(
                             filename=src.rel,
-                            rule_id=_P033,
+                            rule_id=_F002,
                             node=func,
                             message=(
                                 f"@task '{name}' is a second preflight implementation "

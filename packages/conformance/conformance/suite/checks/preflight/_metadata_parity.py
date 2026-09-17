@@ -25,7 +25,7 @@ from conformance.suite.schema.findings import Finding
 
 from ._common import Registry, contracts_for_site, find_preflight_check_sites, norm_key
 
-_P035 = "F004"
+_F004 = "F004"
 
 
 def scan(reg: Registry) -> list[Finding]:
@@ -55,7 +55,7 @@ def scan(reg: Registry) -> list[Finding]:
                 findings.append(
                     make_finding(
                         filename=src.rel,
-                        rule_id=_P035,
+                        rule_id=_F004,
                         node=node,
                         message=(
                             f"preflight_check reads metadata key '{key}', which is not a "

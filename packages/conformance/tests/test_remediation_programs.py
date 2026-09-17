@@ -124,13 +124,24 @@ def test_every_catalog_series_has_a_remediation_area() -> None:
     """
     from conformance.suite.rules import CATALOG
 
+    series = {rule_id[0] for rule_id in CATALOG}
     covered: set[str] = set()
     for area in ALL_AREAS:
         covered.update(
             re.findall(r'series: "([A-Z])"', _read(f"areas/{area}.prose.md"))
         )
-    orphaned = sorted({rule_id[0] for rule_id in CATALOG} - covered)
+    orphaned = sorted(series - covered)
     assert not orphaned, f"catalog series with no remediation area: {orphaned}"
+
+    tagging = _read("functions/detect-violations.prose.md")
+    tagged = dict(re.findall(r"`([A-Z])` → `([a-z-]+)`", tagging))
+    untagged = sorted(series - set(tagged))
+    assert not untagged, f"detect-violations tags no area for series: {untagged}"
+    assert set(tagged.values()) <= set(ALL_AREAS), tagged
+
+    dispatch = _read("functions/remediate-finding.prose.md")
+    undispatched = [area for area in ALL_AREAS if f"| `{area}` |" not in dispatch]
+    assert not undispatched, f"remediate-finding dispatches no row for: {undispatched}"
 
 
 @pytest.mark.parametrize("area", ALL_AREAS)
