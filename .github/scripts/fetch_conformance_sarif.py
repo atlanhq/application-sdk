@@ -60,6 +60,11 @@ import sys
 
 ARTIFACT_PREFIX = "conformance-"
 ARTIFACT_SUFFIX = "-sarif"
+# The suite's upload retry cannot reuse the first attempt's artifact name (a
+# failed FinalizeArtifact holds that name for the whole run and CreateArtifact
+# then 409s), so a series whose SARIF landed on the second attempt is published
+# as `conformance-<series>-sarif-retry`. Both names carry the same `<series>.sarif`.
+RETRY_SUFFIX = "-retry"
 
 
 def run_gh(args: list[str]) -> tuple[int, str]:
@@ -75,11 +80,17 @@ def run_gh(args: list[str]) -> tuple[int, str]:
 def series_name(artifact_name: str) -> str | None:
     """``conformance-<series>-sarif`` -> ``<series>``; None if it doesn't match.
 
+    ``conformance-<series>-sarif-retry`` maps to the same series: it is the
+    upload's second attempt, which is forced onto a distinct artifact name (see
+    ``RETRY_SUFFIX``), and it carries identical content.
+
     Guards against a zero-length series (``conformance--sarif``) and against
     the affixes overlapping on a too-short name.
     """
     if not artifact_name.startswith(ARTIFACT_PREFIX):
         return None
+    if artifact_name.endswith(RETRY_SUFFIX):
+        artifact_name = artifact_name[: -len(RETRY_SUFFIX)]
     if not artifact_name.endswith(ARTIFACT_SUFFIX):
         return None
     inner = artifact_name[len(ARTIFACT_PREFIX) : -len(ARTIFACT_SUFFIX)]
@@ -199,25 +210,34 @@ def download(repo: str, run_id: int, series: list[str], dest: str, gh=run_gh):
 
     Each series is fetched separately so one unretrievable artifact does not
     cost us the rest of the run's evidence.
+
+    Two candidate names per series, the plain one first: the series' SARIF is
+    published under ``-sarif-retry`` when the first upload attempt hit the
+    artifact service's finalize 403. Exactly one of the two exists in a run, so
+    the first name failing is the expected path on a retried leg, not an error
+    — only both failing is warned about.
     """
     os.makedirs(dest, exist_ok=True)
     got: list[str] = []
     for name in series:
-        rc, _ = gh(
-            [
-                "run",
-                "download",
-                str(run_id),
-                "--repo",
-                repo,
-                "--name",
-                f"{ARTIFACT_PREFIX}{name}{ARTIFACT_SUFFIX}",
-                "--dir",
-                dest,
-            ]
-        )
-        if rc == 0:
-            got.append(name)
+        base = f"{ARTIFACT_PREFIX}{name}{ARTIFACT_SUFFIX}"
+        for artifact_name in (base, f"{base}{RETRY_SUFFIX}"):
+            rc, _ = gh(
+                [
+                    "run",
+                    "download",
+                    str(run_id),
+                    "--repo",
+                    repo,
+                    "--name",
+                    artifact_name,
+                    "--dir",
+                    dest,
+                ]
+            )
+            if rc == 0:
+                got.append(name)
+                break
         else:
             print(f"::warning::series '{name}' failed to download from run {run_id}")
     return got

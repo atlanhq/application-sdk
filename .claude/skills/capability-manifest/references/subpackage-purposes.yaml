@@ -14,6 +14,7 @@ handler: HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth
 infrastructure: Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool)
 observability: Logging context — ExecutionContext, CorrelationContext, request/correlation helpers
 outputs: Output collectors and record models for Automation Engine
+pkl_version: The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate
 main: Dev entry point — run_dev_combined() and AppConfig for local execution and container startup
 server: FastAPI server, MCP integration, middleware, health endpoint
 storage: Object-store abstraction — factory, formats, batch, transfer, cloud bindings

@@ -540,7 +540,8 @@ say so.
   manifest.  Draft the required `app.pkl` addition and route to residue for the
   developer to apply.
 
-- **P030 SdrUploadNotCalled** (BLOCK) — no real `self.upload(...)` **call**
+- **P030 SdrUploadNotCalled** (BLOCK) — no real `self.upload(...)` or
+  `self.upload_refs(...)` **call**
   exists in any app source file outside `tests/` (matched on the AST, so a
   comment or docstring merely *mentioning* it does not clear the finding),
   making the `ENABLE_ATLAN_UPLOAD` gate structurally unreachable — OR a custom
@@ -572,8 +573,22 @@ say so.
   method or `run()` method, after extraction completes.  Route to residue for
   human confirmation.
 
+  **Which call to draft.**  `App.upload_refs(...)` (SDK 3.33.2) satisfies this
+  rule too, and is the one to propose whenever the hand-off is a *declaration*
+  — a `FileReference` list a fanned-out step produced — rather than one
+  directory this pod wrote.  It is a peer framework task over the same
+  `_upload_impl` body (same `ENABLE_ATLAN_UPLOAD` gate, same ADR-0014
+  dual-write routing) that lands every declared ref under one destination
+  prefix by reference and verifies the delivered tree against the declaration.
+  A `self.upload(local_path)` drafted where the transforms fanned out uploads
+  only the subset of files this pod happened to hold — green in a
+  single-container e2e, zero-to-partial in distributed production.  If the app
+  already calls `upload_refs`, there is no P030 finding to remedy: do not
+  propose a second upload.
+
 - **P042 SdrHandRolledUploadBridge** (WARN) — a custom `upload_to_atlan` that
-  **does** perform a real storage transfer, with no `self.upload(` anywhere in
+  **does** perform a real storage transfer, with neither `self.upload(` nor
+  `self.upload_refs(` anywhere in
   the app.  Anchored at the bridge definition.  Distinguish it from P030
   carefully: nothing is silently dropped here, so P030's silent-zero-asset
   language is wrong and the urgency is lower — the app works today.  What is
@@ -592,7 +607,10 @@ say so.
   Do **not** force a rewrite in the remediation loop: on v3 connectors whose
   transform outputs live in the deployment store at handoff, a naive swap to
   `self.upload(local_path)` passes single-container e2e and regresses
-  distributed production.  Draft the migration to `await self.upload(...)` and
+  distributed production.  `await self.upload_refs(...)` over the transforms'
+  declaration is the swap that does not — it streams from the deployment store
+  for the files this pod never held — so draft that where the app has a
+  declaration to hand it, and `await self.upload(...)` otherwise.  Either way
   route to residue for a human to sequence against a distributed e2e.  If the
   bridge exists because `App.upload()` cannot express something the app needs,
   record that in the residue as an SDK gap rather than a suppression.

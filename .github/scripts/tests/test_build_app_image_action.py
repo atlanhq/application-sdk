@@ -411,9 +411,12 @@ def test_pkl_is_downloaded_for_the_runners_architecture() -> None:
 
 def test_buildx_cache_scope_is_unchanged() -> None:
     text = _BUILD_ACTION.read_text(encoding="utf-8")
-    # `[^"]` rather than `\S`: the scope interpolates `${{ inputs.app-name }}`,
-    # which contains spaces.
-    scopes = set(re.findall(r"scope=([^\"]+)\"", text))
+    # `[^",]` rather than `\S`: the scope interpolates `${{ inputs.app-name }}`,
+    # which contains spaces — but it must still stop at the comma, because the
+    # cache spec is a CSV of attributes and `scope` is only one of them. Reading
+    # to the closing quote instead swept a later attribute into the "scope" and
+    # reported a change the build never made.
+    scopes = set(re.findall(r"scope=([^\",]+)", text))
     expected = "sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}"
     assert scopes == {expected}, (
         f"buildx cache scope changed to {scopes}. The scope was `sdr-<app-name>` "
@@ -437,9 +440,12 @@ def test_buildx_cache_scope_is_unchanged() -> None:
         "every run, a ~2 minute regression per leg that no assertion would "
         "otherwise catch."
     )
-    assert f'--cache-to "type=gha,mode=max,scope={expected}"' in text, (
-        "the `--cache-to` line was removed (or `mode=max` was dropped). Builds "
-        "would never write the cache, so every leg goes cold on the next run."
+    assert (
+        f'--cache-to "type=gha,mode=max,scope={expected},ignore-error=true"' in text
+    ), (
+        "the `--cache-to` line was removed, or `mode=max` or `ignore-error=true` "
+        "was dropped. Without the first two every leg goes cold on the next run; "
+        "without the third a cache-service write failure fails the build itself."
     )
 
 

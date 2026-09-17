@@ -76,26 +76,35 @@ import asyncio
 import dataclasses
 import os
 import time
-from collections.abc import Callable
-from decimal import Decimal
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
 
 import orjson
 from pydantic import ValidationError
 from temporalio import workflow as _temporal_workflow
+from typing_extensions import deprecated
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
+from application_sdk.common.asset_serialization import entity_bytes
+from application_sdk.common.asset_serialization import orjson_default as _orjson_default
+from application_sdk.common.entity_envelope import (
+    DEFAULT_ENVELOPE,
+    EntityDecorations,
+    EntityEnvelopePolicy,
+)
+from application_sdk.common.last_sync import resolve_last_sync_details
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
 )
 from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.contracts.base import OutputStatus
+from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
@@ -127,7 +136,10 @@ from application_sdk.templates.contracts.sql_metadata import (
     TransformInput,
     TransformOutput,
 )
-from application_sdk.templates.sql_app_errors import SqlProbeTimeoutError
+from application_sdk.templates.sql_app_errors import (
+    SqlProbeTimeoutError,
+    TransformedFileMissingError,
+)
 
 if TYPE_CHECKING:
     from pyatlan_v9.model.assets import Asset
@@ -421,25 +433,6 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
     )
 
 
-def _orjson_default(obj: Any) -> Any:
-    """Fallback serialiser for orjson — covers types it doesn't handle natively.
-
-    orjson natively serialises ``str``, ``int``, ``float``, ``bool``, ``None``,
-    ``list``, ``dict``, ``datetime``, ``date``, ``time``, ``UUID`` and
-    ``dataclass`` instances. SQL drivers commonly return ``Decimal`` for
-    numeric columns and occasionally ``bytes`` for blob columns; both fall
-    back to a JSON-safe representation here.
-    """
-    if isinstance(obj, Decimal):
-        return float(obj)
-    if isinstance(obj, (bytes, bytearray)):
-        return obj.decode("utf-8", errors="replace")
-    # conformance: ignore[E012] orjson default= protocol contractually requires TypeError to signal non-serialisable; replacing with AppError would break serialisation
-    raise TypeError(  # orjson default= protocol requires TypeError to signal non-serializable
-        f"Object of type {type(obj).__name__} is not JSON-serializable"
-    )
-
-
 class SqlApp(App):
     """Consolidated SQL metadata extraction App.
 
@@ -461,6 +454,46 @@ class SqlApp(App):
     need to iterate tables per-schema, paginate by database, or otherwise
     sequence fetches must override ``run()`` and call the ``extract_*``
     / ``transform_*`` activities directly in the order they need.
+
+    **The ``run()``-override surface.** Overriding ``run()`` is a documented
+    path, so everything an override needs to wire the pieces together is
+    public. Reaching for anything underscore-prefixed here means the surface
+    has a gap — raise it rather than working around it:
+
+    - ``extract_*`` / ``transform_*`` — the per-entity tasks themselves.
+    - :meth:`resolve_credential_ref` — produces the ``cred_ref`` that
+      :meth:`build_task_input` needs.
+    - :meth:`build_task_input` — builds a typed task input from the
+      top-level ``ExtractionInput``.
+    - :meth:`build_transform_input` — threads an extract's ``raw_file`` ref
+      into the matching transform's input.
+    - :meth:`collect_transformed_files` — turns the transforms' outputs into
+      the declaration ``App.verify_refs`` / ``App.upload_refs`` check
+      against. An override that adds an entity the default ``run()`` does
+      not drive must fold its refs in, or that entity's assets are dropped
+      from the upload silently.
+    - :meth:`finalize_extraction` — does that folding **and** verifies the
+      combined declaration. Prefer it to concatenating by hand: it is the
+      only way the extra entity gets asserted, because ``super().run()``
+      verifies the four refs it drove and then returns.
+
+    An override that adds a fifth entity therefore looks like::
+
+        async def run(self, input: ExtractionInput) -> ExtractionOutput:
+            base = await super().run(input)
+            cred_ref = self.resolve_credential_ref(input)
+            task_input = self.build_task_input(
+                ExtractionTaskInput, input, cred_ref=cred_ref
+            )
+            proc = await self.extract_procedures(task_input)
+            out = await self.transform_procedures(
+                self.build_transform_input(task_input, proc.raw_file)
+            )
+            return await self.finalize_extraction(base, [out])
+
+    A connector that also has to bridge the tree across an SDR store boundary
+    passes the finalised declaration to ``App.upload_refs`` — which verifies
+    its own delivery — and returns the prefix that comes back.
     """
 
     _app_registered: ClassVar[bool] = True  # abstract template, not concrete
@@ -484,6 +517,16 @@ class SqlApp(App):
     database_name_column: ClassVar[str] = "database_name"
     schema_name_column: ClassVar[str] = "schema_name"
     table_name_column: ClassVar[str] = "table_name"
+
+    # ── Transformed-output envelope (FND-2137) ──────────────────────────
+    #: How this connector's serialised entities are shaped. Declared once per
+    #: app, not per mapper: the envelope is a property of the downstream
+    #: contract, and per-mapper choice is how the fleet ended up with four
+    #: mutually incompatible ones. The default is flattened — see
+    #: :mod:`application_sdk.common.entity_envelope` for why, and for the
+    #: migration lever a connector uses when its released output is the
+    #: pyatlan-native shape.
+    entity_envelope: ClassVar[EntityEnvelopePolicy] = DEFAULT_ENVELOPE
 
     # =====================================================================
     # Public API: build_task_input (BLDX-1138)
@@ -1161,6 +1204,36 @@ class SqlApp(App):
 
         raise MapProcedureUnimplementedError()
 
+    def decorate_entity(
+        self, *, entity_type: str, record: dict[str, Any]
+    ) -> EntityDecorations | None:
+        """Top-level contract fields for one record. Override if your
+        connector owes a downstream app a field pyatlan cannot hold.
+
+        These land on the entity *root*, beside ``typeName`` — not in
+        ``attributes`` — because that is where their readers look. See
+        :class:`~application_sdk.common.entity_envelope.EntityDecorations` for
+        the fields and who reads each one.
+
+        The return type is a typed model, not a dict, deliberately: a
+        decoration is a named cross-app contract, and a free dict is how a
+        second undocumented side-channel gets added without anyone noticing.
+        A connector that needs a field this class does not have adds it there,
+        which forces the conversation about who reads it.
+
+        Args:
+            entity_type: The stream being transformed (``"table"``,
+                ``"column"``, …) — the ``transformed/<entity>/`` the line
+                lands in, not the Atlas type. A mapper can return a ``View``
+                into the ``table`` stream.
+            record: The raw source row the asset was mapped from.
+
+        Returns:
+            The decorations for this record, or ``None`` (the default) for a
+            connector that owes none.
+        """
+        return None
+
     # =====================================================================
     # run() — default orchestration
     # =====================================================================
@@ -1182,7 +1255,7 @@ class SqlApp(App):
         Override for custom orchestration (e.g. sequential fetches, multi-DB).
         Use ``build_task_input()`` to construct typed inputs.
         """
-        cred_ref = self._resolve_credential_ref(input)
+        cred_ref = self.resolve_credential_ref(input)
 
         task_input = self.build_task_input(
             ExtractionTaskInput, input, cred_ref=cred_ref
@@ -1235,18 +1308,25 @@ class SqlApp(App):
         #      a different pod than extract).
         # This is the BLDX-1281 cross-worker fix: no manual download_file
         # plumbing inside the transform, the framework does it.
-        await asyncio.gather(
+        #
+        # The gather's results are kept, not discarded (FND-1790). Each
+        # ``TransformOutput`` carries the ``transformed_file``
+        # ``FileReference`` its task wrote — together they are the only
+        # record this run has of what the transform step produced, and
+        # therefore the only thing ``transformed_data_prefix`` can be
+        # checked against before it is handed on.
+        transform_results = await asyncio.gather(
             self.transform_databases(
-                self._build_transform_input(task_input, db_result.raw_file)
+                self.build_transform_input(task_input, db_result.raw_file)
             ),
             self.transform_schemas(
-                self._build_transform_input(task_input, schema_result.raw_file)
+                self.build_transform_input(task_input, schema_result.raw_file)
             ),
             self.transform_tables(
-                self._build_transform_input(task_input, table_result.raw_file)
+                self.build_transform_input(task_input, table_result.raw_file)
             ),
             self.transform_columns(
-                self._build_transform_input(task_input, column_result.raw_file)
+                self.build_transform_input(task_input, column_result.raw_file)
             ),
         )
 
@@ -1290,31 +1370,241 @@ class SqlApp(App):
                 ),
             )
 
-        return ExtractionOutput(
+        transformed_data_prefix = get_object_store_prefix(
+            os.path.join(resolved_base, "transformed")
+        )
+
+        # -- Phase 4: Verify the handoff against the producer's declaration --
+        # ``transformed_data_prefix`` is publish's contract and stays exactly
+        # as it is - publish walking it is correct behaviour. What was missing
+        # is any way for *this* method to know the prefix it names is whole.
+        # A walk cannot tell "absent" from "lost": a transformed/ tree short by
+        # one entity looks identical to a run that only had three, and publish
+        # then diffs the tenant against the subset and archives the rest
+        # (APP-CORRECTNESS-001).
+        #
+        # ``finalize_extraction`` collects the transforms' refs into the
+        # expected set and asserts every declared object is present under the
+        # prefix about to be returned, so a hole fails the run here instead of
+        # surfacing as a short publish two stages downstream.
+        #
+        # The default path goes through the same method a ``run()`` override
+        # calls, deliberately: the two cannot drift, and an override adding a
+        # fifth entity gets the identical assertion rather than a recipe it has
+        # to reproduce correctly.
+        base = ExtractionOutput(
             databases_extracted=db_result.total_record_count,
             schemas_extracted=schema_result.total_record_count,
             tables_extracted=table_result.total_record_count,
             columns_extracted=column_result.total_record_count,
             connection_qualified_name=connection_qn,
-            transformed_data_prefix=get_object_store_prefix(
-                os.path.join(resolved_base, "transformed")
-            ),
+            transformed_data_prefix=transformed_data_prefix,
             # Expose the resolved local base path so subclasses can derive
             # additional prefixes (e.g. lineage-specific dirs) without calling
             # workflow.info() a second time.
             output_path=resolved_base,
         )
+        # ``transformed_files`` on the result is the producer's declaration of
+        # what it wrote, surfaced so a connector's Atlan bridge can upload each
+        # ref by reference instead of scanning a directory it may not share.
+        return await self.finalize_extraction(base, transform_results)
 
     # =====================================================================
-    # Internal helpers
+    # Public helpers for ``run()`` overrides
     # =====================================================================
+
+    async def finalize_extraction(
+        self,
+        base: ExtractionOutput,
+        extra: Sequence[TransformOutput] = (),
+    ) -> ExtractionOutput:
+        """Fold extra transforms into ``base``'s declaration and verify it all.
+
+        Call this from a ``run()`` override that adds entities the default
+        ``run()`` does not drive — procedures, say. It is the whole tail of
+        such an override: concatenate, assert, return.
+
+        **Why a helper and not a documented recipe.** ``super().run()`` calls
+        ``App.verify_refs`` on the four refs it drove and then returns, so an
+        override that concatenates a fifth ref and returns a ``model_copy``
+        ships it unverified while looking, at the call site, exactly like it
+        verified everything — the same silent shortfall FND-1790 is about, one
+        layer up. Documenting the extra ``verify_refs`` call would leave a step
+        that is invisible when omitted; this method removes the chance to omit
+        it.
+
+        **Using ``App.upload_refs`` is not a substitute.** It gives partial
+        cover — it fails if a declared ref cannot be materialised, and it
+        verifies the copies it delivered — but it checks the *destination*
+        after the fact. It does not assert the declaration against the
+        deployment store before delivery starts, and it does not check
+        containment in ``transformed_data_prefix``. So a missing ref surfaces
+        as a materialisation failure part-way through a delivery rather than as
+        a ``StorageHandoffIncompleteError`` naming the key, and a ref that
+        landed outside the prefix is not caught at all. Call this first and
+        hand ``upload_refs`` the finalised declaration.
+
+        Verifies the **whole** declaration, not just *extra*. The four default
+        refs were already checked inside ``super().run()``, so those HEADs are
+        redundant — but the thing being handed downstream is the concatenated
+        list, and asserting exactly what is handed on is cheaper to reason
+        about than a split proof, at four metadata lookups.
+
+        **Verification is skipped when there is no app context**, i.e. when
+        ``run()`` was called directly rather than by a worker. Without a worker
+        there is no activity interceptor, so nothing was persisted and there is
+        nothing in the store to check. This is what lets a connector's existing
+        ``run()`` unit tests keep passing unchanged: the declaration is still
+        assembled and returned, only the store assertion is skipped. It logs a
+        warning, so if it ever happens under a worker it is visible.
+
+        Args:
+            base: The ``ExtractionOutput`` returned by ``super().run()``.
+            extra: ``TransformOutput`` values for the entities this override
+                drove itself. Empty is valid and means "verify what base
+                declared", which is a no-op assertion rather than an error.
+
+        Returns:
+            ``base`` with ``transformed_files`` extended by *extra*'s refs.
+
+        Raises:
+            TransformedFileMissingError: If a result in *extra* reports records
+                but carries no ``transformed_file``.
+            StorageHandoffIncompleteError: If any declared ref is missing from
+                the store or resolves outside ``base.transformed_data_prefix``.
+        """
+        declaration = [
+            *base.transformed_files,
+            *self.collect_transformed_files(extra),
+        ]
+
+        # No app context means ``run()`` was invoked directly rather than by a
+        # worker: the workflow wrapper binds ``_context`` before ``run()`` and
+        # clears it after, so its absence is structural, not incidental.
+        #
+        # Skipping the check there is correct rather than a concession. Without
+        # a worker there is no activity interceptor, so no ``transformed_file``
+        # ref was ever persisted — there is nothing in the object store to
+        # verify, and asserting against a store nothing wrote to would fail on
+        # the absence of data that was never supposed to be there yet.
+        #
+        # It is also what keeps this change backwards compatible. Every SQL
+        # connector has ``run()`` unit tests that drive the real ``run()`` with
+        # the tasks mocked out and no infrastructure bound; before FND-1790
+        # ``run()`` performed no I/O, so those tests needed none. Failing them
+        # would force a test-only edit on every connector in the fleet to buy
+        # an assertion that cannot mean anything in that context.
+        #
+        # The declaration is still assembled and still returned on
+        # ``transformed_files``, so a connector's own ``upload_refs`` /
+        # ``verify_refs`` call is unaffected — only the pre-delivery assertion
+        # is skipped, and only where nothing was delivered.
+        if self._context is None:
+            logger.warning(
+                "Skipping transformed-declaration verification: no app context, "
+                "so run() is not executing under a worker and nothing was "
+                "persisted to verify (%d ref(s) declared)",
+                len(declaration),
+            )
+            return base.model_copy(update={"transformed_files": declaration})
+
+        if declaration:
+            await self.verify_refs(
+                VerifyRefsInput(
+                    # auto_materialize=False: this is a HEAD per ref, not a
+                    # reason to pull every transformed file onto this pod.
+                    refs=[
+                        ref.model_copy(update={"auto_materialize": False})
+                        for ref in declaration
+                    ],
+                    prefix=base.transformed_data_prefix,
+                )
+            )
+        else:
+            logger.warning(
+                "No entity produced transformed output; transformed_data_prefix "
+                "%s names an empty tree",
+                base.transformed_data_prefix,
+            )
+        return base.model_copy(update={"transformed_files": declaration})
 
     @staticmethod
-    def _build_transform_input(
+    def collect_transformed_files(
+        results: Sequence[TransformOutput],
+    ) -> list[FileReference]:
+        """Return the ``transformed_file`` refs a set of transforms declared.
+
+        This is the producer's declaration of what the transform step wrote —
+        the expected set ``transformed_data_prefix`` gets checked against
+        before it is handed downstream (FND-1790).
+
+        **Public because a ``run()`` override needs it.** The class docstring
+        already directs connectors that need their own sequencing to override
+        ``run()`` and drive ``extract_*`` / ``transform_*`` themselves, and
+        those methods are public for exactly that. A connector adding an entity
+        the default ``run()`` does not know about — procedures, say — holds a
+        ``TransformOutput`` that never passed through ``run()``, so its ref is
+        absent from :attr:`ExtractionOutput.transformed_files`. Its refs have
+        to be folded into that list, or every asset of that entity is dropped
+        from the upload silently, because the ref-based path has no directory
+        listing to fall back on.
+
+        **Most overrides should call :meth:`finalize_extraction` instead**,
+        which uses this and then verifies the combined declaration.
+        Concatenating this return value by hand and returning it leaves the
+        extra entity unasserted: ``super().run()`` verified the four refs it
+        drove and then returned, so nothing checks the fifth. Reach for this
+        method directly only when you are assembling a declaration you will
+        verify yourself — ``App.upload_refs`` verifies its own delivery, so
+        handing it the concatenated list also covers you.
+
+        A transform that mapped zero records legitimately contributes no ref;
+        that is the "genuine zero-row entity" signal publish already relies on
+        and it is skipped silently. A transform that mapped records and still
+        returned no ref is a hole, not a quiet day: its assets exist but
+        nothing can point at them, so they will be missing from the tree
+        publish walks and archived as removed-from-source. That case raises.
+
+        Args:
+            results: The ``TransformOutput`` values returned by the
+                ``transform_*`` tasks, in any order.
+
+        Returns:
+            One ``FileReference`` per entity that produced output.
+
+        Raises:
+            TransformedFileMissingError: If any result reports records but
+                carries no ``transformed_file``.
+        """
+        refs: list[FileReference] = []
+        for result in results:
+            if result.transformed_file is not None:
+                refs.append(result.transformed_file)
+            elif result.total_record_count > 0:
+                raise TransformedFileMissingError(
+                    message=(
+                        f"transform_{result.typename or '<unknown>'} reported "
+                        f"{result.total_record_count} records but returned no "
+                        "transformed_file reference"
+                    ),
+                    typename=result.typename or None,
+                    record_count=result.total_record_count,
+                    expectation="a FileReference for the transformed output",
+                    observed="transformed_file=None",
+                )
+        return refs
+
+    @staticmethod
+    def build_transform_input(
         base: ExtractionTaskInput,
         raw_file: FileReference | None,
     ) -> TransformInput:
         """Build a ``TransformInput`` from ``base`` carrying ``raw_file``.
+
+        Part of the supported ``run()``-override surface (see the class
+        docstring). ``transform_*`` is public, and this is the only thing that
+        builds its input correctly — an override that adds an entity the
+        default ``run()`` does not drive needs both.
 
         Called by ``run()`` to thread the durable ``FileReference``
         returned by each ``extract_*`` activity (as
@@ -1413,16 +1703,92 @@ class SqlApp(App):
             },
         )
 
-    def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
+    def resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
         """Resolve credential ref from extraction input.
+
+        Part of the supported ``run()``-override surface (see the class
+        docstring). :meth:`build_task_input` takes a ``cred_ref`` and cannot be
+        called correctly without one, so a public builder needing a privately
+        produced argument left the documented path unusable as documented.
+
+        Call this rather than :meth:`CredentialRef.resolve_or_none` directly.
+        Both return the same value today, but this method is the SDK's routing
+        seam and is shared with the injected preflight gate — going through it
+        is what keeps an override and the gate resolving identically if the
+        routing ever changes.
 
         Delegates to :meth:`CredentialRef.resolve_or_none` — prefers the input's
         own ``credential_ref``, routes direct (credential_guid) / agent
         (agent_json) modes, and degrades to a legacy GUID ref or ``None`` on a
-        routing edge case. Shared with the injected preflight gate so both paths
-        route identically.
+        routing edge case.
         """
         return CredentialRef.resolve_or_none(input)
+
+    # =====================================================================
+    # Deprecated private aliases — remove in v4.0.0
+    # =====================================================================
+    #
+    # These were private, so they carried no compatibility promise — but a
+    # `gh search code` for ``self._resolve_credential_ref`` over the atlanhq org
+    # finds call sites in 7 connector repos (cloudera-impala, db2, mssql, mysql,
+    # presto, sapase, sapdatasphere) and 4 for ``self._build_transform_input``
+    # (db2, mssql app + miner, mysql, sapase). Searching the bare names matches
+    # 12 and 4, but the extras are docstring cross-references and design docs —
+    # worth stating precisely, because "12 repos break" and "7 repos break" are
+    # the same decision only until someone re-derives the number.
+    # A rename with no shim breaks every one of them on their next SDK bump,
+    # which is a fleet-wide outage traded for a tidier diff. They delegate, so
+    # there is exactly one implementation either way.
+    #
+    # What the shims do NOT save: a test that patches one of these names. The
+    # patch lands on the shim while every SDK-internal caller now goes to the
+    # public name, so the mock is never reached — quieter than a broken import
+    # and worth knowing before debugging one. Each docstring says so.
+
+    @deprecated(
+        "SqlApp._resolve_credential_ref is deprecated; use the public "
+        "SqlApp.resolve_credential_ref instead. Will be removed in v4.0.0."
+    )
+    def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
+        """**Deprecated** — use :meth:`resolve_credential_ref`.
+
+        Removed in v4.0.0.
+
+        .. warning::
+            **Patching this name no longer intercepts the SDK.** ``run()`` and
+            the preflight gate call :meth:`resolve_credential_ref` now, so a
+            ``patch.object(SqlApp, "_resolve_credential_ref", ...)`` in a
+            connector's tests still patches *something* — this shim — and is
+            simply never reached. Depending on what the test asserts that
+            surfaces as a failed call-count, or as the real implementation
+            running under a mock the author believes is in place. Move the
+            patch site to the public name.
+        """
+        return self.resolve_credential_ref(input)
+
+    @staticmethod
+    @deprecated(
+        "SqlApp._build_transform_input is deprecated; use the public "
+        "SqlApp.build_transform_input instead. Will be removed in v4.0.0."
+    )
+    def _build_transform_input(
+        base: ExtractionTaskInput,
+        raw_file: FileReference | None,
+    ) -> TransformInput:
+        """**Deprecated** — use :meth:`build_transform_input`.
+
+        Removed in v4.0.0.
+
+        .. warning::
+            **Patching this name no longer intercepts the SDK** — see
+            :meth:`_resolve_credential_ref` for why. Move the patch site to
+            :meth:`build_transform_input`.
+        """
+        return SqlApp.build_transform_input(base, raw_file)
+
+    # =====================================================================
+    # Internal helpers
+    # =====================================================================
 
     async def _extract_entity(
         self,
@@ -1602,6 +1968,21 @@ class SqlApp(App):
                 connection_qn = getattr(attrs, "qualified_name", "") or ""
                 connection_name = getattr(attrs, "name", "") or ""
 
+        # Resolved once, here, for two reasons (FND-2097).
+        #
+        # Once, not per record: ``lastSyncRunAt`` is a property of the *run*,
+        # so every asset this activity writes must carry the same value. A
+        # per-record ``time.time()`` — what connectors hand-rolling this did —
+        # gives every row in one crawl a different "last synced at".
+        #
+        # Here, not inside ``_map_records``: the resolver reads the execution
+        # and correlation contextvars the Temporal interceptor populates.
+        # ``run_in_thread`` does propagate them (it runs the callable under
+        # ``contextvars.copy_context()``), so resolving in the thread would
+        # also work today — but that correctness would rest on an offload
+        # implementation detail rather than on where the call sits.
+        last_sync = resolve_last_sync_details()
+
         output_dir = Path(output_path) / "transformed" / entity_type
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "entities.json"
@@ -1615,20 +1996,31 @@ class SqlApp(App):
                         continue
                     record = orjson.loads(line)
                     asset = mapper_fn(record, connection_qn)
-                    # Inject connectionName if the mapper returned a dict
-                    if isinstance(asset, dict) and connection_name:
-                        asset.setdefault("attributes", {}).setdefault(
-                            "connectionName", connection_name
+                    # One seam owns the framework-injected attributes —
+                    # connectionName (FND-2056) and lastSync* (FND-2097) —
+                    # the asset → wire-shape dispatch, and the envelope the
+                    # finished line takes (FND-2137), for every template that
+                    # runs the mapper pattern. A return value it does not
+                    # recognise raises rather than falling back to writing
+                    # ``record`` — that fallback published unmapped source rows
+                    # as entities under a SUCCESS status.
+                    #
+                    # ``decorate_entity`` is called per record because that is
+                    # its aperture: its inputs are the row and the stream, and
+                    # a connector that owes no decorations returns None from
+                    # the base implementation at the cost of one call.
+                    w.write(
+                        entity_bytes(
+                            asset,
+                            connection_name=connection_name,
+                            last_sync=last_sync,
+                            entity_type=entity_type,
+                            envelope=self.entity_envelope,
+                            decorations=self.decorate_entity(
+                                entity_type=entity_type, record=record
+                            ),
                         )
-                    if hasattr(asset, "to_nested_dict"):
-                        payload = asset.to_nested_dict()
-                    elif hasattr(asset, "model_dump"):
-                        payload = asset.model_dump()
-                    elif isinstance(asset, dict):
-                        payload = asset
-                    else:
-                        payload = record
-                    w.write(orjson.dumps(payload, default=_orjson_default))
+                    )
                     w.write(b"\n")
                     written += 1
             return written

@@ -1,9 +1,22 @@
-"""P008 FrameworkTransferInsideTask — ``self.upload()``/``self.download()`` in a ``@task``.
+"""P008 FrameworkTransferInsideTask — a framework transfer task in a ``@task``.
 
-``App.upload()`` and ``App.download()`` are themselves framework tasks; nesting
+``App.upload()``, ``App.download()`` and ``App.upload_refs()`` are themselves
+framework tasks; nesting
 them inside another ``@task``-decorated method runs a task within a task.  Data
 that must move between tasks belongs on a ``FileReference`` contract field, not
 in a nested transfer call.
+
+Scope of the method set
+-----------------------
+``_TRANSFER_METHODS`` holds the framework tasks that *move bytes across the
+store boundary*, which is the class of call this rule names.  ``App`` has other
+framework tasks — ``verify_refs`` (asserts a declaration), ``cleanup_files`` and
+``cleanup_storage`` — and nesting one of those in a ``@task`` is the same
+task-within-a-task error, but it is not a *transfer*, so it does not belong
+under a rule id whose name and remediation text are about the transfer seam.
+The SDK's own ``_upload_impl`` / ``_verify_refs_impl`` bodies exist precisely so
+a framework task can reuse another's work without nesting; a rule covering the
+non-transfer members wants its own id rather than a widened P008.
 
 Decorator provenance
 --------------------
@@ -24,7 +37,11 @@ from conformance.suite.schema.findings import Finding
 
 from ._decorator_provenance import collect_import_provenance, is_task_decorator
 
-_TRANSFER_METHODS: frozenset[str] = frozenset({"upload", "download"})
+#: ``upload_refs`` (SDK 3.33.2) delivers a ``FileReference`` declaration by
+#: looping the same ``_upload_impl`` body ``App.upload`` uses, and is decorated
+#: ``@task`` in exactly the same way — so calling it from inside a ``@task``
+#: nests an activity for the same reason, and is caught here for the same one.
+_TRANSFER_METHODS: frozenset[str] = frozenset({"upload", "download", "upload_refs"})
 
 
 def _is_self_transfer_call(node: ast.AST) -> bool:
@@ -62,7 +79,7 @@ def check_p008(
     filename: str,
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
-    """Emit P008 for ``self.upload()``/``self.download()`` inside a ``@task`` method."""
+    """Emit P008 for a framework transfer task called inside a ``@task`` method."""
     findings: list[Finding] = []
     prov = collect_import_provenance(tree)
     for func in ast.walk(tree):
@@ -84,10 +101,10 @@ def check_p008(
                         node=sub,
                         message=(
                             f"self.{attr}() called inside a @task method — "
-                            "App.upload()/download() are themselves framework "
-                            "tasks and must be called from run(), not nested "
-                            "inside another @task. For task-to-task data, use a "
-                            "FileReference field on the contract instead."
+                            "App.upload()/download()/upload_refs() are themselves "
+                            "framework tasks and must be called from run(), not "
+                            "nested inside another @task. For task-to-task data, "
+                            "use a FileReference field on the contract instead."
                         ),
                         directives=directives,
                     )

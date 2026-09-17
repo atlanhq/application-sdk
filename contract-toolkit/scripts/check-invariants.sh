@@ -761,6 +761,111 @@ if ! echo "$ERR_MSG" | grep -q "isDistinct"; then
 fi
 
 # --------------------------------------------------------------------------
+# multiSelect DropDown: `default` is generated from `defaultSelection`
+# --------------------------------------------------------------------------
+# A multi-select widget reads its pre-selection from `default` as a
+# JSON-stringified array. Authors declare `defaultSelection` structurally and the
+# toolkit renders that string; hand-writing it is rejected, because an unescaped
+# quote in the value used to emit syntactically invalid Python into
+# `app/generated/_e2e_substitutions.py` (FND-1980).
+
+# $1 = label, $2 = the DropDown body, $3 = grep pattern the error must contain
+check_dropdown_default() {
+  local label="$1" body="$2" pattern="$3"
+  local contract out_dir err
+  contract="$(mktemp "$REPO_ROOT/test-dropdown-default-XXXXXX.pkl")"
+  out_dir="$(mktemp -d "$REPO_ROOT/test-dropdown-default-out-XXXXXX")"
+  dropdown_body "$body" > "$contract"
+  err="$(pkl eval -m "$out_dir" "$contract" 2>&1 || true)"
+  rm -f "$contract"
+  rm -rf "$out_dir"
+  if ! echo "$err" | grep -q "$pattern"; then
+    echo "FAIL: multiSelect default invariant did not fire for $label"
+    echo "  Got: $err"
+    fail=1
+  fi
+}
+
+# $1 = the body of the asset_scope DropDown
+dropdown_body() {
+  cat <<PKLEOF
+amends "src/App.pkl"
+
+name = "dropdown-default-app"
+displayName = "DropDown Default"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["asset_scope"] = new DropDown {
+          title = "Asset scope"
+          possibleValues {
+            ["S3Bucket"] = "Bucket"
+            ["S3Object"] = "Object"
+          }
+$1
+        }
+      }
+    }
+  }
+}
+PKLEOF
+}
+
+echo ":: Checking a hand-written multiSelect DropDown default is rejected..."
+check_dropdown_default "hand-written stringified default" \
+  '          default = "[\"S3Bucket\",\"S3Object\"]"
+          multiSelect = true' \
+  "cannot be set by hand"
+
+# Both set: without a guard the hand-written value simply overrides the generated
+# one and `defaultSelection` is ignored in silence — the exact footgun the
+# property exists to remove, and the one case a "default == null" check misses.
+echo ":: Checking a hand-written default ALONGSIDE defaultSelection is rejected..."
+check_dropdown_default "default set alongside defaultSelection" \
+  '          defaultSelection { "S3Bucket"; "S3Object" }
+          default = "SILENTLY-WINS"
+          multiSelect = true' \
+  "generated from .defaultSelection."
+
+echo ":: Checking defaultSelection is rejected on a single-select DropDown..."
+check_dropdown_default "defaultSelection without multiSelect" \
+  '          defaultSelection { "S3Bucket" }' \
+  "multi-select only"
+
+echo ":: Checking defaultSelection rejects a key absent from possibleValues..."
+check_dropdown_default "defaultSelection with an unknown key" \
+  '          defaultSelection { "S3Bucket"; "S3Nonsense" }
+          multiSelect = true' \
+  "Unknown: S3Nonsense"
+
+# Control: the same contract written the supported way must generate cleanly, and
+# must render the JSON-stringified array the frontend expects. Without this, a
+# check that always errors would pass the three assertions above and prove nothing.
+echo ":: Checking a structured defaultSelection still generates (control)..."
+DD_CTRL_CONTRACT="$(mktemp "$REPO_ROOT/test-dropdown-ctrl-XXXXXX.pkl")"
+DD_CTRL_OUT="$(mktemp -d "$REPO_ROOT/test-dropdown-ctrl-out-XXXXXX")"
+dropdown_body '          defaultSelection { "S3Bucket"; "S3Object" }
+          multiSelect = true' > "$DD_CTRL_CONTRACT"
+DD_CTRL_ERR="$(pkl eval -m "$DD_CTRL_OUT" "$DD_CTRL_CONTRACT" 2>&1 || true)"
+if echo "$DD_CTRL_ERR" | grep -q "Pkl Error"; then
+  echo "FAIL: control contract with a structured defaultSelection failed to generate"
+  echo "  Got: $DD_CTRL_ERR"
+  fail=1
+elif ! grep -q '"default": "\[\\"S3Bucket\\",\\"S3Object\\"\]"' \
+    "$DD_CTRL_OUT/app/generated/dropdown-default-app.json"; then
+  echo "FAIL: defaultSelection did not render the JSON-stringified array the widget needs"
+  echo "  Got: $(grep -o '"default":[^,]*' "$DD_CTRL_OUT/app/generated/dropdown-default-app.json" || true)"
+  fail=1
+fi
+rm -f "$DD_CTRL_CONTRACT"
+rm -rf "$DD_CTRL_OUT"
+
+# --------------------------------------------------------------------------
 # Done
 # --------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then

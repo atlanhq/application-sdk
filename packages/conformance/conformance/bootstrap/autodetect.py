@@ -14,8 +14,10 @@ import pathlib
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_apt_packages,
+    extract_build_publish_lfs,
     extract_field,
     extract_use_ghcr_base,
+    extract_vulnerability_scan_lfs,
     resolve_renovate_fallback_exit_zero,
     sanitize_package_list,
 )
@@ -81,6 +83,39 @@ def _read_use_ghcr_base(path: pathlib.Path) -> str:
         return ""
     try:
         return extract_use_ghcr_base(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _read_vuln_scan_lfs(path: pathlib.Path) -> str:
+    """Return ``"true"`` if *path* (a ``vulnerability-scan.yml``) opts into the
+    LFS checkout on the scan's image build, else ``""``.
+
+    Delegates to ``conformance.bootstrap.extract``'s
+    ``extract_vulnerability_scan_lfs`` — the same extractor the C002 drift
+    checker uses — so a detected opt-in is re-rendered byte-identically and
+    can't read as drift.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return extract_vulnerability_scan_lfs(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _read_build_publish_lfs(path: pathlib.Path) -> str:
+    """Return ``"true"`` if *path* (a ``build-and-publish.yaml``) opts into the
+    LFS checkout on the release image build, else ``""``.
+
+    Delegates to ``extract_build_publish_lfs`` — the same extractor the C002
+    drift checker uses — so a detected opt-in is re-rendered byte-identically
+    and can't read as drift.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return extract_build_publish_lfs(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
         return ""
 
@@ -196,6 +231,30 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
     # ahead of that flip has to be an app-owned, drift-free choice.
     if not kwargs["use_ghcr_base"]:
         kwargs["use_ghcr_base"] = _read_use_ghcr_base(
+            root / ".github" / "workflows" / "build-and-publish.yaml"
+        )
+    # vuln-scan lfs: an existing vulnerability-scan.yml's opt-in, else unset.
+    # Exactly the use-ghcr-base case above -- an always-overwrite shim carrying
+    # a per-repo choice -- but with a sharper failure. An app that vendors
+    # LFS-tracked assets into its Docker build context (a parser jar, a native
+    # lib) needs this or the scan's image build copies the pointer file, and
+    # unlike tests.yaml there is no unpreserved_declarations guard here to
+    # refuse the write: the line just disappears, on every bootstrap
+    # invocation including granular ones that have nothing to do with this
+    # file. Autodetected rather than flag-driven because the value already
+    # lives in the repo that needs it.
+    if not kwargs["vuln_scan_lfs"]:
+        kwargs["vuln_scan_lfs"] = _read_vuln_scan_lfs(
+            root / ".github" / "workflows" / "vulnerability-scan.yml"
+        )
+    # build-publish lfs: the same opt-in on the RELEASE image build. Identical
+    # mechanics to the scan's above, but the failure is quieter and lands
+    # later: the gap only bites a `release` event, so every PR stays green
+    # while the release path is broken. One connector lost the line to a
+    # conformance rollout and did not find out until a version could not be
+    # published.
+    if not kwargs["build_publish_lfs"]:
+        kwargs["build_publish_lfs"] = _read_build_publish_lfs(
             root / ".github" / "workflows" / "build-and-publish.yaml"
         )
     # app-name: atlan.yaml `name:` field, else the repo directory name.

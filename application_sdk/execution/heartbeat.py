@@ -133,7 +133,17 @@ async def stop_heartbeat_task(
 
 
 class HeartbeatController(Protocol):
-    """Protocol for heartbeat operations."""
+    """Protocol for heartbeat operations.
+
+    Deliberately does **not** declare ``last_sent_details()``, which the two
+    concrete controllers below both implement: adding a required method to a
+    structural Protocol is a breaking change for any consumer that implements
+    it. The activity wrapper therefore types its controller as the concrete
+    ``TemporalHeartbeatController | NoopHeartbeatController`` union rather than
+    as this Protocol, which is what makes that call type-check. Keep it that
+    way — widening the wrapper's annotation back to this Protocol would break
+    the eviction carry at runtime, silently.
+    """
 
     def heartbeat(self, *details: Any) -> None:
         """Send a heartbeat with optional progress details."""
@@ -151,8 +161,20 @@ class HeartbeatController(Protocol):
 class TemporalHeartbeatController:
     """HeartbeatController that uses Temporal's activity.heartbeat()."""
 
-    def __init__(self) -> None:
+    def __init__(self, fallback_details: tuple[Any, ...] = ()) -> None:
         self._last_details: tuple[Any, ...] = ()
+        # Details the evicted attempt last sent, handed over by the eviction
+        # retry loop (see ``_temporal/eviction_retry.py``). Temporal scopes
+        # heartbeat details to an activity *execution*, and an eviction
+        # re-dispatch is a new execution — so without this fallback
+        # ``get_last_heartbeat_details()`` returns nothing after a pod shutdown.
+        self._fallback_details: tuple[Any, ...] = tuple(fallback_details)
+        # Whether *this* attempt has beaten at all, tracked separately from the
+        # details themselves because ``heartbeat()`` accepts zero details: an
+        # empty tuple otherwise means both "nothing sent yet" and "explicitly
+        # sent nothing", and collapsing the two lets a stale carried checkpoint
+        # outlive the attempt that superseded it.
+        self._sent = False
 
     def heartbeat(self, *details: Any) -> None:
         """Send a heartbeat to Temporal with optional progress details."""
@@ -161,6 +183,7 @@ class TemporalHeartbeatController:
         )
 
         self._last_details = details
+        self._sent = True
         activity.heartbeat(*details)
 
     def heartbeat_keepalive(self) -> None:
@@ -177,19 +200,42 @@ class TemporalHeartbeatController:
             activity,
         )
 
-        return tuple(activity.info().heartbeat_details)
+        details = tuple(activity.info().heartbeat_details)
+        return details or self._fallback_details
+
+    def last_sent_details(self) -> tuple[Any, ...] | None:
+        """Details of the most recent heartbeat *this attempt* sent.
+
+        ``None`` means this attempt never beat — distinct from ``()``, which
+        means it beat with no details and so deliberately superseded whatever
+        the previous attempt left. The caller must branch on ``is None``, not
+        on truthiness: treating ``()`` as "nothing sent" would re-carry a
+        checkpoint this attempt has already moved past, and the execution after
+        the next eviction would redo completed work.
+
+        Distinct from :meth:`get_last_heartbeat_details`, which is what the
+        *previous* attempt left behind. Read by the activity wrapper when it
+        raises ``WorkerEvicted``, so the progress can ride on the failure to
+        the re-dispatched execution.
+        """
+        return self._last_details if self._sent else None
 
 
 class NoopHeartbeatController:
     """No-op HeartbeatController for local execution and testing."""
 
-    def __init__(self) -> None:
+    def __init__(self, fallback_details: tuple[Any, ...] = ()) -> None:
         self._details: tuple[Any, ...] = ()
         self._heartbeat_calls: list[tuple[Any, ...]] = []
+        self._fallback_details: tuple[Any, ...] = tuple(fallback_details)
+        # See TemporalHeartbeatController._sent: "never beat" and "beat with no
+        # details" are different answers and an empty tuple cannot hold both.
+        self._sent = False
 
     def heartbeat(self, *details: Any) -> None:
         """Record a heartbeat call."""
         self._details = details
+        self._sent = True
         self._heartbeat_calls.append(details)
 
     def heartbeat_keepalive(self) -> None:
@@ -197,8 +243,29 @@ class NoopHeartbeatController:
         self._heartbeat_calls.append(self._details)
 
     def get_last_heartbeat_details(self) -> tuple[Any, ...]:
-        """Get the details from the last heartbeat call."""
-        return self._details
+        """Get the details from the last heartbeat call, else the carried fallback.
+
+        Truthiness, not ``_sent``, deliberately. This mirrors
+        :meth:`TemporalHeartbeatController.get_last_heartbeat_details`, where the
+        value is ``activity.info().heartbeat_details`` and is frozen for the
+        whole attempt — what the *previous* attempt left, never what this one
+        has since sent. It also keeps ``MockHeartbeatController``'s documented
+        idiom working: consumer tests assign ``_details`` directly to stand in
+        for what Temporal returned on retry, without going through
+        :meth:`heartbeat`. The ``_sent`` distinction that stops an empty beat
+        re-carrying a superseded checkpoint belongs to
+        :meth:`last_sent_details`, which is the method the eviction carry
+        actually reads.
+        """
+        return self._details or self._fallback_details
+
+    def last_sent_details(self) -> tuple[Any, ...] | None:
+        """Details of the most recent heartbeat call, or ``None`` if never called.
+
+        ``()`` means a beat carrying no details; see
+        :meth:`TemporalHeartbeatController.last_sent_details`.
+        """
+        return self._details if self._sent else None
 
 
 def _check_for_stall(

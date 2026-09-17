@@ -27,9 +27,9 @@ jobs:
           python-version: '3.14'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.12.10"
+          version: "0.12.13"
 
       - name: Install dependencies
         shell: bash
@@ -134,3 +134,81 @@ jobs:
         run: |
           gh workflow run renovate.yaml --repo atlanhq/application-sdk \
           || echo "::warning::Could not trigger renovate.yaml — consumers will update on the next scheduled run."
+
+  linear-release:
+    # Record what shipped in this version as a Linear release, so the
+    # Foundation team's "release completed → Done" automation marks issues done
+    # when the bump PR that carries them merges — not when the original feature
+    # PR merged. Gated by `needs: [release]`, so it inherits that job's `if:`
+    # (merged PR labelled `release`) and fires exactly once per SDK version.
+    # The conformance and contract-toolkit bumps carry `release:conformance` /
+    # `release:contract-toolkit`, which `contains()` does not match.
+    name: Sync Linear release
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout the merged bump commit
+        # The bump PR's own merge commit on main, not `main` itself: it pins the
+        # scan to exactly this version's contents even if another PR lands while
+        # this job runs, and it is the commit the CLI stores as the baseline for
+        # the next release's range. fetch-depth: 0 is required — the CLI scans
+        # <stored baseline>..HEAD.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Collect version and release notes
+        id: meta
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/extract_release_notes.py "${VERSION}" > "${RUNNER_TEMP}/linear_release_notes.md"
+
+      - name: Sync release to Linear
+        id: sync
+        # Soft-fail, mirroring the fan-out job above: this runs after the tag,
+        # the GitHub Release and the PyPI publish have all landed, so a Linear
+        # outage or a revoked access key must not colour the release run red.
+        # Nothing is lost by a skipped sync — a failed run never advances the
+        # stored baseline, so the next release's scan range covers this version
+        # too and its issues complete one release later.
+        continue-on-error: true
+        # Issue attribution rides on the PR number, not the commit text: squash
+        # subjects on main end in `(#NNNN)` and the head branch carrying the
+        # `fnd-NNNN` identifier is deleted at merge, so the CLI hands Linear the
+        # PR number and Linear resolves it back to the issues linked to that PR.
+        #
+        # base_ref is a ONE-RUN override, to be removed in the PR that follows
+        # the first live release. With no prior release in the pipeline the CLI
+        # scans only the current commit (there is no previous SHA to bound the
+        # range from), which would record the bump PR alone and then park the
+        # baseline past everything merged since. v3.34.3 is the last version
+        # that shipped, so it is the exclusive lower bound that makes the first
+        # live release exactly its own contents. Issues that shipped in v3.34.3
+        # itself are being completed by hand — they predate the pipeline going
+        # live and are deliberately out of this range.
+        #
+        # Once removed, the range comes from the baseline the CLI stores after
+        # each successful sync, which is what makes a failed sync self-healing
+        # (see the soft-fail note above). Leaving base_ref pinned here would
+        # defeat that and re-attach the same issues to every later release.
+        uses: linear/linear-release-action@53ad0f863963e7f8e270fba18426bbb55ef55384 # v0.17.2
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          version: ${{ steps.meta.outputs.version }}
+          name: v${{ steps.meta.outputs.version }}
+          release_notes: ${{ runner.temp }}/linear_release_notes.md
+          links: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.meta.outputs.version }}
+          base_ref: v3.34.3
+
+      - name: Warn when the Linear sync failed
+        # The soft-fail above leaves the run green, so without this a revoked
+        # access key — which fails every release, not just one — is invisible.
+        # An annotation surfaces it on the run without failing the release.
+        if: steps.sync.outcome == 'failure'
+        run: echo "::warning::Linear release sync failed for v${{ steps.meta.outputs.version }} — its issues will be attached to the next release instead. Check LINEAR_ACCESS_KEY if this repeats."

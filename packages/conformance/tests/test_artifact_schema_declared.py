@@ -18,8 +18,14 @@ contract field names, shaped like the toolkit's real output.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
+from conformance.suite.checks._sdk_contract_mixins import (
+    SDK_MODEL_BACKED_ARTIFACT_FIELDS,
+    SDK_TEMPLATE_CONTRACT_FIELDS,
+    SdkField,
+)
 from conformance.suite.checks.artifact_schema_declared import scan_all
 from conformance.suite.checks.artifact_schema_declared._declarations import (
     candidate_paths,
@@ -35,6 +41,23 @@ from conformance.suite.schema.disposition import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@contextmanager
+def monkeypatched_sdk_template(class_name: str, fields: tuple[SdkField, ...]):
+    """Register a stand-in SDK template contract for the duration of a test.
+
+    The registries in ``_sdk_contract_mixins`` mirror the SDK version this
+    package *pins*, so a fixture built on a real SDK contract asserts whatever
+    that pin happens to contain — including nothing. Registering a stub keeps the
+    mechanism under test (an un-scannable base resolved through the mirror) while
+    the assertion stays independent of the pin.
+    """
+    SDK_TEMPLATE_CONTRACT_FIELDS[class_name] = fields
+    try:
+        yield
+    finally:
+        del SDK_TEMPLATE_CONTRACT_FIELDS[class_name]
 
 
 def _write_py(tmp_path: Path, py_files: dict[str, str]) -> list[Path]:
@@ -583,3 +606,262 @@ def test_candidate_paths_are_nested_first_and_empty_for_unplaceable_shapes(
     # multi mode needs a wire name to name the subdirectory.
     assert candidate_paths(tmp_path, "multi", None) == []
     assert candidate_paths(tmp_path, "absent", "extract-metadata") == []
+
+
+# ---------------------------------------------------------------------------
+# Model-declared fields are exempt (FND-1863)
+# ---------------------------------------------------------------------------
+
+_OWN_MARKER_APP = """
+from typing import Annotated
+
+from application_sdk.app import App
+from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import AssetArtifact, FileReference
+
+
+class ExtractInput(Input):
+    row_count: int = 0
+
+
+class ExtractOutput(Output):
+    transformed: Annotated[FileReference | None, AssetArtifact()] = None
+    residual_failures: FileReference | None = None
+
+
+class MyApp(App):
+    async def run(self, input: ExtractInput) -> ExtractOutput:
+        return ExtractOutput()
+"""
+
+
+def test_a_field_the_app_marks_itself_is_exempt(tmp_path: Path) -> None:
+    """The marker says the declaration *is* the model, so there is nothing to author.
+
+    Read off the app's own ``Annotated[...]``, which is where the marker lives —
+    the canonical type the rule matches ``FileReference`` against has it
+    stripped, so this is deliberately a second read of the raw annotation.
+    """
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+
+    findings = _run(tmp_path, {"app/main.py": _OWN_MARKER_APP})
+
+    assert _fields(findings) == {"residual_failures"}
+
+
+def test_a_marked_field_on_an_in_repo_base_is_exempt(tmp_path: Path) -> None:
+    """Provenance travels: the marker is declared on a base, read at the boundary.
+
+    ``resolve_contract_fields`` reports an inherited field with ``node=None``, so
+    the annotation the marker lives in is out of this rule's reach by the time it
+    sees the field. Matching the field *name* instead would report this one —
+    ``handoff`` is nothing the SDK mirrors — even though the marker plainly
+    declares it. The flag is resolved where the annotation still exists.
+    """
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    src = """
+from typing import Annotated
+
+from application_sdk.app import App
+from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import AssetArtifact, FileReference
+
+
+class ExtractInput(Input):
+    row_count: int = 0
+
+
+class TransformBase(Output):
+    handoff: Annotated[FileReference | None, AssetArtifact()] = None
+
+
+class ExtractOutput(TransformBase):
+    row_count: int = 0
+
+
+class MyApp(App):
+    async def run(self, input: ExtractInput) -> ExtractOutput:
+        return ExtractOutput()
+"""
+
+    assert _run(tmp_path, {"app/main.py": src}) == []
+
+
+def test_an_unmarked_field_sharing_a_mirrored_name_is_still_reported(
+    tmp_path: Path,
+) -> None:
+    """The hollow-gate case: a name collision may not buy an exemption.
+
+    ``transformed_files`` is the name the SDK marks, so a rule keyed on names
+    waves this field through — inherited from a base of the app's own, marked by
+    nobody, model-validated by nothing. A check with an input it silently passes
+    is worse than no check, so the exemption is keyed on the marker and this is a
+    finding.
+    """
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    src = """
+from application_sdk.app import App
+from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import FileReference
+
+
+class ExtractInput(Input):
+    row_count: int = 0
+
+
+class TransformBase(Output):
+    transformed_files: list[FileReference] = []
+
+
+class ExtractOutput(TransformBase):
+    row_count: int = 0
+
+
+class MyApp(App):
+    async def run(self, input: ExtractInput) -> ExtractOutput:
+        return ExtractOutput()
+"""
+
+    findings = _run(tmp_path, {"app/main.py": src})
+
+    assert _fields(findings) == {"transformed_files"}
+
+
+def test_the_exempt_name_still_reports_when_the_app_declares_it_unmarked(
+    tmp_path: Path,
+) -> None:
+    """The same collision, declared directly rather than inherited."""
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    src = """
+from application_sdk.app import App
+from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import FileReference
+
+
+class ExtractInput(Input):
+    row_count: int = 0
+
+
+class ExtractOutput(Output):
+    transformed_files: list[FileReference] = []
+
+
+class MyApp(App):
+    async def run(self, input: ExtractInput) -> ExtractOutput:
+        return ExtractOutput()
+"""
+
+    findings = _run(tmp_path, {"app/main.py": src})
+
+    assert _fields(findings) == {"transformed_files"}
+
+
+def test_a_redeclaration_cannot_drop_an_inherited_marker(tmp_path: Path) -> None:
+    """Narrowing a marked field keeps the exemption, as the SDK reader does.
+
+    Pydantic rebuilds a redeclared field's metadata from the new annotation, so
+    the SDK's ``asset_artifact_marker`` resolves across the MRO rather than
+    reading one class. This rule has to reach the same answer: reporting a field
+    the SDK exempts and the interceptor is model-validating in full would put a
+    review finding on a boundary that is checked more strictly than a declared
+    one.
+    """
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    src = """
+from typing import Annotated
+
+from application_sdk.app import App
+from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import AssetArtifact, FileReference
+
+
+class ExtractInput(Input):
+    row_count: int = 0
+
+
+class TransformBase(Output):
+    handoff: Annotated[FileReference | None, AssetArtifact()] = None
+
+
+class ExtractOutput(TransformBase):
+    handoff: FileReference | None = None
+
+
+class MyApp(App):
+    async def run(self, input: ExtractInput) -> ExtractOutput:
+        return ExtractOutput()
+"""
+
+    assert _run(tmp_path, {"app/main.py": src}) == []
+
+
+def test_a_field_inherited_from_a_marked_sdk_contract_is_exempt(
+    tmp_path: Path,
+) -> None:
+    """The SDK case, driven through the mirror rather than through an annotation.
+
+    An SDK contract's source is not in a consumer repo's AST, so the marker on
+    ``ExtractionOutput.transformed_files`` is unreachable and
+    ``SDK_MODEL_BACKED_ARTIFACT_FIELDS`` stands in for it. Asserted through a
+    stub SDK-shaped base registered in the mirror rather than through
+    ``ExtractionOutput`` itself: whether that class resolves any fields at all
+    depends on the SDK version this package pins, so a fixture built on it would
+    pass while asserting nothing.
+    """
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    mirrored = next(iter(SDK_MODEL_BACKED_ARTIFACT_FIELDS))
+    src = """
+from application_sdk.app import App
+from application_sdk.contracts.base import Input
+from application_sdk.templates.contracts.stub_metadata import StubExtractionOutput
+
+
+class ExtractInput(Input):
+    row_count: int = 0
+
+
+class ExtractOutput(StubExtractionOutput):
+    row_count: int = 0
+
+
+class MyApp(App):
+    async def run(self, input: ExtractInput) -> ExtractOutput:
+        return ExtractOutput()
+"""
+
+    with monkeypatched_sdk_template(
+        "StubExtractionOutput",
+        (SdkField(mirrored, "list[FileReference]", "active"),),
+    ):
+        assert _run(tmp_path, {"app/main.py": src}) == []
+
+
+def test_an_unmarked_sdk_field_is_reported(tmp_path: Path) -> None:
+    """The mirror exempts only the names it lists, not every SDK-inherited field."""
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    src = """
+from application_sdk.app import App
+from application_sdk.contracts.base import Input
+from application_sdk.templates.contracts.stub_metadata import StubExtractionOutput
+
+
+class ExtractInput(Input):
+    row_count: int = 0
+
+
+class ExtractOutput(StubExtractionOutput):
+    row_count: int = 0
+
+
+class MyApp(App):
+    async def run(self, input: ExtractInput) -> ExtractOutput:
+        return ExtractOutput()
+"""
+
+    with monkeypatched_sdk_template(
+        "StubExtractionOutput",
+        (SdkField("some_other_artifact", "FileReference | None", "active"),),
+    ):
+        findings = _run(tmp_path, {"app/main.py": src})
+
+    assert _fields(findings) == {"some_other_artifact"}

@@ -37,6 +37,19 @@ Design constraints:
 * **Preserve graceful shutdown.** SIGTERM/SIGINT are forwarded to daprd so its
   ``--dapr-graceful-shutdown-seconds`` behaviour (the reason the entrypoint runs
   daprd directly) is unchanged. This process exits with daprd's exit code.
+* **``DAPR_LOG_LEVEL`` wins for daprd lines.** This process exists only to relay
+  daprd lines, and daprd has already gated them at ``--log-level``; a second gate
+  at the app's ``LOG_LEVEL`` (``INFO`` by default) served no purpose and silently
+  dropped every daprd ``debug`` line an operator had explicitly asked for. So the
+  forwarder gates itself at the *more verbose* of ``LOG_LEVEL`` and
+  ``DAPR_LOG_LEVEL`` by setting ``ATLAN_LOG_LEVEL`` for its own process. The SDK
+  reads that once, at import — and ``application_sdk.observability/__init__``
+  imports the logger (and builds its sinks) before this module's ``main()`` can
+  run — so ``main()`` re-execs the process a single time with the variable set,
+  guarded by the level already matching. Records keep daprd's real level in the
+  console, in OTel ``severity_number`` and in the lakehouse ``level`` column; no
+  level is rewritten. The app runs as a sibling process, so its verbosity is
+  untouched.
 * **Transparent when disabled.** Outside SDR mode the child is exec'd directly,
   so the process tree and PID semantics match running daprd without the wrapper.
 """
@@ -45,6 +58,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import sys
@@ -62,6 +76,91 @@ _LEVEL_TO_METHOD = {
     "fatal": "critical",
     "panic": "critical",
 }
+
+# Numeric severities for the daprd level names above, in stdlib ``logging`` units
+# so they compare directly against the app's ``LOG_LEVEL`` names.
+_METHOD_LEVELNO = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+}
+
+
+# ``entrypoint.sh`` resolves ``DAPR_LOG_LEVEL`` as ``${DAPR_LOG_LEVEL:-warn}``
+# before handing it to ``daprd --log-level``; keep the two fallbacks identical so
+# one variable cannot mean two levels. (In the shipped image neither fires: the
+# Dockerfile sets ``ENV DAPR_LOG_LEVEL=info``.)
+_ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK = "warn"
+
+
+def _app_log_level_name() -> str:
+    """The app level name the SDK will resolve, mirroring ``constants.LOG_LEVEL``
+    without importing it (that import is what fixes the sinks)."""
+    return (
+        os.environ.get("ATLAN_LOG_LEVEL") or os.environ.get("LOG_LEVEL", "INFO")
+    ).upper()
+
+
+def _forwarder_log_level() -> str | None:
+    """Level name this process should gate at: the more verbose of the app's
+    ``LOG_LEVEL`` and ``DAPR_LOG_LEVEL``.
+
+    ``DAPR_LOG_LEVEL`` is what the entrypoint hands to ``daprd --log-level``; the
+    base image sets it to ``info`` (``ENV`` in the SDK ``Dockerfile``). The
+    fallback below mirrors ``entrypoint.sh``'s own ``${DAPR_LOG_LEVEL:-warn}``,
+    so the variable resolves to the same level here as the one daprd was
+    actually gated at — the entrypoint exports it before launching this module,
+    so the fallback only applies to direct invocation outside the image.
+    Returns ``None`` when either name is not a known level, so a
+    misconfiguration falls back to the unchanged behaviour rather than raising
+    — this code supervises daprd.
+    """
+    dapr_method = _LEVEL_TO_METHOD.get(
+        os.environ.get("DAPR_LOG_LEVEL", _ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK)
+        .strip()
+        .lower()
+    )
+    app_levelno = logging.getLevelNamesMapping().get(_app_log_level_name())
+    if dapr_method is None or app_levelno is None:
+        return None
+    return logging.getLevelName(min(app_levelno, _METHOD_LEVELNO[dapr_method]))
+
+
+def _reexec_with_log_level(level: str, argv: list[str]) -> None:
+    """Re-run this module with ``ATLAN_LOG_LEVEL`` set, so the SDK logger and its
+    sinks are built at *level* before anything is emitted. Never returns on
+    success; on failure returns and the caller carries on at the current level.
+
+    Cost, paid only when ``DAPR_LOG_LEVEL`` is more verbose than the app's level:
+    a second interpreter start plus SDK import before daprd is spawned, and the
+    observability stack this process already built at import (OTLP exporter,
+    logger provider) is discarded by ``execve`` without a shutdown — nothing has
+    been emitted yet, so no records are lost. ``entrypoint.sh``'s startup check
+    is a ``kill -0`` on this process's PID, which ``execve`` preserves, so the
+    extra second does not trip it.
+    """
+    # No spec means the module was run as a file path rather than with ``-m``:
+    # there is no importable name to re-exec with, and ``-m __main__`` would exec
+    # *successfully* and then die on ``__main__.__spec__ is None`` — taking daprd
+    # with it. Stay at the current level instead; verbosity is the only loss.
+    if __spec__ is None:
+        return
+    # POSIX only. Windows has no exec: ``os.execve`` there spawns a *copy* and
+    # exits this process, so the parent's pipes close under whoever is reading
+    # them and daprd ends up supervised by a process its caller never spawned.
+    # The forwarder ships only in the Linux container image (``entrypoint.sh``),
+    # so the same fallback as a failed exec is the honest behaviour here.
+    if os.name != "posix":
+        return
+    env = dict(os.environ, ATLAN_LOG_LEVEL=level)
+    cmd = [sys.executable, "-m", __spec__.name, *argv[1:]]
+    try:
+        os.execve(sys.executable, cmd, env)
+    # conformance: ignore[E004] exec failed; the only safe fallback is to keep supervising daprd at the current level
+    except OSError:
+        return  # conformance: ignore[E007] daprd must start regardless; the loss is only log verbosity, and the logger cannot be assumed usable this early
 
 
 def _split_child_command(argv: list[str]) -> list[str]:
@@ -295,6 +394,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if not ENABLE_ATLAN_UPLOAD:
         _exec_transparently(child_cmd)  # never returns
+
+    # Gate this process at the more verbose of LOG_LEVEL and DAPR_LOG_LEVEL.
+    # The SDK logger was already built (at import, by the package __init__) at
+    # the app's level, so the only way to lower the gate for this process is to
+    # start over with ATLAN_LOG_LEVEL set. One exec; the guard is the level
+    # already matching, so the re-exec'd process falls straight through.
+    target = _forwarder_log_level()
+    levels = logging.getLevelNamesMapping()
+    if target is not None and levels[target] < levels.get(
+        _app_log_level_name(), logging.INFO
+    ):
+        _reexec_with_log_level(target, argv)  # returns only if exec failed
 
     return asyncio.run(_run(child_cmd))
 

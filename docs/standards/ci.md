@@ -58,6 +58,62 @@ failure mode. Because it now concludes on every PR, it can be added to branch
 protection directly, without the always-concluding-gate wrapper that
 path-filtered required checks need (see `sdk-gate.yaml` for that pattern).
 
+## An artifact upload retry must use a DIFFERENT artifact name
+
+`actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403
+as non-retryable and fails the step, so every upload on a gating path is paired
+with a retry (first attempt `continue-on-error: true`, companion step guarded on
+`steps.<id>.outcome == 'failure'`). Three rules the pairing has to follow:
+
+1. **The retry uploads under `<first attempt's name>-retry`.** A failed finalize
+   leaves an artifact record that holds the name for the rest of the run but
+   never becomes visible: it is absent from `GET /actions/runs/<id>/artifacts`,
+   and `overwrite: true` deletes by looking the name up in that same listing —
+   so it finds nothing, skips (on a `core.debug` line, invisible in the log),
+   and `CreateArtifact` then 409s on the record it could not see:
+
+   ```
+   Upload test results          FinalizeArtifact -> (403) Forbidden   [warning]
+   Upload test results (retry)  CreateArtifact   -> (409) Conflict:
+                                an artifact with this name already exists
+   ```
+
+   A same-named retry can therefore never absorb the one failure it exists for,
+   and on a fatal path it turns a warning into a red job after all the expensive
+   work has passed. `overwrite: true` stays on the retry for the case it does
+   handle: re-running a failed job inside a run that already holds the artifact.
+
+2. **A backoff step sits between the two attempts** (`run: sleep 20`, guarded on
+   the same outcome). The 403 comes from an intermediary having a moment; an
+   immediate retry lands in the same window and both attempts fail together.
+
+3. **Both attempts set `overwrite: true`** — the first attempt is the
+   load-bearing one. Artifacts survive across attempts of a run, so without it
+   re-running a failed job 409s on the *first* attempt, hands the upload to the
+   retry, and leaves both `<name>` (from the earlier attempt) and
+   `<name>-retry` live. A `merge-multiple` consumer then flattens two files of
+   the same inner name in undefined order — for `docker-image` that means
+   scanning the previous attempt's image. Overwrite is what keeps **at most one
+   live artifact per name**, which is the invariant the globs below rest on.
+
+4. **Consumers accept the retry name.** Three shapes, pick per call site:
+   - same-run `download-artifact`: `pattern: <name>*` + `merge-multiple: true`,
+     never an exact `name:`;
+   - cross-run `gh run download`: resolve the name from the run's artifact
+     listing first (newest live match of `<name>` or `<name>-retry`) and pass
+     that — a hard-coded `--name <name>` silently no-ops on a retried upload;
+   - a jq/regex selector: match either name explicitly.
+
+   Note that with `pattern:` (unlike `name:`) `download-artifact` treats
+   "nothing matched" as **success**, so any step gated on
+   `steps.<download>.outcome` has to move onto `hashFiles(...)`.
+
+`.github/scripts/tests/test_artifact_upload_retry.py` enforces all four over
+every workflow, composite action and script in this repo — including a
+cross-file check that no consumer addresses a retried artifact by its base name
+alone — and `EXEMPT` there carries the reason for each upload that does not need
+the hardening.
+
 ## Label gates must be event-aware
 
 **Rule:** if a workflow can receive a `labeled` event, every job gated on a
@@ -218,13 +274,14 @@ are for, and recording those in image history is a feature.
 
 ## Renovate post-upgrade commands
 
-Two run today, both installed as bare PATH commands by `.github/workflows/renovate.yaml`
-and both declared in `renovate-config/default.json`:
+Three run today, all installed as bare PATH commands by `.github/workflows/renovate.yaml`
+and all declared in `renovate-config/default.json`:
 
 | command | lane | what it does |
 |---|---|---|
 | `renovate-pkl-sync` | `app-contract-toolkit` | re-resolves the Pkl lock and regenerates contract artifacts |
 | `renovate-uv-lock-bounded` | `lockFileMaintenance` | re-resolves `uv.lock` under the org §5 release-age bound, then strips uv's `[options]` block |
+| `renovate-contract-ledger` | `lockFileMaintenance`, conformance package | regenerates `contract_schema.lock.json` at the conformance version the branch locked |
 
 Three rules apply to any command added here.
 
@@ -250,6 +307,64 @@ applied at lock time and left recorded makes the lock unusable in the app
 Dockerfiles. That is what reddened `scan / Build Image` fleet-wide in #3212. The
 bounded driver strips the block; if you add another lock-writing command, check
 what it records.
+
+### Only one Renovate engine may serve a repo
+
+`allowedCommands` is admin-only, so it exists only for a runner we own. A second
+engine reading the same `renovate.json` resolves the same preset, finds the same
+`postUpgradeTasks`, and has **every one of them rejected** — then pushes to the
+same `renovate/lock-file-maintenance` branch name, because branch names come from
+the shared preset rather than from the engine.
+
+That is not hypothetical. The Mend-hosted app stayed installed org-wide long
+after the fleet moved to the self-hosted runner (FND-1985). On atlan-gcs-app#124
+the fleet runner bounded the lock correctly at 08:11 and Mend replaced it at
+11:18 with an unbounded refresh, a red `renovate/artifacts`, and a red
+`checks/dep-cooldown` naming four packages inside the window. Telling the two
+apart is a one-liner — the branch head's author is `atlan-app-fleet[bot]` when we
+wrote it and `renovate[bot]` when Mend did:
+
+```bash
+gh api "repos/atlanhq/<repo>/commits?sha=renovate%2Flock-file-maintenance&per_page=1" \
+  --jq '.[0].author.login'
+```
+
+Three things stand behind this, and only the first is a fix:
+
+1. **Do not install a second engine on a fleet repo.** Everything below bounds
+   the damage; nothing below prevents it.
+2. `renovate_reap_refused_locks.py` deletes any managed-lane branch a foreign
+   engine wrote, so the fleet runner rebuilds it in the same pass. **This is the
+   only thing that clears it.** Renovate will not recover such a branch, for two
+   independent reasons — either alone is enough. From the atlan-netsuite-app job
+   of 2026-09-14T14:15:44Z, on `renovate/conformance-package`:
+
+   ```
+   DEBUG: branch.isModified() = true
+     "unrecognizedAuthors": ["29139614+renovate[bot]@users.noreply.github.com"]
+   DEBUG: Branch has been edited but found no PR - skipping
+   ```
+
+   The head commit's author is not the runner's, so the branch reads as
+   hand-modified and Renovate refuses to write it. And Renovate cannot see the
+   PR at all: its PR list is scoped to its own account, so in that same run it
+   found `#64` on the lock lane (author `app/atlan-app-fleet`) and did not find
+   `#92` on this one (author `app/renovate`).
+
+   Do not expect `rebaseWhen: behind-base-branch` to rescue it — atlan-athena-app's
+   `main` had a `latestCommitDate` of 2026-09-02 while its branch sat wedged, so
+   it was never behind base. Renovate's own pruning declines for the same
+   isModified reason (`Orphan Branch is modified - skipping branch deletion`).
+   There is no clock and no trigger.
+
+   The reaper covers every `renovate/*` lane except the github-actions pair,
+   which is the one place deletion would destroy rather than recover: that
+   manager is disabled, so nothing would rebuild the branch. Stranded PRs there
+   are a human's call to close.
+3. Condition (a) of the approval gate refuses a Mend-authored PR outside
+   `MEND_REPOS`, so a foreign PR is turned away on identity rather than on
+   whether it happens to look green. `MEND_REPOS` is application-sdk alone,
+   which has not moved off Mend.
 
 ### A refused lock refresh is red on purpose, and nothing re-evaluates it
 
@@ -453,6 +568,63 @@ call the private reusable it wired up, so it had never produced a check run at
 all — and the App offers no `lockfile-globs` equivalent to scope, only a `security`
 label bypass. The App's check run is a separate thing and was never affected.
 
+## A toolchain pin is declared once, in a file consumers can read
+
+**Rule:** a tool version that CI installs gets exactly **one** literal in the
+repo, in a file that is *also* reachable by whoever has to reproduce what CI
+did. Every workflow, action and script derives it from there; none restates it.
+Two pins exist today and both follow this:
+
+| Tool | Declared in | Read by CI via |
+|---|---|---|
+| Container Python | the golden base tag in `Dockerfile` | `.github/scripts/container_python_version.py` |
+| `pkl` | `PKL_VERSION` in `application_sdk/pkl_version.py` | `.github/scripts/pkl_version.py` |
+
+**Why one literal.** `pkl` was pinned in six places at once — `install-pkl`, the
+`regenerate-contract` action, the freshness gate, and three
+`contract-toolkit-*` workflows — with nothing keeping them in agreement. Six
+copies of a value is six chances to bump five.
+
+**Why *readable* matters more.** The freshness gate's whole value is that a
+local `uv run poe generate` predicts it. `pkl` is a language, so a contract can
+render cleanly on a developer's 0.32.x and be structurally incapable of
+rendering on CI's 0.27.2 (`Invalid character escape sequence` on a backslash
+line-continuation inside a multi-line string, valid from 0.28 on). With the pin
+buried in a reusable workflow, "it evals locally" was not evidence, the failure
+surfaced only after push, and the gate's message blamed stale artifacts —
+FND-1864. No app could even fix it; the version was not theirs to see.
+
+So the pin lives in the *shipped package*, which every connector already
+depends on, and the SDK hands out the exact build:
+
+```bash
+python -m application_sdk.dev.pkl print-version   # what CI renders with
+python -m application_sdk.dev.pkl path            # download + cache that build
+python -m application_sdk.dev.pkl check           # has my PATH pkl drifted?
+```
+
+**The mechanics, when you add the next pin.**
+
+1. Declare the literal in one file, on one line, plainly enough for a regex to
+   read (a Renovate custom manager rewrites it in place).
+2. Add a `.github/scripts/<tool>_version.py` with a `resolve --requested`
+   subcommand, and default every workflow/action input to `""` rather than to
+   the version. "Empty means the pin" is conditional logic, so it belongs in the
+   tested script, not the install shell — see the first section of this file.
+3. Resolve from the **action's own** checkout, not the caller's workspace: a
+   composite that runs in a consumer repo has no copy of this repo's source.
+   `${{ github.action_path }}/../../..` is this repo's root in both places.
+4. Put the declaring file in whichever `sdk-gate.yaml` path filter runs the job
+   that would *catch a bad bump*. For `pkl` that is the `toolkit` filter, whose
+   suite regenerates every `contract-toolkit/examples/` tree and fails on any
+   diff — the only check that can prove a pin bump is output-neutral. Skip this
+   and the bump is a one-line change that matches no filter and merges
+   unverified.
+5. Guard it: `.github/scripts/tests/test_pkl_version.py` fails the build if any
+   workflow, action or script spells a `pkl` version out, if a call site pins
+   one, if the textual and imported reads disagree, or if the declaring file
+   falls out of that path filter.
+
 ## Reusing scripts from a reusable workflow
 
 A `uses:` reusable workflow does **not** bring its own repo's files into the
@@ -651,6 +823,64 @@ Three further consequences to design for:
   the degraded value; if any one of them does not, the fail-open is fiction, and
   the honest version is to fail where the cause is still in hand.
 
+### An evicted run still reports, and the newest run owns the required check
+
+A required status check is resolved to the check run of the **newest check suite
+on the commit** — not the most recently completed one. Both halves of that
+sentence are load-bearing, and together they make a same-commit eviction able to
+block a pull request outright.
+
+A bot PR receives several `pull_request` events on one head SHA seconds apart:
+`opened`, then one `labeled` per label the bot applies. Every scaffolded
+`tests.yaml` subscribes to `labeled` (the `e2e` label needs it), so GitHub
+creates one `Tests` run per event on the same SHA and the unit job's ref-keyed
+group evicts all but one. `tests-passed` is `if: always()` — a required context
+must always report — so each evicted run publishes a **`failure`** on
+`tests / Tests Gate`. Eviction order is not run-creation order, so when the
+surviving run is not the highest-id one, its `success` does not count and the PR
+sits at `mergeStateStatus: BLOCKED` with auto-merge enabled until the bot
+rebases. Measured on `atlan-trino-app` (FND-2167): across 18 PRs every merged one
+had its highest-run-id gate `success`, and the single PR whose `success` sat
+under a `cancelled` sibling was the blocked one.
+
+**A skipped job is not a silent job.** It publishes a check run with conclusion
+`skipped`, and GitHub counts `skipped` as a **pass** for a required status check.
+So "skip the jobs on a non-`e2e` `labeled` event" does not remove the duplicate
+runs' verdict — it replaces a false red with a false *green* from the newest
+suite, which would override a genuine `failure` from the `opened` run and make
+the gate decorative on exactly the auto-merge path it guards. Only a job that
+never instantiates reports nothing at all: skipping the **caller** job leaves the
+context untouched, so the previous run's verdict stands. Know which of the two
+you are doing.
+
+**Greening the gate on cancellation is not available either**: an un-run test
+must never green a merge, and a human cancelling the only run would do just that.
+
+What is left is to re-run the offender:
+`.github/scripts/rerun_evicted_tests_run.py`, invoked from `tests-passed` in the
+run that *did* produce a verdict. If a newer run on the same commit concluded
+`cancelled`, it is re-run, and its fresh check runs supersede the evicted
+attempt's on the required context — a measured verdict replacing an unearned one.
+Four properties that make it safe to leave running fleet-wide:
+
+* **Only the newest run is ever touched.** Older evicted siblings publish red
+  rows that are ugly and harmless, and re-running them would put them back in
+  one concurrency group to evict each other again.
+* **An eviction is distinguished from a deliberate cancel by duration.** An
+  eviction never gets a runner and is over in seconds; a person cancels a run
+  minutes in, and that cancel must stick.
+* **One attempt.** A candidate already on `run_attempt` > 1 is left alone, so two
+  runs cannot re-run each other indefinitely.
+* **Fail open, exit 0, `continue-on-error`.** The step runs inside the required
+  context; a repair that can redden it would turn a cosmetic flake into the block
+  it exists to remove.
+
+Re-running needs `actions: write`, which the reusable's own `GITHUB_TOKEN` cannot
+be given — a called workflow may only equal or narrow its caller's grant, the
+callers grant `actions: read`, and asking for more is a hard workflow error in
+every consumer at once. `ORG_PAT_GITHUB` does the write and its absence is a
+logged no-op.
+
 ### Declare the permissions a reusable workflow needs, in the caller
 
 A called workflow's `permissions` can only **equal or narrow** its caller's, so a
@@ -672,3 +902,31 @@ make that edit easy to get wrong:
   level each scope is used at, and asserts the scaffolded caller declares exactly
   that — so adding a scope to a job of the reusable fails there rather than
   silently arriving as `none` in every connector.
+
+### Collapsing a managed workflow into a reusable renames its status check
+
+A job that `uses:` a reusable reports as `<caller job> / <called job>`, never as
+the caller job alone. So moving a bootstrap template's body into a reusable
+renames the check every consumer repo publishes — `checks.yml`'s `pre-commit`
+became `pre-commit / Pre-commit` in FND-1994. Where a repo's ruleset **requires**
+the old context by name, that requirement can never be satisfied again and every
+PR in that repo deadlocks: the required check is simply absent, not failing.
+
+The rename is unavoidable (there is no spelling of caller and callee that
+collapses the path), so it is handled rather than dodged:
+
+* Re-sync one repo at a time and edit its ruleset in the same step. Both halves
+  are per-repo, and neither is a bot action — the fleet App has no
+  `workflows: write` and no ruleset write.
+* `.github/scripts/gate_enforcement_scan.py` reports which repos actually pin a
+  context, which is the list this applies to. Most of the fleet pins nothing and
+  migrates with no ruleset edit at all.
+
+This is also why such a migration is a **pull**, not a push: a repo keeps running
+its own inlined copy until it is re-synced, un-migrated and migrated repos
+coexist indefinitely, and C002 reports the difference at WARN — a signal that the
+repo is due a re-sync, not a failing gate. What that costs the SDK side is that
+every parameter the old shape carried must stay readable: see
+`extract_apt_packages`, which reads `system_deps` off both the caller's `with:`
+block and a pre-migration inline `apt-get install` step. Drop the second arm and
+the first re-sync of an un-migrated repo silently deletes a step its build needs.

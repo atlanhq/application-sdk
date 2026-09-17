@@ -334,3 +334,49 @@ def test_docker_build_gate_cleans_up_its_image() -> None:
     """A long sweep must not accumulate one image per remediated rule."""
     text = _read("functions/docker-build-gate.prose.md")
     assert "docker image rm" in text
+
+
+# ── the area's tier list must match the catalog ────────────────────────────
+
+
+def test_dependency_area_lists_every_warn_tier_d_rule() -> None:
+    """A WARN-tier rule missing from this list is skipped by strict-mode
+    `/remediate`, silently.
+
+    The list drives which findings the area processes in strict mode. Adding a
+    WARN rule to the catalog and forgetting the prose costs nothing at import
+    time, produces no warning, and the only symptom is that the rule is never
+    remediated — indistinguishable from a repo that has no such finding. D014
+    shipped exactly that way and was caught in review, not by a test.
+    """
+    from conformance.suite.rules import CATALOG
+
+    text = _read("areas/dependency.prose.md")
+    listed = set(re.findall(r"\bD\d{3}\b", text.split("### The re-detection")[0]))
+    expected = {
+        rule_id
+        for rule_id, rule in CATALOG.items()
+        if rule_id.startswith("D") and rule.tier.value.upper() == "WARN"
+    }
+    missing = sorted(expected - listed)
+    assert not missing, (
+        f"WARN-tier D-rule(s) {missing} are not named in the dependency area's "
+        "violation-set, so strict-mode /remediate will skip their findings. Add "
+        "them to the WARN-tier list and give each a Fix Prescription entry."
+    )
+
+
+def test_dependency_area_has_a_prescription_for_every_d_rule() -> None:
+    """Being listed as WARN-tier is only half of it: the area also has to say
+    what to do with the finding, or the loop reaches it with no instruction."""
+    from conformance.suite.rules import CATALOG
+
+    text = _read("areas/dependency.prose.md")
+    prescriptions = set(re.findall(r"\*\*(D\d{3}) [A-Za-z]", text))
+    expected = {rule_id for rule_id in CATALOG if rule_id.startswith("D")}
+    missing = sorted(expected - prescriptions)
+    assert not missing, (
+        f"D-rule(s) {missing} have no Fix Prescription entry in the dependency "
+        "area. Every rule the loop can reach needs one, even if it is "
+        "`not_remediable = true` and routes straight to residue."
+    )

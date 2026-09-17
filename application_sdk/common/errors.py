@@ -70,3 +70,30 @@ class FileConverterNotFoundError(UnimplementedError):
     code: ClassVar[str] = "UNIMPLEMENTED_FILE_CONVERTER"
     message: str = "No converter found for file type"
     operation: str | None = "file_conversion"
+
+
+@dataclass(kw_only=True)
+class UnserializableMapperResultError(DataIntegrityError):
+    """An asset mapper returned a type the SDK cannot serialise (FND-2056).
+
+    ``map_<entity>()`` is contracted to return a pyatlan asset or a dict in the
+    Atlas wire shape. Before this error existed the serialiser fell through to
+    writing the *raw source record* instead, so the run published unmapped SQL
+    rows as entities and still reported SUCCESS — silent incompleteness behind
+    a green status, invisible to any count-based check because the file is
+    well-formed JSONL with the right number of lines.
+
+    Non-retryable: the same mapper returns the same type on every attempt.
+    """
+
+    code: ClassVar[str] = "DATA_INTEGRITY_UNSERIALIZABLE_MAPPER_RESULT"
+    message: str = (
+        "Asset mapper returned a value the SDK cannot serialise to the Atlas "
+        "wire shape"
+    )
+    suggested_action: str | None = (
+        "Return a pyatlan asset (one exposing to_nested_bytes(), "
+        "to_nested_dict() or model_dump()) or a dict already in the Atlas wire "
+        "shape from map_<entity>()"
+    )
+    expectation: str | None = "pyatlan asset or dict in the Atlas wire shape"

@@ -32,7 +32,7 @@ from application_sdk.testing.e2e._errors import (
     MissingHarnessEnvError,
     NoWorkerOnTaskQueueError,
 )
-from application_sdk.testing.e2e.base import BaseE2ETest, FullDAGOutcome
+from application_sdk.testing.e2e.base import BaseE2ETest, FullDAGOutcome, NodeDispatch
 from application_sdk.testing.e2e.client import (
     DAGNodeResult,
     DAGNodeStatus,
@@ -563,6 +563,146 @@ class TestObservedPollers:
         suite = _suite()
         suite.temporal_address = "127.0.0.1:7233"  # type: ignore[misc]
         assert suite._resolved_temporal_address() == "127.0.0.1:7233"
+
+
+class TestCaptureStopPointPollers:
+    """FND-1880. AE reports ``Running`` for a task nothing ever claimed exactly
+    as it does for one a worker claimed and stalled on, so the stuck-node line
+    cannot assert either from the status alone. Where Temporal can be read, this
+    is the read that turns it into a measurement — and the reads are scoped to
+    the queues that line will actually ask about."""
+
+    def _stalled(self, *nodes: str) -> DAGRunResult:
+        return DAGRunResult(
+            run_id="r",
+            workflow_slug="s",
+            status=DAGRunStatus.RUNNING,
+            nodes=[
+                DAGNodeResult(
+                    name=name,
+                    status=DAGNodeStatus.RUNNING,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                    error_message=None,
+                )
+                for name in nodes
+            ],
+            progress_stalled_after_seconds=600.0,
+            seconds_since_last_progress=612.0,
+        )
+
+    def _wired(self, **queues: str) -> _Suite:
+        suite = _suite()
+        suite._node_dispatch = {
+            node: NodeDispatch(app_name=node, task_queue=queue)
+            for node, queue in queues.items()
+        }
+        return suite
+
+    def test_no_address_reads_nothing_and_records_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The default, and what a connector CI leg always gets: the runner has
+        no route into the tenant vcluster, so the line hedges instead."""
+        suite = self._wired(extract="atlan-openapi-default")
+        reader = _Reader([])
+        _install_reader(monkeypatch, reader)
+
+        _run_sync(suite._capture_stop_point_pollers(self._stalled("extract")))
+
+        assert reader.queries == []
+        assert suite._queue_pollers == {}
+
+    def test_each_running_nodes_own_queue_is_read_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Keyed by queue, one read per distinct queue — the extract queue is
+        not the answer for a node the seed DAG routed to a system app."""
+        suite = self._wired(
+            extract="atlan-openapi-default",
+            publish="atlan-publish-production",
+            qi="atlan-publish-production",
+        )
+        suite.temporal_address = "127.0.0.1:7233"  # type: ignore[misc]
+        reader = _Reader([])
+        _install_reader(monkeypatch, reader)
+
+        _run_sync(
+            suite._capture_stop_point_pollers(self._stalled("extract", "publish", "qi"))
+        )
+
+        assert reader.queries == [
+            ("atlan-openapi-default", "default"),
+            ("atlan-publish-production", "default"),
+        ]
+        assert set(suite._queue_pollers) == {
+            "atlan-openapi-default",
+            "atlan-publish-production",
+        }
+
+    def test_an_empty_answer_is_recorded_as_the_observed_no_poller_finding(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty is the finding, and it has to survive as a *recorded* reading:
+        an absent key means "not observed", which renders as the hedge."""
+        suite = self._wired(extract="atlan-openapi-default")
+        suite.temporal_address = "127.0.0.1:7233"  # type: ignore[misc]
+        _install_reader(monkeypatch, _Reader([]))
+
+        _run_sync(suite._capture_stop_point_pollers(self._stalled("extract")))
+
+        reading = suite._queue_pollers["atlan-openapi-default"]
+        assert reading.unclaimed
+        assert reading.namespace == "default"
+
+    def test_a_run_that_did_not_stop_early_reads_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No early stop, no stuck-node line to answer for — so a healthy run
+        pays nothing for this."""
+        suite = self._wired(extract="atlan-openapi-default")
+        suite.temporal_address = "127.0.0.1:7233"  # type: ignore[misc]
+        reader = _Reader([])
+        _install_reader(monkeypatch, reader)
+
+        _run_sync(suite._capture_stop_point_pollers(_succeeded("extract")))
+
+        assert reader.queries == []
+        assert suite._queue_pollers == {}
+
+    def test_the_readings_are_replaced_not_accumulated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A multi-DAG suite captures more than once on the same instance, and
+        the class-level default is shared until ``setup_method`` replaces it —
+        so an in-place write would let one run's observation answer for another
+        run, and for another suite."""
+        suite = self._wired(extract="atlan-openapi-default")
+        suite.temporal_address = "127.0.0.1:7233"  # type: ignore[misc]
+        _install_reader(monkeypatch, _Reader([]))
+        _run_sync(suite._capture_stop_point_pollers(self._stalled("extract")))
+        assert suite._queue_pollers
+
+        _run_sync(suite._capture_stop_point_pollers(_succeeded("extract")))
+
+        assert suite._queue_pollers == {}
+        # Never written through to the shared class-level default.
+        assert type(suite)._queue_pollers == {}
+
+    def test_an_unreadable_frontend_records_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A read that failed must never be recorded as an empty poller list —
+        that would manufacture the exact finding the read exists to deliver."""
+        suite = self._wired(extract="atlan-openapi-default")
+        suite.temporal_address = "127.0.0.1:7233"  # type: ignore[misc]
+        _install_reader(
+            monkeypatch, _Reader([], error=RuntimeError("frontend unreachable"))
+        )
+
+        _run_sync(suite._capture_stop_point_pollers(self._stalled("extract")))
+
+        assert suite._queue_pollers == {}
 
 
 class TestTheStallErrorCarriesTheObservation:

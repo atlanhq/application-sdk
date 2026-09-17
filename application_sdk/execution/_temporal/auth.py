@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from application_sdk.constants import APPLICATION_NAME
+from application_sdk.constants import APPLICATION_NAME, APPLICATION_VERSION, COMMIT_SHA
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -326,6 +326,10 @@ class TemporalAuthManager:
                     "refresh_timestamp": str(now),
                     "application_name": app_name,
                     "deployment_name": deployment_name,
+                    # Image identity, repeated on every refresh so the fleet
+                    # registry converges even if worker_start was missed.
+                    "app_version": APPLICATION_VERSION,
+                    "commit_sha": COMMIT_SHA,
                 },
             )
             await _publish_event_via_binding(event)

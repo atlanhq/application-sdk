@@ -365,6 +365,57 @@ class TestDaprBinding:
         with pytest.raises(BindingError):
             await self.binding.invoke("get")
 
+    async def test_invoke_error_surfaces_dapr_error_body(self):
+        """A Dapr 500 carries the real cause only in its JSON body; the
+        BindingError message must carry it too, since the sidecar logs it
+        only at debug level."""
+        req = httpx.Request("POST", "http://localhost:3500/v1.0/bindings/eventstore")
+        resp = httpx.Response(
+            500,
+            request=req,
+            json={
+                "errorCode": "ERR_INVOKE_OUTPUT_BINDING",
+                "message": "error invoking output binding eventstore: "
+                "received status code 403",
+            },
+        )
+        self.client.invoke_binding.side_effect = httpx.HTTPStatusError(
+            "internal error", request=req, response=resp
+        )
+        with pytest.raises(BindingError) as exc:
+            await self.binding.invoke("create")
+        text = str(exc.value)
+        assert "ERR_INVOKE_OUTPUT_BINDING" in text
+        assert "received status code 403" in text
+        assert exc.value.binding_name == "s3"
+        assert exc.value.operation == "create"
+        assert isinstance(exc.value.cause, httpx.HTTPStatusError)
+
+    async def test_invoke_error_surfaces_non_json_body_truncated(self):
+        """A proxy in front of the sidecar may answer with HTML; keep a bounded
+        slice of it rather than dropping it."""
+        req = httpx.Request("POST", "http://localhost:3500/v1.0/bindings/eventstore")
+        resp = httpx.Response(502, request=req, text="<html>" + "x" * 2000)
+        self.client.invoke_binding.side_effect = httpx.HTTPStatusError(
+            "bad gateway", request=req, response=resp
+        )
+        with pytest.raises(BindingError) as exc:
+            await self.binding.invoke("create")
+        text = str(exc.value)
+        assert "<html>" in text
+        assert "x" * 600 not in text
+
+    async def test_invoke_error_without_body_keeps_plain_message(self):
+        req = httpx.Request("POST", "http://localhost:3500/v1.0/bindings/eventstore")
+        resp = httpx.Response(500, request=req)
+        self.client.invoke_binding.side_effect = httpx.HTTPStatusError(
+            "internal error", request=req, response=resp
+        )
+        with pytest.raises(BindingError) as exc:
+            await self.binding.invoke("create")
+        assert str(exc.value).count("Failed to invoke binding") == 1
+        assert "dapr errorCode" not in str(exc.value)
+
 
 # ---------------------------------------------------------------------------
 # DaprPubSub.subscribe / DaprSubscription

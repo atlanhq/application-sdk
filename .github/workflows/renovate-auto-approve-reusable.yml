@@ -47,6 +47,12 @@
 #   4. Every changed file is under .github/, uv.lock, requirements.txt,
 #      pyproject.toml, the Pkl toolkit pin + lock (contract/PklProject[.deps.json]),
 #      or the regenerated contract artifacts (app/generated/**, atlan.yaml, app.yaml)
+#      ...and every changed file under .github/workflows/ is a PIN-ONLY diff:
+#      modified (never added/deleted/renamed), every +/- line a `uses:` step
+#      reference, and the same actions on both sides. A run:/permissions:/on:
+#      edit, or a swapped action, routes to a human (FND-1996). The filename
+#      allowlist alone cannot see what a workflow change does, and this is the
+#      gate rather than the missing `workflows: write` permission doing the work
 #   5. All ruleset-required checks are green (gh pr checks --required exits 0)
 #   6. Renovate's own renovate/artifacts status is green — this is what stops a
 #      failed post-upgrade task from auto-merging

@@ -396,6 +396,32 @@ class TestBuildSdrActivities:
         with pytest.raises(AppContextError):
             _ = handler.context
 
+    async def test_fetch_metadata_mirrors_template_key_onto_object_filter(self) -> None:
+        # Parity with the HTTP /metadata route: the widget routing key must reach
+        # handlers that read the legacy object_filter (e.g. the warehouse widget),
+        # otherwise SDR runs the default fetch and the dropdown renders nothing.
+        handler = _StubHandler()
+        activities = build_sdr_activities(handler, app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        fetch_metadata = by_name[SDR_FETCH_METADATA_ACTIVITY]
+
+        await fetch_metadata(
+            MetadataInput(credentials=[], metadata_template_key="warehouse")
+        )
+        assert handler.metadata_input.object_filter == "warehouse"
+
+        # An explicit object_filter is authoritative and never overwritten.
+        await fetch_metadata(
+            MetadataInput(
+                credentials=[],
+                metadata_template_key="warehouse",
+                object_filter="schemata",
+            )
+        )
+        assert handler.metadata_input.object_filter == "schemata"
+
     async def test_context_app_name_and_credentials_are_populated(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")

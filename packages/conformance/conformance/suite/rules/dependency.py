@@ -588,4 +588,230 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/dependency.md#d011"
         ),
     ),
+    RuleDefinition(
+        id="D012",
+        scope=RuleScope.BOTH,
+        name="UnpinnedPackageIndex",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="supply-chain",
+        autofixable=True,
+        since="0.30.0",
+        rationale=(
+            "Atlan laptops carry a machine-wide uv default index — the Endor Labs "
+            "package firewall, installed into ~/.config/uv/uv.toml with 'default = true' "
+            "and credentials inline. A repo that does not pin its own default index "
+            "inherits it, and then every 'uv run', 'uv sync' and 'uv lock' rewrites every "
+            "package URL in uv.lock to the proxy host. The rewrite is silent in three ways "
+            "at once: it prints nothing, it changes no version and no hash, and it touches "
+            "a file the task at hand never mentioned — so it is noticed only by someone "
+            "who happens to read the diff. A project-level index takes precedence over the "
+            "machine-wide one and every uv subcommand reads it, so one stanza closes the "
+            "whole class. "
+            "Customer impact: the rewritten lock is committed and CI, which holds no "
+            "credential for the proxy, fails at dependency install with 401 Unauthorized "
+            "on a different package each run. The connector's release stalls behind a "
+            "failure that reads as an outage in someone else's infrastructure, and the "
+            "cause is invisible in the diff that produced it — no version moved, no "
+            "hash moved, only the URLs."
+        ),
+        short_description=(
+            "pyproject.toml does not pin PyPI as the default uv index, so a "
+            "machine-wide index can rewrite uv.lock"
+        ),
+        full_description=(
+            "The repo's root ``pyproject.toml`` must declare PyPI as the\n"
+            "resolver's default index::\n"
+            "\n"
+            "    [[tool.uv.index]]\n"
+            '    name = "pypi"\n'
+            '    url = "https://pypi.org/simple"\n'
+            "    default = true\n"
+            "\n"
+            "Two branches, reported at most once per repo:\n"
+            "\n"
+            "1. **No default index** — no ``[[tool.uv.index]]`` entry is\n"
+            "   marked ``default = true``, so whatever default the machine\n"
+            "   supplies is what resolves.\n"
+            "2. **Default index is not PyPI** — an entry is marked default\n"
+            "   but its URL names some other host, which is the proxy rewrite\n"
+            "   already committed into the pyproject.\n"
+            "\n"
+            "Anchored on the root ``pyproject.toml`` only: this is a property\n"
+            "of the repo's resolution, not of each sub-package, so a monorepo\n"
+            "gets one finding rather than one per member.\n"
+            "\n"
+            "The pin belongs in ``pyproject.toml``, **not** in a project-level\n"
+            "``uv.toml``.  A ``uv.toml`` does override the user-level file, but\n"
+            "it also suppresses ``[tool.uv]`` in ``pyproject.toml`` entirely —\n"
+            "silently dropping any ``constraint-dependencies`` CVE floors the\n"
+            "repo declares there.  uv warns about that, but names only\n"
+            "``constraint-dependencies``.\n"
+            "\n"
+            "Scope is ``both``: the SDK inherits the machine-wide index exactly\n"
+            "as an app does.  This rule pins the index; ``D013`` checks whether\n"
+            "a non-PyPI host has already reached ``uv.lock``.  Cite: FND-1928."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d012"
+        ),
+    ),
+    RuleDefinition(
+        id="D013",
+        scope=RuleScope.BOTH,
+        name="NonPyPILockfileIndex",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="supply-chain",
+        autofixable=False,
+        since="0.30.0",
+        rationale=(
+            "D012 is preventive; this is the damage. A uv.lock whose URLs name an internal "
+            "proxy pins the repo's resolution to a credentialed host that CI and every "
+            "contributor outside the firewall cannot reach, so dependency install fails "
+            "with 401 Unauthorized — on a different package each run, because "
+            "resolution order varies, which is what makes it read as someone else's outage "
+            "rather than as a committed file in this repository. Two Atlan repos have "
+            "already lost a debugging cycle to exactly this. The separate credential branch "
+            "exists because the two findings are not the same severity: a proxy host in the "
+            "lock is a broken build, an index credential in the lock is a secret in version "
+            "control that has to be rotated before anything else is done. "
+            "Customer impact: the connector cannot be built or released at all until the "
+            "lock is repaired, and the pre-release gates that would have caught real "
+            "defects never run, because they fail before reaching the code."
+        ),
+        short_description=(
+            "uv.lock resolves packages from a host that is not PyPI, or embeds "
+            "an index credential"
+        ),
+        full_description=(
+            "Every download URL in the repo's ``uv.lock`` must name a PyPI\n"
+            "host — ``files.pythonhosted.org`` or ``pypi.org``.  Two\n"
+            "branches:\n"
+            "\n"
+            "1. **Credentialed URL** — a URL carrying userinfo, or one of\n"
+            "   the known index-key markers.  Reported first and alone: this is\n"
+            "   a secret in version control, and the credential must be rotated\n"
+            "   before the lock is regenerated.\n"
+            "2. **Non-PyPI host** — the lock resolves from an internal\n"
+            "   mirror or proxy.  Restore the committed lock; if a dependency\n"
+            "   genuinely changed, re-lock with\n"
+            "   ``uv lock --default-index https://pypi.org/simple``.\n"
+            "\n"
+            "**Findings never quote a URL — only a host and a count.**  They\n"
+            "reach SARIF, GitHub code scanning, CI logs and the remediation run\n"
+            "artifacts, so interpolating a credentialed URL into a message would\n"
+            "copy the secret into all four.\n"
+            "\n"
+            "**The finding is anchored on** ``pyproject.toml``, not on\n"
+            "``uv.lock``, and names the lock in its message.  A lockfile is\n"
+            "regenerated wholesale on every lock, so a\n"
+            "``# conformance: ignore[D013]`` directive written into it would not\n"
+            "survive — anchoring there would leave the rule with no\n"
+            "suppression path at all.  ``D011``'s lock branch sets the same\n"
+            "precedent.\n"
+            "\n"
+            "A lock that is absent or unparseable never manufactures a finding.\n"
+            "A lock that parses but yields **no** URLs is reported on stderr as\n"
+            "undetermined rather than passing silently: the URL spelling is a uv\n"
+            "implementation detail, and a matcher that has gone inert must not\n"
+            "read as a clean result.  Cite: FND-1928."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d013"
+        ),
+    ),
+    RuleDefinition(
+        id="D014",
+        scope=RuleScope.BOTH,
+        name="AbsoluteResolverFence",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="supply-chain",
+        autofixable=False,
+        since="0.31.0",
+        rationale=(
+            "A repo-local '[tool.uv] exclude-newer' pinned to a fixed date is written as a "
+            "release-age cooldown and behaves as a freeze. The comment above it in all "
+            "three repos found carrying one says 'never resolve a version published in the "
+            "last 7 days'; the value is a timestamp, so it was seven days on the day it was "
+            "typed and has widened by a day every day since. Nothing fails when nobody "
+            "moves it, which is why it is found by census rather than by anyone noticing. "
+            "It bounds every resolve in the repo, /fix-vulnerabilities included, so a "
+            "security fix cannot land until a human edits the date first — the opposite of "
+            "what a cooldown is for. It is also silent in a way that reads as health: "
+            "Renovate's package datasource is unbounded, so it keeps opening upgrade PRs, "
+            "and 'uv lock --upgrade-package' then returns the lock unchanged because uv "
+            "cannot see past the fence. The repo looks maintained and is frozen. "
+            "Customer impact: the connector ships on a dependency set nobody chose, missing "
+            "SDK fixes and CVE patches alike, and the PRs that would have delivered them sit "
+            "open and green-adjacent rather than failing visibly. Measured 2026-09-14: three "
+            "fleet repos, the oldest fence 33 days stale, one of them 12 conformance minors "
+            "and 4 SDK minors behind. FND-414 cleaned eleven repos of this in August; two of "
+            "the three found in September were written AFTER that cleanup, which is why this "
+            "is a rule and not another sweep."
+        ),
+        short_description=(
+            "pyproject.toml pins [tool.uv] exclude-newer to a fixed date, "
+            "freezing every resolve in the repo"
+        ),
+        full_description=(
+            "The repo's root ``pyproject.toml`` must not fence uv's resolver\n"
+            "to an absolute date.  Both places one can be declared are\n"
+            "checked, and each yields its own finding::\n"
+            "\n"
+            "    [tool.uv]\n"
+            '    exclude-newer = "2026-09-01T00:00:00Z"          # repo-wide\n'
+            '    exclude-newer-package = { pkg = "2026-09-03" }  # per package\n'
+            "\n"
+            "Reading only the first misreports a repo that carries both —\n"
+            "``atlan-mongodbatlas-app`` has a repo-wide fence three weeks\n"
+            "older than the per-package carve-outs written to work around it.\n"
+            "\n"
+            "**The value's shape is what is graded, not the key's presence.**\n"
+            'A duration genuinely rolls, so ``exclude-newer-span = "P3D"``\n'
+            "and any non-date value pass.  Only a value beginning\n"
+            "``YYYY-MM-DD`` — uv accepts a bare date and an RFC 3339\n"
+            "timestamp — is a fence that never moves.\n"
+            "\n"
+            "**Each per-package fence carries a discriminator.**  Written as\n"
+            "an inline table they share one line, so fingerprints — hashed\n"
+            "from (rule, uri, line) — would collapse two fenced packages into\n"
+            "one SARIF identity and a line-level directive would silence both.\n"
+            "The discriminator is ``exclude-newer-package.<name>``, so one can\n"
+            "be suppressed alone with\n"
+            "``# conformance: ignore[D014:exclude-newer-package.<name>]`` while\n"
+            "the repo-wide fence is still reported.  Written as a\n"
+            "``[tool.uv.exclude-newer-package]`` sub-table each key anchors on\n"
+            "its own line as well, so the directive sits where a reader expects\n"
+            "it; the discriminator is set either way, because a fingerprint\n"
+            "must not depend on which spelling the repo chose.\n"
+            "\n"
+            "**Findings never state how stale the fence is.**  Staleness is\n"
+            "the point of the rule and also the one fact that changes on every\n"
+            "run: a day count in the message would rewrite the SARIF, move the\n"
+            "fingerprint and re-notify on an unchanged repo daily, forever.\n"
+            "The message names the date; the reader subtracts.\n"
+            "\n"
+            "Not autofixable, deliberately.  Deleting the key is one line, but\n"
+            "the next resolve then jumps the repo across every release the\n"
+            "fence was holding back, and at least one instance is a documented\n"
+            "owner-gated hold (FND-1125) rather than drift.  Which of those a\n"
+            "given fence is cannot be read off the file, so the remediation\n"
+            "loop must not decide it.\n"
+            "\n"
+            "Scope is ``both``: a fence bounds the SDK's own resolves exactly\n"
+            "as it bounds an app's.  The fleet does need a release-age bound —\n"
+            "it is applied centrally and rolling, by ``minimumReleaseAge`` in\n"
+            "``renovate-config/default.json`` and by the bounded driver in\n"
+            "``postUpgradeTasks``, neither of which can rot in a repo.\n"
+            "Cite: FND-1985, FND-1999, FND-2000, FND-2001."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d014"
+        ),
+    ),
 )

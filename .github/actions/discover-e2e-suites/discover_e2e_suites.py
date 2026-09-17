@@ -75,6 +75,32 @@ deliberate edit here.
 callers that target a whole directory rather than fanning out per file
 (``e2e-full-reusable.yaml``).
 
+Per-suite dimensions (FND-1865)
+-------------------------------
+Two of the values a leg runs with used to be resolved once for the whole repo
+while the legs were already per suite: ``source-available`` and the compose
+overlay. A connector whose entrypoints differ in source provisioning could not
+express that — db2's LUW flavour has a community container, its z/OS flavour
+cannot have one at all (container images are architecture *and* OS specific) —
+and no app-side workaround exists: the harness's class attribute loses to
+``E2E_SOURCE_AVAILABLE`` on every CI run, and a module-level ``pytest.skip``
+exits 5, which the composite propagates verbatim, so the leg reds rather than
+skipping.
+
+Both are resolved here, keyed off the discovered suite, and carried in the
+matrix the same way the artifact suffix and the derived deployment name already
+are — see :class:`PerSuiteOptions`:
+
+* ``--source-available`` is the repo-wide default; ``--source-available-overrides``
+  is ``<suite>=true|false``, comma-separated, and overrides in both directions.
+  An override naming an undiscovered suite is a hard failure, not a no-op: an
+  inert override leaves the leg on the repo-wide default, and the run greens
+  having tried to extract from a source that cannot exist.
+* ``--compose-overlay`` is the repo-wide FALLBACK; the per-suite overlay is a
+  convention resolved against the caller's tree
+  (``<dir>/<suite>-docker-compose.yaml``), which is possible here precisely
+  because this driver runs after the caller's checkout.
+
 Co-located with the composite action — NOT under ``.github/scripts/`` — so it
 is checked out alongside the action when consumed from another repo (mirrors
 build_compose_chain.py). It scans the *caller's* checked-out working tree, so
@@ -87,7 +113,8 @@ import argparse
 import json
 import re
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _SANITIZE_RE = re.compile(r"[^a-z0-9]+")
@@ -102,9 +129,30 @@ DEFAULT_CLOUDS = ("aws", "azure", "gcp")
 # every un-customised run is the failure this sentinel exists to prevent.
 NO_CLOUDS = "none"
 
+# The per-suite compose-overlay convention (FND-1865). The matrix fans out one
+# leg per suite, but the overlay used to be a single repo-wide path pinned by
+# the caller, so a multi-entrypoint connector started EVERY source container on
+# EVERY leg — and the worker's `depends_on: service_healthy` made the legs that
+# cannot use one wait for it. A file named for the discovered suite wins over
+# the repo-wide fallback; no such file means "nothing suite-specific here",
+# which is what every single-flavour connector already has, so their behaviour
+# stays byte-identical.
+SUITE_COMPOSE_OVERLAY = "{suite}-docker-compose.yaml"
+
+# The only two spellings a source-availability value may take here. The harness
+# itself is lenient (``1``/``yes`` count as true) because it reads an env var
+# several things write; this reads a hand-written workflow input, where
+# rejecting a ``zos=0`` costs one loud discovery failure and accepting it
+# silently decides whether a leg extracts anything at all.
+_BOOLS = {"true": True, "false": False}
+
 
 class CloudSelectionError(ValueError):
     """The requested cloud fan-out cannot be satisfied."""
+
+
+class SuiteOptionError(ValueError):
+    """A per-suite option is malformed, or names a suite that was not found."""
 
 
 def _leg_name(path: Path) -> str:
@@ -202,7 +250,146 @@ def parse_clouds(raw: str, available: Iterable[str] | None = None) -> list[str]:
     return _split_clouds(raw)
 
 
-def discover(test_dir: str, clouds: list[str] | None = None) -> list[dict[str, str]]:
+def _parse_bool(raw: str, what: str) -> bool:
+    """Return the boolean *raw* spells, or raise naming *what* and the value."""
+    value = raw.strip().lower()
+    if value not in _BOOLS:
+        raise SuiteOptionError(
+            f"{what} must be 'true' or 'false', not {raw.strip()!r}. Rejected "
+            "rather than coerced: this value decides whether a leg runs the "
+            "full DAG or degrades to a worker-up-only check, and a typo that "
+            "read as false would green a leg that extracted nothing."
+        )
+    return _BOOLS[value]
+
+
+def parse_source_available_overrides(raw: str) -> dict[str, bool]:
+    """Parse the per-suite source-availability overrides (FND-1865).
+
+    Accepts the comma-separated ``<suite>=true|false`` form the workflow input
+    carries — ``"db2zos-e2e=false"`` — keyed off the DISCOVERED suite name (the
+    matrix's ``suite``/``name``, i.e. ``test_db2zos_e2e.py`` -> ``db2zos-e2e``),
+    which is the same key ``artifact-suffix`` and the derived
+    ``ATLAN_DEPLOYMENT_NAME`` already use. ``""`` (an untouched input) yields no
+    overrides, so every suite takes the repo-wide default.
+
+    Overrides key on the SUITE, never on the leg: source availability is a
+    property of the entrypoint, not of the CSP tenant the leg runs against, so
+    an override applies to that suite on every cloud.
+
+    Malformed tokens raise rather than being skipped — a dropped override is
+    exactly the silent full-DAG-on-a-sourceless-leg the input exists to prevent.
+    A suite named twice raises too, even with the same value: one of the two
+    lines is not what its author meant.
+    """
+    overrides: dict[str, bool] = {}
+    for token in raw.split(","):
+        item = token.strip()
+        if not item:
+            continue
+        suite, sep, value = item.partition("=")
+        suite = suite.strip()
+        if not sep or not suite:
+            raise SuiteOptionError(
+                f"source-available override {item!r} is not '<suite>=true|false'. "
+                "The suite is the discovered suite name (test_db2zos_e2e.py -> "
+                "db2zos-e2e), e.g. 'db2zos-e2e=false'."
+            )
+        if suite in overrides:
+            raise SuiteOptionError(
+                f"suite {suite!r} appears twice in the source-available "
+                "overrides; one of the two is not what it meant to say."
+            )
+        overrides[suite] = _parse_bool(value, f"source-available override {suite!r}")
+    return overrides
+
+
+def resolve_compose_overlay(suite: str, fallback: str) -> str:
+    """Return *suite*'s compose overlay: its own file if it exists, else *fallback*.
+
+    The convention is ``<fallback's dir>/<suite>-docker-compose.yaml``, resolved
+    against the CALLER's checked-out tree (this driver runs after the caller's
+    checkout, which is what lets a per-suite file be a convention rather than an
+    input). *fallback* is the single repo-wide overlay the caller used to pin for
+    every leg, so a connector with no per-suite file is unaffected.
+
+    Note the asymmetry with the source-availability default: a missing per-suite
+    file falls back, it does not mean "no overlay". Expressing "this suite must
+    layer nothing" is the app's job — it moves the shared overlay's contents
+    into the per-suite files that want them and stops shipping the shared path.
+    """
+    candidate = Path(fallback).parent / SUITE_COMPOSE_OVERLAY.format(suite=suite)
+    return candidate.as_posix() if candidate.is_file() else fallback
+
+
+@dataclass(frozen=True)
+class PerSuiteOptions:
+    """The per-suite dimensions a matrix leg carries beyond file/name/cloud.
+
+    Both existed as ONE repo-wide value per run while the legs were already
+    per-suite (FND-1865): a multi-entrypoint connector whose entrypoints differ
+    in source provisioning — db2's containerisable LUW flavour beside z/OS,
+    which no container can serve — could not express that, and had no app-side
+    workaround (a class attribute loses to the env var; a module-level
+    ``pytest.skip`` exits 5 and reds the leg).
+
+    ``compose_overlay`` is the repo-wide FALLBACK path, not the resolved one:
+    resolution is per suite, against the caller's tree, in
+    :func:`resolve_compose_overlay`.
+    """
+
+    source_available: bool = True
+    source_available_overrides: Mapping[str, bool] = field(default_factory=dict)
+    compose_overlay: str = ""
+
+    def source_available_for(self, suite: str) -> bool:
+        """Whether *suite* has a source: its override if it has one, else the default."""
+        return self.source_available_overrides.get(suite, self.source_available)
+
+    def keys_for(self, suite: str) -> dict[str, str]:
+        """The extra matrix keys for *suite*, as the strings a leg forwards.
+
+        ``source-available`` is always emitted — it always has a value, and a
+        leg that forwarded an empty one would fall back to the harness's class
+        default (true), which is the wrong direction to fail in for a connector
+        that set it false. ``compose-overlay`` is emitted only when a fallback
+        was supplied, because there is no sane default overlay path to derive a
+        convention from (the SDR and full-DAG pipelines use different ones), and
+        an empty value would send the sdr-e2e action to its OWN convention —
+        the SDR overlay — on the full-DAG pipeline.
+        """
+        keys = {"source-available": str(self.source_available_for(suite)).lower()}
+        if self.compose_overlay:
+            keys["compose-overlay"] = resolve_compose_overlay(
+                suite, self.compose_overlay
+            )
+        return keys
+
+    def require_known_suites(self, suites: Iterable[str]) -> None:
+        """Raise when an override names a suite discovery did not find.
+
+        A typo'd or renamed suite name would otherwise be a no-op: the override
+        matches nothing, the leg keeps the repo-wide default, and the run reports
+        green having tried to extract from a source that does not exist. Failing
+        in the discovery job costs seconds and names the suites that do exist.
+        """
+        known = list(suites)
+        unknown = [s for s in self.source_available_overrides if s not in known]
+        if unknown:
+            raise SuiteOptionError(
+                "source-available override(s) name suite(s) that were not "
+                f"discovered: {', '.join(sorted(unknown))}. Discovered suites: "
+                f"{', '.join(known) or 'none'}. An override that matches no "
+                "suite is silently inert — the leg would keep the repo-wide "
+                "default — so this fails instead."
+            )
+
+
+def discover(
+    test_dir: str,
+    clouds: list[str] | None = None,
+    options: PerSuiteOptions | None = None,
+) -> list[dict[str, str]]:
     """Return the ordered matrix ``include`` entries for *test_dir*.
 
     One entry per ``test_*.py`` directly under *test_dir*, crossed with *clouds*
@@ -218,6 +405,11 @@ def discover(test_dir: str, clouds: list[str] | None = None) -> list[dict[str, s
     With no *clouds* the entries keep the pre-FND-6 ``{file, name}`` shape
     exactly: no ``suite``/``cloud`` keys are added, so ``matrix.cloud`` is empty
     in the caller and the tenant resolver takes its single-tenant fallback path.
+
+    *options* adds the per-suite dimensions (FND-1865) — ``source-available``,
+    and ``compose-overlay`` when a fallback path was given. Omitted (the
+    default) it adds nothing, so a caller that does not pass the new inputs gets
+    the pre-FND-1865 entry shape unchanged.
     """
     root = Path(test_dir)
     files = sorted(p for p in root.glob("test_*.py") if p.is_file())
@@ -233,8 +425,14 @@ def discover(test_dir: str, clouds: list[str] | None = None) -> list[dict[str, s
             seen[name] = 1
         suites.append((path, name))
 
+    def extra(suite: str) -> dict[str, str]:
+        return options.keys_for(suite) if options else {}
+
     if not clouds:
-        return [{"file": path.as_posix(), "name": name} for path, name in suites]
+        return [
+            {"file": path.as_posix(), "name": name, **extra(name)}
+            for path, name in suites
+        ]
 
     return [
         {
@@ -242,6 +440,7 @@ def discover(test_dir: str, clouds: list[str] | None = None) -> list[dict[str, s
             "suite": name,
             "cloud": cloud,
             "name": f"{name}-{cloud}",
+            **extra(name),
         }
         for path, name in suites
         for cloud in clouds
@@ -296,6 +495,39 @@ def main(argv: list[str] | None = None) -> int:
             "suite. --test-dir is not read in this mode."
         ),
     )
+    parser.add_argument(
+        "--source-available",
+        default="true",
+        help=(
+            "The repo-wide source-availability default every discovered suite "
+            "takes unless --source-available-overrides names it. 'true' (the "
+            "default) runs the full DAG; 'false' degrades every leg to a "
+            "worker-up-only check."
+        ),
+    )
+    parser.add_argument(
+        "--source-available-overrides",
+        default="",
+        help=(
+            "Comma-separated <suite>=true|false overrides of the repo-wide "
+            "default, keyed off the discovered suite name (test_db2zos_e2e.py "
+            "-> db2zos-e2e), e.g. 'db2zos-e2e=false'. For a multi-entrypoint "
+            "connector whose entrypoints are not equally testable. Empty = no "
+            "overrides. An override naming an undiscovered suite is an error, "
+            "not a no-op."
+        ),
+    )
+    parser.add_argument(
+        "--compose-overlay",
+        default="",
+        help=(
+            "The repo-wide compose overlay each leg falls back to. When set, "
+            "every leg's overlay is resolved per suite as "
+            f"<dir>/{SUITE_COMPOSE_OVERLAY.format(suite='<suite>')} when that "
+            "file exists in the caller's tree, else this path. Empty (the "
+            "default) omits the compose-overlay matrix key entirely."
+        ),
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     try:
@@ -304,7 +536,35 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
 
+    # Parsed before the matrix is built, and nothing is written to stdout on the
+    # failing path: a caller that read a matrix from an errored run would fan out
+    # legs whose per-suite dimensions were never resolved.
+    try:
+        options = PerSuiteOptions(
+            source_available=_parse_bool(args.source_available, "--source-available"),
+            source_available_overrides=parse_source_available_overrides(
+                args.source_available_overrides
+            ),
+            compose_overlay=args.compose_overlay.strip(),
+        )
+    except SuiteOptionError as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
+
     if args.clouds_only:
+        # The cloud-only mode has no suite dimension, so a per-suite option
+        # passed here would be silently inert — which is the failure class the
+        # whole of FND-1865 is about. Say so instead.
+        if options.source_available_overrides or options.compose_overlay:
+            print(
+                "::error::--source-available-overrides / --compose-overlay have "
+                "no meaning with --clouds-only: that mode emits no suite "
+                "dimension, so a per-suite value could not reach any leg. Drop "
+                "them, or drop --clouds-only.",
+                file=sys.stderr,
+            )
+            return 1
+
         # No suites to count in this mode: the caller runs one pytest target per
         # cloud, so the suite count IS the cloud count and a zero there means
         # "no clouds configured" — which the caller's guard should still catch.
@@ -321,7 +581,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     suites = discover(args.test_dir)
-    entries = discover(args.test_dir, clouds)
+    try:
+        options.require_known_suites(e["name"] for e in suites)
+    except SuiteOptionError as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
+    entries = discover(args.test_dir, clouds, options)
 
     nested = _nested_only(args.test_dir)
     if nested:
@@ -344,8 +609,16 @@ def main(argv: list[str] | None = None) -> int:
         f"= {len(entries)} leg(s)",
         file=sys.stderr,
     )
+    # Per-leg, not per-run: "source-available: false" printed once for the run
+    # is what this driver used to be able to say, and it is exactly the sentence
+    # that was wrong for a connector with one testable flavour and one not.
     for e in entries:
-        print(f"  - {e['name']}: {e['file']}", file=sys.stderr)
+        dims = "".join(
+            f" {key}={e[key]}"
+            for key in ("source-available", "compose-overlay")
+            if key in e
+        )
+        print(f"  - {e['name']}: {e['file']}{dims}", file=sys.stderr)
     print(f"matrix={matrix}")
     print(f"count={len(suites)}")
     print(f"leg-count={len(entries)}")

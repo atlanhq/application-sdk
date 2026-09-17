@@ -5,9 +5,11 @@ the application container.  These rules enforce the structural constraints that
 keep the fleet predictable: the correct base image, the base-image entrypoint
 contract, the required module-discovery env var, and non-root execution.
 
-* ``I001`` — FROM must be ``registry.atlan.com/public/app-runtime-base:3``.
-  Reject ``*-latest``, dev-branch tags, raw ``cgr.dev/.../python``, or any
-  other base image.  The v3 major tag is the only accepted form.
+* ``I001`` — FROM must be ``registry.atlan.com/public/app-runtime-base:3``
+  or its GHCR mirror ``ghcr.io/atlanhq/app-runtime-base:3`` (the same image,
+  published to both registries at one digest).  Reject ``*-latest``,
+  dev-branch tags, raw ``cgr.dev/.../python``, or any other base image.  The
+  v3 major tag is the only accepted form.
 
 * ``I002`` — CMD and ENTRYPOINT must not be overridden.  The base image
   co-launches ``daprd`` and handles graceful shutdown on SIGTERM; overriding
@@ -65,11 +67,16 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         short_description=(
             "Final-stage FROM does not use the approved base image "
-            "registry.atlan.com/public/app-runtime-base:3"
+            "registry.atlan.com/public/app-runtime-base:3 (or its GHCR mirror "
+            "ghcr.io/atlanhq/app-runtime-base:3)"
         ),
         full_description=(
             "The final-stage ``FROM`` instruction must be exactly "
-            "``registry.atlan.com/public/app-runtime-base:3``.  The v3 major "
+            "``registry.atlan.com/public/app-runtime-base:3`` or its GHCR "
+            "mirror ``ghcr.io/atlanhq/app-runtime-base:3`` — the same image, "
+            "published to both registries at one digest by harbor-release.yaml, "
+            "so either registry may be named directly (this is what lets a "
+            "Dockerfile move to GHCR without the fix being reverted).  The v3 major "
             "tag is the only accepted form: ``*-latest``, dev-branch tags "
             "(e.g. ``:main``), pinned patch versions (e.g. ``:3.2.1``), "
             "raw upstream Python images, and any other registry or image name "

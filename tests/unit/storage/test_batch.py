@@ -81,6 +81,18 @@ class TestListKeys:
 # ---------------------------------------------------------------------------
 
 
+# The blobstorage proxy's verdict when its own Keycloak lookup times out: it
+# maps that onto ``401 {"code":1005}``, which reads as a rejected credential
+# unless it is classified. Shaped like the ``ops`` fixture of the same name so
+# both sides of the storage layer pin the identical wire text. (FND-2076)
+_GATEWAY_401 = (
+    "Error performing DELETE https://tenant.example.com/api/blobstorage/"
+    "atlan-bucket/artifacts/apps/example/workflows/run-extract/raw/folders/0.json "
+    "in 30.191040891s - Server returned non-2xx status code: 401 Unauthorized: "
+    '{"code":1005,"error":"Invalid Client","message":"Client authentication failed"}'
+)
+
+
 class _ForeignBaseError(BaseException):
     """A leaf ``ops.delete``'s ``except Exception`` cannot wrap.
 
@@ -387,6 +399,88 @@ class TestDeletePrefix:
         ):
             await delete_prefix("r2", store)
         assert "Failed to check root marker" in str(exc_info.value)
+
+    async def test_head_probe_classifies_the_gateway_401(self, store) -> None:
+        """The root-marker HEAD is a classification site like any other.
+
+        It built its ``StorageError`` in place, so a gateway ``(401, 1005)`` on
+        this probe lost the ``http_status`` / ``provider_code`` / ``target``
+        evidence every other storage failure carries — and with it the
+        "do not rotate credentials" remediation. (FND-2076)
+        """
+        from application_sdk.storage.errors import StorageGatewayAuthUnavailableError
+
+        await _put("r3/a.txt", b"1", store, normalize=False)
+
+        async def gateway_401(*args, **kwargs):
+            raise Exception(_GATEWAY_401)
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.head_async",
+                side_effect=gateway_401,
+            ),
+            pytest.raises(StorageGatewayAuthUnavailableError) as exc_info,
+        ):
+            await delete_prefix("r3", store)
+        err = exc_info.value
+        assert "Failed to check root marker" in str(err)
+        assert err.http_status == 401
+        assert err.provider_code == "1005"
+        assert err.target is not None and "r3" in err.target
+        assert err.suggested_action and "Do not rotate" in err.suggested_action
+        # Classification must not turn a transient into a terminal failure.
+        assert err.effective_retryable is True
+
+    async def test_bulk_delete_classifies_the_gateway_401(self, store) -> None:
+        """The write-side sibling of the probe above.
+
+        The bulk ``delete_async`` failure path was the remaining raise in this
+        function that bypassed ``_storage_error_for``, so the same gateway
+        condition reported as a rejected credential on the delete leg while the
+        listing leg beside it classified correctly. (FND-2076)
+        """
+        from application_sdk.storage.errors import StorageGatewayAuthUnavailableError
+
+        await _put("q2/a.txt", b"1", store, normalize=False)
+
+        async def gateway_401(*args, **kwargs):
+            raise Exception(_GATEWAY_401)
+
+        with (
+            patch(
+                "application_sdk.storage.batch.obstore.delete_async",
+                side_effect=gateway_401,
+            ),
+            pytest.raises(StorageGatewayAuthUnavailableError) as exc_info,
+        ):
+            await delete_prefix("q2/", store, normalize=False)
+        err = exc_info.value
+        assert "Failed to delete 1 objects with prefix 'q2/'" in str(err)
+        assert err.http_status == 401
+        assert err.provider_code == "1005"
+        assert err.target is not None and "q2" in err.target
+        assert err.suggested_action and "Do not rotate" in err.suggested_action
+        assert err.effective_retryable is True
+
+    async def test_bulk_delete_not_found_race_still_bypasses_classification(
+        self, store
+    ) -> None:
+        """The FND-341 branch above the classification must stay reachable.
+
+        Routing the fatal path through ``_storage_error_for`` must not change
+        which errors are fatal: a vanished key is still benign and still falls
+        back to the idempotent per-key pass rather than raising a classified
+        error.
+        """
+        await _put("q3/a.txt", b"1", store, normalize=False)
+
+        with patch(
+            "application_sdk.storage.batch.obstore.delete_async",
+            side_effect=_bulk_delete_raising_not_found("q3/a.txt"),
+        ):
+            n = await delete_prefix("q3/", store, normalize=False)
+        assert n == 1
 
 
 # ---------------------------------------------------------------------------

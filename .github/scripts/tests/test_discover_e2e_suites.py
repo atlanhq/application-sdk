@@ -20,9 +20,13 @@ sys.path.insert(
 from discover_e2e_suites import (  # noqa: E402
     DEFAULT_CLOUDS,
     CloudSelectionError,
+    PerSuiteOptions,
+    SuiteOptionError,
     discover,
     main,
     parse_clouds,
+    parse_source_available_overrides,
+    resolve_compose_overlay,
 )
 
 
@@ -421,3 +425,291 @@ def test_clouds_only_narrows_the_same_way(capsys, tmp_path: Path) -> None:
     assert rc == 0
     assert [e["cloud"] for e in _matrix(out)["include"]] == ["aws", "gcp"]
     assert "count=2" in out.splitlines()
+
+
+# ── Per-suite source-availability and compose overlay (FND-1865) ─────────────
+#
+# The legs were per-suite and these two values were per-repo, which a connector
+# whose entrypoints are not equally testable cannot express: db2's LUW flavour
+# has a community container, its z/OS flavour cannot have one at all. The tests
+# below pin the three properties that make the pair usable — an override
+# reaches only its own suite, an undiscovered suite name is a hard failure
+# rather than an inert line, and a suite with no overlay file of its own keeps
+# the repo-wide path byte-identically.
+
+
+def test_overrides_parse_to_the_named_suites_only() -> None:
+    assert parse_source_available_overrides("db2zos-e2e=false") == {"db2zos-e2e": False}
+    assert parse_source_available_overrides(" a=false , b=true ,") == {
+        "a": False,
+        "b": True,
+    }
+
+
+def test_no_overrides_is_an_empty_map_not_an_error() -> None:
+    # An untouched GitHub input arrives as "". Every suite then takes the
+    # repo-wide default, which is the pre-FND-1865 behaviour.
+    assert parse_source_available_overrides("") == {}
+    assert parse_source_available_overrides("  ,  ") == {}
+
+
+@pytest.mark.parametrize("raw", ["db2zos-e2e", "=false", "db2zos-e2e=", "a=0", "a=no"])
+def test_a_malformed_override_raises_rather_than_being_skipped(raw: str) -> None:
+    # Skipping the token would leave the leg on the repo-wide default — the
+    # silent full-DAG-on-a-sourceless-leg the input exists to prevent. Note
+    # `a=0`/`a=no`: the HARNESS accepts those spellings from its env var, and
+    # this input deliberately does not, because here a rejected value costs one
+    # loud discovery failure and an accepted one decides a leg's whole tier.
+    with pytest.raises(SuiteOptionError):
+        parse_source_available_overrides(raw)
+
+
+def test_a_suite_named_twice_raises() -> None:
+    # Even with the same value on both lines: one of the two is not what its
+    # author meant, and picking either silently is a coin toss.
+    with pytest.raises(SuiteOptionError):
+        parse_source_available_overrides("a=false,a=false")
+
+
+def test_an_override_applies_to_its_suite_and_nothing_else(tmp_path: Path) -> None:
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_db2luw_e2e.py", "test_db2zos_e2e.py")
+    options = PerSuiteOptions(
+        source_available=True,
+        source_available_overrides={"db2zos-e2e": False},
+    )
+    resolved = {
+        e["name"]: e["source-available"] for e in discover(str(e2e), [], options)
+    }
+    assert resolved == {"db2luw-e2e": "true", "db2zos-e2e": "false"}
+
+
+def test_an_override_survives_the_cloud_cross_product(tmp_path: Path) -> None:
+    # Source availability is a property of the ENTRYPOINT, not of the CSP tenant
+    # the leg runs against, so the override has to reach that suite on every
+    # cloud — otherwise two of three legs would still try to extract.
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_db2luw_e2e.py", "test_db2zos_e2e.py")
+    options = PerSuiteOptions(source_available_overrides={"db2zos-e2e": False})
+    entries = discover(str(e2e), ["aws", "azure", "gcp"], options)
+    zos = [e for e in entries if e["suite"] == "db2zos-e2e"]
+    luw = [e for e in entries if e["suite"] == "db2luw-e2e"]
+    assert len(zos) == len(luw) == 3
+    assert {e["source-available"] for e in zos} == {"false"}
+    assert {e["source-available"] for e in luw} == {"true"}
+
+
+def test_the_repo_wide_default_can_be_false_with_one_suite_opted_in(
+    tmp_path: Path,
+) -> None:
+    # The inverse direction, which a "suites with no source" list could not
+    # express: most flavours unsourced, one containerisable.
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_a.py", "test_b.py")
+    options = PerSuiteOptions(
+        source_available=False, source_available_overrides={"b": True}
+    )
+    resolved = {
+        e["name"]: e["source-available"] for e in discover(str(e2e), [], options)
+    }
+    assert resolved == {"a": "false", "b": "true"}
+
+
+def test_source_available_is_emitted_even_when_nothing_is_overridden(
+    tmp_path: Path,
+) -> None:
+    # Always present, never blank: a leg forwarding "" would fall back to the
+    # harness's class default (true), so a connector that set the repo-wide
+    # input false would silently run the full DAG.
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_a.py")
+    (entry,) = discover(str(e2e), [], PerSuiteOptions(source_available=False))
+    assert entry["source-available"] == "false"
+
+
+def test_without_options_the_entry_shape_is_unchanged(tmp_path: Path) -> None:
+    # A caller that has not adopted the new inputs must get the pre-FND-1865
+    # matrix, key for key.
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_a.py")
+    (entry,) = discover(str(e2e))
+    assert set(entry) == {"file", "name"}
+
+
+def test_an_undiscovered_suite_in_the_overrides_raises(tmp_path: Path) -> None:
+    # The failure this guards is a no-op, not a crash: a renamed or misspelt
+    # suite name matches nothing, the leg keeps the repo-wide default, and the
+    # run reports green having tried to extract from a source that cannot exist.
+    options = PerSuiteOptions(source_available_overrides={"db2zos-e2e": False})
+    with pytest.raises(SuiteOptionError) as excinfo:
+        options.require_known_suites(["db2luw-e2e"])
+    message = str(excinfo.value)
+    assert "db2zos-e2e" in message
+    assert "db2luw-e2e" in message, "the discovered suites must be named too"
+
+
+def test_a_matching_suite_name_passes_the_check() -> None:
+    options = PerSuiteOptions(source_available_overrides={"a": False})
+    options.require_known_suites(["a", "b"])
+
+
+def test_the_per_suite_overlay_wins_when_the_file_exists(tmp_path: Path) -> None:
+    overlays = tmp_path / ".github" / "e2e"
+    _mk(overlays, "db2luw-e2e-docker-compose.yaml", "e2e-full-docker-compose.yaml")
+    fallback = (overlays / "e2e-full-docker-compose.yaml").as_posix()
+    assert resolve_compose_overlay("db2luw-e2e", fallback) == (
+        (overlays / "db2luw-e2e-docker-compose.yaml").as_posix()
+    )
+
+
+def test_a_suite_without_its_own_overlay_keeps_the_repo_wide_path(
+    tmp_path: Path,
+) -> None:
+    overlays = tmp_path / ".github" / "e2e"
+    _mk(overlays, "e2e-full-docker-compose.yaml")
+    fallback = (overlays / "e2e-full-docker-compose.yaml").as_posix()
+    assert resolve_compose_overlay("db2zos-e2e", fallback) == fallback
+
+
+def test_the_fallback_is_returned_even_when_it_does_not_exist(tmp_path: Path) -> None:
+    # The sdr-e2e action skips a missing overlay silently, which is how a
+    # connector with no overlay at all already runs. Discovery must not start
+    # failing those repos.
+    fallback = (
+        tmp_path / ".github" / "e2e" / "e2e-full-docker-compose.yaml"
+    ).as_posix()
+    assert resolve_compose_overlay("a", fallback) == fallback
+
+
+def test_the_overlay_key_is_omitted_without_a_fallback(tmp_path: Path) -> None:
+    # There is no sane default overlay path to derive the convention from — the
+    # SDR and full-DAG pipelines use different ones — and forwarding "" would
+    # send the sdr-e2e action to its OWN convention (the SDR overlay) on the
+    # full-DAG pipeline.
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_a.py")
+    (entry,) = discover(str(e2e), [], PerSuiteOptions())
+    assert "compose-overlay" not in entry
+
+
+def test_the_overlay_is_resolved_per_leg_in_the_matrix(tmp_path: Path) -> None:
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_db2luw_e2e.py", "test_db2zos_e2e.py")
+    overlays = tmp_path / ".github" / "e2e"
+    _mk(overlays, "db2luw-e2e-docker-compose.yaml", "e2e-full-docker-compose.yaml")
+    fallback = (overlays / "e2e-full-docker-compose.yaml").as_posix()
+    entries = discover(str(e2e), [], PerSuiteOptions(compose_overlay=fallback))
+    assert {e["name"]: e["compose-overlay"] for e in entries} == {
+        "db2luw-e2e": (overlays / "db2luw-e2e-docker-compose.yaml").as_posix(),
+        "db2zos-e2e": fallback,
+    }
+
+
+# ── main(): the CLI surface the composite action drives ──────────────────────
+
+
+def test_main_carries_the_per_suite_dimensions_into_the_matrix(
+    capsys, tmp_path: Path
+) -> None:
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_db2luw_e2e.py", "test_db2zos_e2e.py")
+    overlays = tmp_path / ".github" / "e2e"
+    _mk(overlays, "db2luw-e2e-docker-compose.yaml", "e2e-full-docker-compose.yaml")
+    fallback = (overlays / "e2e-full-docker-compose.yaml").as_posix()
+
+    rc = main(
+        [
+            "--test-dir",
+            str(e2e),
+            "--clouds",
+            "none",
+            "--source-available",
+            "true",
+            "--source-available-overrides",
+            "db2zos-e2e=false",
+            "--compose-overlay",
+            fallback,
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 0
+    legs = {e["name"]: e for e in _matrix(captured.out)["include"]}
+    assert legs["db2zos-e2e"]["source-available"] == "false"
+    assert legs["db2zos-e2e"]["compose-overlay"] == fallback
+    assert legs["db2luw-e2e"]["source-available"] == "true"
+    assert legs["db2luw-e2e"]["compose-overlay"] == (
+        (overlays / "db2luw-e2e-docker-compose.yaml").as_posix()
+    )
+    # Per leg, not per run: one "source-available: false" line for the whole run
+    # is exactly the sentence that was wrong for this connector.
+    assert "db2zos-e2e: " in captured.err
+    assert "source-available=false" in captured.err
+    assert "source-available=true" in captured.err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--source-available", "yes"],
+        ["--source-available", ""],
+        ["--source-available-overrides", "nope"],
+    ],
+)
+def test_main_refuses_a_malformed_per_suite_option(
+    capsys, tmp_path: Path, argv: list[str]
+) -> None:
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_a.py")
+    rc = main(["--test-dir", str(e2e), "--clouds", "none", *argv])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "::error::" in captured.err
+    # Same discipline as the cloud-narrowing failure: nothing on stdout, or the
+    # caller reads a matrix out of a run that errored.
+    assert captured.out == ""
+
+
+def test_main_refuses_an_override_for_an_undiscovered_suite(
+    capsys, tmp_path: Path
+) -> None:
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_db2luw_e2e.py")
+    rc = main(
+        [
+            "--test-dir",
+            str(e2e),
+            "--clouds",
+            "none",
+            "--source-available-overrides",
+            "db2zos-e2e=false",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "db2zos-e2e" in captured.err
+    assert captured.out == ""
+
+
+def test_main_refuses_per_suite_options_in_clouds_only_mode(capsys) -> None:
+    # That mode emits no suite dimension, so a per-suite value could not reach
+    # any leg — inert, which is the failure class this whole change is about.
+    rc = main(
+        ["--clouds", "aws", "--clouds-only", "--source-available-overrides", "a=false"]
+    )
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "::error::" in captured.err
+    assert captured.out == ""
+
+
+def test_clouds_only_still_works_with_the_defaulted_per_suite_options(
+    capsys,
+) -> None:
+    # The composite passes --source-available on every call, so the cloud-only
+    # caller (e2e-full-reusable's plan-clouds) must be unaffected by it.
+    rc = main(["--clouds", "aws,gcp", "--clouds-only", "--source-available", "true"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert _matrix(out) == {
+        "include": [{"cloud": "aws", "name": "aws"}, {"cloud": "gcp", "name": "gcp"}]
+    }

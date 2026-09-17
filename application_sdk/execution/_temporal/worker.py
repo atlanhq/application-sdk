@@ -442,6 +442,7 @@ async def _emit_worker_start_event(
         APP_SDK_VERSION,
         APP_TYPE,
         APPLICATION_VERSION,
+        COMMIT_SHA,
         DEPLOYMENT_OBJECT_STORE_NAME,
         PUBLISHED_AT,
         RELEASE_CHANNEL,
@@ -456,6 +457,7 @@ async def _emit_worker_start_event(
         WorkerStartEventData,
     )
     from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        WORKER_START_DIRECT_PUBLISH_TIMEOUT_SECONDS,
         _publish_event_via_binding,
     )
     from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
@@ -487,6 +489,7 @@ async def _emit_worker_start_event(
         build_id=build_id or None,
         use_worker_versioning=use_worker_versioning,
         app_version=APPLICATION_VERSION,
+        commit_sha=COMMIT_SHA,
         release_id=RELEASE_ID,
         release_channel=RELEASE_CHANNEL,
         sdk_version=APP_SDK_VERSION,
@@ -505,7 +508,10 @@ async def _emit_worker_start_event(
     )
 
     try:
-        await _publish_event_via_binding(event)
+        await _publish_event_via_binding(
+            event,
+            direct_publish_timeout=WORKER_START_DIRECT_PUBLISH_TIMEOUT_SECONDS,
+        )
     except BindingError:
         logger.warning(
             "eventstore binding unavailable — worker_start event not emitted",

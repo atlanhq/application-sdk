@@ -6,6 +6,28 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.26.0] - 2026-09-14
+
+### Breaking changes
+
+- generate a multiSelect DropDown default from a structured defaultSelection (#3771) ([3e2e590](https://github.com/atlanhq/application-sdk/commit/3e2e590))
+
+## [0.25.2] - 2026-09-09
+
+### Bug fixes
+
+- make the pkl pin one readable value so a local eval predicts CI (#3726) ([8532754](https://github.com/atlanhq/application-sdk/commit/8532754))
+
+## [0.25.1] - 2026-09-08
+
+### Bug fixes
+
+- sanitize leading underscores in generated Python field names (#3701) ([c749ac8](https://github.com/atlanhq/application-sdk/commit/c749ac8))
+
+### Other changes
+
+- ci(contract-toolkit): warn when regeneration would drop an app's own post-processing (#3691) ([8ef12b6](https://github.com/atlanhq/application-sdk/commit/8ef12b6))
+
 ## [0.25.0] - 2026-09-07
 
 ### Features

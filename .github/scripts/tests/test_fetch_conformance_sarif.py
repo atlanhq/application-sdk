@@ -318,7 +318,9 @@ def test_downloads_every_series_the_run_published(tmp_path, monkeypatch):
 
 def test_partial_download_still_publishes_what_landed(tmp_path, monkeypatch):
     def rc_for(args):
-        return 1 if "conformance-security-sarif" in args else 0
+        # Both candidate names for the series, so the retry-name fallback is
+        # exercised and still ends up dropping the series.
+        return 1 if any("conformance-security-sarif" in arg for arg in args) else 0
 
     gh = FakeGh(
         runs=json.dumps([{"databaseId": 5, "conclusion": "success"}]),
@@ -333,6 +335,40 @@ def test_partial_download_still_publishes_what_landed(tmp_path, monkeypatch):
     assert rc == 0
     assert out["has_artifacts"] == "true"
     assert out["series"] == "ci"
+
+
+def test_a_series_published_only_under_the_retry_name_still_lands(
+    tmp_path, monkeypatch
+):
+    """The upload's second attempt cannot reuse the first attempt's artifact
+    name — a failed FinalizeArtifact holds that name for the whole run and
+    CreateArtifact then 409s — so it publishes `conformance-<series>-sarif-retry`.
+    That is the only copy of the series' SARIF in such a run, and both the
+    series discovery and the download have to recognise it."""
+
+    def rc_for(args):
+        # Only the retry name exists in this run, as after a finalize 403.
+        return 0 if "conformance-ci-sarif-retry" in args else 1
+
+    gh = FakeGh(
+        runs=json.dumps([{"databaseId": 9, "conclusion": "success"}]),
+        artifacts_by_run={9: _artifacts([("conformance-ci-sarif-retry", False)])},
+        download_rc=rc_for,
+    )
+    rc, out = _run_main(gh, tmp_path, monkeypatch)
+
+    assert rc == 0
+    assert out["has_artifacts"] == "true"
+    assert out["series"] == "ci"
+    assert "conformance-ci-sarif-retry" in gh.downloaded_names()
+
+
+def test_series_name_maps_a_retry_artifact_to_its_series():
+    assert fcs.series_name("conformance-ci-sarif-retry") == "ci"
+    assert fcs.series_name("conformance-ci-sarif") == "ci"
+    # Still not a conformance SARIF artifact just because it ends in -retry.
+    assert fcs.series_name("unit-test-coverage-retry") is None
+    assert fcs.series_name("conformance--sarif-retry") is None
 
 
 def test_no_run_is_a_clean_skip_not_a_failure(tmp_path, monkeypatch):

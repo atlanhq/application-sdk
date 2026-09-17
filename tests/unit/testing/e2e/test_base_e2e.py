@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -34,6 +35,7 @@ from application_sdk.testing.e2e.base import (
     BaseE2ETest,
     FullDAGOutcome,
     NodeDispatch,
+    QueuePollerReading,
     _derive_progress_stall_seconds,
 )
 from application_sdk.testing.e2e.client import (
@@ -46,6 +48,7 @@ from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import AgentSpec, DatabaseSpec, RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.harness._poll import fake_clock
+from application_sdk.testing.harness.temporal import PollerInfo, TaskQueueType
 
 
 @asynccontextmanager
@@ -1314,6 +1317,30 @@ def _stalled_result(
     )
 
 
+def _reading(
+    queue: str = "atlan-publish-production",
+    *,
+    pollers: tuple[PollerInfo, ...] = (),
+    namespace: str = "default",
+) -> QueuePollerReading:
+    """A recorded poller read. An empty ``pollers`` is the observed no-poller
+    answer, not a failed read — a failed read is never recorded at all."""
+    return QueuePollerReading(task_queue=queue, namespace=namespace, pollers=pollers)
+
+
+def _poller(
+    identity: str,
+    build_id: str | None = None,
+    task_queue_type: TaskQueueType = TaskQueueType.WORKFLOW,
+) -> PollerInfo:
+    return PollerInfo(
+        identity=identity,
+        last_access=datetime(2026, 9, 9, tzinfo=UTC),
+        task_queue_type=task_queue_type,
+        build_id=build_id,
+    )
+
+
 class TestCaptureNodeDispatch:
     """The seed DAG is the only local source for a node's task queue —
     ``native-status`` reports statuses, not routing."""
@@ -1532,6 +1559,102 @@ class TestDescribeDagNodes:
         assert "atlan-publish-production" in line
         assert "status=Running error=None" not in line
 
+    def test_running_node_does_not_assert_that_a_worker_claimed_it(self) -> None:
+        """FND-1880. AE reports Running for a task no poller ever claimed just as
+        it does for one a worker picked up and stalled on. The line used to end
+        by asserting the second as fact, which reads as evidence *against* a
+        queue-name mismatch — the cause on the run this came from — and sends
+        the reader into connector code instead."""
+        harness = self._harness()
+        line = harness._describe_dag_nodes(
+            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+        )
+        assert "A worker claimed it and stopped making progress" not in line
+        assert "so this does not say which" in line
+
+    def test_unobserved_running_node_points_at_the_queue_names_first(self) -> None:
+        """The hedge has to be actionable, and the check that settled the real
+        incident is the dispatched queue against the worker's own startup line —
+        with the child workflow as the second step, not the first."""
+        harness = self._harness()
+        line = harness._describe_dag_nodes(
+            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+        )
+        assert "startup line (queue=...)" in line
+        assert "'run-1-publish'" in line
+        assert line.index("startup line") < line.index("'run-1-publish'")
+
+    def test_an_unpolled_queue_is_reported_as_the_observed_cause(self) -> None:
+        """When Temporal was read, the line says which of the two it was rather
+        than hedging — zero pollers is the observed form of "never claimed"."""
+        harness = self._harness()
+        harness._queue_pollers = {"atlan-publish-production": _reading()}
+        line = harness._describe_dag_nodes(
+            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+        )
+        assert "NO poller has claimed it" in line
+        assert "0 pollers on 'atlan-publish-production'" in line
+        assert "does not match the dispatched one" in line
+        assert "so this does not say which" not in line
+
+    def test_a_polled_queue_rules_out_the_mismatch_and_claims_no_more(self) -> None:
+        """Only the negative is decidable from a poller read. ``DescribeTaskQueue``
+        answers who is holding the queue *name* now, not whether this node's task
+        was ever claimed — so a non-empty read must not repeat, on the measured
+        path, the assertion this whole change removes."""
+        harness = self._harness()
+        harness._queue_pollers = {
+            "atlan-publish-production": _reading(
+                pollers=(
+                    _poller("1@worker-a", "build-7", TaskQueueType.WORKFLOW),
+                    _poller("1@worker-a", "build-7", TaskQueueType.ACTIVITY),
+                )
+            )
+        }
+        line = harness._describe_dag_nodes(
+            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+        )
+        assert "Something IS holding 'atlan-publish-production'" in line
+        assert "rules out a queue-name mismatch" in line
+        assert "not proof THIS task was claimed" in line
+        assert "2 poller(s), both halves" in line
+        assert "1@worker-a (Workflow, build build-7)" in line
+        assert "'run-1-publish'" in line
+        # The bug on the unmeasured path, not to be reintroduced on this one.
+        assert "A worker claimed it and stopped making progress" not in line
+
+    def test_a_half_polled_queue_names_the_half_it_holds(self) -> None:
+        """The zombie shape: a worker whose workflow poll loop died while its
+        activity loop lives holds one half, and a union count reports that as
+        "1 poller" exactly as a healthy worker does."""
+        harness = self._harness()
+        harness._queue_pollers = {
+            "atlan-publish-production": _reading(
+                pollers=(_poller("1@worker-a", "build-7", TaskQueueType.WORKFLOW),)
+            )
+        }
+        line = harness._describe_dag_nodes(
+            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+        )
+        assert "1 poller(s), the Workflow half only" in line
+        assert "polling only the other half of the queue" in line
+        assert "A worker claimed it and stopped making progress" not in line
+
+    def test_a_reading_for_another_queue_does_not_answer_for_this_node(
+        self,
+    ) -> None:
+        """Readings are keyed by queue, so a poller read for the extract queue
+        cannot be rendered as the verdict on a node dispatched elsewhere."""
+        harness = self._harness()
+        harness._queue_pollers = {
+            "atlan-something-else": _reading("atlan-something-else")
+        }
+        line = harness._describe_dag_nodes(
+            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+        )
+        assert "so this does not say which" in line
+        assert "NO poller has claimed it" not in line
+
     def test_running_without_a_timeout_is_not_dressed_up(self) -> None:
         """Only a ceiling makes "still running" meaningful; a terminal run's
         Running node (AE raced us) keeps the plain status line."""
@@ -1740,6 +1863,10 @@ class TestTeardownFallsBackToTheHarnessPurge:
 
         harness = _ConcreteE2ETest()
         harness.connection_qualified_name = self._QN
+        # A run that got as far as submitting its DAG, so the connection it
+        # minted may exist — which is what teardown gates the reclaim on since
+        # FND-1873.
+        harness._dag_submitted = True
         monkeypatch.setattr(
             "application_sdk.testing.e2e.base.purge_connection", _record
         )
@@ -1774,6 +1901,7 @@ class TestTeardownFallsBackToTheHarnessPurge:
         """
         harness = _ConcreteE2ETest()
         harness.connection_qualified_name = self._QN
+        harness._dag_submitted = True
 
         def _unreachable(self: object) -> Any:
             raise RuntimeError("no tenant configured")

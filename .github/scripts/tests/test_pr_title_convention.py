@@ -76,17 +76,40 @@ class TestClassifyFiles:
             "cf-core"
         )
 
+    def test_conformance_tests_are_exempt(self):
+        assert ptc.classify_files(["packages/conformance/tests/test_foo.py"]) == "other"
+
     @pytest.mark.parametrize(
         "path",
         [
-            "packages/conformance/tests/test_foo.py",
             "packages/conformance/uv.lock",
             "packages/conformance/ui/package-lock.json",
             "packages/conformance/ui/yarn.lock",
         ],
     )
-    def test_conformance_exempt_paths(self, path):
-        assert ptc.classify_files([path]) == "other"
+    def test_conformance_lock_files_are_deps(self, path):
+        # Lock files classify as a dependency update; both zones require chore/ci.
+        assert ptc.classify_files([path]) == "deps"
+
+    @pytest.mark.parametrize(
+        "files",
+        [
+            ["pyproject.toml", "uv.lock"],
+            ["packages/conformance/pyproject.toml", "packages/conformance/uv.lock"],
+            ["packages/conformance/conformance/package.json"],
+            ["contract-toolkit/pyproject.toml"],
+            ["requirements.txt"],
+        ],
+    )
+    def test_dependency_manifests_only_is_deps(self, files):
+        assert ptc.classify_files(files) == "deps"
+
+    def test_manifest_plus_source_is_not_deps(self):
+        # A real source change that also touches a manifest keeps its zone.
+        assert ptc.classify_files(
+            ["packages/conformance/pyproject.toml", "packages/conformance/foo.py"]
+        ) == ("cf-core")
+        assert ptc.classify_files(["pyproject.toml", "entrypoint.sh"]) == "docker-img"
 
     def test_docs_only_is_other(self):
         assert ptc.classify_files(["docs/foo.md"]) == "other"
@@ -126,6 +149,18 @@ class TestValidate:
     def test_cf_core_requires_exact_scope(self):
         assert ptc.validate("cf-core", "feat(conformance): x") == (False, "")
         assert ptc.validate("cf-core", "feat: x") == (True, "cf-core")
+
+    def test_deps_accepts_chore_or_ci(self):
+        assert ptc.validate(
+            "deps", "chore(deps): update dependency ruff to v0.16.7"
+        ) == (
+            False,
+            "",
+        )
+        assert ptc.validate("deps", "ci: pin uv") == (False, "")
+
+    def test_deps_rejects_feat_fix(self):
+        assert ptc.validate("deps", "feat(conformance): bump ruff") == (True, "deps")
 
     def test_other_accepts_chore_or_ci(self):
         assert ptc.validate("other", "chore: tidy") == (False, "")
@@ -173,6 +208,36 @@ class TestRun:
         )
         assert (violation, expected) == (True, "docker-img")
         assert "feat`/`fix` title" in comment_out.read_text()
+
+    def test_conformance_dependency_bump_accepts_chore_deps(self, tmp_path: Path):
+        changed = _write_changed_files(
+            tmp_path,
+            ["packages/conformance/pyproject.toml", "packages/conformance/uv.lock"],
+        )
+        comment_out = tmp_path / "comment.md"
+        violation, expected = ptc.run(
+            "chore(deps): update dependency ruff to v0.16.7",
+            "renovate/non-critical-python-dependencies",
+            str(changed),
+            str(comment_out),
+        )
+        assert (violation, expected) == (False, "")
+        assert not comment_out.exists()
+
+    def test_conformance_dependency_bump_rejects_feat(self, tmp_path: Path):
+        changed = _write_changed_files(
+            tmp_path,
+            ["packages/conformance/pyproject.toml", "packages/conformance/uv.lock"],
+        )
+        comment_out = tmp_path / "comment.md"
+        violation, expected = ptc.run(
+            "feat(conformance): update dependency ruff",
+            "renovate/non-critical-python-dependencies",
+            str(changed),
+            str(comment_out),
+        )
+        assert (violation, expected) == (True, "deps")
+        assert "`chore`/`ci` title" in comment_out.read_text()
 
     def test_entrypoint_with_fix_title_passes(self, tmp_path: Path):
         changed = _write_changed_files(tmp_path, ["entrypoint.sh"])

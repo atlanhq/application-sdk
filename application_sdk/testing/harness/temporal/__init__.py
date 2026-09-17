@@ -10,12 +10,19 @@ available on the first probe. The largest regression class it catches has no
 other detector at all: a queue name that is well formed and refers to nothing,
 where every string comparison passes and the queue simply does not exist.
 
-**Available, not yet adopted.** ``poll_native_status`` still infers, and nothing
-in ``testing/e2e`` calls this module — swapping the inference for the read is
-child H's, with the rest of the re-expression. The distinction is worth keeping
-straight in both directions: claiming the upgrade here would misreport the state
-of the tree, and describing this module as merely optional would understate why
-the read has to exist before that swap can happen.
+**Adopted where a suite has a route, alongside the inference — not instead of
+it.** ``poll_native_status`` still infers, and that inference is still what
+fires; :meth:`~application_sdk.testing.e2e.base.BaseE2ETest._read_queue_pollers`
+is the one place ``testing/e2e`` reads this module, and it answers ``None``
+whenever no ``temporal_address`` is configured or the frontend could not be
+read. Two callers use it: the stall guard's ``NoWorkerOnTaskQueueError``, which
+gets Temporal's answer appended to its inference, and the stuck-node diagnostic
+(FND-1880), which uses a zero-poller reading to say whether a still-``Running``
+node was ever *claimed* rather than asserting a cause. The distinction is worth
+keeping straight in both directions: a connector CI runner has no route into the
+tenant vcluster, so claiming the inference has been replaced would misreport the
+tree, and describing this module as merely optional would understate why the read
+has to exist for either caller to report a measurement at all.
 
 Read-only, like :mod:`application_sdk.testing.harness.cluster`, and for the same
 reason: scenario-side mutation stays scenario-side. Starting work already has a

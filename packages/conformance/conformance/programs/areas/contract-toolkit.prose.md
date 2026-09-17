@@ -28,7 +28,9 @@ description: >
   wrong -- in contract/app.pkl plus a regenerate, or in the App class attribute.
   K016 (a public hand-off with no artifact schema) and K017 (a declared artifact
   schema its own writer contradicts) are the artifact-schema pair: K016 is fixed by
-  declaring the shape in contract/app.pkl and regenerating; K017 is fixed on
+  declaring the shape in contract/app.pkl and regenerating -- except on a field
+  carrying the SDK's AssetArtifact marker, which is already declared by the Asset
+  model and is a no-action case; K017 is fixed on
   whichever side is wrong -- the declaration or the writer.
   K018 (the extract node sends a flat arg the entrypoint's Input contract cannot
   receive), K019 (a uiConfig form key with no matching {{...}} placeholder),
@@ -675,6 +677,33 @@ route to residue with the question, rather than declaring a plausible-looking
 schema.
 
 *Procedure:*
+
+0. **First, check whether the field is model-declared — and if it is, stop.**  A
+   `FileReference` field carrying the SDK's `AssetArtifact` marker
+   (`application_sdk.contracts.types`) is already declared, by the `pyatlan_v9`
+   `Asset` model rather than by a field map, and the SDK's interceptor validates
+   it against the whole of it.  There is nothing to author and nothing to
+   suppress: this is a **no-action** case, not a fix and not a residue item.
+
+   The rule already exempts these, so a finding on one means the exemption
+   mis-fired — route to residue naming the field, rather than satisfying it with
+   a declaration.  Two shapes to recognise:
+
+   * the field's own annotation carries it —
+     `Annotated[list[FileReference], AssetArtifact()]`;
+   * the field is inherited from an SDK contract that carries it — most often
+     `ExtractionOutput.transformed_files`, which the SDK declares, `SqlApp.run()`
+     populates and `SqlApp._transform_entity` writes, so no connector authors any
+     part of it.
+
+   **A hand-written envelope for one of these fields is the defect, not the
+   remedy.**  The asset hand-off is 500+ types and 4000+ properties, and the
+   nested format omits every unset attribute, so anything authored for it is a
+   partial restatement of `Asset` — and choosing `required` from what one
+   connector happens to emit encodes a connector-local observation as a cross-app
+   contract.  If the contract already declares such a field, **removing** that
+   entry is the correct edit: the declaration is ignored at runtime (the model
+   wins), so deleting it changes no behaviour.
 
 1. **Find what writes the field.**  Follow the `FileReference` named in the
    finding to the code that populates it — the writer's columns (parquet) or
