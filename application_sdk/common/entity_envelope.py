@@ -51,12 +51,19 @@ So the v9 path delegates, and :func:`flatten_envelope` exists only for the
 shapes ``to_atlas_format`` cannot take: plain dicts and pyatlan v1 models.
 
 The two paths agree on the question this module exists to settle — where
-relationship refs live — and diverge on null handling. ``to_atlas_format``
-collapses an explicit ``None`` into an absent key (``to_nested_bytes`` does
-not); :func:`flatten_envelope` leaves nulls exactly as the mapper wrote them.
-See :func:`flatten_envelope` for why making them identical silently deleted
-data a dict-returning mapper had emitted on purpose, and why the v9 side's
-loss is tolerable here.
+relationship refs live — and, from pyatlan 11.3.0, on null handling too: both
+leave an explicit ``None`` exactly where the mapper wrote it, and both omit a
+field that was never set.
+
+That second agreement is a pinned dependency premise, not a property of this
+code. Up to pyatlan 11.2.0 ``to_atlas_format`` dropped explicit nulls in its
+key partition, so the flattened envelope disagreed both with
+:func:`flatten_envelope` and with ``to_nested_bytes`` — which is why
+``pyproject.toml`` floors at ``pyatlan>=11.3`` rather than the ``>=11`` range
+that would otherwise do. ``TestPyatlanFlattenContract`` in
+``tests/unit/common/test_entity_envelope.py`` is what catches a move here.
+See :func:`flatten_envelope` for why the SDK never mirrored the drop on its
+own side.
 
 Public API::
 
@@ -212,33 +219,34 @@ def flatten_envelope(entity: dict[str, Any]) -> dict[str, Any]:
     The generic path, for the shapes ``to_atlas_format`` cannot take: a plain
     dict from a dict-returning mapper, or a pyatlan v1 model's ``model_dump``.
 
-    **This moves relationship refs and nothing else.** It deliberately does not
-    copy ``to_atlas_format``'s null-dropping. An earlier revision did, on the
-    reasoning that ``FLATTENED`` should mean one thing whatever the mapper
-    returned — but that silently deleted values a dict-returning mapper had
-    emitted on purpose. ``atlan-clickhouse-app``'s ``_rel()`` emits a null
-    relationship stub to mirror "the legacy transformer's all-None-leaves
-    collapse", and its ``_positive_bigint_or_none`` emits null ``rowCount`` /
-    ``sizeBytes`` for the same v2 parity. Dropping those rehashes every entity
-    in ``atlan-publish-app``'s diff cache for no behavioural gain.
+    **This moves relationship refs and nothing else.** In particular it does
+    not drop nulls. An earlier revision did, copying what ``to_atlas_format``
+    did at the time, on the reasoning that ``FLATTENED`` should mean one thing
+    whatever the mapper returned — but that silently deleted values a
+    dict-returning mapper had emitted on purpose. ``atlan-clickhouse-app``'s
+    ``_rel()`` emits a null relationship stub to mirror "the legacy
+    transformer's all-None-leaves collapse", and its
+    ``_positive_bigint_or_none`` emits null ``rowCount`` / ``sizeBytes`` for
+    the same v2 parity. Dropping those rehashes every entity in
+    ``atlan-publish-app``'s diff cache for no behavioural gain.
 
     So null handling stays the mapper's decision here, and ``FLATTENED`` means
     exactly "relationship refs live in ``attributes``" — the only question the
     envelope needed to settle.
 
-    The asymmetry with the v9 path is real and worth naming, because the
-    obvious explanation for it is wrong. ``pyatlan_v9`` fields are three-state
-    (``Union[str, None, UnsetType] = UNSET``), so an asset **can** express an
-    explicit null, and ``to_nested_bytes`` preserves the distinction —
-    ``UNSET`` is absent, ``None`` serialises as ``null``. It is
-    ``to_atlas_format`` that collapses ``None`` into absent. That loss is
-    tolerable in this pipeline rather than harmless in principle:
-    ``atlan-publish-app``'s ``calculate_attributes_diff`` re-synthesises the
-    clear, emitting ``{key: None}`` when a key present in the cached entity is
-    absent from the new one. So a v9 asset's dropped null still reaches Atlas
-    as a clear on the incremental path, and on a create there is nothing to
-    clear. Do not rely on a producer-side null for a v9 asset; set the value
-    you mean.
+    pyatlan 11.3.0 reached the same conclusion on its side, which is why the
+    two paths now agree rather than the SDK tolerating a known loss. Worth
+    keeping the shape of that loss in mind, because the ``>=11.3`` floor in
+    ``pyproject.toml`` is all that holds it off. ``pyatlan_v9`` fields are
+    three-state (``Union[str, None, UnsetType] = UNSET``), so an asset can
+    express an explicit null; up to 11.2.0 ``to_atlas_format`` rendered that
+    ``None`` identically to ``UNSET``, as an absent key. It survived review
+    because ``atlan-publish-app``'s ``calculate_attributes_diff``
+    re-synthesises the clear, emitting ``{key: None}`` when a key present in
+    the cached entity is absent from the new one — so a dropped null still
+    reached Atlas on the incremental path, and on a create there was nothing
+    to clear. That argument no longer has to be made; a producer-side null on
+    a v9 asset now reaches the wire as written.
 
     ``appendRelationshipAttributes`` and ``removeRelationshipAttributes`` are
     dropped rather than merged. That is load-bearing, not tidying:
@@ -333,7 +341,7 @@ def apply_envelope(
         policy: The connector's declared envelope policy.
         decorations: Top-level contract fields to add, if any.
         already_flattened: True when *entity* came from ``to_atlas_format``,
-            which has done the flattening and null-dropping itself. Skips
+            which has done the flattening itself. Skips
             :func:`flatten_envelope` rather than re-running a no-op over every
             record.
 
