@@ -15,6 +15,7 @@ from __future__ import annotations
 import msgspec
 import pytest
 from pyatlan_v9.model.transform import get_type
+from pydantic import ValidationError
 
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
 
@@ -224,37 +225,48 @@ class TestFromConnection:
         assert isinstance(ref.attributes, ConnectionAttributes)
 
 
-class TestNullAttributesAreTreatedAsAbsent:
-    """A ``Connection`` carrying an explicit null must still decode.
+class TestNullAdminListsAreAValue:
+    """A cleared ``admin_*`` list survives; a null identity does not.
 
-    ``qualified_name``, ``name`` and the three admin lists are non-optional
-    with a default, so a ``null`` in the input is a hard ``ValidationError``
-    rather than a fall-through to the default.
-
-    This was unreachable through :meth:`ConnectionRef.from_connection` until
-    pyatlan 11.3.0: up to 11.2.0 ``to_atlas_format`` dropped explicit nulls,
-    so the key never arrived. 11.3.0 preserves them. The drop was the only
-    thing standing between this model and a crash, and it was never a
-    property anyone chose — see ``TestPyatlanFlattenContract`` in
+    Only observable from pyatlan 11.3.0. Up to 11.2.0 ``to_atlas_format``
+    dropped explicit nulls, so a cleared field reached
+    :meth:`ConnectionRef.from_connection` indistinguishable from one that was
+    never set — see ``TestPyatlanFlattenContract`` in
     ``tests/unit/common/test_entity_envelope.py``.
+
+    The two halves are deliberately asymmetric. Clearing ``admin_roles`` while
+    granting ``admin_groups`` is an ordinary ACL edit and Atlas accepts
+    clearing all three, so a null there is a value to carry. ``qualifiedName``
+    and ``name`` are identity: coercing a null to ``""`` would manufacture an
+    empty identity and surface the failure somewhere further from its cause.
     """
 
-    def test_from_connection_survives_a_null_admin_list(self) -> None:
+    def test_from_connection_preserves_a_cleared_admin_list(self) -> None:
         conn = _make_conn(admin_users=["alice"])
         conn.admin_roles = None  # type: ignore[attr-defined]
 
         ref = ConnectionRef.from_connection(conn)
 
-        assert ref.attributes.admin_roles == []
-        assert set(ref.attributes.admin_users) == {"alice"}
+        assert ref.attributes.admin_roles is None
+        assert set(ref.attributes.admin_users or []) == {"alice"}
 
-    def test_null_scalars_fall_through_to_the_default(self) -> None:
+    def test_an_absent_admin_list_is_an_empty_list_not_none(self) -> None:
+        """Absent and cleared must not collapse onto each other."""
+        ref = ConnectionRef.model_validate(
+            {"typeName": "Connection", "attributes": {"name": "c"}}
+        )
+
+        assert ref.attributes.admin_roles == []
+        assert ref.attributes.admin_roles is not None
+
+    def test_all_three_admin_lists_may_be_cleared_at_once(self) -> None:
+        """Atlas permits it — it orphans the connection, but it is legal."""
         ref = ConnectionRef.model_validate(
             {
                 "typeName": "Connection",
                 "attributes": {
-                    "qualifiedName": None,
-                    "name": None,
+                    "qualifiedName": "default/sf/123",
+                    "name": "c",
                     "adminUsers": None,
                     "adminRoles": None,
                     "adminGroups": None,
@@ -262,26 +274,31 @@ class TestNullAttributesAreTreatedAsAbsent:
             }
         )
 
-        assert ref.attributes.qualified_name == ""
-        assert ref.attributes.name == ""
-        assert ref.attributes.admin_users == []
-        assert ref.attributes.admin_roles == []
-        assert ref.attributes.admin_groups == []
+        assert ref.attributes.admin_users is None
+        assert ref.attributes.admin_roles is None
+        assert ref.attributes.admin_groups is None
 
-    def test_a_real_value_is_still_taken(self) -> None:
-        """The normalisation must not swallow values, only nulls."""
-        ref = ConnectionRef.model_validate(
-            {
-                "typeName": "Connection",
-                "attributes": {"name": "my-conn", "adminUsers": ["alice"]},
-            }
-        )
+    def test_a_cleared_admin_list_round_trips_back_to_the_struct(self) -> None:
+        """``None`` must reach the wire as ``null``, not as ``[]``."""
+        conn = _make_conn(admin_users=["alice"])
+        conn.admin_roles = None  # type: ignore[attr-defined]
 
-        assert ref.attributes.name == "my-conn"
-        assert ref.attributes.admin_users == ["alice"]
+        back = ConnectionRef.from_connection(conn).to_connection()
 
-    def test_optional_fields_keep_an_explicit_null(self) -> None:
-        """``connector_name`` / ``category`` are ``str | None`` — untouched."""
+        assert back.admin_roles is None
+
+    @pytest.mark.parametrize("field", ["qualifiedName", "name"])
+    def test_a_null_identity_field_is_rejected(self, field: str) -> None:
+        with pytest.raises(ValidationError):
+            ConnectionRef.model_validate(
+                {
+                    "typeName": "Connection",
+                    "attributes": {"qualifiedName": "default/sf/123", field: None},
+                }
+            )
+
+    def test_optional_scalars_keep_an_explicit_null(self) -> None:
+        """``connector_name`` / ``category`` are ``str | None`` already."""
         ref = ConnectionRef.model_validate(
             {
                 "typeName": "Connection",

@@ -20,7 +20,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.common._listing import safe_list_directory
@@ -503,15 +503,36 @@ class ConnectionAttributes(BaseModel, frozen=True):
 
     ``extra="allow"`` ensures unknown AE fields (connector-specific attributes)
     survive round-trips without requiring SDK changes.
+
+    Nulls
+    -----
+
+    ``qualified_name`` and ``name`` are identity: a Connection without them is
+    not addressable, so an explicit ``null`` is rejected rather than coerced.
+    Silently substituting ``""`` would manufacture an empty identity and push
+    the failure somewhere further from its cause.
+
+    The three ``admin_*`` fields are different. A ``null`` there is a *value*,
+    not an absence — clearing ``admin_roles`` while granting ``admin_groups``
+    is an ordinary ACL edit, and Atlas accepts clearing all three (which
+    leaves the connection editable by nobody, but the API permits it). So the
+    distinction is preserved end to end: **absent** stays ``[]``, an explicit
+    **null** stays ``None``.
+
+    That distinction only became observable at pyatlan 11.3.0. Up to 11.2.0
+    ``to_atlas_format`` dropped explicit nulls, so a cleared field reached
+    :meth:`ConnectionRef.from_connection` indistinguishable from one that was
+    never set. Collapsing it back to ``[]`` here would reintroduce exactly
+    that loss on the SDK's side of the boundary.
     """
 
     qualified_name: str = ""
     name: str = ""
     connector_name: str | None = None
     category: str | None = None
-    admin_users: list[str] = Field(default_factory=list)
-    admin_roles: list[str] = Field(default_factory=list)
-    admin_groups: list[str] = Field(default_factory=list)
+    admin_users: list[str] | None = Field(default_factory=list)
+    admin_roles: list[str] | None = Field(default_factory=list)
+    admin_groups: list[str] | None = Field(default_factory=list)
 
     model_config = ConfigDict(
         frozen=True,
@@ -519,37 +540,6 @@ class ConnectionAttributes(BaseModel, frozen=True):
         alias_generator=to_camel,
         populate_by_name=True,
     )
-
-    @field_validator(
-        "qualified_name",
-        "name",
-        "admin_users",
-        "admin_roles",
-        "admin_groups",
-        mode="before",
-    )
-    @classmethod
-    def _null_means_unset(cls, value: Any, info: ValidationInfo) -> Any:
-        """Treat an explicit ``null`` on a non-optional field as "not given".
-
-        These five are non-optional with a default, so a ``null`` in the input
-        is a hard ``ValidationError`` rather than a fall-through to the
-        default. That never surfaced while :meth:`ConnectionRef.from_connection`
-        fed this model from ``to_atlas_format``, because up to pyatlan 11.2.0
-        that encoder dropped explicit nulls and the key simply wasn't there.
-        pyatlan 11.3.0 preserves them, so a ``Connection`` carrying
-        ``admin_roles = None`` now reaches this model as ``{"adminRoles":
-        None}``.
-
-        Absent and null mean the same thing to every reader of this contract —
-        "no value" — so they are normalised to the same place rather than one
-        of them raising. The ``Optional`` fields need no such treatment: they
-        accept ``None`` already.
-        """
-        if value is not None:
-            return value
-        field = cls.model_fields[str(info.field_name)]
-        return field.get_default(call_default_factory=True)
 
 
 class ConnectionRef(BaseModel, frozen=True):
