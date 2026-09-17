@@ -145,8 +145,12 @@ Every exit shares one builder on purpose. A consumer must be able to read a kill
 chain and find the previous attempt's typed evidence, so the retry marker cannot carry less
 than the block does; and a plumbing failure that left the activity as a bare class name gave
 the reader nothing to attribute at all. The workflow parses this payload inside its own
-`except`, so it reads tolerantly: a payload it cannot parse is `gate_broken` and fails open
-rather than failing the workflow task.
+`except`, so it reads tolerantly: a `details[0]` it cannot parse is `gate_broken` and fails
+open rather than failing the workflow task, and a single check it cannot parse is dropped
+from `checks` while the block stands on `details[0]`. `checks` may therefore be shorter
+than the handler's list, and it is empty on the `frame_lost` block the workflow raises for
+a killed attempt that left no evidence. A consumer must attribute from `details[0]` and
+treat `checks` as supplementary, never index `checks[0]`.
 
 ## The preflight-results write route
 

@@ -441,6 +441,7 @@ a platform blip must not fail a healthy run. The gate stamps which of the two ha
 | Credential lookup failed for another reason | `gate_broken` | fail open | fail open |
 | Secret-store outage in the gate's own resolution | `gate_broken` | fail open | fail open |
 | No worker ever ran the attempt (`SCHEDULE_TO_START`) | `gate_broken` | fail open | fail open |
+| The workflow cancelled the gate activity (`CancelledError`) | `gate_broken` | fail open | fail open |
 | Gate skipped (replay, source-less app) | `not_run` | `skipped` | `skipped` |
 
 The line is drawn by **who raised**, not by the error's category. Anything that escapes

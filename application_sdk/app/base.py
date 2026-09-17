@@ -2514,6 +2514,13 @@ async def _run_preflight_gate(
     visible rather than silent. Credential resolution happens inside the activity
     — the deterministic workflow forwards only secret-free references.
 
+    The patch id is deliberately not bumped for the hard-mode block this frame
+    now raises on a dead gate: a run in flight across the upgrade whose gate
+    failed without a block would replay into a raise here, but workers pin
+    their deployment version (``default_versioning_behavior = PINNED``), so
+    such a run finishes on the build that started it. Only a deployment with no
+    ``ATLAN_APP_BUILD_ID`` — local, self-deployed — can replay across the change.
+
     ``budget_seconds``, ``max_attempts`` and ``gate_mode`` come from the app's
     declared ``App.preflight_gate_*`` attributes (``ClassVar``s, so reading them
     here is replay-deterministic); ``None`` means the SDK default, and the clamps
