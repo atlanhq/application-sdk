@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.34.2
-source-sha:    500722ed520ecc12b8b295a9ef7adf822ab5f16a
-source-date:   2026-09-15T16:55:35+01:00
+sdk-version:   3.34.3
+source-sha:    af576016582a9598b36d2073373e76ba9438e1ca
+source-date:   2026-09-16T09:10:49Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 33 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 45 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 384 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 403 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -493,6 +493,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Enumeration of dataframe types.
 - **Defined in:** `application_sdk/common/types.py`
 
+#### `EntityDecorations`
+
+- **Import:** `from application_sdk.common.entity_envelope import EntityDecorations`
+- **Signature:** `class EntityDecorations(default_catalog_name: str | None = None, default_schema_name: str | None = None) -> None`
+- **Summary:** Top-level entity fields that no pyatlan model field can hold.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `EntityEnvelopePolicy`
+
+- **Import:** `from application_sdk.common.entity_envelope import EntityEnvelopePolicy`
+- **Signature:** `class EntityEnvelopePolicy(shape: EnvelopeShape = EnvelopeShape.FLATTENED, sql_dialect: str | None = None) -> None`
+- **Summary:** How one connector's serialised entities are shaped.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `EnvelopeShape`
+
+- **Import:** `from application_sdk.common.entity_envelope import EnvelopeShape`
+- **Signature:** `class EnvelopeShape`
+- **Summary:** Where relationship references live in the serialised entity.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
 #### `FilterPattern`
 
 - **Import:** `from application_sdk.common import FilterPattern`
@@ -500,6 +521,20 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `class FilterPattern(include: list[re.Pattern[str]], exclude: list[re.Pattern[str]])`
 - **Summary:** A compiled include/exclude filter with uniform regex-or-exact semantics.
 - **Defined in:** `application_sdk/common/filter_matching.py`
+
+#### `LastSyncDetails`
+
+- **Import:** `from application_sdk.common.last_sync import LastSyncDetails`
+- **Signature:** `class LastSyncDetails(run: str, workflow_name: str, run_at_ms: int) -> None`
+- **Summary:** Resolved last-sync values for a single end-to-end run.
+- **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `LastSyncStampable`
+
+- **Import:** `from application_sdk.common.last_sync import LastSyncStampable`
+- **Signature:** `class LastSyncStampable`
+- **Summary:** Any asset object that declares the three run-identity fields.
+- **Defined in:** `application_sdk/common/last_sync.py`
 
 #### `ModelDumpAsset`
 
@@ -544,6 +579,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Defined in:** `application_sdk/common/asset_serialization.py`
 
 ### Functions
+
+#### `apply_envelope`
+
+- **Import:** `from application_sdk.common.entity_envelope import apply_envelope`
+- **Signature:** `apply_envelope(entity: dict[str, *, ...)`
+- **Summary:** Apply *policy* and *decorations* to one serialised entity dict.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `atomic_copy`
 
@@ -590,7 +632,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `entity_bytes`
 
 - **Import:** `from application_sdk.common.asset_serialization import entity_bytes`
-- **Signature:** `entity_bytes(asset: object, *, connection_name: str = '', entity_type: str | None = None) -> bytes`
+- **Signature:** `entity_bytes(asset: object, *, ...)`
 - **Summary:** Serialise a mapper's return value to one Atlas wire-shape JSON line.
 - **Defined in:** `application_sdk/common/asset_serialization.py`
 
@@ -615,6 +657,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `filter_matches(candidate: str, *, ...)`
 - **Summary:** Convenience one-shot: compile ``include``/``exclude`` and test ``candidate``.
 - **Defined in:** `application_sdk/common/filter_matching.py`
+
+#### `flatten_envelope`
+
+- **Import:** `from application_sdk.common.entity_envelope import flatten_envelope`
+- **Signature:** `flatten_envelope(entity: dict[str, Any]) -> dict[str, Any]`
+- **Summary:** Merge a nested-format entity's relationship refs into ``attributes``.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `get_actual_cpu_count`
 
@@ -714,7 +763,42 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Read all SQL files from a directory and return as a name→content mapping.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
+#### `resolve_last_sync_details`
+
+- **Import:** `from application_sdk.common.last_sync import resolve_last_sync_details`
+- **Signature:** `resolve_last_sync_details(*, *, ...)`
+- **Summary:** Resolve last-sync values from the current execution + correlation
+- **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `set_last_sync_details_on_asset`
+
+- **Import:** `from application_sdk.common.last_sync import set_last_sync_details_on_asset`
+- **Signature:** `set_last_sync_details_on_asset(asset: LastSyncStampable, *, ...)`
+- **Summary:** Stamp last-sync details onto an asset (mutating in place).
+- **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `set_last_sync_details_on_assets_bulk`
+
+- **Import:** `from application_sdk.common.last_sync import set_last_sync_details_on_assets_bulk`
+- **Signature:** `set_last_sync_details_on_assets_bulk(assets: Iterable[LastSyncStampable], *, ...)`
+- **Summary:** Stamp last-sync details on every asset in ``assets``.
+- **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `to_atlas_format_dict`
+
+- **Import:** `from application_sdk.common.entity_envelope import to_atlas_format_dict`
+- **Signature:** `to_atlas_format_dict(asset: object) -> dict[str, Any] | None`
+- **Summary:** ``pyatlan_v9.to_atlas_format(asset)``, or ``None`` if it doesn't apply.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
 ### Constants and Enums
+
+#### `DEFAULT_ENVELOPE`
+
+- **Import:** `from application_sdk.common.entity_envelope import DEFAULT_ENVELOPE`
+- **Signature:** `DEFAULT_ENVELOPE: Final[EntityEnvelopePolicy]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `PARTIAL_DIRNAME`
 
@@ -3348,6 +3432,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 ### Classes
 
+#### `Absent`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Absent`
+- **Signature:** `class Absent() -> None`
+- **Summary:** The attribute is not set on this asset.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `AdminIdentity`
 
 - **Import:** `from application_sdk.testing.harness.atlas import AdminIdentity`
@@ -3436,6 +3527,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Where to find the app under test inside a cluster.
 - **Defined in:** `application_sdk/testing/harness/spec.py`
 
+#### `AssetAttributes`
+
+- **Import:** `from application_sdk.testing.harness.atlas import AssetAttributes`
+- **Also importable from:** `application_sdk.testing.harness.expectations`
+- **Signature:** `class AssetAttributes(*, qualified_name: str, values: Mapping[str, AttributeValue] = dict())`
+- **Summary:** The attribute values one sampled asset carries.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `AssetDiff`
 
 - **Import:** `from application_sdk.testing.integration import AssetDiff`
@@ -3458,6 +3557,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AssetMismatch(key: str, field_diffs: tuple[FieldDiff, ...])`
 - **Summary:** An asset present on both sides whose fields differ.
 - **Defined in:** `application_sdk/testing/golden.py`
+
+#### `AssetRef`
+
+- **Import:** `from application_sdk.testing.harness.atlas import AssetRef`
+- **Also importable from:** `application_sdk.testing.harness.expectations`
+- **Signature:** `class AssetRef(*, type_name: str, qualified_name_suffix: str)`
+- **Summary:** Which single asset an attribute expectation is about.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `AssetValidationFailure`
 
@@ -3500,6 +3607,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AtlanApiTimeoutError(*, ...)`
 - **Summary:** No response received from the AE API before the timeout elapsed.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AtLeast`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AtLeast`
+- **Signature:** `class AtLeast(minimum: float) -> None`
+- **Summary:** The attribute is a number greater than or equal to *minimum*.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AtMost`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AtMost`
+- **Signature:** `class AtMost(maximum: float) -> None`
+- **Summary:** The attribute is a number less than or equal to *maximum*.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AttributeMatcher`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeMatcher`
+- **Signature:** `class AttributeMatcher`
+- **Summary:** One claim about a single attribute value on a single asset.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `AutomationEngineNotDispatchingError`
 
@@ -3762,6 +3890,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class EvidenceLog(label: str) -> None`
 - **Summary:** A mutable builder for one test's :class:`EvidenceBundle`.
 - **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `Exactly`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Exactly`
+- **Signature:** `class Exactly(expected: AttributeValue) -> None`
+- **Summary:** The attribute is present and equal to *expected*.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `Expired`
 
@@ -4160,6 +4295,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class PreflightOutcomeCapture()`
 - **Summary:** A stand-in for the gate's logger that keeps the rows it was handed.
 - **Defined in:** `application_sdk/testing/preflight.py`
+
+#### `Present`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Present`
+- **Signature:** `class Present() -> None`
+- **Summary:** The attribute is present and not null — any value will do.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `PublishedVersion`
 
@@ -4681,6 +4823,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** AppContext wired with MockStateStore and MockSecretStore.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
+#### `as_attribute_samples`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_attribute_samples`
+- **Signature:** `as_attribute_samples(reading: Outcome[Mapping[K, ...)`
+- **Summary:** Project an attribute read the same way :func:`as_samples` does.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
 #### `as_count`
 
 - **Import:** `from application_sdk.testing.harness.outcome import as_count`
@@ -4694,6 +4843,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `as_counts(reading: Outcome[Mapping[str, int]], type_names: Sequence[str]) -> Mapping[str, CountRead]`
 - **Summary:** Project a per-type count read, spreading an unreadable one over its types.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `as_matcher`
+
+- **Import:** `from application_sdk.testing.harness.expectations import as_matcher`
+- **Signature:** `as_matcher(declared: AttributeExpectationValue) -> AttributeMatcher`
+- **Summary:** Coerce one declared right-hand side into a matcher.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `as_samples`
 
@@ -4970,6 +5126,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `equals(expected: Any, *, description: str | None = None)`
 - **Summary:** Assert that the actual value equals the expected value.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `evaluate_attributes`
+
+- **Import:** `from application_sdk.testing.harness.expectations import evaluate_attributes`
+- **Signature:** `evaluate_attributes(samples: Mapping[str, AttributeSampleRead], expectations: AssetExpectations) -> Sequence[Finding]`
+- **Summary:** Evaluate sampled attribute values against the declared matchers.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `evaluate_attributes_at`
+
+- **Import:** `from application_sdk.testing.harness.expectations import evaluate_attributes_at`
+- **Signature:** `evaluate_attributes_at(reads: Mapping[AssetRef, ...)`
+- **Summary:** Evaluate the attribute values of individually addressed assets.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `evaluate_counts`
 
@@ -5501,6 +5671,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert that none of the predicates pass.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `normalise_attribute_expectations`
+
+- **Import:** `from application_sdk.testing.harness.expectations import normalise_attribute_expectations`
+- **Signature:** `normalise_attribute_expectations(declared: Mapping[str, ...)`
+- **Summary:** Coerce a whole declaration into matchers.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `normalise_attribute_expectations_at`
+
+- **Import:** `from application_sdk.testing.harness.expectations import normalise_attribute_expectations_at`
+- **Signature:** `normalise_attribute_expectations_at(declared: Mapping[str, ...)`
+- **Summary:** Flatten a per-asset declaration into matchers keyed by :class:`AssetRef`.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `not_contains`
 
 - **Import:** `from application_sdk.testing.integration import not_contains`
@@ -5601,6 +5785,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `read_app_identity(repo_root: Path) -> AppIdentity`
 - **Summary:** Return the names ``atlan.yaml`` commits, as cards may report them.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
+
+#### `read_asset_attributes`
+
+- **Import:** `from application_sdk.testing.harness.atlas import read_asset_attributes`
+- **Signature:** `read_asset_attributes(client: AsyncAtlanClient, ...)`
+- **Summary:** Read named attributes off individually addressed assets.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `read_entrypoint_names`
 
@@ -5703,6 +5894,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `run_workflow(namespace: str, service: str, port: int, workflow_name: str, payload: dict[str, Any])`
 - **Summary:** POST to the handler's workflow endpoint and return the workflow ID.
 - **Defined in:** `application_sdk/testing/e2e/workflows.py`
+
+#### `sample_asset_attributes`
+
+- **Import:** `from application_sdk.testing.harness.atlas import sample_asset_attributes`
+- **Signature:** `sample_asset_attributes(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Sample up to *per_type* assets per type, reading the named attributes.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `sample_qualified_names`
 
@@ -5894,6 +6092,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `APPLICATION_NAME_ENV`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `AttributeExpectationValue`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeExpectationValue`
+- **Signature:** `AttributeExpectationValue: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AttributeSampleRead`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeSampleRead`
+- **Signature:** `AttributeSampleRead: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `AttributeValue`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AttributeValue`
+- **Signature:** `AttributeValue: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `Authorizer`
 

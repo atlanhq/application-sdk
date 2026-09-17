@@ -1002,6 +1002,31 @@ def extract_vulnerability_scan_lfs(text: str) -> str:
     return "true" if extract_field(text, "lfs") == "true" else ""
 
 
+def extract_build_publish_lfs(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``build-and-publish.yaml``) opts into the
+    LFS checkout on the release image build, else ``""``.
+
+    The third and last of the ``lfs`` round-trips, and the one that cost the
+    most before it existed. ``build-and-publish-app.yaml`` declares the same
+    input as ``build-and-scan.yaml`` (``default: false``, applied only to the
+    image-build checkout), and this shim is likewise always-overwrite — so a
+    repo that vendors LFS-tracked assets lost the line on every bootstrap run.
+
+    What made this one worse than the scan's: the gap only bites a ``release``
+    event. Every PR stayed green while the release path was broken, so the
+    first symptom was a **failed release build** rather than a failed check.
+    Seen on a connector whose ``lfs: true`` was added deliberately and then
+    dropped by a conformance rollout; nothing noticed until a version could not
+    be published, months later.
+
+    Same value semantics as ``extract_vulnerability_scan_lfs`` above: only a
+    literal ``true`` is preserved, because an explicit ``false`` is a second
+    spelling of the reusable's own default and would read as drift on every
+    repo that spells it by saying nothing.
+    """
+    return "true" if extract_field(text, "lfs") == "true" else ""
+
+
 def extract_field(text: str, field: str) -> str:
     """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
 

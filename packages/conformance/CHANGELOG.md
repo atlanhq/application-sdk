@@ -2,6 +2,14 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.31.1] - 2026-09-16
+
+### Bug fixes
+
+- give build-and-publish.yaml an lfs slot so bootstrap stops deleting it (#3804) ([ec09fdc](https://github.com/atlanhq/application-sdk/commit/ec09fdc))
+- make B001 see SqlApp's deprecated run()-override shims (FND-2143) (#3803) ([1569993](https://github.com/atlanhq/application-sdk/commit/1569993))
+- give vulnerability-scan.yml an lfs slot so bootstrap stops deleting it (#3798) ([0aab930](https://github.com/atlanhq/application-sdk/commit/0aab930))
+
 ## [0.31.0] - 2026-09-15
 
 ### Features

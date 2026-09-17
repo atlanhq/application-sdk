@@ -18,13 +18,13 @@ if TYPE_CHECKING:
     import pandas as pd
     import pyarrow as pa
 
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.transformers import TransformerInterface
-from application_sdk.transformers.common.last_sync import (
+from application_sdk.common.last_sync import (
     LastSyncDetails,
     resolve_last_sync_details,
     set_last_sync_details_on_asset,
 )
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.common.utils import process_text
 
 warnings.warn(

@@ -76,7 +76,6 @@ import asyncio
 import dataclasses
 import os
 import time
-import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
@@ -84,6 +83,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
 import orjson
 from pydantic import ValidationError
 from temporalio import workflow as _temporal_workflow
+from typing_extensions import deprecated
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
@@ -92,6 +92,12 @@ from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
 from application_sdk.common.asset_serialization import entity_bytes
 from application_sdk.common.asset_serialization import orjson_default as _orjson_default
+from application_sdk.common.entity_envelope import (
+    DEFAULT_ENVELOPE,
+    EntityDecorations,
+    EntityEnvelopePolicy,
+)
+from application_sdk.common.last_sync import resolve_last_sync_details
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
@@ -511,6 +517,16 @@ class SqlApp(App):
     database_name_column: ClassVar[str] = "database_name"
     schema_name_column: ClassVar[str] = "schema_name"
     table_name_column: ClassVar[str] = "table_name"
+
+    # ── Transformed-output envelope (FND-2137) ──────────────────────────
+    #: How this connector's serialised entities are shaped. Declared once per
+    #: app, not per mapper: the envelope is a property of the downstream
+    #: contract, and per-mapper choice is how the fleet ended up with four
+    #: mutually incompatible ones. The default is flattened — see
+    #: :mod:`application_sdk.common.entity_envelope` for why, and for the
+    #: migration lever a connector uses when its released output is the
+    #: pyatlan-native shape.
+    entity_envelope: ClassVar[EntityEnvelopePolicy] = DEFAULT_ENVELOPE
 
     # =====================================================================
     # Public API: build_task_input (BLDX-1138)
@@ -1188,6 +1204,36 @@ class SqlApp(App):
 
         raise MapProcedureUnimplementedError()
 
+    def decorate_entity(
+        self, *, entity_type: str, record: dict[str, Any]
+    ) -> EntityDecorations | None:
+        """Top-level contract fields for one record. Override if your
+        connector owes a downstream app a field pyatlan cannot hold.
+
+        These land on the entity *root*, beside ``typeName`` — not in
+        ``attributes`` — because that is where their readers look. See
+        :class:`~application_sdk.common.entity_envelope.EntityDecorations` for
+        the fields and who reads each one.
+
+        The return type is a typed model, not a dict, deliberately: a
+        decoration is a named cross-app contract, and a free dict is how a
+        second undocumented side-channel gets added without anyone noticing.
+        A connector that needs a field this class does not have adds it there,
+        which forces the conversation about who reads it.
+
+        Args:
+            entity_type: The stream being transformed (``"table"``,
+                ``"column"``, …) — the ``transformed/<entity>/`` the line
+                lands in, not the Atlas type. A mapper can return a ``View``
+                into the ``table`` stream.
+            record: The raw source row the asset was mapped from.
+
+        Returns:
+            The decorations for this record, or ``None`` (the default) for a
+            connector that owes none.
+        """
+        return None
+
     # =====================================================================
     # run() — default orchestration
     # =====================================================================
@@ -1699,6 +1745,10 @@ class SqlApp(App):
     # public name, so the mock is never reached — quieter than a broken import
     # and worth knowing before debugging one. Each docstring says so.
 
+    @deprecated(
+        "SqlApp._resolve_credential_ref is deprecated; use the public "
+        "SqlApp.resolve_credential_ref instead. Will be removed in v4.0.0."
+    )
     def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
         """**Deprecated** — use :meth:`resolve_credential_ref`.
 
@@ -1714,15 +1764,13 @@ class SqlApp(App):
             running under a mock the author believes is in place. Move the
             patch site to the public name.
         """
-        warnings.warn(
-            "SqlApp._resolve_credential_ref is deprecated; use the public "
-            "SqlApp.resolve_credential_ref instead. Will be removed in v4.0.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         return self.resolve_credential_ref(input)
 
     @staticmethod
+    @deprecated(
+        "SqlApp._build_transform_input is deprecated; use the public "
+        "SqlApp.build_transform_input instead. Will be removed in v4.0.0."
+    )
     def _build_transform_input(
         base: ExtractionTaskInput,
         raw_file: FileReference | None,
@@ -1736,12 +1784,6 @@ class SqlApp(App):
             :meth:`_resolve_credential_ref` for why. Move the patch site to
             :meth:`build_transform_input`.
         """
-        warnings.warn(
-            "SqlApp._build_transform_input is deprecated; use the public "
-            "SqlApp.build_transform_input instead. Will be removed in v4.0.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         return SqlApp.build_transform_input(base, raw_file)
 
     # =====================================================================
@@ -1926,6 +1968,21 @@ class SqlApp(App):
                 connection_qn = getattr(attrs, "qualified_name", "") or ""
                 connection_name = getattr(attrs, "name", "") or ""
 
+        # Resolved once, here, for two reasons (FND-2097).
+        #
+        # Once, not per record: ``lastSyncRunAt`` is a property of the *run*,
+        # so every asset this activity writes must carry the same value. A
+        # per-record ``time.time()`` — what connectors hand-rolling this did —
+        # gives every row in one crawl a different "last synced at".
+        #
+        # Here, not inside ``_map_records``: the resolver reads the execution
+        # and correlation contextvars the Temporal interceptor populates.
+        # ``run_in_thread`` does propagate them (it runs the callable under
+        # ``contextvars.copy_context()``), so resolving in the thread would
+        # also work today — but that correctness would rest on an offload
+        # implementation detail rather than on where the call sits.
+        last_sync = resolve_last_sync_details()
+
         output_dir = Path(output_path) / "transformed" / entity_type
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "entities.json"
@@ -1939,17 +1996,29 @@ class SqlApp(App):
                         continue
                     record = orjson.loads(line)
                     asset = mapper_fn(record, connection_qn)
-                    # One seam owns connectionName injection and the
-                    # asset → wire-shape dispatch, for every template that
-                    # runs the mapper pattern (FND-2056). A return value it
-                    # does not recognise raises rather than falling back to
-                    # writing ``record`` — that fallback published unmapped
-                    # source rows as entities under a SUCCESS status.
+                    # One seam owns the framework-injected attributes —
+                    # connectionName (FND-2056) and lastSync* (FND-2097) —
+                    # the asset → wire-shape dispatch, and the envelope the
+                    # finished line takes (FND-2137), for every template that
+                    # runs the mapper pattern. A return value it does not
+                    # recognise raises rather than falling back to writing
+                    # ``record`` — that fallback published unmapped source rows
+                    # as entities under a SUCCESS status.
+                    #
+                    # ``decorate_entity`` is called per record because that is
+                    # its aperture: its inputs are the row and the stream, and
+                    # a connector that owes no decorations returns None from
+                    # the base implementation at the cost of one call.
                     w.write(
                         entity_bytes(
                             asset,
                             connection_name=connection_name,
+                            last_sync=last_sync,
                             entity_type=entity_type,
+                            envelope=self.entity_envelope,
+                            decorations=self.decorate_entity(
+                                entity_type=entity_type, record=record
+                            ),
                         )
                     )
                     w.write(b"\n")

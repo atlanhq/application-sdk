@@ -405,14 +405,19 @@ include_pattern, exclude_pattern = prepare_filters(
 ```python
 from application_sdk.common.asset_serialization import entity_bytes
 
-line = entity_bytes(asset, connection_name="My MySQL", entity_type="table")
+line = entity_bytes(
+    asset,
+    connection_name="My MySQL",
+    last_sync=last_sync,       # see "Framework-injected attributes" below
+    entity_type="table",
+)
 ```
 
 **What it accepts**, in dispatch order:
 
 | Shape | Protocol | Notes |
 |-------|----------|-------|
-| `to_nested_bytes()` | `NestedBytesAsset` | `pyatlan_v9` assets. Passed through byte-for-byte — no JSON round-trip on the SDK side. |
+| `to_nested_bytes()` | `NestedBytesAsset` | `pyatlan_v9` assets. Under the `PYATLAN` envelope, passed through byte-for-byte; under the default flattened envelope the asset goes through pyatlan's own `to_atlas_format` instead (see [Entity envelope](#entity-envelope)). |
 | `to_nested_dict()` | `NestedDictAsset` | Serialised with the shared `orjson_default` (`Decimal` → float, `bytes` → text). |
 | `model_dump()` | `ModelDumpAsset` | pyatlan v1 / pydantic assets. Last of the object shapes: `model_dump()` yields the model's own field names, which for a snake_case model is *not* the Atlas wire shape, so an asset exposing a nested encoder as well is serialised through that instead. |
 | `dict` | — | Already in the Atlas wire shape. |
@@ -429,7 +434,97 @@ Anything else raises `UnserializableMapperResultError`. There is deliberately no
 
 The last one guards a public protocol rather than a live bug — `pyatlan_v9`'s encoder is compact — but `NestedBytesAsset` is exported, and the caller writes the returned bytes verbatim plus one newline. A pretty-printing implementer would therefore split one entity across several JSONL records: well-formed lines, wrong count, no error. That is the same silent, count-passing damage this seam exists to remove, so it is refused rather than trusted.
 
-`connectionName` is stamped before the dispatch, on the asset itself rather than on a serialised dict afterwards, so an asset-returning mapper keeps it. A value the mapper set explicitly always wins. If the asset declares `connection_name` but refuses assignment (frozen, or a property with no setter), the name is dropped rather than failing the transform — every asset type that genuinely needs it exposes a settable field.
+### Framework-injected attributes
+
+Two groups of attributes are stamped by the seam, before the dispatch, on the asset itself rather than on a serialised dict afterwards — one of the accepted shapes (`to_nested_bytes()`) never produces a dict to patch.
+
+| Attribute(s) | Source | Who wins on a conflict |
+|---|---|---|
+| `connectionName` | The `connection_name` argument | The mapper. A value it set explicitly is kept. |
+| `lastSyncRun`, `lastSyncWorkflowName`, `lastSyncRunAt` | The `last_sync` argument | The framework. A resolved value overwrites whatever the mapper set. |
+
+Both exist for the same reason: the mapper is handed a source record and a connection *qualified* name, and nothing else, so anything resolved from run context has to be injected by the framework. One seam beats a copy in every connector, which is how these ended up missing or wrong in the first place.
+
+They differ on who wins because they are different kinds of value. `connectionName` is asset content the mapper may legitimately know better. The three `lastSync*` attributes are *run identity* the mapper structurally cannot resolve: a connector that tries reaches for the workflow id it was handed, which is the **child** workflow's Temporal id, not the AE-dispatched run — so the value lands on the asset looking right and is not clickable back to the run that produced it (FND-2097, BLDX-1229). One exception, inherited from the primitive: an empty resolved `run` or `workflow_name` is never written, so outside Temporal (CLI tools, tests) a hand-set value survives rather than being blanked.
+
+If the asset declares the attribute but refuses assignment (frozen, or a property with no setter), the value is dropped rather than failing the transform — every asset type that genuinely needs these exposes settable fields.
+
+The stamping itself is `application_sdk.common.last_sync.set_last_sync_details_on_asset()`, unwrapped — the seam adds the wider aperture (`entity_bytes` takes an `object`, so the shape may be a dict, may not declare the fields, or may refuse assignment) but not a second definition of what stamping means. An asset object qualifies when it satisfies `LastSyncStampable`, a runtime-checkable Protocol over the three fields; it is a structural type rather than pyatlan's `Asset` because both pyatlan generations are valid targets and they are unrelated classes.
+
+**Resolve `last_sync` once per transform activity**, never per record:
+
+```python
+from application_sdk.common.asset_serialization import entity_bytes
+from application_sdk.common.last_sync import resolve_last_sync_details
+
+last_sync = resolve_last_sync_details()   # once, outside the record loop
+
+for record in records:
+    line = entity_bytes(
+        mapper(record, connection_qn),
+        connection_name="My MySQL",
+        last_sync=last_sync,
+        entity_type="table",
+    )
+```
+
+`lastSyncRunAt` is a property of the *run*, so every asset one crawl produces must carry the same value; a per-record `time.time()` gives every row in one crawl a different "last synced at". `SqlApp._transform_entity` does this for every SQL connector already. **Non-SQL apps get the same behaviour from the same two calls** — nothing in this seam or in `last_sync` is SQL-specific, and an app that writes `asset.to_nested_bytes()` directly today gets both injections plus the typed-error contract by routing through `entity_bytes()` instead.
+
+`resolve_last_sync_details()` reads the execution and correlation contextvars the SDK's Temporal interceptor populates. Call it on the event loop inside the activity. `run_in_thread` does propagate contextvars (it runs the callable under `contextvars.copy_context()`), so resolving inside an offloaded loop works too — but then the correctness rests on an offload implementation detail rather than on where the call sits.
+
+### Entity envelope
+
+`entity_bytes()` decides *how to serialise* the mapper's return value. `application_sdk.common.entity_envelope` decides *what the finished line looks like* — and in particular where relationship references live (FND-2137).
+
+Before this, every connector hand-rolled its own post-serialisation pass, and a scan of the six SqlApp-pattern connectors found four mutually incompatible envelope strategies, two of which disagreed about that question. Two apps publishing to the same downstream disagreed about the wire contract.
+
+```python
+from application_sdk.common.entity_envelope import (
+    EntityDecorations,
+    EntityEnvelopePolicy,
+    EnvelopeShape,
+)
+
+class TeradataApp(SqlApp):
+    entity_envelope = EntityEnvelopePolicy(sql_dialect="teradata")
+```
+
+Declared once per app as a class attribute, not per mapper: the envelope is a property of the downstream contract, and per-mapper choice is how the fleet ended up with four of them. `SqlApp` reads it in `_transform_entity` and threads it into `entity_bytes()`; a non-SQL app passes `envelope=` directly.
+
+**`shape`** — where relationship refs live:
+
+| Value | Output | Use |
+|---|---|---|
+| `EnvelopeShape.FLATTENED` | Refs merged into `attributes`, no `relationshipAttributes` key | The default |
+| `EnvelopeShape.PYATLAN` | Refs under a top-level `relationshipAttributes` key | **Deprecated, removed in v4.0.** A migration lever for a connector whose *released* output is this shape |
+
+Flattened is the default because that is what the publish app's diff engine reads: it does set-based append/remove diffing for `inputs`, `outputs` and `upstreamTables` out of `attributes`, and a top-level `relationshipAttributes` key falls through to a whole-dict equality branch. Under the pyatlan-native envelope the relationship append/remove path never fires. A connector emitting no lineage gets away with it; the first one that does loses incremental relationship diffing silently. `application_sdk.validation.assets` and the SDK's own seed harness are already on the flattened side.
+
+The flattening itself is `pyatlan_v9.model.transform.to_atlas_format` — the SDK does not hand-roll it, and does not need to: that encoder is *cheaper* than the nested one (≈3 µs/record against ≈11 µs), and never emits the `appendRelationshipAttributes` / `removeRelationshipAttributes` keys the publish app generates itself. A dict-returning mapper or a pyatlan v1 model goes through `flatten_envelope()` instead.
+
+**The two paths agree on ref placement and differ on nulls.** `flatten_envelope()` does **not** drop nulls, because a dict-returning mapper emits them on purpose: `atlan-clickhouse-app` emits a null relationship stub to mirror the legacy transformer's all-None-leaves collapse, and null `rowCount` / `sizeBytes` for v2 parity. Dropping those would delete real wire values and rehash every entity in the publish app's diff cache.
+
+`to_atlas_format` does drop them, and that is worth understanding rather than assuming. `pyatlan_v9` fields are three-state — `Union[str, None, UnsetType] = UNSET` — so an asset *can* express an explicit null, and `to_nested_bytes` preserves it. `to_atlas_format` renders `None` and `UNSET` identically, as an absent key. The loss is tolerable in this pipeline, not harmless in principle: the publish app's `calculate_attributes_diff` re-synthesises the clear, emitting `{key: None}` when a key in the cached entity is absent from the new one — so a dropped null still reaches Atlas as a clear on the incremental path, and on a create there is nothing to clear. **Don't rely on a producer-side null for a v9 asset; set the value you mean.**
+
+So `FLATTENED` means exactly **"relationship refs live in `attributes`"** — nothing more. Null handling stays the mapper's decision.
+
+**`sql_dialect`** — stamped as `attributes.sqlDialect` on assets that carry DDL (`tableDefinition` on a `Table`, `definition` on a `View` / `MaterialisedView`), so downstream SQL parsing knows which grammar to read a definition with. The value is static per connector; the condition is per record. It lives here because no `pyatlan_v9` asset type declares `sqlDialect` — an asset-returning mapper has nowhere to put it.
+
+**Decorations** — top-level fields no pyatlan model field can hold, returned per record from `SqlApp.decorate_entity()`:
+
+```python
+class MysqlApp(SqlApp):
+    def decorate_entity(self, *, entity_type, record) -> EntityDecorations | None:
+        return EntityDecorations(
+            default_catalog_name=record["table_catalog"],
+            default_schema_name=record["table_schema"],
+        )
+```
+
+These land on the entity *root*, beside `typeName`, because that is where their readers look — Query Intelligence reads `defaultCatalogName` / `defaultSchemaName` into each `success.json` row, which lineage-app then uses to resolve a bare table name to a fully-qualified Atlas path. The publish app strips unknown root keys before hashing, so a decoration reaches its reader off the transformed artifact or not at all.
+
+The return type is a typed model rather than a `Mapping[str, Any]` deliberately. Every field is a named cross-app contract with a specific reader; a free dict is how a second undocumented side-channel gets added without anyone noticing. A connector needing a field `EntityDecorations` does not have adds it there, which forces the conversation about who reads it.
+
 
 ## General Utilities
 

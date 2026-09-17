@@ -13,6 +13,7 @@ from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     declared_keys,
     extract_apt_packages,
+    extract_build_publish_lfs,
     extract_declared_unit_coverage_fail_under,
     extract_field,
     extract_force_external_runtime,
@@ -1465,3 +1466,53 @@ def test_non_default_install_app_to_tenant_still_refuses(value: str) -> None:
     assert "install-app-to-tenant" in unpreserved_tests_yaml_declarations(
         text, rendered
     )
+
+
+# ---------------------------------------------------------------------------
+# build-and-publish.yaml's lfs (an app vendoring LFS assets into its build)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_build_publish_lfs_round_trips_through_render() -> None:
+    """Write side and read side must agree, or the opt-in is deleted by the next
+    bootstrap run of an always-overwrite shim.
+
+    This is the one where a broken round-trip is quietest: the gap only bites a
+    `release` event, so every PR stays green while the release path is broken.
+    """
+    rendered = render("build-and-publish.yaml", build_publish_lfs="true")
+    assert extract_build_publish_lfs(rendered) == "true"
+
+
+def test_extract_build_publish_lfs_empty_when_absent() -> None:
+    assert extract_build_publish_lfs(render("build-and-publish.yaml")) == ""
+
+
+def test_extract_build_publish_lfs_empty_for_explicit_false() -> None:
+    """``false`` is a second spelling of build-and-publish-app.yaml's own
+    default, so it renders no line — same reasoning as the other two."""
+    text = "jobs:\n  build-and-publish:\n    with:\n      lfs: false\n"
+    assert extract_build_publish_lfs(text) == ""
+
+
+def test_extract_build_publish_lfs_ignores_commented_opt_in() -> None:
+    text = "jobs:\n  build-and-publish:\n    with:\n      # lfs: true\n"
+    assert extract_build_publish_lfs(text) == ""
+
+
+def test_build_publish_default_render_is_unchanged_by_the_slot() -> None:
+    """Adding the slot must not churn the repos that do not opt in."""
+    rendered = render("build-and-publish.yaml")
+    assert "lfs" not in rendered
+
+
+def test_build_publish_lfs_coexists_with_use_ghcr_base() -> None:
+    """Both opt-ins are rendered into the same `with:` block, so a repo that
+    self-selected the GHCR base does not lose its LFS checkout (or vice versa)."""
+    rendered = render(
+        "build-and-publish.yaml", build_publish_lfs="true", use_ghcr_base="true"
+    )
+    assert "use_ghcr_base: true" in rendered
+    assert "lfs: true" in rendered
+    assert extract_build_publish_lfs(rendered) == "true"
+    assert extract_use_ghcr_base(rendered) == "true"
