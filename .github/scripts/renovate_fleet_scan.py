@@ -35,6 +35,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -67,6 +68,13 @@ OPEN_PAGE_SIZE = 25
 # The merged-PR field set carries no files and no statusCheckRollup, and was
 # measured OK at 100/50/25 — it does not need the cut.
 MERGED_PAGE_SIZE = 100
+# Width of one merged-search date window (see fetch_merged_prs). Page size is a
+# cost knob; this is a CAP knob — it bounds how many results ONE query can match,
+# which pagination cannot help with. Sized from the live fleet on 2026-09-17:
+# app/atlan-app-fleet merged 1366 PRs in 30 days, ~320 in any 7, so a week sits
+# at roughly a third of the 1000-result cap and leaves room for the fleet to
+# grow before the guard fires again.
+MERGED_WINDOW_DAYS = 7
 # Back-compat alias for callers/tests that predate the split.
 PAGE_SIZE = OPEN_PAGE_SIZE
 # Safety backstop, not a real ceiling: 50 pages x 100 = 5000 PRs in one search window,
@@ -366,15 +374,86 @@ def fetch_prs_by_author(
     the overlap is empty in practice — but a slice that silently double-counted
     would inflate every dashboard number, and the guard is one set.
 
-    ``fetch_all_prs`` still raises if any individual slice is truncated. The
-    fleet is growing, so that will eventually fire again; the next narrowing is
-    by date range (or a shorter ``--since`` window for the merged search).
+    ``fetch_all_prs`` still raises if any individual slice is truncated. That
+    duly fired on 2026-09-17 — `app/atlan-app-fleet is:merged merged:>=<30d ago>`
+    matched 1366 — so the merged search now takes the next narrowing on top of
+    this one, by date range: see fetch_merged_prs.
     """
     seen: set[str] = set()
     out: list[dict] = []
     for author in RENOVATE_PR_AUTHORS:
         query = f"{scope} is:pr author:{author} {extra}".strip()
         for node in fetch_all_prs(token, query, fields, post, page_size):
+            url = node.get("url")
+            if url is not None and url in seen:
+                continue
+            if url is not None:
+                seen.add(url)
+            out.append(node)
+    return out
+
+
+def merged_date_windows(
+    since: str, until: Optional[str] = None, window_days: int = MERGED_WINDOW_DAYS
+) -> list[str]:
+    """Split [since, until] into non-overlapping `merged:A..B` search filters.
+
+    GitHub's `merged:A..B` is INCLUSIVE at both ends, so each window starts the
+    day after the previous one ends. Windows are emitted oldest first; the last
+    one ends on `until` (default: today, UTC-ish — the runner's clock, matching
+    how the workflow computes --since).
+
+    A `since` later than `until` yields a single window covering the one day, so
+    a clock skew of a few hours cannot produce an empty scan.
+    """
+    start = date.fromisoformat(since)
+    end = date.fromisoformat(until) if until else date.today()
+    if end < start:
+        end = start
+    step = timedelta(days=max(1, window_days))
+    windows: list[str] = []
+    cursor = start
+    while cursor <= end:
+        stop = min(cursor + step - timedelta(days=1), end)
+        windows.append(f"is:merged merged:{cursor.isoformat()}..{stop.isoformat()}")
+        cursor = stop + timedelta(days=1)
+    return windows
+
+
+def fetch_merged_prs(
+    token: str,
+    scope: str,
+    since: str,
+    fields: str,
+    post: PostFn = _post_graphql,
+    page_size: Optional[int] = None,
+    window_days: int = MERGED_WINDOW_DAYS,
+    until: Optional[str] = None,
+) -> list[dict]:
+    """Merged PRs over [since, today], queried one date window at a time.
+
+    The author slicing in fetch_prs_by_author stopped being enough on
+    2026-09-17: `app/atlan-app-fleet is:merged` over the dashboard's 30-day
+    window matched 1366 results against the API's 1000-result cap, and every
+    scheduled full-fleet run had been dying on the truncation guard since. The
+    fleet merges more than a thousand dependency PRs a month now, so the window
+    itself has to be cut, and `merged:A..B` is the only qualifier that cuts a
+    merged search without changing WHICH PRs it covers.
+
+    Deliberately NOT adaptive (no halve-on-truncation retry): the per-slice cap
+    guard in fetch_all_prs stays the loud failure it was designed to be, and a
+    single week outgrowing 1000 merges per author is a fact worth a human
+    reading, not silently absorbing. The knob to turn then is
+    --merged-window-days.
+
+    Deduplicated by URL like the author slicing, for the same reason: windows
+    are disjoint by construction, and a slicing bug that double-counted would
+    inflate every merged-PR number on the dashboard instead of failing.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for window in merged_date_windows(since, until, window_days):
+        for node in fetch_prs_by_author(token, scope, window, fields, post, page_size):
             url = node.get("url")
             if url is not None and url in seen:
                 continue
@@ -629,20 +708,24 @@ def run(
     token: str,
     post: PostFn = _post_graphql,
     repo_modes: Optional[dict[str, str]] = None,
+    merged_window_days: int = MERGED_WINDOW_DAYS,
 ) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
     # Sliced per author and paged at a size the API can actually serve — see
     # fetch_prs_by_author for the 1000-result cap and OPEN_PAGE_SIZE for the
-    # query-cost measurements behind each number.
+    # query-cost measurements behind each number. The open search needs only that
+    # slicing (615 + 388 on 2026-09-17); the merged one is additionally cut by
+    # date window, which is what stopped the scheduled runs failing.
     open_nodes = fetch_prs_by_author(
         token, scope, "is:open", _OPEN_PR_FIELDS, post, OPEN_PAGE_SIZE
     )
-    merged_nodes = fetch_prs_by_author(
+    merged_nodes = fetch_merged_prs(
         token,
         scope,
-        f"is:merged merged:>={since}",
+        since,
         _MERGED_PR_FIELDS,
         post,
         MERGED_PAGE_SIZE,
+        merged_window_days,
     )
 
     # Second pass, deliberately narrow: only the red uv.lock-only PRs, and only
@@ -701,6 +784,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--merged-window-days",
+        type=int,
+        default=MERGED_WINDOW_DAYS,
+        help=(
+            "width in days of one merged-search date window (default: "
+            f"{MERGED_WINDOW_DAYS}). Lower it if the truncation guard fires on a "
+            "single window — that means one author now merges more than the "
+            "search API's 1000-result cap inside this many days."
+        ),
+    )
+    parser.add_argument(
         "--repo-modes-file",
         type=Path,
         default=None,
@@ -735,6 +829,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         known_repos=known_repos,
         token=token,
         repo_modes=repo_modes,
+        merged_window_days=args.merged_window_days,
     )
 
     open_count = sum(len(v) for v in open_grouped.values())
