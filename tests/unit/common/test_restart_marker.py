@@ -1,7 +1,6 @@
 """The restart marker and the bounded wait it gates."""
 
 import asyncio
-import json
 
 import pytest
 
@@ -11,7 +10,7 @@ from application_sdk.common import restart_marker as rm
 @pytest.fixture(autouse=True)
 def marker_dir(tmp_path, monkeypatch):
     """Point the marker at a real directory, as the mounted volume would be."""
-    monkeypatch.setenv(rm.MARKER_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(rm, "MARKER_DIR", tmp_path)
     # The shipped default is a positive number; switch it off unless a test asks.
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 0)
     return tmp_path
@@ -67,7 +66,7 @@ def told_to_wait(monkeypatch):
 
 def test_first_start_in_a_pod_is_clean_and_leaves_a_marker(marker_dir):
     assert rm.check_and_update_the_marker() == 0
-    assert json.loads((marker_dir / rm.MARKER_NAME).read_text())["starts"] == 1
+    assert (marker_dir / rm.MARKER_NAME).read_text() == "1"
 
 
 def test_a_second_start_in_the_same_pod_is_a_restart(marker_dir):
@@ -92,7 +91,7 @@ def test_no_volume_means_detection_is_inert(monkeypatch, tmp_path, logs):
     either way, so the only thing that distinguishes an unmounted volume from a
     healthy fleet is that it says so."""
     missing = tmp_path / "not-mounted"
-    monkeypatch.setenv(rm.MARKER_DIR_ENV, str(missing))
+    monkeypatch.setattr(rm, "MARKER_DIR", missing)
     assert rm.check_and_update_the_marker() == 0
     assert (
         not missing.exists()
@@ -103,13 +102,10 @@ def test_no_volume_means_detection_is_inert(monkeypatch, tmp_path, logs):
     )
 
 
-def test_a_corrupt_marker_still_counts_as_a_restart(marker_dir):
-    (marker_dir / rm.MARKER_NAME).write_text("{ truncated")
-    assert rm.check_and_update_the_marker() == 1
-
-
-def test_an_unparsable_start_count_still_counts_as_a_restart(marker_dir):
-    (marker_dir / rm.MARKER_NAME).write_text(json.dumps({"starts": "many"}))
+def test_an_unreadable_marker_still_counts_as_a_restart(marker_dir):
+    """The file existing is the signal; only the count is lost, and one is the
+    answer that changes behaviour."""
+    (marker_dir / rm.MARKER_NAME).write_text("not a number")
     assert rm.check_and_update_the_marker() == 1
 
 
@@ -121,7 +117,7 @@ def test_a_non_utf8_marker_counts_as_a_restart_and_is_replaced(marker_dir):
     path.write_bytes(b"\xff\xfe not utf-8")
     assert rm.check_and_update_the_marker() == 1
     # replaced, so the next start reads a usable marker rather than tripping again
-    assert json.loads(path.read_text())["starts"] == 2
+    assert path.read_text() == "2"
 
 
 # ---------------------------------------------------------------- the wait
@@ -182,18 +178,6 @@ async def test_the_wait_holds_until_something_ends_it(
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-
-
-async def test_the_release_file_ends_the_wait_early(
-    marker_dir, monkeypatch, prompt_polling, told_to_wait
-):
-    rm.check_and_update_the_marker()
-    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
-    task = asyncio.ensure_future(rm.wait_if_pod_restarted(asyncio.Event()))
-    await asyncio.sleep(0.05)
-    assert not task.done()
-    (marker_dir / rm.RELEASE_NAME).write_text("")
-    await asyncio.wait_for(task, timeout=5)
 
 
 async def test_shutdown_ends_the_wait(
