@@ -63,6 +63,7 @@ import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.validation.artifacts import (
+    ELEMENT_STEP,
     FORMAT_NDJSON,
     UNIT_RECORD,
     ArtifactDeclaration,
@@ -70,7 +71,10 @@ from application_sdk.validation.artifacts import (
     ArtifactValidationReport,
     DeclaredField,
     FieldMapDeclaration,
+    FieldPathStep,
     ModelDeclaration,
+    has_element_step,
+    parse_field_path,
 )
 
 logger = get_logger(__name__)
@@ -389,6 +393,67 @@ def _resolve(record: object, parts: tuple[str, ...]) -> object:
     return current
 
 
+@dataclass(frozen=True)
+class _FanOut:
+    """What a path containing ``[]`` addressed in one record.
+
+    ``values`` is every ``(label, value)`` the path reached — empty when an array
+    along the way was empty, which is the vacuous satisfaction ADR-0020 specifies
+    for element paths. ``missing`` and ``not_a_list`` are set instead when the walk
+    could not continue, carrying the text the failure will quote.
+    """
+
+    values: tuple[tuple[str, object], ...] = ()
+    missing: str | None = None
+    not_a_list: tuple[str, str] | None = None
+
+
+def _resolve_fan_out(
+    record: object, steps: tuple[FieldPathStep, ...], *, required: bool
+) -> _FanOut:
+    """Walk a path with element steps, returning every value it addresses.
+
+    ``required`` reads **per element**: ``columns[].name`` required means every
+    element must carry ``name``, so an absent member stops the walk; declared
+    optional, that element simply drops out of the frontier and its siblings are
+    still checked. An empty array ends the walk with no values, which satisfies the
+    declaration vacuously either way.
+
+    An element step onto something that is not a list always fails, required or not
+    — a declaration that descends into an array has been contradicted by a producer
+    that stopped writing one, and that is the defect the step exists to catch.
+    """
+    frontier: list[tuple[str, object]] = [("", record)]
+    for step in steps:
+        nxt: list[tuple[str, object]] = []
+        for label, value in frontier:
+            if step is ELEMENT_STEP:
+                if not isinstance(value, list):
+                    return _FanOut(
+                        not_a_list=(label or "the record", _json_type_name(value))
+                    )
+                nxt.extend((f"{label}[{i}]", item) for i, item in enumerate(value))
+                continue
+            where = f"{label}.{step}" if label else step
+            if not isinstance(value, dict):
+                if required:
+                    return _FanOut(
+                        missing=f"{label or 'the record'} is "
+                        f"{_json_type_name(value)}, not an object"
+                    )
+                continue
+            if step not in value:
+                if required:
+                    return _FanOut(missing=f"'{where}' is absent")
+                continue
+            nxt.append((where, value[step]))
+        frontier = nxt
+        if not frontier:
+            # An empty array upstream: nothing left to address, and nothing to fail.
+            break
+    return _FanOut(values=tuple(frontier))
+
+
 def _stopped_at(record: object, parts: tuple[str, ...]) -> str:
     """Human-readable reason a dotted path did not resolve.
 
@@ -426,6 +491,12 @@ class _Check:
 
     path: str
     parts: tuple[str, ...]
+    """Steps of a path with no element step — the single-value fast path."""
+    steps: tuple[FieldPathStep, ...]
+    """Every step, including :data:`ELEMENT_STEP`. Used only when ``fan_out``."""
+    fan_out: bool
+    """Whether this path addresses many values. Kept off the hot path for the
+    overwhelmingly common single-value declaration."""
     declared_type: str
     required: bool
     checker: Callable[[object], bool] | None
@@ -644,10 +715,16 @@ class NdjsonValidator:
             checker = _CHECKERS.get(declared.type)
             if checker is None:
                 unmapped.append((declared.path, declared.type))
+            steps = parse_field_path(declared.path)
+            fan_out = has_element_step(steps)
             checks.append(
                 _Check(
                     path=declared.path,
-                    parts=tuple(declared.path.split(".")),
+                    # Only meaningful without an element step, where every step is
+                    # a member name; the fan-out walk reads `steps` instead.
+                    parts=() if fan_out else tuple(str(step) for step in steps),
+                    steps=steps,
+                    fan_out=fan_out,
                     declared_type=declared.type,
                     required=declared.required,
                     checker=checker,
@@ -671,6 +748,11 @@ class NdjsonValidator:
         lose which fields to go and fix.
         """
         for check in checks:
+            if check.fan_out:
+                NdjsonValidator._check_elements(
+                    record, check, file_path, line_no, report
+                )
+                continue
             value = _resolve(record, check.parts)
             if value is _MISSING:
                 if check.required:
@@ -705,3 +787,79 @@ class NdjsonValidator:
                     ],
                 )
             )
+
+    @staticmethod
+    def _check_elements(
+        record: dict,
+        check: _Check,
+        file_path: str,
+        line_no: int,
+        report: ArtifactValidationReport,
+    ) -> None:
+        """Check one element-path declaration against one record.
+
+        At most one failure per declaration per record, naming the first offending
+        element. A record whose 10k-element array is uniformly wrong is one defect
+        to go and fix, and emitting 10k rows of it would bury every other field in
+        the report while making ``len(failures)`` mean something different here than
+        it does on every other path.
+        """
+        fan = _resolve_fan_out(record, check.steps, required=check.required)
+
+        if fan.not_a_list is not None:
+            label, found = fan.not_a_list
+            report.failures.append(
+                ArtifactValidationFailure(
+                    kind="type_mismatch",
+                    field=check.path,
+                    expected="array",
+                    actual=found,
+                    file=file_path,
+                    line=line_no,
+                    errors=[
+                        f"'{check.path}' descends into '{label}' as an array, but it "
+                        f"carries a JSON {found}"
+                    ],
+                )
+            )
+            return
+
+        if fan.missing is not None:
+            report.failures.append(
+                ArtifactValidationFailure(
+                    kind="missing",
+                    field=check.path,
+                    expected=check.declared_type,
+                    file=file_path,
+                    line=line_no,
+                    errors=[
+                        f"required field '{check.path}' does not resolve: "
+                        f"{fan.missing}"
+                    ],
+                )
+            )
+            return
+
+        if check.checker is None:
+            # Unmapped type: presence is asserted by the walk above, the type is not.
+            return
+
+        for label, value in fan.values:
+            # A JSON null satisfies every declared type — see the class docstring.
+            if value is None or check.checker(value):
+                continue
+            report.failures.append(
+                ArtifactValidationFailure(
+                    kind="type_mismatch",
+                    field=check.path,
+                    expected=check.declared_type,
+                    actual=_json_type_name(value),
+                    file=file_path,
+                    line=line_no,
+                    errors=[
+                        f"element '{label}' is declared {check.declared_type} but "
+                        f"carries a JSON {_json_type_name(value)}"
+                    ],
+                )
+            )
+            return

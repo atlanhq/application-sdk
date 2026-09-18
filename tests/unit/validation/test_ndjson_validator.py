@@ -888,3 +888,143 @@ def test_the_declared_suffixes_are_lower_cased_extensions() -> None:
 
     assert NDJSON_SUFFIXES == (".json", ".jsonl", ".ndjson")
     assert all(s == s.lower() and s.startswith(".") for s in NDJSON_SUFFIXES)
+
+
+# ---------------------------------------------------------------------------
+# The `[]` element step (FND-2355)
+# ---------------------------------------------------------------------------
+
+
+class TestElementStep:
+    """`[]` descends into an array's element, and `required` reads per element.
+
+    Before FND-2355 every case here reported the declared field unresolvable — a
+    false flag on a record that carried exactly what was declared.
+    """
+
+    def test_scalar_element_resolves(self, tmp_path: Path):
+        path = _write(tmp_path / "a.json", [{"tags": ["a", "b"]}])
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="tags", type="array"),
+                DeclaredField(path="tags[]", type="string"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_empty_array_satisfies_vacuously(self, tmp_path: Path):
+        """ADR-0020 is explicit: an empty array satisfies a required element path."""
+        path = _write(tmp_path / "a.json", [{"tags": []}])
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="tags", type="array"),
+                DeclaredField(path="tags[]", type="string"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_wrong_element_type_is_caught_with_its_index(self, tmp_path: Path):
+        path = _write(tmp_path / "a.json", [{"tags": ["a", 7]}])
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="tags[]", type="string")),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert "tags[1]" in report.failures[0].errors[0]
+
+    def test_element_step_on_a_non_list_is_flagged(self, tmp_path: Path):
+        path = _write(tmp_path / "a.json", [{"tags": "a,b"}])
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="tags[]", type="string")),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert report.failures[0].expected == "array"
+
+    def test_struct_element_leaf_resolves(self, tmp_path: Path):
+        path = _write(
+            tmp_path / "a.json",
+            [{"columns": [{"name": "a", "order": 1}, {"name": "b", "order": 2}]}],
+        )
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="columns", type="array"),
+                DeclaredField(path="columns[]", type="struct"),
+                DeclaredField(path="columns[].name", type="string"),
+                DeclaredField(path="columns[].order", type="int"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_required_leaf_missing_on_one_element_is_caught(self, tmp_path: Path):
+        """`required` reads per element: every element must carry it."""
+        path = _write(
+            tmp_path / "a.json",
+            [{"columns": [{"name": "a", "order": 1}, {"name": "b"}]}],
+        )
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="columns[].order", type="int")),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert "columns[1].order" in report.failures[0].errors[0]
+
+    def test_optional_leaf_missing_on_one_element_is_clean(self, tmp_path: Path):
+        """Declared optional, an absent member drops that element and checks its siblings."""
+        path = _write(
+            tmp_path / "a.json",
+            [{"columns": [{"name": "a", "order": 1}, {"name": "b"}]}],
+        )
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="columns[].order", type="int", required=False)),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_optional_leaf_still_type_checked_where_present(self, tmp_path: Path):
+        """Optional means "absent is fine", never "unchecked when present"."""
+        path = _write(
+            tmp_path / "a.json",
+            [{"columns": [{"name": "a"}, {"name": "b", "order": "2"}]}],
+        )
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="columns[].order", type="int", required=False)),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert "columns[1].order" in report.failures[0].errors[0]
+
+    def test_one_failure_per_declaration_per_record(self, tmp_path: Path):
+        """A uniformly wrong 200-element array is one defect, not 200 report rows."""
+        path = _write(tmp_path / "a.json", [{"tags": [1] * 200}])
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="tags[]", type="string")),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert len(report.failures) == 1
+
+    def test_null_element_satisfies_every_type(self, tmp_path: Path):
+        """Consistent with the scalar path, where JSON null satisfies any declared type."""
+        path = _write(tmp_path / "a.json", [{"tags": [None, "a"]}])
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="tags[]", type="string")),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_nested_arrays_resolve(self, tmp_path: Path):
+        """`a[][]` — repeated element steps, an array of arrays."""
+        path = _write(tmp_path / "a.json", [{"grid": [["x"], ["y", "z"]]}])
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="grid", type="array"),
+                DeclaredField(path="grid[]", type="array"),
+                DeclaredField(path="grid[][]", type="string"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
