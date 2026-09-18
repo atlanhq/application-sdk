@@ -1,4 +1,4 @@
-"""P035 PreflightMetadataContractParity.
+"""F004 PreflightMetadataContractParity.
 
 On the gate path ``PreflightInput.metadata`` is rebuilt from the extraction
 input's ``model_dump()`` (``by_alias=False`` → field *names*, plus the
@@ -23,36 +23,29 @@ from conformance.suite.checks.prescriptions._typed_boundaries import (
 )
 from conformance.suite.schema.findings import Finding
 
-from ._common import (
-    Registry,
-    collect_entrypoint_input_contract_names,
-    find_preflight_check_sites,
-    norm_key,
-)
+from ._common import Registry, contracts_for_site, find_preflight_check_sites, norm_key
 
-_P035 = "P035"
+_F004 = "F004"
 
 
 def scan(reg: Registry) -> list[Finding]:
-    input_contracts = collect_entrypoint_input_contract_names(reg)
-    if not input_contracts:
-        return []
-
-    allowed: set[str] = set()
-    for name in input_contracts:
-        rec = reg.by_name.get(name)
-        if rec is None:
-            # Entrypoint input is an external/generated type we cannot resolve —
-            # its field set is unknown, so we cannot make a parity claim.
-            return []
-        if _opts_into_extra_keys(name, reg, set()):
-            return []
-        aliases = reg.aliases_by_rel.get(rec.file, {})
-        for fi in resolve_contract_fields(rec.node, aliases, reg.by_name):
-            allowed.add(norm_key(fi.name))
-
     findings: list[Finding] = []
     for src, func in find_preflight_check_sites(reg):
+        input_contracts = contracts_for_site(reg, src)
+        if not input_contracts:
+            continue
+        allowed: set[str] = set()
+        unresolved = False
+        for name in input_contracts:
+            rec = reg.by_name.get(name)
+            if rec is None or _opts_into_extra_keys(name, reg, set()):
+                unresolved = True
+                break
+            aliases = reg.aliases_by_rel.get(rec.file, {})
+            for fi in resolve_contract_fields(rec.node, aliases, reg.by_name):
+                allowed.add(norm_key(fi.name))
+        if unresolved:
+            continue
         params = _get_non_self_params(func)
         if not params:
             continue
@@ -62,7 +55,7 @@ def scan(reg: Registry) -> list[Finding]:
                 findings.append(
                     make_finding(
                         filename=src.rel,
-                        rule_id=_P035,
+                        rule_id=_F004,
                         node=node,
                         message=(
                             f"preflight_check reads metadata key '{key}', which is not a "
@@ -152,7 +145,7 @@ def _opts_into_extra_keys(name: str, reg: Registry, seen: set[str]) -> bool:
     or ``{"extra": "allow"}``). Note that ``allow_unbounded_fields=True`` does NOT: it only
     skips payload-safety type validation (``application_sdk/contracts/base.py``
     ``__init_subclass__``); the extra policy stays pydantic-default ``"ignore"``, so
-    undeclared metadata keys are still dropped — exactly the drift P035 must keep catching.
+    undeclared metadata keys are still dropped — exactly the drift F004 must keep catching.
     """
     if name in seen:
         return False

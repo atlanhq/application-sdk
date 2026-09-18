@@ -17,7 +17,7 @@ description: >
   on result URIs after the runner produces the full-repo report.  The runner has
   no `--include` flag; filtering is always done on the parsed output.  When
   omitted, all results are returned.
-- `series` (string, default `"E,L,C,P,O,D,B,I,T,K,S"`) — comma-separated list of
+- `series` (string, default `"E,L,C,P,F,O,D,B,I,T,K,S"`) — comma-separated list of
   rule-series letters to run, e.g. `"E"` for error-handling only or `"E,L"` for
   error-handling and logging.
 - `rule_ids` (list of string, optional) — restrict results to these exact rule
@@ -54,9 +54,10 @@ description: >
 - `findings` — list of findings, each with:
   - `rule_id` — e.g. `"E002"`.
   - `area` — series letter mapped to area name: `E` → `error-handling`,
-    `L` → `logging`, `C` → `ci`, `P` → `prescriptions`, `O` → `optimizations`,
-    `D` → `dependency`, `B` → `deprecation`, `I` → `dockerfile`, `T` → `tests`,
-    `K` → `contract-toolkit`, `S` → `security`.
+    `L` → `logging`, `C` → `ci`, `P` → `prescriptions`, `F` → `preflight`,
+    `O` → `optimizations`, `D` → `dependency`, `B` → `deprecation`,
+    `I` → `dockerfile`, `T` → `tests`, `K` → `contract-toolkit`,
+    `S` → `security`.
   - `file` — repo-relative path.
   - `line`, `column` — location.
   - `fingerprint` — value of `partial_fingerprints["atlanConformance/v1"]`;
@@ -145,8 +146,9 @@ be reported as an error.
 
 Tag each result's area by reading the first letter of `result.rule_id`:
 `E` → `error-handling`, `L` → `logging`, `C` → `ci`, `P` → `prescriptions`,
-`O` → `optimizations`, `D` → `dependency`, `B` → `deprecation`,
-`I` → `dockerfile`, `T` → `tests`, `K` → `contract-toolkit`, `S` → `security`.
+`F` → `preflight`, `O` → `optimizations`, `D` → `dependency`,
+`B` → `deprecation`, `I` → `dockerfile`, `T` → `tests`,
+`K` → `contract-toolkit`, `S` → `security`.
 
 Extract `atlan/mechanism`, `atlan/autofixable`, `atlan/orthogonalGate`,
 `atlan/forcesExternalInfluence` (default `false` if absent) from

@@ -13,6 +13,7 @@ Rule ID namespaces:
 * ``D###``  — dependency patterns (D001–D099)
 * ``I###``  — container image conformance patterns (I001–I099)
 * ``T###``  — test-quality patterns (T001–T099)
+* ``F###``  — preflight-gate patterns (F001–F099)
 """
 
 from __future__ import annotations

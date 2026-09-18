@@ -250,7 +250,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # P029/P030 + P037/P038/P039/P042: SDR-readiness — only apps declare
     # self_deployed_runtime; the SDK itself never does, so these are APP-scoped.
-    # P032–P035: preflight-gate authoring — only apps register @task activities,
+    # F001–F004: preflight-gate authoring — only apps register @task activities,
     # define Handler.preflight_check, construct PreflightCheck results, and declare
     # the entrypoint Input contracts the gate rebuilds metadata from; the SDK
     # publishes the gate, it is not a subject of these rules (BLDX-1545).
@@ -359,7 +359,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P043",
         "P044",
         "P045",
-        "P047",
+        "F005",
         "P048",
         "P049",
         "P051",
@@ -414,10 +414,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P028",
         "P029",
         "P030",
-        "P032",
-        "P033",
-        "P034",
-        "P035",
+        "F001",
+        "F002",
+        "F003",
+        "F004",
         "P037",
         "P038",
         "P039",
@@ -448,6 +448,19 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "I004",
         "I005",
         "S002",
+        "F006",
+        "F007",
+        "F008",
+        "F009",
+        "F010",
+        "F011",
+        "F012",
+        "F013",
+        "F014",
+        "F015",
+        "F016",
+        "F019",
+        "F020",
     }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam
     # (P006/P007, BLDX-1417), declare its deprecations correctly (B002–B004),
@@ -465,6 +478,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P007",
         "P046",
         "P050",
+        "F017",
+        "F018",
     }, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
     assert both == {r.id for r in rules} - app_scoped - sdk_scoped
@@ -594,9 +609,8 @@ def test_catalog_p_series_present() -> None:
     P031 is SharedDefaultExecutorOffload — asyncio.to_thread(...) /
     run_in_executor(None, ...) bypass the SDK's dedicated run_in_thread() pool
     and land on asyncio's shared default executor instead (BLDX-1525).
-    P032–P035 are the preflight-gate rules — reserved gate-name collision,
-    duplicate in-workflow preflight, untyped check failures, and metadata /
-    input-contract parity (BLDX-1545).
+    P032–P035 and P047 are retired: the preflight-gate rules moved to the
+    F-series as F001–F005 (PR #3710) and those P-ids stay vacant.
     P036 is HandRolledProcessIsolation — a bare ProcessPoolExecutor /
     multiprocessing child instead of the run_fault_isolated() / run_best_effort()
     seam (CNCT-85).
@@ -662,10 +676,6 @@ def test_catalog_p_series_present() -> None:
         "P029",
         "P030",
         "P031",
-        "P032",
-        "P033",
-        "P034",
-        "P035",
         "P036",
         "P037",
         "P038",
@@ -676,7 +686,6 @@ def test_catalog_p_series_present() -> None:
         "P044",
         "P045",
         "P046",
-        "P047",
         "P048",
         "P049",
         "P050",
@@ -686,6 +695,25 @@ def test_catalog_p_series_present() -> None:
     assert not missing, f"Missing P-series rules: {missing}"
     extra = p_ids - expected
     assert not extra, f"Unexpected P-series rules: {extra}"
+
+
+def test_catalog_f_series_present() -> None:
+    """The F-series preflight-gate rules are exactly F001–F020.
+
+    F001–F005 were published as P032–P035 and P047 and moved to their own
+    series in PR #3710 before any fleet suppression referenced them; the vacated
+    P-ids are retired and never reused.  F006–F019 are the CONNECT-812 contract,
+    lifetime and behavioral rules; F016–F018 are the opt-in TEST rules.  F020
+    flags a suppression that still cites one of the five retired P-ids.
+
+    There is deliberately no rule for a ``PreflightStatus.PARTIAL`` verdict: it
+    is a read of a deprecated SDK enum member, which B001 already reports
+    fleet-wide from the deprecated-symbol manifest, and two WARN findings on one
+    line is worse than one.
+    """
+    f_ids = {r.id for r in load_catalog() if r.id.startswith("F")}
+    expected = {f"F{n:03}" for n in range(1, 21)}
+    assert f_ids == expected, f"F-series drift: {sorted(f_ids ^ expected)}"
 
 
 def test_catalog_o_series_present() -> None:
