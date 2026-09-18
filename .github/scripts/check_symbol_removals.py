@@ -54,6 +54,24 @@ in the commit subject (``feat!:`` / ``fix!:`` / a ``BREAKING CHANGE:`` trailer),
 which routes it to a major bump in ``release-version-bump.yaml`` instead of
 riding out on a patch the way #3685 did.
 
+What this gate does not cover
+-----------------------------
+
+It guards the **shape** of the surface, not its semantics. Specifically, it does
+not compare default *values*: changing ``mode: PreflightGateMode =
+PreflightGateMode.SOFT`` to ``mode: PreflightGateMode | None = None`` produces no
+finding, because the parameter still exists and still has a default.
+
+That is deliberate. The SDK changes defaults often and on purpose, and a gate
+that argued about every one would be noise nobody reads. But it is a genuine
+blind spot rather than covered ground: a default-value change can alter
+behaviour for every caller who never passed the argument, and nothing here will
+say so. Do not read a green run as "the behaviour is unchanged" — it means no
+name vanished and no signature narrowed.
+
+Also not covered: a changed return type, a narrowed exception contract, and any
+behavioural change behind an unchanged signature.
+
 Why AST and not import
 ----------------------
 

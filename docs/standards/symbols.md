@@ -48,6 +48,21 @@ alias keeps the name *present in the tree*, and the gate is satisfied by its
 presence. The excuse cannot drift away from the code, because the excuse **is**
 the code.
 
+### What the gate does not cover
+
+It guards the **shape** of the surface, not its semantics. It does not compare
+default *values* — changing `mode: PreflightGateMode = PreflightGateMode.SOFT`
+to `mode: PreflightGateMode | None = None` produces no finding, because the
+parameter still exists and still has a default. Nor does it see a changed return
+type, a narrowed exception contract, or any behavioural change behind an
+unchanged signature.
+
+That is deliberate: the SDK changes defaults often and on purpose, and a gate
+that argued about every one would be noise nobody reads. But treat it as a blind
+spot, not as coverage. A default-value change alters behaviour for every caller
+who never passed the argument, and a green run means only that no name vanished
+and no signature narrowed — never that the behaviour is unchanged.
+
 ---
 
 ## How to deprecate, by symbol kind
