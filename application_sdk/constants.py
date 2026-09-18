@@ -623,9 +623,23 @@ SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 #: Name of the deployment object store component in DAPR
 DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
 #: Name of the upstream object store component in DAPR.
-#: Default differs from DEPLOYMENT_OBJECT_STORE_NAME so that non-SDR deployments
-#: — which only ship the deployment binding — cause create_store_from_binding_optional
-#: to return None, leaving upstream_storage unset and routing to fall back to storage.
+#: Three wirings reach this value:
+#:
+#: * **SDR** — a distinct component (default ``atlan-objectstore``) pointing at
+#:   Atlan's bucket; ``upstream_storage`` is a second store and ``App.upload``
+#:   hands artifacts off to it.
+#: * **In-cluster** — the deployment charts set this *and*
+#:   ``DEPLOYMENT_OBJECT_STORE_NAME`` to the app's single object-store
+#:   component.  Same name means one store: startup *aliases* ``upstream_storage``
+#:   to the deployment store rather than building a second store object over the
+#:   same bucket.
+#: * **Absent** — local dev / CI ship only the deployment binding; the optional
+#:   factory returns ``None`` and routing falls back to ``storage``.
+#:
+#: Comparing this name with ``DEPLOYMENT_OBJECT_STORE_NAME`` is startup's private
+#: decision about *what to build* — see ``_create_infrastructure``.  Code asking
+#: "is this deployment one store or two?" reads ``context.single_store``, which
+#: compares the handles that were actually built.
 UPSTREAM_OBJECT_STORE_NAME = os.getenv(
     "UPSTREAM_OBJECT_STORE_NAME", "atlan-objectstore"
 )

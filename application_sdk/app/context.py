@@ -16,6 +16,7 @@ from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import holding_progress
 from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,
+    SingleStoreUnknownInWorkflowError,
     StateStoreNotConfiguredError,
 )
 from application_sdk.constants import LOCAL_WORKFLOW_ID
@@ -23,6 +24,7 @@ from application_sdk.contracts.base import HeartbeatDetails
 from application_sdk.credentials.resolver import CredentialResolver
 from application_sdk.observability.context import get_execution_context
 from application_sdk.observability.correlation import get_correlation_context
+from application_sdk.observability.utils import in_temporal_workflow
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -357,14 +359,56 @@ class AppContext:
 
     @property
     def upstream_storage(self) -> "ObjectStore | None":
-        """Upstream object store, or ``None`` if not configured.
+        """Upstream object store, or ``None`` if no upstream binding is configured.
 
-        Present only in SDR deployments where ``UPSTREAM_OBJECT_STORE_NAME`` is
-        bound to a separate Dapr component pointing at Atlan's bucket.  In
-        standard (non-SDR) deployments this is ``None`` and ``App.upload()``
-        falls back to ``storage`` (the deployment store).
+        Three wirings reach this property:
+
+        * **SDR** — ``UPSTREAM_OBJECT_STORE_NAME`` names a separate Dapr
+          component pointing at Atlan's bucket: a second, distinct store.
+        * **In-cluster** — the charts point both store names at the app's one
+          object-store component, so this *is* ``storage`` (the same object,
+          not a copy).  ``App.upload()`` writes once, to that one bucket.
+        * **Absent** — local dev / CI ship only the deployment binding: ``None``,
+          and routing falls back to ``storage``.
+
+        Read :attr:`single_store`, not ``upstream_storage is None``, to ask
+        whether this deployment has one store or two.
         """
         return self._upstream_storage
+
+    @property
+    def single_store(self) -> bool:
+        """``True`` when this deployment has exactly one object store.
+
+        One definition, shared with
+        :attr:`application_sdk.infrastructure.context.InfrastructureContext.single_store`
+        — see :func:`application_sdk.infrastructure.context.is_single_store`.
+
+        **Activity-scoped.** Only the activity-side context carries store
+        handles (``execution/_temporal/activities.py``); the workflow-side one
+        is built without them, where the shared predicate would answer ``True``
+        for every deployment including a two-store SDR one.  Reading it from
+        workflow code therefore raises
+        :class:`~application_sdk.app.base_errors.SingleStoreUnknownInWorkflowError`
+        rather than returning a verdict it cannot have.  Carry the value out of
+        a ``@task`` on its Output contract instead — that also makes it
+        replay-safe.
+
+        Raises:
+            SingleStoreUnknownInWorkflowError: Read from workflow code.
+        """
+        # in_temporal_workflow() reads Temporal's own ContextVar. The module's
+        # _is_in_workflow() helper reads the ExecutionContext ContextVar, which
+        # is populated only after ExecutionContextInterceptor runs and so fails
+        # *open* — wrong for a guard whose whole job is to refuse a verdict.
+        if in_temporal_workflow():
+            raise SingleStoreUnknownInWorkflowError()
+
+        from application_sdk.infrastructure.context import (  # noqa: PLC0415 — module scope would pull application_sdk.infrastructure (and its Dapr surface) into every import of this module, which runs inside the Temporal workflow sandbox
+            is_single_store,
+        )
+
+        return is_single_store(self._storage, self._upstream_storage)
 
     def log_debug(self, message: str, **kwargs: Any) -> None:
         """Log a debug message."""

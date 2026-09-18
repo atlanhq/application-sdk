@@ -250,8 +250,35 @@ class MyConnector(App):
 
 Two cleanup tasks and two transfer tasks are available on every `App`:
 
-- `upload(UploadInput(...))` — pushes a local file or directory to object storage. Routes to the Atlan-owned `atlan-objectstore` (`infra.upstream_storage`) in SDR deployments; falls back to the customer-owned `objectstore` (`infra.storage`) in local dev. This is the explicit hand-off step that downstream Atlan system apps (publish, lineage, quality) consume. See [file-reference.md](file-reference.md) and [ADR-0014](../adr/0014-two-store-storage-architecture.md).
+- `upload(UploadInput(...))` — pushes a local file or directory to object storage. Routes to the Atlan-owned `atlan-objectstore` (`infra.upstream_storage`) in SDR deployments and to the customer-owned `objectstore` (`infra.storage`) otherwise — see the three wirings below. This is the explicit hand-off step that downstream Atlan system apps (publish, lineage, quality) consume. See [file-reference.md](file-reference.md) and [ADR-0014](../adr/0014-two-store-storage-architecture.md).
 - `download(DownloadInput(...))` — pulls a file or directory from object storage to a local path.
+
+**Three store wirings, not two.** `UPSTREAM_OBJECT_STORE_NAME` reaches
+`upload()` in three shapes, and the third is the common one in Atlan-hosted
+deployments:
+
+| Wiring | `upstream_storage` | What `upload()` does |
+|---|---|---|
+| **SDR** — a distinct `atlan-objectstore` component | a second, distinct store | hands artifacts across the boundary to Atlan's bucket |
+| **In-cluster** — the charts point both store names at the app's one object-store component | *is* `infra.storage` (the same object) | one write, to that one bucket; no self-copy |
+| **Absent** — local dev / CI ship only the deployment binding | `None` | falls back to `infra.storage` |
+
+Ask `self.context.single_store` for the topology, never
+`upstream_storage is None`: on the in-cluster wiring the upstream handle exists
+*and* is the deployment store, so the `None` test reports two stores where there
+is one. `single_store` is `True` for the second and third rows, and it compares
+the handles startup actually built — so it cannot disagree with how `upload()`
+routes. Setting `ENABLE_ATLAN_UPLOAD=true` on the in-cluster wiring asks for a
+hand-off across a boundary that is not there; startup logs a `WARNING` and
+continues, writing to the one store.
+
+`single_store` is **activity-scoped**: only the activity-side context carries
+store handles, so reading it from workflow code raises
+`SingleStoreUnknownInWorkflowError` rather than answering `True` for every
+deployment — including a two-store SDR one — from a context that holds no
+stores. When workflow code needs to branch on the topology, return the verdict
+from a `@task` on its Output contract and branch on that value; a replayed
+workflow then sees what the original run recorded.
 
 **`upload()` does not require the files on the calling pod.** When `local_path`
 is absent — a cross-pod hand-off where the tasks that produced the tree ran on
@@ -298,6 +325,11 @@ immediately after the stores are constructed. It is a no-op in all other run mod
 |---|---|---|
 | Deployment store | `objectstore` | Always |
 | Upstream Atlan store | `atlan-objectstore` | Always in SDR — hard-fail if absent |
+
+A deployment whose two store names resolve to one component is probed **once**,
+as the deployment store: the upstream handle is that same bucket, so a second
+round-trip against it buys nothing. The hard-fail on a genuinely absent upstream
+component is unchanged.
 
 For each store a round-trip probe is executed: write a sentinel object → `HEAD` the object →
 delete it. Delete is best-effort — a delete failure is logged at WARNING but does not fail the
