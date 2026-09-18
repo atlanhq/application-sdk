@@ -117,28 +117,27 @@ class TestUploadRequiresUpstreamWhenAtlanUploadEnabled:
 
         assert mock_upload.call_args.kwargs["store"] is upstream
 
-    async def test_same_name_binding_is_one_store_and_does_not_raise(self) -> None:
-        """Both names on one component: the deployment store *is* Atlan's store.
+    async def test_aliased_store_is_one_write_not_a_self_copy(self) -> None:
+        """Both names on one component: one handle, aliased — so one write.
 
         In-cluster charts wire UPSTREAM_OBJECT_STORE_NAME and
-        DEPLOYMENT_OBJECT_STORE_NAME to the same component, so startup leaves
-        ``upstream_storage`` None on purpose.  ENABLE_ATLAN_UPLOAD must then
-        route to the deployment store once instead of raising.
+        DEPLOYMENT_OBJECT_STORE_NAME to the same component, and startup aliases
+        the upstream handle to the deployment store.  The dual-write fan-out
+        tests ``upstream is not deployment``, so it must collapse to a single
+        write against that one bucket rather than copying it onto itself — and
+        the ENABLE_ATLAN_UPLOAD guard must not fire, because a store is there.
         """
         from application_sdk.contracts.storage import UploadInput, UploadOutput
 
         deployment = object()
-        app = self._app(upstream=None, deployment=deployment)
+        app = self._app(upstream=deployment, deployment=deployment)
+        assert app.context.single_store is True
 
         with (
             mock.patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
             mock.patch(
-                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
-                "my-app-objectstore",
-            ),
-            mock.patch(
-                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
-                "my-app-objectstore",
+                "application_sdk.constants.DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED",
+                True,
             ),
             mock.patch(
                 "application_sdk.storage.transfer.upload",

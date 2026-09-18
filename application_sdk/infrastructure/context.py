@@ -50,6 +50,19 @@ class InfrastructureContext:
     event_binding: Binding | None = field(default=None)
     _dapr_client: Any = field(default=None, repr=False)
 
+    @property
+    def single_store(self) -> bool:
+        """``True`` when this deployment has exactly one object store.
+
+        ``True`` both when no upstream binding exists and when both store names
+        resolve to one Dapr component — startup aliases ``upstream_storage`` to
+        ``storage`` there rather than building a second object over the same
+        bucket.  Compares the handles that were actually built, so it cannot
+        disagree with how ``App.upload()`` routes; ``upstream_storage is not
+        None`` does not answer this question.
+        """
+        return self.upstream_storage is None or self.upstream_storage is self.storage
+
 
 _infrastructure: InfrastructureContext | None = None
 

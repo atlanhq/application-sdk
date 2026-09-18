@@ -138,6 +138,31 @@ class TestAppContextIdentity:
         ctx = AppContext(app_name="a", app_version="1")
         assert ctx.upstream_storage is None
 
+    def test_single_store_true_when_no_upstream_binding(self) -> None:
+        ctx = AppContext(app_name="a", app_version="1", _storage=object())  # type: ignore[arg-type]
+        assert ctx.single_store is True
+
+    def test_single_store_true_when_upstream_aliases_deployment(self) -> None:
+        """The in-cluster wiring: both store names on one Dapr component."""
+        sentinel = object()
+        ctx = AppContext(
+            app_name="a",
+            app_version="1",
+            _storage=sentinel,  # type: ignore[arg-type]
+            _upstream_storage=sentinel,  # type: ignore[arg-type]
+        )
+        assert ctx.single_store is True
+
+    def test_single_store_false_when_upstream_is_a_distinct_store(self) -> None:
+        """Real SDR: a second component pointing at Atlan's bucket."""
+        ctx = AppContext(
+            app_name="a",
+            app_version="1",
+            _storage=object(),  # type: ignore[arg-type]
+            _upstream_storage=object(),  # type: ignore[arg-type]
+        )
+        assert ctx.single_store is False
+
 
 # ---------------------------------------------------------------------------
 # AppContext: state store contract

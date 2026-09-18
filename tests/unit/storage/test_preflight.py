@@ -208,32 +208,28 @@ async def test_verify_fails_when_upstream_absent_in_sdr(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_verify_accepts_absent_upstream_when_names_coincide(monkeypatch) -> None:
-    """SDR mode + both store names on one component → deployment store is Atlan's.
+async def test_verify_probes_an_aliased_upstream_store_once(monkeypatch) -> None:
+    """SDR mode + both store names on one component → one handle, one probe.
 
-    Startup deliberately leaves ``upstream_storage`` None on that wiring, so
-    the absent-upstream hard-fail must not fire; only the deployment store is
-    probed.
+    Startup aliases ``upstream_storage`` to the deployment store on that
+    wiring.  The absent-upstream hard-fail must not fire (a store *is*
+    configured), and the same bucket must not be probed twice.
     """
     import application_sdk.constants as constants_mod
 
     monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
-    monkeypatch.setattr(
-        constants_mod, "DEPLOYMENT_OBJECT_STORE_NAME", "my-app-objectstore"
-    )
-    monkeypatch.setattr(
-        constants_mod, "UPSTREAM_OBJECT_STORE_NAME", "my-app-objectstore"
-    )
 
     fake_store = _fake_store()
     fake_obstore = MagicMock()
     fake_obstore.put_async = AsyncMock()
     fake_obstore.head_async = AsyncMock()
 
-    infra = _make_infra(storage=fake_store, upstream_storage=None)
+    infra = _make_infra(storage=fake_store, upstream_storage=fake_store)
 
     with patch.dict("sys.modules", {"obstore": fake_obstore}):
         await verify_object_store_access(infra)  # must not raise
+
+    assert fake_obstore.put_async.await_count == 1
 
 
 @pytest.mark.asyncio

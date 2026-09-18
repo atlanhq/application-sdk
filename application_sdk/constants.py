@@ -630,9 +630,9 @@ DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "object
 #:   hands artifacts off to it.
 #: * **In-cluster** — the deployment charts set this *and*
 #:   ``DEPLOYMENT_OBJECT_STORE_NAME`` to the app's single object-store
-#:   component.  Same name means one store: startup leaves ``upstream_storage``
-#:   ``None`` rather than building a second store object over the same bucket
-#:   (see :func:`upstream_binding_is_deployment_binding`).
+#:   component.  Same name means one store: startup *aliases* ``upstream_storage``
+#:   to the deployment store rather than building a second store object over the
+#:   same bucket (see :func:`upstream_binding_is_deployment_binding`).
 #: * **Absent** — local dev / CI ship only the deployment binding; the optional
 #:   factory returns ``None`` and routing falls back to ``storage``.
 UPSTREAM_OBJECT_STORE_NAME = os.getenv(
@@ -643,11 +643,15 @@ UPSTREAM_OBJECT_STORE_NAME = os.getenv(
 def upstream_binding_is_deployment_binding() -> bool:
     """True when both store names point at the same Dapr component.
 
-    That is the in-cluster wiring: one object store under two names.  Callers
-    treat it as the single-store topology — no upstream store is built, and an
-    ``ENABLE_ATLAN_UPLOAD`` deployment routes to ``storage`` because that *is*
-    Atlan's store.  A function, not a constant, so the verdict follows the
-    names at call time (tests monkeypatch them).
+    That is the in-cluster wiring: one object store under two names.  Startup
+    (:func:`application_sdk.main._create_infrastructure`) reads this once to
+    decide whether to build a second store object or alias the deployment one;
+    it is deliberately the *only* consumer.  Code asking "is this deployment
+    one store or two?" must read ``context.single_store`` instead, which
+    compares the handles actually built and so cannot disagree with them.
+
+    A function, not a constant, so the verdict follows the names at call time
+    (tests monkeypatch them).
     """
     return UPSTREAM_OBJECT_STORE_NAME == DEPLOYMENT_OBJECT_STORE_NAME
 

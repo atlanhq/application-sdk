@@ -357,15 +357,37 @@ class AppContext:
 
     @property
     def upstream_storage(self) -> "ObjectStore | None":
-        """Upstream object store, or ``None`` unless a *distinct* second binding exists.
+        """Upstream object store, or ``None`` if no upstream binding is configured.
 
-        Present only in SDR deployments where ``UPSTREAM_OBJECT_STORE_NAME`` is
-        bound to a separate Dapr component pointing at Atlan's bucket.  Absent,
-        or the same name as ``DEPLOYMENT_OBJECT_STORE_NAME`` (the in-cluster
-        wiring), both mean one store: this is ``None`` and ``App.upload()``
-        routes to ``storage`` (the deployment store).
+        Three wirings reach this property:
+
+        * **SDR** — ``UPSTREAM_OBJECT_STORE_NAME`` names a separate Dapr
+          component pointing at Atlan's bucket: a second, distinct store.
+        * **In-cluster** — the charts point both store names at the app's one
+          object-store component, so this *is* ``storage`` (the same object,
+          not a copy).  ``App.upload()`` writes once, to that one bucket.
+        * **Absent** — local dev / CI ship only the deployment binding: ``None``,
+          and routing falls back to ``storage``.
+
+        Read :attr:`single_store`, not ``upstream_storage is None``, to ask
+        whether this deployment has one store or two.
         """
         return self._upstream_storage
+
+    @property
+    def single_store(self) -> bool:
+        """``True`` when this deployment has exactly one object store.
+
+        The topology signal for code that behaves differently either side of
+        the SDR boundary — served-prefix rules, hand-off gates, marker ladders.
+        It is ``True`` both when no upstream binding exists and when both store
+        names resolve to one component, and it compares the handles startup
+        actually built, so it cannot disagree with how reads and writes will be
+        routed.  ``upstream_storage is not None`` is *not* a substitute: on the
+        in-cluster wiring the upstream handle exists and is the deployment
+        store.
+        """
+        return self._upstream_storage is None or self._upstream_storage is self._storage
 
     def log_debug(self, message: str, **kwargs: Any) -> None:
         """Log a debug message."""
