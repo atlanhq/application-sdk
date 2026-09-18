@@ -339,7 +339,7 @@ def scan_removed_config(root: Path) -> list[Finding]:
                             file=path.relative_to(root).as_posix(),
                             line=line_number,
                             column=1,
-                            message="Deployment sets the gate mode override removed by SDK PR #3685. Migrate to App.preflight_gate_mode before adopting that release; release-floor applicability is not yet established.",
+                            message="Deployment sets the gate mode override SDK PR #3685 made inert. Nothing reads ATLAN_PREFLIGHT_GATE_MODE and a worker that still sees it warns at startup, so the posture is whatever App.preflight_gate_mode declares. Delete the override and declare the posture on the app.",
                         )
                     )
     return findings

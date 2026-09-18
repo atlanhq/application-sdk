@@ -446,9 +446,13 @@ _CONTRACT_RULES = (
         id="F015",
         canonical_reference=(
             "application_sdk/execution/_temporal/preflight_gate.py — the gate's live "
-            "configuration surface. A manifest key or helper import that this module no "
-            "longer reads is dead configuration, and the SDK version it was removed in "
-            "decides whether a finding applies."
+            "configuration surface, and the deprecated-alias block at the end of it. "
+            "Two states share this rule: ATLAN_PREFLIGHT_GATE_MODE is already inert, so "
+            "a deployment still setting it is dead configuration to delete now; the nine "
+            "symbols PR #3685 renamed still resolve, as aliases that warn and are removed "
+            "in v3.40.0, so an import of one is working code on a deadline rather than an "
+            "incompatibility. Correct looks like the posture declared on "
+            "App.preflight_gate_mode and the replacement each deprecation notice names."
         ),
         name="PreflightRemovedGateContract",
         scope=RuleScope.APP,
