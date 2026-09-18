@@ -65,16 +65,25 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Any, NoReturn
+from typing import IO, TYPE_CHECKING, Any, NoReturn
 
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.common.path import convert_to_extended_path
+from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
+
+if TYPE_CHECKING:
+    from application_sdk.errors import LocalVolumeUnwritableError
+
+#: The top-level directory every workflow artifact is written under, derived from
+#: the output template rather than spelled again here so the two cannot drift.
+_ARTIFACT_ROOT = WORKFLOW_OUTPUT_PATH_TEMPLATE.split("/", 1)[0]
 
 __all__ = [
     "PARTIAL_DIRNAME",
     "atomic_copy",
     "atomic_path",
     "atomic_write",
+    "classify_unwritable_oserror",
     "disk_full_guard",
     "ensure_free_space",
 ]
@@ -89,6 +98,116 @@ _DISK_FULL_ERRNOS: frozenset[int] = frozenset(
     for value in (getattr(errno, name, None) for name in ("ENOSPC", "EDQUOT"))
     if value is not None
 )
+
+
+#: ``errno`` values meaning "this local path/volume cannot be written to": the
+#: filesystem is mounted read-only (``EROFS``) or the writing identity lacks
+#: permission (``EACCES``/``EPERM``). Kept separate from ``_DISK_FULL_ERRNOS``: a
+#: full disk and a read-only mount need different operator responses, and
+#: ``disk_full_guard`` stays narrow to the disk-full case by design.
+_UNWRITABLE_ERRNOS: frozenset[int] = frozenset(
+    value
+    for value in (getattr(errno, name, None) for name in ("EROFS", "EACCES", "EPERM"))
+    if value is not None
+)
+
+
+def _local_write_roots() -> tuple[Path, ...]:
+    """The local filesystem roots the SDK itself writes app data under.
+
+    Resolved per call rather than at import: both roots are relative by default
+    (``./local/tmp/`` and ``artifacts/``), so they mean different absolute paths
+    under different working directories, and ``TEMPORARY_PATH`` is read from the
+    environment. A module-level constant would freeze whichever value happened to
+    be live at first import — in tests, usually the wrong one.
+    """
+    roots = []
+    for root in (TEMPORARY_PATH, _ARTIFACT_ROOT):
+        try:
+            roots.append(Path(root).resolve())
+        except OSError:
+            # An unresolvable root cannot match anything; dropping it is the
+            # same outcome as keeping it, without the exception.
+            continue
+    return tuple(roots)
+
+
+def _is_under_local_write_root(filename: object) -> bool:
+    """Whether *filename* names a path the SDK writes app data to.
+
+    This is the write-provenance check that lets an ``errno`` be read as a
+    statement about the app's volume. ``filename`` comes straight off the
+    ``OSError``, so it is typed as ``object``: the kernel reports it, not us, and
+    it can be ``None``, ``bytes`` or an ``int`` file descriptor as well as a path.
+    """
+    if not isinstance(filename, (str, bytes, os.PathLike)):
+        # Notably an int fd, or None — neither names a path we can attribute.
+        return False
+    try:
+        resolved = Path(os.fsdecode(filename)).resolve()
+    except (OSError, ValueError):
+        return False
+    return any(
+        resolved == root or root in resolved.parents for root in _local_write_roots()
+    )
+
+
+def classify_unwritable_oserror(
+    exc: BaseException,
+) -> LocalVolumeUnwritableError | None:
+    """Return a typed error for a read-only / permission-denied local-write ``OSError``.
+
+    Maps ``OSError`` with ``EROFS``/``EACCES``/``EPERM`` **on a path under the SDK's own
+    local write roots** to :class:`~application_sdk.errors.LocalVolumeUnwritableError`,
+    and returns ``None`` for anything else so callers fall through to their existing
+    handling. Used at the activity boundary to type the artifact-filesystem failure family
+    (``[Errno 30] Read-only file system: 'artifacts'`` and siblings) that would otherwise
+    surface as a bare, unclassifiable ``OSError``.
+
+    **Why the path gate is not optional.** This is called from the outermost
+    ``except Exception`` in :func:`~application_sdk.execution._temporal.activities.create_activity_from_task`,
+    which sees every non-``AppError`` raised anywhere in an activity body — source
+    clients, subprocesses, sockets, credential reads. ``EROFS`` is unambiguous, but
+    ``EACCES``/``EPERM`` are two of the most broadly reused errnos in the kernel: a
+    permission-denied *read* of an unrelated file, or a socket bind with no filename at
+    all, would otherwise be typed as a volume-mount fault and routed to whoever owns
+    volumes. That is worse than leaving it unclassified — an unclassified failure gets
+    human eyes, a confidently misclassified one gets closed. At the write site,
+    "this is a local write" is known for free; here it has to be established, so it is.
+    The gate applies to all three errnos rather than only the ambiguous two, so the
+    error's assertions (``"local write failed"``, ``audience=PLATFORM``, and a
+    remediation naming the ephemeral-volume mount) are true by construction rather than
+    true for two errnos and assumed for the third.
+
+    The gate also keeps arbitrary filesystem paths — a credential or private-key path
+    among them — out of the ``path`` field, which travels on the Temporal failure wire.
+
+    **Why all three errnos stay on one leaf.** Once provenance is proven, ``EACCES`` on
+    the app's own ephemeral volume is not the permissions condition
+    :class:`~application_sdk.errors.AppPermissionDeniedError` describes (a caller lacking
+    rights to a resource); it is the same misconfigured mount that produces ``EROFS``, and
+    it wants the same operator response. The taxonomy split would only be warranted if the
+    classifier still fired on paths the app does not own — which, after the gate, it
+    cannot.
+
+    Deliberately separate from :func:`disk_full_guard`, which stays narrow to
+    ``ENOSPC``/``EDQUOT``; this classifies at a different layer and changes no write path.
+    """
+    if not isinstance(exc, OSError) or exc.errno not in _UNWRITABLE_ERRNOS:
+        return None
+    if not _is_under_local_write_root(getattr(exc, "filename", None)):
+        return None
+
+    from application_sdk.errors import LocalVolumeUnwritableError  # noqa: PLC0415
+
+    name = errno.errorcode.get(exc.errno, str(exc.errno))
+    path = os.fsdecode(exc.filename)
+    return LocalVolumeUnwritableError(
+        message=f"local write failed: {os.strerror(exc.errno)} ('{path}')",
+        path=path,
+        errno_name=name,
+        cause=exc,
+    )
 
 
 def _format_bytes(count: int) -> str:

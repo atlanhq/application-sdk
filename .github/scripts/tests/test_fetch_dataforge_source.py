@@ -180,6 +180,53 @@ def test_error_body_non_json_yields_generic_class(monkeypatch):
         fds._http_get("https://b/api/v1/resources/res-1", "k")
 
 
+def test_paused_resource_class_survives_and_is_distinct(monkeypatch):
+    """A paused pin (dataforge FND-1992) surfaces as `resource_paused`, not the
+    opaque `request_failed` — so the log (and the wake step) can tell "resume
+    it" apart from a missing resource. The resource id in the body must not
+    leak into the message beyond the allowlisted class."""
+    body = json.dumps(
+        {
+            "error": "resource_paused",
+            "message": "pinned resource abc is PAUSED, not PROVISIONED",
+            "resource_id": "abc",
+            "status": "PAUSED",
+        }
+    ).encode()
+    monkeypatch.setattr(
+        fds.urllib.request,
+        "urlopen",
+        lambda req, timeout=0: (_ for _ in ()).throw(_http_error(404, body)),
+    )
+    with pytest.raises(fds.DataforgeSourceError) as excinfo:
+        fds._http_get("https://b/api/v1/resources/res-1", "k")
+    msg = str(excinfo.value)
+    assert "resource_paused" in msg
+    assert "request_failed" not in msg
+    # Only the allowlisted class may reach the message: the body's resource_id
+    # (like any other body field) must not, since this write happens before any
+    # masking. Guards the security contract if error construction ever changes.
+    assert "abc" not in msg
+
+
+def test_no_credential_source_class_survives(monkeypatch):
+    """The endpoint's own not-resolvable code reads as itself, not
+    request_failed."""
+    body = json.dumps({"error": "no_credential_source", "message": "none"}).encode()
+    monkeypatch.setattr(
+        fds.urllib.request,
+        "urlopen",
+        lambda req, timeout=0: (_ for _ in ()).throw(_http_error(404, body)),
+    )
+    with pytest.raises(fds.DataforgeSourceError) as excinfo:
+        fds._http_get("https://b/api/v1/resources/res-1", "k")
+    msg = str(excinfo.value)
+    assert "no_credential_source" in msg
+    # The whole point of allowlisting this class is to distinguish it from a
+    # generic failure, so it must NOT also collapse to request_failed.
+    assert "request_failed" not in msg
+
+
 # ── Resolution: resource mode ─────────────────────────────────────────────────
 
 

@@ -103,6 +103,17 @@ _KNOWN_ERROR_CLASSES = frozenset(
         "credential_not_found",
         "resource_not_found",
         "not_provisioned",
+        # A pinned resource that exists but is in the pause/resume cycle
+        # (dataforge FND-1992). Distinct from resource_not_found (missing / bad
+        # id) and no_credential_source (nothing resolvable at all): this one is
+        # actionable — wake it. Surfacing the class is what lets the wake step,
+        # and a human reading the log, tell "paused, resume it" apart from the
+        # old opaque request_failed.
+        "resource_paused",
+        # The endpoint's own not-resolvable code. Allowlisted so a plain
+        # "no source" 404 reads as itself rather than collapsing to
+        # request_failed — same legibility fix, no new behaviour.
+        "no_credential_source",
         "forbidden",
         "unauthorized",
         "bad_request",
