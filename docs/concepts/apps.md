@@ -463,7 +463,7 @@ a platform blip must not fail a healthy run. The gate stamps which of the two ha
 
 | Gate outcome | `gate_classification` | soft | hard |
 | -- | -- | -- | -- |
-| Verdict `READY` / `PARTIAL` | — | proceed | proceed |
+| Verdict `READY` (or the deprecated `PARTIAL`) | — | proceed | proceed |
 | Verdict `NOT_READY` | — | report `would_block` | **block** |
 | Probe overran the budget | `source_unverifiable` | report `would_block` | **block** |
 | Handler raised any error, typed or not, outside the row below | `source_unverifiable` | report `would_block` | **block** |

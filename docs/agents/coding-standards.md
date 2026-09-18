@@ -151,7 +151,7 @@ beside one). Each row stamps `failure.audience` (who must act) except `proceeded
 - **Gate plumbing failures** (exception during dispatch — `gate_broken`) — the workflow's
   `no_verdict` row at `error` with `exc_info=True`, audience `APP_OWNER`.
 - **Advisory failures** (`proceeded` with any failed check — PARTIAL, or READY with a failed
-  advisory row) — the outcome row at `warning`. P047 bans the handler from logging the
+  advisory row) — the outcome row at `warning`. F005 bans the handler from logging the
   warning itself, so the gate owns the one level that case is semantically for.
 - **Clean `proceeded` / `skipped` / verdict `would_block`** — `info`.
 - The interceptor's `workflow.ended` / `activity.ended … BLOCKED (preflight gate)` lifecycle

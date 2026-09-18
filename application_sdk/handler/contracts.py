@@ -340,11 +340,25 @@ class PreflightStatus(SerializableEnum):
     ``NOT_READY`` blocks the run only when the app has opted into hard mode
     (``preflight_gate_mode = "hard"``); the default posture is soft, where a
     ``NOT_READY`` verdict is reported (``outcome="would_block"``) but the run
-    proceeds. ``READY`` and ``PARTIAL`` always proceed. ``PARTIAL`` is
-    display-only (some advisory check failed but the run may continue). Also
-    surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
-    Engine event.
+    proceeds. ``READY`` proceeds. ``PARTIAL`` is deprecated: the gate treats
+    it exactly like ``READY``, so it can conceal a blocking source failure
+    behind a degraded label. Return ``READY`` when extraction can proceed
+    (advisory failed checks stay visible as typed rows) or ``NOT_READY`` when
+    it cannot. The gate emits a ``DeprecationWarning`` when a handler returns
+    ``PARTIAL``. The member is removed in the first minor release after the
+    reference apps stop returning it; v3.40.0 is the planning anchor, and B003
+    flags the notice if that release arrives first. Also surfaced to the Sage
+    UI, the connector-pulse dashboard, and the Automation Engine event.
     """
+
+    __deprecated_members__ = {
+        "PARTIAL": (
+            "PreflightStatus.PARTIAL is deprecated; use PreflightStatus.READY when "
+            "extraction can proceed or PreflightStatus.NOT_READY when it cannot "
+            "instead — will be removed in v3.40.0, the first minor release after "
+            "the reference apps stop returning it."
+        ),
+    }
 
     READY = "ready"
     NOT_READY = "not_ready"
@@ -528,7 +542,9 @@ class PreflightOutput(BaseModel):
     status: PreflightStatus
     """Overall verdict — decides the gate. ``NOT_READY`` blocks the run only in
     hard mode (per-app opt-in); the default soft posture reports it and
-    proceeds. ``READY``/``PARTIAL`` proceed. The handler computes this itself."""
+    proceeds. ``READY`` proceeds. ``PARTIAL`` is deprecated (removal anchored
+    at v3.40.0) and proceeds like ``READY`` until then. The handler computes
+    this itself."""
 
     checks: list[PreflightCheck] = []
     """Individual check results (display + failure attribution)."""

@@ -171,6 +171,7 @@ relevant area file — this is the progressive-disclosure boundary.
 | `error-handling` | PHASE 1 | `areas/error-handling.prose.md` |
 | `optimizations` | PHASE 1 | `areas/optimizations.prose.md` |
 | `prescriptions` | PHASE 1 (suggest-only) | `areas/prescriptions.prose.md` |
+| `preflight` | PHASE 1 (suggest-only) | `areas/preflight.prose.md` |
 | `logging` | PHASE 2 | `areas/logging.prose.md` |
 | `dependency` | PHASE 1 | `areas/dependency.prose.md` |
 | `dockerfile` | PHASE 1 (suggest-only) | `areas/dockerfile.prose.md` |
