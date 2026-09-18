@@ -1987,7 +1987,7 @@ def build_preflight_gate_activity(
         ) -> None:
             """Emit the gate's one queryable row, and persist the same verdict.
 
-            Single site for all three activity-side outcomes so the attribute set
+            Single site for every activity-side outcome so the attribute set
             cannot drift between them — a consumer that finds ``gate_duration_ms``
             on ``proceeded`` but not on ``would_block`` cannot compute headroom
             for the runs that need it most.
@@ -2296,7 +2296,8 @@ def build_preflight_gate_activity(
                     raise _build_no_verdict_error(result, app_name, _current_attempt())
             # The outcome event is the gate's queryable row (connector-pulse builds the
             # dashboard from it). The activity holds the verdict, so it emits the
-            # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
+            # proceeded/blocked rows and the deprecated fail-open no_verdict; the
+            # workflow emits no_verdict only for a gate that never reached it.
             # ``reason`` is the status on proceed, the primary FailureDetails.code on a
             # block. Activity execution is at-least-once, so a retry after a lost
             # completion can re-emit — consumers dedupe on

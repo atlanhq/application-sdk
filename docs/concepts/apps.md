@@ -455,10 +455,11 @@ happens on; the gate's retry attempts exist for its own plumbing, not to give a 
 One exception runs for a single release train. Before 3.35 the gate treated a raised leaf in the
 `DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED` or `CANCELLED` categories as its own
 plumbing and failed open, and every hard-mode app that predates this rule documents and tests that
-idiom. Until 3.40.0 such a raise still proceeds in both modes, emits a `DeprecationWarning` naming
-the app, the leaf and the removal version, and stamps `deprecated_fail_open` on the row so the
-fleet can count which apps still rely on it. From 3.40.0 it blocks like any other raise. Migrate by
-returning `PARTIAL` with the failed check, as below.
+idiom. Until 3.40.0 such a raise still proceeds in both modes, logs a WARNING line (and a
+`DeprecationWarning`, which default filters hide in a worker) naming the app, the leaf and the
+removal version, and stamps `deprecated_fail_open` on the row so the fleet can count which apps
+still rely on it. The row and the log line are the observable signal. From 3.40.0 it blocks like
+any other raise. Migrate by returning `PARTIAL` with the failed check, as below.
 
 A handler signals "I could not verify, and extraction can cope" — a 429, a database still
 resuming — by **returning** `PARTIAL` with the failed check carrying the typed retryable error, never
