@@ -10,7 +10,7 @@ description: >
 ### Maintains
 
 The current remediation state of the working tree across all enabled
-conformance rule areas (error-handling, logging, CI, prescriptions,
+conformance rule areas (error-handling, logging, CI, prescriptions, preflight,
 optimizations, dependency, deprecation, dockerfile, tests, contract-toolkit,
 security).
 
@@ -29,7 +29,7 @@ An aggregate of violation counts across all enabled areas:
 
 Postcondition (deterministic validator — never render-attested):
 
-**Default mode:** `atlan-application-sdk-conformance detect --repo . --series E,L,C,P,O,D,B,I,T,K,S` exits 0 — zero unsuppressed FAILING results across all enabled areas.
+**Default mode:** `atlan-application-sdk-conformance detect --repo . --series E,L,C,P,F,O,D,B,I,T,K,S` exits 0 — zero unsuppressed FAILING results across all enabled areas.
 
 **Strict mode** (`--strict`): additionally, the `atlan/summary.warning` count
 in the SARIF output is 0 — zero unsuppressed WARNING results.  Every WARNING
@@ -51,7 +51,7 @@ the reason each was routed here:
 - `oscillation` — the loop detected a repeating violation-set and froze.
 - `max-attempts` — the cap was reached with violations remaining.
 - `unverifiable` — the fix was applied and both gates passed, but for this area
-  the gates are structurally blind (P- and S-series under
+  the gates are structurally blind (P-, F- and S-series under
   `apply_unverifiable`), so passing them proved nothing.  Always routed here;
   the human review *is* the gate.  Distinct from `judgment`, which means the fix
   was verified but non-trivial.
@@ -70,10 +70,10 @@ the reason each was routed here:
   series.  This is what lets a caller remediate exactly one rule per run, which
   is also the only way to express "blocking tier first": tier is a **per-rule**
   property, so it cannot be selected through `series`.
-- `apply_unverifiable` — boolean, default `false`.  When `false`, the P-, I- and
-  S-series areas behave exactly as before: propose, never apply.  When `true`,
+- `apply_unverifiable` — boolean, default `false`.  When `false`, the P-, F-, I-
+  and S-series areas behave exactly as before: propose, never apply.  When `true`,
   they apply through the full gated loop.  For the I-series that is now a
-  genuinely verified fix (the `docker-build` gate exists); for P and S the gates
+  genuinely verified fix (the `docker-build` gate exists); for P, F and S the gates
   remain blind, so those results are force-classified `"unverifiable"` and always
   land in residue.  Opt-in precisely because the caller is accepting review
   responsibility that a gate cannot discharge.
@@ -84,6 +84,7 @@ the reason each was routed here:
 - `violations-logging` from `logging-area`
 - `violations-ci` from `ci-area`
 - `violations-prescriptions` from `prescriptions-area`
+- `violations-preflight` from `preflight-area`
 - `violations-optimizations` from `optimizations-area`
 - `violations-dependency` from `dependency-area`
 - `violations-deprecation` from `deprecation-area`
@@ -162,6 +163,11 @@ parallel:
     mode: mode
     rule_ids: rule_ids
   call prescriptions-area
+    scope: scope
+    mode: mode
+    rule_ids: rule_ids
+    apply_unverifiable: apply_unverifiable
+  call preflight-area
     scope: scope
     mode: mode
     rule_ids: rule_ids

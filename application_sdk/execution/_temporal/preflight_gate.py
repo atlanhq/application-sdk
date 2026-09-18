@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+import warnings
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -793,6 +794,16 @@ def _log_row_is_only_channel(surface: PreflightSurface) -> bool:
     return _LOG_ROW_IS_ONLY_CHANNEL.get(surface, True)
 
 
+def warn_if_partial(result: PreflightOutput) -> None:
+    """Emit the deprecation signal where the SDK acts on a ``PARTIAL`` verdict."""
+    if result.status is PreflightStatus.PARTIAL:
+        warnings.warn(
+            PreflightStatus.__deprecated_members__["PARTIAL"],
+            DeprecationWarning,
+            stacklevel=3,
+        )
+
+
 def emit_preflight_check_outcome(
     log: AtlanLoggerAdapter,
     app_name: str,
@@ -815,6 +826,7 @@ def emit_preflight_check_outcome(
     :func:`emit_preflight_crash_outcome`. Callers pass their module logger so
     the row keeps the surface's source.
     """
+    warn_if_partial(result)
     failed = [c for c in result.checks if not c.passed]
     # The aggregate error wins over check order, mirroring _build_block_error:
     # SDR inserts a non-fatal secret-store row ahead of the real failure and
@@ -1581,7 +1593,7 @@ def build_preflight_gate_activity(
             source, whose failure is real in both modes — must be the ERROR
             record itself, not a WARN beside one. A ``proceeded`` run carrying a
             failed check is the advisory case WARNING is semantically for
-            (P047 bans the handler from logging it, so the gate must). Keyed on
+            (F005 bans the handler from logging it, so the gate must). Keyed on
             the checks rather than ``PreflightStatus.PARTIAL`` because PARTIAL
             is documented display-only — a handler may return READY with a
             failed advisory row. Clean proceeds, skips and soft-mode verdict
@@ -1695,8 +1707,7 @@ def build_preflight_gate_activity(
                 )
 
                 raise ApplicationError(
-                    "Preflight could not reach a verdict: "
-                    f"{sanitize_cause_repr(exc)}",
+                    f"Preflight could not reach a verdict: {sanitize_cause_repr(exc)}",
                     type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
                 )
             unverifiable = _unverifiable_result(exc, app_name)
@@ -1840,6 +1851,7 @@ def build_preflight_gate_activity(
                     done, _ = await asyncio.wait({check}, timeout=remaining)
                     if done:
                         result = check.result()
+                        warn_if_partial(result)
                     else:
                         # Ask it to stop, but never await it — an uncooperative
                         # handler must not be able to hold the activity open.

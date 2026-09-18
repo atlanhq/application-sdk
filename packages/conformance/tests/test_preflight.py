@@ -1,4 +1,4 @@
-"""Meta-tests for the preflight-gate checks (P032–P035, P047, BLDX-1545, FND-901).
+"""Meta-tests for the preflight-gate checks (F001–F004, F005, BLDX-1545, FND-901).
 
 These checks fan out across the fleet, so each rule is tested to fire *exactly*
 when it should and stay silent otherwise — both false positives and false
@@ -47,27 +47,38 @@ def _ids(tmp_path: Path, src: str) -> list[str]:
 
 
 def test_rule_metadata() -> None:
-    for rid in ("P033", "P034", "P035", "P047"):
+    for rid in ("F002", "F003", "F004", "F005"):
         rule = get_rule(rid)
         assert rule.scope is RuleScope.APP
-        assert rule.tier is EnforcementTier.WARN
+        assert rule.tier is (
+            EnforcementTier.BLOCK if rid == "F003" else EnforcementTier.WARN
+        )
         assert rule.mechanism is RuleMechanism.STATIC
 
 
-def test_p032_is_block_tier() -> None:
-    """P032 is the one BLOCK-tier preflight rule (FND-311).
+def test_f020_names_the_replacement_for_a_retired_suppression(tmp_path: Path) -> None:
+    src = "x = 1  # conformance: ignore[P034] legacy carve-out\n"
+    findings = [f for f in _scan(tmp_path, {"m.py": src}) if f.rule_id == "F020"]
+    assert len(findings) == 1
+    assert findings[0].line == 1
+    assert "F003" in findings[0].message
+    assert not findings[0].suppressed
 
-    Its siblings describe preflight *quality* — drift, UX, parity — which
-    degrades messages. P032 describes a worker that never boots, so every
-    workflow in the tenant is down from the moment the release deploys.
-    """
-    rule = get_rule("P032")
+
+def test_f020_stays_silent_for_current_ids(tmp_path: Path) -> None:
+    src = "x = 1  # conformance: ignore[F003,E004] current ids\n"
+    assert "F020" not in _ids(tmp_path, src)
+
+
+def test_p032_is_block_tier() -> None:
+    """Reserved gate collisions prevent worker startup."""
+    rule = get_rule("F001")
     assert rule.scope is RuleScope.APP
     assert rule.tier is EnforcementTier.BLOCK
     assert rule.mechanism is RuleMechanism.STATIC
 
 
-# ── P032 ReservedPreflightActivityName ────────────────────────────────────────
+# ── F001 ReservedPreflightActivityName ────────────────────────────────────────
 
 
 def test_p032_fires_on_explicit_name(tmp_path: Path) -> None:
@@ -77,7 +88,7 @@ def test_p032_fires_on_explicit_name(tmp_path: Path) -> None:
         + '    @task(name="preflight")\n'
         + "    async def anything(self): ...\n"
     )
-    assert _ids(tmp_path, src) == ["P032"]
+    assert _ids(tmp_path, src) == ["F001"]
 
 
 def test_p032_fires_on_bare_task_named_preflight(tmp_path: Path) -> None:
@@ -87,7 +98,7 @@ def test_p032_fires_on_bare_task_named_preflight(tmp_path: Path) -> None:
         + "    @task\n"
         + "    async def preflight(self): ...\n"
     )
-    assert _ids(tmp_path, src) == ["P032"]
+    assert _ids(tmp_path, src) == ["F001"]
 
 
 def test_p032_silent_on_non_preflight_task(tmp_path: Path) -> None:
@@ -123,7 +134,7 @@ def test_p032_fires_on_aliased_sdk_task_import(tmp_path: Path) -> None:
         '    @t(name="preflight")\n'
         "    async def anything(self): ...\n"
     )
-    assert _ids(tmp_path, src) == ["P032"]
+    assert _ids(tmp_path, src) == ["F001"]
 
 
 def test_p032_suppressed(tmp_path: Path) -> None:
@@ -131,15 +142,15 @@ def test_p032_suppressed(tmp_path: Path) -> None:
         _APP_IMPORTS
         + "class A(App):\n"
         + '    @task(name="preflight")\n'
-        + "    # conformance: ignore[P032] legacy task, migration tracked\n"
+        + "    # conformance: ignore[F001] legacy task, migration tracked\n"
         + "    async def anything(self): ...\n"
     )
     findings = _scan(tmp_path, {"m.py": src})
-    assert [f.rule_id for f in findings] == ["P032"]
+    assert [f.rule_id for f in findings] == ["F001"]
     assert findings[0].suppressed is True
 
 
-# ── P033 DuplicateInWorkflowPreflight ──────────────────────────────────────────
+# ── F002 DuplicateInWorkflowPreflight ──────────────────────────────────────────
 
 
 def _handler_with_preflight(
@@ -164,7 +175,7 @@ def test_p033_fires_when_handler_and_preflight_task_coexist(tmp_path: Path) -> N
         f.rule_id
         for f in _scan(tmp_path, {"app.py": app, "h.py": _handler_with_preflight()})
     )
-    assert ids == ["P033"]
+    assert ids == ["F002"]
 
 
 def test_p033_silent_without_handler_preflight(tmp_path: Path) -> None:
@@ -183,7 +194,7 @@ def test_p033_silent_on_exact_reserved_name_that_is_p032(tmp_path: Path) -> None
         f.rule_id
         for f in _scan(tmp_path, {"app.py": app, "h.py": _handler_with_preflight()})
     )
-    assert ids == ["P032"]  # never double-fires P033
+    assert ids == ["F001"]  # never double-fires F002
 
 
 def test_p033_silent_on_preflight_substring_non_token(tmp_path: Path) -> None:
@@ -215,7 +226,7 @@ def test_p033_fires_via_transitive_handler_without_preflight_input_annotation(
         + "class A(App):\n    @task\n    async def run_preflight(self): ...\n"
     )
     ids = sorted(f.rule_id for f in _scan(tmp_path, {"app.py": app, "h.py": handler}))
-    assert ids == ["P033"]
+    assert ids == ["F002", "F006"]
 
 
 def test_p033_message_points_at_colocated_handler(tmp_path: Path) -> None:
@@ -233,10 +244,10 @@ def test_p033_message_points_at_colocated_handler(tmp_path: Path) -> None:
         + "        return PreflightOutput(checks=[])\n"
     )
     findings = _scan(tmp_path, {"other.py": other, "app.py": colocated})
-    p033 = [f for f in findings if f.rule_id == "P033"]
-    assert len(p033) == 1
-    assert "app.py:" in p033[0].message
-    assert "other.py:" not in p033[0].message
+    f002 = [f for f in findings if f.rule_id == "F002"]
+    assert len(f002) == 1
+    assert "app.py:" in f002[0].message
+    assert "other.py:" not in f002[0].message
 
 
 def test_p033_suppressed(tmp_path: Path) -> None:
@@ -244,15 +255,15 @@ def test_p033_suppressed(tmp_path: Path) -> None:
         _APP_IMPORTS
         + "class A(App):\n"
         + "    @task\n"
-        + "    # conformance: ignore[P033] kept intentionally, see TICKET-1\n"
+        + "    # conformance: ignore[F002] kept intentionally, see TICKET-1\n"
         + "    async def run_preflight(self): ...\n"
     )
     findings = _scan(tmp_path, {"app.py": app, "h.py": _handler_with_preflight()})
-    assert [f.rule_id for f in findings] == ["P033"]
+    assert [f.rule_id for f in findings] == ["F002"]
     assert findings[0].suppressed is True
 
 
-# ── P034 UntypedPreflightCheckFailure ──────────────────────────────────────────
+# ── F003 UntypedPreflightCheckFailure ──────────────────────────────────────────
 
 
 def _pc(expr: str) -> str:
@@ -264,19 +275,19 @@ def _pc(expr: str) -> str:
 
 
 def test_p034_fires_on_explicit_passed_false(tmp_path: Path) -> None:
-    assert _ids(tmp_path, _pc('PreflightCheck(name="x", passed=False)')) == ["P034"]
+    assert _ids(tmp_path, _pc('PreflightCheck(name="x", passed=False)')) == ["F003"]
 
 
 def test_p034_fires_with_only_deprecated_message(tmp_path: Path) -> None:
     assert _ids(
         tmp_path, _pc('PreflightCheck(name="x", passed=False, message="boom")')
-    ) == ["P034"]
+    ) == ["F003"]
 
 
 def test_p034_fires_on_explicit_error_none(tmp_path: Path) -> None:
     assert _ids(
         tmp_path, _pc('PreflightCheck(name="x", passed=False, error=None)')
-    ) == ["P034"]
+    ) == ["F003"]
 
 
 def test_p034_silent_with_typed_error(tmp_path: Path) -> None:
@@ -292,18 +303,17 @@ def test_p034_silent_on_passed_true(tmp_path: Path) -> None:
     assert _ids(tmp_path, _pc('PreflightCheck(name="x", passed=True)')) == []
 
 
-def test_p034_silent_on_omitted_passed(tmp_path: Path) -> None:
-    # Deliberate false-negative: bare templates are the biggest FP source.
-    assert _ids(tmp_path, _pc('PreflightCheck(name="x")')) == []
+def test_p034_reports_default_failure(tmp_path: Path) -> None:
+    assert _ids(tmp_path, _pc('PreflightCheck(name="x")')) == ["F003"]
 
 
-def test_p034_silent_on_non_literal_passed(tmp_path: Path) -> None:
+def test_dynamic_passed_reports_incomplete_analysis(tmp_path: Path) -> None:
     src = (
         "from application_sdk.handler.contracts import PreflightCheck\n"
         "def make(ok):\n"
         '    return PreflightCheck(name="x", passed=ok)\n'
     )
-    assert _ids(tmp_path, src) == []
+    assert _ids(tmp_path, src) == ["F019"]
 
 
 def test_p034_silent_on_non_sdk_preflightcheck(tmp_path: Path) -> None:
@@ -331,22 +341,22 @@ def test_p034_fires_via_module_alias_call(tmp_path: Path) -> None:
         "def make():\n"
         '    return c.PreflightCheck(name="x", passed=False)\n'
     )
-    assert _ids(tmp_path, src) == ["P034"]
+    assert _ids(tmp_path, src) == ["F003"]
 
 
 def test_p034_suppressed(tmp_path: Path) -> None:
     src = (
         "from application_sdk.handler.contracts import PreflightCheck\n"
         "def make():\n"
-        "    # conformance: ignore[P034] migrating to typed errors\n"
+        "    # conformance: ignore[F003] migrating to typed errors\n"
         '    return PreflightCheck(name="x", passed=False)\n'
     )
     findings = _scan(tmp_path, {"m.py": src})
-    assert [f.rule_id for f in findings] == ["P034"]
+    assert [f.rule_id for f in findings] == ["F003"]
     assert findings[0].suppressed is True
 
 
-# ── P035 PreflightMetadataContractParity ───────────────────────────────────────
+# ── F004 PreflightMetadataContractParity ───────────────────────────────────────
 
 
 def _app_with_input(fields: str) -> str:
@@ -376,7 +386,7 @@ def test_p035_fires_on_key_absent_from_contract(tmp_path: Path) -> None:
         "app.py": _app_with_input("    include_filter: dict = {}\n"),
         "h.py": _handler_reading('x = input.metadata.get("unknown_key")'),
     }
-    assert sorted(f.rule_id for f in _scan(tmp_path, files)) == ["P035"]
+    assert sorted(f.rule_id for f in _scan(tmp_path, files)) == ["F004"]
 
 
 def test_p035_silent_on_declared_field(tmp_path: Path) -> None:
@@ -404,7 +414,7 @@ def test_p035_fires_on_differently_stemmed_alias(tmp_path: Path) -> None:
         ),
         "h.py": _handler_reading('x = input.metadata.get("type")'),
     }
-    assert sorted(f.rule_id for f in _scan(tmp_path, files)) == ["P035"]
+    assert sorted(f.rule_id for f in _scan(tmp_path, files)) == ["F004"]
 
 
 def test_p035_silent_on_subscript_read_of_field(tmp_path: Path) -> None:
@@ -462,7 +472,7 @@ def test_p035_silent_on_dict_literal_extra_allow(tmp_path: Path) -> None:
 
 def test_p035_fires_despite_allow_unbounded_fields(tmp_path: Path) -> None:
     # allow_unbounded_fields only skips payload-safety type checks; the extra policy
-    # stays "ignore", so undeclared keys are still dropped and P035 must still fire.
+    # stays "ignore", so undeclared keys are still dropped and F004 must still fire.
     app = (
         _APP_IMPORTS
         + "class ExtractInput(Input, allow_unbounded_fields=True):\n"
@@ -475,7 +485,7 @@ def test_p035_fires_despite_allow_unbounded_fields(tmp_path: Path) -> None:
         "app.py": app,
         "h.py": _handler_reading('x = input.metadata.get("unknown_key")'),
     }
-    assert sorted(f.rule_id for f in _scan(tmp_path, files)) == ["P035"]
+    assert sorted(f.rule_id for f in _scan(tmp_path, files)) == ["F004"]
 
 
 def test_p035_silent_when_no_entrypoint_input(tmp_path: Path) -> None:
@@ -492,16 +502,16 @@ def test_p035_suppressed(tmp_path: Path) -> None:
     files = {
         "app.py": _app_with_input("    include_filter: dict = {}\n"),
         "h.py": _handler_reading(
-            "# conformance: ignore[P035] form-only key, tracked",
+            "# conformance: ignore[F004] form-only key, tracked",
             'x = input.metadata.get("unknown_key")',
         ),
     }
     findings = _scan(tmp_path, files)
-    assert [f.rule_id for f in findings] == ["P035"]
+    assert [f.rule_id for f in findings] == ["F004"]
     assert findings[0].suppressed is True
 
 
-# ── P047 PreflightFailureLoggedAsWarning ───────────────────────────────────────
+# ── F005 PreflightFailureLoggedAsWarning ───────────────────────────────────────
 
 
 def test_p047_fires_on_logger_warning(tmp_path: Path) -> None:
@@ -509,7 +519,7 @@ def test_p047_fires_on_logger_warning(tmp_path: Path) -> None:
         '        logger.warning("auth check failed: %s", "boom")\n'
         "        return PreflightOutput(checks=[])\n"
     )
-    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == ["P047"]
+    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == ["F005"]
 
 
 def test_p047_fires_on_self_logger_and_stdlib_logging(tmp_path: Path) -> None:
@@ -518,7 +528,7 @@ def test_p047_fires_on_self_logger_and_stdlib_logging(tmp_path: Path) -> None:
         '        logging.warning("degraded")\n'
         "        return PreflightOutput(checks=[])\n"
     )
-    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == ["P047", "P047"]
+    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == ["F005", "F005"]
 
 
 def test_p047_silent_on_other_levels(tmp_path: Path) -> None:
@@ -549,7 +559,7 @@ def test_p047_fires_on_common_logger_aliases(tmp_path: Path) -> None:
         '        logger.warn("deprecated alias")\n'
         "        return PreflightOutput(checks=[])\n"
     )
-    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == ["P047"] * 3
+    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == ["F005"] * 3
 
 
 def test_p047_silent_on_non_logger_receiver(tmp_path: Path) -> None:
@@ -563,10 +573,10 @@ def test_p047_silent_on_non_logger_receiver(tmp_path: Path) -> None:
 
 def test_p047_suppressed(tmp_path: Path) -> None:
     src = _handler_with_preflight(
-        "        # conformance: ignore[P047] advisory-only probe, see FND-901\n"
+        "        # conformance: ignore[F005] advisory-only probe, see FND-901\n"
         '        logger.warning("advisory")\n'
         "        return PreflightOutput(checks=[])\n"
     )
     findings = _scan(tmp_path, {"h.py": src})
-    assert [f.rule_id for f in findings] == ["P047"]
+    assert [f.rule_id for f in findings] == ["F005"]
     assert findings[0].suppressed is True

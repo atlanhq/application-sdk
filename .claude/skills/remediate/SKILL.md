@@ -49,15 +49,16 @@ inputs:
       build-time-visible.  When docker is unavailable the gate returns
       `passed = false`, so the fix reverts rather than passing by default.
 
-      For the **P- and S-series** the gates remain structurally blind — P001's
-      `MaxItems` is a declarative marker no test can observe, and no gate can
+      For the **P-, F- and S-series** the gates remain structurally blind — P001's
+      `MaxItems` is a declarative marker no test can observe, no unit test can
+      prove a preflight verdict is truthful for the real source, and no gate can
       prove a relocated credential still resolves.  Those results are therefore
       force-classified `unverifiable`, always routed to residue, and accepted
       only with a cited source for the chosen value; S-series additionally
       delivers as a draft with a named reviewer.  An uncited fix is never
       applied at all.
 
-      Omitted (the default), all three areas behave byte-identically to before
+      Omitted (the default), all four areas behave byte-identically to before
       this input existed.
     required: false
     default: false
@@ -65,7 +66,7 @@ inputs:
     description: >
       Comma-separated list of areas to remediate.  Defaults to every area the
       top-level program enables (error-handling, deprecation, dependency,
-      prescriptions, optimizations, dockerfile, tests, logging,
+      prescriptions, preflight, optimizations, dockerfile, tests, logging,
       contract-toolkit, security; ci is partially remediated — C002 and
       C003's absent-file case are fixed mechanically via `bootstrap`; C001 is
       mechanically pinned (SHA-resolve + repin) but always escalated to
@@ -334,7 +335,7 @@ so app-only series no-op on the SDK):
 ```
 let before = call detect-violations
   scope: .
-  series: E,L,C,P,O,D,B,I,T,K,S
+  series: E,L,C,P,F,O,D,B,I,T,K,S
   rule_ids: <--rule argument split on commas, if any>
   target: if strict then "failing+warning" else "failing"
   path_prefix: <path argument, if any>
@@ -356,8 +357,8 @@ OpenProse runtime required for the skill path).
 Execution order (from `conformance-remediation.prose.md`):
 
 1. Run every area responsibility in parallel (error-handling, deprecation,
-   dependency, prescriptions, optimizations, dockerfile, tests, logging, ci,
-   contract-toolkit, security) — the top-level contract fans out to all of
+   dependency, prescriptions, preflight, optimizations, dockerfile, tests,
+   logging, ci, contract-toolkit, security) — the top-level contract fans out to all of
    them; do not hardcode a subset.
 
 2. Each area responsibility calls the `detect-fix-recheck` pattern
@@ -380,7 +381,7 @@ Call `detect-violations` again and copy the result to `after.sarif`:
 ```
 let after = call detect-violations
   scope: .
-  series: E,L,C,P,O,D,B,I,T,K,S
+  series: E,L,C,P,F,O,D,B,I,T,K,S
   rule_ids: <--rule argument split on commas, if any>
   target: if strict then "failing+warning" else "failing"
   path_prefix: <path argument, if any>

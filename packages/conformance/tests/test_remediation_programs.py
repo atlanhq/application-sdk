@@ -22,8 +22,13 @@ PROGRAMS = files("conformance").joinpath("programs")
 
 # Areas whose default is propose-don't-apply, and which therefore take
 # `apply_unverifiable`. Kept explicit rather than derived: the point of the test
-# is to notice if a fourth area quietly joins them.
-SUGGEST_ONLY_AREAS = ("prescriptions-area", "dockerfile-area", "security-area")
+# is to notice if a fifth area quietly joins them.
+SUGGEST_ONLY_AREAS = (
+    "prescriptions-area",
+    "preflight-area",
+    "dockerfile-area",
+    "security-area",
+)
 
 
 def _read(rel: str) -> str:
@@ -104,10 +109,39 @@ ALL_AREAS = [
     "error-handling",
     "logging",
     "optimizations",
+    "preflight",
     "prescriptions",
     "security",
     "tests",
 ]
+
+
+def test_every_catalog_series_has_a_remediation_area() -> None:
+    """A series with rules but no area drops out of /remediate silently.
+
+    The dispatcher only calls the areas it names and nothing else notices, so
+    the findings are never remediated — indistinguishable from a clean repo.
+    """
+    from conformance.suite.rules import CATALOG
+
+    series = {rule_id[0] for rule_id in CATALOG}
+    covered: set[str] = set()
+    for area in ALL_AREAS:
+        covered.update(
+            re.findall(r'series: "([A-Z])"', _read(f"areas/{area}.prose.md"))
+        )
+    orphaned = sorted(series - covered)
+    assert not orphaned, f"catalog series with no remediation area: {orphaned}"
+
+    tagging = _read("functions/detect-violations.prose.md")
+    tagged = dict(re.findall(r"`([A-Z])` → `([a-z-]+)`", tagging))
+    untagged = sorted(series - set(tagged))
+    assert not untagged, f"detect-violations tags no area for series: {untagged}"
+    assert set(tagged.values()) <= set(ALL_AREAS), tagged
+
+    dispatch = _read("functions/remediate-finding.prose.md")
+    undispatched = [area for area in ALL_AREAS if f"| `{area}` |" not in dispatch]
+    assert not undispatched, f"remediate-finding dispatches no row for: {undispatched}"
 
 
 @pytest.mark.parametrize("area", ALL_AREAS)
@@ -146,7 +180,7 @@ def test_remediate_finding_declares_the_evidence_field() -> None:
     assert "require_cited_evidence" in text
 
 
-@pytest.mark.parametrize("area", ["prescriptions", "security"])
+@pytest.mark.parametrize("area", ["prescriptions", "preflight", "security"])
 def test_blind_gate_prescriptions_point_at_result_evidence(area: str) -> None:
     assert "result.evidence" in _read(f"areas/{area}.prose.md")
 
@@ -215,10 +249,10 @@ def test_top_level_threads_rule_ids_to_every_area(top_level: str) -> None:
 def test_apply_unverifiable_goes_to_exactly_the_suggest_only_areas(
     top_level: str,
 ) -> None:
-    """Only P/I/S take the flag.
+    """Only P/F/I/S take the flag.
 
     Threading it into an area that already applies would be meaningless; missing it
-    on one of these three makes `--apply-unverifiable` a partial no-op that looks
+    on one of these four makes `--apply-unverifiable` a partial no-op that looks
     like it worked.
     """
     area_calls = re.findall(r"call ([a-z\-]+-area)\n((?:\s{4}\w+:.*\n)+)", top_level)
@@ -233,7 +267,9 @@ def test_apply_unverifiable_goes_to_exactly_the_suggest_only_areas(
     )
 
 
-@pytest.mark.parametrize("area", ["prescriptions", "dockerfile", "security"])
+@pytest.mark.parametrize(
+    "area", ["prescriptions", "preflight", "dockerfile", "security"]
+)
 def test_suggest_only_area_declares_the_flag_and_keeps_a_default_path(
     area: str,
 ) -> None:
@@ -249,9 +285,9 @@ def test_suggest_only_area_declares_the_flag_and_keeps_a_default_path(
     assert "\nelse:" in text, f"{area} lost its propose-only branch"
 
 
-@pytest.mark.parametrize("area", ["prescriptions", "security"])
+@pytest.mark.parametrize("area", ["prescriptions", "preflight", "security"])
 def test_blind_gate_areas_force_the_unverifiable_classification(area: str) -> None:
-    """P and S must not be able to emit a result that reads as gate-verified.
+    """P, F and S must not be able to emit a result that reads as gate-verified.
 
     Their gates pass on any edit, so the classification is the only thing standing
     between "applied" and "verified". The dockerfile area is deliberately excluded:

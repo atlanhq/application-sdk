@@ -66,8 +66,12 @@ class Rule:
 
     @property
     def suppresses_prose(self) -> bool:
-        """Whether a reviewer may skip this rule because CI already blocks it."""
-        return self.tier == "block" and self.scope in SDK_SCOPES
+        """Static CI coverage excludes opt-in preflight workflow and exit tests."""
+        return (
+            self.tier == "block"
+            and self.scope in SDK_SCOPES
+            and self.rule_id not in {"F017", "F018"}
+        )
 
 
 def load_catalog(path: Path | str | None = None) -> dict[str, Rule]:

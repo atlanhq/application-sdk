@@ -42,6 +42,7 @@ jobs:
         [{"slug": "ci", "name": "Upload CI SARIF"},
          {"slug": "error-handling", "name": "Upload Error-handling SARIF"},
          {"slug": "prescriptions", "name": "Upload Prescriptions SARIF"},
+         {"slug": "preflight", "name": "Upload Preflight SARIF"},
          {"slug": "optimizations", "name": "Upload Optimizations SARIF"},
          {"slug": "dependency", "name": "Upload Dependency SARIF"},
          {"slug": "logging", "name": "Upload Logging SARIF"},
