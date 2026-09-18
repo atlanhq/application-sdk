@@ -119,10 +119,17 @@ verdict was reached.
   resolution failing (secret-store outage, a collapsed not-found wrapping a transport error),
   or no worker ever running the attempt. **Always** fails open, in both postures: a platform
   blip must never fail a healthy run.
+- **Deprecated fail-open** (`gate_classification="deprecated_fail_open"`) — a typed leaf in
+  `DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED` or `CANCELLED` raised from
+  `preflight_check`. The pre-3.35 gate treated these as plumbing, and every hard-mode app that
+  predates the origin rule raises them on purpose, so they keep failing open in both postures
+  until 3.40.0 with a `DeprecationWarning` naming the app and the leaf. From 3.40.0 they are
+  source-attributable like any other raise.
 
 So a handler signals "ask me later" by **returning** `PARTIAL` with the failed check carrying
-a typed retryable error, never by raising one and never by returning `NOT_READY` — raising
-blocks a hard gate on a transient and discards the other checks; `NOT_READY` blocks it too.
+a typed retryable error, never by raising one and never by returning `NOT_READY` — from 3.40.0
+raising blocks a hard gate on a transient and discards the other checks; `NOT_READY` blocks it
+today.
 
 Every gated run emits a structured `Preflight gate outcome` event
 (`outcome ∈ {proceeded, blocked, would_block, no_verdict, skipped}`), plus a

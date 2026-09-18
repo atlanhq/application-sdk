@@ -1502,8 +1502,17 @@ def _attempt_is_live(beats: _Beats | None = None) -> bool:
     return datetime.now(timezone.utc) < deadline
 
 
-def _is_deprecated_fail_open(exc: BaseException) -> bool:
-    return isinstance(exc, AppError) and exc.category in DEPRECATED_FAIL_OPEN_CATEGORIES
+def _deprecated_fail_open_leaf(exc: BaseException) -> AppError | None:
+    """The raised leaf when it is in the train, else ``None``.
+
+    The row and the warning are attributed from the leaf's own class
+    attributes, not from the rendered verdict: a leaf whose evidence cannot be
+    serialised degrades to ``INTERNAL`` there, and the census this row feeds
+    must still name the leaf the app raised.
+    """
+    if isinstance(exc, AppError) and exc.category in DEPRECATED_FAIL_OPEN_CATEGORIES:
+        return exc
+    return None
 
 
 def _warn_deprecated_fail_open(app_name: str, leaf: str, code: str) -> None:
@@ -2086,15 +2095,15 @@ def build_preflight_gate_activity(
             with its own row and a warning, until the removal version.
             """
             unverifiable = unverifiable_preflight_result(exc, app_name)
-            if _is_deprecated_fail_open(exc):
-                failure = _primary_failure(unverifiable, app_name)
-                _warn_deprecated_fail_open(app_name, type(exc).__name__, failure.code)
+            leaf = _deprecated_fail_open_leaf(exc)
+            if leaf is not None:
+                _warn_deprecated_fail_open(app_name, type(leaf).__name__, leaf.code)
                 _emit_outcome(
                     PreflightRowOutcome.NO_VERDICT,
-                    failure.code,
+                    leaf.code,
                     unverifiable,
                     PreflightClassification.DEPRECATED_FAIL_OPEN,
-                    audience=failure.audience.value,
+                    audience=leaf.audience.value,
                     exc_info=exc,
                 )
                 return unverifiable

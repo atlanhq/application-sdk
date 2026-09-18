@@ -673,7 +673,7 @@ class TestPreflightEndpoint:
         response = client.post("/workflows/v1/check", json={"credentials": []})
         body = response.json()
         assert response.status_code == 500
-        assert body["detail"].endswith("preflight failed")
+        assert body["detail"] == "preflight failed"
         assert body["preflight"]["status"] == "not_ready"
         assert body["preflight"]["checks"][0]["error"]["audience"] == "APP_OWNER"
 

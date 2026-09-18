@@ -332,10 +332,13 @@ def _preflight_failure_response(
     check carries the raise as typed ``FailureDetails`` — the leaf's own for a
     typed raise, ``InternalError`` with ``classification_pending`` for a crash.
     So the status says the source was not verified while the check says who
-    must act. The HTTP status and ``detail`` keep their previous values, so a
-    client that read only those sees no change. The raw exception text never
-    does: ``cause_repr`` is dropped before the verdict is rendered, because after
-    secret redaction it still names the caller's hosts and accounts.
+    must act. The HTTP status is unchanged. ``detail`` is the typed leaf's own
+    message, never ``str(exc)``: for an ``AppError`` that is the same string as
+    before, for the deprecated ``HandlerError`` it drops the ``[CODE]`` prefix
+    and the ``handler=`` / ``app=`` suffix, which stay in the server log. The
+    raw exception text never reaches the body: ``cause_repr`` is dropped before
+    the verdict is rendered, because after secret redaction it still names the
+    caller's hosts and accounts, and the untyped path passes a fixed ``detail``.
     """
     output = unverifiable_preflight_result(exc, app_name, include_cause=False)
     body = _preflight_response(output, success=False)

@@ -445,7 +445,8 @@ a platform blip must not fail a healthy run. The gate stamps which of the two ha
 | The workflow cancelled the gate activity (`CancelledError`) | `gate_broken` | fail open | fail open |
 | Gate skipped (replay, source-less app) | `not_run` | `skipped` | `skipped` |
 
-The line is drawn by **who raised**, not by the error's category. Anything that escapes
+The line is drawn by **who raised**, not by the error's category, with the one time-boxed
+exception in the `deprecated_fail_open` row. Anything that escapes
 `preflight_check` is the handler's statement about the source if typed, or an app fault if not,
 and the mode applies to both — a handler cannot declare its source to be plumbing by raising a
 `RateLimitedError` or a `DependencyUnavailableError`. A verdict is reached on the attempt the fault
@@ -503,7 +504,8 @@ retried, and the classification keeps the two separable in the dashboards.
 
 **Upgrading an app that is already on hard mode:** the `source_unverifiable` and `frame_lost`
 rows above previously fell through to fail-open, so hard mode enforced only the `NOT_READY`
-verdict. They now block. Before taking this SDK version, confirm the handler finishes inside
+verdict. They now block, except the `deprecated_fail_open` row, which keeps proceeding until
+3.40.0. Before taking this SDK version, confirm the handler finishes inside
 `preflight_gate_timeout_seconds` — an app whose preflight has been quietly overrunning the budget
 was proceeding on every run and will now abort on every run. The worker logs the budget alongside
 the hard-mode line at boot.

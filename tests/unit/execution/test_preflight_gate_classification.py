@@ -551,8 +551,8 @@ _DEPRECATED_FAIL_OPEN_LEAVES = [
         Audience.PLATFORM,
     ),
     (RateLimitedError(message="429"), Audience.USER),
-    (ResourceExhaustedError(message="quota"), None),
-    (CancelledError(message="cancelled"), None),
+    (ResourceExhaustedError(message="quota"), Audience.PLATFORM),
+    (CancelledError(message="cancelled"), Audience.APP_OWNER),
 ]
 
 
@@ -570,7 +570,7 @@ class TestDeprecatedFailOpenTrain:
     @pytest.mark.parametrize("mode", [PreflightGateMode.HARD, PreflightGateMode.SOFT])
     @pytest.mark.parametrize(("exc", "audience"), _DEPRECATED_FAIL_OPEN_LEAVES)
     async def test_proceeds_with_its_own_row_in_both_modes(
-        self, exc: AppError, audience: Audience | None, mode: PreflightGateMode
+        self, exc: AppError, audience: Audience, mode: PreflightGateMode
     ) -> None:
         gate = _gate(_RaisingHandler(exc), mode=mode)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
@@ -587,8 +587,29 @@ class TestDeprecatedFailOpenTrain:
             row[GATE_CLASSIFICATION_KEY] == PreflightClassification.DEPRECATED_FAIL_OPEN
         )
         assert row["reason"] == exc.code
-        if audience is not None:
-            assert row[FAILURE_AUDIENCE_KEY] == audience.value
+        assert row[FAILURE_AUDIENCE_KEY] == audience.value
+
+    async def test_an_unserialisable_train_leaf_is_still_counted_as_itself(
+        self,
+    ) -> None:
+        """The census keys on the leaf the app raised, not on the rendered verdict,
+        which degrades to INTERNAL when the leaf's evidence cannot be built."""
+        gate = _gate(
+            _RaisingHandler(_Unserialisable(message="x", service="warehouse")),
+            mode=PreflightGateMode.HARD,
+        )
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.warns(DeprecationWarning, match="_Unserialisable"):
+                result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        assert result.checks[0].error is not None
+        assert result.checks[0].error.category is FailureCategory.INTERNAL
+        row = _outcome(mock_logger)
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.DEPRECATED_FAIL_OPEN
+        )
+        assert row["reason"] == DependencyUnavailableError.code
+        assert row[FAILURE_AUDIENCE_KEY] == Audience.PLATFORM.value
 
     async def test_warning_names_the_app_the_leaf_and_the_removal_version(
         self,
