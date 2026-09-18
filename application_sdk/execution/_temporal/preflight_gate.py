@@ -762,9 +762,18 @@ def gate_outcome_level(
 
 
 def log_gate_posture(
-    app_name: str, *, mode: PreflightGateMode, budget_seconds: int
+    app_name: str,
+    *,
+    mode: PreflightGateMode | None = None,
+    budget_seconds: int,
+    enforce: bool | None = None,
 ) -> None:
     """Emit the queryable boot-time posture row for one gate-registered app.
+
+    ``enforce`` is the deprecated spelling of ``mode``; see
+    :func:`_mode_from_deprecated_enforce`. ``mode`` is keyword-required in
+    practice — it only carries a default so a caller still on ``enforce`` can
+    omit it.
 
     Emitted for **every** gate app, soft included — the point is a complete
     denominator. Ranking hard-mode apps that never produce a verdict needs the set
@@ -775,11 +784,14 @@ def log_gate_posture(
     pinned contract string that must never be reworded, that one is prose an
     operator reads.
     """
+    resolved = _mode_from_deprecated_enforce(
+        callable_name="log_gate_posture", mode=mode, enforce=enforce, default=None
+    )
     logger.info(
         PREFLIGHT_POSTURE_EVENT,
         app_name=app_name,
         **{
-            GATE_MODE_KEY: mode.value,
+            GATE_MODE_KEY: resolved.value,
             GATE_TIMEOUT_KEY: budget_seconds,
         },
     )
@@ -1955,10 +1967,11 @@ def build_preflight_gate_activity(
     handler: Handler,
     app_name: str,
     *,
-    mode: PreflightGateMode = PreflightGateMode.SOFT,
+    mode: PreflightGateMode | None = None,
     budget_seconds: float = GATE_TIMEOUT_DEFAULT_SECONDS,
     attempts: int = GATE_ATTEMPTS_DEFAULT,
     verify_storage: bool = False,
+    enforce: bool | None = None,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the injected preflight-gate activity (``{app}:preflight``).
 
@@ -1993,7 +2006,18 @@ def build_preflight_gate_activity(
     interrupted. Temporal then ends the frame, and the workflow applies the mode
     to that from the failure chain (:func:`classify_gate_failure`). Handlers
     must keep their probes awaitable and bounded.
+
+    ``enforce`` is the deprecated spelling of ``mode``; see
+    :func:`_mode_from_deprecated_enforce`. ``mode`` defaults to ``None`` rather
+    than to ``SOFT`` only so that "caller passed a posture" stays distinguishable
+    from "caller passed nothing" — an omitted posture still resolves to soft.
     """
+    mode = _mode_from_deprecated_enforce(
+        callable_name="build_preflight_gate_activity",
+        mode=mode,
+        enforce=enforce,
+        default=PreflightGateMode.SOFT,
+    )
     enforce = mode.enforces
 
     @activity.defn(name=preflight_gate_activity_name(app_name))
@@ -2432,6 +2456,67 @@ def _is_gate_broken(exc: BaseException) -> bool:
     :data:`DEPRECATED_FAIL_OPEN_CATEGORIES`.
     """
     return _deprecated_fail_open_leaf(exc) is not None
+
+
+#: The log twin of the notice below, with the callable and the value the caller
+#: passed. %-style rather than an f-string so both stay log fields.
+_ENFORCE_KEYWORD_LOG = (
+    "%s(enforce=%s) is deprecated; use mode=PreflightGateMode.HARD or "
+    "mode=PreflightGateMode.SOFT instead — will be removed in v%s."
+)
+
+
+def _mode_from_deprecated_enforce(
+    *,
+    callable_name: str,
+    mode: PreflightGateMode | None,
+    enforce: bool | None,
+    default: PreflightGateMode | None,
+) -> PreflightGateMode:
+    """Resolve a gate posture from ``mode``, or from the deprecated ``enforce``.
+
+    #3685 replaced the ``enforce: bool`` keyword on :func:`log_gate_posture` and
+    :func:`build_preflight_gate_activity` with ``mode: PreflightGateMode``. The
+    enum is the right shape — a posture is a categorical, and a bool could not
+    have carried ``FRAME_LOST`` handling — but on ``log_gate_posture`` ``enforce``
+    was *keyword-required*, so every existing caller passed it and every one of
+    them now raises ``TypeError``. That is the same undeprecated break as the
+    renamed names, in a shape a name-level diff does not see.
+
+    ``default`` is the posture for a caller that passed neither, or ``None`` to
+    keep the keyword required. Passing both is a ``TypeError`` rather than a
+    precedence rule: the two could disagree, and silently picking a winner would
+    hide a half-finished migration.
+
+    The notice is written **inline** rather than built into a local and passed by
+    name, because conformance rule ``B002`` reads ``warnings.warn``'s first
+    argument statically — a variable there reads as an empty notice and a
+    compliant deprecation is reported as naming neither a replacement nor a
+    removal version.
+    """
+    if enforce is None:
+        if mode is not None:
+            return mode
+        if default is not None:
+            return default
+        raise TypeError(f"{callable_name}() missing required keyword argument: 'mode'")
+    if mode is not None:
+        raise TypeError(
+            f"{callable_name}() received both 'mode' and the deprecated 'enforce'; "
+            "pass 'mode' alone."
+        )
+    warnings.warn(
+        f"{callable_name}'s enforce= is deprecated; use "
+        "mode=PreflightGateMode.HARD or mode=PreflightGateMode.SOFT instead — "
+        "will be removed in v3.40.0. A posture is a categorical, and a bool "
+        "cannot carry the classifications the gate added since.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    logger.warning(
+        _ENFORCE_KEYWORD_LOG, callable_name, enforce, DEPRECATED_FAIL_OPEN_REMOVED_IN
+    )
+    return PreflightGateMode.HARD if enforce else PreflightGateMode.SOFT
 
 
 # Module-level constants cannot carry ``@deprecated`` (it decorates a def or a

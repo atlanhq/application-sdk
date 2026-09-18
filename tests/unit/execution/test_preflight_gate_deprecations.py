@@ -43,6 +43,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     GATE_TIMEOUT_MAX_SECONDS,
     GATE_TIMEOUT_MIN_SECONDS,
     PreflightClassification,
+    PreflightGateMode,
 )
 
 # Transcribed from application_sdk/execution/_temporal/preflight_gate.py at v3.35.0.
@@ -156,6 +157,99 @@ class TestDeprecationNudge:
         """``__getattr__`` must not turn every typo into a silent ``None``."""
         with pytest.raises(AttributeError, match="no attribute"):
             preflight_gate.definitely_not_a_gate_symbol
+
+
+class TestDeprecatedEnforceKeyword:
+    """The ``enforce`` keyword #3685 replaced with ``mode``.
+
+    Not a removed *name*, so the blast-radius count built from names missed it —
+    `build_preflight_gate_activity` still exists, it just rejects the keyword
+    every caller passes. One live caller is known (a connector's gate test
+    passing ``enforce=False``); on `log_gate_posture` ``enforce`` was
+    keyword-*required*, so every caller of it passed one.
+    """
+
+    def test_builder_accepts_the_live_caller_shape(self) -> None:
+        """The exact call shape found in a connector's gate test."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            activity = preflight_gate.build_preflight_gate_activity(
+                object(),  # type: ignore[arg-type]
+                "teradata",
+                enforce=False,
+                budget_seconds=30,
+                attempts=2,
+            )
+        assert callable(activity)
+        assert len(caught) == 1
+        assert issubclass(caught[0].category, DeprecationWarning)
+
+    @pytest.mark.parametrize(
+        ("enforce", "enforces"),
+        [(True, True), (False, False)],
+    )
+    def test_enforce_maps_onto_the_posture_it_meant(
+        self, enforce: bool, enforces: bool
+    ) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            resolved = preflight_gate._mode_from_deprecated_enforce(
+                callable_name="t", mode=None, enforce=enforce, default=None
+            )
+        assert resolved.enforces is enforces
+
+    def test_log_gate_posture_accepts_the_deprecated_keyword(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            preflight_gate.log_gate_posture("app", enforce=True, budget_seconds=30)
+        assert len(caught) == 1
+        assert issubclass(caught[0].category, DeprecationWarning)
+
+    def test_notice_names_target_and_removal(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            preflight_gate.log_gate_posture("app", enforce=False, budget_seconds=30)
+        message = str(caught[0].message)
+        assert "use mode=" in message
+        assert f"removed in v{DEPRECATED_FAIL_OPEN_REMOVED_IN}" in message
+
+    def test_both_spellings_is_a_type_error(self) -> None:
+        """Silently picking a winner would hide a half-finished migration."""
+        with pytest.raises(TypeError, match="both 'mode' and the deprecated"):
+            preflight_gate.log_gate_posture(
+                "app",
+                mode=PreflightGateMode.HARD,
+                enforce=True,
+                budget_seconds=30,
+            )
+
+    def test_mode_stays_required_where_it_was(self) -> None:
+        """``mode`` only carries a default so an ``enforce`` caller can omit it."""
+        with pytest.raises(TypeError, match="missing required keyword"):
+            preflight_gate.log_gate_posture("app", budget_seconds=30)
+
+    def test_builder_still_defaults_to_soft(self) -> None:
+        """Omitting both kept v3.35.0's ``enforce=False`` default."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            resolved = preflight_gate._mode_from_deprecated_enforce(
+                callable_name="build_preflight_gate_activity",
+                mode=None,
+                enforce=None,
+                default=PreflightGateMode.SOFT,
+            )
+        assert resolved is PreflightGateMode.SOFT
+        assert resolved.enforces is False
+        assert caught == []
+
+    def test_mode_alone_does_not_warn(self) -> None:
+        """Callers already migrated pay nothing."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            preflight_gate.log_gate_posture(
+                "app", mode=PreflightGateMode.HARD, budget_seconds=30
+            )
+        assert caught == []
 
 
 class TestDeprecatedResolvers:
