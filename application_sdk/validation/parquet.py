@@ -52,6 +52,7 @@ from typing import Callable, Final, Iterator, Mapping, Sequence
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.validation.artifacts import (
+    ELEMENT_STEP,
     FORMAT_PARQUET,
     UNIT_COLUMN,
     ArtifactDeclaration,
@@ -59,6 +60,7 @@ from application_sdk.validation.artifacts import (
     ArtifactValidationReport,
     DeclaredField,
     FieldMapDeclaration,
+    parse_field_path,
 )
 
 logger = get_logger(__name__)
@@ -522,28 +524,51 @@ def _resolve(schema: object, declared_path: str, arrow_types: object) -> object 
 
     An exact top-level match wins first, so a parquet file whose column is literally
     named ``payload.rows`` resolves to that column rather than being read as a walk
-    into a struct. Only when no such column exists is the dotted path walked through
-    ``struct`` children — the nested addressing ADR-0020 chose over a recursive type
-    grammar.
+    into a struct. Only when no such column exists is the path walked — ``.name``
+    through ``struct`` children and ``[]`` into a list's element, the nested
+    addressing ADR-0020 chose over a recursive type grammar.
     """
     exact = _child(schema, declared_path)
     if exact is not None:
         return exact.type
-    if "." not in declared_path:
+
+    steps = parse_field_path(declared_path)
+    if len(steps) == 1:
+        # A single named step is the exact lookup that just failed.
         return None
 
     current: object = schema
-    parts = declared_path.split(".")
-    for index, part in enumerate(parts):
-        child = _child(current, part)
-        if child is None:
+    for step in steps:
+        if step is ELEMENT_STEP:
+            current = _list_element_type(current, arrow_types)
+        else:
+            # `_child` iterates `.fields`, which a Schema and a StructType both
+            # have. Anything else has to be rejected before it is walked, or a
+            # `.name` step through a list or a string would raise instead of
+            # reporting the column absent.
+            if current is not schema and not _satisfies(
+                current, _STRUCT_PREDICATE, arrow_types
+            ):
+                return None
+            child = _child(current, step)
+            current = None if child is None else child.type
+        if current is None:
             return None
-        if index == len(parts) - 1:
-            return child.type
-        current = child.type
-        if not _satisfies(current, _STRUCT_PREDICATE, arrow_types):
-            return None
-    return None
+    return current
+
+
+def _list_element_type(container: object, arrow_types: object) -> object | None:
+    """The element type inside an arrow list, or ``None`` when it is not a list.
+
+    pyarrow already resolves parquet's 3-level (``list.element``) and legacy 2-level
+    (``bag.array``) encodings to the same logical ``value_type``. Reading the element
+    through it is what lets a declaration stay written in terms of what it *means*,
+    instead of being pinned to an encoding the producer can change without telling
+    anyone.
+    """
+    if not _satisfies(container, _TYPE_PREDICATES["array"], arrow_types):
+        return None
+    return getattr(container, "value_type", None)
 
 
 def _child(container: object, name: str) -> object | None:
