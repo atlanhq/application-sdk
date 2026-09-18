@@ -16,7 +16,7 @@ container's own ``memory.max`` unchanged, and no ``PodResizePending`` condition
 is ever set. Replacing the pod remains the only thing that changes its memory.
 
 That last paragraph is a claim about a platform that will move. Measured
-2026-09-15 on tenant atlan3zp01, EKS 1.33, VPA 1.6.0. On the day the vcluster
+2026-09-15 on an internal tenant, EKS 1.33, VPA 1.6.0. On the day the vcluster
 starts actuating a resize, this module has no reason to exist - so re-run it
 before trusting the date, and delete the module rather than the paragraph.
 
