@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.35.0
-source-sha:    a481816311feb855c8d5deb725340a8fb9a1f5c0
-source-date:   2026-09-18T13:42:21+01:00
+source-sha:    543c5971d86bedeac7a9cfb1a9f06218403ae9dc
+source-date:   2026-09-18T13:45:55+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -611,7 +611,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `classify_unwritable_oserror`
 
 - **Import:** `from application_sdk.common.atomic import classify_unwritable_oserror`
-- **Signature:** `classify_unwritable_oserror(exc: BaseException) -> Any | None`
+- **Signature:** `classify_unwritable_oserror(exc: BaseException) -> LocalVolumeUnwritableError | None`
 - **Summary:** Return a typed error for a read-only / permission-denied local-write ``OSError``.
 - **Defined in:** `application_sdk/common/atomic.py`
 
