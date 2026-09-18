@@ -46,7 +46,29 @@ permissions:
   contents: read
 
 concurrency:
-  group: renovate-fleet
+  # ONLY A LIVE, UNSCOPED SWEEP JOINS THE SHARED GROUP. A dry run writes
+  # nothing and a `repos`-scoped dispatch covers only the repos it lists, so
+  # neither is a substitute for the full live pass — and under a shared
+  # `cancel-in-progress: true` either would ABORT one. That is strictly worse
+  # than what it replaces: the fleet ends up with a partial sweep and no
+  # indication that the rest never ran. Under the previous
+  # `cancel-in-progress: false` these merely queued behind live work, so the
+  # flip below is what makes the distinction load-bearing.
+  #
+  # Everything that is not a live unscoped sweep therefore gets a run-unique
+  # group, which cannot collide with anything: dry runs and pilots are free to
+  # run alongside a live sweep, exactly as they did before, and only live
+  # sweeps coalesce with each other.
+  #
+  # `inputs` is absent on `schedule`, where the properties read as null; null
+  # compares equal to '' under GHA's numeric coercion, so a scheduled run takes
+  # the live branch. A default dispatch sends dry_run='null' (the string,
+  # meaning live) and repos='', so it does too — which is what keeps the
+  # release fan-out on the shared group.
+  group: >-
+    ${{ (inputs.dry_run == 'full' || inputs.dry_run == 'lookup' || inputs.repos != '')
+        && format('renovate-aside-{0}', github.run_id)
+        || 'renovate-fleet' }}
   # COALESCE, do not queue. A sweep is idempotent and whole-fleet, so a newer
   # sweep subsumes whatever an older one had left to do — there is nothing to
   # preserve by letting both run, and real harm in it.
@@ -73,7 +95,13 @@ concurrency:
   # cancelled sweep leaves some repos unprocessed until the cancelling sweep
   # reaches them, which it does in the same run; the 4-hourly schedule is the
   # backstop if a burst of dispatches keeps truncating one.
-  cancel-in-progress: true
+  #
+  # Guarded by the same condition as the group, so it can only ever cancel a
+  # live sweep. On the run-unique `renovate-aside-*` group the value is inert
+  # (nothing shares the group); false is stated anyway so the two expressions
+  # cannot drift into disagreeing about what is cancellable.
+  cancel-in-progress: >-
+    ${{ !(inputs.dry_run == 'full' || inputs.dry_run == 'lookup' || inputs.repos != '') }}
 
 jobs:
   discover:
