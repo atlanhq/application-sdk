@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.36.1 (September 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.0...v3.36.1
+
+### Bug Fixes
+
+- restore the gate symbols #3685 removed, as deprecated aliases (#3843) (by @cmgrote in [cd13c20](https://github.com/atlanhq/application-sdk/commit/cd13c20))
+
+
 ## v3.36.0 (September 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.35.0...v3.36.0
