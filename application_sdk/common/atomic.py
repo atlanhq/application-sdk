@@ -65,10 +65,13 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Any, NoReturn
+from typing import IO, TYPE_CHECKING, Any, NoReturn
 
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.common.path import convert_to_extended_path
+
+if TYPE_CHECKING:
+    from application_sdk.errors import LocalVolumeUnwritableError
 
 __all__ = [
     "PARTIAL_DIRNAME",
@@ -104,7 +107,9 @@ _UNWRITABLE_ERRNOS: frozenset[int] = frozenset(
 )
 
 
-def classify_unwritable_oserror(exc: BaseException) -> Any | None:
+def classify_unwritable_oserror(
+    exc: BaseException,
+) -> LocalVolumeUnwritableError | None:
     """Return a typed error for a read-only / permission-denied local-write ``OSError``.
 
     Maps ``OSError`` with ``EROFS``/``EACCES``/``EPERM`` to
