@@ -529,21 +529,36 @@ _CONTRACT_RULES = (
     RuleDefinition(
         id="F020",
         canonical_reference=(
-            "application_sdk/handler/contracts.py — `PreflightStatus` documents PARTIAL as "
-            "display-only: the gate treats it exactly like READY. An app that wants a failed "
-            "check to mean anything returns NOT_READY; one that wants the run to proceed "
-            "returns READY and keeps the typed failed row visible."
+            "application_sdk/handler/contracts.py — `PreflightStatus` carries the "
+            "`__deprecated_members__` notice for PARTIAL: the gate treats it exactly like "
+            "READY, so a handler returns READY when extraction can proceed and NOT_READY "
+            "when it cannot, keeping the typed failed row visible either way."
         ),
-        name="DeprecatedPartialPreflight",
+        name="PartialVerdictConcealsFailure",
         scope=RuleScope.APP,
-        tier=EnforcementTier.BLOCK,
+        tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
-        short_description="Replace deprecated PARTIAL preflight results with an explicit readiness decision.",
-        full_description="PARTIAL is deprecated for app preflight results. Return NOT_READY for blocking failures or READY when extraction can proceed, preserving truthful typed check evidence. Recognizes literal and enum values, conditional expressions, and single local assignments in supported handler paths. Dynamic construction requires behavioral validation.",
-        rationale="Customer impact: PARTIAL allows extraction to proceed and can conceal a blocking source failure behind a degraded verdict. Explicit readiness decisions prevent this ambiguity.",
+        short_description="A PARTIAL preflight verdict proceeds like READY and can conceal a blocking source failure.",
+        full_description=(
+            "``PreflightStatus.PARTIAL`` is deprecated in the SDK (``__deprecated_members__`` "
+            "on the enum, removed in v4.0.0) because the gate treats it exactly like READY: "
+            "the run proceeds, and a failed probe that should have blocked is presented as a "
+            "degraded-but-fine verdict. Return NOT_READY when a required capability is not "
+            "established and READY when extraction can proceed, keeping every failed check as "
+            "a typed, actionable row. Recognizes literal and enum values, conditional "
+            "expressions, and single local assignments in supported handler paths; dynamic "
+            "construction requires behavioral validation. Reported at WARN until the "
+            "reference apps have migrated off PARTIAL; promotion to BLOCK is a follow-up."
+        ),
+        rationale=(
+            "Customer impact: a PARTIAL verdict lets extraction start against a source that "
+            "a failed probe already showed to be unusable, so the customer sees a long run "
+            "fail late instead of a clear NOT_READY with a next step. The SDK deprecation of "
+            "PARTIAL is the authority for this rule."
+        ),
         help_uri=f"{_HELP_BASE}#f020",
     ),
     RuleDefinition(

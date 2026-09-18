@@ -66,7 +66,7 @@ class PreflightInput(BaseModel):
     timeout_seconds: int = 60                  # on the gate path the SDK stamps the real per-attempt budget (~25s); advisory on HTTP/SDR
 
 class PreflightOutput(BaseModel):
-    status: PreflightStatus           # READY, NOT_READY, or PARTIAL
+    status: PreflightStatus           # READY or NOT_READY; PARTIAL is deprecated (removed in v4.0.0)
     checks: list[PreflightCheck] = [] # individual check results
     message: str = ""                 # human-readable summary (used when error is unset)
     error: FailureDetails | None = None  # typed aggregate failure; wins over message

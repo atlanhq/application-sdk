@@ -5,7 +5,7 @@ from conformance.suite.schema.disposition import (
     RuleScope,
 )
 
-BLOCKING = {"F006", "F007", "F016", "F017", "F018", "F020"}
+BLOCKING = {"F006", "F007", "F016", "F017", "F018"}
 SDK_SCOPED = {"F017", "F018"}
 BEHAVIORAL = {"F016", "F017", "F018"}
 

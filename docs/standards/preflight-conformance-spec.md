@@ -1,8 +1,8 @@
 # Preflight conformance specification
 
-Current policy: F020 reports deprecated app PARTIAL results as BLOCK/error. F016 rejects PARTIAL at runtime; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The SDK enum and runtime gate are unchanged. There are 21 preflight rules (18 static, 3 behavioral), with 8 BLOCK and 13 WARN; the generated catalog page `packages/conformance/conformance/docs/rules/preflight.md` is the source of truth for tiers.
+Current policy: the SDK deprecates `PreflightStatus.PARTIAL` (removed in v4.0.0; the gate emits a `DeprecationWarning` when a handler returns it). F020 reports a PARTIAL verdict at WARN because it proceeds like READY and can conceal a blocking failure. F016 scenarios accept PARTIAL only when every failed check is advisory; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The gate's treatment of PARTIAL is unchanged until removal. There are 21 preflight rules (18 static, 3 behavioral), with 7 BLOCK and 14 WARN; the generated catalog page `packages/conformance/conformance/docs/rules/preflight.md` is the source of truth for tiers.
 
-Status: conformance implementation and remaining acceptance requirements, 2026-09-08. F003, F006, F007, F016–F018 and F020 join F001 at BLOCK; other preflight rules remain WARN. Static checks run by default; behavioral checks require `--with-tests` and app/SDK scenario adapters. SDK production behavior is unchanged.
+Status: conformance implementation and remaining acceptance requirements, 2026-09-08. F003, F006, F007 and F016–F018 join F001 at BLOCK; other preflight rules remain WARN. Static checks run by default; behavioral checks require `--with-tests` and app/SDK scenario adapters. SDK production behavior is unchanged.
 
 The rules ship as the conformance F-series; F001–F005 were first published as P032–P035 and P047. The detector audit that validated them against connector snapshots is recorded on [CONNECT-812](https://linear.app/atlan-epd/issue/CONNECT-812) and in [PR #3710](https://github.com/atlanhq/application-sdk/pull/3710); its counts are tied to one connector revision and one detector build, so they are not kept in this repository.
 
@@ -35,7 +35,7 @@ Every failed check must also provide a nonblank `suggested_action`. For USER err
 
 A `NOT_READY` result must contain at least one failed, typed check. If an aggregate error is present, it must describe the actual blocking reason rather than an unrelated advisory failure. SDK failures before any handler check can run may carry no checks, but must retain a typed aggregate cause and an explicit verdict or no-verdict state.
 
-`READY` means required checks passed and extraction can proceed, including explicitly supported advisory failures. `PARTIAL` is deprecated for app results. `NOT_READY` means a required capability was not established and hard mode blocks. The handler owns aggregation; the SDK check model does not currently expose a `required` field. Do not introduce that field as part of conformance without a separate contract decision.
+`READY` means required checks passed and extraction can proceed, including explicitly supported advisory failures. `PARTIAL` is deprecated in the SDK (removed in v4.0.0) and proceeds like `READY` until then. `NOT_READY` means a required capability was not established and hard mode blocks. The handler owns aggregation; the SDK check model does not currently expose a `required` field. Do not introduce that field as part of conformance without a separate contract decision.
 
 Mandatory checks run in dependency order and short-circuit on the first mandatory failure, following the CONNECT-733 alignment decision. Preserve already completed checks; omit checks that did not run. Permitting additional independent mandatory probes after failure would change that agreed contract and is not part of this specification. Selected-resource aggregation must follow the workflow's supported scope semantics: at least one usable resource permits continuation only where extraction supports that reduced scope. A workflow requiring every selected resource must not inherit an at-least-one rule blindly.
 
@@ -45,7 +45,7 @@ Expected source failures return structured results. A transient permits READY on
 
 For a required capability that remains unavailable after the permitted probe/retry budget, return a typed `NOT_READY`. `retryable` describes the failure; it does not independently authorize continuation or promise that the gate retries it. Under the target PR contract, handler faults produce a verdict on the attempt where they occur, and deliberate blocks remain non-retryable at the gate boundary.
 
-The current conformance policy deprecates PARTIAL. This does not remove SDK compatibility handling for existing histories or older app versions.
+The SDK deprecates PARTIAL with removal in v4.0.0; conformance reports on that contract and does not set it. Compatibility handling for existing histories and older app versions stays until removal.
 
 ### Target SDK enforcement
 

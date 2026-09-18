@@ -45,6 +45,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     input_type_supports_gate,
     is_preflight_block,
     preflight_gate_activity_name,
+    warn_if_partial,
 )
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
@@ -2411,3 +2412,15 @@ def test_gate_module_import_does_not_load_obstore() -> None:
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
+
+
+class TestPartialDeprecation:
+    def test_partial_verdict_emits_the_sdk_deprecation_notice(self) -> None:
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            warn_if_partial(PreflightOutput(status=PreflightStatus.PARTIAL))
+
+    def test_supported_verdicts_stay_silent(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            warn_if_partial(PreflightOutput(status=PreflightStatus.READY))
+            warn_if_partial(PreflightOutput(status=PreflightStatus.NOT_READY))

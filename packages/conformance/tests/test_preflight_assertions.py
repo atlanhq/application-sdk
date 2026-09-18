@@ -110,10 +110,35 @@ def test_unrelated_workflow_failure_rejected():
         )
 
 
-def test_partial_result_is_deprecated():
+def test_partial_result_with_only_advisory_failures_is_accepted():
     output = result()
     output.status = PreflightStatus.PARTIAL
-    with pytest.raises(AssertionError, match="PARTIAL is deprecated"):
+    assert_preflight_result(
+        output,
+        required_checks=set(),
+        observed_checks={"connection"},
+        expected_status="partial",
+    )
+
+
+def test_partial_result_hiding_a_mandatory_failure_is_rejected():
+    output = result()
+    output.status = PreflightStatus.PARTIAL
+    with pytest.raises(AssertionError, match="contradicts scenario roles"):
+        assert_preflight_result(
+            output,
+            required_checks={"connection"},
+            observed_checks={"connection"},
+            expected_status="partial",
+        )
+
+
+def test_partial_result_without_a_failed_check_is_rejected():
+    output = PreflightOutput(
+        status=PreflightStatus.PARTIAL,
+        checks=[PreflightCheck(name="connection", passed=True)],
+    )
+    with pytest.raises(AssertionError, match="no failed check"):
         assert_preflight_result(
             output,
             required_checks=set(),
