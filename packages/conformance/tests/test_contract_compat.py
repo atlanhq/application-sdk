@@ -892,3 +892,204 @@ def test_b005_still_fires_when_the_name_is_unambiguous(tmp_path: Path) -> None:
         tmp_path, {"crawler/_input.py": _TWO_ENTRYPOINTS_SAME_NAME_A}, ledger
     )
     assert "B005" in _ids(findings)
+
+
+# ── B005: the four changes that are not breaks ────────────────────────────────
+
+
+_EP_TYPED = """\
+from application_sdk.app import App
+
+class MyInput:
+    field: {ann}
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def _scan_typed(tmp_path: Path, ann: str, ledger_type: str, status: str = "active"):
+    ledger = _make_ledger(ContractField("MyInput", "field", ledger_type, status))
+    return _scan(tmp_path, {"app.py": _EP_TYPED.format(ann=ann)}, ledger)
+
+
+def test_b005_sunset_field_may_be_absent(tmp_path: Path) -> None:
+    """'sunset' is the remedy the rule's own message names.
+
+    The status was never read, so marking a retired field sunset did nothing and
+    the finding outlived the retirement — the documented fix was inert.
+    """
+    ledger = _make_ledger(ContractField("MyInput", "name", "str", "sunset"))
+    findings = _scan(tmp_path, {"app.py": _EP_WITHOUT_FIELD}, ledger)
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_deprecated_field_must_still_be_present(tmp_path: Path) -> None:
+    """'deprecated' means shipped-but-discouraged — it must stay on the class.
+
+    Only 'sunset' withdraws a field; collapsing the two would let any removal
+    through on the weaker marker.
+    """
+    ledger = _make_ledger(ContractField("MyInput", "name", "str", "deprecated"))
+    findings = _scan(tmp_path, {"app.py": _EP_WITHOUT_FIELD}, ledger)
+    assert "B005" in _ids(findings)
+
+
+def test_b005_active_field_must_still_be_present(tmp_path: Path) -> None:
+    """The rule's whole point — an unmarked removal still fires."""
+    ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
+    findings = _scan(tmp_path, {"app.py": _EP_WITHOUT_FIELD}, ledger)
+    assert "B005" in _ids(findings)
+
+
+def test_b005_widening_is_not_a_break(tmp_path: Path) -> None:
+    """str -> str | list[...] keeps every payload that validated before."""
+    findings = _scan_typed(tmp_path, "str | list[dict[str, object]]", "str")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_narrowing_is_still_a_break(tmp_path: Path) -> None:
+    """The mirror of the widening case must keep firing."""
+    findings = _scan_typed(tmp_path, "str", "str | list[dict[str, object]]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_nested_list_widening_is_not_a_break(tmp_path: Path) -> None:
+    """list[str] -> list[str | None] is producer-safe; every old item still validates."""
+    findings = _scan_typed(tmp_path, "list[str | None]", "list[str]")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_nested_list_narrowing_is_still_a_break(tmp_path: Path) -> None:
+    """The inverse of nested list widening must keep firing."""
+    findings = _scan_typed(tmp_path, "list[str]", "list[str | None]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_nested_dict_widening_is_not_a_break(tmp_path: Path) -> None:
+    """dict[str, int] -> dict[str, int | None] is producer-safe on values."""
+    findings = _scan_typed(tmp_path, "dict[str, int | None]", "dict[str, int]")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_nested_dict_narrowing_is_still_a_break(tmp_path: Path) -> None:
+    """The inverse of nested dict widening must keep firing."""
+    findings = _scan_typed(tmp_path, "dict[str, int]", "dict[str, int | None]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_moving_off_any_in_place_is_not_a_break(tmp_path: Path) -> None:
+    """P001 refuses Any on a contract field at class-definition time.
+
+    Replacing Any in the same outer shape is the required migration, not a
+    break. A constructor change off Any is still a break — see the fire tests
+    below.
+    """
+    findings = _scan_typed(tmp_path, "dict[str, str] | None", "dict[str, Any] | None")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_nested_any_replaced_in_place_is_not_a_break(tmp_path: Path) -> None:
+    """list[Any] -> list[str] keeps the constructor; only the Any slot changes."""
+    findings = _scan_typed(tmp_path, "list[str]", "list[Any]")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_constructor_change_off_any_still_fires(tmp_path: Path) -> None:
+    """dict[str, Any] -> list[str] is a payload break, not a P001 migration."""
+    findings = _scan_typed(tmp_path, "list[str]", "dict[str, Any]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_constructor_change_off_any_union_still_fires(tmp_path: Path) -> None:
+    """Same constructor-swap, with a None arm that used to look like 'off Any'."""
+    findings = _scan_typed(tmp_path, "ConnectionRef | None", "dict[str, Any] | None")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_nested_narrowing_off_any_still_fires(tmp_path: Path) -> None:
+    """Replacing an inner container that held Any, not Any itself, is a break."""
+    findings = _scan_typed(tmp_path, "dict[str, str]", "dict[str, list[Any]]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_a_swap_between_two_concrete_types_still_fires(tmp_path: Path) -> None:
+    """No Any on either side and no widening — that is the real break."""
+    findings = _scan_typed(tmp_path, "int", "str")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_moving_onto_any_still_fires(tmp_path: Path) -> None:
+    """The exemption is one-directional: concrete -> Any is not mandated."""
+    findings = _scan_typed(tmp_path, "dict[str, Any]", "dict[str, str]")
+    assert "B005" in _ids(findings)
+
+
+def test_split_union_does_not_tear_nested_brackets() -> None:
+    """A naive split on '|' would break dict[str, int | None] apart."""
+    from conformance.suite.checks.deprecation._contract_compat import _split_union
+
+    assert _split_union("dict[str, int | None] | None") == {
+        "dict[str, int | None]",
+        "None",
+    }
+
+
+def test_is_widening_recurses_into_list_and_dict() -> None:
+    from conformance.suite.checks.deprecation._contract_compat import _is_widening
+
+    assert _is_widening("list[str]", "list[str | None]")
+    assert not _is_widening("list[str | None]", "list[str]")
+    assert _is_widening("dict[str, int]", "dict[str, int | None]")
+    assert not _is_widening("dict[str, int | None]", "dict[str, int]")
+
+
+def test_any_replaced_in_place_requires_the_same_constructor() -> None:
+    from conformance.suite.checks.deprecation._contract_compat import (
+        _any_replaced_in_place,
+        _parse_canonical,
+    )
+
+    def ok(old: str, new: str) -> bool:
+        return _any_replaced_in_place(_parse_canonical(old), _parse_canonical(new))
+
+    assert ok("dict[str, Any]", "dict[str, str]")
+    assert ok("dict[str, Any] | None", "dict[str, str] | None")
+    assert not ok("dict[str, Any]", "list[str]")
+    assert not ok("dict[str, Any] | None", "ConnectionRef | None")
+    assert not ok("dict[str, list[Any]]", "dict[str, str]")
+
+
+_EP_INHERITED = """\
+from application_sdk.app import App
+
+class Base:
+    status: {ann}
+
+class MyInput(Base):
+    own: str
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def test_b005_inherited_type_change_is_not_this_apps_break(tmp_path: Path) -> None:
+    """The base class owns the type, so the app cannot revert it.
+
+    A connector was flagged because the SDK's own Output base retyped `status`
+    from str to an enum. Reverting is impossible without ceasing to inherit.
+    """
+    ledger = _make_ledger(ContractField("MyInput", "status", "str", "active"))
+    findings = _scan(
+        tmp_path, {"app.py": _EP_INHERITED.format(ann="OutputStatus")}, ledger
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_locally_declared_type_change_still_fires(tmp_path: Path) -> None:
+    """The mirror: a field the app declares itself is the app's own change."""
+    findings = _scan_typed(tmp_path, "OutputStatus", "str")
+    assert "B005" in _ids(findings)

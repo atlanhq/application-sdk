@@ -25,6 +25,7 @@ from application_sdk.validation.artifacts import (
     ARTIFACT_FIELD_TYPES,
     ARTIFACT_FIELD_TYPES_EXTENDED,
     ARTIFACT_VALIDATION_OUTCOMES,
+    ELEMENT_STEP,
     OUTCOME_ABSENT,
     OUTCOME_CLEAN,
     OUTCOME_FLAGGED,
@@ -38,6 +39,8 @@ from application_sdk.validation.artifacts import (
     FieldMapDeclaration,
     ModelDeclaration,
     artifact_validation_matrix_json,
+    has_element_step,
+    parse_field_path,
 )
 
 CAP = ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXIS
@@ -367,3 +370,53 @@ def test_extended_vocabulary_layers_additively_on_the_floor() -> None:
 
 def test_unit_vocabulary() -> None:
     assert (UNIT_RECORD, UNIT_COLUMN) == ("record", "column")
+
+
+# ---------------------------------------------------------------------------
+# The declared-path grammar (FND-2355)
+# ---------------------------------------------------------------------------
+
+
+class TestParseFieldPath:
+    """One parser for both validators, so the grammar cannot drift between formats."""
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            ("name", ("name",)),
+            ("payload.rows", ("payload", "rows")),
+            ("tags[]", ("tags", ELEMENT_STEP)),
+            ("attributes.columns[]", ("attributes", "columns", ELEMENT_STEP)),
+            (
+                "attributes.columns[].name",
+                ("attributes", "columns", ELEMENT_STEP, "name"),
+            ),
+            ("grid[][]", ("grid", ELEMENT_STEP, ELEMENT_STEP)),
+        ],
+    )
+    def test_documented_grammar(self, path: str, expected: tuple[object, ...]) -> None:
+        assert parse_field_path(path) == expected
+
+    @pytest.mark.parametrize("path", ["a[0]", "[]", "a[", "a]b"])
+    def test_paths_outside_the_grammar_fall_back_to_dotted_segments(
+        self, path: str
+    ) -> None:
+        """The toolkit rejects these at generation time.
+
+        One that reaches the SDK anyway must leave the other fields' assertions
+        standing, so it degrades to the plain split — resolving exactly as it did
+        before the element step existed — rather than raising.
+        """
+        assert parse_field_path(path) == tuple(path.split("."))
+
+    def test_element_step_is_a_singleton_not_a_string(self) -> None:
+        """A member legitimately named "[]" must never be read as the element step."""
+        assert parse_field_path("[]") == ("[]",)
+        assert parse_field_path("[]")[0] is not ELEMENT_STEP
+
+    @pytest.mark.parametrize(
+        ("path", "fans_out"),
+        [("a", False), ("a.b", False), ("a[]", True), ("a[].b", True)],
+    )
+    def test_has_element_step(self, path: str, fans_out: bool) -> None:
+        assert has_element_step(parse_field_path(path)) is fans_out

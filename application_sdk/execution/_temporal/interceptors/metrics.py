@@ -11,7 +11,7 @@ both the Prometheus reader (server scrape) and the Pushgateway pusher
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Final
 
 from opentelemetry import metrics as _otel_metrics
 from temporalio import activity, workflow
@@ -29,6 +29,32 @@ from application_sdk.execution._temporal.interceptors.log import _extract_failur
 from application_sdk.observability import resource_sampler
 
 _METER_NAME = "application_sdk.temporal"
+
+# ---------------------------------------------------------------------------
+# failure.classified — the closed vocabulary that separates a real verdict from
+# the INTERNAL / APP_OWNER fallback.
+# ---------------------------------------------------------------------------
+
+CLASSIFIED_TYPED: Final = "typed"
+"""The failure carried SDK-typed ``FailureDetails``. ``failure.category`` and
+``failure.audience`` are the error's own declared values — a verdict somebody made."""
+
+CLASSIFIED_UNTYPED: Final = "untyped"
+"""No SDK-typed failure was recoverable (raw ``ValueError``, third-party exception).
+``failure.category`` / ``failure.audience`` carry the ``INTERNAL`` / ``APP_OWNER``
+fallback, which is a default rather than a classification.
+
+Without this label the ``APP_OWNER`` bucket mixes two unrelated populations — real
+app bugs, and code that never adopted typed errors — so the bucket moves when an app
+adopts ``application_sdk.errors``, not when its reliability changes. Splitting on this
+label is what makes an ``APP_OWNER`` rate interpretable, and
+``sum(...{failure_classified="untyped"}) / sum(...)`` is the fleet's instrumentation
+coverage measured from live traffic."""
+
+FAILURE_CLASSIFIED_VALUES: Final[frozenset[str]] = frozenset(
+    {CLASSIFIED_TYPED, CLASSIFIED_UNTYPED}
+)
+"""Runtime membership test for the two ``failure.classified`` values."""
 
 
 def _meter():
@@ -66,11 +92,15 @@ def _workflow_failures_classified():
             "temporal.workflow.failures.classified",
             unit="1",
             description=(
-                "Workflow failures partitioned by failure.category and "
-                "failure.audience. Emitted for every failure across all "
-                "audiences (USER, PLATFORM, APP_OWNER); consumers filter at "
-                "query time — e.g. drop USER for actionable alerts, or keep "
-                "USER for customer-failure dashboards."
+                "Workflow failures partitioned by failure.category, "
+                "failure.audience and failure.classified. Emitted for every "
+                "failure across all audiences (USER, PLATFORM, APP_OWNER); "
+                "consumers filter at query time — e.g. drop USER for actionable "
+                "alerts, or keep USER for customer-failure dashboards. "
+                "failure.classified is typed|untyped: untyped means no SDK-typed "
+                "failure was recoverable and category/audience are the "
+                "INTERNAL/APP_OWNER fallback, so split APP_OWNER on it before "
+                "reading it as a defect rate."
             ),
         )
     return _INSTRUMENTS["wf_fail_cls"]
@@ -136,23 +166,32 @@ def _activity_mem_gib_seconds():
 
 
 def _classify_failure(exc: BaseException | None) -> dict[str, str]:
-    """Extract bounded {category, audience} labels for the classified counter.
+    """Extract bounded {category, audience, classified} labels for the counter.
 
     Reuses :func:`_extract_failure_attrs` from the log interceptor so log and
     metric paths agree on classification. When extraction yields no SDK-typed
     failure (raw ``ValueError`` / 3rd-party exception), falls back to
     ``INTERNAL`` / ``APP_OWNER`` per the SDK doctrine that unowned failures
     default to the app team (see :class:`Audience` docstring).
+
+    ``failure.classified`` records **which of those two branches ran**, because the
+    labels are otherwise indistinguishable: a deliberate :class:`InternalError` and
+    an unadopted app's raw ``ValueError`` both emit ``INTERNAL`` / ``APP_OWNER``.
+    One is a bug to fix, the other is instrumentation debt, and a consumer that
+    cannot tell them apart cannot set a target on either. See
+    :data:`CLASSIFIED_UNTYPED`.
     """
     attrs = _extract_failure_attrs(exc)
     if attrs:
         return {
             "failure.category": attrs["failure.category"],
             "failure.audience": attrs["failure.audience"],
+            "failure.classified": CLASSIFIED_TYPED,
         }
     return {
         "failure.category": FailureCategory.INTERNAL.value,
         "failure.audience": Audience.APP_OWNER.value,
+        "failure.classified": CLASSIFIED_UNTYPED,
     }
 
 

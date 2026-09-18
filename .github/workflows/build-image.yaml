@@ -83,7 +83,7 @@ jobs:
 
       - name: Set up Buildx
         id: buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       # GHCR for a package owned by this same repo needs nothing beyond the
       # job's own GITHUB_TOKEN plus `packages: write` (declared at the top of
@@ -147,7 +147,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       # Same-repo GHCR push -- see the note on the push-to-ghcr login above.
       - name: Login to GitHub Registry

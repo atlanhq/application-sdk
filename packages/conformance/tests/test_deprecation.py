@@ -314,6 +314,33 @@ def test_b001_real_manifest_transformer_suppressible() -> None:
     assert findings[0].suppressed is True
 
 
+def test_b001_real_manifest_flags_sql_app_private_run_helpers() -> None:
+    """FND-2143: the two ``SqlApp`` run()-override shims are visible to B001.
+
+    Six connector repos still call ``self._resolve_credential_ref`` /
+    ``SqlApp._build_transform_input``, each on its own upgrade timeline. They
+    were marked with a bare ``warnings.warn`` inside an ordinary method, which
+    the extractor does not read, so nothing entered the manifest and B001 had
+    nothing to match. Decorating them with ``@deprecated`` is what puts them
+    here — this test is the tripwire on that marker, not on the shims.
+    """
+    manifest = load_manifest()
+    src = (
+        "class MyConnector(SqlApp):\n"
+        "    async def run(self, input):\n"
+        "        ref = self._resolve_credential_ref(input)\n"
+        "        return SqlApp._build_transform_input(input, None)\n"
+    )
+    tree, directives = _tree_and_directives(src)
+    findings = scan_consumer(tree, "app/connector.py", manifest, directives)
+    assert [f.rule_id for f in findings] == ["B001", "B001"]
+    assert any("_resolve_credential_ref" in f.message for f in findings)
+    assert any("_build_transform_input" in f.message for f in findings)
+    # Each finding carries the public replacement and the removal version, so
+    # the remediation loop can propose the concrete edit.
+    assert all("v4.0.0" in f.message for f in findings)
+
+
 # ── B002 MalformedDeprecationNotice (sdk scope) ─────────────────────────────────
 
 

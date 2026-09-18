@@ -233,11 +233,14 @@ When reviewing code, check for:
       UnimplementedError, AppPermissionDeniedError, CancelledError,
       # Specialized subtypes of the leaves above, e.g. DiskFullError
       # (ResourceExhaustedError; a local write hit ENOSPC/EDQUOT),
+      # LocalVolumeUnwritableError (ResourceExhaustedError; a local write hit
+      # EROFS/EACCES/EPERM under the app's own write roots — classified at the
+      # activity boundary, not raised by hand),
       # TaskStalledError (AppTimeoutError), and the object-store pair
       # ObjectStoreReadError / ObjectStoreDownloadError
       # (DependencyUnavailableError; a store listing/download came up empty)
       # — raise the subtype when it describes the failure precisely.
-      DiskFullError,
+      DiskFullError, LocalVolumeUnwritableError,
       ObjectStoreReadError, ObjectStoreDownloadError,
   )
 

@@ -72,6 +72,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -79,6 +80,24 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P029",
+        canonical_reference=(
+            "atlan-metabase-app app/generated/manifest.json — `agent_json` and "
+            "`extraction_method` are top-level keys of $.dag.extract.inputs.args. The "
+            "toolkit emits both defensively for any app that does not model the widgets "
+            "itself, so an app missing them is generating on a toolkit that predates "
+            "that: bump `app-contract-toolkit` in contract/PklProject and regenerate."
+        ),
+        rule_interactions=(
+            "A toolkit-version gap, not a renderer gap: contract-toolkit emits "
+            "`agent_json` unconditionally, and `extraction_method` alongside it since "
+            "#3633. So the default fix is K007's — bump the `app-contract-toolkit` "
+            "`@<version>` in contract/PklProject, re-resolve PklProject.deps.json "
+            "(K003) and re-run the repo's OWN generate task, never a bare `pkl eval`. "
+            "Editing contract/app.pkl is the exception, not the default: it is needed "
+            "only where the app models the widgets itself and keeps them out of the "
+            "manifest."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrManifestMissingAgentJson",
         tier=EnforcementTier.BLOCK,
@@ -132,11 +151,23 @@ RULES: tuple[RuleDefinition, ...] = (
             "  passed; adopting ``BaseSDRIntegrationTest.manifest_path`` (T003)\n"
             "  closes the test gap, this rule closes the static gap.\n"
             "\n"
-            "**Remediation:** surface ``agent_json`` + ``extraction_method`` at the\n"
-            "extract-args top level in the app's ``contract/app.pkl`` (keep them\n"
-            "under ``metadata`` too if the connector reads there) and re-run\n"
-            "``pkl eval`` to regenerate ``app/generated/<name>/manifest.json``.  Do\n"
-            "not hand-edit the generated manifest — C002 tracks drift.\n"
+            "**Remediation (default — an outdated toolkit pin).**  Bump\n"
+            "``app-contract-toolkit`` to the current ``@<version>`` in\n"
+            "``contract/PklProject``, re-resolve ``contract/PklProject.deps.json``,\n"
+            "and re-run the repo's OWN generate task — not a bare ``pkl eval``,\n"
+            "which skips post-processing and rewrites unrelated generated files.\n"
+            "This is K007's fix, and it is the whole fix for almost every finding:\n"
+            "the current toolkit emits both fields at the extract-args top level\n"
+            "for any app that does not model the widgets itself.\n"
+            "\n"
+            "**Remediation (exception — the app models the widgets).**  Only when\n"
+            "the contract declares ``agent-json`` / ``extraction-method`` as its own\n"
+            "form properties does the toolkit step aside, and only then does\n"
+            "``contract/app.pkl`` need editing: mark them ``includeInManifest`` so\n"
+            "they land at the extract-args top level (keep them under ``metadata``\n"
+            "too if the connector reads there), then regenerate the same way.\n"
+            "\n"
+            "Do not hand-edit the generated manifest either way — C002 tracks drift.\n"
             "\n"
             "Toolkit-version notes (from fleet remediation):\n"
             "\n"
@@ -161,6 +192,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P030",
+        canonical_reference=(
+            "atlan-metabase-app app/connector.py — `run()` uploads each transformed "
+            "typename with `raise_on_empty=True`, and uploads residual/ separately. An SDR "
+            "app with no self.upload() call leaves the ENABLE_ATLAN_UPLOAD path "
+            "unreachable, so the e2e leg greens without moving a byte to the tenant "
+            "bucket."
+        ),
         scope=RuleScope.APP,
         name="SdrUploadNotCalled",
         tier=EnforcementTier.BLOCK,
@@ -313,6 +351,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P037",
+        canonical_reference=(
+            "atlan-metabase-app app/credentials.py — `build_credential_ref` routes through "
+            "`CredentialRef.resolve`, which covers direct (credential_guid) and agent "
+            "(agent_json) modes from one call. Resolving by credential_guid alone works in "
+            "direct mode and silently ignores agent_json in SDR mode."
+        ),
         scope=RuleScope.APP,
         name="SdrAgentJsonNotConsumed",
         tier=EnforcementTier.WARN,
@@ -380,6 +424,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P038",
+        canonical_reference=(
+            "atlan-mysql-app app/mysql.py — the upload's storage_path comes from "
+            "`base_result.transformed_data_prefix`, which the SDK roots from "
+            "APPLICATION_NAME. An input field named application_name defaults to empty, so "
+            "rooting the prefix from it silently writes to the bucket root."
+        ),
         scope=RuleScope.APP,
         name="SdrArtifactMisrooted",
         tier=EnforcementTier.BLOCK,
@@ -463,6 +513,22 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P039",
+        canonical_reference=(
+            "atlan-metabase-app app/contracts.py — `MetabaseInput` declares `agent_json` "
+            "as a typed field, and atlan-metabase-app app/generated/_input.py extends the "
+            "SDK's `ExtractionInput` rather than a bare `Input`. Either route keeps the "
+            "forwarded value; a bare Input subclass with no agent_json field drops it "
+            "before the credential resolver sees it."
+        ),
+        rule_interactions=(
+            "The finding may anchor on generated output (app/generated/**), which is "
+            "not editable — a hand-edit is erased by the next regeneration and turns "
+            "the freshness gate red. Fix contract/*.pkl instead, then run the repo's "
+            "OWN generate task: a bare `pkl eval` skips the post-processing step and "
+            "rewrites unrelated generated files. Diff atlan.yaml afterwards, which "
+            "regeneration can silently strip hand-written comments from."
+        ),
+        fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="SdrAgentJsonDroppedByInputContract",
         tier=EnforcementTier.BLOCK,
@@ -547,6 +613,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P042",
+        canonical_reference=(
+            "atlan-metabase-app app/connector.py — the tenant-bucket hand-off is `await "
+            "self.upload(UploadInput(...))`. A hand-rolled upload_to_atlan bridge "
+            "re-implements the routing to upstream_storage and then has to track it as the "
+            "SDK changes."
+        ),
         scope=RuleScope.APP,
         name="SdrHandRolledUploadBridge",
         tier=EnforcementTier.WARN,
@@ -646,6 +718,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P051",
+        canonical_reference=(
+            "atlan-mysql-app uv.lock — the SDK resolves to 3.32.0, above the 3.30.0 floor "
+            "that carries interactive setup (test auth, preflight, metadata browsing). The "
+            "declared range in pyproject.toml is what lets the lock reach it."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="SdrPreflightUnavailable",
         tier=EnforcementTier.WARN,

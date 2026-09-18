@@ -48,6 +48,7 @@ from application_sdk.errors.leaves import (
     DiskFullError,
     InternalError,
     InvalidInputError,
+    LocalVolumeUnwritableError,
     NotFoundError,
     ObjectStoreDownloadError,
     ObjectStoreReadError,
@@ -101,6 +102,7 @@ STORAGE_PREFLIGHT = ErrorCode("STR", 6)
 STORAGE_INTEGRITY = ErrorCode("STR", 7)
 STORAGE_RELOCATION = ErrorCode("STR", 8)
 STORAGE_HANDOFF_INCOMPLETE = ErrorCode("STR", 9)
+STORAGE_GATEWAY_AUTH = ErrorCode("STR", 10)
 
 # CTR - Contract errors
 CONTRACT_VALIDATION = ErrorCode("CTR", 1)
@@ -152,6 +154,7 @@ __all__ = [
     "DataIntegrityError",
     "DependencyUnavailableError",
     "DiskFullError",
+    "LocalVolumeUnwritableError",
     "SourceUnavailableError",
     "InternalError",
     "InvalidInputError",
@@ -181,6 +184,7 @@ __all__ = [
     "STORAGE_RELOCATION",
     "STORAGE_INTEGRITY",
     "STORAGE_HANDOFF_INCOMPLETE",
+    "STORAGE_GATEWAY_AUTH",
     "CONTRACT_VALIDATION",
     "PAYLOAD_SAFETY",
     "HANDLER_ERROR",

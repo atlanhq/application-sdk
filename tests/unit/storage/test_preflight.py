@@ -156,11 +156,15 @@ async def test_probe_store_head_fails_after_write_succeeds() -> None:
 
 
 def _make_infra(*, storage=None, upstream_storage=None):
-    """Build a minimal InfrastructureContext-like object."""
-    infra = MagicMock()
-    infra.storage = storage
-    infra.upstream_storage = upstream_storage
-    return infra
+    """Build a real InfrastructureContext holding the two store handles.
+
+    The real dataclass, not a mock: ``single_store`` is a derived property and a
+    ``MagicMock`` would answer it truthily whatever the handles are, quietly
+    skipping the upstream probe.
+    """
+    from application_sdk.infrastructure.context import InfrastructureContext
+
+    return InfrastructureContext(storage=storage, upstream_storage=upstream_storage)
 
 
 @pytest.mark.asyncio
@@ -205,6 +209,31 @@ async def test_verify_fails_when_upstream_absent_in_sdr(monkeypatch) -> None:
     msg = str(err)
     assert "upstream" in msg
     assert "ENABLE_ATLAN_UPLOAD" in msg
+
+
+@pytest.mark.asyncio
+async def test_verify_probes_an_aliased_upstream_store_once(monkeypatch) -> None:
+    """SDR mode + both store names on one component → one handle, one probe.
+
+    Startup aliases ``upstream_storage`` to the deployment store on that
+    wiring.  The absent-upstream hard-fail must not fire (a store *is*
+    configured), and the same bucket must not be probed twice.
+    """
+    import application_sdk.constants as constants_mod
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
+
+    fake_store = _fake_store()
+    fake_obstore = MagicMock()
+    fake_obstore.put_async = AsyncMock()
+    fake_obstore.head_async = AsyncMock()
+
+    infra = _make_infra(storage=fake_store, upstream_storage=fake_store)
+
+    with patch.dict("sys.modules", {"obstore": fake_obstore}):
+        await verify_object_store_access(infra)  # must not raise
+
+    assert fake_obstore.put_async.await_count == 1
 
 
 @pytest.mark.asyncio

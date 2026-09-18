@@ -329,6 +329,23 @@ def main():
         has_release_tag=last_release_tag() is not None,
     )
 
+    # The PR that fired this run may not have landed anything on the target
+    # branch at all. GitHub delivers a stacked PR's merge into its *parent*
+    # feature branch as a closed PR on the stack's root, so `branches: [main]`
+    # matches and the checkout is the feature branch tip (application-sdk#3794).
+    # The version check below cannot see that — the computed version is
+    # genuinely newer than the target's — so ask git first whether the merged
+    # commit is an ancestor of the target branch. Same skip output, same gating.
+    merged_sha = os.environ.get(release_guard.MERGE_COMMIT_ENV, "")
+    landed, detail = release_guard.landed_on_branch(merged_sha, branch=current_branch)
+    if not landed:
+        logging.warning(
+            release_guard.not_landed_message(merged_sha, branch=current_branch)
+        )
+        _set_output("skip", "true")
+        return
+    logging.info(f"Merge commit check: {detail}")
+
     # This job may be running against a frozen `pull_request` merge ref that
     # predates an already merged-and-published release, in which case
     # `current_version` is stale and `new_version` is one that already shipped.

@@ -138,6 +138,67 @@ class TestAppContextIdentity:
         ctx = AppContext(app_name="a", app_version="1")
         assert ctx.upstream_storage is None
 
+    def test_single_store_true_when_no_upstream_binding(self) -> None:
+        ctx = AppContext(app_name="a", app_version="1", _storage=object())  # type: ignore[arg-type]
+        assert ctx.single_store is True
+
+    def test_single_store_true_when_upstream_aliases_deployment(self) -> None:
+        """The in-cluster wiring: both store names on one Dapr component."""
+        sentinel = object()
+        ctx = AppContext(
+            app_name="a",
+            app_version="1",
+            _storage=sentinel,  # type: ignore[arg-type]
+            _upstream_storage=sentinel,  # type: ignore[arg-type]
+        )
+        assert ctx.single_store is True
+
+    def test_single_store_false_when_upstream_is_a_distinct_store(self) -> None:
+        """Real SDR: a second component pointing at Atlan's bucket."""
+        ctx = AppContext(
+            app_name="a",
+            app_version="1",
+            _storage=object(),  # type: ignore[arg-type]
+            _upstream_storage=object(),  # type: ignore[arg-type]
+        )
+        assert ctx.single_store is False
+
+    def test_single_store_raises_in_workflow_code(self) -> None:
+        """Workflow-side AppContext holds no stores — refuse, do not guess.
+
+        ``app/base.py``'s ``_run`` wrapper builds the workflow-side context
+        without ``_storage`` / ``_upstream_storage``; only activities receive
+        them.  The shared predicate would answer ``True`` for both-None, so a
+        real two-store SDR deployment would read as single-store in workflow
+        code.  Patch Temporal's own ``in_workflow`` (what the guard consults
+        through ``in_temporal_workflow``) rather than the SDK helper, so the
+        test exercises the real chain.
+        """
+        from application_sdk.app.base_errors import SingleStoreUnknownInWorkflowError
+
+        # The exact shape base.py builds workflow-side: no store handles.
+        ctx = AppContext(app_name="a", app_version="1", run_id="r")
+
+        with patch("temporalio.workflow.in_workflow", return_value=True):
+            with pytest.raises(SingleStoreUnknownInWorkflowError) as exc_info:
+                ctx.single_store
+
+        # The message must send the reader to the fix, not just name the rule.
+        assert "@task" in (exc_info.value.suggested_action or "")
+
+    def test_single_store_answers_outside_workflow_code(self) -> None:
+        """The guard is scoped to workflow code — activities still get a verdict."""
+        sentinel = object()
+        ctx = AppContext(
+            app_name="a",
+            app_version="1",
+            _storage=sentinel,  # type: ignore[arg-type]
+            _upstream_storage=sentinel,  # type: ignore[arg-type]
+        )
+
+        with patch("temporalio.workflow.in_workflow", return_value=False):
+            assert ctx.single_store is True
+
 
 # ---------------------------------------------------------------------------
 # AppContext: state store contract

@@ -183,10 +183,27 @@ def test_every_step_is_gated() -> None:
 def test_reusable_serialises_runs_per_pr() -> None:
     """Both comment paths mutate one sticky comment, so an older run's POST
     landing after a newer run's CLEAR would leave an obsolete failure comment on
-    a passing check. A per-PR group with cancel-in-progress is what prevents it."""
+    a passing check. A per-PR concurrency group is what prevents it."""
     concurrency = _load(_REUSABLE)["concurrency"]
     assert "github.event.pull_request.number" in concurrency["group"]
-    assert concurrency["cancel-in-progress"] is True
+
+
+def test_reusable_queues_rather_than_cancelling() -> None:
+    """Serialise by QUEUING, never by cancelling.
+
+    Cancelling an in-flight run leaves a `cancelled` check run on the head SHA,
+    and Renovate greens a branch only when every check run on it is
+    success/skipped/neutral — so one cancelled entry pins the branch yellow and
+    Renovate's own merge never fires, while GitHub still shows the PR CLEAN
+    (it reads the latest run per required context). atlan-cosmosdb-app#97 sat
+    green and unmerged for 14 days on exactly this: a reopen plus two
+    force-pushes inside 4 seconds put two runs on one SHA, and the first was
+    cancelled by the second.
+
+    Queuing keeps the ordering property the test above asserts, at the cost of a
+    few seconds of runner time on a ~10s job.
+    """
+    assert _load(_REUSABLE)["concurrency"]["cancel-in-progress"] is False
 
 
 def test_noop_step_runs_on_merge_group() -> None:

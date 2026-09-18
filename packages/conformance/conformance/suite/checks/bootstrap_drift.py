@@ -70,10 +70,12 @@ from conformance.bootstrap import extract as bootstrap_extract
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_apt_packages,
+    extract_build_publish_lfs,
     extract_field,
     extract_renovate_automerge,
     extract_tests_yaml_params,
     extract_use_ghcr_base,
+    extract_vulnerability_scan_lfs,
     format_dropped_declarations,
     resolve_renovate_fallback_exit_zero,
     strip_action_pins,
@@ -297,6 +299,20 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         # as a permanent C002 finding whose only "fix" (re-run bootstrap) sends
         # the app back to Harbor.
         kwargs["use_ghcr_base"] = extract_use_ghcr_base(on_disk)
+        # Same per-repo value as on vulnerability-scan.yml below, on the release
+        # image build rather than the scan's. Without it an app that vendors
+        # LFS-tracked assets reports permanent C002 drift whose only "fix"
+        # (re-run bootstrap) deletes the line — and here that is not caught by a
+        # red PR check, because the gap only bites a `release` event.
+        kwargs["build_publish_lfs"] = extract_build_publish_lfs(on_disk)
+    elif name == "vulnerability-scan.yml":
+        # The LFS checkout on the scan's image build is a per-repo value like
+        # any other rendered param: an app that vendors LFS-tracked assets into
+        # its Docker build context needs it, and only structural drift is
+        # flagged. Without this, every such repo reports permanent C002 drift
+        # whose only "fix" (re-run bootstrap) deletes the line and leaves the
+        # scan building from a pointer file.
+        kwargs["vuln_scan_lfs"] = extract_vulnerability_scan_lfs(on_disk)
     elif name == "conformance.yaml":
         kwargs["exit_zero"] = _extract_exit_zero(on_disk, root)
     elif name == "checks.yml":

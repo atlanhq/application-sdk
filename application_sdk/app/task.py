@@ -286,6 +286,15 @@ class TaskMetadata:
     retry_max_attempts: int = 3
     """Maximum retry attempts for this task. Ignored when retry_policy is set."""
 
+    retry_initial_interval_seconds: int = 1
+    """Delay before the first retry, in seconds. Subsequent delays grow from
+    here by the backoff coefficient, so this — not
+    :attr:`retry_max_interval_seconds` — is what decides how wide a window a
+    small attempt budget actually spans. At the 1-second default a task with
+    three attempts has retried and given up within about three seconds, which
+    is shorter than most dependency blips it will meet. Default: 1 second
+    (Temporal's own). Ignored when retry_policy is set."""
+
     retry_max_interval_seconds: int = 30
     """Maximum interval between retries in seconds. Caps exponential backoff
     to prevent very long waits between retries. Default: 30 seconds.
@@ -438,6 +447,7 @@ def task(
     schedule_to_close_seconds: int | None | object = _USE_DEFAULT,
     retry_policy: "RetryPolicy | None" = None,
     retry_max_attempts: int = 3,
+    retry_initial_interval_seconds: int = 1,
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
@@ -456,6 +466,7 @@ def task(
     schedule_to_close_seconds: int | None | object = _USE_DEFAULT,
     retry_policy: "RetryPolicy | None" = None,
     retry_max_attempts: int = 3,
+    retry_initial_interval_seconds: int = 1,
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
@@ -545,6 +556,11 @@ def task(
             retry_max_attempts and retry_max_interval_seconds.
         retry_max_attempts: Maximum retry attempts (default 3). Ignored when
             retry_policy is provided.
+        retry_initial_interval_seconds: Delay before the first retry, in seconds
+            (default 1). Later delays grow from it by the backoff coefficient,
+            so this is the knob that widens the window a small attempt budget
+            spans — raise it when the task's dependency fails for tens of
+            seconds at a time. Ignored when retry_policy is provided.
         retry_max_interval_seconds: Maximum interval between retries in seconds.
             Caps exponential backoff to prevent very long waits. Default: 30 seconds.
             Ignored when retry_policy is provided.
@@ -669,6 +685,7 @@ def task(
             pool=pool,
             retry_policy=retry_policy,
             retry_max_attempts=retry_max_attempts,
+            retry_initial_interval_seconds=retry_initial_interval_seconds,
             retry_max_interval_seconds=retry_max_interval_seconds,
             heartbeat_timeout_seconds=resolved_heartbeat_timeout,
             auto_heartbeat_seconds=resolved_auto_heartbeat,

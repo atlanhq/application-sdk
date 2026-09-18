@@ -203,6 +203,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -210,6 +211,13 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T001",
+        canonical_reference=(
+            "atlan-mysql-app tests/integration/test_mysql_workflow.py — a module-level "
+            "`pytestmark = pytest.mark.integration`, which marks every test in the file in "
+            "one line. atlan-openapi-app tests/integration/test_openapi.py marks per-test "
+            "with the same marker; either satisfies the unit job's deselection."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="UnmarkedIntegrationTest",
         tier=EnforcementTier.WARN,
@@ -257,6 +265,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T002",
+        canonical_reference=(
+            "atlan-mysql-app tests/e2e/test_mysql_e2e.py — `TestMySQLE2E` sets `mode = "
+            "RunMode.AGENT`, which is what drives the SDR (agent-mode) path. An app "
+            "declaring a self-deployed runtime and never exercising that mode has an "
+            "untested deployment shape."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="MissingSdrTestClass",
         tier=EnforcementTier.WARN,
@@ -322,6 +337,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T003",
+        canonical_reference=(
+            "atlan-mysql-app tests/e2e/test_mysql_e2e.py — the suite extends the generated "
+            "`MysqlGeneratedE2EBase`, not the retired BaseSDRIntegrationTest. The "
+            "generated base is regenerated from the contract, so it cannot drift from the "
+            "app it tests."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="DeprecatedSdrHarness",
         tier=EnforcementTier.WARN,
@@ -419,6 +441,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T004",
+        canonical_reference=(
+            "atlan-mysql-app main.py — the container entry point imports `main` from "
+            "app.run_dev and awaits it, so the same path serves the image and `uv run "
+            "python main.py`. Calling application_sdk.main.main() directly requires "
+            "ATLAN_APP_MODULE to be set, which CI's dev-mode boot does not set."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="DevEntrypointRequiresAppModule",
         tier=EnforcementTier.WARN,
@@ -488,6 +517,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T005",
+        canonical_reference=(
+            "atlan-hello-world-app tests/unit/test_connector.py — every test ends in an "
+            "assertion about the value under test. A test whose body only exercises code "
+            "is a smoke test wearing a test's name."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="AssertionFreeTest",
         tier=EnforcementTier.WARN,
@@ -554,6 +589,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T006",
+        canonical_reference=(
+            "atlan-metabase-app tests/unit/test_utils.py — the smallest tests in the four "
+            "reference apps still assert; none is a `pass` or an ellipsis awaiting a body."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="EmptyTestBody",
         tier=EnforcementTier.WARN,
@@ -593,6 +633,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T007",
+        canonical_reference=(
+            "atlan-openapi-app tests/unit/test_contracts.py — assertions compare the value "
+            "under test against an expected one. `assert True`, `assert 1 == 1` and "
+            "`assert some_object` on a value that is never falsy appear nowhere."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="VacuousAssertion",
         tier=EnforcementTier.WARN,
@@ -645,6 +691,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T008",
+        canonical_reference=(
+            "atlan-metabase-app tests/unit/ — every collectable module is named test_*.py. "
+            "A helper that is not meant to be collected goes in conftest.py, as "
+            "atlan-metabase-app tests/unit/conftest.py does."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="UncollectableTestFile",
         tier=EnforcementTier.WARN,
@@ -695,6 +747,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T009",
+        canonical_reference=(
+            "atlan-openapi-app tests/e2e/test_connection_create.py — the module-level skip "
+            "is conditional: it fires only from the ImportError raised when the installed "
+            "SDK predates the agnostic e2e harness. An unconditional module skip disables "
+            "the file forever and nothing tells you."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="UnconditionalModuleSkip",
         tier=EnforcementTier.WARN,
@@ -750,6 +809,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T010",
+        canonical_reference=(
+            "atlan-hello-world-app tests/unit/ — three modules covering the connector, the "
+            "contracts and the dev entrypoint. This tier is the floor and is not "
+            "exemptable; even the scaffold app has it."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="MissingUnitTestSuite",
         tier=EnforcementTier.WARN,
@@ -794,6 +859,14 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T011",
+        canonical_reference=(
+            "atlan-mysql-app tests/integration/ — handler auth and preflight against a "
+            "real MySQL, plus credential resolution against fake secret stores. Where an "
+            "app genuinely has nothing to exercise at this tier, atlan-hello-world-app "
+            "pyproject.toml declares `[tool.conformance] exempt_test_tiers` and says why "
+            "in a comment."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="MissingIntegrationTestSuite",
         tier=EnforcementTier.WARN,
@@ -848,6 +921,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T012",
+        canonical_reference=(
+            "atlan-mysql-app tests/e2e/test_mysql_e2e.py — one full-DAG suite on the "
+            "generated e2e base. atlan-hello-world-app instead exempts the tier in "
+            "pyproject.toml, which is the other legitimate end state."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="MissingE2ETestSuite",
         tier=EnforcementTier.WARN,
@@ -900,6 +979,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T013",
+        canonical_reference=(
+            "atlan-metabase-app tests/ — everything collectable sits under unit/, "
+            "integration/ or e2e/. None of the four reference apps has a tests/sdr/ or a "
+            "tests/full_dag/; the tier a test belongs to is a directory, not a naming "
+            "convention."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="TestFileOutsideTierDir",
         tier=EnforcementTier.WARN,
@@ -948,6 +1034,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T014",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — `fail_under = 84` under "
+            "[tool.coverage.report]. atlan-metabase-app sets 85. A measured number with no "
+            "fail_under is a report nobody's build ever reads."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="CoverageGateDisabled",
         tier=EnforcementTier.WARN,
@@ -1014,6 +1106,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T015",
+        canonical_reference=(
+            "atlan-metabase-app pyproject.toml — coverage omits only `tests/**` and "
+            "`app/generated/**`, the latter with a comment saying it is regenerated from "
+            "contract/app.pkl on every contract change. Omitting anything under app/ that "
+            "a human wrote inflates the number instead of measuring it."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="CoverageOmitsProductCode",
         tier=EnforcementTier.WARN,
@@ -1073,6 +1172,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T016",
+        canonical_reference=(
+            "atlan-mysql-app .github/e2e/e2e-full-docker-compose.yaml — "
+            "`ATLAN_DEPLOYMENT_NAME=${ATLAN_DEPLOYMENT_NAME:-e2e-full-ci-${GITHUB_RUN_ID}}`. "
+            "The overlay inherits the per-leg value the sdr-e2e action sets and only "
+            "defaults it; hard-coding it points every leg at one queue."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2EDeploymentNameNotInherited",
         tier=EnforcementTier.WARN,
@@ -1139,6 +1245,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T017",
+        canonical_reference=(
+            "atlan-openapi-app tests/e2e/test_connection_create.py — `agent_spec()` is "
+            "inherited, not overridden: the generated base derives the worker queue from "
+            "ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME, so each leg lands on the "
+            "queue its own CI action provisioned."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2EAgentSpecPinsQueue",
         tier=EnforcementTier.WARN,
@@ -1218,6 +1331,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T018",
+        canonical_reference=(
+            "atlan-openapi-app pyproject.toml — `addopts` sets only timeouts, with a "
+            "comment recording why integration tests are deliberately NOT deselected "
+            "there: the directory-scoped CI job would collect nothing and pytest would "
+            "exit 5."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="IntegrationTierDeselectedByAddopts",
         tier=EnforcementTier.WARN,
@@ -1314,6 +1434,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T019",
+        canonical_reference=(
+            "atlan-openapi-app pyproject.toml — `asyncio_default_fixture_loop_scope` and "
+            '`asyncio_default_test_loop_scope` are both "session", with a comment '
+            "explaining the hang that follows when only the fixture scope is broadened."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
         name="AsyncioTestLoopScopeUnset",
         tier=EnforcementTier.WARN,
@@ -1423,6 +1549,14 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T020",
+        canonical_reference=(
+            "atlan-mysql-app .github/workflows/tests.yaml — the e2e job calls "
+            "`atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main` and "
+            "passes inputs. Calling the SDK's sdr-e2e action directly re-implements what "
+            "the reusable workflow already owns, and then has to track its changes by "
+            "hand."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="BespokeFullDagE2EWorkflow",
         tier=EnforcementTier.WARN,
@@ -1499,6 +1633,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T021",
+        canonical_reference=(
+            "atlan-metabase-app .github/workflows/tests.yaml — the e2e job is reachable "
+            "from the `e2e` PR label and from workflow_dispatch, so a suite under "
+            "tests/e2e/ actually runs. A tests/e2e/ directory nothing triggers is a suite "
+            "that has never failed because it has never run."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2ESuiteUnreachableInCI",
         tier=EnforcementTier.WARN,
@@ -1576,6 +1717,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T022",
+        canonical_reference=(
+            "atlan-mysql-app .github/workflows/tests.yaml — the tests-reusable caller sets "
+            "`two-store: true`, with a comment naming the ADR. Without it the e2e leg runs "
+            "single-store and a missing App.upload() bridge goes green."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2ETwoStorePostureDisabled",
         tier=EnforcementTier.WARN,
@@ -1646,6 +1793,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T023",
+        canonical_reference=(
+            "atlan-metabase-app tests/e2e/test_metabase_e2e.py — identity attributes, the "
+            "credential body and the Mustache substitutions all come from the generated "
+            "`MetabaseGeneratedE2EBase` and MetabaseMustacheSubstitutions. Hand-declaring "
+            "them in the test freezes a copy of what the contract will regenerate."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2EHarnessScaffoldHandWritten",
         tier=EnforcementTier.WARN,
@@ -1726,6 +1880,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T024",
+        canonical_reference=(
+            "atlan-metabase-app tests/e2e/test_metabase_e2e.py — `mode = RunMode.AGENT` is "
+            "declared on the class. Inheriting the RunMode.DIRECT default means the "
+            "CI-side worker under test is never the one the run routes to."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="E2ERunModeUnset",
         tier=EnforcementTier.WARN,
@@ -1793,6 +1953,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="T025",
+        canonical_reference=(
+            "atlan-openapi-app tests/e2e/ — two suites, test_connection_create.py and "
+            "test_connection_reuse.py, so each contract entrypoint of the bundle has one. "
+            "A multi-entrypoint contract with a single e2e suite leaves the other "
+            "entrypoints unproven end to end."
+        ),
+        fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
         name="EntrypointWithoutE2ECoverage",
         tier=EnforcementTier.WARN,

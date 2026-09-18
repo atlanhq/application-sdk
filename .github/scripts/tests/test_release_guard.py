@@ -201,6 +201,146 @@ class TestFailsOpen:
 
 
 # ---------------------------------------------------------------------------
+# landed_on_branch — did the PR that fired this run reach the target branch?
+# ---------------------------------------------------------------------------
+
+
+def _fake_ancestry(
+    monkeypatch, *, is_ancestor_rc: int, fetch_rc: int = 0
+) -> list[list[str]]:
+    """Stub git for the ancestry probe; returns the commands git saw.
+
+    ``is_ancestor_rc`` is what ``git merge-base --is-ancestor`` exits with:
+    0 = ancestor, 1 = definitively not, anything else = git could not say.
+    """
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        if cmd[:2] == ["git", "fetch"]:
+            return subprocess.CompletedProcess(cmd, fetch_rc, "", "")
+        if cmd[:2] == ["git", "merge-base"]:
+            return subprocess.CompletedProcess(cmd, is_ancestor_rc, "", "")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(release_guard.subprocess, "run", fake_run)
+    return calls
+
+
+class TestLandedOnBranchFires:
+    def test_stacked_pr_merge_into_parent_branch_did_not_land(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The application-sdk#3794 shape.
+
+        The event said "merged into main" but the commit it names is the tip of
+        a feature branch. git's definitive exit 1 is the only thing that may
+        make the guard fire.
+        """
+        _fake_ancestry(monkeypatch, is_ancestor_rc=1)
+
+        landed, detail = release_guard.landed_on_branch("feedfacecafe0001")
+
+        assert landed is False
+        assert "not reachable from origin/main" in detail
+
+    def test_message_names_the_commit_and_branch(self) -> None:
+        msg = release_guard.not_landed_message("feedfacecafe0001", branch="main")
+
+        assert "feedfacecafe" in msg
+        assert "origin/main" in msg
+        assert "stacked" in msg
+
+
+class TestLandedOnBranchAllows:
+    def test_commit_on_target_branch_proceeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _fake_ancestry(monkeypatch, is_ancestor_rc=0)
+
+        landed, detail = release_guard.landed_on_branch("feedfacecafe0001")
+
+        assert landed is True
+        assert "is on origin/main" in detail
+
+    def test_fetch_is_forced_and_targets_the_tracking_ref(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A plain fetch would be refused in exactly the case that matters.
+
+        actions/checkout has just pointed refs/remotes/origin/main at the
+        feature-branch sha under test, so updating it back to the real tip is a
+        non-fast-forward move; without ``+`` the guard would fail open every
+        time it should fire.
+        """
+        calls = _fake_ancestry(monkeypatch, is_ancestor_rc=0)
+
+        release_guard.landed_on_branch("feedfacecafe0001")
+
+        fetch = next(c for c in calls if c[:2] == ["git", "fetch"])
+        assert fetch[-1] == "+main:refs/remotes/origin/main"
+        probe = next(c for c in calls if c[:2] == ["git", "merge-base"])
+        assert probe[2:] == [
+            "--is-ancestor",
+            "feedfacecafe0001",
+            "refs/remotes/origin/main",
+        ]
+
+    def test_honours_branch_and_remote(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """App repos may release off a branch other than main."""
+        calls = _fake_ancestry(monkeypatch, is_ancestor_rc=1)
+
+        landed, detail = release_guard.landed_on_branch(
+            "feedfacecafe0001", branch="release-2.x", remote="upstream"
+        )
+
+        assert landed is False
+        assert "upstream/release-2.x" in detail
+        fetch = next(c for c in calls if c[:2] == ["git", "fetch"])
+        assert fetch[-2:] == [
+            "upstream",
+            "+release-2.x:refs/remotes/upstream/release-2.x",
+        ]
+
+
+class TestLandedOnBranchFailsOpen:
+    @pytest.mark.parametrize("sha", ["", "   ", None])
+    def test_no_merge_commit_skips_the_check_without_touching_git(
+        self, monkeypatch: pytest.MonkeyPatch, sha: str | None
+    ) -> None:
+        """workflow_dispatch, or a caller that does not pass the variable."""
+        calls = _fake_ancestry(monkeypatch, is_ancestor_rc=1)
+
+        landed, detail = release_guard.landed_on_branch(sha)
+
+        assert landed is True
+        assert "not checked" in detail
+        assert calls == []
+
+    def test_fetch_failure_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No network / no token scope must not turn into a red release lane."""
+        calls = _fake_ancestry(monkeypatch, is_ancestor_rc=1, fetch_rc=128)
+
+        landed, detail = release_guard.landed_on_branch("feedfacecafe0001")
+
+        assert landed is True
+        assert "not checked" in detail
+        # The probe is never attempted against a tracking ref we failed to refresh.
+        assert all(c[:2] != ["git", "merge-base"] for c in calls)
+
+    def test_git_error_other_than_not_an_ancestor_proceeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exit 128 (unknown object, corrupt repo) is 'could not say', not 'no'."""
+        _fake_ancestry(monkeypatch, is_ancestor_rc=128)
+
+        landed, detail = release_guard.landed_on_branch("feedfacecafe0001")
+
+        assert landed is True
+        assert "exited 128" in detail
+
+
+# ---------------------------------------------------------------------------
 # Ref selection
 # ---------------------------------------------------------------------------
 

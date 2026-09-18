@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.34.2"
+version = "3.35.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -26,7 +26,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.62b1,<0.63",
     "prometheus-client>=0.20.0,<1.0",
     "fastapi[standard]>=0.141.1,<0.142.0",
-    "pyatlan>=11,<12",
+    "pyatlan>=11.3,<12",
     "httpx-retries>=0.6.0,<0.7.0",
     "pydantic>=2.10.6,<3.0.0",
     "packaging>=24.0",
@@ -148,7 +148,7 @@ harness = [
     "kubernetes>=36.0.3,<37.0.0",
 ]
 scale_data_generator = [
-    "faker>=40.38.0,<40.39.0",
+    "faker>=40.39.0,<40.40.0",
     "numpy>=1.23.5,<3.0.0",
 ]
 # Removed in v3.1 — use sql extra instead

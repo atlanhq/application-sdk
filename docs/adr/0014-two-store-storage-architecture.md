@@ -51,8 +51,61 @@ references in `InfrastructureContext`:
 
 The `atlan-objectstore` component is provisioned by the atlan-configurator at
 SDR deploy time and points to `{tenant}/api/blobstorage` with the deployment's
-OAuth client credentials for SigV4 signing. In non-SDR deployments (local dev,
-Atlan-hosted) the component is absent and `upstream_storage` is `None`.
+OAuth client credentials for SigV4 signing. Outside SDR there is no second
+store, reached two ways: local dev ships no such component, so
+`upstream_storage` is `None`; the Atlan-hosted (in-cluster) charts set
+`UPSTREAM_OBJECT_STORE_NAME` and `DEPLOYMENT_OBJECT_STORE_NAME` to the *same*
+component, so startup aliases `upstream_storage` to the deployment store
+instead of building a second store object over one bucket.
+
+### One component under two names — alias, never a second object (CONNECT-1778)
+
+The in-cluster charts have named one component twice since before this
+architecture existed. Building a second store object from that one binding is
+what broke: the dual-write fan-out below selects its legs with
+`upstream is not deployment`, and `transfer._upload_from_store` short-circuits
+a no-op copy with `source_store is target_store`. Both are **identity** tests
+(obstore stores are unhashable, so equality is not available), so two objects
+over one bucket defeat both, and `App.upload` reconciles the bucket against
+itself — a per-key SHA-256 sidecar compare inside the framework task's fixed
+`600 s × 3` budget, which a multi-thousand-file prefix cannot finish.
+
+Aliasing the handle, rather than leaving it `None`, is deliberate. Every
+consumer outside `App.upload` reads `upstream_storage` as "is an upstream store
+configured"; a name-equality gate that answers `None` there is the fragile
+heuristic removed in `668a06c21` — it silently disables routing for an operator
+who points both names at the same non-default component, and it hands `None` to
+call sites that only meant to ask about presence. The question those call sites
+*should* ask has its own name:
+
+```python
+if self.context.single_store:      # AppContext / InfrastructureContext
+    ...
+```
+
+`single_store` is `True` both when no upstream binding exists and when the two
+handles are the same object. It compares what startup actually built, so it
+cannot disagree with how reads and writes are routed — unlike a call-time
+re-read of the two env-var constants.
+
+It is answerable only where those handles exist, which is the activity side:
+the workflow-side `AppContext` is built without them, and `is_single_store(None,
+None)` is `True`, so a two-store SDR deployment would read as single-store in
+workflow code. Reading it there raises `SingleStoreUnknownInWorkflowError`
+instead. Workflow code that must branch on the topology takes the verdict from
+a `@task`'s Output contract — which is also what makes it replay-safe, and what
+the databricks connector's hand-off gate does.
+
+There is exactly one definition of it — `infrastructure.context.is_single_store`,
+which both contexts delegate to — and exactly one place the two component *names*
+are compared: `_create_infrastructure`, where the second object does not yet
+exist so identity cannot be tested. Every later question about topology is an
+identity test against the handles that branch produced.
+
+A deployment that sets `ENABLE_ATLAN_UPLOAD=true` on this wiring is
+contradictory: it asked for a hand-off across the boundary, and there is no
+boundary. That is not fatal (the artifacts do land, in the one bucket the
+deployment has), so startup logs it at `WARNING` and continues.
 
 ### Credential resolution — `auth.secretStore` and env vars (BLDX-1619)
 
@@ -146,6 +199,27 @@ deployment→deployment copy inexpressible: the leg fell through to `StorageErro
 ("local_path does not exist …")`, which is a spurious `WARNING` under
 `best_effort` and a **failed run** under `required`, even though the upstream
 leg had done its job.
+
+### Retry window at the boundary (FND-2076)
+
+The upstream store is reached over Atlan's `/api/blobstorage` gateway, whose
+auth hop can be unavailable for tens of seconds at a time — see
+`StorageGatewayAuthUnavailableError` in `docs/concepts/common.md` for the
+mechanism. The framework tasks that cross the boundary (`upload`, `download`,
+`verify_refs`, `upload_refs`) therefore declare a wider retry shape than the
+SDK default: **4 attempts at 10s / 20s / 40s**, spreading 70 seconds of backoff
+across the same work.
+
+The default (3 attempts, 1-second initial interval) retries after 1s and 2s, so
+the whole budget is spent inside roughly three seconds. That is shorter than
+the outages this boundary actually meets: the FND-2076 failure saw every signed
+request rejected for at least 55 seconds, and `upload_refs` gave up 25 seconds
+in — losing a complete extraction at the hand-off.
+
+The cost falls only on a store that is genuinely broken rather than briefly
+unavailable, which now fails after ~70s of waiting instead of ~3s. That is the
+right way round for work this far downstream: the run has already paid for the
+extraction by the time it reaches the hand-off.
 
 ### Connector responsibility
 

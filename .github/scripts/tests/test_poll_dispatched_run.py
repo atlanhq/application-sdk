@@ -215,7 +215,10 @@ def test_main_exits_zero_even_when_the_dispatched_run_failed(monkeypatch, capsys
         "run",
         responses({"status": "completed", "conclusion": "failure"}),
     )
-    monkeypatch.setattr(poll_dispatched_run.time, "sleep", lambda _: None)
+    # No local sleep stub: conftest's `_no_retry_sleep` already skips the wait,
+    # and its stub ADVANCES `time.monotonic` — which this script's deadline loop
+    # reads. Re-stubbing sleep to a plain no-op here would leave that loop
+    # spinning against a clock that never moves.
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     assert main(["--repo", "atlanhq/app", "--run-id", "123"]) == 0
     assert "failed with conclusion failure" in capsys.readouterr().out

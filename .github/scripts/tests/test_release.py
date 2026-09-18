@@ -414,6 +414,8 @@ class TestMainAlreadyReleasedGuard:
         guard_result: tuple,
         branch: str = "main",
         new_version: str = "1.3.0",
+        landed_result: tuple = (True, "stubbed"),
+        merge_commit: str | None = None,
     ) -> tuple[list, dict, dict]:
         monkeypatch.setattr(sys, "argv", ["release.py", branch, "1.2.0"])
         monkeypatch.setattr(release, "get_commits_since_last_tag", lambda: ["feat: x"])
@@ -439,6 +441,20 @@ class TestMainAlreadyReleasedGuard:
             return guard_result
 
         monkeypatch.setattr(release.release_guard, "already_released", fake_guard)
+
+        # The ancestry guard would otherwise run a real `git fetch`; its own
+        # behaviour is covered by test_release_guard.py, only the wiring here.
+        if merge_commit is None:
+            monkeypatch.delenv(release.release_guard.MERGE_COMMIT_ENV, raising=False)
+        else:
+            monkeypatch.setenv(release.release_guard.MERGE_COMMIT_ENV, merge_commit)
+
+        def fake_landed(sha, **kwargs):
+            seen["landed_sha"] = sha
+            seen["landed_branch"] = kwargs.get("branch")
+            return landed_result
+
+        monkeypatch.setattr(release.release_guard, "landed_on_branch", fake_landed)
         return written, outputs, seen
 
     def test_skips_without_writing_pyproject(
@@ -475,3 +491,67 @@ class TestMainAlreadyReleasedGuard:
         assert seen["branch"] == "release-2.x"
         assert seen["version"] == "1.3.0"
         assert seen["path"] == "pyproject.toml"
+
+
+class TestMainStackedPrGuard:
+    """release.main() must not bump from a PR that never reached the target.
+
+    Reproduces application-sdk#3794: a GitHub stacked PR merged into its
+    *parent feature branch*, GitHub reported it as a merge into main, and the
+    opener rebuilt the bump branch on fifteen unmerged feature commits. The
+    version guard cannot catch this (3.35.0 *was* newer than main's 3.34.3);
+    only the ancestry of the merged commit can.
+    """
+
+    _wire = TestMainAlreadyReleasedGuard._wire
+
+    def test_skips_before_the_version_guard_or_any_write(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        written, outputs, seen = self._wire(
+            monkeypatch,
+            guard_result=(False, "1.2.0"),
+            landed_result=(False, "not reachable"),
+            merge_commit="feedfacecafe0001",
+        )
+
+        release.main()
+
+        assert outputs["skip"] == "true"
+        assert "new" not in outputs
+        assert written == []
+        # The ancestry question comes first: a run that did not land on the
+        # target has nothing meaningful to compare versions against.
+        assert "version" not in seen
+
+    def test_merge_commit_and_target_branch_come_from_the_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The workflow hands over merge_commit_sha via PR_MERGE_COMMIT_SHA."""
+        _w, outputs, seen = self._wire(
+            monkeypatch,
+            guard_result=(False, None),
+            branch="release-2.x",
+            merge_commit="feedfacecafe0001",
+        )
+
+        release.main()
+
+        assert seen["landed_sha"] == "feedfacecafe0001"
+        assert seen["landed_branch"] == "release-2.x"
+        assert outputs["skip"] == "false"
+
+    def test_unset_variable_is_handed_to_the_guard_as_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An app pinned to an older reusable workflow never sets the variable.
+
+        release.py must not invent a sha or crash; the guard's own fail-open
+        path (covered in test_release_guard.py) then lets the release proceed.
+        """
+        _w, outputs, seen = self._wire(monkeypatch, guard_result=(False, None))
+
+        release.main()
+
+        assert seen["landed_sha"] == ""
+        assert outputs["skip"] == "false"

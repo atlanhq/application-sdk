@@ -748,6 +748,17 @@ def create_activity_from_task(
 
                 if isinstance(e, _AppError):
                     raise _to_application_error(e) from e
+                # A read-only / permission-denied local-write OSError (the
+                # artifact-filesystem pattern family) otherwise re-raises here
+                # untyped and re-files as a fresh unclassifiable pattern. Type it
+                # once, at this boundary — atomic.py's disk-full guard stays narrow.
+                from application_sdk.common.atomic import (  # noqa: PLC0415 — circular
+                    classify_unwritable_oserror,
+                )
+
+                _typed = classify_unwritable_oserror(e)
+                if _typed is not None:
+                    raise _to_application_error(_typed) from e
                 raise
 
             finally:
@@ -828,6 +839,9 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
     else:
         retry_policy = TemporalRetryPolicy(
             maximum_attempts=task_metadata.retry_max_attempts,
+            initial_interval=timedelta(
+                seconds=task_metadata.retry_initial_interval_seconds
+            ),
             maximum_interval=timedelta(
                 seconds=task_metadata.retry_max_interval_seconds
             ),

@@ -162,6 +162,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("success", "bool", "active"),
         SdkField("tables_extracted", "int", "active"),
         SdkField("transformed_data_prefix", "str", "active"),
+        SdkField("transformed_files", "list[FileReference]", "active"),
         SdkField("views_extracted", "int", "active"),
         SdkField("workflow_id", "str", "active"),
     ),
@@ -429,6 +430,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("success", "bool", "active"),
         SdkField("tables_extracted", "int", "active"),
         SdkField("transformed_data_prefix", "str", "active"),
+        SdkField("transformed_files", "list[FileReference]", "active"),
         SdkField("views_extracted", "int", "active"),
         SdkField("workflow_id", "str", "active"),
     ),
@@ -702,4 +704,4 @@ SDK_MODEL_BACKED_ARTIFACT_FIELDS: frozenset[str] = frozenset({"transformed_files
 #: drift test sees it live and fails until the name is removed from this
 #: allowlist — which is the point: the exemption stays, the temporary excuse for
 #: it does not.
-MODEL_BACKED_FIELDS_AHEAD_OF_PIN: frozenset[str] = frozenset({"transformed_files"})
+MODEL_BACKED_FIELDS_AHEAD_OF_PIN: frozenset[str] = frozenset()

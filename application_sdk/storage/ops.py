@@ -421,6 +421,19 @@ _LOG_CAUSE_MAX_LEN = 8000
 
 _OBSTORE_HTTP_STATUS_RE = re.compile(r"status code:\s*(\d{3})")
 _PROVIDER_CODE_RE = re.compile(r"<Code>([^<>]{1,64})</Code>")
+# Not every store behind an S3 API answers in S3's XML dialect. Atlan's
+# ``/api/blobstorage`` proxy is a Kong plugin that rejects before the request
+# ever reaches a bucket, and it answers in its own JSON shape
+# ``{"code": 1005, "error": "...", "message": "..."}``. Parsed into the same
+# ``provider_code`` field as ``<Code>`` so a consumer branches on one field
+# regardless of which dialect the failing hop speaks. (FND-2076)
+_JSON_PROVIDER_CODE_RE = re.compile(r'"code"\s*:\s*"?(\d{1,10})"?')
+
+#: The blobstorage proxy's "I could not look your signing key up in Keycloak"
+#: verdict. See :class:`~application_sdk.storage.errors.
+#: StorageGatewayAuthUnavailableError` for why this is a gateway-availability
+#: signal rather than a credential one.
+GATEWAY_INVALID_CLIENT_CODE = "1005"
 
 
 class _StorageEvidence(TypedDict):
@@ -451,7 +464,7 @@ def _obstore_http_evidence(exc: BaseException) -> tuple[int | None, str | None]:
     """
     text = str(exc)
     status = _OBSTORE_HTTP_STATUS_RE.search(text)
-    provider = _PROVIDER_CODE_RE.search(text)
+    provider = _PROVIDER_CODE_RE.search(text) or _JSON_PROVIDER_CODE_RE.search(text)
     return (
         int(status.group(1)) if status else None,
         provider.group(1) if provider else None,
@@ -509,15 +522,19 @@ def _storage_error_for(
 ) -> Exception:
     """Build the typed storage error for a failed write.
 
-    Only two conditions reclassify: a missing Azure container, and a bucket
+    Only three conditions reclassify: a missing Azure container, a blobstorage
+    gateway that could not reach its identity provider, and a bucket
     mid-relocation. Everything else — including a bare ``PreconditionFailed``
     — is a retryable ``StorageError``. The parsed ``http_status`` and
-    ``provider_code`` are *evidence, not routing*: they ride on the envelope so
-    a consumer holding context the SDK lacks can branch on them, and so a
-    future case can argue for its own leaf from data rather than inference.
+    ``provider_code`` are otherwise *evidence, not routing*: they ride on the
+    envelope so a consumer holding context the SDK lacks can branch on them,
+    and so a future case can argue for its own leaf from data rather than
+    inference. The gateway branch is the first case to have made that argument,
+    and it routes on the ``(401, 1005)`` pair specifically — not on either
+    field alone.
 
-    Order is load-bearing, but not for the retry verdict — both reclassifying
-    branches are retryable. It decides which ``code`` and which
+    Order is load-bearing, but not for the retry verdict — every reclassifying
+    branch is retryable. It decides which ``code`` and which
     ``suggested_action`` an operator sees, and those are wrong if a broader
     rule matches first. Do not reorder without re-reading the notes at each
     branch.
@@ -530,6 +547,7 @@ def _storage_error_for(
         StorageBucketRelocationError,
         StorageConfigError,
         StorageError,
+        StorageGatewayAuthUnavailableError,
     )
 
     http_status, provider_code = _obstore_http_evidence(exc)
@@ -549,6 +567,36 @@ def _storage_error_for(
     # container, not the object, is what is absent.
     if _is_azure_container_not_found(exc):
         return StorageConfigError(_azure_container_not_found_message(key), **evidence)
+
+    # Checked before the relocation branch and the generic fallthrough for the
+    # same reason the Azure branch is: the pair it matches on is exact, so a
+    # broader rule reaching it first can only lose information. Matching on
+    # BOTH the 401 and the gateway's own ``1005`` is what keeps a real
+    # credential rejection — any other 401 from any other store — out of this
+    # leaf; ``1005`` is emitted by exactly one hop in the fleet.
+    #
+    # The retry verdict does not change here (StorageError is already
+    # retryable). What changes is what an operator is told: without this leaf
+    # the envelope says "lacked valid authentication credentials", which points
+    # at the connector's static Keycloak client id/secret — credentials the SDR
+    # preflight already proved good against this same store at startup. The
+    # actual condition is the proxy's Keycloak lookup failing, and no
+    # credential change fixes it. (FND-2076)
+    if http_status == 401 and provider_code == GATEWAY_INVALID_CLIENT_CODE:
+        return StorageGatewayAuthUnavailableError(
+            f"{message}: the object-store gateway could not verify the request "
+            "signature because its own identity-provider lookup failed — this "
+            "is the gateway being unavailable, not a rejected credential",
+            suggested_action=(
+                "Do not rotate or re-issue the store's credentials: they are a "
+                "static Keycloak client id/secret that the SDR preflight probe "
+                "already exercised against this store at startup. Retry the "
+                "run; if the condition persists beyond a few minutes, the "
+                "tenant's blobstorage gateway cannot reach Keycloak and the "
+                "fix is platform-side."
+            ),
+            **evidence,
+        )
 
     # Relocation is checked BEFORE the generic fallthrough below, and the order
     # is load-bearing rather than stylistic — though not for the reason it might
@@ -1152,10 +1200,8 @@ async def download_file(
             elapsed_ms=elapsed_ms,
             error_class=_exc_class_name(exc),
         )
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-        raise StorageError(
-            f"Failed to download key '{key}'", key=key, cause=exc
+        raise _storage_error_for(
+            exc, key, f"Failed to download key '{key}'", resolved
         ) from exc
 
     bytes_written = 0
@@ -1334,11 +1380,9 @@ async def get_file_meta(
     except Exception as exc:
         if _is_not_found(exc):
             return None
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
-
-        raise StorageError(f"Failed to head key '{key}'", key=key, cause=exc) from exc
+        raise _storage_error_for(
+            exc, key, f"Failed to head key '{key}'", resolved
+        ) from exc
 
 
 async def _get_bytes(
@@ -1382,9 +1426,9 @@ async def _get_bytes(
     except Exception as exc:
         if _is_not_found(exc):
             return None
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-        raise StorageError(f"Failed to get key '{key}'", key=key, cause=exc) from exc
+        raise _storage_error_for(
+            exc, key, f"Failed to get key '{key}'", resolved
+        ) from exc
 
 
 async def _put(
@@ -1489,9 +1533,9 @@ async def delete(
     except Exception as exc:
         if _is_not_found(exc):
             return False
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-        raise StorageError(f"Failed to delete key '{key}'", key=key, cause=exc) from exc
+        raise _storage_error_for(
+            exc, key, f"Failed to delete key '{key}'", resolved
+        ) from exc
 
 
 async def exists(
@@ -1531,8 +1575,6 @@ async def exists(
     except Exception as exc:
         if _is_not_found(exc):
             return False
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-        raise StorageError(
-            f"Failed to check existence of key '{key}'", key=key, cause=exc
+        raise _storage_error_for(
+            exc, key, f"Failed to check existence of key '{key}'", resolved
         ) from exc

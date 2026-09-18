@@ -131,6 +131,13 @@ def test_parse_bootstrap_args_defaults() -> None:
         # canonical and C002 stays silent.
         "unit_coverage_fail_under": "",
         "use_ghcr_base": "",
+        # No flag of its own: autodetected from an existing
+        # vulnerability-scan.yml so an app that vendors LFS-tracked assets into
+        # its Docker build context keeps `lfs: true` across a bootstrap run.
+        "vuln_scan_lfs": "",
+        # Same round trip on the RELEASE image build: autodetected from an
+        # existing build-and-publish.yaml so a bootstrap run cannot drop it.
+        "build_publish_lfs": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",

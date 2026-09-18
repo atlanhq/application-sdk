@@ -823,6 +823,64 @@ Three further consequences to design for:
   the degraded value; if any one of them does not, the fail-open is fiction, and
   the honest version is to fail where the cause is still in hand.
 
+### An evicted run still reports, and the newest run owns the required check
+
+A required status check is resolved to the check run of the **newest check suite
+on the commit** — not the most recently completed one. Both halves of that
+sentence are load-bearing, and together they make a same-commit eviction able to
+block a pull request outright.
+
+A bot PR receives several `pull_request` events on one head SHA seconds apart:
+`opened`, then one `labeled` per label the bot applies. Every scaffolded
+`tests.yaml` subscribes to `labeled` (the `e2e` label needs it), so GitHub
+creates one `Tests` run per event on the same SHA and the unit job's ref-keyed
+group evicts all but one. `tests-passed` is `if: always()` — a required context
+must always report — so each evicted run publishes a **`failure`** on
+`tests / Tests Gate`. Eviction order is not run-creation order, so when the
+surviving run is not the highest-id one, its `success` does not count and the PR
+sits at `mergeStateStatus: BLOCKED` with auto-merge enabled until the bot
+rebases. Measured on `atlan-trino-app` (FND-2167): across 18 PRs every merged one
+had its highest-run-id gate `success`, and the single PR whose `success` sat
+under a `cancelled` sibling was the blocked one.
+
+**A skipped job is not a silent job.** It publishes a check run with conclusion
+`skipped`, and GitHub counts `skipped` as a **pass** for a required status check.
+So "skip the jobs on a non-`e2e` `labeled` event" does not remove the duplicate
+runs' verdict — it replaces a false red with a false *green* from the newest
+suite, which would override a genuine `failure` from the `opened` run and make
+the gate decorative on exactly the auto-merge path it guards. Only a job that
+never instantiates reports nothing at all: skipping the **caller** job leaves the
+context untouched, so the previous run's verdict stands. Know which of the two
+you are doing.
+
+**Greening the gate on cancellation is not available either**: an un-run test
+must never green a merge, and a human cancelling the only run would do just that.
+
+What is left is to re-run the offender:
+`.github/scripts/rerun_evicted_tests_run.py`, invoked from `tests-passed` in the
+run that *did* produce a verdict. If a newer run on the same commit concluded
+`cancelled`, it is re-run, and its fresh check runs supersede the evicted
+attempt's on the required context — a measured verdict replacing an unearned one.
+Four properties that make it safe to leave running fleet-wide:
+
+* **Only the newest run is ever touched.** Older evicted siblings publish red
+  rows that are ugly and harmless, and re-running them would put them back in
+  one concurrency group to evict each other again.
+* **An eviction is distinguished from a deliberate cancel by duration.** An
+  eviction never gets a runner and is over in seconds; a person cancels a run
+  minutes in, and that cancel must stick.
+* **One attempt.** A candidate already on `run_attempt` > 1 is left alone, so two
+  runs cannot re-run each other indefinitely.
+* **Fail open, exit 0, `continue-on-error`.** The step runs inside the required
+  context; a repair that can redden it would turn a cosmetic flake into the block
+  it exists to remove.
+
+Re-running needs `actions: write`, which the reusable's own `GITHUB_TOKEN` cannot
+be given — a called workflow may only equal or narrow its caller's grant, the
+callers grant `actions: read`, and asking for more is a hard workflow error in
+every consumer at once. `ORG_PAT_GITHUB` does the write and its absence is a
+logged no-op.
+
 ### Declare the permissions a reusable workflow needs, in the caller
 
 A called workflow's `permissions` can only **equal or narrow** its caller's, so a
