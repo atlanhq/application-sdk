@@ -436,10 +436,12 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
-> Migrate removed mode overrides and private gate-classification helpers.
+> Migrate the inert mode override and the renamed gate-classification helpers.
 
-**Rationale:** SDK PR #3685 removes the old gate contract. Until its release floor is established this
-is an upgrade advisory, not proof of current incompatibility.
+**Rationale:** SDK PR #3685 renamed the old gate contract. The nine affected symbols are served as
+deprecated aliases until v3.40.0 and ATLAN_PREFLIGHT_GATE_MODE no longer does anything,
+so a hit is a migration window rather than proof of current incompatibility — WARN, not
+BLOCK.
 
 ### What correct looks like
 
@@ -448,7 +450,7 @@ is an upgrade advisory, not proof of current incompatibility.
   configuration, and the SDK version it was removed in decides whether a finding
   applies.
 
-Migrate removed mode overrides and private gate-classification helpers.
+Migrate the inert mode override and the renamed gate-classification helpers.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f015).

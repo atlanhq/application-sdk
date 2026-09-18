@@ -28,7 +28,23 @@ _BLOCKING = {
     "socket.create_connection",
 }
 _DEADLINES = {"asyncio.wait_for", "asyncio.timeout", "asyncio.timeout_at"}
-_REMOVED = {"_GATE_BROKEN_CATEGORIES", "_is_gate_broken"}
+
+# Every name SDK PR #3685 renamed out of ``preflight_gate``. The set listed two
+# of them, which is why the five repos importing ``resolve_gate_*`` got no
+# advisory at all and found out from a red ``tests / Unit`` instead. All nine are
+# served again as deprecated aliases and removed for real in v3.40.0, so a hit
+# here is a migration window rather than a break — the rule stays WARN.
+_DEPRECATED = {
+    "CLASSIFICATION_GATE_BROKEN",
+    "CLASSIFICATION_SOURCE_UNVERIFIABLE",
+    "CLASSIFICATION_VERDICT",
+    "GATE_RETRY",
+    "UNVERIFIABLE_CHECK_NAME",
+    "_GATE_BROKEN_CATEGORIES",
+    "_is_gate_broken",
+    "resolve_gate_attempts",
+    "resolve_gate_budget_seconds",
+}
 _ENV = "ATLAN_PREFLIGHT_GATE_MODE"
 
 
@@ -250,7 +266,7 @@ def scan(reg: Registry) -> list[Finding]:
             removed = (
                 isinstance(node, ast.ImportFrom)
                 and (node.module or "").endswith("preflight_gate")
-                and any(a.name in _REMOVED for a in node.names)
+                and any(a.name in _DEPRECATED for a in node.names)
             )
             if isinstance(node, ast.Attribute):
                 qname = _qualified(src, node)
@@ -258,7 +274,7 @@ def scan(reg: Registry) -> list[Finding]:
                     qname.startswith(
                         "application_sdk.execution._temporal.preflight_gate."
                     )
-                    and node.attr in _REMOVED
+                    and node.attr in _DEPRECATED
                 )
             if isinstance(node, ast.Call) and _qualified(src, node.func) in {
                 "os.getenv",
@@ -281,7 +297,7 @@ def scan(reg: Registry) -> list[Finding]:
                     src,
                     node,
                     "F015",
-                    "Legacy gate configuration or private helper is removed by SDK PR #3685. Migration advisory until the release floor is known: declare App.preflight_gate_mode and test public verdict behavior.",
+                    "Legacy gate configuration or renamed gate helper from SDK PR #3685. The symbols are served as deprecated aliases and are removed in v3.40.0; ATLAN_PREFLIGHT_GATE_MODE is already inert. Declare App.preflight_gate_mode and test public verdict behavior before the removal.",
                 )
     return findings
 

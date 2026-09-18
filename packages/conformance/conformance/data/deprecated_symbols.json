@@ -91,6 +91,33 @@
       "symbol": "DiscoveryError"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "_is_gate_broken is deprecated; use classify_gate_failure, whose GateFailure separates a genuinely broken gate from the deprecated fail-open idiom this predicate conflated \u2014 will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "_is_gate_broken"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "resolve_gate_attempts is deprecated; use gate_attempts, which returns (attempts, complaint) and leaves the logging to its caller \u2014 will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "resolve_gate_attempts"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "resolve_gate_budget_seconds is deprecated; use gate_budget_seconds, which returns (budget, complaint) and leaves the logging to its caller \u2014 will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "resolve_gate_budget_seconds"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass \u2014 will be removed in v4.0",
