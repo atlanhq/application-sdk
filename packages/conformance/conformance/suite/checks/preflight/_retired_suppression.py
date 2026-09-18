@@ -1,4 +1,4 @@
-"""F021: a suppression directive that cites a preflight id retired by the F-series move.
+"""F020: a suppression directive that cites a preflight id retired by the F-series move.
 
 The directive parser matches ids as plain strings, so ``ignore[P034]`` keeps
 parsing after the rename, suppresses nothing, and the renamed rule fires with
@@ -31,7 +31,7 @@ def scan(reg: Registry) -> list[Finding]:
                 findings.append(
                     make_finding(
                         filename=src.rel,
-                        rule_id="F021",
+                        rule_id="F020",
                         node=ast.Pass(lineno=lineno, col_offset=0),
                         message=(
                             f"Suppression cites retired id {old}; the rule is now "

@@ -56,18 +56,18 @@ def test_rule_metadata() -> None:
         assert rule.mechanism is RuleMechanism.STATIC
 
 
-def test_f021_names_the_replacement_for_a_retired_suppression(tmp_path: Path) -> None:
+def test_f020_names_the_replacement_for_a_retired_suppression(tmp_path: Path) -> None:
     src = "x = 1  # conformance: ignore[P034] legacy carve-out\n"
-    findings = [f for f in _scan(tmp_path, {"m.py": src}) if f.rule_id == "F021"]
+    findings = [f for f in _scan(tmp_path, {"m.py": src}) if f.rule_id == "F020"]
     assert len(findings) == 1
     assert findings[0].line == 1
     assert "F003" in findings[0].message
     assert not findings[0].suppressed
 
 
-def test_f021_stays_silent_for_current_ids(tmp_path: Path) -> None:
+def test_f020_stays_silent_for_current_ids(tmp_path: Path) -> None:
     src = "x = 1  # conformance: ignore[F003,E004] current ids\n"
-    assert "F021" not in _ids(tmp_path, src)
+    assert "F020" not in _ids(tmp_path, src)
 
 
 def test_p032_is_block_tier() -> None:

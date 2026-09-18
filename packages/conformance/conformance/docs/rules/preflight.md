@@ -5,7 +5,7 @@
 
 # Preflight-Gate Rules (F-series)
 
-**20 rules** · Checker: `suite.checks.preflight` (F001–F015, F019–F021: cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests) and the opt-in `--with-tests` scenario runner (F016–F018: registered pytest scenarios executed in a bounded subprocess via `conformance.preflight_testing`)
+**20 rules** · Checker: `suite.checks.preflight` (F001–F015, F019–F020: cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests) and the opt-in `--with-tests` scenario runner (F016–F018: registered pytest scenarios executed in a bounded subprocess via `conformance.preflight_testing`)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -44,7 +44,7 @@ never reused.
 | [F017](#f017) | `PreflightWorkflowEnforcement` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [F018](#f018) | `PreflightExitEvidence` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [F019](#f019) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
-| [F021](#f021) | `RetiredPreflightSuppression` | `warn` | `app` | `preflight-gate` | — | 0.32.0 |
+| [F020](#f020) | `RetiredPreflightSuppression` | `warn` | `app` | `preflight-gate` | — | 0.32.0 |
 
 ---
 
@@ -533,7 +533,7 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ---
 
-## F021 — `RetiredPreflightSuppression` {#f021}
+## F020 — `RetiredPreflightSuppression` {#f020}
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.32.0
 
@@ -556,6 +556,6 @@ the renamed rule fires with no hint why. Cite the new id named in the message, k
 the justification, or delete the directive if the finding it covered is gone.
 
 [Investigation, remediation and verification
-guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f021).
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f020).
 
 ---

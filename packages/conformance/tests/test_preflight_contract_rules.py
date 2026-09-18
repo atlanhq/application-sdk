@@ -227,7 +227,8 @@ def test_partial_verdict_has_no_preflight_rule(tmp_path, status):
     ``PreflightStatus.PARTIAL`` is deprecated in the SDK, and B001 reports an
     app reading a deprecated enum member fleet-wide from the deprecated-symbol
     manifest, carrying the SDK's own migration guidance.  A preflight-specific
-    rule would put a second WARN on the same line, so F020 was dropped and its
-    id retired.  This pins that: the verdict alone produces no F finding.
+    rule would put a second WARN on the same line, so the preflight series
+    deliberately has none.  This pins that: the verdict alone produces no F
+    finding.
     """
     assert check(tmp_path, f"return PreflightOutput(status={status}, checks=[])") == []

@@ -135,7 +135,7 @@ Retryability alone does not justify returning `READY` after a failed probe. Demo
 
 `PreflightStatus.PARTIAL` is deprecated in the SDK, removed in the first minor release after the reference apps stop returning it, anchored at v3.40.0. The gate treats it exactly like READY, so a PARTIAL verdict can conceal a blocking source failure behind a degraded label, and the gate emits a `DeprecationWarning` when a handler returns it.
 
-There is no preflight rule for it. Reading a deprecated SDK enum member is what **B001** `DeprecatedSdkSymbolUsage` reports, fleet-wide, from the deprecated-symbol manifest — carrying the SDK's own migration guidance on the finding. An F-series rule would put a second WARN on the same line, so F020 was dropped and its id retired.
+There is no preflight rule for it. Reading a deprecated SDK enum member is what **B001** `DeprecatedSdkSymbolUsage` reports, fleet-wide, from the deprecated-symbol manifest — carrying the SDK's own migration guidance on the finding. An F-series rule would put a second WARN on the same line, so the preflight series deliberately has none.
 
 **Investigate:** determine whether each failed probe prevents extraction or whether extraction supports proceeding. Inspect the same source operation and recovery path used by extraction.
 
@@ -145,8 +145,8 @@ There is no preflight rule for it. Reading a deprecated SDK enum member is what 
 
 Known gap: B001 matches the enum member (`PreflightStatus.PARTIAL`), so a raw-string spelling — `PreflightOutput(status="partial")` — is not reported. `status` is typed `PreflightStatus`, so that spelling is already off-contract; it is an accepted gap rather than a rule of its own.
 
-## F021
+## F020
 
 **Contract:** a `# conformance: ignore[...]` directive that cites P032, P033, P034, P035 or P047 suppresses nothing. Those ids moved to F001 to F005 when the preflight rules got their own series, and the parser matches ids as plain strings.
 
-**Investigate:** find the finding the directive was written for and confirm it still fires under the new id on the same line. A directive whose finding is gone is dead weight, not a carve-out. **Fix:** replace the retired id with the one named in the message and keep the justification; delete the directive if the finding no longer fires. **Verify:** rerun `--series F`. F021 disappears, and the renamed rule is suppressed with its justification counted in `atlan/summary.suppressing`.
+**Investigate:** find the finding the directive was written for and confirm it still fires under the new id on the same line. A directive whose finding is gone is dead weight, not a carve-out. **Fix:** replace the retired id with the one named in the message and keep the justification; delete the directive if the finding no longer fires. **Verify:** rerun `--series F`. F020 disappears, and the renamed rule is suppressed with its justification counted in `atlan/summary.suppressing`.

@@ -10,11 +10,12 @@ metadata (F003), the silent metadata/contract drift that no runtime signal
 can catch (F004), and preflight failures logged below the customer's default
 ERROR filter (F005, FND-901).
 
-F006-F019 and F021 add the CONNECT-812 contract, lifetime and behavioral
-rules. F020 is vacant: a PARTIAL verdict is a read of the deprecated
-``PreflightStatus.PARTIAL`` member, which B001 already reports fleet-wide
-from the deprecated-symbol manifest, so a preflight-specific rule would
-double-report the same line. The id stays retired.
+F006-F020 add the CONNECT-812 contract, lifetime and behavioral rules.
+
+There is deliberately no preflight rule for a ``PARTIAL`` verdict: it is a
+read of the deprecated ``PreflightStatus.PARTIAL`` member, which B001 already
+reports fleet-wide from the deprecated-symbol manifest, so a preflight-specific
+rule would put a second WARN on the same line.
 
 The detector lives in ``suite.checks.preflight`` and runs on the F leg of the
 fleet CI matrix. F001-F005 were published as P032-P035 and P047 and moved here
@@ -531,7 +532,7 @@ _CONTRACT_RULES = (
         help_uri=f"{_HELP_BASE}#f019",
     ),
     RuleDefinition(
-        id="F021",
+        id="F020",
         canonical_reference=(
             "atlan-mysql-app app/handler.py — its inline directives cite live ids "
             "(E004) with a named owner and a review date. A directive that cited P034 "
@@ -558,7 +559,7 @@ _CONTRACT_RULES = (
             "unexplained finding on the next conformance run, and the developer has "
             "no signal that the stale directive is the cause."
         ),
-        help_uri=f"{_HELP_BASE}#f021",
+        help_uri=f"{_HELP_BASE}#f020",
     ),
 )
 
