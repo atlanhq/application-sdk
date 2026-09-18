@@ -1314,3 +1314,82 @@ class TestWriteChunkNullColumns:
         assert ticks >= 5, f"event loop stalled during the write ({ticks} ticks)"
         table = pq.read_table(file_name)
         assert table.num_rows == 3
+
+
+class TestConsolidationFileCount:
+    """FND-1339: a consolidated chunk is one parquet file, not chunk/buffer files.
+
+    Consolidation exists to turn the per-``buffer_size`` accumulation chunks
+    into one file per ``chunk_size`` rows. The loop that wrote the consolidated
+    output sliced by ``buffer_size`` again, so every chunk became
+    ``chunk_size / buffer_size`` objects (20 at the defaults) — and every one of
+    them cost the hand-off a set of round trips.
+    """
+
+    @pytest.mark.asyncio
+    async def test_one_chunk_consolidates_to_one_file(self, tmp_path: Path):
+        writer = ParquetFileWriter(
+            path=str(tmp_path / "out"),
+            typename="rows",
+            chunk_size=1000,
+            buffer_size=10,
+            use_consolidation=True,
+            defer_uploads=True,
+        )
+
+        await writer.write_batches(
+            iter([pd.DataFrame({"id": list(range(1000)), "v": ["x"] * 1000})])
+        )
+        result = await writer.close()
+
+        assert result.total_record_count == 1000
+        assert writer.chunk_count == 1
+        assert writer.partitions == [1]
+        files = sorted(Path(writer.path).rglob("*.parquet"))
+        assert len(files) == 1, [f.name for f in files]
+        assert len(pd.read_parquet(files[0])) == 1000
+
+    @pytest.mark.asyncio
+    async def test_two_chunks_consolidate_to_two_files(self, tmp_path: Path):
+        writer = ParquetFileWriter(
+            path=str(tmp_path / "out"),
+            typename="rows",
+            chunk_size=200,
+            buffer_size=10,
+            use_consolidation=True,
+            defer_uploads=True,
+        )
+
+        await writer.write_batches(iter([pd.DataFrame({"id": list(range(250))})]))
+        await writer.close()
+
+        assert writer.chunk_count == 2
+        assert writer.partitions == [1, 1]
+        files = sorted(Path(writer.path).rglob("*.parquet"))
+        assert len(files) == 2, [f.name for f in files]
+        assert sum(len(pd.read_parquet(f)) for f in files) == 250
+
+    @pytest.mark.asyncio
+    async def test_max_file_size_still_splits_a_wide_chunk(self, tmp_path: Path):
+        writer = ParquetFileWriter(
+            path=str(tmp_path / "out"),
+            typename="rows",
+            chunk_size=1000,
+            buffer_size=100,
+            use_consolidation=True,
+            defer_uploads=True,
+        )
+        # A cap far below one chunk's in-memory size forces the split the cap
+        # exists for; it is the only thing that may split a consolidated chunk.
+        writer.max_file_size_bytes = 4 * 1024
+
+        await writer.write_batches(
+            iter([pd.DataFrame({"id": list(range(1000)), "v": ["y" * 20] * 1000})])
+        )
+        await writer.close()
+
+        assert writer.chunk_count == 1
+        assert writer.partitions[0] > 1
+        files = sorted(Path(writer.path).rglob("*.parquet"))
+        assert len(files) == writer.partitions[0]
+        assert sum(len(pd.read_parquet(f)) for f in files) == 1000

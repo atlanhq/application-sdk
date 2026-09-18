@@ -151,12 +151,13 @@ async def test_consolidation_path_marks_accumulation_and_consolidation(
     writer.consolidation_threshold = 2 * _BUFFER
     await writer.write_batches(batches())
 
-    # Four accumulated chunks, and four consolidated files (two folders hit the
-    # 200-record threshold; each consolidates into 200/buffer_size = 2 files).
-    # The consolidation path bypasses _flush_buffer entirely, so without its own
-    # hooks this whole stream would be one quiet window.
+    # Four accumulated chunks, and two consolidated files (two folders hit the
+    # 200-record threshold; each consolidates into one file — FND-1339 stopped
+    # the consolidation loop re-slicing by buffer_size). The consolidation path
+    # bypasses _flush_buffer entirely, so without its own hooks this whole
+    # stream would be one quiet window.
     assert progress_marks.count("writer.accumulate_chunk") == 4
-    assert progress_marks.count("writer.consolidate_chunk") == 4
+    assert progress_marks.count("writer.consolidate_chunk") == 2
     assert progress_marks.count("writer.flush_buffer") == 0
 
 
