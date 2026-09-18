@@ -1,8 +1,8 @@
 # Preflight conformance specification
 
-Current policy: F020 reports deprecated app PARTIAL results as BLOCK/error. F016 rejects PARTIAL at runtime; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The SDK enum and runtime gate are unchanged. There are now 20 preflight rules (17 static, 3 behavioral), with 8 BLOCK and 12 WARN.
+Current policy: F020 reports deprecated app PARTIAL results as BLOCK/error. F016 rejects PARTIAL at runtime; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The SDK enum and runtime gate are unchanged. There are 21 preflight rules (18 static, 3 behavioral), with 8 BLOCK and 13 WARN; the generated catalog page `packages/conformance/conformance/docs/rules/preflight.md` is the source of truth for tiers.
 
-Status: conformance implementation and remaining acceptance requirements, 2026-09-08. F003, F006, F007, and F016–F018 now join F001 at BLOCK; other preflight rules remain WARN. Static checks run by default; behavioral checks require `--with-tests` and app/SDK scenario adapters. SDK production behavior is unchanged.
+Status: conformance implementation and remaining acceptance requirements, 2026-09-08. F003, F006, F007, F016–F018 and F020 join F001 at BLOCK; other preflight rules remain WARN. Static checks run by default; behavioral checks require `--with-tests` and app/SDK scenario adapters. SDK production behavior is unchanged.
 
 The rules ship as the conformance F-series; F001–F005 were first published as P032–P035 and P047. The detector audit that validated them against connector snapshots is recorded on [CONNECT-812](https://linear.app/atlan-epd/issue/CONNECT-812) and in [PR #3710](https://github.com/atlanhq/application-sdk/pull/3710); its counts are tied to one connector revision and one detector build, so they are not kept in this repository.
 
