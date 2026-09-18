@@ -444,4 +444,86 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri=f"{_HELP_BASE}#b007",
     ),
+    RuleDefinition(
+        id="B008",
+        canonical_reference=(
+            "atlan-openapi-app app/connector.py — every SDK import names a public "
+            "module (application_sdk.app, application_sdk.contracts, "
+            "application_sdk.errors). None of the four reference apps imports an "
+            "underscore-prefixed SDK module or name, in app code or in tests."
+        ),
+        scope=RuleScope.APP,
+        name="PrivateSdkModuleImport",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="sdk-private-surface",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.34.0",
+        rationale=(
+            "An underscore-prefixed SDK module or name carries no compatibility "
+            "promise: the SDK renames and deletes its internals without a "
+            "deprecation cycle, and every surface tool it owns already treats them "
+            "as out of scope — the capability manifest generator skips "
+            "_-prefixed module paths by construction, which is why "
+            "docs/agents/sdk-capabilities.md has never listed a single "
+            "preflight_gate symbol. Python enforces none of this: a leading "
+            "underscore is a convention with no runtime meaning, so the boundary "
+            "held only as long as nobody crossed it. Fifteen connector repos "
+            "crossed it and stopped collecting tests when 3.36.0 reshaped "
+            "application_sdk/execution/_temporal/preflight_gate.py — the two names "
+            "with the widest blast radius, _GATE_BROKEN_CATEGORIES (nine repos) "
+            "and _is_gate_broken (two), were both private and both imported from "
+            "app test suites, most likely copied from the SDK's own tests "
+            "(FND-2388). This rule is the missing enforcement of a boundary the "
+            "SDK already declared. It is the consumer-side half of a pair: the "
+            "surface-removal gate blocks the SDK from deleting a PUBLIC name "
+            "without a deprecation cycle but only reports the deletion of a "
+            "private one, because freezing the SDK's internals would tax every "
+            "refactor. B008 is what makes that split safe. WARN rather than BLOCK "
+            "because the fleet has these imports today, and a BLOCK tier would "
+            "turn a correct diagnosis into the fleet-wide red wall this whole line "
+            "of work exists to prevent; worth revisiting once the count nears zero."
+        ),
+        short_description=(
+            "Imports an underscore-prefixed SDK module or name — SDK internals "
+            "change without a deprecation cycle"
+        ),
+        full_description=(
+            "Flags any import that reaches into ``application_sdk`` internals.\n"
+            "Four shapes are matched:\n"
+            "\n"
+            "* ``from application_sdk.execution._temporal.preflight_gate import X``\n"
+            "  — a private component anywhere in the module path;\n"
+            "* ``import application_sdk.execution._temporal.worker``;\n"
+            "* ``from application_sdk.execution._temporal import preflight_gate``\n"
+            "  — private component in the package being imported from;\n"
+            "* ``from application_sdk.app.base import _helper`` — public module,\n"
+            "  private name.\n"
+            "\n"
+            "Dunders are not private in this sense and are never matched.  A\n"
+            "**relative** import is never matched either: ``from ._helpers import\n"
+            "x`` inside an app resolves against the app's own package, which is\n"
+            "the app's business and not this rule's.\n"
+            "\n"
+            "**Tests are in scope, and deliberately so.**  All fifteen repos\n"
+            "FND-2388 wedged broke in ``tests/``, not in ``app/`` — no production\n"
+            "code imported a removed name.  A rule that skipped test files would\n"
+            "have reported nothing at all on the incident it exists for.\n"
+            "\n"
+            "**Remediation.**  Import the public equivalent, or test through the\n"
+            "public behaviour rather than the internal helper — an app asserting\n"
+            "on an SDK private is testing the SDK, which the SDK's own suite\n"
+            "already does.  Where no public equivalent exists, that is an SDK gap\n"
+            "worth raising rather than routing around; say so in the suppression:\n"
+            "``# conformance: ignore[B008] no public equivalent — tracked in <id>``.\n"
+            "\n"
+            "Coverage limit (intentional): import statements only.  A\n"
+            "module-qualified reach-through at the use site (``import\n"
+            "application_sdk as sdk; sdk.execution._temporal.x``) is not matched,\n"
+            "the same documented limit B001 carries, biased toward zero false\n"
+            "positives.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#b008",
+    ),
 )

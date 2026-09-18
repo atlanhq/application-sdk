@@ -2,11 +2,14 @@
 
 One checker, two halves plus a contract-compat pass, dispatched by scope:
 
-* **consumer half (B001/B007, scope ``app``)** — B001 flags app usage of any SDK
-  symbol the committed manifest marks deprecated; B007 flags daft-only
+* **consumer half (B001/B007/B008, scope ``app``)** — B001 flags app usage of any
+  SDK symbol the committed manifest marks deprecated; B007 flags daft-only
   DataFrame APIs (``count_rows``/``to_pylist``/``.names``,
   ``DataframeType.daft``) that are dead on the daft-less SDK >= 3.22 runtime —
-  third-party surfaces the generated manifest cannot carry;
+  third-party surfaces the generated manifest cannot carry; B008 flags an import
+  that reaches into an ``_``-prefixed SDK module or name, which no manifest can
+  carry either because a private symbol is never deprecated before it changes
+  (FND-2388);
 * **authoring half (B002/B003/B004, scope ``sdk``)** — flags the SDK declaring
   its own deprecations incorrectly (malformed notice, overdue removal, or an
   unmarked docstring claim);
@@ -21,7 +24,7 @@ never depends on this dispatch alone.
 
 Inline suppression
 ------------------
-Add ``# conformance: ignore[B001] <reason>`` (or B002–B007) on the offending
+Add ``# conformance: ignore[B001] <reason>`` (or B002–B008) on the offending
 line or the comment-only line directly above it.
 """
 
@@ -47,6 +50,7 @@ from ._contract_compat import scan_contract_compat
 from ._daft_runtime import scan_daft_runtime
 from ._ledger_schema import load_ledger
 from ._manifest import load_manifest
+from ._private_imports import scan_private_imports
 
 SERIES = "B"
 
@@ -61,6 +65,7 @@ __all__ = [
     "scan_contract_compat",
     "scan_daft_runtime",
     "scan_path",
+    "scan_private_imports",
 ]
 
 
@@ -108,6 +113,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             findings.extend(scan_consumer(tree, rel, manifest, directives))
         if run_consumer:
             findings.extend(scan_daft_runtime(tree, rel, directives))
+            findings.extend(scan_private_imports(tree, rel, directives))
         if run_authoring:
             findings.extend(scan_authoring(tree, rel, version, directives))
 

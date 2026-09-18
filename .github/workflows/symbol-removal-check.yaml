@@ -1,0 +1,107 @@
+# Importable-Surface Removal Gate (FND-2388)
+#
+# Compares the importable surface of application_sdk at HEAD against the surface
+# at the last stable release tag, and fails when a name that shipped has simply
+# stopped existing.
+#
+# This is the check that was missing when 3.36.0 shipped PR #3685. Nine
+# preflight_gate names were removed with no deprecation cycle and fifteen
+# connector repos hit ImportError at test collection on their next lock refresh.
+# Nothing in CI objected, because nothing in CI was looking at what the diff
+# took away:
+#
+#   * capability-manifest-check regenerates docs/agents/sdk-capabilities.md and
+#     diffs it against the committed copy — it proves the manifest is FRESH, not
+#     that the surface is INTACT. It is also, by its own header, not a required
+#     check. And its extractor skips any module with a "_"-prefixed path part,
+#     so application_sdk/execution/_temporal/preflight_gate.py was never in it.
+#   * gen-deprecations scans for LIVE markers, so a symbol deleted outright
+#     leaves nothing for it to record. B001 can only fan out what still exists.
+#   * the release automation reads conventional commits, and #3685 was a
+#     `fix(preflight):` — so a fleet-breaking change rode out on a minor bump
+#     with no changelog breaking note.
+#
+# The policy this enforces, in one line: you may not remove a name that was not
+# already marked deprecated in the previous release. Turning a name into a
+# deprecated alias keeps it PRESENT, so a properly deprecated removal produces
+# no finding — there is no second registry to keep in sync and no way for the
+# excuse to drift away from the code. All the decision logic lives in the tested
+# .github/scripts/check_symbol_removals.py per docs/standards/ci.md; the run:
+# block below is one straight-line call.
+#
+# REQUIRED CHECK. Unlike capability-manifest-check this one must gate merges —
+# an advisory surface gate is how the incident happened. Two consequences follow
+# from the branch-protection semantics, both learned the hard way elsewhere in
+# this repo:
+#
+#   1. NO job-level `if`. GitHub does not treat a "skipped" job as "success" for
+#      a required status check, so a job-level skip leaves the check pending
+#      forever and blocks the merge. Release PRs are handled INSIDE the job.
+#   2. `labeled`/`unlabeled` are NOT in the trigger types. On bot PRs the
+#      auto-approve workflow labels within milliseconds of the push, firing two
+#      events for one SHA; cancel-in-progress then leaves a CANCELLED check run,
+#      and branch protection counts every run for the name. Labels have no
+#      bearing on the surface, so there is nothing to gain by re-running.
+
+name: Symbol Removal Check
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  merge_group:
+
+concurrency:
+  group: symbol-removal-check-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  surface-diff:
+    name: Importable Surface
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # fetch-depth: 0 is load-bearing, not hygiene. The gate compares against
+      # the last release TAG; on a shallow checkout no tag is reachable, and the
+      # script exits 2 (cannot run) rather than reporting a clean surface.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # Release PRs only move version/lockfile artefacts, so there is no surface
+      # to diff. Skipped per-STEP, never per-job (see above), and expressed as a
+      # workflow expression rather than an `if` inside a run: block — branching
+      # logic in YAML cannot be regression-tested (docs/standards/ci.md).
+      #
+      # The PR title and body reach the script through a FILE, not through ${{ }}
+      # interpolation into a shell command line: on a fork PR both are
+      # attacker-supplied text. A `!` subject or a BREAKING CHANGE trailer
+      # relaxes a blocking finding to advisory, because that routes the change to
+      # a major bump in release-version-bump.yaml instead of riding out on a
+      # patch the way #3685 did.
+      - name: Collect the commit text
+        if: ${{ !startsWith(github.event.pull_request.head.ref, 'bump-version') }}
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/subject.txt"
+
+      - name: Compare surface against the last release
+        if: ${{ !startsWith(github.event.pull_request.head.ref, 'bump-version') }}
+        env:
+          HEAD_LABEL: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 .github/scripts/check_symbol_removals.py check \
+            --repo . \
+            --head-label "$HEAD_LABEL" \
+            --commit-subject-file "$RUNNER_TEMP/subject.txt" \
+            --summary-file "$RUNNER_TEMP/surface.md"
+
+      # always(): the report is most worth reading when the step above failed.
+      - name: Publish the report
+        if: ${{ always() && !startsWith(github.event.pull_request.head.ref, 'bump-version') }}
+        run: cat "$RUNNER_TEMP/surface.md" >> "$GITHUB_STEP_SUMMARY"

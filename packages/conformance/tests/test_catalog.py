@@ -353,6 +353,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     assert app_scoped == {
         "B001",
         "B007",
+        "B008",
         "D010",
         "P040",
         "P042",
@@ -757,7 +758,7 @@ def test_catalog_b_series_present() -> None:
     """
     rules = load_catalog()
     b_ids = {r.id for r in rules if r.id.startswith("B")}
-    expected = {"B001", "B002", "B003", "B004", "B005", "B006", "B007"}
+    expected = {"B001", "B002", "B003", "B004", "B005", "B006", "B007", "B008"}
     missing = expected - b_ids
     assert not missing, f"Missing B-series rules: {missing}"
     extra = b_ids - expected

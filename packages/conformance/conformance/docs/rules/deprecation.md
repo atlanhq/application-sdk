@@ -5,7 +5,7 @@
 
 # Backwards-Compatibility / Deprecation Rules (B-series)
 
-**7 rules** · Checker: `suite.checks.deprecation` (AST-based)
+**8 rules** · Checker: `suite.checks.deprecation` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -30,6 +30,7 @@ reassigned.
 | [B005](#b005) | `NonAdditiveContractChange` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
 | [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
 | [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `app` | `daft-removal` | — | 0.18.0 |
+| [B008](#b008) | `PrivateSdkModuleImport` | `warn` | `app` | `sdk-private-surface` | — | 0.34.0 |
 
 ---
 
@@ -329,5 +330,65 @@ Matching is attribute-name-anchored (the B001 posture): a same-named method on a
 unrelated object is a known false-positive risk, accepted at WARN.  Suppress with `#
 conformance: ignore[B007] <reason>` where the receiver is genuinely not an SDK reader
 frame.
+
+---
+
+## B008 — `PrivateSdkModuleImport` {#b008}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdk-private-surface` · **Autofixable:** — · **Since:** 0.34.0
+
+> Imports an underscore-prefixed SDK module or name — SDK internals change without a deprecation cycle
+
+**Rationale:** An underscore-prefixed SDK module or name carries no compatibility promise: the SDK
+renames and deletes its internals without a deprecation cycle, and every surface tool it
+owns already treats them as out of scope — the capability manifest generator skips
+_-prefixed module paths by construction, which is why docs/agents/sdk-capabilities.md
+has never listed a single preflight_gate symbol. Python enforces none of this: a leading
+underscore is a convention with no runtime meaning, so the boundary held only as long as
+nobody crossed it. Fifteen connector repos crossed it and stopped collecting tests when
+3.36.0 reshaped application_sdk/execution/_temporal/preflight_gate.py — the two names
+with the widest blast radius, _GATE_BROKEN_CATEGORIES (nine repos) and _is_gate_broken
+(two), were both private and both imported from app test suites, most likely copied from
+the SDK's own tests (FND-2388). This rule is the missing enforcement of a boundary the
+SDK already declared. It is the consumer-side half of a pair: the surface-removal gate
+blocks the SDK from deleting a PUBLIC name without a deprecation cycle but only reports
+the deletion of a private one, because freezing the SDK's internals would tax every
+refactor. B008 is what makes that split safe. WARN rather than BLOCK because the fleet
+has these imports today, and a BLOCK tier would turn a correct diagnosis into the
+fleet-wide red wall this whole line of work exists to prevent; worth revisiting once the
+count nears zero.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/connector.py — every SDK import names a public module
+  (application_sdk.app, application_sdk.contracts, application_sdk.errors). None of the
+  four reference apps imports an underscore-prefixed SDK module or name, in app code or
+  in tests.
+
+Flags any import that reaches into `application_sdk` internals. Four shapes are matched:
+
+* `from application_sdk.execution._temporal.preflight_gate import X`   — a private
+component anywhere in the module path; * `import
+application_sdk.execution._temporal.worker`; * `from application_sdk.execution._temporal
+import preflight_gate`   — private component in the package being imported from; * `from
+application_sdk.app.base import _helper` — public module,   private name.
+
+Dunders are not private in this sense and are never matched.  A **relative** import is
+never matched either: `from ._helpers import x` inside an app resolves against the app's
+own package, which is the app's business and not this rule's.
+
+**Tests are in scope, and deliberately so.**  All fifteen repos FND-2388 wedged broke in
+`tests/`, not in `app/` — no production code imported a removed name.  A rule that
+skipped test files would have reported nothing at all on the incident it exists for.
+
+**Remediation.**  Import the public equivalent, or test through the public behaviour
+rather than the internal helper — an app asserting on an SDK private is testing the SDK,
+which the SDK's own suite already does.  Where no public equivalent exists, that is an
+SDK gap worth raising rather than routing around; say so in the suppression: `#
+conformance: ignore[B008] no public equivalent — tracked in <id>`.
+
+Coverage limit (intentional): import statements only.  A module-qualified reach-through
+at the use site (`import application_sdk as sdk; sdk.execution._temporal.x`) is not
+matched, the same documented limit B001 carries, biased toward zero false positives.
 
 ---

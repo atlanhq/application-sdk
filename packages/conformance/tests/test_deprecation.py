@@ -1,4 +1,4 @@
-"""Meta-tests for the B-series deprecation checks (B001–B004).
+"""Meta-tests for the B-series deprecation checks (B001–B008).
 
 These checks fan out across the fleet — a buggy check false-positives across many
 apps and triggers spurious remediations.  So each rule is tested to fire *exactly*
@@ -23,6 +23,7 @@ from conformance.suite.checks.deprecation._manifest import (
     Manifest,
     load_manifest,
 )
+from conformance.suite.checks.deprecation._private_imports import scan_private_imports
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
@@ -1168,3 +1169,220 @@ def test_b007_tuple_unpacking_pairs_element_wise() -> None:
         + "    return df.to_pylist()\n"
     )
     assert _b007(src) == []
+
+
+# ── _DEPRECATED_CONSTANTS (the PEP 562 module-constant convention) ─────────────
+#
+# FND-2388. A module constant can carry neither @deprecated nor
+# __deprecated_members__, so a module __getattr__ is the only vehicle left. Until
+# this marker existed the six constants application-sdk#3843 restored that way
+# were invisible to the manifest, and B001 could not nudge one app off them.
+
+
+_CONST_SRC = (
+    "import warnings\n\n"
+    "_DEPRECATED_CONSTANTS = {\n"
+    '    "GATE_RETRY": ("gate_retry_policy(GATE_ATTEMPTS_DEFAULT)", '
+    '"the policy built from an app\'s declared attempts"),\n'
+    "}\n\n"
+    "def __getattr__(name):\n"
+    "    replacement, note = _DEPRECATED_CONSTANTS[name]\n"
+    "    warnings.warn(\n"
+    '        f"{name} is deprecated; use {replacement} instead — {note}. "\n'
+    '        "Will be removed in v3.40.0.",\n'
+    "        DeprecationWarning,\n"
+    "        stacklevel=2,\n"
+    "    )\n"
+    "    return None\n"
+)
+
+
+def test_extractor_finds_a_pep562_constant_alias() -> None:
+    site = next(s for s in extract_sites(ast.parse(_CONST_SRC)) if s.kind == "constant")
+    assert site.symbol == "GATE_RETRY"
+    assert site.marker_via == "module-getattr"
+
+
+def test_pep562_constant_notice_is_glued_from_both_halves() -> None:
+    """Neither half carries a complete notice, so B002/B003 need both.
+
+    The per-name replacement lives in the mapping; the removal version lives in
+    the ``__getattr__`` f-string. Graded separately, every entry would read as a
+    notice naming no removal version — a B002 finding on correct code.
+    """
+    site = next(s for s in extract_sites(ast.parse(_CONST_SRC)) if s.kind == "constant")
+    assert site.has_migration_target is True
+    assert site.removal_version_raw == "3.40.0"
+
+
+def test_pep562_constant_accepts_a_plain_notice_string() -> None:
+    """The preferred shape — it reads well in a B001 finding."""
+    src = (
+        "import warnings\n\n"
+        "_DEPRECATED_CONSTANTS = {\n"
+        '    "OLD": "OLD is deprecated; use NEW — will be removed in v4.0.0.",\n'
+        "}\n\n"
+        "def __getattr__(name):\n"
+        "    warnings.warn(_DEPRECATED_CONSTANTS[name], DeprecationWarning)\n"
+        "    return None\n"
+    )
+    site = next(s for s in extract_sites(ast.parse(src)) if s.kind == "constant")
+    assert site.symbol == "OLD"
+    assert site.removal_version_raw == "4.0.0"
+
+
+def test_alias_mapping_without_a_shim_records_nothing() -> None:
+    """The mapping alone serves no name.
+
+    Recording its keys would tell every app the name is still importable when
+    accessing it raises ``AttributeError`` — worse than no signal at all.
+    """
+    src = '_DEPRECATED_CONSTANTS = {"OLD": "use NEW — removed in v4.0.0"}\n'
+    assert [s for s in extract_sites(ast.parse(src)) if s.kind == "constant"] == []
+
+
+def test_lazy_import_getattr_is_not_a_deprecation() -> None:
+    """Several SDK packages use ``__getattr__`` for lazy imports. Not a marker."""
+    src = (
+        "def __getattr__(name):\n"
+        "    import importlib\n"
+        "    return getattr(importlib.import_module('.impl', __name__), name)\n"
+    )
+    assert [s for s in extract_sites(ast.parse(src)) if s.kind == "constant"] == []
+
+
+def test_alias_mapping_is_not_itself_a_symbol() -> None:
+    symbols = {s.symbol for s in extract_sites(ast.parse(_CONST_SRC))}
+    assert "_DEPRECATED_CONSTANTS" not in symbols
+
+
+_CONST_MANIFEST = Manifest(
+    symbols=(
+        DeprecatedSymbol(
+            symbol="CLASSIFICATION_VERDICT",
+            kind="constant",
+            module="application_sdk.execution._temporal.preflight_gate",
+            marker_via="module-getattr",
+            message="use PreflightClassification.VERDICT — removed in v3.40.0",
+            migration_target=True,
+            removal_version="3.40.0",
+        ),
+    )
+)
+
+
+def test_b001_fires_on_importing_a_deprecated_constant() -> None:
+    """The manifest recording it is worth nothing if B001 ignores the kind."""
+    src = (
+        "from application_sdk.execution._temporal.preflight_gate import (\n"
+        "    CLASSIFICATION_VERDICT,\n"
+        ")\n"
+    )
+    tree, directives = _tree_and_directives(src)
+    findings = scan_consumer(tree, "app/x.py", _CONST_MANIFEST, directives)
+    assert [f.rule_id for f in findings] == ["B001"]
+
+
+def test_b001_constant_match_is_module_aware() -> None:
+    """An app's own same-named constant must never be flagged."""
+    tree, directives = _tree_and_directives(
+        "from application_sdk.constants import CLASSIFICATION_VERDICT\n"
+    )
+    assert scan_consumer(tree, "app/x.py", _CONST_MANIFEST, directives) == []
+
+
+# ── B008 PrivateSdkModuleImport ───────────────────────────────────────────────
+#
+# FND-2388. Python enforces nothing about a leading underscore, so the SDK's
+# private boundary held only as long as nobody crossed it. Fifteen repos crossed
+# it and stopped collecting tests when 3.36.0 reshaped
+# application_sdk/execution/_temporal/preflight_gate.py.
+
+
+def _b008(src: str) -> list:
+    tree, directives = _tree_and_directives(src)
+    return scan_private_imports(tree, "tests/test_x.py", directives)
+
+
+def test_b008_fires_on_the_fnd_2388_import() -> None:
+    """The literal line nine repos carried."""
+    src = (
+        "from application_sdk.execution._temporal.preflight_gate import (\n"
+        "    _GATE_BROKEN_CATEGORIES,\n"
+        ")\n"
+    )
+    assert [f.rule_id for f in _b008(src)] == ["B008"]
+
+
+def test_b008_fires_on_a_plain_import_of_a_private_module() -> None:
+    src = "import application_sdk.execution._temporal.worker\n"
+    assert [f.rule_id for f in _b008(src)] == ["B008"]
+
+
+def test_b008_fires_on_importing_a_submodule_out_of_a_private_package() -> None:
+    src = "from application_sdk.execution._temporal import preflight_gate\n"
+    assert [f.rule_id for f in _b008(src)] == ["B008"]
+
+
+def test_b008_fires_on_a_private_name_from_a_public_module() -> None:
+    """The module is public; the name is not."""
+    src = "from application_sdk.app.base import _resolve_gate_enforcement\n"
+    assert [f.rule_id for f in _b008(src)] == ["B008"]
+
+
+def test_b008_silent_on_public_sdk_imports() -> None:
+    src = (
+        "from application_sdk.app import App\n"
+        "from application_sdk.errors import AuthError\n"
+        "import application_sdk.constants\n"
+    )
+    assert _b008(src) == []
+
+
+def test_b008_silent_on_a_dunder() -> None:
+    """``__init__`` is plumbing, not a private subpackage."""
+    assert _b008("from application_sdk.app.__init__ import App\n") == []
+
+
+def test_b008_silent_on_a_non_sdk_private_import() -> None:
+    """Another library's internals are not this rule's business."""
+    src = "from temporalio.api._grpc import x\nfrom pandas._libs import y\n"
+    assert _b008(src) == []
+
+
+def test_b008_silent_on_an_apps_own_relative_private_import() -> None:
+    """``from ._helpers import x`` resolves against the app's own package."""
+    assert _b008("from ._helpers import build\n") == []
+
+
+def test_b008_reports_each_private_import_once() -> None:
+    src = (
+        "from application_sdk.execution._temporal.preflight_gate import (\n"
+        "    _GATE_BROKEN_CATEGORIES,\n"
+        "    _is_gate_broken,\n"
+        ")\n"
+    )
+    # One finding for the statement, not one per name: the module path is what
+    # is private, and two findings on one line is noise.
+    assert len(_b008(src)) == 1
+
+
+def test_b008_message_names_the_private_component() -> None:
+    src = "from application_sdk.execution._temporal.preflight_gate import X\n"
+    assert "_temporal" in _b008(src)[0].message
+
+
+def test_b008_is_suppressible_inline() -> None:
+    src = (
+        "# conformance: ignore[B008] no public equivalent — tracked in FND-9999\n"
+        "from application_sdk.execution._temporal.preflight_gate import X\n"
+    )
+    findings = _b008(src)
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
+
+
+def test_b008_rule_is_registered_app_scoped_and_warn() -> None:
+    rule = get_rule("B008")
+    assert rule.scope is RuleScope.APP
+    assert rule.tier is EnforcementTier.WARN
