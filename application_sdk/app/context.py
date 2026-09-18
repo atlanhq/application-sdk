@@ -357,12 +357,13 @@ class AppContext:
 
     @property
     def upstream_storage(self) -> "ObjectStore | None":
-        """Upstream object store, or ``None`` if not configured.
+        """Upstream object store, or ``None`` unless a *distinct* second binding exists.
 
         Present only in SDR deployments where ``UPSTREAM_OBJECT_STORE_NAME`` is
-        bound to a separate Dapr component pointing at Atlan's bucket.  In
-        standard (non-SDR) deployments this is ``None`` and ``App.upload()``
-        falls back to ``storage`` (the deployment store).
+        bound to a separate Dapr component pointing at Atlan's bucket.  Absent,
+        or the same name as ``DEPLOYMENT_OBJECT_STORE_NAME`` (the in-cluster
+        wiring), both mean one store: this is ``None`` and ``App.upload()``
+        routes to ``storage`` (the deployment store).
         """
         return self._upstream_storage
 

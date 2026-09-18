@@ -51,8 +51,12 @@ references in `InfrastructureContext`:
 
 The `atlan-objectstore` component is provisioned by the atlan-configurator at
 SDR deploy time and points to `{tenant}/api/blobstorage` with the deployment's
-OAuth client credentials for SigV4 signing. In non-SDR deployments (local dev,
-Atlan-hosted) the component is absent and `upstream_storage` is `None`.
+OAuth client credentials for SigV4 signing. In non-SDR deployments
+`upstream_storage` is `None`: local dev ships no such component, and the
+Atlan-hosted (in-cluster) charts set `UPSTREAM_OBJECT_STORE_NAME` and
+`DEPLOYMENT_OBJECT_STORE_NAME` to the same component, which the SDK collapses
+to a single store (`constants.upstream_binding_is_deployment_binding`) rather
+than building a second store object over one bucket.
 
 ### Credential resolution — `auth.secretStore` and env vars (BLDX-1619)
 

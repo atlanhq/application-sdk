@@ -117,6 +117,40 @@ class TestUploadRequiresUpstreamWhenAtlanUploadEnabled:
 
         assert mock_upload.call_args.kwargs["store"] is upstream
 
+    async def test_same_name_binding_is_one_store_and_does_not_raise(self) -> None:
+        """Both names on one component: the deployment store *is* Atlan's store.
+
+        In-cluster charts wire UPSTREAM_OBJECT_STORE_NAME and
+        DEPLOYMENT_OBJECT_STORE_NAME to the same component, so startup leaves
+        ``upstream_storage`` None on purpose.  ENABLE_ATLAN_UPLOAD must then
+        route to the deployment store once instead of raising.
+        """
+        from application_sdk.contracts.storage import UploadInput, UploadOutput
+
+        deployment = object()
+        app = self._app(upstream=None, deployment=deployment)
+
+        with (
+            mock.patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
+            mock.patch(
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
+                "my-app-objectstore",
+            ),
+            mock.patch(
+                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
+                "my-app-objectstore",
+            ),
+            mock.patch(
+                "application_sdk.storage.transfer.upload",
+                new_callable=mock.AsyncMock,
+                return_value=UploadOutput(),
+            ) as mock_upload,
+        ):
+            await app.upload(UploadInput(local_path="/tmp/out"))
+
+        mock_upload.assert_awaited_once()
+        assert mock_upload.call_args.kwargs["store"] is deployment
+
     async def test_error_names_the_upstream_component_so_it_is_actionable(self) -> None:
         from application_sdk.app.base_errors import (
             UpstreamObjectStoreNotConfiguredError,

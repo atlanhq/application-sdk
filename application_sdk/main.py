@@ -663,6 +663,7 @@ async def _create_infrastructure(
             SECRET_STORE_NAME,
             STATE_STORE_NAME,
             UPSTREAM_OBJECT_STORE_NAME,
+            upstream_binding_is_deployment_binding,
         )
         from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
             DaprBinding,
@@ -697,21 +698,34 @@ async def _create_infrastructure(
             set_fetched_binding_secrets,
         )
 
-        upstream_secrets = await _fetch_binding_secrets(
-            dapr_client,
-            UPSTREAM_OBJECT_STORE_NAME,
-            components_dir=components_dir,
-            required=ENABLE_ATLAN_UPLOAD,
-        )
-        set_fetched_binding_secrets(UPSTREAM_OBJECT_STORE_NAME, upstream_secrets)
-        upstream_storage, upstream_put_attrs = (
-            _create_store_from_binding_optional_with_put_attrs(
+        if upstream_binding_is_deployment_binding():
+            # In-cluster charts point both names at the app's one object-store
+            # component.  A second store object over the same bucket would make
+            # ``App.upload`` route by identity and copy the bucket onto itself
+            # (a per-key sidecar compare inside the task's fixed timeout), and
+            # connectors would misread the topology as two-store.
+            logger.info(
+                "UPSTREAM_OBJECT_STORE_NAME and DEPLOYMENT_OBJECT_STORE_NAME both "
+                "name %r — one object store; upstream routing disabled",
+                DEPLOYMENT_OBJECT_STORE_NAME,
+            )
+            upstream_storage, upstream_put_attrs = None, None
+        else:
+            upstream_secrets = await _fetch_binding_secrets(
+                dapr_client,
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=components_dir,
                 required=ENABLE_ATLAN_UPLOAD,
-                secrets=upstream_secrets,
             )
-        )
+            set_fetched_binding_secrets(UPSTREAM_OBJECT_STORE_NAME, upstream_secrets)
+            upstream_storage, upstream_put_attrs = (
+                _create_store_from_binding_optional_with_put_attrs(
+                    UPSTREAM_OBJECT_STORE_NAME,
+                    components_dir=components_dir,
+                    required=ENABLE_ATLAN_UPLOAD,
+                    secrets=upstream_secrets,
+                )
+            )
 
         deployment_secrets = await _fetch_binding_secrets(
             dapr_client,

@@ -507,6 +507,7 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
         DEPLOYMENT_OBJECT_STORE_NAME,
         ENABLE_ATLAN_UPLOAD,
         UPSTREAM_OBJECT_STORE_NAME,
+        upstream_binding_is_deployment_binding,
     )
     from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: avoids a module-level circular import
         ObjectStorePreflightError,
@@ -525,7 +526,9 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
     # The primary guard is the binding factory raising StorageBindingNotFoundError
     # at construction time (required=ENABLE_ATLAN_UPLOAD); this check catches any
     # caller that bypasses the factory and passes upstream_storage=None directly.
-    if infra.upstream_storage is None:
+    # Not a failure when both names point at one component: startup leaves
+    # upstream_storage None then, and the deployment store is Atlan's store.
+    if infra.upstream_storage is None and not upstream_binding_is_deployment_binding():
         failures.append(
             f"  * upstream store (binding: '{UPSTREAM_OBJECT_STORE_NAME}'): not configured\n"
             "    SDR mode is enabled (ENABLE_ATLAN_UPLOAD=true) but the upstream Atlan\n"

@@ -623,12 +623,35 @@ SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 #: Name of the deployment object store component in DAPR
 DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
 #: Name of the upstream object store component in DAPR.
-#: Default differs from DEPLOYMENT_OBJECT_STORE_NAME so that non-SDR deployments
-#: — which only ship the deployment binding — cause create_store_from_binding_optional
-#: to return None, leaving upstream_storage unset and routing to fall back to storage.
+#: Three wirings reach this value:
+#:
+#: * **SDR** — a distinct component (default ``atlan-objectstore``) pointing at
+#:   Atlan's bucket; ``upstream_storage`` is a second store and ``App.upload``
+#:   hands artifacts off to it.
+#: * **In-cluster** — the deployment charts set this *and*
+#:   ``DEPLOYMENT_OBJECT_STORE_NAME`` to the app's single object-store
+#:   component.  Same name means one store: startup leaves ``upstream_storage``
+#:   ``None`` rather than building a second store object over the same bucket
+#:   (see :func:`upstream_binding_is_deployment_binding`).
+#: * **Absent** — local dev / CI ship only the deployment binding; the optional
+#:   factory returns ``None`` and routing falls back to ``storage``.
 UPSTREAM_OBJECT_STORE_NAME = os.getenv(
     "UPSTREAM_OBJECT_STORE_NAME", "atlan-objectstore"
 )
+
+
+def upstream_binding_is_deployment_binding() -> bool:
+    """True when both store names point at the same Dapr component.
+
+    That is the in-cluster wiring: one object store under two names.  Callers
+    treat it as the single-store topology — no upstream store is built, and an
+    ``ENABLE_ATLAN_UPLOAD`` deployment routes to ``storage`` because that *is*
+    Atlan's store.  A function, not a constant, so the verdict follows the
+    names at call time (tests monkeypatch them).
+    """
+    return UPSTREAM_OBJECT_STORE_NAME == DEPLOYMENT_OBJECT_STORE_NAME
+
+
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 #: DAPR binding operation for creating resources

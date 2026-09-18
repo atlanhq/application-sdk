@@ -1383,11 +1383,12 @@ class App(ABC):
         **Store routing (SDR vs non-SDR):** this method targets the upstream
         object store when one is configured (``UPSTREAM_OBJECT_STORE_NAME``
         points to a distinct Dapr component), and falls back to the deployment
-        store otherwise.  In standard (non-SDR) deployments only the deployment
-        binding is present, so ``upstream_storage`` is ``None`` and routing
-        falls back to the deployment store.  In SDR deployments the upstream
-        store is Atlan's bucket — the correct destination for extracted
-        artifacts handed off to the publish app.
+        store otherwise.  In standard (non-SDR) deployments the upstream name
+        is either absent or the same component as the deployment binding, so
+        ``upstream_storage`` is ``None`` and routing falls back to the
+        deployment store.  In SDR deployments the upstream store is Atlan's
+        bucket — the correct destination for extracted artifacts handed off to
+        the publish app.
 
         This routing applies to ``App.upload()`` and ``App.download()``.  The
         automatic file-reference materialisation that transfers ``FileReference``
@@ -1434,6 +1435,7 @@ class App(ABC):
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED,
             ENABLE_ATLAN_UPLOAD,
+            upstream_binding_is_deployment_binding,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
             normalize_key,
@@ -1448,8 +1450,14 @@ class App(ABC):
         # BLDX-1619: a deployment that set ENABLE_ATLAN_UPLOAD expects artifacts
         # in Atlan's bucket. Falling back to the deployment store here returns a
         # positive file count for a write publish will never see, so fail before
-        # doing any work rather than after.
-        if ENABLE_ATLAN_UPLOAD and upstream is None:
+        # doing any work rather than after.  Unless both store names point at
+        # one component: then the deployment store *is* Atlan's store and
+        # startup left ``upstream`` None on purpose.
+        if (
+            ENABLE_ATLAN_UPLOAD
+            and upstream is None
+            and not upstream_binding_is_deployment_binding()
+        ):
             raise UpstreamObjectStoreNotConfiguredError()
 
         # BLDX-1555 defense-in-depth: validate transformed assets against the

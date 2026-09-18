@@ -892,6 +892,65 @@ class TestCreateInfrastructureUpstreamStore:
             "objectstore", components_dir=ANY, secrets=ANY
         )
 
+    async def test_upstream_storage_none_when_both_names_are_the_same_component(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One component under both names is one store — no upstream leg.
+
+        In-cluster charts point UPSTREAM_OBJECT_STORE_NAME and
+        DEPLOYMENT_OBJECT_STORE_NAME at the app's single object-store component.
+        Building a second store object over the same bucket makes App.upload
+        route by identity and copy the bucket onto itself, so startup must not
+        fetch upstream secrets or build an upstream store at all.
+        """
+        self._make_dapr_env(monkeypatch)
+        deployment_store = MagicMock()
+
+        with (
+            patch(
+                "application_sdk.main._log_dapr_components",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(
+                "application_sdk.main._fetch_binding_secrets",
+                new_callable=AsyncMock,
+                return_value={},
+            ) as mock_fetch,
+            patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(
+                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
+                return_value=(MagicMock(), None),
+            ) as mock_optional,
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(deployment_store, None),
+            ) as mock_binding,
+            patch(
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
+                "my-app-objectstore",
+            ),
+            patch(
+                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
+                "my-app-objectstore",
+            ),
+        ):
+            infra = await _create_infrastructure()
+
+        assert infra.upstream_storage is None
+        assert infra.upstream_storage_put_attributes is None
+        assert infra.storage is deployment_store
+        mock_optional.assert_not_called()
+        # Secrets are fetched once, for the deployment binding only.
+        mock_fetch.assert_awaited_once()
+        assert mock_fetch.await_args.args[1] == "my-app-objectstore"
+        mock_binding.assert_called_once_with(
+            "my-app-objectstore", components_dir=ANY, secrets=ANY
+        )
+
     async def test_upstream_required_true_when_sdr_enabled(
         self,
         monkeypatch: pytest.MonkeyPatch,
