@@ -11,7 +11,9 @@ BEHAVIORAL = {"F016", "F017", "F018"}
 
 
 def test_preflight_contract_rules_have_evidence_based_enforcement():
-    for number in range(6, 21):
+    # F020 is deliberately vacant: a PARTIAL verdict is a read of a deprecated
+    # SDK enum member, which B001 already reports fleet-wide.
+    for number in [*range(6, 20), 21]:
         rule_id = f"F{number:03}"
         rule = get_rule(rule_id)
         assert rule.tier is (
@@ -31,7 +33,7 @@ def test_every_preflight_rule_links_to_a_packaged_investigation_section():
     from conformance.suite.rules.preflight import RULES
 
     guide = files("conformance").joinpath("docs/preflight-guide.md").read_text()
-    assert len(RULES) == 21
+    assert len(RULES) == 20
     for rule in RULES:
         assert f"## {rule.id}\n" in guide
         assert f"preflight-guide.md#{rule.id.lower()}" in rule.full_description

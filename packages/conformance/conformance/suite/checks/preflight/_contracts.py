@@ -236,7 +236,7 @@ class _Checker:
                     f"Preflight failure has missing or blank {field}; provide a meaningful explanation and audience-appropriate next action. Unresolved factory values require behavioral validation.",
                 )
 
-    def result(self, src: Source, call: ast.Call, bindings: dict[str, ast.AST]) -> None:
+    def result(self, src: Source, call: ast.Call) -> None:
         kwargs = _kwargs(call)
         if _sdk(src, call.func, "PreflightCheck") and "status" in kwargs:
             self.emit(
@@ -253,29 +253,6 @@ class _Checker:
         )
         if isinstance(status_name, str):
             status_name = status_name.upper()
-        pending = [status]
-        seen = set()
-        while pending:
-            candidate = pending.pop()
-            if isinstance(candidate, ast.Name) and candidate.id not in seen:
-                seen.add(candidate.id)
-                pending.append(bindings.get(candidate.id))
-            elif isinstance(candidate, ast.IfExp):
-                pending.extend([candidate.body, candidate.orelse])
-            elif (
-                isinstance(candidate, ast.Constant)
-                and isinstance(candidate.value, str)
-                and candidate.value.upper() == "PARTIAL"
-                or isinstance(candidate, ast.Attribute)
-                and candidate.attr == "PARTIAL"
-            ):
-                self.emit(
-                    src,
-                    call,
-                    "F020",
-                    "PreflightStatus.PARTIAL is deprecated (removal anchored at v3.36.0) and proceeds like READY, so it can conceal a blocking failure. Return NOT_READY for a blocking failure or READY when extraction can proceed; preserve truthful typed check evidence. Do not replace PARTIAL blindly.",
-                )
-                break
         checks = kwargs.get("checks")
         if not isinstance(checks, (ast.List, ast.Tuple)):
             if "checks" in kwargs:
@@ -350,16 +327,6 @@ class _Checker:
         if id(func) in visited:
             return
         visited = visited | {id(func)}
-        bindings: dict[str, ast.AST] = {}
-        assignments: dict[str, list[ast.AST]] = {}
-        for node in _nodes(func):
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        assignments.setdefault(target.id, []).append(node.value)
-        bindings = {
-            name: values[0] for name, values in assignments.items() if len(values) == 1
-        }
 
         def walk(
             node: ast.AST,
@@ -429,7 +396,7 @@ class _Checker:
                         "Expected typed preflight failure escapes the handler. Return a typed PreflightOutput verdict; the strict gate does not preserve the legacy raised-error fail-open behavior.",
                     )
             if isinstance(node, ast.Call):
-                self.result(src, node, bindings)
+                self.result(src, node)
                 helper = self.helper(src, func, node)
                 if helper is not None:
                     self.body(helper[0], helper[1], visited, caught)

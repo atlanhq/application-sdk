@@ -10,7 +10,11 @@ metadata (F003), the silent metadata/contract drift that no runtime signal
 can catch (F004), and preflight failures logged below the customer's default
 ERROR filter (F005, FND-901).
 
-F006-F020 add the CONNECT-812 contract, lifetime and behavioral rules.
+F006-F019 and F021 add the CONNECT-812 contract, lifetime and behavioral
+rules. F020 is vacant: a PARTIAL verdict is a read of the deprecated
+``PreflightStatus.PARTIAL`` member, which B001 already reports fleet-wide
+from the deprecated-symbol manifest, so a preflight-specific rule would
+double-report the same line. The id stays retired.
 
 The detector lives in ``suite.checks.preflight`` and runs on the F leg of the
 fleet CI matrix. F001-F005 were published as P032-P035 and P047 and moved here
@@ -525,42 +529,6 @@ _CONTRACT_RULES = (
         full_description="Report unresolved preflight dispatch and contracts instead of a clean result.",
         rationale="An undiscovered handler or unresolved contract must not be mistaken for conforming code.",
         help_uri=f"{_HELP_BASE}#f019",
-    ),
-    RuleDefinition(
-        id="F020",
-        canonical_reference=(
-            "application_sdk/handler/contracts.py — `PreflightStatus` carries the "
-            "`__deprecated_members__` notice for PARTIAL: the gate treats it exactly like "
-            "READY, so a handler returns READY when extraction can proceed and NOT_READY "
-            "when it cannot, keeping the typed failed row visible either way."
-        ),
-        name="PartialVerdictConcealsFailure",
-        scope=RuleScope.APP,
-        tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
-        category="preflight-gate",
-        orthogonal_gate="tests",
-        since="0.27.0",
-        short_description="A PARTIAL preflight verdict proceeds like READY and can conceal a blocking source failure.",
-        full_description=(
-            "``PreflightStatus.PARTIAL`` is deprecated in the SDK (``__deprecated_members__`` "
-            "on the enum; removal lands in the first minor after the reference apps "
-            "migrate, anchored at v3.36.0) because the gate treats it exactly like READY: "
-            "the run proceeds, and a failed probe that should have blocked is presented as a "
-            "degraded-but-fine verdict. Return NOT_READY when a required capability is not "
-            "established and READY when extraction can proceed, keeping every failed check as "
-            "a typed, actionable row. Recognizes literal and enum values, conditional "
-            "expressions, and single local assignments in supported handler paths; dynamic "
-            "construction requires behavioral validation. Reported at WARN until the "
-            "reference apps have migrated off PARTIAL; promotion to BLOCK is a follow-up."
-        ),
-        rationale=(
-            "Customer impact: a PARTIAL verdict lets extraction start against a source that "
-            "a failed probe already showed to be unusable, so the customer sees a long run "
-            "fail late instead of a clear NOT_READY with a next step. The SDK deprecation of "
-            "PARTIAL is the authority for this rule."
-        ),
-        help_uri=f"{_HELP_BASE}#f020",
     ),
     RuleDefinition(
         id="F021",

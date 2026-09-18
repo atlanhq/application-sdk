@@ -2416,7 +2416,7 @@ def test_gate_module_import_does_not_load_obstore() -> None:
 
 class TestPartialDeprecation:
     def test_partial_verdict_emits_the_sdk_deprecation_notice(self) -> None:
-        with pytest.warns(DeprecationWarning, match="removed in v3.36.0"):
+        with pytest.warns(DeprecationWarning, match="removed in v3.40.0"):
             warn_if_partial(PreflightOutput(status=PreflightStatus.PARTIAL))
 
     def test_supported_verdicts_stay_silent(self) -> None:

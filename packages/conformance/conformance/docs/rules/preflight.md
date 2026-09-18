@@ -5,7 +5,7 @@
 
 # Preflight-Gate Rules (F-series)
 
-**21 rules** · Checker: `suite.checks.preflight` (F001–F015, F019–F021: cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests) and the opt-in `--with-tests` scenario runner (F016–F018: registered pytest scenarios executed in a bounded subprocess via `conformance.preflight_testing`)
+**20 rules** · Checker: `suite.checks.preflight` (F001–F015, F019–F021: cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests) and the opt-in `--with-tests` scenario runner (F016–F018: registered pytest scenarios executed in a bounded subprocess via `conformance.preflight_testing`)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -44,7 +44,6 @@ never reused.
 | [F017](#f017) | `PreflightWorkflowEnforcement` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [F018](#f018) | `PreflightExitEvidence` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [F019](#f019) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
-| [F020](#f020) | `PartialVerdictConcealsFailure` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F021](#f021) | `RetiredPreflightSuppression` | `warn` | `app` | `preflight-gate` | — | 0.32.0 |
 
 ---
@@ -531,39 +530,6 @@ Report unresolved preflight dispatch and contracts instead of a clean result.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f019).
-
----
-
-## F020 — `PartialVerdictConcealsFailure` {#f020}
-
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
-
-> A PARTIAL preflight verdict proceeds like READY and can conceal a blocking source failure.
-
-**Rationale:** Customer impact: a PARTIAL verdict lets extraction start against a source that a failed
-probe already showed to be unusable, so the customer sees a long run fail late instead
-of a clear NOT_READY with a next step. The SDK deprecation of PARTIAL is the authority
-for this rule.
-
-### What correct looks like
-
-- **Compliant example:** application_sdk/handler/contracts.py — `PreflightStatus` carries the
-  `__deprecated_members__` notice for PARTIAL: the gate treats it exactly like READY, so
-  a handler returns READY when extraction can proceed and NOT_READY when it cannot,
-  keeping the typed failed row visible either way.
-
-`PreflightStatus.PARTIAL` is deprecated in the SDK (`__deprecated_members__` on the
-enum; removal lands in the first minor after the reference apps migrate, anchored at
-v3.36.0) because the gate treats it exactly like READY: the run proceeds, and a failed
-probe that should have blocked is presented as a degraded-but-fine verdict. Return
-NOT_READY when a required capability is not established and READY when extraction can
-proceed, keeping every failed check as a typed, actionable row. Recognizes literal and
-enum values, conditional expressions, and single local assignments in supported handler
-paths; dynamic construction requires behavioral validation. Reported at WARN until the
-reference apps have migrated off PARTIAL; promotion to BLOCK is a follow-up.
-
-[Investigation, remediation and verification
-guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f020).
 
 ---
 

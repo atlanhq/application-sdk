@@ -345,7 +345,7 @@ class PreflightStatus(SerializableEnum):
     (advisory failed checks stay visible as typed rows) or ``NOT_READY`` when
     it cannot. The gate emits a ``DeprecationWarning`` when a handler returns
     ``PARTIAL``. The member is removed in the first minor release after the
-    reference apps stop returning it; v3.36.0 is the planning anchor, and B003
+    reference apps stop returning it; v3.40.0 is the planning anchor, and B003
     flags the notice if that release arrives first. Also surfaced to the Sage
     UI, the connector-pulse dashboard, and the Automation Engine event.
     """
@@ -354,7 +354,7 @@ class PreflightStatus(SerializableEnum):
         "PARTIAL": (
             "PreflightStatus.PARTIAL is deprecated; use PreflightStatus.READY when "
             "extraction can proceed or PreflightStatus.NOT_READY when it cannot "
-            "instead — will be removed in v3.36.0, the first minor release after "
+            "instead — will be removed in v3.40.0, the first minor release after "
             "the reference apps stop returning it."
         ),
     }
@@ -523,7 +523,7 @@ class PreflightOutput(BaseModel):
     """Overall verdict — decides the gate. ``NOT_READY`` blocks the run only in
     hard mode (per-app opt-in); the default soft posture reports it and
     proceeds. ``READY`` proceeds. ``PARTIAL`` is deprecated (removal anchored
-    at v3.36.0) and proceeds like ``READY`` until then. The handler computes
+    at v3.40.0) and proceeds like ``READY`` until then. The handler computes
     this itself."""
 
     checks: list[PreflightCheck] = []

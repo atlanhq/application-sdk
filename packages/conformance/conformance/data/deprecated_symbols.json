@@ -102,10 +102,10 @@
     {
       "kind": "enum_member",
       "marker_via": "enum-member",
-      "message": "PreflightStatus.PARTIAL is deprecated; use PreflightStatus.READY when extraction can proceed or PreflightStatus.NOT_READY when it cannot instead \u2014 will be removed in v3.36.0, the first minor release after the reference apps stop returning it.",
+      "message": "PreflightStatus.PARTIAL is deprecated; use PreflightStatus.READY when extraction can proceed or PreflightStatus.NOT_READY when it cannot instead \u2014 will be removed in v3.40.0, the first minor release after the reference apps stop returning it.",
       "migration_target": true,
       "module": "application_sdk.handler.contracts",
-      "removal_version": "3.36.0",
+      "removal_version": "3.40.0",
       "symbol": "PreflightStatus.PARTIAL"
     },
     {

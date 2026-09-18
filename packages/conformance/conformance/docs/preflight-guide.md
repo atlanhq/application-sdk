@@ -131,17 +131,19 @@ Retryability alone does not justify returning `READY` after a failed probe. Demo
 **Investigate:** locate the actual handler and follow registries, dynamic imports or factories. Snowflake-style dispatch requires checking every registered probe. **Fix:** use a supported resolvable pattern where appropriate, improve analysis with regression tests, or add executable scenarios for the unresolved path. **Verify:** demonstrate that a known defect on that path is detected. Do not relabel unresolved as compliant or change runtime semantics merely to satisfy static discovery.
 
 
-## F020
+## PARTIAL verdicts — reported by B001, not by an F rule
 
-**Contract:** `PreflightStatus.PARTIAL` is deprecated in the SDK. It is removed in the first minor release after the reference apps stop returning it, anchored at v3.36.0. The gate treats it exactly like READY, so a PARTIAL verdict can conceal a blocking source failure behind a degraded label. This rule reports WARN until the reference apps have migrated; the gate emits a `DeprecationWarning` when a handler returns PARTIAL.
+`PreflightStatus.PARTIAL` is deprecated in the SDK, removed in the first minor release after the reference apps stop returning it, anchored at v3.40.0. The gate treats it exactly like READY, so a PARTIAL verdict can conceal a blocking source failure behind a degraded label, and the gate emits a `DeprecationWarning` when a handler returns it.
 
-**Investigate:** Determine whether each failed probe prevents extraction or whether extraction supports proceeding. Inspect the same source operation and recovery path used by extraction.
+There is no preflight rule for it. Reading a deprecated SDK enum member is what **B001** `DeprecatedSdkSymbolUsage` reports, fleet-wide, from the deprecated-symbol manifest — carrying the SDK's own migration guidance on the finding. An F-series rule would put a second WARN on the same line, so F020 was dropped and its id retired.
 
-**Fix:** Return NOT_READY for blocking failures and READY when extraction can proceed. Keep failed check evidence typed and actionable; never relabel a failed probe as passed to satisfy the rule.
+**Investigate:** determine whether each failed probe prevents extraction or whether extraction supports proceeding. Inspect the same source operation and recovery path used by extraction.
 
-**Verify:** Exercise both outcomes with real-handler scenarios. F016 accepts a PARTIAL result only when every failed check is advisory and the scenario expects PARTIAL; a failed mandatory probe must give NOT_READY.
+**Fix:** return NOT_READY for blocking failures and READY when extraction can proceed. Keep failed check evidence typed and actionable; never relabel a failed probe as passed to satisfy the rule.
 
-Static detection covers supported PreflightOutput construction with literals, enum members, conditional expressions, and single local assignments. Arbitrary factories and mutations require behavioral tests.
+**Verify:** exercise both outcomes with real-handler scenarios. F016 accepts a PARTIAL result only when every failed check is advisory and the scenario expects PARTIAL; a failed mandatory probe must give NOT_READY.
+
+Known gap: B001 matches the enum member (`PreflightStatus.PARTIAL`), so a raw-string spelling — `PreflightOutput(status="partial")` — is not reported. `status` is typed `PreflightStatus`, so that spelling is already off-contract; it is an accepted gap rather than a rule of its own.
 
 ## F021
 

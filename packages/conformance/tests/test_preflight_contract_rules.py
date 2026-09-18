@@ -126,7 +126,7 @@ def test_partial_failed_check_is_valid(tmp_path: Path) -> None:
     assert check(
         tmp_path,
         'return PreflightOutput(status="PARTIAL", checks=[PreflightCheck(passed=False, error=external_factory())])',
-    ) == ["F020", "F019"]
+    ) == ["F019"]
 
 
 def test_interactive_input_without_entrypoint_valid(tmp_path: Path) -> None:
@@ -218,16 +218,16 @@ def test_sdk_default_action_not_missing(tmp_path, name):
         '"PARTIAL"',
         "PreflightStatus.PARTIAL",
         '"partial" if degraded else "ready"',
+        '"ready"',
     ],
 )
-def test_partial_preflight_is_deprecated(tmp_path, status):
-    assert "F020" in check(
-        tmp_path, f"return PreflightOutput(status={status}, checks=[])"
-    )
+def test_partial_verdict_has_no_preflight_rule(tmp_path, status):
+    """No F-series rule reports a PARTIAL verdict — that belongs to B001.
 
-
-@pytest.mark.parametrize("status", ['"ready"', '"not_ready"'])
-def test_supported_preflight_status_is_not_deprecated(tmp_path, status):
-    assert "F020" not in check(
-        tmp_path, f"return PreflightOutput(status={status}, checks=[])"
-    )
+    ``PreflightStatus.PARTIAL`` is deprecated in the SDK, and B001 reports an
+    app reading a deprecated enum member fleet-wide from the deprecated-symbol
+    manifest, carrying the SDK's own migration guidance.  A preflight-specific
+    rule would put a second WARN on the same line, so F020 was dropped and its
+    id retired.  This pins that: the verdict alone produces no F finding.
+    """
+    assert check(tmp_path, f"return PreflightOutput(status={status}, checks=[])") == []
