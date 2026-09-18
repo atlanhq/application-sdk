@@ -46,8 +46,62 @@ permissions:
   contents: read
 
 concurrency:
-  group: renovate-fleet
-  cancel-in-progress: false
+  # ONLY A LIVE, UNSCOPED SWEEP JOINS THE SHARED GROUP. A dry run writes
+  # nothing and a `repos`-scoped dispatch covers only the repos it lists, so
+  # neither is a substitute for the full live pass — and under a shared
+  # `cancel-in-progress: true` either would ABORT one. That is strictly worse
+  # than what it replaces: the fleet ends up with a partial sweep and no
+  # indication that the rest never ran. Under the previous
+  # `cancel-in-progress: false` these merely queued behind live work, so the
+  # flip below is what makes the distinction load-bearing.
+  #
+  # Everything that is not a live unscoped sweep therefore gets a run-unique
+  # group, which cannot collide with anything: dry runs and pilots are free to
+  # run alongside a live sweep, exactly as they did before, and only live
+  # sweeps coalesce with each other.
+  #
+  # `inputs` is absent on `schedule`, where the properties read as null; null
+  # compares equal to '' under GHA's numeric coercion, so a scheduled run takes
+  # the live branch. A default dispatch sends dry_run='null' (the string,
+  # meaning live) and repos='', so it does too — which is what keeps the
+  # release fan-out on the shared group.
+  group: >-
+    ${{ (inputs.dry_run == 'full' || inputs.dry_run == 'lookup' || inputs.repos != '')
+        && format('renovate-aside-{0}', github.run_id)
+        || 'renovate-fleet' }}
+  # COALESCE, do not queue. A sweep is idempotent and whole-fleet, so a newer
+  # sweep subsumes whatever an older one had left to do — there is nothing to
+  # preserve by letting both run, and real harm in it.
+  #
+  # `false` queued them instead, and the fleet App's hourly API budget is sized
+  # for roughly ONE full-fleet sweep. On 2026-09-17 a release fan-out dispatch
+  # (20:04), the 4-hourly schedule (20:04:52) and a second fan-out dispatch
+  # (20:10) arrived inside seven minutes; the group held one pending slot so the
+  # schedule was evicted, and the two dispatches ran back to back inside one
+  # rate-limit hour. The second exhausted the budget 14 repos in, which is NOT a
+  # clean failure — it degrades in three places at once:
+  #
+  #   * `enablePullRequestAutoMerge` 403s, so every PR the sweep created came
+  #     out without auto-merge while Renovate logged `INFO: PR created` and
+  #     exited 0 (38 conformance PRs, none merging).
+  #   * Renovate then cannot even init (`Init: Can't get App details`), so the
+  #     remaining 68 of 82 repos got no pass at all.
+  #   * The GITHUB_TOKEN sharing that budget 403s inside
+  #     rerun_evicted_tests_run.py, which fails open — leaving a stale failed
+  #     `tests / Tests Gate` on the very PRs that cannot merge.
+  #
+  # Two releases minutes apart is normal (an SDK tag and a conformance tag), so
+  # this is the common case, not a freak. The cost of coalescing is that a
+  # cancelled sweep leaves some repos unprocessed until the cancelling sweep
+  # reaches them, which it does in the same run; the 4-hourly schedule is the
+  # backstop if a burst of dispatches keeps truncating one.
+  #
+  # Guarded by the same condition as the group, so it can only ever cancel a
+  # live sweep. On the run-unique `renovate-aside-*` group the value is inert
+  # (nothing shares the group); false is stated anyway so the two expressions
+  # cannot drift into disagreeing about what is cancellable.
+  cancel-in-progress: >-
+    ${{ !(inputs.dry_run == 'full' || inputs.dry_run == 'lookup' || inputs.repos != '') }}
 
 jobs:
   discover:
@@ -221,6 +275,25 @@ jobs:
           # Pass the matrix repo through the environment rather than interpolating
           # it into the shell string, so the value can never be parsed as shell.
           TARGET_REPO: ${{ matrix.repo }}
+          RENOVATE_LOG: ${{ runner.temp }}/renovate.log
         # Positional arg = the single repository this job handles. The consumer's
         # own renovate.json (extending renovate-config/default.json) is read as usual.
-        run: renovate "$TARGET_REPO"
+        #
+        # Tee'd so the guard below can read it. GitHub runs `run:` under
+        # `bash -e -o pipefail`, so Renovate's own non-zero exit still fails this
+        # step through the pipe — the guard covers the exit-0 failures only.
+        run: renovate "$TARGET_REPO" 2>&1 | tee "$RENOVATE_LOG"
+
+      # Renovate exits 0 after failing to enable auto-merge, so a sweep that
+      # produced PRs nothing will ever merge is indistinguishable from a healthy
+      # one until a human reads a PR. This turns that into a red job. See the
+      # script's docstring and the concurrency comment above.
+      - name: Guard — no silent sweep failures
+        if: always()
+        env:
+          TARGET_REPO: ${{ matrix.repo }}
+          RENOVATE_LOG: ${{ runner.temp }}/renovate.log
+        run: |
+          python3 .github/scripts/check_renovate_sweep.py \
+            --log "$RENOVATE_LOG" \
+            --repo "$TARGET_REPO"
