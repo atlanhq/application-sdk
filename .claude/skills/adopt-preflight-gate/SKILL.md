@@ -10,8 +10,8 @@ description: >
   a NOT_READY verdict, anything the handler raises, a probe overrunning the
   enforced budget, a running attempt Temporal had to kill, a provably absent
   credential — while failures of the gate's own plumbing (its credential
-  resolution, no worker) always fail open; a transient is returned as PARTIAL
-  with a typed retryable check error, never raised. Classifies the app's
+  resolution, no worker) always fail open; a transient is returned as READY
+  with a typed retryable advisory check, never raised. Classifies the app's
   rollout bucket, sizes the check budget
   (preflight_gate_timeout_seconds, default 150s, ceiling 300s) and retry attempts
   (preflight_gate_max_attempts) against what the handler actually costs, sizing
@@ -84,8 +84,9 @@ status. Read its `app/handler.py` before proposing changes.
   resolution, the store probes) fail open. So an uncaught probe exception is a
   run-aborting bug for a hard app, and a raised transient is a fail-closed on a
   blip. A transient the extraction can cope with — a 429, a database still
-  resuming — is a failed check on a `PARTIAL` output carrying the typed
-  retryable leaf: the run proceeds in both modes, the row names the check's
+  resuming — is a failed advisory check on a `READY` output carrying the typed
+  retryable leaf (`PARTIAL` is deprecated and proceeds exactly like `READY`):
+  the run proceeds in both modes, the row names the check's
   code as `reason`, and the other checks survive.
 - A failed check should carry `error=<SDK leaf>(...).to_failure_details()` —
   category/code/audience/suggested_action flow to the Automation Engine and
@@ -212,8 +213,8 @@ Rules the skill enforces during adoption:
   fail *closed* on a blip. Never raise them either: until application-sdk
   3.40.0 a raised `RateLimitedError` / `DependencyUnavailableError` still fails
   open with a `DeprecationWarning` and a `deprecated_fail_open` row, and from
-  3.40.0 it blocks a hard gate and discards the other checks. Return `PARTIAL` with
-  the failed check carrying `RateLimitedError(...).to_failure_details()`
+  3.40.0 it blocks a hard gate and discards the other checks. Return `READY` with
+  the failed advisory check carrying `RateLimitedError(...).to_failure_details()`
   (retryable); wait for a `Retry-After` only when it fits inside
   `input.timeout_seconds` with margin, and leave the checks that could not run
   out of the list rather than seeding them as failures.

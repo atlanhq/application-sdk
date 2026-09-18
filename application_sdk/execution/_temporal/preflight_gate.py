@@ -1541,7 +1541,7 @@ def _warn_deprecated_fail_open(app_name: str, leaf: str, code: str) -> None:
     message = (
         f"{app_name}: preflight_check raised {leaf} ({code}). The gate fails open on "
         f"this category only until application-sdk {DEPRECATED_FAIL_OPEN_REMOVED_IN}; "
-        "return PARTIAL with the failed check instead. From "
+        "return READY with the failed check as an advisory row instead. From "
         f"{DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise blocks a hard gate."
     )
     warnings.warn(message, DeprecationWarning, stacklevel=2)

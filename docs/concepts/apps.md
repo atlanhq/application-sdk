@@ -491,13 +491,14 @@ idiom. Until 3.40.0 such a raise still proceeds in both modes, logs a WARNING li
 `DeprecationWarning`, which default filters hide in a worker) naming the app, the leaf and the
 removal version, and stamps `deprecated_fail_open` on the row so the fleet can count which apps
 still rely on it. The row and the log line are the observable signal. From 3.40.0 it blocks like
-any other raise. Migrate by returning `PARTIAL` with the failed check, as below.
+any other raise. Migrate by returning `READY` with the failed check as an advisory row, as below.
 
 A handler signals "I could not verify, and extraction can cope" — a 429, a database still
-resuming — by **returning** `PARTIAL` with the failed check carrying the typed retryable error, never
-by raising. The run proceeds in both modes, the row carries the check's code as `reason`, and the
-check list is preserved. Returning `NOT_READY` for a transient makes hard mode fail *closed* on a
-blip; raising it makes hard mode block with the right code but loses every other check.
+resuming — by **returning** `READY` with the failed check carrying the typed retryable error, never
+by raising. `PARTIAL` is deprecated and the gate treats it exactly like `READY`, so it adds nothing
+but a warning. The run proceeds in both modes, the row carries the check's code as `reason`, and
+the check list is preserved. Returning `NOT_READY` for a transient makes hard mode fail *closed* on
+a blip; raising it makes hard mode block with the right code but loses every other check.
 
 A running attempt that Temporal has to kill is one the gate's own cancel could not end — a probe
 holding the event loop, an uncancellable thread — so the workflow applies the mode from the failure

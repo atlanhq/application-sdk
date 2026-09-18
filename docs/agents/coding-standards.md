@@ -50,7 +50,7 @@ All I/O, network calls, and non-deterministic operations go in `@task` methods.
 Every extraction workflow runs a `{app}:preflight` Temporal activity as its first
 step. The activity resolves credentials, calls `handler.preflight_check(PreflightInput)`,
 and aborts before extraction when the returned `PreflightOutput.status` is `NOT_READY`
-(`READY` and `PARTIAL` proceed; `PARTIAL` is display-only).
+(`READY` proceeds; `PARTIAL` is deprecated and proceeds exactly like `READY`).
 
 ### What the gate does
 
@@ -126,8 +126,9 @@ verdict was reached.
   until 3.40.0 with a `DeprecationWarning` naming the app and the leaf. From 3.40.0 they are
   source-attributable like any other raise.
 
-So a handler signals "ask me later" by **returning** `PARTIAL` with the failed check carrying
-a typed retryable error, never by raising one and never by returning `NOT_READY` — from 3.40.0
+So a handler signals "ask me later" by **returning** `READY` with the failed check carrying
+a typed retryable error as an advisory row, never by raising one and never by returning
+`NOT_READY` — from 3.40.0
 raising blocks a hard gate on a transient and discards the other checks; `NOT_READY` blocks it
 today.
 
