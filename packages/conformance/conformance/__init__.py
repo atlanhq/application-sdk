@@ -4,4 +4,4 @@ Dev-only package.  Provides the conformance validators, remediation programs,
 and CLI for the atlan-application-sdk ecosystem.
 """
 
-__version__ = "0.32.0"
+__version__ = "0.33.0"
