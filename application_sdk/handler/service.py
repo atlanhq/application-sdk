@@ -322,7 +322,7 @@ def _preflight_response(
 
 
 def _preflight_failure_response(
-    exc: AppError, app_name: str, status_code: int, detail: str
+    exc: AppError, app_name: str, status_code: int, detail: str | None = None
 ) -> JSONResponse:
     """The ``/workflows/v1/check`` body when the handler raised instead of returning.
 
@@ -339,8 +339,8 @@ def _preflight_failure_response(
     """
     output = unverifiable_preflight_result(exc, app_name, include_cause=False)
     body = _preflight_response(output, success=False)
-    body["detail"] = detail
     failure = output.checks[0].error
+    body["detail"] = detail if detail is not None else output.message
     body["error"] = (
         failure.model_dump(mode="json", exclude_none=True)
         if failure is not None
@@ -3052,7 +3052,7 @@ def create_app_handler_service(
                     exc_info=True,
                 )
                 _crash_row(e)
-                return _preflight_failure_response(e, app_name, e.http_status, str(e))
+                return _preflight_failure_response(e, app_name, e.http_status)
             except AppError as e:
                 logger.error(
                     "Preflight check failed for app %s (request %s): %s",
@@ -3063,7 +3063,7 @@ def create_app_handler_service(
                 )
                 _crash_row(e)
                 return _preflight_failure_response(
-                    e, app_name, _app_error_to_http_status(e), str(e)
+                    e, app_name, _app_error_to_http_status(e)
                 )
             except HTTPException as e:
                 # Deliberate client-facing responses (e.g. 400 from a malformed
