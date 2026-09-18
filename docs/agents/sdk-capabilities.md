@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.35.0
-source-sha:    3e0c2cd9048294cccd4ec4144ff2bf8dd3395428
-source-date:   2026-09-18T20:13:53+05:30
+source-sha:    70b9a34d684248a4349f1f67b1b8cae9483080db
+source-date:   2026-09-18T22:31:12+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -26,7 +26,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 68 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
@@ -2409,6 +2409,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Import:** `from application_sdk.handler import PreflightCheck`
 - **Signature:** `class PreflightCheck`
 - **Summary:** Result of a single preflight check.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `PreflightGateMode`
+
+- **Import:** `from application_sdk.handler import PreflightGateMode`
+- **Signature:** `class PreflightGateMode`
+- **Summary:** The gate's posture for one app: what it does with a source it cannot certify.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightInput`
