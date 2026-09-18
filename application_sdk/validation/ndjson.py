@@ -393,19 +393,30 @@ def _resolve(record: object, parts: tuple[str, ...]) -> object:
     return current
 
 
+_FAN_MISSING: Final = "missing"
+_FAN_NOT_A_LIST: Final = "not_a_list"
+
+
 @dataclass(frozen=True)
 class _FanOut:
     """What a path containing ``[]`` addressed in one record.
 
-    ``values`` is every ``(label, value)`` the path reached — empty when an array
-    along the way was empty, which is the vacuous satisfaction ADR-0020 specifies
-    for element paths. ``missing`` and ``not_a_list`` are set instead when the walk
-    could not continue, carrying the text the failure will quote.
+    ``values`` is every value the path reached — empty when an array along the way
+    was empty or null, which is the vacuous satisfaction ADR-0020 specifies for
+    element paths. ``failure`` names which way the walk stopped instead.
+
+    **No labels.** The scan pays only for what it checks; the text naming *which*
+    element went wrong is rebuilt by :func:`_trace_fan_out` while the failure is
+    being written. That is the same split :func:`_stopped_at` already makes on the
+    scalar path, and it matters more here: a label per element of every array of
+    every record is work the overwhelmingly common clean artifact never reads.
     """
 
-    values: tuple[tuple[str, object], ...] = ()
-    missing: str | None = None
-    not_a_list: tuple[str, str] | None = None
+    values: tuple[object, ...] = ()
+    failure: str | None = None
+    found: str = ""
+    """JSON type name the element step met instead of a list. Only for
+    :data:`_FAN_NOT_A_LIST`, where it is one cheap lookup on a cold path."""
 
 
 def _resolve_fan_out(
@@ -416,42 +427,90 @@ def _resolve_fan_out(
     ``required`` reads **per element**: ``columns[].name`` required means every
     element must carry ``name``, so an absent member stops the walk; declared
     optional, that element simply drops out of the frontier and its siblings are
-    still checked. An empty array ends the walk with no values, which satisfies the
-    declaration vacuously either way.
+    still checked.
 
-    An element step onto something that is not a list always fails, required or not
-    — a declaration that descends into an array has been contradicted by a producer
+    An empty array ends the walk with no values, which satisfies the declaration
+    vacuously. **A JSON null does the same** — the scalar path already rules that
+    null satisfies every declared type, and an element path that disagreed would
+    flag ``{"tags": null}`` while the ``tags``/``array`` declaration beside it
+    passed the very same record.
+
+    An element step onto any *other* non-list always fails, required or not: a
+    declaration that descends into an array has been contradicted by a producer
     that stopped writing one, and that is the defect the step exists to catch.
+    """
+    frontier: list[object] = [record]
+    for step in steps:
+        nxt: list[object] = []
+        for value in frontier:
+            if step is ELEMENT_STEP:
+                if value is None:
+                    continue
+                if not isinstance(value, list):
+                    return _FanOut(
+                        failure=_FAN_NOT_A_LIST, found=_json_type_name(value)
+                    )
+                nxt.extend(value)
+                continue
+            if not isinstance(value, dict) or step not in value:
+                if required:
+                    return _FanOut(failure=_FAN_MISSING)
+                continue
+            nxt.append(value[step])
+        frontier = nxt
+        if not frontier:
+            break
+    return _FanOut(values=tuple(frontier))
+
+
+@dataclass(frozen=True)
+class _FanOutTrace:
+    """The labelled re-walk of an element path, built only to write a failure."""
+
+    labels: tuple[str, ...] = ()
+    stopped: str = ""
+
+
+def _trace_fan_out(
+    record: object, steps: tuple[FieldPathStep, ...], *, required: bool
+) -> _FanOutTrace:
+    """Re-walk an element path carrying labels, for the failure text.
+
+    Mirrors :func:`_resolve_fan_out` step for step, so ``labels`` is positionally
+    aligned with the ``values`` that walk returned and the caller can name the
+    element it rejected. Cold path only.
     """
     frontier: list[tuple[str, object]] = [("", record)]
     for step in steps:
         nxt: list[tuple[str, object]] = []
         for label, value in frontier:
             if step is ELEMENT_STEP:
+                if value is None:
+                    continue
                 if not isinstance(value, list):
-                    return _FanOut(
-                        not_a_list=(label or "the record", _json_type_name(value))
+                    return _FanOutTrace(
+                        stopped=f"'{label or 'the record'}' carries a JSON "
+                        f"{_json_type_name(value)}"
                     )
                 nxt.extend((f"{label}[{i}]", item) for i, item in enumerate(value))
                 continue
             where = f"{label}.{step}" if label else step
             if not isinstance(value, dict):
                 if required:
-                    return _FanOut(
-                        missing=f"{label or 'the record'} is "
+                    return _FanOutTrace(
+                        stopped=f"{label or 'the record'} is "
                         f"{_json_type_name(value)}, not an object"
                     )
                 continue
             if step not in value:
                 if required:
-                    return _FanOut(missing=f"'{where}' is absent")
+                    return _FanOutTrace(stopped=f"'{where}' is absent")
                 continue
             nxt.append((where, value[step]))
         frontier = nxt
         if not frontier:
-            # An empty array upstream: nothing left to address, and nothing to fail.
             break
-    return _FanOut(values=tuple(frontier))
+    return _FanOutTrace(labels=tuple(label for label, _ in frontier))
 
 
 def _stopped_at(record: object, parts: tuple[str, ...]) -> str:
@@ -806,25 +865,26 @@ class NdjsonValidator:
         """
         fan = _resolve_fan_out(record, check.steps, required=check.required)
 
-        if fan.not_a_list is not None:
-            label, found = fan.not_a_list
+        if fan.failure == _FAN_NOT_A_LIST:
+            trace = _trace_fan_out(record, check.steps, required=check.required)
             report.failures.append(
                 ArtifactValidationFailure(
                     kind="type_mismatch",
                     field=check.path,
                     expected="array",
-                    actual=found,
+                    actual=fan.found,
                     file=file_path,
                     line=line_no,
                     errors=[
-                        f"'{check.path}' descends into '{label}' as an array, but it "
-                        f"carries a JSON {found}"
+                        f"'{check.path}' descends into an array, but "
+                        f"{trace.stopped}"
                     ],
                 )
             )
             return
 
-        if fan.missing is not None:
+        if fan.failure == _FAN_MISSING:
+            trace = _trace_fan_out(record, check.steps, required=check.required)
             report.failures.append(
                 ArtifactValidationFailure(
                     kind="missing",
@@ -834,7 +894,7 @@ class NdjsonValidator:
                     line=line_no,
                     errors=[
                         f"required field '{check.path}' does not resolve: "
-                        f"{fan.missing}"
+                        f"{trace.stopped}"
                     ],
                 )
             )
@@ -844,10 +904,12 @@ class NdjsonValidator:
             # Unmapped type: presence is asserted by the walk above, the type is not.
             return
 
-        for label, value in fan.values:
+        for index, value in enumerate(fan.values):
             # A JSON null satisfies every declared type — see the class docstring.
             if value is None or check.checker(value):
                 continue
+            trace = _trace_fan_out(record, check.steps, required=check.required)
+            where = trace.labels[index] if index < len(trace.labels) else check.path
             report.failures.append(
                 ArtifactValidationFailure(
                     kind="type_mismatch",
@@ -857,7 +919,7 @@ class NdjsonValidator:
                     file=file_path,
                     line=line_no,
                     errors=[
-                        f"element '{label}' is declared {check.declared_type} but "
+                        f"element '{where}' is declared {check.declared_type} but "
                         f"carries a JSON {_json_type_name(value)}"
                     ],
                 )
