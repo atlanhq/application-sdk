@@ -56,8 +56,7 @@ store, reached two ways: local dev ships no such component, so
 `upstream_storage` is `None`; the Atlan-hosted (in-cluster) charts set
 `UPSTREAM_OBJECT_STORE_NAME` and `DEPLOYMENT_OBJECT_STORE_NAME` to the *same*
 component, so startup aliases `upstream_storage` to the deployment store
-(`constants.upstream_binding_is_deployment_binding`) instead of building a
-second store object over one bucket.
+instead of building a second store object over one bucket.
 
 ### One component under two names — alias, never a second object (CONNECT-1778)
 
@@ -88,6 +87,12 @@ if self.context.single_store:      # AppContext / InfrastructureContext
 handles are the same object. It compares what startup actually built, so it
 cannot disagree with how reads and writes are routed — unlike a call-time
 re-read of the two env-var constants.
+
+There is exactly one definition of it — `infrastructure.context.is_single_store`,
+which both contexts delegate to — and exactly one place the two component *names*
+are compared: `_create_infrastructure`, where the second object does not yet
+exist so identity cannot be tested. Every later question about topology is an
+identity test against the handles that branch produced.
 
 A deployment that sets `ENABLE_ATLAN_UPLOAD=true` on this wiring is
 contradictory: it asked for a hand-off across the boundary, and there is no

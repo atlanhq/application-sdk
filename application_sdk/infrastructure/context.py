@@ -25,6 +25,31 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure.state import StateStore
 
 
+def is_single_store(
+    storage: "ObjectStore | None", upstream_storage: "ObjectStore | None"
+) -> bool:
+    """``True`` when these two handles are one object store.
+
+    The single definition of the deployment's storage topology, shared by
+    :attr:`InfrastructureContext.single_store` and
+    ``application_sdk.app.context.AppContext.single_store``.
+
+    It is the topology signal for code that behaves differently either side of
+    the SDR boundary — served-prefix rules, hand-off gates, marker ladders — and
+    it is ``True`` in two wirings: no upstream binding at all, and both store
+    names resolving to one Dapr component, where startup *aliases*
+    ``upstream_storage`` to ``storage`` rather than building a second object
+    over the same bucket.
+
+    Identity, not the component names: it compares the handles startup actually
+    built, so it cannot disagree with how ``App.upload()`` routes (which selects
+    legs with ``upstream is not deployment``).  ``upstream_storage is not None``
+    is *not* a substitute — on the in-cluster wiring the upstream handle exists
+    and is the deployment store.
+    """
+    return upstream_storage is None or upstream_storage is storage
+
+
 @dataclass(frozen=True)
 class InfrastructureContext:
     """Holds the current infrastructure services for a process.
@@ -54,14 +79,9 @@ class InfrastructureContext:
     def single_store(self) -> bool:
         """``True`` when this deployment has exactly one object store.
 
-        ``True`` both when no upstream binding exists and when both store names
-        resolve to one Dapr component — startup aliases ``upstream_storage`` to
-        ``storage`` there rather than building a second object over the same
-        bucket.  Compares the handles that were actually built, so it cannot
-        disagree with how ``App.upload()`` routes; ``upstream_storage is not
-        None`` does not answer this question.
+        See :func:`is_single_store`.
         """
-        return self.upstream_storage is None or self.upstream_storage is self.storage
+        return is_single_store(self.storage, self.upstream_storage)
 
 
 _infrastructure: InfrastructureContext | None = None

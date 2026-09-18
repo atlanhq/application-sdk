@@ -632,30 +632,17 @@ DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "object
 #:   ``DEPLOYMENT_OBJECT_STORE_NAME`` to the app's single object-store
 #:   component.  Same name means one store: startup *aliases* ``upstream_storage``
 #:   to the deployment store rather than building a second store object over the
-#:   same bucket (see :func:`upstream_binding_is_deployment_binding`).
+#:   same bucket.
 #: * **Absent** — local dev / CI ship only the deployment binding; the optional
 #:   factory returns ``None`` and routing falls back to ``storage``.
+#:
+#: Comparing this name with ``DEPLOYMENT_OBJECT_STORE_NAME`` is startup's private
+#: decision about *what to build* — see ``_create_infrastructure``.  Code asking
+#: "is this deployment one store or two?" reads ``context.single_store``, which
+#: compares the handles that were actually built.
 UPSTREAM_OBJECT_STORE_NAME = os.getenv(
     "UPSTREAM_OBJECT_STORE_NAME", "atlan-objectstore"
 )
-
-
-def upstream_binding_is_deployment_binding() -> bool:
-    """True when both store names point at the same Dapr component.
-
-    That is the in-cluster wiring: one object store under two names.  Startup
-    (:func:`application_sdk.main._create_infrastructure`) reads this once to
-    decide whether to build a second store object or alias the deployment one;
-    it is deliberately the *only* consumer.  Code asking "is this deployment
-    one store or two?" must read ``context.single_store`` instead, which
-    compares the handles actually built and so cannot disagree with them.
-
-    A function, not a constant, so the verdict follows the names at call time
-    (tests monkeypatch them).
-    """
-    return UPSTREAM_OBJECT_STORE_NAME == DEPLOYMENT_OBJECT_STORE_NAME
-
-
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 #: DAPR binding operation for creating resources

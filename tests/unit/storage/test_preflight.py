@@ -156,11 +156,15 @@ async def test_probe_store_head_fails_after_write_succeeds() -> None:
 
 
 def _make_infra(*, storage=None, upstream_storage=None):
-    """Build a minimal InfrastructureContext-like object."""
-    infra = MagicMock()
-    infra.storage = storage
-    infra.upstream_storage = upstream_storage
-    return infra
+    """Build a real InfrastructureContext holding the two store handles.
+
+    The real dataclass, not a mock: ``single_store`` is a derived property and a
+    ``MagicMock`` would answer it truthily whatever the handles are, quietly
+    skipping the upstream probe.
+    """
+    from application_sdk.infrastructure.context import InfrastructureContext
+
+    return InfrastructureContext(storage=storage, upstream_storage=upstream_storage)
 
 
 @pytest.mark.asyncio

@@ -378,16 +378,15 @@ class AppContext:
     def single_store(self) -> bool:
         """``True`` when this deployment has exactly one object store.
 
-        The topology signal for code that behaves differently either side of
-        the SDR boundary — served-prefix rules, hand-off gates, marker ladders.
-        It is ``True`` both when no upstream binding exists and when both store
-        names resolve to one component, and it compares the handles startup
-        actually built, so it cannot disagree with how reads and writes will be
-        routed.  ``upstream_storage is not None`` is *not* a substitute: on the
-        in-cluster wiring the upstream handle exists and is the deployment
-        store.
+        One definition, shared with
+        :attr:`application_sdk.infrastructure.context.InfrastructureContext.single_store`
+        — see :func:`application_sdk.infrastructure.context.is_single_store`.
         """
-        return self._upstream_storage is None or self._upstream_storage is self._storage
+        from application_sdk.infrastructure.context import (  # noqa: PLC0415 — module scope would pull application_sdk.infrastructure (and its Dapr surface) into every import of this module, which runs inside the Temporal workflow sandbox
+            is_single_store,
+        )
+
+        return is_single_store(self._storage, self._upstream_storage)
 
     def log_debug(self, message: str, **kwargs: Any) -> None:
         """Log a debug message."""

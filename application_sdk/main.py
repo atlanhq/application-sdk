@@ -663,7 +663,6 @@ async def _create_infrastructure(
             SECRET_STORE_NAME,
             STATE_STORE_NAME,
             UPSTREAM_OBJECT_STORE_NAME,
-            upstream_binding_is_deployment_binding,
         )
         from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
             DaprBinding,
@@ -712,7 +711,11 @@ async def _create_infrastructure(
             )
         )
 
-        if upstream_binding_is_deployment_binding():
+        # The only place the two component *names* are compared: identity cannot
+        # be tested before the second object exists, so this is the decision
+        # about what to build.  Everywhere downstream asks ``single_store``,
+        # which compares the handles this branch produced.
+        if UPSTREAM_OBJECT_STORE_NAME == DEPLOYMENT_OBJECT_STORE_NAME:
             # In-cluster charts point both names at the app's one object-store
             # component.  One component is one store, so alias the handle rather
             # than build a second store object over the same bucket: identity is
