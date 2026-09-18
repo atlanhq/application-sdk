@@ -15,6 +15,11 @@ and a direct patch of the subresource both leave ``allocatedResources`` and the
 container's own ``memory.max`` unchanged, and no ``PodResizePending`` condition
 is ever set. Replacing the pod remains the only thing that changes its memory.
 
+That last paragraph is a claim about a platform that will move. Measured
+2026-09-15 on tenant atlan3zp01, EKS 1.33, VPA 1.6.0. On the day the vcluster
+starts actuating a resize, this module has no reason to exist - so re-run it
+before trusting the date, and delete the module rather than the paragraph.
+
 The marker is written on a start and removed on a clean return, so an abnormal
 exit is what leaves it behind. Written at birth rather than at death because the
 kill arrives without warning and no handler runs.
