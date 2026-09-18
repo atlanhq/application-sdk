@@ -9,7 +9,7 @@ from typing import Optional
 
 
 class Category(str, Enum):
-    """Renovate PR category, derived from self-managed labels (branch/title fallback)."""
+    """Renovate PR category, derived from the branch slug (title as fallback)."""
 
     LOCK_MAINTENANCE = "lock-maintenance"
     GITHUB_ACTIONS = "github-actions"
@@ -21,7 +21,14 @@ class Category(str, Enum):
 
 
 class UpdateType(str, Enum):
-    """Semver update type reported by Renovate labels."""
+    """Semver update type, parsed from the Renovate PR body's version table.
+
+    REPORTING ONLY — nothing branches on it (see classify.auto_merge_expected).
+    PATCH, DIGEST and PIN are no longer produced: the update:<type> labels that
+    carried them were removed in FND-2201 and the body table cannot separate a
+    minor from a patch without assuming three-part semver. They stay in the enum
+    because historical dashboard JSON on S3 still contains them.
+    """
 
     MAJOR = "major"
     MINOR = "minor"
@@ -134,6 +141,13 @@ class RenovatePR:
     # Defaulted so pre-existing RenovatePR constructions stay valid; scan._parse_pr
     # populates it from the fetched field.
     auto_merge_enabled: bool = False
+    # Raw: does this PR's REPO arm auto-merge at all — "auto", "soft" (the repo
+    # blanket-disables it on top of the fleet preset) or "unknown". Supplied by
+    # renovate_fleet_scan.py from discovery's renovate.json read. "unknown" is
+    # the behaviour before this field existed: lane policy alone decides. Without
+    # it, a green unarmed PR in a soft-rollout repo — working as designed,
+    # waiting on a human — is indistinguishable from one Renovate failed to arm.
+    repo_automerge_mode: str = "unknown"
     # Raw: committedDate of the branch head. The clock the bounded-lock refusal
     # signal expires against — created_at is wrong for it, because Renovate
     # rewrites a lock branch in place across many pushes without reopening the PR.

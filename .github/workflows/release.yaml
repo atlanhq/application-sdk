@@ -33,7 +33,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.12.13"
+          version: "0.12.16"
 
       - name: Install dependencies
         shell: bash
@@ -49,6 +49,12 @@ jobs:
 
       - name: Update version
         id: version_update
+        env:
+          # The commit the closed PR produced. release_guard sets skip=true when
+          # it is not on origin/main: GitHub fires this workflow for a stacked
+          # PR merging into its *parent feature branch* exactly as if it had
+          # merged into main, and only ancestry tells the two apart (#3794).
+          PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
           # Update the version
           python .github/scripts/release.py main ${{ env.CURRENT_VERSION }}

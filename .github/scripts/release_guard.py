@@ -1,11 +1,48 @@
 """
 release_guard.py
 ----------------
-Shared guard against a release opener minting a version that has *already*
-been released.
+Shared guards deciding whether a release-opener run should act at all. Two
+independent questions, each answered against the target branch fetched fresh
+rather than against the checkout the job started from:
 
-Why this exists
-===============
+1. Did the pull request that fired this run actually land on the target
+   branch? (``landed_on_branch``)
+2. Has the version this run computed already been released?
+   (``already_released``)
+
+Either answer being "no"/"yes" means the caller sets ``skip=true`` and every
+mutating step stays gated off.
+
+Why the ancestry check exists (application-sdk#3794, 2026-09-17)
+================================================================
+GitHub's stacked pull requests deliver a child PR's merge into its **parent
+feature branch** as a ``pull_request: closed`` event on the stack's *root*:
+``github.ref`` is ``refs/heads/main``, so a ``branches: [main]`` filter
+matches, while ``github.sha`` is the parent feature branch's new tip.
+actions/checkout then fetches that sha *as* ``origin/main``.
+
+===================  =========================================================
+06:01:08             #3753 (``feat/oom-restart-action``) merges into its parent
+                     ``feat/dirty-restart-marker``. Nothing reaches main.
+06:01:11             Every ``branches: [main]`` closed-PR workflow fires,
+                     ``release.yaml`` among them, with ``TARGET_BRANCH=main``
+06:01:24             Checkout: ``git checkout -B main refs/remotes/origin/main``
+                     — but that ref now points at the feature branch tip
+06:01:34             Reads version 3.34.2 (main was at 3.34.3), last tag
+                     ``v3.34.2``, computes 3.35.0
+06:01:40             Force-pushes ``bump-version-main``: 15 unmerged feature
+                     commits plus the bump. PR #3794 goes CONFLICTING.
+===================  =========================================================
+
+The version check below **cannot** catch this: 3.35.0 was genuinely newer than
+anything on main, so ``already_released`` correctly said proceed. The only
+signal that distinguishes "merged into main" from "merged into a sibling
+branch GitHub is reporting as main" is ancestry — the commit the event names
+(``github.event.pull_request.merge_commit_sha``) must be reachable from the
+target branch's tip. That is what ``landed_on_branch`` asks git.
+
+Why the version check exists (application-sdk#3570, 2026-08-31)
+===============================================================
 Every release lane in this repo fires on ``pull_request: closed`` and checks
 out the PR's merge ref. That ref is **frozen** at the moment GitHub computed
 it, so a run triggered by PR *B* can be looking at a tree that predates the
@@ -44,8 +81,11 @@ Fail-open by design
 ===================
 Every failure to determine the remote version — no network, no token scope,
 missing file, a version string this module cannot parse — returns "not already
-released" and lets the release proceed. A lane that goes red because it could
-not reach origin would be a worse defect than the duplicate PR this prevents.
+released" and lets the release proceed. Likewise every failure to *test*
+ancestry — no merge commit supplied (``workflow_dispatch``), a failed fetch, a
+git error other than a definite "not an ancestor" — returns "landed". A lane
+that goes red because it could not reach origin would be a worse defect than
+the duplicate or mis-based PR these guards prevent.
 """
 
 from __future__ import annotations
@@ -55,6 +95,13 @@ import subprocess
 
 VERSION_RE = re.compile(r'^\s*version\s*=\s*"([^"]+)"', re.MULTILINE)
 TRIPLE_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+# Environment variable through which the workflows hand the opener scripts the
+# commit the closed PR produced (``github.event.pull_request.merge_commit_sha``).
+# An env var rather than a CLI flag so that an app repo pinned to an older
+# ``sdk_scripts_ref`` — whose release.py does not know about it — keeps working
+# unchanged when it calls the current reusable workflow.
+MERGE_COMMIT_ENV = "PR_MERGE_COMMIT_SHA"
 
 
 def parse_version(text):
@@ -78,6 +125,63 @@ def version_tuple(version):
     """
     m = TRIPLE_RE.match(version or "")
     return tuple(int(x) for x in m.groups()) if m else None
+
+
+def landed_on_branch(sha, branch="main", remote="origin"):
+    """Return ``(landed, detail)``: did *sha* actually reach ``<remote>/<branch>``?
+
+    *sha* is the commit the closing pull request produced. For a PR merged into
+    the target branch it is reachable from that branch's tip. For a stacked PR
+    merged into its parent feature branch it is not — even though GitHub
+    delivers the event as if it had targeted the stack's root (see the module
+    docstring).
+
+    The branch tip is fetched fresh with a *forced* refspec. actions/checkout
+    has just pointed ``refs/remotes/<remote>/<branch>`` at ``github.sha`` — the
+    very commit whose ancestry is in question — so a plain fetch would be
+    refused as non-fast-forward in exactly the case that matters.
+
+    Fail-open: an empty *sha*, a failed fetch, or any git exit other than
+    ``merge-base --is-ancestor``'s definitive 1 all return ``True``. *detail*
+    is a one-line explanation for the run log.
+    """
+    sha = (sha or "").strip()
+    if not sha:
+        return True, "no merge commit supplied; ancestry not checked"
+
+    tracking = f"refs/remotes/{remote}/{branch}"
+    fetched = subprocess.run(
+        ["git", "fetch", "--quiet", remote, f"+{branch}:{tracking}"],
+        capture_output=True,
+        text=True,
+    )
+    if fetched.returncode != 0:
+        return True, f"could not fetch {remote}/{branch}; ancestry not checked"
+
+    probe = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", sha, tracking],
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode == 0:
+        return True, f"{sha[:12]} is on {remote}/{branch}"
+    if probe.returncode == 1:
+        return False, f"{sha[:12]} is not reachable from {remote}/{branch}"
+    return True, (
+        f"git merge-base exited {probe.returncode} for {sha[:12]}; "
+        "ancestry not checked"
+    )
+
+
+def not_landed_message(sha, branch="main"):
+    """Human-readable reason, for the run log."""
+    return (
+        f"The commit this run is reacting to, {sha[:12]}, did not land on "
+        f"origin/{branch}. GitHub reports a stacked pull request's merge into "
+        f"its parent branch as a closed PR on the stack's root, so this run is "
+        f"looking at a feature branch, not at {branch}. Bumping from here would "
+        f"build a release on unmerged code (application-sdk#3794). Skipping."
+    )
 
 
 def version_on_branch(path, branch="main", remote="origin"):

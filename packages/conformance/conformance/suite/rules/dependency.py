@@ -36,6 +36,7 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -43,6 +44,12 @@ from conformance.suite.schema.disposition import (
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D001",
+        canonical_reference=(
+            "atlan-openapi-app pyproject.toml — `atlan-application-sdk>=3.24.1,<4.0.0`. "
+            "Bounded at both ends: a floor for the features the app uses, a ceiling at the "
+            "next major so a breaking release cannot arrive through a lockfile refresh."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="UnpinnedSdkDependency",
         tier=EnforcementTier.BLOCK,
@@ -81,6 +88,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D002",
+        canonical_reference=(
+            "atlan-hello-world-app pyproject.toml — [project.dependencies] holds exactly "
+            "one entry, the SDK. Everything the SDK already resolves (orjson, pydantic, "
+            "temporalio) is imported without being redeclared, so there is one place a "
+            "version can move."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="RedeclaredSdkManagedDependency",
         tier=EnforcementTier.WARN,
@@ -117,6 +131,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D004",
+        canonical_reference=(
+            "atlan-metabase-app pyproject.toml — the dev and test groups hold only what "
+            "the SDK does not ship (pre-commit, pyright, ruff, poethepoet, testcontainers, "
+            "httpx, docker), several with a comment on why. Nothing the SDK already pins "
+            "is repeated there."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="RedeclaredSdkManagedDependencyInGroups",
         tier=EnforcementTier.WARN,
@@ -152,6 +173,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D005",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — "
+            "`atlan-application-sdk[iam-auth,sql,workflows,pandas]`. All four are extras "
+            "the SDK publishes; a typo here resolves to nothing and fails at import, not "
+            "at install."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="UnknownSdkExtra",
         tier=EnforcementTier.BLOCK,
@@ -189,6 +217,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D006",
+        canonical_reference=(
+            'atlan-openapi-app pyproject.toml — `requires-python = ">=3.11"`, the SDK\'s '
+            "own floor. A lower bound than the SDK's promises an interpreter the "
+            "dependency tree cannot actually satisfy."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="IncompatibleRequiresPython",
         tier=EnforcementTier.WARN,
@@ -224,6 +258,11 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D007",
+        canonical_reference=(
+            'atlan-openapi-app pyproject.toml — `build-backend = "hatchling.build"`, '
+            "which is what the app-runtime base image and the publish pipeline expect."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="NonStandardBuildBackend",
         tier=EnforcementTier.WARN,
@@ -252,6 +291,12 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D008",
+        canonical_reference=(
+            'atlan-openapi-app pyproject.toml — `typeCheckingMode = "standard"` under '
+            "[tool.pyright], the SDK baseline. Weakening it locally hides exactly the "
+            "boundary errors the typed contracts exist to catch."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="WeakenedTypeChecking",
         tier=EnforcementTier.WARN,
@@ -283,6 +328,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D003",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — aiomysql is declared with no import to "
+            "justify it, and carries an inline ignore[D003] saying SQLAlchemy loads it "
+            'dynamically from the "mysql+aiomysql" dialect string. A dynamically-loaded '
+            "dependency is real; it just has to say so."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
         name="UnusedDependency",
         tier=EnforcementTier.WARN,
@@ -334,6 +386,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D009",
+        canonical_reference=(
+            "atlan-hello-world-app pyproject.toml — [tool.poe.tasks.download-components] "
+            "copies the Dapr component YAMLs out of the installed application_sdk wheel. "
+            "Components then match whatever SDK version uv.lock resolved, instead of "
+            "whatever main happened to hold."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="RemoteDaprComponentFetch",
         tier=EnforcementTier.BLOCK,
@@ -382,6 +441,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D010",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — the SDK is installed with the `sql` extra, "
+            "which is what resolves duckdb. An app importing the SDK query transformer "
+            "without one of [sql]/[incremental], or a direct duckdb pin, imports a module "
+            "whose engine is absent."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="QueryTransformerWithoutDuckdb",
         tier=EnforcementTier.BLOCK,
@@ -485,6 +551,20 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D011",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — "
+            "`atlan-application-sdk-conformance>=0.17.0,<1.0.0` in a dependency group, "
+            "with a comment recording that the D-series CI leg resolves the suite from "
+            "this repo's own environment. A hard pin freezes that one leg while every "
+            "other leg runs the latest; a declaration in [project.dependencies] ships the "
+            "linter to production."
+        ),
+        terminal_state=(
+            "The specifier must be able to float. Pinning is what freezes one repo's "
+            "D-series leg to a single suite version while every other leg runs the "
+            "latest."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
         name="ConformanceDependencyContract",
         tier=EnforcementTier.BLOCK,
@@ -590,6 +670,14 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D012",
+        canonical_reference=(
+            "atlan-hello-world-app pyproject.toml — `[[tool.uv.index]]` names pypi at "
+            "https://pypi.org/simple with `default = true`, above a comment recording "
+            "which machine-wide index the pin displaces and why it cannot move to a "
+            "project-level uv.toml. Declared in pyproject.toml, so the repo's [tool.uv] "
+            "constraint-dependencies keep being read."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
         name="UnpinnedPackageIndex",
         tier=EnforcementTier.WARN,
@@ -659,6 +747,14 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D013",
+        canonical_reference=(
+            "atlan-hello-world-app uv.lock — every download URL names "
+            "files.pythonhosted.org, because that repo's D012 pin was in place before "
+            "the lock was last resolved. A lock that has already picked up a proxy host "
+            "is repaired by restoring the committed one, not by re-locking on the "
+            "machine that rewrote it."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
         name="NonPyPILockfileIndex",
         tier=EnforcementTier.WARN,
@@ -725,6 +821,15 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D014",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — no `[tool.uv] exclude-newer` and no "
+            "`exclude-newer-package`. That repo's release-age cooldown lives in "
+            "renovate.json, which extends the SDK's shared preset: a rolling window "
+            "bounds the lanes Renovate resolves itself, and the lock-refresh driver "
+            "bounds its own re-resolve — leaving a human's `uv lock` and the CVE-fix "
+            "workflow unfenced, which a date in pyproject.toml would not."
+        ),
+        fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
         name="AbsoluteResolverFence",
         tier=EnforcementTier.WARN,
@@ -812,6 +917,106 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d014"
+        ),
+    ),
+    RuleDefinition(
+        id="D015",
+        canonical_reference=(
+            "atlan-openapi-app pyproject.toml — `[tool.pyright]` sets venvPath, venv, "
+            "typeCheckingMode and two report levels, and declares no `exclude` at all, "
+            "so pyright's built-in defaults stay in force and `**/.*` keeps .venv out "
+            "of the walk. A repo that does need an exclude restates `**/.*` beside its "
+            "own entries; atlan-mysql-app and atlan-metabase-app both exclude "
+            "`.github/**` without it and are open findings, which is why neither is "
+            "cited here."
+        ),
+        fix_locus=FixLocus.PACKAGING,
+        scope=RuleScope.BOTH,
+        name="PyrightExcludeClobbersDefaults",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="tooling-baseline",
+        autofixable=True,
+        since="0.32.0",
+        rationale=(
+            "pyright's 'exclude' REPLACES its built-in defaults rather than adding to "
+            "them, and one of those defaults -- '**/.*' -- is the only thing keeping "
+            ".venv out of the analysis. Nothing in the repo says so: the protection is "
+            "incidental, earned because the directory happens to start with a dot. So "
+            "the first time anyone excludes a path of their own -- '.github/**', "
+            "'app/generated/**', a fixture tree -- the virtualenv silently joins the "
+            "set of files pyright type-checks, and the edit that caused it looks "
+            "entirely reasonable in review. "
+            ".gitignore does not save it. pyright has no .gitignore integration at all; "
+            "measured on 1.1.410 against a gitignored NON-dot directory, so the dot-dir "
+            "default could not be the cause, pyright analysed it anyway. ruff does "
+            "respect .gitignore, which is exactly why the wrong intuition is so common. "
+            "The failure is invisible under every normal invocation. pre-commit passes "
+            "filenames to the hook and an editor checks one file, so both stay fast; "
+            "only a bare 'uv run pyright' walks the root. That is the invocation an "
+            "agent types. Measured on one such run: argument-scoped invocations "
+            "returned in 12-19s while two bare ones ran 553s and 912s without "
+            "returning, the second exhausting the lane's 900s no-progress budget and "
+            "escalating the whole run to a human. Customer impact is indirect -- no "
+            "connector ships differently -- but a type checker nobody can afford to run "
+            "is a gate that stops catching the contract mismatches it exists to catch. "
+            "Measured 2026-09-17 across all 115 atlan-*-app repos: 73 declare an "
+            "'exclude' that clobbers the defaults with no scoped 'include' to save "
+            "them, 3 more are latent behind an 'include', and application-sdk itself is "
+            "in the first group -- which is why the scope is 'both' and not 'app'."
+        ),
+        short_description=(
+            "pyproject.toml declares [tool.pyright] exclude without restating the "
+            "dot-directory default, so a bare pyright run walks .venv"
+        ),
+        full_description=(
+            "``[tool.pyright].exclude`` **replaces** pyright's built-in\n"
+            "defaults -- ``**/node_modules``, ``**/__pycache__`` and\n"
+            "``**/.*`` -- rather than appending to them.  Losing the first\n"
+            "two costs nothing in a Python repo.  Losing ``**/.*`` is what\n"
+            "matters: it is the only reason ``.venv`` is not type-checked::\n"
+            "\n"
+            "    [tool.pyright]\n"
+            '    exclude = [".github/**"]      # .venv is now in scope\n'
+            "\n"
+            "**Only the dot-directory protection is graded**, not all three\n"
+            "defaults, so a repo that deliberately restates just ``**/.*``\n"
+            "passes.  Either spelling clears the rule -- ``**/.*`` itself, or\n"
+            "an explicit ``.venv``/``.venv/``/``.venv/**`` entry.\n"
+            "\n"
+            "**An empty list is still a clobber.**  ``exclude = []`` reads as\n"
+            "a no-op and is not one: declaring the key replaces the defaults\n"
+            "with nothing at all, which is the worst case rather than the\n"
+            "neutral one.  It is reported like any other unprotected list.\n"
+            "\n"
+            "**A scoped ``include`` is a complete defence and is honoured.**\n"
+            "With ``include`` set, pyright only ever walks the listed roots\n"
+            "and never reaches ``.venv``, so ``exclude`` cannot matter and no\n"
+            "finding is raised.  This is a real pattern in the fleet, not a\n"
+            "hypothetical -- three repos rely on it.\n"
+            "\n"
+            "``ignore`` does **not** clear the rule.  It suppresses\n"
+            "diagnostics for matched files but still parses them, so it does\n"
+            "nothing for the walk cost that is the entire problem.\n"
+            "\n"
+            "Graded on ``pyproject.toml`` only.  A repo configuring pyright\n"
+            "through ``pyrightconfig.json`` is out of scope: the D-series CI\n"
+            "leg watches ``**/pyproject.toml``, and a checker must not read a\n"
+            "tree its leg's path filter does not watch.\n"
+            "\n"
+            "Autofixable: the remedy is to append the three defaults to the\n"
+            "existing list, preserving the repo's own entries.  The\n"
+            "prescription never introduces an ``include`` key -- scoping\n"
+            "``include`` is a legitimate alternative a human may choose, but\n"
+            "it changes *what gets type-checked*, which is not a safe\n"
+            "automatic rewrite.\n"
+            "\n"
+            "Scope is ``both``: application-sdk's own ``pyproject.toml``\n"
+            "carries this exact shape.  Cite: FND-2229."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d015"
         ),
     ),
 )

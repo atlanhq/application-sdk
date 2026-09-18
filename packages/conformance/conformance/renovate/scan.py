@@ -137,6 +137,7 @@ def _parse_pr(raw: dict) -> Optional[RenovatePR]:
             is_draft=raw.get("isDraft", False),
             body=raw.get("body") or "",
             auto_merge_enabled=bool(raw.get("autoMergeEnabled") or False),
+            repo_automerge_mode=raw.get("repoAutomergeMode") or "unknown",
             head_committed_at=_parse_head_committed_at(raw),
             lock_refusal_window=refusal_window,
             lock_refusal_reason=refusal_reason,

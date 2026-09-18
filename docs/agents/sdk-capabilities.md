@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.34.3
-source-sha:    ed08853378d80ff33114644410cecd52c50b0ed1
-source-date:   2026-09-18T12:37:21+05:30
+sdk-version:   3.35.0
+source-sha:    f0b7ebb5d3ea1f292bc1ebeafcf731e1588d2892
+source-date:   2026-09-18T14:59:37+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,11 +20,11 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 39 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 45 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 68 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 67 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -36,7 +36,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 403 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 82 |
 
 ## Subpackage Details
 
@@ -493,6 +493,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Enumeration of dataframe types.
 - **Defined in:** `application_sdk/common/types.py`
 
+#### `EntityDecorations`
+
+- **Import:** `from application_sdk.common.entity_envelope import EntityDecorations`
+- **Signature:** `class EntityDecorations(default_catalog_name: str | None = None, default_schema_name: str | None = None) -> None`
+- **Summary:** Top-level entity fields that no pyatlan model field can hold.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `EntityEnvelopePolicy`
+
+- **Import:** `from application_sdk.common.entity_envelope import EntityEnvelopePolicy`
+- **Signature:** `class EntityEnvelopePolicy(shape: EnvelopeShape = EnvelopeShape.FLATTENED, sql_dialect: str | None = None) -> None`
+- **Summary:** How one connector's serialised entities are shaped.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `EnvelopeShape`
+
+- **Import:** `from application_sdk.common.entity_envelope import EnvelopeShape`
+- **Signature:** `class EnvelopeShape`
+- **Summary:** Where relationship references live in the serialised entity.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
 #### `FilterPattern`
 
 - **Import:** `from application_sdk.common import FilterPattern`
@@ -559,6 +580,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 ### Functions
 
+#### `apply_envelope`
+
+- **Import:** `from application_sdk.common.entity_envelope import apply_envelope`
+- **Signature:** `apply_envelope(entity: dict[str, *, ...)`
+- **Summary:** Apply *policy* and *decorations* to one serialised entity dict.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
 #### `atomic_copy`
 
 - **Import:** `from application_sdk.common.atomic import atomic_copy`
@@ -578,13 +606,6 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Import:** `from application_sdk.common.atomic import atomic_write`
 - **Signature:** `atomic_write(path: str | Path, *, ...)`
 - **Summary:** Yield an open handle whose contents land at *path* only if the block succeeds.
-- **Defined in:** `application_sdk/common/atomic.py`
-
-#### `classify_unwritable_oserror`
-
-- **Import:** `from application_sdk.common.atomic import classify_unwritable_oserror`
-- **Signature:** `classify_unwritable_oserror(exc: BaseException) -> Any | None`
-- **Summary:** Return a typed error for a read-only / permission-denied local-write ``OSError``.
 - **Defined in:** `application_sdk/common/atomic.py`
 
 #### `create_next_marker`
@@ -636,6 +657,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `filter_matches(candidate: str, *, ...)`
 - **Summary:** Convenience one-shot: compile ``include``/``exclude`` and test ``candidate``.
 - **Defined in:** `application_sdk/common/filter_matching.py`
+
+#### `flatten_envelope`
+
+- **Import:** `from application_sdk.common.entity_envelope import flatten_envelope`
+- **Signature:** `flatten_envelope(entity: dict[str, Any]) -> dict[str, Any]`
+- **Summary:** Merge a nested-format entity's relationship refs into ``attributes``.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `get_actual_cpu_count`
 
@@ -756,7 +784,21 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Stamp last-sync details on every asset in ``assets``.
 - **Defined in:** `application_sdk/common/last_sync.py`
 
+#### `to_atlas_format_dict`
+
+- **Import:** `from application_sdk.common.entity_envelope import to_atlas_format_dict`
+- **Signature:** `to_atlas_format_dict(asset: object) -> dict[str, Any] | None`
+- **Summary:** ``pyatlan_v9.to_atlas_format(asset)``, or ``None`` if it doesn't apply.
+- **Defined in:** `application_sdk/common/entity_envelope.py`
+
 ### Constants and Enums
+
+#### `DEFAULT_ENVELOPE`
+
+- **Import:** `from application_sdk.common.entity_envelope import DEFAULT_ENVELOPE`
+- **Signature:** `DEFAULT_ENVELOPE: Final[EntityEnvelopePolicy]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/entity_envelope.py`
 
 #### `PARTIAL_DIRNAME`
 
@@ -1560,13 +1602,6 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import InvalidInputError`
 - **Signature:** `class InvalidInputError(*, ...)`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors/leaves.py`
-
-#### `LocalVolumeUnwritableError`
-
-- **Import:** `from application_sdk.errors import LocalVolumeUnwritableError`
-- **Signature:** `class LocalVolumeUnwritableError(*, ...)`
-- **Summary:** A local write failed because the volume is read-only or the path is unwritable.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `NotFoundError`
@@ -6543,6 +6578,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Map every Temporal workflow type ``app_name`` registers to its entry point.
 - **Defined in:** `application_sdk/validation/interceptor.py`
 
+#### `has_element_step`
+
+- **Import:** `from application_sdk.validation.artifacts import has_element_step`
+- **Signature:** `has_element_step(steps: Sequence[FieldPathStep]) -> bool`
+- **Summary:** Whether ``steps`` addresses many values rather than one.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `iter_ndjson_lines`
 
 - **Import:** `from application_sdk.validation import iter_ndjson_lines`
@@ -6558,6 +6600,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `log_artifact_validation_posture(app_name: str, *, enforce: bool, enabled: bool)`
 - **Summary:** Emit the boot-time posture row for one app — **every** app, soft included.
 - **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `parse_field_path`
+
+- **Import:** `from application_sdk.validation.artifacts import parse_field_path`
+- **Signature:** `parse_field_path(path: str) -> tuple[FieldPathStep, ...]`
+- **Summary:** Split a declared path into steps, resolving the two documented step kinds.
+- **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `resolve_artifact_enforcement`
 
@@ -6807,6 +6856,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** A scan ran and returned a real answer about the artifact. Subject to mode.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `ELEMENT_STEP`
+
+- **Import:** `from application_sdk.validation.artifacts import ELEMENT_STEP`
+- **Signature:** `ELEMENT_STEP: Final`
+- **Summary:** The one :class:`_ElementStep`. Compare with ``is``.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `ENFORCEMENT_BLOCKED`
 
 - **Import:** `from application_sdk.validation import ENFORCEMENT_BLOCKED`
@@ -6829,6 +6885,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `ENFORCEMENT_WOULD_BLOCK: Final`
 - **Summary:** Soft mode, and this outcome *would* have failed the activity in hard mode.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `FieldPathStep`
+
+- **Import:** `from application_sdk.validation.artifacts import FieldPathStep`
+- **Signature:** `FieldPathStep`
+- **Summary:** One step of a parsed path: a member name, or :data:`ELEMENT_STEP`.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `FORMAT_NDJSON`

@@ -112,7 +112,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.12.13"
+          version: "0.12.16"
 
       - name: Get current version
         id: versions
@@ -150,6 +150,14 @@ jobs:
 
       - name: Bump version
         id: bump
+        env:
+          # The commit the caller's closed PR produced. release_guard sets
+          # skip=true when it is not on origin/<target_branch>: GitHub fires the
+          # caller for a stacked PR merging into its *parent feature branch*
+          # exactly as if it had merged into the target, and only ancestry tells
+          # the two apart (application-sdk#3794). A release.py pinned to an older
+          # sdk_scripts_ref ignores the variable and behaves as before.
+          PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
           python3 -m venv /tmp/bump-venv
           /tmp/bump-venv/bin/pip install semver packaging -q

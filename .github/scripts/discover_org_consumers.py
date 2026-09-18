@@ -143,13 +143,12 @@ def list_candidate_repos(owner: str, name_pattern: str, run: RunFn = _run_gh) ->
     return [r for r in all_repos if pat.match(r.split("/", 1)[-1])]
 
 
-def extends_preset(repo: str, marker: str, run: RunFn = _run_gh) -> bool:
-    """True if repo's default-branch renovate.json contains `marker` (i.e.
-    extends the shared preset).
+def read_renovate_config(repo: str, run: RunFn = _run_gh) -> Optional[str]:
+    """The repo's default-branch renovate.json as text, or None if it has none.
 
-    A 404 is a real "no renovate.json" and returns False. Every other failure
+    A 404 is a real "no renovate.json" and returns None. Every other failure
     raises DiscoveryError: it says nothing about the repo, and treating it as
-    False drops a live consumer out of the roster. That was harmless when the
+    absent drops a live consumer out of the roster. That was harmless when the
     roster only fed a dashboard, but the roster is now also the unlisted sweep's
     deletion criterion, where a dropped repo means deleted data.
     """
@@ -163,9 +162,94 @@ def extends_preset(repo: str, marker: str, run: RunFn = _run_gh) -> bool:
     )
     if code != 0:
         if _is_not_found(stderr):
-            return False
+            return None
         raise DiscoveryError(f"reading {repo}/renovate.json failed: {stderr.strip()}")
-    return marker in content
+    return content
+
+
+def extends_preset(repo: str, marker: str, run: RunFn = _run_gh) -> bool:
+    """True if repo's default-branch renovate.json contains `marker` (i.e.
+    extends the shared preset)."""
+    content = read_renovate_config(repo, run=run)
+    return content is not None and marker in content
+
+
+def automerge_mode(config_text: str) -> str:
+    """Classify a repo's renovate.json as ``soft``, ``auto`` or ``unknown``.
+
+    ``soft`` means the repo blanket-disables auto-merge on top of the preset —
+    the shape the soft-rollout bootstrap template writes:
+
+        {"matchPackageNames": ["*"], "automerge": false, "platformAutomerge": false}
+
+    plus the sibling ``lockFileMaintenance.automerge: false`` override. In such a
+    repo Renovate is SUPPOSED never to arm GitHub-native auto-merge, so a PR
+    sitting green and unarmed is the design, not a fault. Without this signal the
+    dashboard's AUTOMERGE_NOT_ARMED / AUTOMERGE_STALE reasons cannot separate the
+    two, and the soft half of the fleet (37 of the 61 repos with open dependency
+    PRs on 2026-09-17) drowns the real ones.
+
+    Deliberately conservative in both directions:
+
+    * A per-PACKAGE opt-out (a rule naming specific packages) is NOT soft mode.
+      Those repos still auto-merge every other lane, so their unarmed PRs are
+      worth reporting; a narrower rule that happens to cover the PR in hand is a
+      refinement this does not attempt.
+    * Anything unparseable returns ``unknown``, which consumers treat exactly as
+      they treated a repo before this signal existed. A guess in either direction
+      would either invent a fault or hide one.
+    """
+    try:
+        config = json.loads(config_text)
+    except (json.JSONDecodeError, TypeError):
+        return "unknown"
+    if not isinstance(config, dict):
+        return "unknown"
+
+    if config.get("automerge") is False:
+        return "soft"
+    lock_maintenance = config.get("lockFileMaintenance")
+    if (
+        isinstance(lock_maintenance, dict)
+        and lock_maintenance.get("automerge") is False
+    ):
+        return "soft"
+
+    for rule in config.get("packageRules") or []:
+        if not isinstance(rule, dict) or rule.get("automerge") is not False:
+            continue
+        names = rule.get("matchPackageNames")
+        # No package matcher at all, or the wildcard: the rule covers every lane.
+        if names is None or "*" in names:
+            return "soft"
+    return "auto"
+
+
+def discover_fleet_with_modes(
+    owner: str,
+    name_pattern: str,
+    marker: str,
+    excludes: set,
+    run: RunFn = _run_gh,
+) -> tuple:
+    """(sorted fleet, {repo: automerge_mode}) from ONE renovate.json read each.
+
+    The mode rides along on the read membership already pays for — see
+    automerge_mode for what it is worth and read_renovate_config for why an
+    unreadable repo aborts the whole discovery rather than shrinking the fleet.
+    """
+    candidates = list_candidate_repos(owner, name_pattern, run=run)
+    fleet = []
+    modes = {}
+    for repo in candidates:
+        if repo in excludes:
+            continue
+        content = read_renovate_config(repo, run=run)
+        if content is None or marker not in content:
+            continue
+        fleet.append(repo)
+        modes[repo] = automerge_mode(content)
+    return sorted(fleet), modes
 
 
 def discover_fleet(
@@ -179,17 +263,12 @@ def discover_fleet(
     excluded, and extending the preset.
 
     Raises DiscoveryError rather than returning a partial fleet — see
-    extends_preset. Aborting on the first unreadable repo is deliberate: there
-    is no useful way to consume "the fleet, minus an unknown number of repos we
-    could not check".
+    read_renovate_config. Aborting on the first unreadable repo is deliberate:
+    there is no useful way to consume "the fleet, minus an unknown number of
+    repos we could not check".
     """
-    candidates = list_candidate_repos(owner, name_pattern, run=run)
-    fleet = [
-        r
-        for r in candidates
-        if r not in excludes and extends_preset(r, marker, run=run)
-    ]
-    return sorted(fleet)
+    fleet, _ = discover_fleet_with_modes(owner, name_pattern, marker, excludes, run=run)
+    return fleet
 
 
 def main(argv: Optional[list] = None, run: RunFn = _run_gh) -> int:
@@ -220,6 +299,15 @@ def main(argv: Optional[list] = None, run: RunFn = _run_gh) -> int:
         "Mend-hosted app).",
     )
     parser.add_argument(
+        "--modes-out",
+        default=None,
+        metavar="PATH",
+        help="write {repo: 'auto'|'soft'|'unknown'} JSON here, from the same "
+        "renovate.json read membership already costs. Consumed by "
+        "renovate_fleet_scan.py --repo-modes-file so the dashboard can tell a "
+        "repo that never arms auto-merge by policy from one that failed to.",
+    )
+    parser.add_argument(
         "--fail-on-empty",
         action="store_true",
         help="exit non-zero when discovery finds no repo. Read failures already "
@@ -232,7 +320,7 @@ def main(argv: Optional[list] = None, run: RunFn = _run_gh) -> int:
 
     excluded = set(args.exclude or [])
     try:
-        repos = discover_fleet(
+        repos, modes = discover_fleet_with_modes(
             args.owner, args.name_pattern, args.preset_marker, excluded, run=run
         )
     except DiscoveryError as exc:
@@ -245,6 +333,14 @@ def main(argv: Optional[list] = None, run: RunFn = _run_gh) -> int:
 
     with open(os.environ["GITHUB_OUTPUT"], "a") as f:
         f.write(f"repos={json.dumps(repos)}\n")
+
+    # Written even when empty, and before the empty-fleet branch below, for the
+    # same reason `repos=` is: a consumer that reads a file which may or may not
+    # exist has to branch, and branching on presence cannot tell "discovery
+    # found nothing" from "this run never got that far".
+    if args.modes_out:
+        with open(args.modes_out, "w") as f:
+            json.dump(modes, f)
 
     if not repos:
         # Reaching here means the reads all succeeded and nothing matched, since

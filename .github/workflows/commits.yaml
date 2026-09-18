@@ -95,9 +95,30 @@ permissions:
 # github.sha, which is run-distinct and therefore serialises nothing. Same shape
 # as generated-freshness.yaml, the other sticky-commenting reusable here, and as
 # this repo's own pr-title-convention.yaml.
+#
+# QUEUE, do not cancel. Cancelling an in-flight run leaves a `cancelled` CHECK
+# RUN attached to the head SHA, and Renovate greens a branch only when EVERY
+# check run on it is success/skipped/neutral — one cancelled entry pins the
+# branch yellow for as long as that SHA is head, so Renovate's own merge never
+# fires. GitHub itself is unaffected (it reads the latest run per required
+# context), which is what makes this shape invisible: the PR shows CLEAN and
+# mergeable while nothing merges it. Seen on atlan-cosmosdb-app#97, where
+# Renovate reopened the PR and force-pushed twice inside 4 seconds: three
+# `pull_request` events, two runs on SHA 48146f0d, the first cancelled by the
+# second, and the PR then sat green and unmerged for 14 days.
+#
+# Keying the group on the head SHA would not help — both runs were on the SAME
+# SHA. Only not cancelling does.
+#
+# Serialisation (the FND-381 property above) is preserved: a queued run still
+# waits, so comment writes stay ordered and the newest run has the last word.
+# The cost is a few seconds of runner time for a superseded run of a ~10s job.
+# If a third event arrives while one run is in flight and another queued, GitHub
+# evicts the QUEUED one — it never started, so it files no check run, and the
+# newest event always keeps its slot.
 concurrency:
   group: conventional-commits-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   conventional-commits:
