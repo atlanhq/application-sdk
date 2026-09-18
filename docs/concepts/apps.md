@@ -272,6 +272,14 @@ routes. Setting `ENABLE_ATLAN_UPLOAD=true` on the in-cluster wiring asks for a
 hand-off across a boundary that is not there; startup logs a `WARNING` and
 continues, writing to the one store.
 
+`single_store` is **activity-scoped**: only the activity-side context carries
+store handles, so reading it from workflow code raises
+`SingleStoreUnknownInWorkflowError` rather than answering `True` for every
+deployment — including a two-store SDR one — from a context that holds no
+stores. When workflow code needs to branch on the topology, return the verdict
+from a `@task` on its Output contract and branch on that value; a replayed
+workflow then sees what the original run recorded.
+
 **`upload()` does not require the files on the calling pod.** When `local_path`
 is absent — a cross-pod hand-off where the tasks that produced the tree ran on
 other workers, or a caller that only has a `FileReference` — pass

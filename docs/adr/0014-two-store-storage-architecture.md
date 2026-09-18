@@ -88,6 +88,14 @@ handles are the same object. It compares what startup actually built, so it
 cannot disagree with how reads and writes are routed — unlike a call-time
 re-read of the two env-var constants.
 
+It is answerable only where those handles exist, which is the activity side:
+the workflow-side `AppContext` is built without them, and `is_single_store(None,
+None)` is `True`, so a two-store SDR deployment would read as single-store in
+workflow code. Reading it there raises `SingleStoreUnknownInWorkflowError`
+instead. Workflow code that must branch on the topology takes the verdict from
+a `@task`'s Output contract — which is also what makes it replay-safe, and what
+the databricks connector's hand-off gate does.
+
 There is exactly one definition of it — `infrastructure.context.is_single_store`,
 which both contexts delegate to — and exactly one place the two component *names*
 are compared: `_create_infrastructure`, where the second object does not yet
