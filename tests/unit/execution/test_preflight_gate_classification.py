@@ -22,14 +22,19 @@ import pytest
 from application_sdk.common.env_warnings import _REMOVED_ENV_VARS
 from application_sdk.constants import PREFLIGHT_GATE_MODE_ENV
 from application_sdk.credentials.errors import CredentialNotFoundError
+from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     AuthError,
+    CancelledError,
     DependencyUnavailableError,
     RateLimitedError,
+    ResourceExhaustedError,
     SourceUnavailableError,
 )
 from application_sdk.execution._temporal.preflight_gate import (
+    DEPRECATED_FAIL_OPEN_CATEGORIES,
+    DEPRECATED_FAIL_OPEN_REMOVED_IN,
     FAILURE_AUDIENCE_KEY,
     GATE_ATTEMPTS_DEFAULT,
     GATE_ATTEMPTS_MAX,
@@ -492,22 +497,19 @@ class TestHandlerRaisedPlumbingIsSourceSide:
     A handler cannot declare its source to be gate plumbing. Whatever escapes
     ``preflight_check`` is the handler's statement about the source if typed, or
     an app fault if not, and the mode applies to both. The only fail-open left
-    is the gate's own frames: credential resolution and the store probes.
+    is the gate's own frames: credential resolution and the store probes, plus
+    the deprecated train pinned by the next class.
     """
 
     @pytest.mark.parametrize(
         ("exc", "category", "audience"),
         [
             (
-                DependencyUnavailableError(message="db paused", service="source"),
-                FailureCategory.DEPENDENCY_UNAVAILABLE,
-                Audience.PLATFORM,
-            ),
-            (
-                RateLimitedError(message="429"),
-                FailureCategory.RATE_LIMITED,
+                SourceUnavailableError(message="no answer"),
+                FailureCategory.SOURCE_UNAVAILABLE,
                 Audience.USER,
             ),
+            (AuthError(message="bad"), FailureCategory.AUTH, Audience.USER),
         ],
     )
     async def test_hard_mode_blocks_with_the_handlers_own_details(
@@ -529,11 +531,7 @@ class TestHandlerRaisedPlumbingIsSourceSide:
         assert row[FAILURE_AUDIENCE_KEY] == audience.value
 
     @pytest.mark.parametrize(
-        "exc",
-        [
-            DependencyUnavailableError(message="db paused", service="source"),
-            RateLimitedError(message="429"),
-        ],
+        "exc", [SourceUnavailableError(message="no answer"), AuthError(message="bad")]
     )
     async def test_soft_mode_reports_and_proceeds(self, exc: Exception) -> None:
         gate = _gate(_RaisingHandler(exc), mode=PreflightGateMode.SOFT)
@@ -545,6 +543,86 @@ class TestHandlerRaisedPlumbingIsSourceSide:
         assert (
             row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
         )
+
+
+_DEPRECATED_FAIL_OPEN_LEAVES = [
+    (
+        DependencyUnavailableError(message="db paused", service="source"),
+        Audience.PLATFORM,
+    ),
+    (RateLimitedError(message="429"), Audience.USER),
+    (ResourceExhaustedError(message="quota"), None),
+    (CancelledError(message="cancelled"), None),
+]
+
+
+class TestDeprecatedFailOpenTrain:
+    """The pre-3.35 raise idiom fails open for one release train, loudly.
+
+    Every hard-mode app that predates the origin rule raises a transient from
+    ``preflight_check`` to keep the gate open, and documents that as design.
+    Until the removal version such a raise proceeds in both modes, emits a
+    ``DeprecationWarning`` naming the app, the leaf and the version, and stamps
+    ``deprecated_fail_open`` on the row so the fleet can count who still relies
+    on it. Everything outside the four categories blocks as the class above pins.
+    """
+
+    @pytest.mark.parametrize("mode", [PreflightGateMode.HARD, PreflightGateMode.SOFT])
+    @pytest.mark.parametrize(("exc", "audience"), _DEPRECATED_FAIL_OPEN_LEAVES)
+    async def test_proceeds_with_its_own_row_in_both_modes(
+        self, exc: AppError, audience: Audience | None, mode: PreflightGateMode
+    ) -> None:
+        gate = _gate(_RaisingHandler(exc), mode=mode)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.warns(
+                DeprecationWarning, match=DEPRECATED_FAIL_OPEN_REMOVED_IN
+            ):
+                result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        assert result.checks[0].error is not None
+        assert result.checks[0].error.category is exc.category
+        row = _outcome(mock_logger)
+        assert row["outcome"] == "no_verdict"
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.DEPRECATED_FAIL_OPEN
+        )
+        assert row["reason"] == exc.code
+        if audience is not None:
+            assert row[FAILURE_AUDIENCE_KEY] == audience.value
+
+    async def test_warning_names_the_app_the_leaf_and_the_removal_version(
+        self,
+    ) -> None:
+        gate = _gate(
+            _RaisingHandler(RateLimitedError(message="429")),
+            mode=PreflightGateMode.HARD,
+        )
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            with pytest.warns(DeprecationWarning) as caught:
+                await gate(PreflightGateInput())
+        (warning,) = [w for w in caught if w.category is DeprecationWarning]
+        text = str(warning.message)
+        assert "myapp" in text
+        assert "RateLimitedError" in text
+        assert DEPRECATED_FAIL_OPEN_REMOVED_IN in text
+        assert "PARTIAL" in text
+        logged = [c.args[0] for c in mock_logger.warning.call_args_list]
+        assert text in logged
+
+    def test_the_set_is_exactly_the_old_plumbing_categories(self) -> None:
+        assert DEPRECATED_FAIL_OPEN_CATEGORIES == {
+            FailureCategory.DEPENDENCY_UNAVAILABLE,
+            FailureCategory.RATE_LIMITED,
+            FailureCategory.RESOURCE_EXHAUSTED,
+            FailureCategory.CANCELLED,
+        }
+
+    async def test_an_untyped_crash_is_not_in_the_train(self) -> None:
+        gate = _gate(_RaisingHandler(RuntimeError("boom")), mode=PreflightGateMode.HARD)
+        with mock.patch(f"{_GATE}.logger"):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
 
     @pytest.mark.parametrize("mode", [PreflightGateMode.HARD, PreflightGateMode.SOFT])
     async def test_resolution_frame_plumbing_still_fails_open(
@@ -1385,9 +1463,13 @@ class TestALeafThatCannotSerialiseStillBlocks:
     ``INTERNAL`` fault with ``classification_pending``, and the mode applies.
     """
 
+    class _UnserialisableSource(SourceUnavailableError):
+        def to_failure_details(self):
+            raise ValueError("evidence keys may not use secret-named fields")
+
     async def test_hard_mode_blocks_as_an_app_fault(self) -> None:
         gate = _gate(
-            _RaisingHandler(_Unserialisable(message="x", service="warehouse")),
+            _RaisingHandler(self._UnserialisableSource(message="x")),
             mode=PreflightGateMode.HARD,
         )
         with mock.patch(f"{_GATE}.logger") as mock_logger:
@@ -1405,7 +1487,7 @@ class TestALeafThatCannotSerialiseStillBlocks:
 
     async def test_soft_mode_reports_would_block(self) -> None:
         gate = _gate(
-            _RaisingHandler(_Unserialisable(message="x", service="warehouse")),
+            _RaisingHandler(self._UnserialisableSource(message="x")),
             mode=PreflightGateMode.SOFT,
         )
         with mock.patch(f"{_GATE}.logger") as mock_logger:

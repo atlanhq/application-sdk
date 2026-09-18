@@ -258,10 +258,18 @@ def entrypoint_index(app_name: str) -> Mapping[str, str]:
 def resolve_artifact_enforcement(app_cls: type | None) -> bool:
     """Resolve one app's artifact-validation posture. ``True`` = hard.
 
-    Unlike the preflight gate, which reads ``App.preflight_gate_mode`` alone so
-    its worker and workflow frames can never disagree, this keeps a deploy-time
-    lever: artifact validation is the one feature that can redden a healthy run
-    on a validator bug, so ops must be able to stand it down without a release.
+    Two features can redden a healthy run: artifact validation on a validator
+    bug, and the preflight gate on a ``frame_lost`` frame it cannot tell from a
+    worker lost to a rollout. They differ in who owns the fix. A validator bug
+    is SDK-side, so this keeps a deploy-time lever and ops can stand it down
+    without an app release. The gate's posture is the app's own declaration and
+    deliberately has no lever: two frames reading two sources of truth is how the
+    gate once disagreed with itself. An operator whose hard-mode run a node drain
+    reddened at 02:00 re-runs the workflow; if it repeats, the app owner ships
+    ``preflight_gate_mode = "soft"``, and the row's ``frame_lost`` classification
+    keeps those runs countable so that call is made on evidence. The deprecated
+    fail-open train in the gate module is a grace period for one raise idiom,
+    not a stand-down.
 
     Precedence:
 

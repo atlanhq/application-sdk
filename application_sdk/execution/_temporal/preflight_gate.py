@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+import warnings
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -589,6 +590,22 @@ GATE_HEARTBEAT_TIMEOUT_SECONDS = 60
 #: through. 2s suppresses that geometry while tolerating realistic NTP drift.
 GATE_LIVENESS_CLOCK_GRACE_SECONDS = 2
 
+# One release train for the pre-3.35 raise idiom. The gate used to treat a typed
+# leaf in these categories, raised from ``preflight_check``, as its own plumbing
+# and failed open; every hard-mode app that predates the origin rule documents
+# and tests that idiom. Until the removal version such a raise still proceeds,
+# with a DeprecationWarning and its own row classification, so the flip to
+# blocking is made against a fleet count rather than an audit.
+DEPRECATED_FAIL_OPEN_CATEGORIES: frozenset[FailureCategory] = frozenset(
+    {
+        FailureCategory.DEPENDENCY_UNAVAILABLE,
+        FailureCategory.RATE_LIMITED,
+        FailureCategory.RESOURCE_EXHAUSTED,
+        FailureCategory.CANCELLED,
+    }
+)
+DEPRECATED_FAIL_OPEN_REMOVED_IN = "3.40.0"
+
 # Floor on what's left after credential resolution. Below this there is no point
 # calling the handler: resolution has eaten the budget, which is a plumbing
 # problem, not evidence about the source. Without this floor a slow vault would
@@ -627,15 +644,18 @@ class PreflightClassification(SerializableEnum):
     """Why a gate row reads the way it does; the ``gate_classification`` wire values.
 
     Only ``SOURCE_UNVERIFIABLE`` and ``FRAME_LOST`` are subject to the gate mode.
-    ``GATE_BROKEN`` always fails open, ``VERDICT`` is a real answer from the
-    handler, and ``NOT_RUN`` is a gate that never dispatched. Stamped explicitly
-    on every row so a consumer keys on a value, never on a missing field.
+    ``GATE_BROKEN`` always fails open, ``DEPRECATED_FAIL_OPEN`` fails open until
+    :data:`DEPRECATED_FAIL_OPEN_REMOVED_IN` and counts the apps still on the
+    raise idiom, ``VERDICT`` is a real answer from the handler, and ``NOT_RUN``
+    is a gate that never dispatched. Stamped explicitly on every row so a
+    consumer keys on a value, never on a missing field.
     """
 
     VERDICT = "verdict"
     SOURCE_UNVERIFIABLE = "source_unverifiable"
     FRAME_LOST = "frame_lost"
     GATE_BROKEN = "gate_broken"
+    DEPRECATED_FAIL_OPEN = "deprecated_fail_open"
     NOT_RUN = "not_run"
 
 
@@ -1482,6 +1502,21 @@ def _attempt_is_live(beats: _Beats | None = None) -> bool:
     return datetime.now(timezone.utc) < deadline
 
 
+def _is_deprecated_fail_open(exc: BaseException) -> bool:
+    return isinstance(exc, AppError) and exc.category in DEPRECATED_FAIL_OPEN_CATEGORIES
+
+
+def _warn_deprecated_fail_open(app_name: str, leaf: str, code: str) -> None:
+    message = (
+        f"{app_name}: preflight_check raised {leaf} ({code}). The gate fails open on "
+        f"this category only until application-sdk {DEPRECATED_FAIL_OPEN_REMOVED_IN}; "
+        "return PARTIAL with the failed check instead. From "
+        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise blocks a hard gate."
+    )
+    warnings.warn(message, DeprecationWarning, stacklevel=2)
+    logger.warning(message)
+
+
 def _is_definitive_credential_absence(exc: BaseException) -> bool:
     """Whether ``exc`` proves the credential is genuinely not there.
 
@@ -2045,9 +2080,24 @@ def build_preflight_gate_activity(
             here: a typed leaf is the handler's statement about the source, and
             an untyped crash is an app fault — neither is the gate's plumbing,
             so neither may fail open. Only the gate's own frames (credential
-            resolution, the store probes) raise past this.
+            resolution, the store probes) raise past this. The one exception is
+            the deprecated fail-open train: a leaf in
+            :data:`DEPRECATED_FAIL_OPEN_CATEGORIES` proceeds in both modes
+            with its own row and a warning, until the removal version.
             """
             unverifiable = unverifiable_preflight_result(exc, app_name)
+            if _is_deprecated_fail_open(exc):
+                failure = _primary_failure(unverifiable, app_name)
+                _warn_deprecated_fail_open(app_name, type(exc).__name__, failure.code)
+                _emit_outcome(
+                    PreflightRowOutcome.NO_VERDICT,
+                    failure.code,
+                    unverifiable,
+                    PreflightClassification.DEPRECATED_FAIL_OPEN,
+                    audience=failure.audience.value,
+                    exc_info=exc,
+                )
+                return unverifiable
             block_error = _build_block_error(unverifiable, app_name, _current_attempt())
             _emit_outcome(
                 PreflightRowOutcome.BLOCKED

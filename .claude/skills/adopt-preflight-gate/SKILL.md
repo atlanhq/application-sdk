@@ -209,8 +209,10 @@ Rules the skill enforces during adoption:
   belongs on the App class, verdicts belong in the handler.
 - **Never return `NOT_READY` for a transient.** A 429 or a dependency outage is
   "ask me later", not "the source is not ready" — collapsing them makes hard mode
-  fail *closed* on a blip. Never raise them either: a raised transient blocks a
-  hard gate just the same and discards the other checks. Return `PARTIAL` with
+  fail *closed* on a blip. Never raise them either: until application-sdk
+  3.40.0 a raised `RateLimitedError` / `DependencyUnavailableError` still fails
+  open with a `DeprecationWarning` and a `deprecated_fail_open` row, and from
+  3.40.0 it blocks a hard gate and discards the other checks. Return `PARTIAL` with
   the failed check carrying `RateLimitedError(...).to_failure_details()`
   (retryable); wait for a `Retry-After` only when it fits inside
   `input.timeout_seconds` with margin, and leave the checks that could not run

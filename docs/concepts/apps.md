@@ -434,7 +434,8 @@ a platform blip must not fail a healthy run. The gate stamps which of the two ha
 | Verdict `READY` / `PARTIAL` | — | proceed | proceed |
 | Verdict `NOT_READY` | — | report `would_block` | **block** |
 | Probe overran the budget | `source_unverifiable` | report `would_block` | **block** |
-| Handler raised any error, typed or not | `source_unverifiable` | report `would_block` | **block** |
+| Handler raised any error, typed or not, outside the row below | `source_unverifiable` | report `would_block` | **block** |
+| Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED`, `CANCELLED`), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
 | Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** |
 | Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`) | `frame_lost` | report `would_block` | **block** |
 | Credential provably absent | `source_unverifiable` | report `would_block` | **block** |
@@ -449,6 +450,14 @@ The line is drawn by **who raised**, not by the error's category. Anything that 
 and the mode applies to both — a handler cannot declare its source to be plumbing by raising a
 `RateLimitedError` or a `DependencyUnavailableError`. A verdict is reached on the attempt the fault
 happens on; the gate's retry attempts exist for its own plumbing, not to give a source a second try.
+
+One exception runs for a single release train. Before 3.35 the gate treated a raised leaf in the
+`DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED` or `CANCELLED` categories as its own
+plumbing and failed open, and every hard-mode app that predates this rule documents and tests that
+idiom. Until 3.40.0 such a raise still proceeds in both modes, emits a `DeprecationWarning` naming
+the app, the leaf and the removal version, and stamps `deprecated_fail_open` on the row so the
+fleet can count which apps still rely on it. From 3.40.0 it blocks like any other raise. Migrate by
+returning `PARTIAL` with the failed check, as below.
 
 A handler signals "I could not verify, and extraction can cope" — a 429, a database still
 resuming — by **returning** `PARTIAL` with the failed check carrying the typed retryable error, never
