@@ -273,7 +273,7 @@ class _Checker:
                     src,
                     call,
                     "F020",
-                    "PreflightStatus.PARTIAL is deprecated (removed in v4.0.0) and proceeds like READY, so it can conceal a blocking failure. Return NOT_READY for a blocking failure or READY when extraction can proceed; preserve truthful typed check evidence. Do not replace PARTIAL blindly.",
+                    "PreflightStatus.PARTIAL is deprecated (removal anchored at v3.36.0) and proceeds like READY, so it can conceal a blocking failure. Return NOT_READY for a blocking failure or READY when extraction can proceed; preserve truthful typed check evidence. Do not replace PARTIAL blindly.",
                 )
                 break
         checks = kwargs.get("checks")

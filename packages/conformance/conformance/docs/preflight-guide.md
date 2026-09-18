@@ -133,7 +133,7 @@ Retryability alone does not justify returning `READY` after a failed probe. Demo
 
 ## F020
 
-**Contract:** `PreflightStatus.PARTIAL` is deprecated in the SDK and is removed in v4.0.0. The gate treats it exactly like READY, so a PARTIAL verdict can conceal a blocking source failure behind a degraded label. This rule reports WARN until the reference apps have migrated; the gate emits a `DeprecationWarning` when a handler returns PARTIAL.
+**Contract:** `PreflightStatus.PARTIAL` is deprecated in the SDK. It is removed in the first minor release after the reference apps stop returning it, anchored at v3.36.0. The gate treats it exactly like READY, so a PARTIAL verdict can conceal a blocking source failure behind a degraded label. This rule reports WARN until the reference apps have migrated; the gate emits a `DeprecationWarning` when a handler returns PARTIAL.
 
 **Investigate:** Determine whether each failed probe prevents extraction or whether extraction supports proceeding. Inspect the same source operation and recovery path used by extraction.
 

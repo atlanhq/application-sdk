@@ -544,7 +544,8 @@ _CONTRACT_RULES = (
         short_description="A PARTIAL preflight verdict proceeds like READY and can conceal a blocking source failure.",
         full_description=(
             "``PreflightStatus.PARTIAL`` is deprecated in the SDK (``__deprecated_members__`` "
-            "on the enum, removed in v4.0.0) because the gate treats it exactly like READY: "
+            "on the enum; removal lands in the first minor after the reference apps "
+            "migrate, anchored at v3.36.0) because the gate treats it exactly like READY: "
             "the run proceeds, and a failed probe that should have blocked is presented as a "
             "degraded-but-fine verdict. Return NOT_READY when a required capability is not "
             "established and READY when extraction can proceed, keeping every failed check as "
