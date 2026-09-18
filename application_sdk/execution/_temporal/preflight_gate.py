@@ -624,6 +624,17 @@ def _min_handler_seconds(budget_seconds: float) -> float:
     return min(GATE_MIN_HANDLER_SECONDS, budget_seconds / 2)
 
 
+def _deadline_reached(elapsed: float, deadline: float) -> bool:
+    """Whether ``elapsed`` reached ``deadline`` as the event loop sees it.
+
+    asyncio fires a timer up to one clock resolution early, so a ``wait_for``
+    that expired on the loop's clock can read a hair short on a fresh
+    ``time.monotonic()`` reading. On Windows that resolution is about 15 ms,
+    enough to misreport a budget the loop did spend as a socket timeout.
+    """
+    return elapsed >= deadline - time.get_clock_info("monotonic").resolution
+
+
 def _resolution_exhausted_budget(budget_seconds: float) -> DependencyUnavailableError:
     """The plumbing fault for a credential resolution that left no time to probe.
 
@@ -2175,7 +2186,7 @@ def build_preflight_gate_activity(
                 # whether the budget was really spent.
                 if _is_definitive_credential_absence(e):
                     return _no_verdict(e)
-                if time.monotonic() - started >= resolution_deadline:
+                if _deadline_reached(time.monotonic() - started, resolution_deadline):
                     raise _plumbing_error(
                         _resolution_exhausted_budget(budget),
                         app_name,

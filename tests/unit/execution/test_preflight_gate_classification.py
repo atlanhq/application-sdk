@@ -1515,3 +1515,35 @@ class TestALeafThatCannotSerialiseStillBlocks:
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.NOT_READY
         assert _outcome(mock_logger)["outcome"] == "would_block"
+
+
+class TestDeadlineReachedTakesTheClockResolutionIntoAccount:
+    """asyncio fires a timer up to one clock resolution early.
+
+    A ``wait_for`` that expired on the loop's clock can read a hair short on a
+    fresh ``time.monotonic()`` reading, about 15 ms on Windows. Without the
+    tolerance a budget the loop did spend was reported as a socket timeout.
+    """
+
+    def test_exactly_at_the_deadline(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import _deadline_reached
+
+        assert _deadline_reached(0.4, 0.4) is True
+
+    def test_short_by_less_than_one_clock_resolution_counts_as_reached(self) -> None:
+        import time
+
+        from application_sdk.execution._temporal.preflight_gate import _deadline_reached
+
+        resolution = time.get_clock_info("monotonic").resolution
+        assert _deadline_reached(0.4 - resolution / 2, 0.4) is True
+
+    def test_well_short_is_not_reached(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import _deadline_reached
+
+        assert _deadline_reached(0.2, 0.4) is False
+
+    def test_a_socket_timeout_early_in_a_real_budget_is_not_exhaustion(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import _deadline_reached
+
+        assert _deadline_reached(2.0, 149.0) is False
