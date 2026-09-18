@@ -13,6 +13,7 @@
     "DiskFullError",
     "InternalError",
     "InvalidInputError",
+    "LocalVolumeUnwritableError",
     "NotFoundError",
     "ObjectStoreDownloadError",
     "ObjectStoreReadError",
