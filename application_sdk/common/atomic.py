@@ -75,6 +75,7 @@ __all__ = [
     "atomic_copy",
     "atomic_path",
     "atomic_write",
+    "classify_unwritable_oserror",
     "disk_full_guard",
     "ensure_free_space",
 ]
@@ -89,6 +90,49 @@ _DISK_FULL_ERRNOS: frozenset[int] = frozenset(
     for value in (getattr(errno, name, None) for name in ("ENOSPC", "EDQUOT"))
     if value is not None
 )
+
+
+#: ``errno`` values meaning "this local path/volume cannot be written to": the
+#: filesystem is mounted read-only (``EROFS``) or the writing identity lacks
+#: permission (``EACCES``/``EPERM``). Kept separate from ``_DISK_FULL_ERRNOS``: a
+#: full disk and a read-only mount need different operator responses, and
+#: ``disk_full_guard`` stays narrow to the disk-full case by design.
+_UNWRITABLE_ERRNOS: frozenset[int] = frozenset(
+    value
+    for value in (getattr(errno, name, None) for name in ("EROFS", "EACCES", "EPERM"))
+    if value is not None
+)
+
+
+def classify_unwritable_oserror(exc: BaseException) -> Any | None:
+    """Return a typed error for a read-only / permission-denied local-write ``OSError``.
+
+    Maps ``OSError`` with ``EROFS``/``EACCES``/``EPERM`` to
+    :class:`~application_sdk.errors.LocalVolumeUnwritableError`, and returns ``None`` for
+    anything else so callers fall through to their existing handling. Used at the
+    activity boundary to type the artifact-filesystem failure family
+    (``[Errno 30] Read-only file system: 'artifacts'`` and siblings) that would otherwise
+    surface as a bare, unclassifiable ``OSError``.
+
+    Deliberately separate from :func:`disk_full_guard`, which stays narrow to
+    ``ENOSPC``/``EDQUOT``; this classifies at a different layer and changes no write path.
+    """
+    if not isinstance(exc, OSError) or exc.errno not in _UNWRITABLE_ERRNOS:
+        return None
+
+    from application_sdk.errors import LocalVolumeUnwritableError  # noqa: PLC0415
+
+    name = errno.errorcode.get(exc.errno, str(exc.errno))
+    path = getattr(exc, "filename", None)
+    detail = f"local write failed: {os.strerror(exc.errno)}"
+    if path:
+        detail += f" ('{path}')"
+    return LocalVolumeUnwritableError(
+        message=detail,
+        path=str(path) if path else None,
+        errno_name=name,
+        cause=exc,
+    )
 
 
 def _format_bytes(count: int) -> str:
