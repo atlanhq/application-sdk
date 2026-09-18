@@ -382,3 +382,67 @@ async def test_a_pod_that_cannot_name_itself_asks_nothing(
     rm.check_and_update_the_marker()
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
     assert advice["asked"] == [], "without its own name it cannot ask about itself"
+
+
+@pytest.fixture
+def parks(monkeypatch):
+    """Capture what a finished park records."""
+    seen: list[dict] = []
+
+    class _Metrics:
+        def record_metric(self, **kw):
+            seen.append(kw)
+
+    monkeypatch.setattr(rm, "get_metrics", lambda: _Metrics())
+    return seen
+
+
+async def test_a_park_that_gets_its_replacement_is_counted_as_such(
+    marker_dir, monkeypatch, told_to_wait, prompt_polling, parks
+):
+    """Shutdown is the pod going away, which is the replacement arriving."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    rm.check_and_update_the_marker()
+    shutdown = asyncio.Event()
+    task = asyncio.ensure_future(rm.wait_if_pod_restarted(shutdown))
+    await asyncio.sleep(0.05)
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=5)
+
+    assert [p["labels"]["outcome"] for p in parks] == [
+        rm.PARK_REPLACED,
+        rm.PARK_REPLACED,
+    ]
+
+
+async def test_a_park_that_buys_nothing_is_counted_separately(
+    marker_dir, monkeypatch, told_to_wait, prompt_polling, parks
+):
+    """The failure worth alerting on: the worker sat out its whole budget and
+    resumed on the limit that killed it. Nothing outside the pod can see this -
+    an eviction that lands late, or never, looks identical from the rerouter."""
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 1)
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=10)
+
+    assert [p["labels"]["outcome"] for p in parks] == [rm.PARK_SPENT, rm.PARK_SPENT]
+    seconds = next(p for p in parks if p["name"] == rm.PARK_SECONDS_METRIC)
+    assert seconds["value"] > 0, "the elapsed wall-clock is the value, not a label"
+    assert "seconds" not in seconds["labels"], "a duration label mints a series per value"
+
+
+async def test_a_broken_metrics_backend_does_not_stop_the_worker(
+    marker_dir, monkeypatch, told_to_wait, prompt_polling, logs
+):
+    """The worker has just held its work back. Failing to describe that must not
+    also stop it from starting."""
+
+    def explode():
+        raise RuntimeError("no metrics backend")
+
+    monkeypatch.setattr(rm, "get_metrics", explode)
+    monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 1)
+    rm.check_and_update_the_marker()
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=10)
+
+    assert logs.says("warning", "could not record the park metric")

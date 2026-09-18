@@ -50,6 +50,8 @@ from pathlib import Path
 import httpx
 
 from application_sdk.constants import DIRTY_RESTART_IDLE_MAX_SECONDS, OOM_RESTART_CHECK
+from application_sdk.observability.metrics_adaptor import get_metrics
+from application_sdk.observability.models import MetricType
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -65,6 +67,24 @@ HEARTBEAT_SECONDS = 60
 
 #: How often the wait wakes to check whether it is done.
 RECHECK_SECONDS = 5
+
+#: How a park ended. The two are not equivalent and the difference is the whole
+#: point of counting: REPLACED means something took this pod away while the
+#: worker was holding its work back, which is the mechanism working. SPENT means
+#: the worker sat out its entire budget and resumed on the limit that killed it,
+#: having bought nothing. A lane that quietly stopped helping shows up as the
+#: second one climbing, and nothing else in the system can see it - the
+#: rerouter's counter records evictions, and an eviction that lands after the
+#: budget, or never, looks the same from there.
+PARK_REPLACED = "replaced"
+PARK_SPENT = "spent"
+
+#: A finished park, counted, and how long it took. Two metrics rather than one
+#: because the duration belongs in a value: as a label it would mint a series per
+#: distinct number of seconds, which is the cardinality mistake this lane already
+#: made once with a pod label.
+PARK_METRIC = "worker_restart_park"
+PARK_SECONDS_METRIC = "worker_restart_park_seconds"
 
 #: The one value of the check switch that does anything. The other is the
 #: default, so only this needs naming.
@@ -311,6 +331,38 @@ async def ask_what_this_restart_earns() -> tuple[bool, str, int] | None:
         return None
 
 
+def _record_park(outcome: str, seconds: float) -> None:
+    """Count one finished park, and how long it took.
+
+    Emitted here because this is the only place the outcome exists: a park ends
+    inside the worker, and nothing outside the pod can tell a wait that was
+    rewarded from one that was spent.
+
+    Never raises. A worker that has just held its work back is about to start
+    polling, and failing to describe that must not stop it.
+    """
+    try:
+        metrics = get_metrics()
+        metrics.record_metric(
+            name=PARK_METRIC,
+            value=1,
+            metric_type=MetricType.COUNTER,
+            labels={"outcome": outcome},
+            description="Worker parks after a restart, by how the park ended",
+            unit="count",
+        )
+        metrics.record_metric(
+            name=PARK_SECONDS_METRIC,
+            value=round(seconds, 1),
+            metric_type=MetricType.HISTOGRAM,
+            labels={"outcome": outcome},
+            description="Wall-clock a worker spent parked, by how the park ended",
+            unit="s",
+        )
+    except Exception:
+        logger.warning("could not record the park metric", exc_info=True)
+
+
 async def wait_for_pod_to_get_replaced(
     shutdown_event: asyncio.Event, budget: int
 ) -> None:
@@ -320,8 +372,9 @@ async def wait_for_pod_to_get_replaced(
         "this work",
         budget,
     )
-    deadline = time.monotonic() + budget
-    last_beat = time.monotonic()
+    started = time.monotonic()
+    deadline = started + budget
+    last_beat = started
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -330,6 +383,7 @@ async def wait_for_pod_to_get_replaced(
                 "limit that already failed",
                 budget,
             )
+            _record_park(PARK_SPENT, time.monotonic() - started)
             return
         try:
             # One await does two jobs: it is the sleep, and it is the shutdown
@@ -345,6 +399,7 @@ async def wait_for_pod_to_get_replaced(
             logger.info(
                 "shutdown requested while waiting, which is this pod going away"
             )
+            _record_park(PARK_REPLACED, time.monotonic() - started)
             return
         now = time.monotonic()
         if now - last_beat >= HEARTBEAT_SECONDS:
