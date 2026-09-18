@@ -9,7 +9,7 @@ from typing import Optional
 
 
 class Category(str, Enum):
-    """Renovate PR category, derived from self-managed labels (branch/title fallback)."""
+    """Renovate PR category, derived from the branch slug (title as fallback)."""
 
     LOCK_MAINTENANCE = "lock-maintenance"
     GITHUB_ACTIONS = "github-actions"
@@ -21,7 +21,14 @@ class Category(str, Enum):
 
 
 class UpdateType(str, Enum):
-    """Semver update type reported by Renovate labels."""
+    """Semver update type, parsed from the Renovate PR body's version table.
+
+    REPORTING ONLY — nothing branches on it (see classify.auto_merge_expected).
+    PATCH, DIGEST and PIN are no longer produced: the update:<type> labels that
+    carried them were removed in FND-2201 and the body table cannot separate a
+    minor from a patch without assuming three-part semver. They stay in the enum
+    because historical dashboard JSON on S3 still contains them.
+    """
 
     MAJOR = "major"
     MINOR = "minor"

@@ -1,18 +1,40 @@
 """
 Pure classification logic for Renovate PRs.
 
-Label-first: reads self-managed labels added by the fleet preset.
-Falls back to branch/title/body parsing for PRs that predate the label rollout
-(Renovate re-labels them on its next run after the preset change ships).
+Branch-first, title as fallback. This module used to read self-managed labels
+the fleet preset applied, with branch/title parsing only as a fallback for PRs
+that predated the label rollout. The labels are gone (FND-2201) and the fallback
+is now the only path, because the labels cost far more than they were worth:
+
+GitHub emits one ``pull_request: labeled`` event PER label, the fleet's
+tests.yaml subscribes to ``labeled`` (the only way the human ``e2e`` label can
+start a run — GitHub has no trigger-level filter for WHICH label), and the unit
+job's concurrency group then evicts all but one of the resulting runs. Each
+evicted run still publishes a FAILURE on the required ``tests / Tests Gate``
+context. That reds Renovate's own automerge fallback on every bot PR
+("PR is not ready for merge (branch status is red)" — Renovate aggregates ALL
+check runs, not just required ones), and blocks the merge outright whenever an
+evicted run is the newest check SUITE, which is how GitHub resolves a required
+check. Three labels per PR meant four Tests runs, three of them evicted.
+
+Branch names carry the same information for free: they are set by the preset's
+own groupName/branchName, so they are as authoritative as a label Renovate
+applies from the same config, and they arrive with the PR instead of as three
+extra webhook events.
 
 Auto-merge policy mirrors renovate-config/default.json:
   - lock-maintenance:    automerge=true  (uv.lock-only, in-range)
+  - sdk-package:         automerge=true  (FND-359 — an SDK release must reach
+                         the fleet in minutes; majors are `enabled: false`
+                         upstream, so they raise no PR to classify)
   - github-actions:      automerge=true  (all update types, incl. major)
-  - contract-toolkit:    automerge=true  for minor/patch; false for major
-  - conformance-package: automerge=true  for minor/patch; false for major
-                         (dedicated uv.lock-only PR via update-lockfile;
-                         auto-merged even under the soft-mode template's
-                         '*' automerge=false rule, which carves it out)
+  - contract-toolkit:    automerge=true  (majors are `enabled: false` in the
+                         preset, so a contract-toolkit major PR never exists)
+  - conformance-package: automerge=true  for EVERY update type, majors included
+                         (FND-378 — the suite is its own gate, so a major it
+                         cannot pass simply never merges; dedicated uv.lock-only
+                         PR via update-lockfile, auto-merged even under the
+                         soft-mode template's '*' automerge=false rule)
   - python-dep:          automerge=false (edits pyproject.toml constraint → human)
 
 Blocking-reason mirrors renovate-auto-approve-reusable.yml conditions:
@@ -34,22 +56,6 @@ from conformance.renovate.models import (
     RenovatePR,
     UpdateType,
 )
-
-# Labels emitted by the fleet preset's addLabels rules.
-_LABEL_CATEGORY_MAP: dict[str, Category] = {
-    "update:lock-maintenance": Category.LOCK_MAINTENANCE,
-    "update:github-actions": Category.GITHUB_ACTIONS,
-    "contract-toolkit-update": Category.CONTRACT_TOOLKIT,
-    "conformance-package-update": Category.CONFORMANCE_PACKAGE,
-    "sdk-package-update": Category.SDK_PACKAGE,
-}
-_LABEL_UPDATE_TYPE_MAP: dict[str, UpdateType] = {
-    "update:major": UpdateType.MAJOR,
-    "update:minor": UpdateType.MINOR,
-    "update:patch": UpdateType.PATCH,
-    "update:digest": UpdateType.DIGEST,
-    "update:pin": UpdateType.PIN,
-}
 
 # The runtime SDK package — matched in branch slugs (renovate/atlan-application-sdk-3.x)
 # and titles ("update dependency atlan-application-sdk to v3.27.0"). The negative
@@ -280,15 +286,18 @@ def bounded_lock_refusal_state(
 
 
 def categorize(pr: RenovatePR) -> Category:
-    """Derive category from self-managed labels (primary) then branch/title (fallback)."""
-    label_set = set(pr.labels)
+    """Derive category from the branch slug, falling back to the title.
 
-    # Label-first path.
-    for label, cat in _LABEL_CATEGORY_MAP.items():
-        if label in label_set:
-            return cat
+    Branch-only since FND-2201 — see the module docstring for why the label path
+    was removed. Every lane below is named by the preset's own groupName (or, for
+    the SDK lane, by the package name Renovate slugifies into the branch), so
+    this reads the same config the labels were generated from, one indirection
+    earlier and without the webhook cost.
 
-    # Fallback: branch/title parsing for pre-label PRs.
+    The title arm stays because two shapes reach here without a usable branch:
+    a PR retargeted or renamed by hand, and the grouped lanes whose slug is the
+    groupName rather than the package ("non-critical python dependencies").
+    """
     branch = pr.branch.lower()
     title = pr.title.lower()
 
@@ -318,17 +327,9 @@ def categorize(pr: RenovatePR) -> Category:
     return Category.PYTHON_DEP
 
 
-def update_type_from_labels(labels: list[str]) -> UpdateType:
-    """Extract the Renovate update-type from self-managed labels."""
-    for label in labels:
-        if label in _LABEL_UPDATE_TYPE_MAP:
-            return _LABEL_UPDATE_TYPE_MAP[label]
-    return UpdateType.UNKNOWN
-
-
 def update_type_from_body(body: str) -> UpdateType:
     """
-    Fallback: parse the semver update type from the Renovate PR body table.
+    Parse the semver update type from the Renovate PR body table.
 
     Renovate embeds a 'from -> to' version table like:
         | dep | 1.2.3 | -> | 2.0.0 |
@@ -345,10 +346,21 @@ def update_type_from_body(body: str) -> UpdateType:
 
 
 def derive_update_type(pr: RenovatePR) -> UpdateType:
-    """Labels first, body-table fallback."""
-    ut = update_type_from_labels(pr.labels)
-    if ut != UpdateType.UNKNOWN:
-        return ut
+    """Body-table only, since FND-2201 removed the update:<type> labels.
+
+    REPORTING ONLY. Nothing branches on this — :func:`auto_merge_expected`
+    deliberately does not take it (see that function's docstring), so a coarser
+    answer here cannot mis-route a PR, only under-describe one on the dashboard.
+
+    That is what makes dropping the labels affordable: the body table renders
+    the version move but not enough of it to separate a minor from a patch
+    without assuming three-part semver, so PATCH, DIGEST and PIN are no longer
+    distinguishable and surface as MINOR or UNKNOWN. Do not reintroduce a label
+    to recover them — the fidelity is worth a fraction of one wasted CI run,
+    let alone three per PR across the fleet. If a consumer ever genuinely needs
+    the exact update type, read it from the deps this PR delivers
+    (:func:`extract_deps` gives from/to versions) rather than from a label.
+    """
     return update_type_from_body(pr.body)
 
 
@@ -428,7 +440,6 @@ def extract_deps(pr: RenovatePR) -> tuple[PRDep, ...]:
 
 def auto_merge_expected(
     category: Category,
-    update_type: UpdateType,
     repo_automerge_mode: str = "unknown",
 ) -> bool:
     """
@@ -444,9 +455,41 @@ def auto_merge_expected(
 
     lock-maintenance → always auto (uv.lock refresh, in-range)
     github-actions   → always auto (incl. major; validated by CI gate)
-    contract-toolkit → auto for minor/patch; human for major
-    sdk-package      → always human (runtime SDK bumps are a deliberate merge)
+    contract-toolkit → always auto (majors are `enabled: false` upstream)
+    conformance-pkg  → always auto (every update type — FND-378)
+    sdk-package      → always auto for minor/patch (FND-359); majors are
+                       `enabled: false` in the preset, so they raise no PR
     python-dep       → always human (edits pyproject.toml constraint → out-of-range)
+
+    The SDK arm read "always human (runtime SDK bumps are a deliberate merge)"
+    until FND-2201, which was true when it was written and stopped being true at
+    FND-359: the preset's SDK lane carries automerge/platformAutomerge true, on
+    the reasoning that an SDK release must reach the fleet in minutes and this is
+    the only lane that can deliver it promptly now the lock refresh is
+    release-age bounded. A repo not ready for that opts out in its own
+    renovate.json, which arrives here as ``repo_automerge_mode == "soft"`` and is
+    handled above — so the lane rule does not need to hedge for it. Reporting the
+    lane as human-review meant every stranded SDK bump classified as
+    AWAITING_HUMAN_REVIEW, i.e. "blocked by design", which is exactly the
+    verdict that stops the dashboard raising it.
+
+    NO UPDATE TYPE. This used to take one and gate both toolkit and conformance
+    on ``update_type not in (MAJOR, UNKNOWN)``. Both arms were wrong against the
+    preset they claim to mirror, in opposite directions:
+
+    * contract-toolkit majors are ``enabled: false`` in the preset, so a
+      contract-toolkit major PR cannot exist. The arm was unreachable.
+    * conformance majors ARE auto-merged, explicitly and by design (FND-378):
+      the lane ships a checker whose worst case is a red check on the very PR
+      that introduced it, so the suite is its own gate. Treating them as
+      human-review reported every conformance major as AWAITING_HUMAN_REVIEW —
+      the one classification that suppresses the stuck-PR signal — for a PR the
+      fleet was in fact auto-merging.
+
+    The ``UNKNOWN`` half was worse than either: it made the verdict depend on
+    whether a label happened to be present, so a PR whose labels had not landed
+    yet was silently reclassified as needing a human. Removing the parameter is
+    what lets the update:<type> labels go (FND-2201); it is also simply correct.
     """
     if repo_automerge_mode == "soft":
         return False
@@ -455,9 +498,11 @@ def auto_merge_expected(
     if category == Category.GITHUB_ACTIONS:
         return True
     if category == Category.CONTRACT_TOOLKIT:
-        return update_type not in (UpdateType.MAJOR, UpdateType.UNKNOWN)
+        return True
     if category == Category.CONFORMANCE_PACKAGE:
-        return update_type not in (UpdateType.MAJOR, UpdateType.UNKNOWN)
+        return True
+    if category == Category.SDK_PACKAGE:
+        return True
     # python-dep, unknown
     return False
 
@@ -472,7 +517,6 @@ def checks_state(pr: RenovatePR) -> ChecksState:
 def blocking_reason(
     pr: RenovatePR,
     category: Category,
-    update_type: UpdateType,
     age_days: int = 0,
     now: Optional[datetime] = None,
 ) -> BlockingReason:
@@ -488,7 +532,7 @@ def blocking_reason(
     because classify() computes them after the model is first constructed.
     """
     now = now or datetime.now(timezone.utc)
-    if not auto_merge_expected(category, update_type, pr.repo_automerge_mode):
+    if not auto_merge_expected(category, pr.repo_automerge_mode):
         return BlockingReason.AWAITING_HUMAN_REVIEW
 
     # For auto-merge-eligible PRs, check gate conditions in priority order.
@@ -552,8 +596,9 @@ def classify(pr: RenovatePR) -> RenovatePR:
     blocking_reason, and age_days populated.
     """
     cat = categorize(pr)
+    # Reporting only — deliberately not an input to either verdict below.
     ut = derive_update_type(pr)
-    ame = auto_merge_expected(cat, ut, pr.repo_automerge_mode)
+    ame = auto_merge_expected(cat, pr.repo_automerge_mode)
 
     now = datetime.now(timezone.utc)
     # pr.created_at may be tz-aware or naive; normalise.
@@ -563,7 +608,7 @@ def classify(pr: RenovatePR) -> RenovatePR:
     age = max(0, (now - created).days)
 
     # age feeds the staleness backstop, so it must be computed before classifying.
-    br = blocking_reason(pr, cat, ut, age, now)
+    br = blocking_reason(pr, cat, age, now)
 
     # dataclass is frozen=True; use replace pattern.
     import dataclasses
