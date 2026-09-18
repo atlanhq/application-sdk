@@ -199,7 +199,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.36.0"
+version = "3.36.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -223,9 +223,9 @@ dependencies = [
     { name = "temporalio" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/b1/1da5a9355d54c0d29e1218f22d6d705419b7f61ee198cff03bb19822d863/atlan_application_sdk-3.36.0.tar.gz", hash = "sha256:6ef7f0e3d90c25f60c1c92468fec4c3af45f26431b483f1eb4806448a7677ca5", size = 8701617, upload-time = "2026-09-18T19:31:24.397Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ff/55/08fa43d5842995447546b806e3a7a48e18d0414418bd3b941601a0e88284/atlan_application_sdk-3.36.1.tar.gz", hash = "sha256:1f787608a9f1565b55ec3d6708e3f1a745c98526107ae745f56f49dbd8f5177b", size = 8722155, upload-time = "2026-09-18T23:37:39.456Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/04/5a/4c47f6172418e569514f902661bf410d1b6d40670e4b3f8e71f3a70e12b4/atlan_application_sdk-3.36.0-py3-none-any.whl", hash = "sha256:088f35c276c80797751a08d2da6a77b6abae97ec2d75f8dcfa76a2963f7f5e2a", size = 1854039, upload-time = "2026-09-18T19:31:22.388Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/46/45720b44238affced22a1933500e88b2c3b8f7a12d5366eb2b0947c2b8d2/atlan_application_sdk-3.36.1-py3-none-any.whl", hash = "sha256:17596e48c8f241fcce251d09259cbcc24985f08db60ddf7ee209e6b4148e34a8", size = 1856807, upload-time = "2026-09-18T23:37:36.589Z" },
 ]
 
 [package.optional-dependencies]
