@@ -416,6 +416,40 @@ class DiskFullError(ResourceExhaustedError):
 
 
 @dataclass(kw_only=True)
+class LocalVolumeUnwritableError(ResourceExhaustedError):
+    """A local write failed because the volume is read-only or the path is unwritable.
+
+    Raised at the activity boundary for ``OSError`` ``EROFS`` (read-only filesystem)
+    and ``EACCES``/``EPERM`` (permission denied) on the app's local scratch/artifacts
+    volume. A bare ``OSError`` here carries no category, so it re-files as a fresh,
+    unclassifiable failure pattern on every occurrence — the artifact-filesystem family
+    (``[Errno 30] Read-only file system: 'artifacts'`` and siblings). Typing it makes the
+    failure classified, attributable to the writing step, and alertable, and — like
+    :class:`DiskFullError` — points the operator at the volume/mount, not the connector.
+
+    Deliberately **not** classified inside :mod:`application_sdk.common.atomic`, whose
+    ``disk_full_guard`` stays narrow to ``ENOSPC``/``EDQUOT`` by design (guarded by
+    ``test_an_unrelated_oserror_is_not_reclassified``). The classification happens once,
+    at the activity boundary, so no existing write-path invariant changes.
+
+    **Retryable, inherited deliberately.** A read-only or unwritable volume is usually a
+    node/mount condition; a fresh attempt may land on a healthy node. A persistently
+    misconfigured mount re-fails identically and keeps emitting the same operator signal.
+    """
+
+    path: str | None = None
+    operation: str | None = None
+    errno_name: str | None = None
+
+    code: ClassVar[str] = "RESOURCE_EXHAUSTED_VOLUME_UNWRITABLE"
+    resource: str | None = "local-volume"
+    suggested_action: str | None = (
+        "The app's local volume is read-only or not writable (EROFS/EACCES/EPERM). "
+        "Check the ephemeral-volume mount and its permissions on this deployment."
+    )
+
+
+@dataclass(kw_only=True)
 class DataIntegrityError(AppError):
     expectation: str | None = None
     observed: str | None = None

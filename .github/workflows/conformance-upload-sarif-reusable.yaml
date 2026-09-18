@@ -166,7 +166,7 @@ jobs:
       # side of the migration it is on.
       - name: "Upload SARIF to Security tab"
         if: hashFiles(format('{0}-upload.sarif', matrix.slug)) != '' && steps.probe.outputs.available == 'true'
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         with:
           sarif_file: ${{ matrix.slug }}-upload.sarif
           category: conformance-${{ matrix.slug }}
