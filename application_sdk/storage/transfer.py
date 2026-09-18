@@ -38,29 +38,43 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
-from application_sdk.common._listing import safe_list_directory
-from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
+from application_sdk.common._listing import file_sizes, safe_list_directory
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._concurrency import _gather_size_tiered
 
 # The batch key listers are imported at top level, unlike the other
 # storage-sibling imports in this module which are lazy: ``batch`` depends only
 # on ``storage.ops`` / ``storage.integrity`` and never on ``transfer``, so
 # ``transfer → batch`` is unconditionally acyclic — the import is safe
 # regardless of module load order.
-from application_sdk.storage.batch import list_data_keys, list_data_objects, list_keys
+from application_sdk.storage.batch import (
+    list_data_keys,
+    list_data_objects,
+    list_keys,
+    list_keys_with_meta,
+)
 
 # Sidecar naming, digest computation and the read/write of ``{key}.sha256`` all
 # live in ``storage.integrity``, which ``ops`` calls on every transfer. This
 # module holds no copy of them: a second implementation of the digest protocol
 # is how the reader and the writer drift apart.
-from application_sdk.storage.integrity import read_expected_digest, sha256_file
+from application_sdk.storage.integrity import (
+    check_transfer_size,
+    read_expected_digest,
+    sha256_file,
+    sidecar_key,
+    sidecar_writes_enabled,
+    verification_enabled,
+    write_digest_sidecar,
+)
 
 _logger = get_logger(__name__)
 
@@ -78,12 +92,28 @@ async def _upload_one(
     store_key: str,
     *,
     skip_if_exists: bool,
-) -> tuple[bool, str]:
-    """Upload a single file.  Returns ``(transferred, reason)``.
+    sidecar_present: bool | None = None,
+    defer_remote_verify: bool = False,
+    write_sidecar: bool | None = None,
+) -> tuple[bool, str, str | None]:
+    """Upload a single file.  Returns ``(transferred, reason, digest)``.
 
     The ``{key}.sha256`` sidecar is written by ``upload_file`` itself, after it
     has validated that what landed in the store is what was sent — so it is not
-    written here (FND-306).
+    written here (FND-306). A directory upload holds both of those back
+    (``defer_remote_verify=True``, ``write_sidecar=False``) and does them once
+    for the whole batch against a listing; ``digest`` is returned so it can.
+
+    Args:
+        sidecar_present: What a listing of the target already established
+            about ``{store_key}.sha256`` — forwarded to
+            :func:`read_expected_digest` so the skip check costs no request
+            when the listing says there is nothing to compare against.
+            ``None`` keeps the per-file HEAD.
+        defer_remote_verify: Forwarded to ``upload_file``; the caller verifies
+            the object afterwards.
+        write_sidecar: Forwarded to ``upload_file``; ``False`` when the caller
+            writes sidecars itself after its readback.
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         upload_file,
@@ -91,23 +121,32 @@ async def _upload_one(
 
     if skip_if_exists:
         local_digest = await sha256_file(local_file)
-        remote_digest = await read_expected_digest(store, store_key)
+        remote_digest = await read_expected_digest(
+            store, store_key, sidecar_present=sidecar_present
+        )
         if remote_digest == local_digest:
             # A skip is still one file resolved. Directory uploads that skip
             # thousands of hash-matching files on an idempotent retry are doing
             # real work (a digest and a sidecar GET each) and must not read as
             # a stall.
             current_progress_tracker().mark_progress("storage.upload_file")
-            return False, "skipped:hash_match"
+            return False, "skipped:hash_match", local_digest
 
-    await upload_file(store_key, local_file, store, normalize=False)
+    digest = await upload_file(
+        store_key,
+        local_file,
+        store,
+        normalize=False,
+        defer_remote_verify=defer_remote_verify,
+        write_sidecar=write_sidecar,
+    )
     # Per-file boundary, on top of the per-part marks inside upload_file: this
     # is the label an operator wants in a stall message, since it says the
     # attempt was moving whole files rather than stuck mid-transfer on one.
     # (The sidecar write that used to sit here is upload_file's job now — see
     # the docstring above.)
     current_progress_tracker().mark_progress("storage.upload_file")
-    return True, "uploaded"
+    return True, "uploaded", digest
 
 
 async def _cross_store_sha256_match(
@@ -440,6 +479,80 @@ _FALLBACK_PREFIX_REQUIRED = (
 )
 
 
+def _fan_out_limits(max_concurrency: int | None) -> tuple[int, int, int]:
+    """``(small_limit, large_limit, small_threshold)`` for a directory transfer.
+
+    ``None`` sizes the fan-out per file from the deployment's constants: small
+    objects (at or below ``STORAGE_SMALL_OBJECT_BYTES``) run
+    ``MAX_CONCURRENT_SMALL_TRANSFERS`` wide, everything else
+    ``MAX_CONCURRENT_STORAGE_TRANSFERS``. An explicit *max_concurrency* is one
+    hard cap across everything in flight — a caller that asks for two means
+    two — so it collapses the tiers (threshold ``0``) rather than granting two
+    separate allowances. Read at call time, not import time, so a deployment's
+    environment (and a test's patch) is what governs.
+    """
+    from application_sdk import (  # noqa: PLC0415 — read at call time so the deployment's env (and tests) govern
+        constants as _constants,
+    )
+
+    if max_concurrency is not None:
+        return max_concurrency, max_concurrency, 0
+    return (
+        _constants.MAX_CONCURRENT_SMALL_TRANSFERS,
+        _constants.MAX_CONCURRENT_STORAGE_TRANSFERS,
+        _constants.STORAGE_SMALL_OBJECT_BYTES,
+    )
+
+
+async def _list_target_sizes(prefix: str, store: ObjectStore) -> dict[str, int]:
+    """``{key: size}`` for every object under *prefix* in *store*, sidecars included.
+
+    One listing (a request per thousand keys) answers, for a whole directory,
+    the two questions the per-object protocol used to spend a HEAD each on:
+    "is there a sidecar to compare against?" before the transfer, and "did
+    every object land at the size that was sent?" after it (FND-1339).
+    """
+    items = await list_keys_with_meta(prefix.rstrip("/") + "/", store, normalize=False)
+    return {key: size for key, size, _ in items}
+
+
+async def _verify_uploaded_against_listing(
+    prefix: str,
+    store: ObjectStore,
+    uploaded: list[tuple[str, int, str | None, Path]],
+) -> None:
+    """The directory-mode readback: one listing in place of a HEAD per object.
+
+    Same two checks as :func:`application_sdk.storage.ops._finalize_upload_integrity`
+    makes per object — the object is there, and it is the size that was sent —
+    and the same error classes, so a caller cannot tell which shape ran except
+    by the request count. Absence is checked separately from length because a
+    zero-byte object that a backend silently dropped would pass a bare size
+    comparison (0 sent, 0 found).
+
+    Raises:
+        StorageError: If any transferred object is missing from the listing or
+            listed at a different size than was sent (retryable).
+    """
+    listed = await _list_target_sizes(prefix, store)
+    for key, expected, _digest, local_path in uploaded:
+        actual = listed.get(key)
+        if actual is None:
+            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+
+            raise StorageError(
+                f"Upload of '{key}' reported success but the object is absent "
+                f"from the store's listing afterwards ({expected} bytes sent "
+                f"from {local_path}). Some S3-style backends silently drop "
+                f"empty objects; others need read-your-writes consistency that "
+                f"this store does not offer.",
+                key=key,
+            )
+        check_transfer_size(
+            "upload", key, expected=expected, actual=actual, local_path=local_path
+        )
+
+
 async def _list_source_data_keys(
     source_storage_path: str, source_store: ObjectStore
 ) -> tuple[str, list[str]]:
@@ -486,9 +599,17 @@ async def upload(
     _source_store: ObjectStore | None = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
-    max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
+    max_concurrency: int | None = None,
 ) -> UploadOutput:
     """Upload a local file or directory to the object store.
+
+    **Round trips (directory mode, FND-1339).** A directory hand-off over a
+    high-latency store is bound by requests, not bytes. Each file costs one
+    PUT and one sidecar PUT; the skip check and the readback that used to add
+    a HEAD each per file are answered for the whole directory by two listings
+    of the target prefix (a request per thousand keys). Small objects fan out
+    on their own wider tier — see *max_concurrency* — because they are
+    buffered whole and hold no multipart part buffers.
 
     When *storage_path* is ``None`` and *_app_prefix* is provided the key /
     prefix is auto-namespaced as ``{_app_prefix}/{filename}`` (files) or
@@ -547,8 +668,13 @@ async def upload(
             fallback source.  Always ``self.context.storage`` when called via
             ``App.upload()``.
         _app_prefix: Internal prefix injected by the ``App.upload`` task.
-        max_concurrency: Maximum parallel uploads for directory mode
-            (default :data:`~application_sdk.constants.MAX_CONCURRENT_STORAGE_TRANSFERS`).
+        max_concurrency: Hard cap on parallel uploads in directory mode.
+            ``None`` (default) sizes the fan-out per file: objects at or below
+            :data:`~application_sdk.constants.STORAGE_SMALL_OBJECT_BYTES` run
+            :data:`~application_sdk.constants.MAX_CONCURRENT_SMALL_TRANSFERS`
+            wide, larger ones
+            :data:`~application_sdk.constants.MAX_CONCURRENT_STORAGE_TRANSFERS`.
+            An explicit value is one hard cap across everything in flight.
 
     Returns:
         :class:`~application_sdk.contracts.storage.UploadOutput`
@@ -610,7 +736,7 @@ async def upload(
         key = _derive_target_key(
             storage_path, _app_prefix, storage_subdir, src.name, normalize_key
         )
-        transferred, reason = await _upload_one(
+        transferred, reason, _ = await _upload_one(
             resolved, src, key, skip_if_exists=skip_if_exists
         )
         return _make_upload_output(str(src), key, 1, _tier, int(transferred), reason)
@@ -683,7 +809,6 @@ async def upload(
                 "stream-uploaded-per-file workaround pattern.",
                 local_path=local_path,
             )
-        sem = asyncio.Semaphore(max_concurrency)
         keys = [
             f"{prefix}/{str(fp.relative_to(src)).replace(os.sep, '/')}"
             if prefix
@@ -691,14 +816,48 @@ async def upload(
             for fp in files
         ]
 
-        async def _bounded_upload(file_path: Path, fkey: str) -> bool:
-            async with sem:
-                ok, _ = await _upload_one(
-                    resolved, file_path, fkey, skip_if_exists=skip_if_exists
-                )
-                return ok
+        # ── Round-trip budget (FND-1339) ─────────────────────────────────
+        # A directory hand-off over a high-latency store is bound by requests,
+        # not bytes: every file used to cost four *dependent* round trips — a
+        # sidecar HEAD for the skip check, the PUT, a readback HEAD, the
+        # sidecar PUT — at a fan-out of four. Two listings of the target prefix
+        # now stand in for the two HEADs of every file: one before the
+        # transfer answers "is there a sidecar to compare against?" for the
+        # skip check, one after confirms every object landed at the size that
+        # was sent. Listing needs a rooted prefix — at the store root there is
+        # no narrow listing to make — so that shape keeps the per-object
+        # checks.
+        can_list_target = bool(prefix)
+        target_before: dict[str, int] | None = None
+        if can_list_target and skip_if_exists:
+            target_before = await _list_target_sizes(prefix, resolved)
+        defer_verify = can_list_target and verification_enabled(None)
+        sizes = await run_in_thread(file_sizes, files)
+        # Every object this call transferred, as (key, local size, digest,
+        # local path): the set the deferred readback and sidecar pass cover.
+        uploaded: list[tuple[str, int, str | None, Path]] = []
 
-        async def _bounded_reconcile(source_key: str, target_key: str) -> bool:
+        async def _upload_local(file_path: Path, fkey: str, size: int) -> bool:
+            sidecar_present = (
+                None if target_before is None else sidecar_key(fkey) in target_before
+            )
+            ok, _, digest = await _upload_one(
+                resolved,
+                file_path,
+                fkey,
+                skip_if_exists=skip_if_exists,
+                sidecar_present=sidecar_present,
+                defer_remote_verify=defer_verify,
+                # Held back until the listing has confirmed the object; a
+                # sidecar must never advertise a digest for an object this
+                # same upload then rejects.
+                write_sidecar=False if defer_verify else None,
+            )
+            if ok:
+                uploaded.append((fkey, size, digest, file_path))
+            return ok
+
+        async def _reconcile(source_key: str, target_key: str) -> bool:
             # source_resolved is non-None whenever reconcile_pairs is populated
             # (guarded where reconcile_pairs is built). Explicit check rather than
             # ``assert`` so it is not stripped under ``python -O`` and narrows the
@@ -707,20 +866,31 @@ async def upload(
                 raise RuntimeError(
                     "reconcile requires a resolved source store but none was set"
                 )
-            async with sem:
-                ok, _ = await _upload_from_store(
-                    source_resolved,
-                    source_key,
-                    resolved,
-                    target_key,
-                    source_listed=True,  # came from _list_source_data_keys
-                )
-                return ok
+            ok, _ = await _upload_from_store(
+                source_resolved,
+                source_key,
+                resolved,
+                target_key,
+                source_listed=True,  # came from _list_source_data_keys
+            )
+            return ok
 
+        small_limit, large_limit, small_threshold = _fan_out_limits(max_concurrency)
         # conformance: ignore[E010] results checked immediately below: errs filters BaseException, first is re-raised and rest are logged
-        results = await asyncio.gather(
-            *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
-            *[_bounded_reconcile(sk, tk) for sk, tk in reconcile_pairs],
+        results = await _gather_size_tiered(
+            [
+                (size, _upload_local(fp, k, size))
+                for fp, k, size in zip(files, keys, sizes)
+            ]
+            + [
+                # A streamed copy's size is unknown without a HEAD, and it
+                # holds part buffers like any large object: narrow tier.
+                (sys.maxsize, _reconcile(sk, tk))
+                for sk, tk in reconcile_pairs
+            ],
+            small_threshold=small_threshold,
+            small_limit=small_limit,
+            large_limit=large_limit,
             return_exceptions=True,
         )
         errs = [r for r in results if isinstance(r, BaseException)]
@@ -728,6 +898,23 @@ async def upload(
             for extra in errs[1:]:
                 _logger.error("concurrent upload failure (suppressed)", exc_info=extra)
             raise errs[0]
+        if defer_verify and uploaded:
+            await _verify_uploaded_against_listing(prefix, resolved, uploaded)
+            if sidecar_writes_enabled(None):
+                # Sidecars only now, after the listing has confirmed every
+                # object — the same ordering the per-object protocol keeps.
+                # write_digest_sidecar is best-effort and logs its own
+                # failures, so there are no results to check here.
+                await _gather_size_tiered(
+                    [
+                        (0, write_digest_sidecar(resolved, key, digest))
+                        for key, _, digest, _ in uploaded
+                        if digest is not None
+                    ],
+                    small_threshold=small_threshold,
+                    small_limit=small_limit,
+                    large_limit=large_limit,
+                )
         n = sum(1 for ok in results if ok)
         total_files = len(files) + len(reconcile_pairs)
         reason = "uploaded" if n > 0 else "skipped:hash_match"
@@ -768,7 +955,10 @@ async def upload(
             )
             if not fallback_prefix:
                 raise StorageError(_FALLBACK_PREFIX_REQUIRED)
-            sem = asyncio.Semaphore(max_concurrency)
+            # Streamed copies hold part buffers like any large object, so the
+            # fallback keeps the narrow tier (an explicit cap still wins).
+            _, large_limit, _ = _fan_out_limits(max_concurrency)
+            sem = asyncio.Semaphore(large_limit)
 
             async def _bounded_fallback(source_key: str) -> bool:
                 async with sem:
