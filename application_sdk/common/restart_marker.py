@@ -50,9 +50,9 @@ from pathlib import Path
 import httpx
 
 from application_sdk.constants import DIRTY_RESTART_IDLE_MAX_SECONDS, OOM_RESTART_CHECK
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.observability.models import MetricType
-from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 

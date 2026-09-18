@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -461,7 +461,7 @@ test = [
 
 [[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.29.0"
+version = "0.30.0"
 source = { directory = "packages/conformance" }
 dependencies = [
     { name = "jinja2" },

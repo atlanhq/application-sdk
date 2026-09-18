@@ -428,7 +428,9 @@ async def test_a_park_that_buys_nothing_is_counted_separately(
     assert [p["labels"]["outcome"] for p in parks] == [rm.PARK_SPENT, rm.PARK_SPENT]
     seconds = next(p for p in parks if p["name"] == rm.PARK_SECONDS_METRIC)
     assert seconds["value"] > 0, "the elapsed wall-clock is the value, not a label"
-    assert "seconds" not in seconds["labels"], "a duration label mints a series per value"
+    assert (
+        "seconds" not in seconds["labels"]
+    ), "a duration label mints a series per value"
 
 
 async def test_a_broken_metrics_backend_does_not_stop_the_worker(
