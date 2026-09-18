@@ -892,6 +892,115 @@ class TestCreateInfrastructureUpstreamStore:
             "objectstore", components_dir=ANY, secrets=ANY
         )
 
+    async def test_upstream_storage_aliases_deployment_when_names_are_one_component(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One component under both names is one store — one handle, aliased.
+
+        In-cluster charts point UPSTREAM_OBJECT_STORE_NAME and
+        DEPLOYMENT_OBJECT_STORE_NAME at the app's single object-store component.
+        A *second* store object over the same bucket makes App.upload route by
+        identity and copy the bucket onto itself, so startup must not build one;
+        ``None`` would be wrong the other way, because every consumer outside
+        App.upload reads the handle as "is there an upstream store". Alias it.
+        """
+        self._make_dapr_env(monkeypatch)
+        deployment_store = MagicMock()
+        deployment_attrs = {"Storage-Class": "STANDARD_IA"}
+
+        with (
+            patch(
+                "application_sdk.main._log_dapr_components",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(
+                "application_sdk.main._fetch_binding_secrets",
+                new_callable=AsyncMock,
+                return_value={},
+            ) as mock_fetch,
+            patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(
+                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
+                return_value=(MagicMock(), None),
+            ) as mock_optional,
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(deployment_store, deployment_attrs),
+            ) as mock_binding,
+            patch(
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
+                "my-app-objectstore",
+            ),
+            patch(
+                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
+                "my-app-objectstore",
+            ),
+        ):
+            infra = await _create_infrastructure()
+
+        # Same object, not an equal one: identity is what the dual-write
+        # fan-out and _upload_from_store's same-object guard test.
+        assert infra.storage is deployment_store
+        assert infra.upstream_storage is deployment_store
+        assert infra.upstream_storage_put_attributes is deployment_attrs
+        assert infra.single_store is True
+        mock_optional.assert_not_called()
+        # The binding is built once and its secrets fetched once.
+        mock_fetch.assert_awaited_once()
+        assert mock_fetch.await_args.args[1] == "my-app-objectstore"
+        mock_binding.assert_called_once_with(
+            "my-app-objectstore", components_dir=ANY, secrets=ANY
+        )
+
+    async def test_two_distinct_components_are_not_single_store(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A real SDR wiring keeps two handles and reports single_store False."""
+        self._make_dapr_env(monkeypatch)
+        deployment_store = MagicMock()
+        upstream_store = MagicMock()
+
+        with (
+            patch(
+                "application_sdk.main._log_dapr_components",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(
+                "application_sdk.main._fetch_binding_secrets",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(
+                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
+                return_value=(upstream_store, None),
+            ),
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(deployment_store, None),
+            ),
+            patch(
+                "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
+                "objectstore",
+            ),
+            patch(
+                "application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME",
+                "atlan-objectstore",
+            ),
+        ):
+            infra = await _create_infrastructure()
+
+        assert infra.upstream_storage is upstream_store
+        assert infra.single_store is False
+
     async def test_upstream_required_true_when_sdr_enabled(
         self,
         monkeypatch: pytest.MonkeyPatch,

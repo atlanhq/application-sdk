@@ -51,8 +51,61 @@ references in `InfrastructureContext`:
 
 The `atlan-objectstore` component is provisioned by the atlan-configurator at
 SDR deploy time and points to `{tenant}/api/blobstorage` with the deployment's
-OAuth client credentials for SigV4 signing. In non-SDR deployments (local dev,
-Atlan-hosted) the component is absent and `upstream_storage` is `None`.
+OAuth client credentials for SigV4 signing. Outside SDR there is no second
+store, reached two ways: local dev ships no such component, so
+`upstream_storage` is `None`; the Atlan-hosted (in-cluster) charts set
+`UPSTREAM_OBJECT_STORE_NAME` and `DEPLOYMENT_OBJECT_STORE_NAME` to the *same*
+component, so startup aliases `upstream_storage` to the deployment store
+instead of building a second store object over one bucket.
+
+### One component under two names — alias, never a second object (CONNECT-1778)
+
+The in-cluster charts have named one component twice since before this
+architecture existed. Building a second store object from that one binding is
+what broke: the dual-write fan-out below selects its legs with
+`upstream is not deployment`, and `transfer._upload_from_store` short-circuits
+a no-op copy with `source_store is target_store`. Both are **identity** tests
+(obstore stores are unhashable, so equality is not available), so two objects
+over one bucket defeat both, and `App.upload` reconciles the bucket against
+itself — a per-key SHA-256 sidecar compare inside the framework task's fixed
+`600 s × 3` budget, which a multi-thousand-file prefix cannot finish.
+
+Aliasing the handle, rather than leaving it `None`, is deliberate. Every
+consumer outside `App.upload` reads `upstream_storage` as "is an upstream store
+configured"; a name-equality gate that answers `None` there is the fragile
+heuristic removed in `668a06c21` — it silently disables routing for an operator
+who points both names at the same non-default component, and it hands `None` to
+call sites that only meant to ask about presence. The question those call sites
+*should* ask has its own name:
+
+```python
+if self.context.single_store:      # AppContext / InfrastructureContext
+    ...
+```
+
+`single_store` is `True` both when no upstream binding exists and when the two
+handles are the same object. It compares what startup actually built, so it
+cannot disagree with how reads and writes are routed — unlike a call-time
+re-read of the two env-var constants.
+
+It is answerable only where those handles exist, which is the activity side:
+the workflow-side `AppContext` is built without them, and `is_single_store(None,
+None)` is `True`, so a two-store SDR deployment would read as single-store in
+workflow code. Reading it there raises `SingleStoreUnknownInWorkflowError`
+instead. Workflow code that must branch on the topology takes the verdict from
+a `@task`'s Output contract — which is also what makes it replay-safe, and what
+the databricks connector's hand-off gate does.
+
+There is exactly one definition of it — `infrastructure.context.is_single_store`,
+which both contexts delegate to — and exactly one place the two component *names*
+are compared: `_create_infrastructure`, where the second object does not yet
+exist so identity cannot be tested. Every later question about topology is an
+identity test against the handles that branch produced.
+
+A deployment that sets `ENABLE_ATLAN_UPLOAD=true` on this wiring is
+contradictory: it asked for a hand-off across the boundary, and there is no
+boundary. That is not fatal (the artifacts do land, in the one bucket the
+deployment has), so startup logs it at `WARNING` and continues.
 
 ### Credential resolution — `auth.secretStore` and env vars (BLDX-1619)
 

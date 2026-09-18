@@ -539,7 +539,9 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
     stores_to_probe: list[tuple[str, str, object]] = [
         ("deployment", DEPLOYMENT_OBJECT_STORE_NAME, infra.storage),
     ]
-    if infra.upstream_storage is not None:
+    # On a single-store deployment the upstream handle is either absent or the
+    # same bucket already queued as "deployment" — nothing more to probe.
+    if not infra.single_store:
         stores_to_probe.append(
             ("upstream", UPSTREAM_OBJECT_STORE_NAME, infra.upstream_storage)
         )
@@ -623,7 +625,9 @@ async def check_object_store_access(
     stores_to_probe: list[tuple[str, str, object | None]] = [
         ("deployment", DEPLOYMENT_OBJECT_STORE_NAME, infra.storage),
     ]
-    if infra.upstream_storage is not None:
+    # On a single-store deployment the upstream handle is either absent or the
+    # same bucket already queued as "deployment" — nothing more to probe.
+    if not infra.single_store:
         stores_to_probe.append(
             ("upstream", UPSTREAM_OBJECT_STORE_NAME, infra.upstream_storage)
         )
@@ -755,7 +759,9 @@ async def check_run_storage_access(
     stores_to_probe: list[tuple[str, str, object | None]] = [
         ("deployment", DEPLOYMENT_OBJECT_STORE_NAME, infra.storage),
     ]
-    if infra.upstream_storage is not None:
+    # On a single-store deployment the upstream handle is either absent or the
+    # same bucket already queued as "deployment" — nothing more to probe.
+    if not infra.single_store:
         stores_to_probe.append(
             ("upstream", UPSTREAM_OBJECT_STORE_NAME, infra.upstream_storage)
         )

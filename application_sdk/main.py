@@ -686,8 +686,8 @@ async def _create_infrastructure(
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 
-        # BLDX-1619: on the k8s SDR secure path the upstream component resolves
-        # its credentials through auth.secretStore, and the matching env vars are
+        # BLDX-1619: on the k8s SDR secure path a store component resolves its
+        # credentials through auth.secretStore, and the matching env vars are
         # deliberately absent. Fetch those secrets here — the sidecar is up — so
         # the resolver sees the same values the sidecar does.  Publish them to
         # the binding-layer cache so later sync consumers (notably
@@ -695,22 +695,6 @@ async def _create_infrastructure(
         # verdict instead of re-deriving a different one env-only.
         from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: startup wiring only
             set_fetched_binding_secrets,
-        )
-
-        upstream_secrets = await _fetch_binding_secrets(
-            dapr_client,
-            UPSTREAM_OBJECT_STORE_NAME,
-            components_dir=components_dir,
-            required=ENABLE_ATLAN_UPLOAD,
-        )
-        set_fetched_binding_secrets(UPSTREAM_OBJECT_STORE_NAME, upstream_secrets)
-        upstream_storage, upstream_put_attrs = (
-            _create_store_from_binding_optional_with_put_attrs(
-                UPSTREAM_OBJECT_STORE_NAME,
-                components_dir=components_dir,
-                required=ENABLE_ATLAN_UPLOAD,
-                secrets=upstream_secrets,
-            )
         )
 
         deployment_secrets = await _fetch_binding_secrets(
@@ -726,6 +710,63 @@ async def _create_infrastructure(
                 secrets=deployment_secrets,
             )
         )
+
+        # The only place the two component *names* are compared: identity cannot
+        # be tested before the second object exists, so this is the decision
+        # about what to build.  Everywhere downstream asks ``single_store``,
+        # which compares the handles this branch produced.
+        if UPSTREAM_OBJECT_STORE_NAME == DEPLOYMENT_OBJECT_STORE_NAME:
+            # In-cluster charts point both names at the app's one object-store
+            # component.  One component is one store, so alias the handle rather
+            # than build a second store object over the same bucket: identity is
+            # what the dual-write fan-out (``upstream is not deployment``) and
+            # ``_upload_from_store``'s same-object guard test, and two objects
+            # make ``App.upload`` copy the bucket onto itself — a per-key sidecar
+            # compare inside the framework task's fixed timeout.
+            #
+            # Aliasing, not ``None``: every consumer outside ``App.upload`` reads
+            # ``upstream_storage`` as "is there an upstream store", and a name
+            # gate that answers ``None`` there is the fragile heuristic 668a06c21
+            # removed.  ``context.single_store`` is the topology signal.
+            if ENABLE_ATLAN_UPLOAD:
+                logger.warning(
+                    "ENABLE_ATLAN_UPLOAD is set but UPSTREAM_OBJECT_STORE_NAME and "
+                    "DEPLOYMENT_OBJECT_STORE_NAME both name %r — one object store. "
+                    "App.upload hands artifacts to that store; nothing crosses to a "
+                    "separate Atlan bucket. Point UPSTREAM_OBJECT_STORE_NAME at the "
+                    "Atlan object-store component if this deployment is meant to "
+                    "hand off across the boundary.",
+                    DEPLOYMENT_OBJECT_STORE_NAME,
+                )
+            else:
+                logger.info(
+                    "UPSTREAM_OBJECT_STORE_NAME and DEPLOYMENT_OBJECT_STORE_NAME both "
+                    "name %r — one object store; upstream_storage aliases it",
+                    DEPLOYMENT_OBJECT_STORE_NAME,
+                )
+            upstream_storage, upstream_put_attrs = (
+                deployment_store,
+                deployment_put_attrs,
+            )
+        else:
+            # BLDX-1619: the upstream component resolves its credentials through
+            # auth.secretStore on the k8s SDR secure path, so fetch those secrets
+            # too before building the store.
+            upstream_secrets = await _fetch_binding_secrets(
+                dapr_client,
+                UPSTREAM_OBJECT_STORE_NAME,
+                components_dir=components_dir,
+                required=ENABLE_ATLAN_UPLOAD,
+            )
+            set_fetched_binding_secrets(UPSTREAM_OBJECT_STORE_NAME, upstream_secrets)
+            upstream_storage, upstream_put_attrs = (
+                _create_store_from_binding_optional_with_put_attrs(
+                    UPSTREAM_OBJECT_STORE_NAME,
+                    components_dir=components_dir,
+                    required=ENABLE_ATLAN_UPLOAD,
+                    secrets=upstream_secrets,
+                )
+            )
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
             secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
