@@ -8,9 +8,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.errors.categories import Audience, FailureCategory
-from application_sdk.errors.leaves import AuthError, DependencyUnavailableError
+from application_sdk.errors.leaves import (
+    AuthError,
+    DependencyUnavailableError,
+    InternalError,
+)
 from application_sdk.execution._temporal.interceptors.metrics import (
     _INSTRUMENTS,
+    CLASSIFIED_TYPED,
+    CLASSIFIED_UNTYPED,
+    FAILURE_CLASSIFIED_VALUES,
     MetricsInterceptor,
     _activity_errors,
     _activity_executions,
@@ -219,6 +226,8 @@ class TestWorkflowFailuresClassified:
         assert tags["temporal.workflow.type"] == "TestWorkflow"
         assert tags["failure.category"] == FailureCategory.INTERNAL.value
         assert tags["failure.audience"] == Audience.APP_OWNER.value
+        # The INTERNAL/APP_OWNER pair here is the fallback, not a verdict.
+        assert tags["failure.classified"] == CLASSIFIED_UNTYPED
 
     async def test_platform_audience_fires_with_dependency_unavailable(
         self, split_counters
@@ -231,6 +240,7 @@ class TestWorkflowFailuresClassified:
         tags = classified.add.call_args[0][1]
         assert tags["failure.category"] == FailureCategory.DEPENDENCY_UNAVAILABLE.value
         assert tags["failure.audience"] == Audience.PLATFORM.value
+        assert tags["failure.classified"] == CLASSIFIED_TYPED
 
     async def test_user_audience_fires_with_user_label(self, split_counters):
         _, classified = split_counters
@@ -241,6 +251,7 @@ class TestWorkflowFailuresClassified:
         tags = classified.add.call_args[0][1]
         assert tags["failure.category"] == FailureCategory.AUTH.value
         assert tags["failure.audience"] == Audience.USER.value
+        assert tags["failure.classified"] == CLASSIFIED_TYPED
 
     async def test_success_does_not_fire(self, split_counters):
         _, classified = split_counters
@@ -278,6 +289,59 @@ class TestWorkflowFailuresClassified:
         tags = classified.add.call_args[0][1]
         assert tags["failure.category"] == FailureCategory.INTERNAL.value
         assert tags["failure.audience"] == Audience.APP_OWNER.value
+        assert tags["failure.classified"] == CLASSIFIED_UNTYPED
+
+    async def test_typed_internal_and_raw_exception_differ_only_by_classified(
+        self, split_counters
+    ):
+        """The whole point of the label.
+
+        A deliberate ``InternalError`` and an unadopted app's raw ``ValueError``
+        are the same two labels on the old schema. If this test ever passes
+        without ``failure.classified``, the ``APP_OWNER`` bucket has silently
+        gone back to mixing real bugs with instrumentation debt.
+        """
+        _, classified = split_counters
+
+        await self._run_failing_workflow(
+            InternalError(message="invariant broken"), split_counters
+        )
+        typed_tags = dict(classified.add.call_args[0][1])
+
+        classified.add.reset_mock()
+        await self._run_failing_workflow(ValueError("oops"), split_counters)
+        untyped_tags = dict(classified.add.call_args[0][1])
+
+        # Indistinguishable on the pre-existing labels ...
+        assert (
+            typed_tags["failure.category"]
+            == untyped_tags["failure.category"]
+            == FailureCategory.INTERNAL.value
+        )
+        assert (
+            typed_tags["failure.audience"]
+            == untyped_tags["failure.audience"]
+            == Audience.APP_OWNER.value
+        )
+        # ... and separable only by the new one.
+        assert typed_tags["failure.classified"] == CLASSIFIED_TYPED
+        assert untyped_tags["failure.classified"] == CLASSIFIED_UNTYPED
+
+    async def test_classified_label_stays_within_closed_vocabulary(
+        self, split_counters
+    ):
+        """Cardinality guard: this label rides every failure sample."""
+        _, classified = split_counters
+        for exc in (
+            ValueError("oops"),
+            InternalError(message="bug"),
+            AuthError(message="bad creds"),
+            DependencyUnavailableError(message="dapr down"),
+        ):
+            classified.add.reset_mock()
+            await self._run_failing_workflow(exc, split_counters)
+            tags = classified.add.call_args[0][1]
+            assert tags["failure.classified"] in FAILURE_CLASSIFIED_VALUES
 
     async def test_classified_emit_failure_is_silent(self, mock_meter):
         exec_counter = MagicMock()

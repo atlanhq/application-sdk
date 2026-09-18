@@ -35,8 +35,9 @@ process) rather than every validator re-deciding it.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final, Literal, Union
+from typing import Final, Literal, Union, final
 
 import orjson
 
@@ -99,11 +100,15 @@ __all__ = [
     "ArtifactValidationOutcome",
     "ArtifactValidationReport",
     "DeclaredField",
+    "ELEMENT_STEP",
+    "FieldPathStep",
     "FieldMapDeclaration",
     "ModelDeclaration",
     "artifact_enforcement",
     "artifact_validation_event_fields",
     "artifact_validation_matrix_json",
+    "has_element_step",
+    "parse_field_path",
     "artifact_validation_mode",
 ]
 
@@ -185,6 +190,75 @@ ARTIFACT_FORMATS: Final[frozenset[str]] = frozenset({FORMAT_NDJSON, FORMAT_PARQU
 
 
 # ---------------------------------------------------------------------------
+# The declared-path grammar
+# ---------------------------------------------------------------------------
+
+
+@final
+class _ElementStep:
+    """The ``[]`` step: descend into an array's element.
+
+    A singleton rather than a string so it can never collide with a member whose
+    name is literally ``"[]"`` — legal in JSON, and the walkers compare by identity.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "[]"
+
+
+ELEMENT_STEP: Final = _ElementStep()
+"""The one :class:`_ElementStep`. Compare with ``is``."""
+
+FieldPathStep = Union[str, _ElementStep]
+"""One step of a parsed path: a member name, or :data:`ELEMENT_STEP`."""
+
+
+def parse_field_path(path: str) -> tuple[FieldPathStep, ...]:
+    """Split a declared path into steps, resolving the two documented step kinds.
+
+    ``.name`` descends into a container's named member and ``[]`` into an array's
+    element, so ``attributes.columns[].name`` is
+    ``("attributes", "columns", ELEMENT_STEP, "name")``. Each validator resolves the
+    element step for its own format — the physical spelling differs (parquet writes
+    the same leaf as ``columns.list.element.name`` under the 3-level list encoding
+    and ``columns.bag.array.name`` under the legacy 2-level one), which is exactly
+    why the declaration says what is *meant* instead.
+
+    **A path this grammar does not cover is returned as plain dotted segments**, so
+    it resolves exactly as it did before this function existed. The contract toolkit
+    rejects those at generation time (``a[0]`` selects one element rather than
+    describing every one; ``[]`` has no container to descend into), and a
+    declaration that reached the SDK anyway is a reason to report one field
+    unresolved, never to fail the artifact's whole check.
+    """
+    steps: list[FieldPathStep] = []
+    for segment in path.split("."):
+        base = segment
+        depth = 0
+        while base.endswith("[]"):
+            base = base[:-2]
+            depth += 1
+        if depth and not base:
+            # "[]" with nothing to descend into — not the grammar. Fall back whole,
+            # rather than part-parsed, so the result is one predictable shape.
+            return tuple(path.split("."))
+        steps.append(base)
+        steps.extend(ELEMENT_STEP for _ in range(depth))
+    return tuple(steps)
+
+
+def has_element_step(steps: Sequence[FieldPathStep]) -> bool:
+    """Whether ``steps`` addresses many values rather than one.
+
+    Validators keep their single-value fast path for the common case and pay for the
+    fan-out walk only on a declaration that asked for it.
+    """
+    return any(step is ELEMENT_STEP for step in steps)
+
+
+# ---------------------------------------------------------------------------
 # What a schema source resolves to
 # ---------------------------------------------------------------------------
 
@@ -193,14 +267,19 @@ ARTIFACT_FORMATS: Final[frozenset[str]] = frozenset({FORMAT_NDJSON, FORMAT_PARQU
 class DeclaredField:
     """One field an app declares it requires of an artifact.
 
-    Nested payloads are addressed by **dotted path plus a container type**, not by
-    a recursive type grammar: ``payload.rows`` typed ``array`` rather than a nested
+    Nested payloads are addressed by **path plus a container type**, not by a
+    recursive type grammar: ``payload.rows`` typed ``array`` rather than a nested
     schema literal. The deeply-nested case never needs the grammar because it
     delegates to an executable model (see :class:`ModelDeclaration`).
     """
 
     path: str
-    """Field name, or dotted path for a nested field (e.g. ``payload.rows``)."""
+    """Field name, or a path for a nested field.
+
+    Two step kinds, parsed by :func:`parse_field_path`: ``.name`` descends into a
+    container's named member (``payload.rows``) and ``[]`` into an array's element
+    (``tags[]``, ``attributes.columns[].name``). On an element path ``required``
+    reads *per element*, so an empty array satisfies it vacuously."""
     type: ArtifactFieldTypeExtended = "any"
     """Declared logical type. ``any`` means "must be present, type not asserted" —
     so a thin declaration can assert presence without anyone inventing a wrong type

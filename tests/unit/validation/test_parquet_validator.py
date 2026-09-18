@@ -901,3 +901,161 @@ class TestTheValidatorSeam:
         assert report.fields_declared == 2
         assert report.boundary is True
         assert "START_TIME" in report.format_report()
+
+
+# ---------------------------------------------------------------------------
+# The `[]` element step (FND-2355)
+# ---------------------------------------------------------------------------
+
+
+class TestElementStep:
+    """`[]` descends into a list's element.
+
+    The step exists because the *physical* spelling does not survive a producer
+    change: parquet writes the same leaf as `columns.list.element.name` under the
+    3-level list encoding and `columns.bag.array.name` under the legacy 2-level one.
+    Every assertion here is written in terms of what the declaration means, and
+    pyarrow's `value_type` is what makes both encodings answer the same way.
+
+    Before FND-2355 every case in this class reported the declared column absent
+    from the footer — a false flag on an artifact that carried exactly what was
+    declared.
+    """
+
+    def test_scalar_element_resolves(self, tmp_path: Path):
+        path = _write_parquet(
+            tmp_path / "a.parquet",
+            pa.schema([pa.field("tags", pa.list_(pa.string()))]),
+        )
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="tags", type="array"),
+                DeclaredField(path="tags[]", type="string"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_scalar_element_type_is_asserted(self, tmp_path: Path):
+        """The element's own type is checked, not just the list's presence."""
+        path = _write_parquet(
+            tmp_path / "a.parquet",
+            pa.schema([pa.field("tags", pa.list_(pa.int64()))]),
+        )
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="tags", type="array"),
+                DeclaredField(path="tags[]", type="string"),
+            ),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert any(f.field == "tags[]" for f in report.failures)
+
+    def test_struct_element_leaf_resolves(self, tmp_path: Path):
+        """`columns[].name` — the documented three-step path."""
+        path = _write_parquet(
+            tmp_path / "a.parquet",
+            pa.schema(
+                [
+                    pa.field(
+                        "columns",
+                        pa.list_(
+                            pa.struct(
+                                [
+                                    pa.field("name", pa.string()),
+                                    pa.field("order", pa.int64()),
+                                ]
+                            )
+                        ),
+                    )
+                ]
+            ),
+        )
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="columns", type="array"),
+                DeclaredField(path="columns[]", type="struct"),
+                DeclaredField(path="columns[].name", type="string"),
+                DeclaredField(path="columns[].order", type="int"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_struct_element_leaf_type_drift_is_caught(self, tmp_path: Path):
+        """The 73-day RCA's defect, one level down inside a list."""
+        path = _write_parquet(
+            tmp_path / "a.parquet",
+            pa.schema(
+                [
+                    pa.field(
+                        "rows",
+                        pa.list_(pa.struct([pa.field("at", pa.string())])),
+                    )
+                ]
+            ),
+        )
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="rows", type="array"),
+                DeclaredField(path="rows[]", type="struct"),
+                DeclaredField(path="rows[].at", type="timestamp"),
+            ),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert any(f.field == "rows[].at" for f in report.failures)
+
+    @pytest.mark.parametrize(
+        "list_type",
+        [
+            pa.list_(pa.string()),
+            pa.large_list(pa.string()),
+            pa.list_(pa.string(), 2),
+        ],
+        ids=["list", "large_list", "fixed_size_list"],
+    )
+    def test_every_list_flavour_resolves_the_same(self, tmp_path: Path, list_type):
+        """A declaration must not be pinned to which list type the producer wrote."""
+        path = _write_parquet(
+            tmp_path / "a.parquet", pa.schema([pa.field("tags", list_type)])
+        )
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="tags", type="array"),
+                DeclaredField(path="tags[]", type="string"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_element_step_on_a_non_list_is_flagged(self, tmp_path: Path):
+        """A producer that stopped writing a list is exactly what this catches."""
+        path = _write_parquet(
+            tmp_path / "a.parquet", pa.schema([pa.field("tags", pa.string())])
+        )
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="tags[]", type="string")),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+
+    def test_optional_element_absent_is_clean(self, tmp_path: Path):
+        """Over-strictness is its own failure mode: it trains people to ignore flags."""
+        path = _write_parquet(
+            tmp_path / "a.parquet", pa.schema([pa.field("other", pa.string())])
+        )
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="tags[]", type="string", required=False)),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_literal_column_name_still_wins(self, tmp_path: Path):
+        """Exact-match-first is unchanged: a column really named `a.b` resolves to it."""
+        path = _write_parquet(
+            tmp_path / "a.parquet", pa.schema([pa.field("a.b", pa.string())])
+        )
+        report = _validate(path, _declare(DeclaredField(path="a.b", type="string")))
+        assert report.outcome == OUTCOME_CLEAN, report.reason

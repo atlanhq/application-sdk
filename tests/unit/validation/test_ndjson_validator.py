@@ -888,3 +888,214 @@ def test_the_declared_suffixes_are_lower_cased_extensions() -> None:
 
     assert NDJSON_SUFFIXES == (".json", ".jsonl", ".ndjson")
     assert all(s == s.lower() and s.startswith(".") for s in NDJSON_SUFFIXES)
+
+
+# ---------------------------------------------------------------------------
+# The `[]` element step (FND-2355)
+# ---------------------------------------------------------------------------
+
+
+class TestElementStep:
+    """`[]` descends into an array's element, and `required` reads per element.
+
+    Before FND-2355 every case here reported the declared field unresolvable — a
+    false flag on a record that carried exactly what was declared.
+    """
+
+    def test_scalar_element_resolves(self, tmp_path: Path):
+        path = _write(tmp_path / "a.json", [{"tags": ["a", "b"]}])
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="tags", type="array"),
+                DeclaredField(path="tags[]", type="string"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_empty_array_satisfies_vacuously(self, tmp_path: Path):
+        """ADR-0020 is explicit: an empty array satisfies a required element path."""
+        path = _write(tmp_path / "a.json", [{"tags": []}])
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="tags", type="array"),
+                DeclaredField(path="tags[]", type="string"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_wrong_element_type_is_caught_with_its_index(self, tmp_path: Path):
+        path = _write(tmp_path / "a.json", [{"tags": ["a", 7]}])
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="tags[]", type="string")),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert "tags[1]" in report.failures[0].errors[0]
+
+    def test_element_step_on_a_non_list_is_flagged(self, tmp_path: Path):
+        path = _write(tmp_path / "a.json", [{"tags": "a,b"}])
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="tags[]", type="string")),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert report.failures[0].expected == "array"
+
+    def test_struct_element_leaf_resolves(self, tmp_path: Path):
+        path = _write(
+            tmp_path / "a.json",
+            [{"columns": [{"name": "a", "order": 1}, {"name": "b", "order": 2}]}],
+        )
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="columns", type="array"),
+                DeclaredField(path="columns[]", type="struct"),
+                DeclaredField(path="columns[].name", type="string"),
+                DeclaredField(path="columns[].order", type="int"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_required_leaf_missing_on_one_element_is_caught(self, tmp_path: Path):
+        """`required` reads per element: every element must carry it."""
+        path = _write(
+            tmp_path / "a.json",
+            [{"columns": [{"name": "a", "order": 1}, {"name": "b"}]}],
+        )
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="columns[].order", type="int")),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert "columns[1].order" in report.failures[0].errors[0]
+
+    def test_optional_leaf_missing_on_one_element_is_clean(self, tmp_path: Path):
+        """Declared optional, an absent member drops that element and checks its siblings."""
+        path = _write(
+            tmp_path / "a.json",
+            [{"columns": [{"name": "a", "order": 1}, {"name": "b"}]}],
+        )
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="columns[].order", type="int", required=False)),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_optional_leaf_still_type_checked_where_present(self, tmp_path: Path):
+        """Optional means "absent is fine", never "unchecked when present"."""
+        path = _write(
+            tmp_path / "a.json",
+            [{"columns": [{"name": "a"}, {"name": "b", "order": "2"}]}],
+        )
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="columns[].order", type="int", required=False)),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert "columns[1].order" in report.failures[0].errors[0]
+
+    def test_one_failure_per_declaration_per_record(self, tmp_path: Path):
+        """A uniformly wrong 200-element array is one defect, not 200 report rows."""
+        path = _write(tmp_path / "a.json", [{"tags": [1] * 200}])
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="tags[]", type="string")),
+        )
+        assert report.outcome == OUTCOME_FLAGGED
+        assert len(report.failures) == 1
+
+    def test_null_element_satisfies_every_type(self, tmp_path: Path):
+        """Consistent with the scalar path, where JSON null satisfies any declared type."""
+        path = _write(tmp_path / "a.json", [{"tags": [None, "a"]}])
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="tags[]", type="string")),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_nested_arrays_resolve(self, tmp_path: Path):
+        """`a[][]` — repeated element steps, an array of arrays."""
+        path = _write(tmp_path / "a.json", [{"grid": [["x"], ["y", "z"]]}])
+        report = _validate(
+            path,
+            _declare(
+                DeclaredField(path="grid", type="array"),
+                DeclaredField(path="grid[]", type="array"),
+                DeclaredField(path="grid[][]", type="string"),
+            ),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_null_array_is_vacuous_like_an_empty_one(self, tmp_path: Path):
+        """A JSON null array must read the same on both paths.
+
+        `null` satisfies every declared type on the scalar path, so an element path
+        that rejected it would flag `{"tags": null}` while the `tags`/`array`
+        declaration beside it passed the very same record — and in `hard` mode that
+        false flag fails the activity.
+        """
+        path = _write(tmp_path / "a.json", [{"tags": None}])
+        declaration = _declare(
+            DeclaredField(path="tags", type="array"),
+            DeclaredField(path="tags[]", type="string"),
+        )
+        report = _validate(path, declaration)
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_null_array_agrees_with_the_scalar_declaration(self, tmp_path: Path):
+        """The two declarations must not disagree about the same record."""
+        path = _write(tmp_path / "a.json", [{"tags": None}])
+        scalar = _validate(path, _declare(DeclaredField(path="tags", type="array")))
+        element = _validate(path, _declare(DeclaredField(path="tags[]", type="string")))
+        assert scalar.outcome == element.outcome
+
+    def test_null_nested_array_is_vacuous(self, tmp_path: Path):
+        path = _write(tmp_path / "a.json", [{"attributes": {"columns": None}}])
+        report = _validate(
+            path,
+            _declare(DeclaredField(path="attributes.columns[].name", type="string")),
+        )
+        assert report.outcome == OUTCOME_CLEAN, report.reason
+
+    def test_non_list_that_is_not_null_is_still_flagged(self, tmp_path: Path):
+        """Widening null must not have widened the real defect it guards."""
+        path = _write(tmp_path / "a.json", [{"tags": "a,b"}])
+        report = _validate(path, _declare(DeclaredField(path="tags[]", type="string")))
+        assert report.outcome == OUTCOME_FLAGGED
+
+    def test_element_label_survives_the_deferred_walk(self, tmp_path: Path):
+        """Labels are rebuilt on the cold path; they must still name the right element.
+
+        Guards the optimisation: the fast walk carries no labels, so a drift between
+        it and the labelling re-walk would silently misattribute every failure.
+        """
+        path = _write(
+            tmp_path / "a.json",
+            [{"c": [{"n": "a"}, {"n": "b"}, {"n": 3}, {"n": "d"}]}],
+        )
+        report = _validate(path, _declare(DeclaredField(path="c[].n", type="string")))
+        assert report.outcome == OUTCOME_FLAGGED
+        assert "c[2].n" in report.failures[0].errors[0]
+
+    def test_element_label_is_correct_across_nested_arrays(self, tmp_path: Path):
+        """Positional alignment has to hold when the fan-out is more than one level."""
+        path = _write(tmp_path / "a.json", [{"g": [["a"], ["b", 7]]}])
+        report = _validate(path, _declare(DeclaredField(path="g[][]", type="string")))
+        assert report.outcome == OUTCOME_FLAGGED
+        assert "g[1][1]" in report.failures[0].errors[0]
+
+    def test_literal_bracket_key_reads_as_the_element_step(self, tmp_path: Path):
+        """Pinning a deliberate asymmetry rather than leaving it accidental.
+
+        A record key literally named "tags[]" resolved before the element step
+        existed. It now parses as "descend into `tags`", which is the reading the
+        grammar intends; parquet keeps its exact-match-first rule because a parquet
+        column name is a flat string, while a JSON member is addressed by the same
+        walk that has to interpret the step. FND-2355 records the asymmetry.
+        """
+        path = _write(tmp_path / "a.json", [{"tags[]": "x"}])
+        report = _validate(path, _declare(DeclaredField(path="tags[]", type="string")))
+        assert report.outcome == OUTCOME_FLAGGED

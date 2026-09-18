@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.35.0
-source-sha:    72f4c3a01e0edfba9b0627740456ab6690aac6e3
-source-date:   2026-09-18T19:16:17+05:30
+source-sha:    3933f81a05f1fa23bfc979fe3bc9295a2cd3a497
+source-date:   2026-09-18T19:30:52+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -36,7 +36,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 403 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 82 |
 
 ## Subpackage Details
 
@@ -6578,6 +6578,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Map every Temporal workflow type ``app_name`` registers to its entry point.
 - **Defined in:** `application_sdk/validation/interceptor.py`
 
+#### `has_element_step`
+
+- **Import:** `from application_sdk.validation.artifacts import has_element_step`
+- **Signature:** `has_element_step(steps: Sequence[FieldPathStep]) -> bool`
+- **Summary:** Whether ``steps`` addresses many values rather than one.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `iter_ndjson_lines`
 
 - **Import:** `from application_sdk.validation import iter_ndjson_lines`
@@ -6593,6 +6600,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `log_artifact_validation_posture(app_name: str, *, enforce: bool, enabled: bool)`
 - **Summary:** Emit the boot-time posture row for one app — **every** app, soft included.
 - **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `parse_field_path`
+
+- **Import:** `from application_sdk.validation.artifacts import parse_field_path`
+- **Signature:** `parse_field_path(path: str) -> tuple[FieldPathStep, ...]`
+- **Summary:** Split a declared path into steps, resolving the two documented step kinds.
+- **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `resolve_artifact_enforcement`
 
@@ -6842,6 +6856,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** A scan ran and returned a real answer about the artifact. Subject to mode.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `ELEMENT_STEP`
+
+- **Import:** `from application_sdk.validation.artifacts import ELEMENT_STEP`
+- **Signature:** `ELEMENT_STEP: Final`
+- **Summary:** The one :class:`_ElementStep`. Compare with ``is``.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `ENFORCEMENT_BLOCKED`
 
 - **Import:** `from application_sdk.validation import ENFORCEMENT_BLOCKED`
@@ -6864,6 +6885,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `ENFORCEMENT_WOULD_BLOCK: Final`
 - **Summary:** Soft mode, and this outcome *would* have failed the activity in hard mode.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `FieldPathStep`
+
+- **Import:** `from application_sdk.validation.artifacts import FieldPathStep`
+- **Signature:** `FieldPathStep`
+- **Summary:** One step of a parsed path: a member name, or :data:`ELEMENT_STEP`.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `FORMAT_NDJSON`
