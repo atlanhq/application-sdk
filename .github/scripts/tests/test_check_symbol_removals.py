@@ -30,6 +30,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import check_symbol_removals as mod
+import release as release_mod  # the real parser, to pin the two predicates together
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -198,8 +199,10 @@ def test_deleting_what_the_base_already_deprecated_is_clean():
     [
         "feat!: drop the legacy gate contract",
         "fix(preflight)!: drop the legacy gate contract",
-        "refactor: reshape the gate\n\nBREAKING CHANGE: resolve_gate_attempts is gone",
-        "refactor: reshape\n\nBREAKING-CHANGE: gone",
+        "refactor!: reshape the gate",
+        # A trailer works only when it is IN the title, which is the only part
+        # that survives the squash into the commit release.py parses.
+        "BREAKING CHANGE: resolve_gate_attempts is gone",
     ],
 )
 def test_declared_break_downgrades_to_advisory(subject):
@@ -209,6 +212,48 @@ def test_declared_break_downgrades_to_advisory(subject):
     findings = mod.compare(base, head, commit_subject=subject)
     assert blocking(findings) == set()
     assert advisory(findings) == {"application_sdk.thing:resolve_gate_attempts"}
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        # Body-only trailer: spec-valid Conventional Commits, and discarded by
+        # this repo's squash (title-only subject, blank body), so release.py
+        # never sees it and cuts no major.
+        "refactor: reshape the gate\n\nBREAKING CHANGE: resolve_gate_attempts is gone",
+        # Hyphenated synonym: release.py matches the space form only.
+        "refactor: reshape\n\nBREAKING-CHANGE: gone",
+        "refactor-CHANGE: not a declaration",
+    ],
+)
+def test_a_declaration_the_release_ignores_does_not_relax_the_gate(subject):
+    """The relaxation is only sound if the release automation actually majors.
+
+    Each of these once relaxed the gate while producing no major bump — an
+    un-deprecated public removal shipping in a non-major release, which is the
+    #3685 shape the gate exists to prevent.
+    """
+    base = snap("def resolve_gate_attempts(raw): ...")
+    head = snap("")
+    assert blocking(mod.compare(base, head, commit_subject=subject))
+
+
+def test_every_accepted_declaration_is_one_release_py_majors():
+    """Pin the two predicates together so they cannot drift apart again.
+
+    Asserted against release.py's real parser, not a copy of its regexes.
+    """
+    accepted = [
+        "feat!: drop it",
+        "fix(preflight)!: drop it",
+        "refactor!: drop it",
+        "BREAKING CHANGE: drop it",
+    ]
+    for subject in accepted:
+        assert mod.declares_break(subject), subject
+        squashed = mod.squashed_subject(subject)
+        is_breaking, _, _ = release_mod.parse_conventional_commits([squashed])
+        assert is_breaking, f"gate relaxed on {subject!r} but release.py cuts no major"
 
 
 @pytest.mark.parametrize(
@@ -259,6 +304,58 @@ def test_self_is_not_part_of_a_method_signature():
     base = snap("class A:\n    def go(self, x): ...")
     head = snap("class A:\n    def go(self, x): ...")
     assert mod.compare(base, head) == []
+
+
+def test_making_a_parameter_keyword_only_is_narrowing():
+    """`f(1)` breaks. Silent before review found it."""
+    base = snap("def f(x): ...")
+    head = snap("def f(*, x): ...")
+    findings = mod.compare(base, head)
+    assert blocking(findings) == {"application_sdk.thing:f"}
+    assert "positional" in findings[0].detail
+
+
+def test_making_a_parameter_positional_only_is_narrowing():
+    """`f(x=1)` breaks. Also silent before."""
+    base = snap("def f(x): ...")
+    head = snap("def f(x, /): ...")
+    findings = mod.compare(base, head)
+    assert blocking(findings) == {"application_sdk.thing:f"}
+    assert "keyword" in findings[0].detail
+
+
+def test_positional_only_to_keyword_only_is_narrowing():
+    """Swaps which style works rather than removing one — still breaks callers."""
+    base = snap("def f(x, /): ...")
+    head = snap("def f(*, x): ...")
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:f"}
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("def f(*, x): ...", "def f(x): ..."),  # keyword-only -> both
+        ("def f(x, /): ...", "def f(x): ..."),  # positional-only -> both
+    ],
+)
+def test_loosening_a_parameter_kind_is_not_narrowing(before, after):
+    """Every existing call still works, so there is nothing to report.
+
+    Encoding the kind into the parameter name would report these as a dropped
+    `*x` / `/x` — a false positive on a pure widening.
+    """
+    assert mod.compare(snap(before), snap(after)) == []
+
+
+def test_vararg_and_keyword_only_of_the_same_name_do_not_collide():
+    """They are different kinds and must not compare equal.
+
+    `def f(*items)` accepts `f(1, 2)`; `def f(*, items)` accepts `f(items=1)`.
+    A name-encoding scheme renders both `*items` and sees no change.
+    """
+    base = snap("def f(*items): ...")
+    head = snap("def f(*, items): ...")
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:f"}
 
 
 def test_narrowing_a_deprecated_symbol_is_not_reported():

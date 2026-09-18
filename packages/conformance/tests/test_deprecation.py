@@ -1386,3 +1386,79 @@ def test_b008_rule_is_registered_app_scoped_and_warn() -> None:
     rule = get_rule("B008")
     assert rule.scope is RuleScope.APP
     assert rule.tier is EnforcementTier.WARN
+
+
+# ── The documented shim, graded end to end ────────────────────────────────────
+#
+# The site-level tests above prove extract_sites() reads the mapping. They say
+# nothing about B002/B003, which grade through a SEPARATE extractor walking
+# warnings.warn calls — and that is where the documented idiom was found to
+# trip. Review caught this: an SDK author following docs/standards/symbols.md
+# got a spurious B002 on a correctly authored deprecation.
+
+
+_DOCUMENTED_SHIM = (
+    "import warnings\n\n"
+    "_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {\n"
+    '    "CLASSIFICATION_VERDICT": (\n'
+    '        "PreflightClassification.VERDICT",\n'
+    '        "the enum member carrying the same wire value",\n'
+    "    ),\n"
+    "}\n\n"
+    "def __getattr__(name: str) -> object:\n"
+    "    entry = _DEPRECATED_CONSTANTS.get(name)\n"
+    "    if entry is None:\n"
+    "        raise AttributeError(name)\n"
+    "    replacement, note = entry\n"
+    "    warnings.warn(\n"
+    '        f"{name} is deprecated; use {replacement} instead — {note}. "\n'
+    '        "Will be removed in v3.40.0.",\n'
+    "        DeprecationWarning,\n"
+    "        stacklevel=2,\n"
+    "    )\n"
+    "    return None\n"
+)
+
+
+def test_documented_shim_grades_clean_end_to_end() -> None:
+    """The shape `docs/standards/symbols.md` prescribes must not trip B002.
+
+    A standard that produces a finding when followed is worse than no standard:
+    the author either suppresses a correct deprecation or stops writing them.
+    """
+    tree, directives = _tree_and_directives(_DOCUMENTED_SHIM)
+    findings = scan_authoring(tree, "application_sdk/x.py", "3.36.0", directives)
+    assert [f.rule_id for f in findings] == [], [f.message for f in findings]
+
+
+def test_documented_shim_also_yields_a_complete_site() -> None:
+    """Both halves: the site carries the target and the version B001 needs."""
+    site = next(
+        s for s in extract_sites(ast.parse(_DOCUMENTED_SHIM)) if s.kind == "constant"
+    )
+    assert site.symbol == "CLASSIFICATION_VERDICT"
+    assert site.has_migration_target is True
+    assert site.removal_version_raw == "3.40.0"
+
+
+def test_passing_the_notice_as_a_variable_still_trips_b002() -> None:
+    """Pins WHY the standard says to inline the f-string.
+
+    `_static_str` reads a literal or an f-string; hand it a name and it yields
+    "". If this ever starts passing, `_static_str` has learned to resolve a
+    name binding — at which point the restriction in symbols.md can go, and
+    this test should be replaced rather than deleted quietly.
+    """
+    src = (
+        "import warnings\n\n"
+        "_DEPRECATED_CONSTANTS: dict[str, str] = {\n"
+        '    "OLD": "OLD is deprecated; use NEW — will be removed in v4.0.0.",\n'
+        "}\n\n"
+        "def __getattr__(name: str) -> object:\n"
+        "    notice = _DEPRECATED_CONSTANTS[name]\n"
+        "    warnings.warn(notice, DeprecationWarning, stacklevel=2)\n"
+        "    return None\n"
+    )
+    tree, directives = _tree_and_directives(src)
+    findings = scan_authoring(tree, "application_sdk/x.py", "3.36.0", directives)
+    assert [f.rule_id for f in findings] == ["B002"]

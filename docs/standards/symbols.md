@@ -32,10 +32,19 @@ equivalent.
 > **You may not remove a name that was not already marked deprecated in the
 > previous release.**
 
-That is the whole policy, and it is enforced mechanically by
+That is the whole policy, and it is checked mechanically by
 `.github/scripts/check_symbol_removals.py` (the **Symbol Removal Check**
-workflow, a required status check), which compares the importable surface at
-`HEAD` against the surface at the last stable `v*` tag.
+workflow), which compares the importable surface at `HEAD` against the surface
+at the last stable `v*` tag.
+
+> **Status: advisory, not yet enforced.** The check runs on every PR and
+> reports, but `Symbol Removal Check` is not among the `main` ruleset's
+> required status checks, so a PR removing an un-deprecated public name goes
+> red and merges anyway. Making it required is an admin change to the ruleset:
+> add the context `Symbol Removal Check` — the **job** name, which this
+> workflow deliberately keeps identical to its own name, because a ruleset
+> context matching no check run blocks every PR indefinitely. Until then, treat
+> a red run as a review obligation rather than a wall.
 
 Note what the rule does *not* say. It does not say "do not remove things" — the
 SDK has to be able to shed surface. It says removal is a **two-step** operation
@@ -128,10 +137,13 @@ import.
 ```python
 import warnings
 
-_DEPRECATED_CONSTANTS: dict[str, str] = {
+#: name -> (replacement, why). The shared sentence and the removal version
+#: live in __getattr__ below; both halves are glued back together when the
+#: notice is graded.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "CLASSIFICATION_VERDICT": (
-        "CLASSIFICATION_VERDICT is deprecated; use PreflightClassification.VERDICT, "
-        "the enum member carrying the same wire value — will be removed in v3.40.0."
+        "PreflightClassification.VERDICT",
+        "the enum member carrying the same wire value",
     ),
 }
 
@@ -144,12 +156,36 @@ def _deprecated_constant_value(name: str) -> object:
 
 def __getattr__(name: str) -> object:
     """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
-    notice = _DEPRECATED_CONSTANTS.get(name)
-    if notice is None:
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    warnings.warn(notice, DeprecationWarning, stacklevel=2)
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v3.40.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return _deprecated_constant_value(name)
 ```
+
+**Build the notice inline in the `warn` call, as above — do not pass a
+variable.** It reads like a pointless restriction and it is not. B002/B003
+grade notices through a separate extractor that walks `warnings.warn` calls, and
+`_static_str` can only read a literal or an f-string: hand it a name and it sees
+an empty string, so a correctly authored deprecation is reported as naming
+neither a replacement nor a removal version. Measured on the two shapes:
+
+| shim shape | site extraction | `scan_authoring` |
+|---|---|---|
+| f-string inline in `warn(...)` | target ✅, removal ✅ | clean |
+| `notice = ...` then `warn(notice, ...)` | target ✅, removal ✅ | **spurious B002** |
+
+The site side reads the mapping and is fine either way; only the notice side
+trips. Until `_static_str` learns to resolve a simple name binding, the inline
+form is the one that grades clean — and it is also what
+[#3843](https://github.com/atlanhq/application-sdk/pull/3843) ships, so it is
+precedent rather than invention.
 
 Three constraints make this readable by the tooling, and all three matter:
 
@@ -163,12 +199,10 @@ Three constraints make this readable by the tooling, and all three matter:
   before `__getattr__` ever runs, so the alias never fires and the consumer gets
   no migration signal at all.
 
-A value may also be a tuple of parts (`(replacement, note)`), which the extractor
-joins — that shape exists because
-[#3843](https://github.com/atlanhq/application-sdk/pull/3843) wrote it that way,
-with the shared sentence and the removal version living in the `__getattr__`
-f-string. Both halves are glued back together before grading. Prefer the plain
-notice string: it is what a B001 finding shows a human.
+A value may also be a single notice string rather than a `(replacement, note)`
+tuple; the extractor accepts both and appends the `__getattr__` tail either way.
+The tuple form is shown above because it keeps the shared sentence in one place
+instead of repeating it per entry.
 
 ---
 

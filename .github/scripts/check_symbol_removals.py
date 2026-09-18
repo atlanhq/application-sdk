@@ -94,7 +94,6 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import re
 import subprocess
 import sys
 import tarfile
@@ -102,6 +101,13 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from conventional_breaking import (  # noqa: E402 — sibling script, path set above
+    declares_breaking_change,
+    squashed_subject,
+)
 
 #: The distribution package whose surface this gate guards.
 DEFAULT_PACKAGE = "application_sdk"
@@ -117,10 +123,11 @@ ALIAS_MAPPING_NAME = "_DEPRECATED_CONSTANTS"
 #: on the attribute name alone).
 _DEPRECATED_DECORATORS = frozenset({"deprecated"})
 
-#: Conventional-commit shapes that declare a break. ``!`` before the colon, or a
-#: ``BREAKING CHANGE``/``BREAKING-CHANGE`` trailer anywhere in the body.
-_BREAKING_SUBJECT = re.compile(r"^[a-zA-Z]+(\([^)]*\))?!:")
-_BREAKING_TRAILER = re.compile(r"^BREAKING[ -]CHANGE:", re.MULTILINE)
+# The breaking-change predicate is NOT defined here. It lives in
+# conventional_breaking so this gate and release.py cannot drift: relaxing a
+# blocking removal is only sound if the release automation actually cuts a
+# major for the same text. See that module for the two divergences this
+# arrangement replaced.
 
 #: Dunder names that are module plumbing rather than surface. ``__getattr__``
 #: and ``__all__`` describe the surface; they are not themselves part of it.
@@ -158,6 +165,8 @@ class Symbol:
     """Parameter names for a callable, in declaration order."""
     required_params: tuple[str, ...] = ()
     """The subset of *params* with no default — narrowing these is a break."""
+    param_kinds: tuple[str, ...] = ()
+    """How each of *params* may be passed, positionally aligned with it."""
 
     @property
     def key(self) -> str:
@@ -205,6 +214,7 @@ class Snapshot:
                 deprecated=rec["deprecated"],
                 params=tuple(rec.get("params", ())),
                 required_params=tuple(rec.get("required_params", ())),
+                param_kinds=tuple(rec.get("param_kinds", ())),
             )
             for key, rec in raw["symbols"].items()
         }
@@ -244,35 +254,75 @@ def _is_deprecated_decorator(node: ast.expr) -> bool:
     return False
 
 
+#: How a parameter may be passed.
+POSITIONAL_ONLY = "positional-only"
+POSITIONAL_OR_KEYWORD = "positional-or-keyword"
+KEYWORD_ONLY = "keyword-only"
+VAR_POSITIONAL = "var-positional"
+VAR_KEYWORD = "var-keyword"
+
+#: The call styles each kind accepts. A kind change narrows when it takes a
+#: style away: ``positional-or-keyword`` → ``keyword-only`` drops "positional"
+#: and breaks ``f(1)``; → ``positional-only`` drops "keyword" and breaks
+#: ``f(x=1)``. The reverse adds a style and breaks nobody, so *loosening* a
+#: parameter is never a finding.
+_ACCEPTS: dict[str, frozenset[str]] = {
+    POSITIONAL_ONLY: frozenset({"positional"}),
+    POSITIONAL_OR_KEYWORD: frozenset({"positional", "keyword"}),
+    KEYWORD_ONLY: frozenset({"keyword"}),
+    VAR_POSITIONAL: frozenset({"positional"}),
+    VAR_KEYWORD: frozenset({"keyword"}),
+}
+
+
 def _signature(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Return ``(all param names, required param names)`` for *node*.
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Return ``(all param names, required param names, param kinds)`` for *node*.
 
     ``self``/``cls`` are dropped so a method reads the same as the call an app
     actually writes.  ``*args``/``**kwargs`` are recorded by name because their
     disappearance narrows the surface too.
+
+    Kinds ride in a parallel tuple rather than encoded into the names.
+    Encoding them (``/x``, ``*x``) collides — a var-positional and a
+    keyword-only render identically — and turns every *widening* into a
+    spurious dropped-name finding, since ``def f(*, x)`` → ``def f(x)`` breaks
+    nobody but would read as ``*x`` having been removed.
     """
     args = node.args
-    positional = [*args.posonlyargs, *args.args]
-    names: list[str] = [a.arg for a in positional]
-    if names and names[0] in ("self", "cls"):
-        names.pop(0)
-        positional = positional[1:]
+    posonly = [a.arg for a in args.posonlyargs]
+    plain = [a.arg for a in args.args]
 
-    # Defaults right-align against the positional list.
+    # ``self``/``cls`` is dropped so a method reads as the call an app writes.
+    # It can only ever be the first parameter, positional-only or not.
+    if posonly and posonly[0] in ("self", "cls"):
+        posonly.pop(0)
+    elif plain and plain[0] in ("self", "cls"):
+        plain.pop(0)
+
+    names: list[str] = [*posonly, *plain]
+    kinds: list[str] = [
+        *([POSITIONAL_ONLY] * len(posonly)),
+        *([POSITIONAL_OR_KEYWORD] * len(plain)),
+    ]
+
+    # Defaults right-align across posonly + args together.
     n_defaulted = len(args.defaults)
     required = names[: len(names) - n_defaulted] if n_defaulted else list(names)
 
     if args.vararg:
         names.append(f"*{args.vararg.arg}")
+        kinds.append(VAR_POSITIONAL)
     for kwarg, default in zip(args.kwonlyargs, args.kw_defaults):
         names.append(kwarg.arg)
+        kinds.append(KEYWORD_ONLY)
         if default is None:
             required.append(kwarg.arg)
     if args.kwarg:
         names.append(f"**{args.kwarg.arg}")
-    return tuple(names), tuple(required)
+        kinds.append(VAR_KEYWORD)
+    return tuple(names), tuple(required), tuple(kinds)
 
 
 def _alias_names(tree: ast.Module) -> set[str]:
@@ -388,7 +438,7 @@ def extract_module(
     symbols: list[Symbol] = []
 
     def add(
-        qualname: str, kind: str, *, deprecated: bool = False, sig=((), ())
+        qualname: str, kind: str, *, deprecated: bool = False, sig=((), (), ())
     ) -> None:
         if qualname in _PLUMBING:
             return
@@ -400,6 +450,7 @@ def extract_module(
                 deprecated=deprecated or qualname in aliases,
                 params=sig[0],
                 required_params=sig[1],
+                param_kinds=sig[2],
             )
         )
 
@@ -509,31 +560,60 @@ class Finding:
 
 
 def declares_break(commit_subject: str | None) -> bool:
-    """True when *commit_subject* routes this change to a major bump.
+    """True when *commit_subject* routes this change to a **major** bump.
 
-    Matches the same shapes ``release-version-bump.yaml`` reads: a ``!`` before
-    the colon, or a ``BREAKING CHANGE:`` trailer.
+    Reads the FIRST LINE only, and asks ``conventional_breaking`` — the same
+    predicate ``release.py`` uses — rather than a lookalike regex.
+
+    First line only because this repo squash-merges with the PR title as the
+    commit subject and a blank body: the body never reaches the commit
+    ``release.py`` parses. A ``BREAKING CHANGE:`` footer is spec-valid
+    Conventional Commits and reads like a declaration, but it is discarded at
+    merge, so honouring it here would relax the gate for a change that then
+    ships in a non-major release — the exact outcome this gate exists to stop.
     """
     if not commit_subject:
         return False
-    return bool(
-        _BREAKING_SUBJECT.search(commit_subject.strip())
-        or _BREAKING_TRAILER.search(commit_subject)
-    )
+    return declares_breaking_change(squashed_subject(commit_subject))
 
 
 def _narrowing(base: Symbol, head: Symbol) -> str | None:
     """Describe how *head* narrows *base*, or ``None`` if it does not.
 
     Narrowing is any change an existing correct call site can trip over:
-    a parameter disappears or is renamed, or one that had a default stops
-    having one.  Adding an optional parameter is not narrowing.
+
+    * a parameter disappears or is renamed;
+    * one stops accepting a call style it used to accept — making it
+      positional-only breaks ``f(x=1)``, keyword-only breaks ``f(1)``. Both
+      are ordinary API-hardening refactors, and both break every caller using
+      the style that was taken away;
+    * one that had a default stops having one.
+
+    Adding an optional parameter, or *loosening* a kind, is not narrowing.
     """
     if base.kind != head.kind or head.kind not in ("function", "method"):
         return None
     dropped = [p for p in base.params if p not in head.params]
     if dropped:
         return f"parameter(s) {', '.join(dropped)} removed from {base.qualname}()"
+
+    head_kinds = dict(zip(head.params, head.param_kinds))
+    tightened = []
+    for name, base_kind in zip(base.params, base.param_kinds):
+        head_kind = head_kinds.get(name)
+        if head_kind is None or head_kind == base_kind:
+            continue
+        lost = _ACCEPTS.get(base_kind, frozenset()) - _ACCEPTS.get(
+            head_kind, frozenset()
+        )
+        if lost:
+            tightened.append(
+                f"{name} ({base_kind} → {head_kind}, no longer callable by "
+                f"{'/'.join(sorted(lost))})"
+            )
+    if tightened:
+        return f"parameter(s) hardened on {base.qualname}(): {', '.join(tightened)}"
+
     newly_required = [
         p
         for p in head.required_params

@@ -29,10 +29,19 @@
 # .github/scripts/check_symbol_removals.py per docs/standards/ci.md; the run:
 # block below is one straight-line call.
 #
-# REQUIRED CHECK. Unlike capability-manifest-check this one must gate merges —
-# an advisory surface gate is how the incident happened. Two consequences follow
-# from the branch-protection semantics, both learned the hard way elsewhere in
-# this repo:
+# NOT YET A REQUIRED CHECK — and it has to become one to be worth anything.
+#
+# As of this commit the `main` ruleset (id 16702782) requires: Authorized
+# Approver Check, Pre-commit Checks, Trivy Code Scan, Capability Manifest Drift,
+# Validate PR title, SDK Gate, Connector Tests Gate, Guard release-owned files.
+# This job is not among them and no aggregator rolls it up, so today a PR that
+# removes an un-deprecated public name gets a red advisory check and merges
+# anyway — the precise failure mode the gate was written to close. Wiring it up
+# is an admin change to the ruleset, made deliberately and separately from
+# landing the code.
+#
+# The job is written to BE required, and the two rules below follow from
+# branch-protection semantics, both learned the hard way elsewhere in this repo:
 #
 #   1. NO job-level `if`. GitHub does not treat a "skipped" job as "success" for
 #      a required status check, so a job-level skip leaves the check pending
@@ -60,7 +69,12 @@ permissions:
 
 jobs:
   surface-diff:
-    name: Importable Surface
+    # Job name deliberately identical to the workflow name. The required-check
+    # context a ruleset matches is the JOB name, not the workflow's, so having
+    # the two differ invites someone wiring this up to add "Symbol Removal
+    # Check" to the ruleset and produce a required context that matches no
+    # check run — which blocks every PR indefinitely. One string, one meaning.
+    name: Symbol Removal Check
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
