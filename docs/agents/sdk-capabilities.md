@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.34.3
-source-sha:    3435a565b2919b60f4bca9e9a3bd5176f41a17ac
-source-date:   2026-09-16T08:26:24+01:00
+source-sha:    ed08853378d80ff33114644410cecd52c50b0ed1
+source-date:   2026-09-18T12:37:21+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,11 +20,11 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 38 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 39 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 67 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 68 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -578,6 +578,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Import:** `from application_sdk.common.atomic import atomic_write`
 - **Signature:** `atomic_write(path: str | Path, *, ...)`
 - **Summary:** Yield an open handle whose contents land at *path* only if the block succeeds.
+- **Defined in:** `application_sdk/common/atomic.py`
+
+#### `classify_unwritable_oserror`
+
+- **Import:** `from application_sdk.common.atomic import classify_unwritable_oserror`
+- **Signature:** `classify_unwritable_oserror(exc: BaseException) -> Any | None`
+- **Summary:** Return a typed error for a read-only / permission-denied local-write ``OSError``.
 - **Defined in:** `application_sdk/common/atomic.py`
 
 #### `create_next_marker`
@@ -1553,6 +1560,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import InvalidInputError`
 - **Signature:** `class InvalidInputError(*, ...)`
 - **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `LocalVolumeUnwritableError`
+
+- **Import:** `from application_sdk.errors import LocalVolumeUnwritableError`
+- **Signature:** `class LocalVolumeUnwritableError(*, ...)`
+- **Summary:** A local write failed because the volume is read-only or the path is unwritable.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `NotFoundError`
