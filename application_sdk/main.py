@@ -624,6 +624,13 @@ async def _fetch_binding_secrets(
                     ),
                     service="dapr-secret-store",
                     target=declared.secret_store,
+                    # Not the leaf's retryable=True default. This `except`
+                    # catches a transient store outage and a secret that is
+                    # missing or misnamed alike, and cannot tell them apart —
+                    # only the first is fixed by retrying. Claiming retryable
+                    # on the pair invites a retry loop on a misconfiguration,
+                    # where the pre-typed behaviour was to fail outright.
+                    retryable=False,
                     cause=exc,
                 ) from exc
             logger.warning(
