@@ -1546,6 +1546,55 @@ def test_retry_budget_is_respected_and_the_error_explains_the_lag(
     )
 
 
+def test_install_retries_a_transient_5xx_from_the_marketplace_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LM failing to answer is not LM saying no; the budget covers both shapes.
+
+    Both shapes appear here: a bare 502 from Heracles (no envelope, so the HTTP
+    status is all there is) and LM's own 500 inside an HTTP 200 envelope. That
+    envelope is what an e2e leg actually died on while the tenant's control
+    plane was rolling — one attempt, no retry (FND-2429).
+    """
+    transport = _wire(
+        monkeypatch,
+        _publish_then(
+            Response(status=502, body={}),
+            _install_reply("error", 500, "Internal server error"),
+            _ok({"deployment_id": "d1"}),
+        ),
+    )
+    outcome = app.install(_install_args(install_retry_seconds=600))
+    assert outcome.deployment_id == "d1"
+    assert len([p for p in transport.paths("POST") if "/install" in p]) == 3
+
+
+def test_a_spent_budget_on_a_transient_5xx_names_the_shared_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The hint decides where an operator looks next, and for this shape that is
+    # the marketplace service, not the app under test.
+    _wire(monkeypatch, _publish_then(_install_reply("error", 500, "Internal error")))
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.install(_install_args(install_retry_seconds=0))
+    message = str(excinfo.value)
+    assert "shared across the whole e2e fan-out" in message
+    assert "not an app change to fix" in message
+
+
+def test_an_install_credential_rejection_stays_fatal_on_the_first_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A credential does not come good on a retry, so spending 600s on it only
+    # buries the one error worth reading — the same split _publish draws.
+    transport = _wire(
+        monkeypatch, _publish_then(_install_reply("error", 401, "Unauthorized"))
+    )
+    with pytest.raises(app.TenantAppError, match="401"):
+        app.install(_install_args(install_retry_seconds=600))
+    assert len([p for p in transport.paths("POST") if "/install" in p]) == 1
+
+
 def test_already_installed_is_a_no_op_not_a_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
