@@ -334,3 +334,54 @@ class TestDeprecatedIsGateBroken:
             )
         assert FailureCategory.DEPENDENCY_UNAVAILABLE in categories
         assert broken is True
+
+
+class TestResolveGateEnforcementShim:
+    """The tenth symbol #3685 removed, missed by the first restore pass.
+
+    It lived in ``worker`` rather than ``preflight_gate``, so the name-level diff
+    that found the other nine never saw it. Consumers import it directly and got
+    an ``ImportError`` -- two app repos failed their SDK bump on exactly that.
+    """
+
+    @staticmethod
+    def _app(mode: object) -> type:
+        return type("_App", (), {"preflight_gate_mode": mode})
+
+    def test_hard_declares_enforcement(self) -> None:
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        assert _resolve_gate_enforcement(self._app("hard")) is True
+
+    @pytest.mark.parametrize("mode", ["soft", "HARDLY", "", None])
+    def test_everything_else_is_soft(self, mode: object) -> None:
+        """Blocking stays a deliberate opt-in; a typo never aborts a run."""
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        assert _resolve_gate_enforcement(self._app(mode)) is False
+
+    def test_undeclared_app_is_soft(self) -> None:
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        assert _resolve_gate_enforcement(None) is False
+
+    def test_it_warns_like_the_other_nine(self) -> None:
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _resolve_gate_enforcement(self._app("hard"))
+        assert len(caught) == 1
+        assert issubclass(caught[0].category, DeprecationWarning)
+        message = str(caught[0].message)
+        assert "resolve_gate_mode" in message
+        assert f"removed in v{DEPRECATED_FAIL_OPEN_REMOVED_IN}" in message
+
+    def test_it_tracks_the_enum_rather_than_reimplementing_it(self) -> None:
+        """The shim must not drift from the posture the gate actually applies."""
+        from application_sdk.execution._temporal.preflight_gate import resolve_gate_mode
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        for mode in ("hard", "soft", "nonsense", None):
+            app = self._app(mode)
+            assert _resolve_gate_enforcement(app) is resolve_gate_mode(app).enforces

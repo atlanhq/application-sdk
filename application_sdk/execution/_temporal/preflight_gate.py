@@ -2576,6 +2576,26 @@ def _deprecated_constant_value(name: str) -> object:
     return UNVERIFIABLE_CHECK_NAME
 
 
+if TYPE_CHECKING:
+    # PEP 562's ``__getattr__`` can only be typed ``-> object``, and that is all
+    # a type checker infers for every name it serves. The erasure is not
+    # cosmetic: ``category not in _GATE_BROKEN_CATEGORIES`` becomes
+    # "Operator not in not supported for object" and a consumer's pyright hook
+    # fails on code that runs correctly. That turns the deprecation window into
+    # the same hard break the shim exists to prevent — the alias resolves, warns,
+    # and returns the right value, yet the repo still cannot merge the upgrade.
+    #
+    # Declaring the names here restores their real types for static analysis
+    # only. These statements never execute, so every runtime access still misses
+    # the module globals, still reaches ``__getattr__``, and still warns.
+    _GATE_BROKEN_CATEGORIES: frozenset[FailureCategory]
+    CLASSIFICATION_VERDICT: str
+    CLASSIFICATION_GATE_BROKEN: str
+    CLASSIFICATION_SOURCE_UNVERIFIABLE: str
+    GATE_RETRY: RetryPolicy
+    UNVERIFIABLE_CHECK_NAME: str
+
+
 def __getattr__(name: str) -> object:
     """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
     entry = _DEPRECATED_CONSTANTS.get(name)

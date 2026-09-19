@@ -172,6 +172,15 @@
       "symbol": "resolve_gate_budget_seconds"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "_resolve_gate_enforcement is deprecated; use resolve_gate_mode(app_cls) and read PreflightGateMode.enforces, which distinguishes the postures a bool cannot \u2014 will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.worker",
+      "removal_version": "3.40.0",
+      "symbol": "_resolve_gate_enforcement"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass \u2014 will be removed in v4.0",
