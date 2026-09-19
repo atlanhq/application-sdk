@@ -46,7 +46,11 @@ from application_sdk.discovery import (
     load_handler_class,
     validate_app_class,
 )
-from application_sdk.errors import AppError, InvalidInputError
+from application_sdk.errors import (
+    AppError,
+    DependencyUnavailableError,
+    InvalidInputError,
+)
 from application_sdk.main_errors import (
     DaprNotDetectedError,
     MissingAppModuleError,
@@ -611,11 +615,16 @@ async def _fetch_binding_secrets(
         # conformance: ignore[E004] one unreadable secret must not mask the rest; the resolver names the broken fields
         except Exception as exc:
             if required:
-                raise RuntimeError(
-                    f"Could not read secret '{secret_name}' from secret store "
-                    f"'{declared.secret_store}' for Dapr component '{name}' — "
-                    f"the binding is required, so the secret-store failure is "
-                    f"fatal"
+                raise DependencyUnavailableError(
+                    message=(
+                        f"Could not read secret '{secret_name}' from secret store "
+                        f"'{declared.secret_store}' for Dapr component '{name}' — "
+                        f"the binding is required, so the secret-store failure is "
+                        f"fatal"
+                    ),
+                    service="dapr-secret-store",
+                    target=declared.secret_store,
+                    cause=exc,
                 ) from exc
             logger.warning(
                 "Could not read secret '%s' from secret store '%s' for Dapr "
