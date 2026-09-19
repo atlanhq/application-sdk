@@ -35,12 +35,7 @@ from application_sdk._runtime.progress import (
     current_progress_tracker,
     declared_hold_active,
 )
-
-# Imported from the leaves submodule rather than the ``application_sdk.errors``
-# package: the package re-exports ``wire``, which pulls pydantic into this
-# low-level runtime module's import chain. ``leaves`` needs only ``base`` and
-# ``categories``, both stdlib-only at runtime.
-from application_sdk.errors.leaves import InvalidInputValueError
+from application_sdk.errors import InvalidInputValueError
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 
 logger = get_logger(__name__)
