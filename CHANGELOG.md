@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.36.3 (September 19, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.2...v3.36.3
+
+### Bug Fixes
+
+- restore the env lever the _resolve_gate_enforcement shim dropped (#3858) (by @cmgrote in [a7d0093](https://github.com/atlanhq/application-sdk/commit/a7d0093))
+
+
 ## v3.36.2 (September 19, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.1...v3.36.2
