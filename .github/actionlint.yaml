@@ -17,8 +17,26 @@
 # in `run:` blocks, a separate and far lower-stakes concern than a workflow
 # that will not start. Worth its own pass.
 
+# NOT self-hosted labels — `self-hosted-runner.labels` is the only knob
+# actionlint offers for teaching it a runner label, and these are ordinary
+# GitHub-hosted ones.
+#
+# actionlint hardcodes the GitHub-hosted label list in its source and only
+# refreshes it in a release. Upstream has been dormant since 2026-04-19, so
+# v1.7.12 (2026-03-30) is still the newest release and it predates the
+# `ubuntu-26.04` runner images (first published 2026-08-31). Requests for the
+# label have been open since 2026-06-12: rhysd/actionlint#682, #683, #723.
+#
+# The values are globs (`path.Match`), so one pattern covers every future
+# Ubuntu bump instead of a per-version treadmill. They are deliberately narrow
+# — the `NN.04` shape is required, so typos are still caught: `ubunto-26.04`,
+# `ubuntu-26.4` and `macos-99` all remain errors. Verified against v1.7.12.
+#
+# Delete this block if actionlint resumes releases and learns the labels.
 self-hosted-runner:
-  labels: []
+  labels:
+    - "ubuntu-2*.04"
+    - "ubuntu-2*.04-arm"
 
 paths:
   # FALSE POSITIVE — actionlint's `job` context type is out of date.
