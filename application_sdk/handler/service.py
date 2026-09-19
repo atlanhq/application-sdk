@@ -75,7 +75,7 @@ from application_sdk.common.task_queue import (
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.credentials.ingress import lift_agent_json
-from application_sdk.errors import AppError, InternalError
+from application_sdk.errors import AppError, InternalError, PreconditionError
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
@@ -2776,10 +2776,20 @@ def create_app_handler_service(
             # user isn't sent to reinstall the extra when the fault is elsewhere.
             if e.name != "fastmcp" and not (e.name or "").startswith("fastmcp."):
                 raise
-            raise RuntimeError(
-                "ENABLE_MCP is set but the MCP dependencies are not installed. "
-                "Install the SDK with the 'mcp' extra "
-                "(e.g. `uv add 'atlan-application-sdk[mcp]'`) or unset ENABLE_MCP."
+            raise PreconditionError(
+                message=(
+                    "ENABLE_MCP is set but the MCP dependencies are not installed. "
+                    "Install the SDK with the 'mcp' extra "
+                    "(e.g. `uv add 'atlan-application-sdk[mcp]'`) or unset ENABLE_MCP."
+                ),
+                resource="mcp extra",
+                expected_state="installed",
+                actual_state="missing",
+                suggested_action=(
+                    "Install the SDK with the 'mcp' extra "
+                    "(e.g. `uv add 'atlan-application-sdk[mcp]'`) or unset ENABLE_MCP."
+                ),
+                cause=e,
             ) from e
 
         _mcp_server = MCPServer(application_name=app_name)
