@@ -17,6 +17,7 @@ from temporalio.client import Client
 from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
+from typing_extensions import deprecated
 
 from application_sdk.app.registry import (
     AppRegistry,
@@ -1049,3 +1050,37 @@ def create_worker(
         primary_app_name=primary_app_name,
         task_queue=task_queue,
     )
+
+
+@deprecated(
+    "_resolve_gate_enforcement is deprecated; use resolve_gate_mode(app_cls) and "
+    "read PreflightGateMode.enforces, which distinguishes the postures a bool "
+    "cannot — will be removed in v3.40.0."
+)
+def _resolve_gate_enforcement(app_cls: type | None) -> bool:
+    """Whether the preflight gate blocks a ``NOT_READY`` verdict for this app.
+
+    .. deprecated:: 3.37
+        Use :func:`~application_sdk.execution._temporal.preflight_gate.resolve_gate_mode`
+        and read :attr:`~application_sdk.handler.contracts.PreflightGateMode.enforces`.
+        Will be removed in v3.40.0.
+
+    #3685 removed this alongside the nine names the preflight_gate shim restored;
+    it was missed because it lived in *this* module rather than that one, and a
+    name-level diff of one file cannot see it. Consumers import it directly —
+    ``from application_sdk.execution._temporal.worker import
+    _resolve_gate_enforcement`` — so its absence is an ImportError at lock
+    refresh, with no warning and no migration window.
+
+    One behavioural difference, deliberate and not reproducible here: the
+    original consulted ``ATLAN_PREFLIGHT_GATE_MODE`` ahead of the declared
+    attribute. #3685 made that env lever inert on purpose, so the worker and the
+    workflow read one source and cannot disagree. This shim therefore returns the
+    declared posture alone; a deployment still setting that variable was already
+    being ignored before this restored the name.
+    """
+    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: mirrors create_worker's gate import, avoids a module cycle
+        resolve_gate_mode,
+    )
+
+    return resolve_gate_mode(app_cls).enforces
