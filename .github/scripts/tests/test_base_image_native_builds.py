@@ -14,7 +14,7 @@ these are tests rather than comments:
   is in it, so one leg cancels the other and the merge job never finds both.
 
 The same properties on the *connector* image paths are pinned in
-test_build_app_image_action.py; this file covers the two workflows that publish
+test_build_app_image_action.py; this file covers the workflow that publishes
 the base image those paths build FROM.
 """
 
@@ -32,13 +32,14 @@ import harbor_release_tags  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _HARBOR = _REPO_ROOT / ".github/workflows/harbor-release.yaml"
-_GHCR = _REPO_ROOT / ".github/workflows/build-image.yaml"
 
 #: (workflow path, build job, merge job) for each base-image publisher.
-_PUBLISHERS = (
-    pytest.param(_HARBOR, "build", "merge", id="harbor-release"),
-    pytest.param(_GHCR, "push-to-ghcr", "merge-ghcr", id="build-image"),
-)
+#: One entry today — build-image.yaml, which pushed an unconsumed
+#: `app-runtime-base-main:sha-<sha7>` dev tag on every push to main, was
+#: deleted rather than repaired. The parametrisation stays so a second
+#: publisher is added here rather than going unchecked; the coverage test
+#: below fails until it is.
+_PUBLISHERS = (pytest.param(_HARBOR, "build", "merge", id="harbor-release"),)
 
 
 def _load(path: Path) -> dict:
@@ -253,7 +254,7 @@ def test_every_base_image_publisher_is_covered() -> None:
         if "app-runtime-base" in path.read_text(encoding="utf-8")
     }
 
-    unclassified = referencing - {_HARBOR.name, _GHCR.name} - _CONSUMERS_ONLY
+    unclassified = referencing - {_HARBOR.name} - _CONSUMERS_ONLY
     assert not unclassified, (
         f"{sorted(unclassified)} reference app-runtime-base and are classified "
         "neither way. If one PUBLISHES the base image, add it to _PUBLISHERS so "
