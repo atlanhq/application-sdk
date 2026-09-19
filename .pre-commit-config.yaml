@@ -31,11 +31,17 @@ repos:
   # `run:` blocks, which are a separate and much lower-stakes concern than a
   # workflow that will not start. Config and grandfathered findings live in
   # .github/actionlint.yaml.
+  #
+  # `files` widens the upstream hook's default (`^\.github/workflows/`) to cover
+  # .github/workflow-templates/ as well. Those starter workflows are handed to
+  # other repos verbatim, so a parse error there is shipped rather than merely
+  # suffered — the same silent-failure class, one repo further downstream.
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
     hooks:
       - id: actionlint
         args: ['-shellcheck=']
+        files: ^\.github/(workflows|workflow-templates)/.*\.ya?ml$
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
     hooks:
