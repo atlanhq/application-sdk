@@ -2,6 +2,17 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.34.0] - 2026-09-19
+
+### Features
+
+- gate symbol removals against the last release, and stop apps importing SDK privates (#3844) ([c928cce](https://github.com/atlanhq/application-sdk/commit/c928cce))
+
+### Bug fixes
+
+- restore the last two names #3685 removed without a migration window (#3853) ([4fc1ce8](https://github.com/atlanhq/application-sdk/commit/4fc1ce8))
+- restore the gate symbols #3685 removed, as deprecated aliases (#3843) ([cd13c20](https://github.com/atlanhq/application-sdk/commit/cd13c20))
+
 ## [0.33.0] - 2026-09-18
 
 ### Features
