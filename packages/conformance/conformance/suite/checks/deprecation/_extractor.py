@@ -372,7 +372,12 @@ def _deprecated_constants(tree: ast.Module) -> list[tuple[str, str, int]]:
     )
     if not has_getattr:
         return []
-    tail = _module_getattr_tail(tree)
+    # Only the removal VERSION is taken from the shim's message, not its text.
+    # Concatenating the text produced notices like "GATE_BROKEN — the enum
+    # member carrying the same wire value  is deprecated; use  instead — .
+    # Will be removed in v3.40.0." — machine-correct and unreadable, and this
+    # string is exactly what a B001 finding shows a human.
+    tail_version = removal_version(_module_getattr_tail(tree))
     out: list[tuple[str, str, int]] = []
     for item in tree.body:
         if isinstance(item, ast.Assign):
@@ -391,15 +396,28 @@ def _deprecated_constants(tree: ast.Module) -> list[tuple[str, str, int]]:
         for key, message_node in zip(value.keys, value.values):
             if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
                 continue
+            name = key.value
             if isinstance(message_node, ast.Tuple | ast.List):
-                parts = [_static_str(e) for e in message_node.elts]
-                entry = " — ".join(p for p in parts if p)
+                parts = [p for p in (_static_str(e) for e in message_node.elts) if p]
+                if not parts:
+                    continue
+                replacement = parts[0]
+                note = parts[1].rstrip(" .") if len(parts) > 1 else ""
+                notice = (
+                    f"{name} is deprecated; use {replacement} — {note}."
+                    if note
+                    else f"{name} is deprecated; use {replacement}."
+                )
             else:
-                entry = _static_str(message_node)
-            notice = f"{entry} {tail}".strip() if tail else entry
+                notice = _static_str(message_node)
             if not notice:
                 continue
-            out.append((key.value, notice, getattr(key, "lineno", item.lineno)))
+            # The mapping carries the replacement; the shim's f-string carries
+            # the horizon. Only glue the second on when the entry lacks one, so
+            # a self-contained notice string is passed through untouched.
+            if removal_version(notice) is None and tail_version:
+                notice = f"{notice} Will be removed in v{tail_version}."
+            out.append((name, notice, getattr(key, "lineno", item.lineno)))
     return out
 
 
