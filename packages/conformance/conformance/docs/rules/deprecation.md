@@ -30,7 +30,7 @@ reassigned.
 | [B005](#b005) | `NonAdditiveContractChange` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
 | [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
 | [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `app` | `daft-removal` | — | 0.18.0 |
-| [B008](#b008) | `PrivateSdkModuleImport` | `warn` | `app` | `sdk-private-surface` | — | 0.34.0 |
+| [B008](#b008) | `PrivateModuleImport` | `warn` | `app` | `sdk-private-surface` | — | 0.34.0 |
 
 ---
 
@@ -333,49 +333,59 @@ frame.
 
 ---
 
-## B008 — `PrivateSdkModuleImport` {#b008}
+## B008 — `PrivateModuleImport` {#b008}
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `sdk-private-surface` · **Autofixable:** — · **Since:** 0.34.0
 
-> Imports an underscore-prefixed SDK module or name — SDK internals change without a deprecation cycle
+> Imports or uses an underscore-prefixed module or name the app does not own — foreign internals change without a deprecation cycle
 
-**Rationale:** An underscore-prefixed SDK module or name carries no compatibility promise: the SDK
-renames and deletes its internals without a deprecation cycle, and every surface tool it
-owns already treats them as out of scope — the capability manifest generator skips
-_-prefixed module paths by construction, which is why docs/agents/sdk-capabilities.md
-has never listed a single preflight_gate symbol. Python enforces none of this: a leading
-underscore is a convention with no runtime meaning, so the boundary held only as long as
-nobody crossed it. Fifteen connector repos crossed it and stopped collecting tests when
-3.36.0 reshaped application_sdk/execution/_temporal/preflight_gate.py — the two names
-with the widest blast radius, _GATE_BROKEN_CATEGORIES (nine repos) and _is_gate_broken
-(two), were both private and both imported from app test suites, most likely copied from
-the SDK's own tests (FND-2388). This rule is the missing enforcement of a boundary the
-SDK already declared. It is the consumer-side half of a pair: the surface-removal gate
-blocks the SDK from deleting a PUBLIC name without a deprecation cycle but only reports
-the deletion of a private one, because freezing the SDK's internals would tax every
-refactor. B008 is what makes that split safe. WARN rather than BLOCK because the fleet
-has these imports today, and a BLOCK tier would turn a correct diagnosis into the
-fleet-wide red wall this whole line of work exists to prevent; worth revisiting once the
-count nears zero.
+**Rationale:** An underscore-prefixed module or name carries no compatibility promise from whoever owns
+it: its owner renames and deletes internals without a deprecation cycle. Python enforces
+none of this — a leading underscore is a convention with no runtime meaning — so the
+boundary holds only as long as nobody crosses it. Fifteen connector repos crossed the
+SDK's and stopped collecting tests when 3.36.0 reshaped
+application_sdk/execution/_temporal/preflight_gate.py; the two names with the widest
+blast radius, _GATE_BROKEN_CATEGORIES (nine repos) and _is_gate_broken (two), were both
+private and both imported from app test suites, most likely copied from the SDK's own
+tests (FND-2388). Nothing about that failure is specific to the SDK: pandas._libs,
+temporalio.api._grpc and pydantic._internal are equally free to change under an app,
+with the same absence of warning. An app sits at the leaf of the dependency chain, so
+everything it imports is somebody else's and the rule is 'nothing foreign and private'
+rather than 'nothing of the SDK's'. The app's OWN privates are never flagged — it owns
+no published surface, so how it organises its internals is its business. This is also
+the only app-side piece of the FND-2388 work, and deliberately so: deprecation manifests
+and removal gates are promises made by whoever owns a surface, and an app owns none. It
+is the consumer-side half of a pair — the SDK's surface-removal gate blocks deleting a
+PUBLIC name without a deprecation cycle but only reports deleting a private one, because
+freezing internals would tax every refactor, and B008 is what makes that split safe.
+WARN rather than BLOCK because the fleet has these imports today, and a BLOCK tier would
+turn a correct diagnosis into the fleet-wide red wall this whole line of work exists to
+prevent; revisit once the count nears zero.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/connector.py — every SDK import names a public module
-  (application_sdk.app, application_sdk.contracts, application_sdk.errors). None of the
-  four reference apps imports an underscore-prefixed SDK module or name, in app code or
-  in tests.
+- **Compliant example:** atlan-openapi-app app/connector.py — every third-party import names a public module
+  (application_sdk.app, application_sdk.contracts, application_sdk.errors, httpx,
+  pyatlan_v9.model.assets). None of the four reference apps imports an
+  underscore-prefixed module or name it does not own, in app code or in tests.
 
-Flags any import that reaches into `application_sdk` internals. Four shapes are matched:
+Flags any import or attribute use that reaches a private module or name the app does not
+own.  Six shapes are matched:
 
 * `from application_sdk.execution._temporal.preflight_gate import X`   — a private
 component anywhere in the module path; * `import
 application_sdk.execution._temporal.worker`; * `from application_sdk.execution._temporal
 import preflight_gate`   — private component in the package being imported from; * `from
-application_sdk.app.base import _helper` — public module,   private name.
+application_sdk.app.base import _helper` — public module,   private name; * `from
+pandas._libs import x` — any third party, not just the SDK; * `import application_sdk as
+sdk` … `sdk.execution._temporal.x`   — module-qualified use, where the import line
+itself is clean.
 
-Dunders are not private in this sense and are never matched.  A **relative** import is
-never matched either: `from ._helpers import x` inside an app resolves against the app's
-own package, which is the app's business and not this rule's.
+**The app's own privates are never flagged.**  A relative import (`from ._helpers import
+x`) is own code by construction, and an absolute import rooted at one of the repo's own
+top-level packages (`app`, `tests`, `local`, …) is too.  An app publishes no surface and
+owes no compatibility promise, so how it organises its internals is its own business.
+Dunders are never matched either.
 
 **Tests are in scope, and deliberately so.**  All fifteen repos FND-2388 wedged broke in
 `tests/`, not in `app/` — no production code imported a removed name.  A rule that
@@ -383,12 +393,12 @@ skipped test files would have reported nothing at all on the incident it exists 
 
 **Remediation.**  Import the public equivalent, or test through the public behaviour
 rather than the internal helper — an app asserting on an SDK private is testing the SDK,
-which the SDK's own suite already does.  Where no public equivalent exists, that is an
-SDK gap worth raising rather than routing around; say so in the suppression: `#
-conformance: ignore[B008] no public equivalent — tracked in <id>`.
+which the SDK's own suite already does.  Where no public equivalent exists, that is a
+gap in the package worth raising rather than routing around; say so in the suppression:
+`# conformance: ignore[B008] no public equivalent — tracked in <id>`.
 
-Coverage limit (intentional): import statements only.  A module-qualified reach-through
-at the use site (`import application_sdk as sdk; sdk.execution._temporal.x`) is not
-matched, the same documented limit B001 carries, biased toward zero false positives.
+Coverage limit (intentional): a reach-through whose base is not a module alias bound in
+the same file — e.g. a private attribute on an object returned by a factory — is not
+matched, biased toward zero false positives.
 
 ---

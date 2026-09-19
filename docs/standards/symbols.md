@@ -234,10 +234,27 @@ The boundary was always declared. The capability manifest generator skips
 `docs/agents/sdk-capabilities.md` has never listed a single `preflight_gate`
 symbol. Python simply enforces none of it: a leading underscore is a convention
 with no runtime meaning, and `from pkg._private import thing` works exactly as
-well as any other import. So the enforcement is **B008
-`PrivateSdkModuleImport`**, which runs in consumer apps and flags any import that
-reaches into an `_`-prefixed SDK module or name — in `tests/` as much as in
+well as any other import. So the enforcement is **B008 `PrivateModuleImport`**,
+which runs in consumer apps and flags any import or attribute use reaching an
+`_`-prefixed module or name the app does not own — in `tests/` as much as in
 `app/`, because all fifteen repos FND-2388 wedged broke in `tests/`.
+
+**B008 is not SDK-specific, and deliberately so.** The SDK is where this bit us,
+but nothing about the failure was particular to it: `pandas._libs`,
+`daft.io.iceberg._iceberg` and `temporalio.api._grpc` are all exactly as free to
+change under an app, with the same absence of warning. An app sits at the leaf
+of the dependency chain — everything it imports belongs to somebody else — so
+the rule is "nothing foreign and private", not "nothing of the SDK's". Measured
+across 37 connector repos: 138 findings, 125 of them SDK and 13 other
+third-party.
+
+An app's **own** privates are never flagged. It publishes no surface and owes no
+compatibility promise, so how it organises its internals is its own business.
+
+That asymmetry is why B008 is the only app-side piece of this standard.
+Everything else here — the deprecation markers, the manifest, the removal gate —
+is a promise made by whoever *owns* a surface. An app owns none, so it has
+nothing to deprecate and no manifest to keep.
 
 The two halves are a pair, and the split is the design:
 
@@ -249,9 +266,10 @@ The two halves are a pair, and the split is the design:
 The SDK keeps the right to change its internals; apps get told, once, to stop
 depending on them.
 
-Where an app genuinely needs something only a private symbol provides, that is an
-SDK gap worth raising — not routing around. Say so in the suppression:
-`# conformance: ignore[B008] no public equivalent — tracked in <issue>`.
+Where an app genuinely needs something only a private symbol provides, that is a
+gap in the package worth raising — not routing around. Say so in the
+suppression: `# conformance: ignore[B008] no public equivalent — tracked in
+<issue>`.
 
 ---
 

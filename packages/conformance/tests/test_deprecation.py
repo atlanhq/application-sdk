@@ -23,7 +23,10 @@ from conformance.suite.checks.deprecation._manifest import (
     Manifest,
     load_manifest,
 )
-from conformance.suite.checks.deprecation._private_imports import scan_private_imports
+from conformance.suite.checks.deprecation._private_imports import (
+    own_import_roots,
+    scan_private_imports,
+)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
@@ -1299,9 +1302,14 @@ def test_b001_constant_match_is_module_aware() -> None:
 # application_sdk/execution/_temporal/preflight_gate.py.
 
 
-def _b008(src: str) -> list:
+#: Top-level import roots a connector app owns, as `own_import_roots` derives
+#: them from the repo (openapi and hello-world both have app/ and tests/).
+_OWN = frozenset({"app", "tests", "local", "scripts"})
+
+
+def _b008(src: str, own: frozenset[str] = _OWN) -> list:
     tree, directives = _tree_and_directives(src)
-    return scan_private_imports(tree, "tests/test_x.py", directives)
+    return scan_private_imports(tree, "tests/test_x.py", directives, own)
 
 
 def test_b008_fires_on_the_fnd_2388_import() -> None:
@@ -1344,15 +1352,95 @@ def test_b008_silent_on_a_dunder() -> None:
     assert _b008("from application_sdk.app.__init__ import App\n") == []
 
 
-def test_b008_silent_on_a_non_sdk_private_import() -> None:
-    """Another library's internals are not this rule's business."""
+def test_b008_fires_on_any_third_party_private_not_just_the_sdk() -> None:
+    """Nothing about the FND-2388 failure was specific to the SDK.
+
+    `pandas._libs` is exactly as free to change under an app as
+    `application_sdk._temporal` was, with the same absence of warning.
+    """
     src = "from temporalio.api._grpc import x\nfrom pandas._libs import y\n"
-    assert _b008(src) == []
+    assert [f.rule_id for f in _b008(src)] == ["B008", "B008"]
 
 
 def test_b008_silent_on_an_apps_own_relative_private_import() -> None:
     """``from ._helpers import x`` resolves against the app's own package."""
     assert _b008("from ._helpers import build\n") == []
+
+
+def test_b008_silent_on_an_apps_own_absolute_private_import() -> None:
+    """An app owns no published surface, so its own internals are its business."""
+    src = (
+        "from app._helpers import build\n"
+        "from tests._fixtures import make\n"
+        "import app._internal\n"
+    )
+    assert _b008(src) == []
+
+
+def test_b008_fires_on_module_qualified_use_not_just_the_import() -> None:
+    """`import application_sdk as sdk` is clean; the reach happens at the use."""
+    src = "import application_sdk as sdk\n\nx = sdk.execution._temporal.thing\n"
+    findings = _b008(src)
+    assert [f.rule_id for f in findings] == ["B008"]
+    assert "_temporal" in findings[0].message
+
+
+def test_b008_silent_on_public_module_qualified_use() -> None:
+    src = "import application_sdk as sdk\n\nx = sdk.app.App\n"
+    assert _b008(src) == []
+
+
+def test_b008_own_roots_read_from_the_repo(tmp_path) -> None:
+    """The exemption comes from the tree, not from a hardcoded list."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / "conftest.py").write_text("")
+    roots = own_import_roots(tmp_path)
+    assert {"app", "tests", "conftest"} <= roots
+    assert ".venv" not in roots
+
+
+def test_b008_own_roots_find_a_src_layout_package(tmp_path) -> None:
+    """`src/commons` is imported as `commons.…` — own code, not foreign.
+
+    atlan-local-marketplace-app. A top-level-only sweep called every one of
+    these foreign; they were 40+ of a first fleet pass's findings.
+    """
+    (tmp_path / "src" / "commons").mkdir(parents=True)
+    assert "commons" in own_import_roots(tmp_path)
+
+
+def test_b008_own_roots_find_a_deeply_nested_sibling(tmp_path) -> None:
+    """A test importing a script four levels down is still own code.
+
+    atlan-snowflake-app keeps one under `.claude/skills/…/scripts/`, so dot
+    directories are repo content and must not be pruned wholesale.
+    """
+    nested = tmp_path / ".claude" / "skills" / "parity" / "scripts"
+    nested.mkdir(parents=True)
+    (nested / "resolve_paths.py").write_text("")
+    assert "resolve_paths" in own_import_roots(tmp_path)
+
+
+def test_b008_own_roots_prune_the_virtualenv(tmp_path) -> None:
+    """Every installed dependency lives in .venv — exempting those would gut it."""
+    (tmp_path / ".venv" / "lib" / "pandas").mkdir(parents=True)
+    assert "pandas" not in own_import_roots(tmp_path)
+
+
+def test_b008_silent_on_a_documented_public_underscore_name() -> None:
+    """`os._exit` is documented, supported API with no non-underscore equivalent.
+
+    The convention is not universal; flagging these is wrong, not conservative.
+    """
+    assert _b008("import os\n\nos._exit(1)\n") == []
+    assert _b008("from os import _exit\n") == []
+
+
+def test_b008_unreadable_repo_over_reports_rather_than_falling_silent() -> None:
+    """No own-roots means everything foreign — the safe direction for a WARN."""
+    assert [f.rule_id for f in _b008("from app._x import y\n", frozenset())] == ["B008"]
 
 
 def test_b008_reports_each_private_import_once() -> None:

@@ -7,8 +7,9 @@ One checker, two halves plus a contract-compat pass, dispatched by scope:
   DataFrame APIs (``count_rows``/``to_pylist``/``.names``,
   ``DataframeType.daft``) that are dead on the daft-less SDK >= 3.22 runtime —
   third-party surfaces the generated manifest cannot carry; B008 flags an import
-  that reaches into an ``_``-prefixed SDK module or name, which no manifest can
-  carry either because a private symbol is never deprecated before it changes
+  or attribute use that reaches an ``_``-prefixed module or name the app does
+  not own — the SDK's, or any other package's — which no manifest can carry
+  either, because a private symbol is never deprecated before it changes
   (FND-2388);
 * **authoring half (B002/B003/B004, scope ``sdk``)** — flags the SDK declaring
   its own deprecations incorrectly (malformed notice, overdue removal, or an
@@ -50,7 +51,7 @@ from ._contract_compat import scan_contract_compat
 from ._daft_runtime import scan_daft_runtime
 from ._ledger_schema import load_ledger
 from ._manifest import load_manifest
-from ._private_imports import scan_private_imports
+from ._private_imports import own_import_roots, scan_private_imports
 
 SERIES = "B"
 
@@ -93,6 +94,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
     manifest = load_manifest() if run_consumer else None
     version = _read_project_version(root) if run_authoring else None
+    # Resolved once per run: B008 needs to tell the app's own privates (fine)
+    # from everybody else's (not fine), and that is a property of the repo, not
+    # of any one file.
+    own_roots = own_import_roots(root) if run_consumer else frozenset()
 
     findings: list[Finding] = []
     for path in paths:
@@ -113,7 +118,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             findings.extend(scan_consumer(tree, rel, manifest, directives))
         if run_consumer:
             findings.extend(scan_daft_runtime(tree, rel, directives))
-            findings.extend(scan_private_imports(tree, rel, directives))
+            findings.extend(scan_private_imports(tree, rel, directives, own_roots))
         if run_authoring:
             findings.extend(scan_authoring(tree, rel, version, directives))
 

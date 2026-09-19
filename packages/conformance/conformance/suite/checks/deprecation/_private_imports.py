@@ -1,13 +1,21 @@
-"""B008 ``PrivateSdkModuleImport`` — flag an app reaching into SDK internals.
+"""B008 ``PrivateModuleImport`` — flag an app reaching into someone else's internals.
 
-Runs against *consumer apps* (scope ``app``). Flags any import that traverses an
-underscore-prefixed component of an ``application_sdk`` module path, or that
-binds an underscore-prefixed name out of an SDK module:
+Runs against *consumer apps* (scope ``app``). Flags any import or attribute use
+that reaches a ``_``-prefixed module or name belonging to code the app does not
+own:
 
 * ``from application_sdk.execution._temporal.preflight_gate import X``
 * ``import application_sdk.execution._temporal.worker``
 * ``from application_sdk.execution._temporal import preflight_gate``
 * ``from application_sdk.app.base import _helper``
+* ``from pandas._libs import x`` / ``from temporalio.api._grpc import y``
+* ``import application_sdk as sdk`` … ``sdk.execution._temporal.thing``
+
+The app's **own** privates are never flagged. A relative import
+(``from ._helpers import x``) is own code by construction, and an absolute
+import rooted at one of the repo's own top-level packages (``app``, ``tests``,
+``local``, …) is too. An app is free to organise its own internals however it
+likes; what it cannot do is depend on somebody else's.
 
 Why this rule exists
 --------------------
@@ -26,54 +34,134 @@ leading underscore is a convention with no runtime meaning, and
 ``from pkg._private import thing`` works exactly as well as any other import.
 This rule is that missing enforcement.
 
-The boundary is not new — the SDK already treats ``_``-prefixed paths as private
-everywhere it reasons about its own surface. The capability manifest generator
-skips them by construction, which is why
-``docs/agents/sdk-capabilities.md`` has never carried a single ``preflight_gate``
-symbol. The decision recorded on FND-2388 is to enforce that existing boundary
-rather than widen it to match what the fleet happened to do.
+Why it is not SDK-specific
+--------------------------
+
+The SDK is where it bit us, but nothing about the failure is particular to the
+SDK: it is the general hazard of depending on a boundary the owner never
+promised to keep. ``pandas._libs``, ``temporalio.api._grpc`` and
+``pydantic._internal`` are all exactly as free to change under an app as
+``application_sdk._temporal`` was, and an app that imports one has the same
+latent breakage with the same absence of warning. An app sits at the leaf of the
+dependency chain — everything it imports is somebody else's — so the rule is
+"nothing foreign and private", not "nothing of the SDK's".
 
 Relationship to the surface-removal gate
 ----------------------------------------
 
-The two halves are deliberately complementary, and the split is the whole design.
-``.github/scripts/check_symbol_removals.py`` blocks the SDK from deleting a
-*public* name without a deprecation cycle, but only *reports* the deletion of an
+The two halves are complementary, and the split is the design. The SDK's own
+``.github/scripts/check_symbol_removals.py`` blocks it from deleting a *public*
+name without a deprecation cycle, but only *reports* the deletion of an
 underscore-private one — freezing the SDK's internals would be a tax on every
-refactor. B008 is what makes that split safe: the SDK keeps the right to change
-its privates, and apps get told, once, to stop depending on them.
+refactor. B008 is what makes that split safe: publishers keep the right to
+change their privates, and apps get told, once, to stop depending on them.
+
+That asymmetry is also why the manifest-and-deprecation machinery stays on the
+publisher's side and this rule is the only app-side piece. Deprecation is a
+promise made by whoever owns the surface; an app owns none, so it has nothing to
+deprecate and no manifest to keep.
 
 Tier
 ----
 
-WARN, not BLOCK. Today the fleet *has* these imports — fifteen repos' worth — and
-a BLOCK tier would turn a correct diagnosis into a fleet-wide red wall, which is
-the failure mode FND-2388 is about in the first place. WARN reports every one,
-the remediation loop can act on them, and the tier is worth revisiting once the
-count is near zero.
-
-Coverage limit
---------------
-
-Import statements only. A module-qualified reach-through at the *use* site
-(``import application_sdk as sdk; sdk.execution._temporal.x``) is not matched —
-the same documented limit B001 carries, and biased toward zero false positives.
+WARN, not BLOCK. Today the fleet *has* these imports — fifteen repos' worth from
+the SDK alone — and a BLOCK tier would turn a correct diagnosis into a
+fleet-wide red wall, which is the failure mode FND-2388 is about in the first
+place. WARN reports every one, the remediation loop can act on them, and the
+tier is worth revisiting once the count is near zero.
 """
 
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._manifest import SDK_IMPORT_ROOT
-
 _RULE_ID = "B008"
 
+#: Directories that are never an import root of the repo's own code.
+_NOT_IMPORT_ROOTS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        "build",
+        "dist",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+    }
+)
 
-def _is_sdk_module(name: str) -> bool:
-    return name == SDK_IMPORT_ROOT or name.startswith(SDK_IMPORT_ROOT + ".")
+
+def own_import_roots(root: Path) -> frozenset[str]:
+    """Every module/package name that exists anywhere in *root*'s own tree.
+
+    The question this answers is "does this import originate outside the app's
+    own code?", and the only reliable signal for that is whether a module of
+    that name is *in the repo*. An app's own package is not reliably at the top
+    of it, and is imported absolutely from wherever it does live. Measured
+    against the fleet, a shallower sweep called all of this foreign:
+
+    * ``src/`` layout — ``atlan-local-marketplace-app`` keeps ``src/commons``
+      and ``src/deployment_orchestrator``, imported as ``commons.…``;
+    * pytest rootdir — ``atlan-databricks-app`` has ``tests/incremental``,
+      imported as ``incremental.driver``;
+    * a test importing a sibling script four levels down, or one under
+      ``.claude/skills/…`` — still the app's own code by any reading.
+
+    Those three shapes were 57 of 210 findings on a first pass: a false-positive
+    rate that would have taught the fleet to ignore the rule.
+
+    Directories count whether or not they carry ``__init__.py``, since apps use
+    regular and namespace packages alike. Dot-directories are included (a repo's
+    ``.claude/`` is its own content); only the genuinely uninteresting trees are
+    pruned.
+
+    Being generous here only means declining to flag an app's reach into its own
+    internals, which is not this rule's business. It can over-exempt if an app
+    happens to contain a directory named after a third-party package it also
+    imports privately — an acceptable trade at WARN against the alternative.
+    Failing to read the tree yields an empty set, which makes every private
+    import look foreign: the safe direction, over-report rather than fall silent.
+    """
+
+    names: set[str] = set()
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            children = list(current.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.name in _NOT_IMPORT_ROOTS:
+                continue
+            if child.is_dir():
+                names.add(child.name)
+                stack.append(child)
+            elif child.suffix == ".py":
+                names.add(child.stem)
+    return frozenset(names)
+
+
+#: Underscore-prefixed names that are documented, supported public API despite
+#: the leading underscore. The convention is not universal, and flagging these
+#: would be simply wrong rather than conservative — ``os._exit`` is the
+#: documented way to leave a forked child without running cleanup handlers, and
+#: has no non-underscore equivalent.
+_PUBLIC_DESPITE_UNDERSCORE = frozenset(
+    {
+        "os._exit",
+        "sys._getframe",
+        "sys._current_frames",
+        "sys._MEIPASS",  # set by PyInstaller, read by application code
+    }
+)
 
 
 def _private_component(dotted: str) -> str | None:
@@ -88,15 +176,20 @@ def _private_component(dotted: str) -> str | None:
     return None
 
 
+def _is_own(dotted: str, own_roots: frozenset[str]) -> bool:
+    """True when *dotted* names the app's own code."""
+    return dotted.split(".")[0] in own_roots
+
+
 def _message(path: str, component: str) -> str:
     return (
-        f"`{path}` reaches into SDK internals — `{component}` is private. The SDK "
-        "changes private modules and names without a deprecation cycle, which is "
-        "exactly how a 3.36.0 refactor stopped fifteen connector repos from "
-        "collecting tests (FND-2388). Import the public equivalent instead, or "
-        "test through the public behaviour rather than the internal helper. If no "
-        "public equivalent exists, that is an SDK gap worth raising rather than "
-        "routing around."
+        f"`{path}` reaches into another package's internals — `{component}` is "
+        "private. Its owner changes private modules and names without a "
+        "deprecation cycle, which is exactly how an SDK refactor stopped fifteen "
+        "connector repos from collecting tests (FND-2388). Import the public "
+        "equivalent instead, or test through the public behaviour rather than "
+        "the internal helper. If no public equivalent exists, that is a gap in "
+        "the package worth raising rather than routing around."
     )
 
 
@@ -104,11 +197,19 @@ def scan_private_imports(
     tree: ast.Module,
     file: str,
     directives: dict[int, _IgnoreDirective],
+    own_roots: frozenset[str] = frozenset(),
 ) -> list[Finding]:
-    """Return B008 findings for every private-SDK import in *tree*."""
+    """Return B008 findings for every foreign-private reach in *tree*."""
     findings: list[Finding] = []
+    reported: set[tuple[int, str]] = set()
+    # Local name -> dotted module it is bound to, for `import x as y` chains.
+    module_aliases: dict[str, str] = {}
 
     def emit(node: ast.AST, path: str, component: str) -> None:
+        key = (node.lineno, path)
+        if key in reported:
+            return
+        reported.add(key)
         findings.append(
             make_finding(
                 filename=file,
@@ -119,34 +220,63 @@ def scan_private_imports(
             )
         )
 
+    def check(node: ast.AST, dotted: str) -> None:
+        if not dotted or _is_own(dotted, own_roots):
+            return
+        if dotted in _PUBLIC_DESPITE_UNDERSCORE:
+            return
+        component = _private_component(dotted)
+        if component:
+            emit(node, dotted, component)
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if not _is_sdk_module(alias.name):
-                    continue
-                component = _private_component(alias.name)
-                if component:
-                    emit(node, alias.name, component)
+                module_aliases[alias.asname or alias.name.split(".")[0]] = alias.name
+                check(node, alias.name)
         elif isinstance(node, ast.ImportFrom):
-            # A relative import inside an app resolves against the app's own
-            # package, never the SDK's — `from ._helpers import x` in app code is
-            # the app's business.
+            # A relative import resolves against the app's own package, always.
             if node.level:
                 continue
             module = node.module or ""
-            if not _is_sdk_module(module):
+            if _is_own(module, own_roots):
                 continue
             component = _private_component(module)
             if component:
                 emit(node, module, component)
                 continue
-            # The module path is public, so check what is being pulled out of it:
-            # `from application_sdk.app.base import _helper`, and the submodule
-            # form `from application_sdk.execution._temporal import x` is already
-            # covered above.
+            # Public module, private member:
+            # `from application_sdk.app.base import _helper`.
             for alias in node.names:
-                name_component = _private_component(alias.name)
-                if name_component:
-                    emit(node, f"{module}.{alias.name}", name_component)
+                if _private_component(alias.name):
+                    check(node, f"{module}.{alias.name}")
+
+    # Module-qualified *use*: `import application_sdk as sdk` then
+    # `sdk.execution._temporal.thing`. The import line above is clean — the
+    # private part only appears at the call site.
+    #
+    # Only the OUTERMOST attribute of a chain is considered. `a.b._c.d` nests
+    # one Attribute per dot, so walking them all would report the same reach
+    # once per level — `a.b._c.d` and `a.b._c` are different paths and would
+    # both survive dedup.
+    inner = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute)
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute) or node in inner:
+            continue
+        parts: list[str] = []
+        cursor: ast.expr = node
+        while isinstance(cursor, ast.Attribute):
+            parts.append(cursor.attr)
+            cursor = cursor.value
+        if not isinstance(cursor, ast.Name):
+            continue
+        base = module_aliases.get(cursor.id)
+        if base is None:
+            continue
+        check(node, ".".join([base, *reversed(parts)]))
 
     return findings
