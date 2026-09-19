@@ -446,9 +446,13 @@ _CONTRACT_RULES = (
         id="F015",
         canonical_reference=(
             "application_sdk/execution/_temporal/preflight_gate.py — the gate's live "
-            "configuration surface. A manifest key or helper import that this module no "
-            "longer reads is dead configuration, and the SDK version it was removed in "
-            "decides whether a finding applies."
+            "configuration surface, and the deprecated-alias block at the end of it. "
+            "Two states share this rule: ATLAN_PREFLIGHT_GATE_MODE is already inert, so "
+            "a deployment still setting it is dead configuration to delete now; the nine "
+            "symbols PR #3685 renamed still resolve, as aliases that warn and are removed "
+            "in v3.40.0, so an import of one is working code on a deadline rather than an "
+            "incompatibility. Correct looks like the posture declared on "
+            "App.preflight_gate_mode and the replacement each deprecation notice names."
         ),
         name="PreflightRemovedGateContract",
         scope=RuleScope.APP,
@@ -457,9 +461,9 @@ _CONTRACT_RULES = (
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
-        short_description="Migrate removed mode overrides and private gate-classification helpers.",
-        full_description="Migrate removed mode overrides and private gate-classification helpers.",
-        rationale="SDK PR #3685 removes the old gate contract. Until its release floor is established this is an upgrade advisory, not proof of current incompatibility.",
+        short_description="Migrate the inert mode override and the renamed gate-classification helpers.",
+        full_description="Migrate the inert mode override and the renamed gate-classification helpers.",
+        rationale="SDK PR #3685 renamed the old gate contract. The nine affected symbols are served as deprecated aliases until v3.40.0 and ATLAN_PREFLIGHT_GATE_MODE no longer does anything, so a hit is a migration window rather than proof of current incompatibility — WARN, not BLOCK.",
         help_uri=f"{_HELP_BASE}#f015",
     ),
     RuleDefinition(

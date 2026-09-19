@@ -102,9 +102,11 @@ Retryability alone does not justify returning `READY` after a failed probe. Demo
 
 ## F015
 
-**Contract:** apps must not rely on removed gate overrides or private classifiers after upgrading past their removal.
+**Contract:** apps must not rely on the inert gate mode override, and must migrate off the gate helpers SDK PR #3685 renamed before those aliases are removed in v3.40.0.
 
-**Investigate:** confirm the installed/pinned SDK and the actual removal release before declaring incompatibility. **Fix:** migrate to the supported app gate configuration and public contract for that version. **Verify:** configuration precedence and old/new supported-version behavior. Until the release floor is established, this finding is an upgrade advisory.
+Two different states share this rule. `ATLAN_PREFLIGHT_GATE_MODE` is **already inert**: nothing reads it, and a deployment that still sets it gets a startup warning from the removed-env-var registry. The nine renamed symbols (`resolve_gate_budget_seconds`, `resolve_gate_attempts`, `_is_gate_broken`, `_GATE_BROKEN_CATEGORIES`, `CLASSIFICATION_VERDICT`, `CLASSIFICATION_GATE_BROKEN`, `CLASSIFICATION_SOURCE_UNVERIFIABLE`, `GATE_RETRY`, `UNVERIFIABLE_CHECK_NAME`) still **work**, as deprecated aliases that emit a `DeprecationWarning` naming their replacement, until they are removed in v3.40.0.
+
+**Investigate:** decide which of the two a finding is — an env-var hit is dead configuration to delete now; a symbol import is working code on a deadline. **Fix:** delete the override and declare `App.preflight_gate_mode`; for a symbol, follow the replacement named in its own deprecation notice (`gate_budget_seconds` / `gate_attempts` return `(value, complaint)`; `classify_gate_failure` replaces the private predicate). **Verify:** configuration precedence, and that the migrated code passes with `-W error::DeprecationWarning`. This is a WARN advisory, not proof of current incompatibility: on any SDK before v3.40.0 the aliases resolve and the code runs.
 
 ## F016
 

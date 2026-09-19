@@ -48,6 +48,7 @@ from pydantic import BaseModel, Field, ValidationError
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import TimeoutType
+from typing_extensions import deprecated
 
 with workflow.unsafe.imports_passed_through():
     from application_sdk.constants import (
@@ -761,9 +762,18 @@ def gate_outcome_level(
 
 
 def log_gate_posture(
-    app_name: str, *, mode: PreflightGateMode, budget_seconds: int
+    app_name: str,
+    *,
+    mode: PreflightGateMode | None = None,
+    budget_seconds: int,
+    enforce: bool | None = None,
 ) -> None:
     """Emit the queryable boot-time posture row for one gate-registered app.
+
+    ``enforce`` is the deprecated spelling of ``mode``; see
+    :func:`_mode_from_deprecated_enforce`. ``mode`` is keyword-required in
+    practice — it only carries a default so a caller still on ``enforce`` can
+    omit it.
 
     Emitted for **every** gate app, soft included — the point is a complete
     denominator. Ranking hard-mode apps that never produce a verdict needs the set
@@ -774,11 +784,14 @@ def log_gate_posture(
     pinned contract string that must never be reworded, that one is prose an
     operator reads.
     """
+    resolved = _mode_from_deprecated_enforce(
+        callable_name="log_gate_posture", mode=mode, enforce=enforce, default=None
+    )
     logger.info(
         PREFLIGHT_POSTURE_EVENT,
         app_name=app_name,
         **{
-            GATE_MODE_KEY: mode.value,
+            GATE_MODE_KEY: resolved.value,
             GATE_TIMEOUT_KEY: budget_seconds,
         },
     )
@@ -1954,10 +1967,11 @@ def build_preflight_gate_activity(
     handler: Handler,
     app_name: str,
     *,
-    mode: PreflightGateMode = PreflightGateMode.SOFT,
+    mode: PreflightGateMode | None = None,
     budget_seconds: float = GATE_TIMEOUT_DEFAULT_SECONDS,
     attempts: int = GATE_ATTEMPTS_DEFAULT,
     verify_storage: bool = False,
+    enforce: bool | None = None,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the injected preflight-gate activity (``{app}:preflight``).
 
@@ -1992,7 +2006,18 @@ def build_preflight_gate_activity(
     interrupted. Temporal then ends the frame, and the workflow applies the mode
     to that from the failure chain (:func:`classify_gate_failure`). Handlers
     must keep their probes awaitable and bounded.
+
+    ``enforce`` is the deprecated spelling of ``mode``; see
+    :func:`_mode_from_deprecated_enforce`. ``mode`` defaults to ``None`` rather
+    than to ``SOFT`` only so that "caller passed a posture" stays distinguishable
+    from "caller passed nothing" — an omitted posture still resolves to soft.
     """
+    mode = _mode_from_deprecated_enforce(
+        callable_name="build_preflight_gate_activity",
+        mode=mode,
+        enforce=enforce,
+        default=PreflightGateMode.SOFT,
+    )
     enforce = mode.enforces
 
     @activity.defn(name=preflight_gate_activity_name(app_name))
@@ -2357,3 +2382,210 @@ def build_preflight_gate_activity(
             )
 
     return preflight_gate
+
+
+# ---------------------------------------------------------------------------
+# Deprecated compatibility surface — removed in v3.40.0
+# ---------------------------------------------------------------------------
+#
+# #3685 renamed these in place and 3.36.0 shipped them gone, so every consumer
+# that imported one broke on ``ImportError`` at the next lock refresh with no
+# warning and no migration window. They are restored here on the same 3.40.0
+# horizon :data:`DEPRECATED_FAIL_OPEN_REMOVED_IN` already uses, so the fleet
+# migrates on a B001 nudge carrying this guidance instead of on a red CI run.
+#
+# The two underscore-prefixed names are not a public surface and are owed no
+# compatibility. They are restored anyway because the fleet imports them from
+# its test suites regardless, and a silent break teaches nothing a warned one
+# does not. Their notices point at the public replacement rather than at a
+# like-for-like private, so migrating off them is the only way forward.
+
+
+@deprecated(
+    "resolve_gate_budget_seconds is deprecated; use gate_budget_seconds, which "
+    "returns (budget, complaint) and leaves the logging to its caller — will be "
+    "removed in v3.40.0."
+)
+def resolve_gate_budget_seconds(raw: object) -> int:
+    """Resolve an app's declared gate budget, warning once about a bad value.
+
+    .. deprecated:: 3.37
+        Use :func:`gate_budget_seconds` and log the complaint yourself. Will be
+        removed in v3.40.0.
+    """
+    budget, complaint = gate_budget_seconds(raw)
+    if complaint:
+        logger.warning(
+            "preflight_gate_timeout_seconds: %s; using %ds", complaint, budget
+        )
+    return budget
+
+
+@deprecated(
+    "resolve_gate_attempts is deprecated; use gate_attempts, which returns "
+    "(attempts, complaint) and leaves the logging to its caller — will be "
+    "removed in v3.40.0."
+)
+def resolve_gate_attempts(raw: object) -> int:
+    """Resolve an app's declared gate attempts, warning once about a bad value.
+
+    .. deprecated:: 3.37
+        Use :func:`gate_attempts` and log the complaint yourself. Will be
+        removed in v3.40.0.
+    """
+    attempts, complaint = gate_attempts(raw)
+    if complaint:
+        logger.warning("preflight_gate_max_attempts: %s; using %d", complaint, attempts)
+    return attempts
+
+
+@deprecated(
+    "_is_gate_broken is deprecated; use classify_gate_failure, whose GateFailure "
+    "separates a genuinely broken gate from the deprecated fail-open idiom this "
+    "predicate conflated — will be removed in v3.40.0."
+)
+def _is_gate_broken(exc: BaseException) -> bool:
+    """Whether ``exc`` is the gate's own plumbing failing, not source evidence.
+
+    .. deprecated:: 3.37
+        Use :func:`classify_gate_failure` and read
+        :attr:`GateFailure.classification`. Will be removed in v3.40.0.
+
+    Preserved exactly: the old predicate tested the raised leaf's
+    ``FailureCategory`` against the four-member set now published as
+    :data:`DEPRECATED_FAIL_OPEN_CATEGORIES`.
+    """
+    return _deprecated_fail_open_leaf(exc) is not None
+
+
+#: The log twin of the notice below, with the callable and the value the caller
+#: passed. %-style rather than an f-string so both stay log fields.
+_ENFORCE_KEYWORD_LOG = (
+    "%s(enforce=%s) is deprecated; use mode=PreflightGateMode.HARD or "
+    "mode=PreflightGateMode.SOFT instead — will be removed in v%s."
+)
+
+
+def _mode_from_deprecated_enforce(
+    *,
+    callable_name: str,
+    mode: PreflightGateMode | None,
+    enforce: bool | None,
+    default: PreflightGateMode | None,
+) -> PreflightGateMode:
+    """Resolve a gate posture from ``mode``, or from the deprecated ``enforce``.
+
+    #3685 replaced the ``enforce: bool`` keyword on :func:`log_gate_posture` and
+    :func:`build_preflight_gate_activity` with ``mode: PreflightGateMode``. The
+    enum is the right shape — a posture is a categorical, and a bool could not
+    have carried ``FRAME_LOST`` handling — but on ``log_gate_posture`` ``enforce``
+    was *keyword-required*, so every existing caller passed it and every one of
+    them now raises ``TypeError``. That is the same undeprecated break as the
+    renamed names, in a shape a name-level diff does not see.
+
+    ``default`` is the posture for a caller that passed neither, or ``None`` to
+    keep the keyword required. Passing both is a ``TypeError`` rather than a
+    precedence rule: the two could disagree, and silently picking a winner would
+    hide a half-finished migration.
+
+    The notice is written **inline** rather than built into a local and passed by
+    name, because conformance rule ``B002`` reads ``warnings.warn``'s first
+    argument statically — a variable there reads as an empty notice and a
+    compliant deprecation is reported as naming neither a replacement nor a
+    removal version.
+    """
+    if enforce is None:
+        if mode is not None:
+            return mode
+        if default is not None:
+            return default
+        raise TypeError(f"{callable_name}() missing required keyword argument: 'mode'")
+    if mode is not None:
+        raise TypeError(
+            f"{callable_name}() received both 'mode' and the deprecated 'enforce'; "
+            "pass 'mode' alone."
+        )
+    warnings.warn(
+        f"{callable_name}'s enforce= is deprecated; use "
+        "mode=PreflightGateMode.HARD or mode=PreflightGateMode.SOFT instead — "
+        "will be removed in v3.40.0. A posture is a categorical, and a bool "
+        "cannot carry the classifications the gate added since.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    logger.warning(
+        _ENFORCE_KEYWORD_LOG, callable_name, enforce, DEPRECATED_FAIL_OPEN_REMOVED_IN
+    )
+    return PreflightGateMode.HARD if enforce else PreflightGateMode.SOFT
+
+
+# Module-level constants cannot carry ``@deprecated`` (it decorates a def or a
+# class), and they are not enum members, so neither machine-readable marker
+# applies. PEP 562 module ``__getattr__`` is the remaining vehicle: it fires on
+# *access*, so an app that never touches one pays nothing, and the warning names
+# the caller's own line rather than this module's import. The notice text is
+# still subject to B002/B003 — the f-string's constant parts carry both the
+# migration target and the removal version.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "_GATE_BROKEN_CATEGORIES": (
+        "DEPRECATED_FAIL_OPEN_CATEGORIES",
+        "the identical frozenset under its honest name",
+    ),
+    "CLASSIFICATION_VERDICT": (
+        "PreflightClassification.VERDICT",
+        "the enum member carrying the same wire value",
+    ),
+    "CLASSIFICATION_GATE_BROKEN": (
+        "PreflightClassification.GATE_BROKEN",
+        "the enum member carrying the same wire value",
+    ),
+    "CLASSIFICATION_SOURCE_UNVERIFIABLE": (
+        "PreflightClassification.SOURCE_UNVERIFIABLE",
+        "the enum member carrying the same wire value",
+    ),
+    "GATE_RETRY": (
+        "gate_retry_policy(GATE_ATTEMPTS_DEFAULT)",
+        "the policy built from an app's declared attempts",
+    ),
+    "UNVERIFIABLE_CHECK_NAME": (
+        "application_sdk.handler.contracts.UNVERIFIABLE_CHECK_NAME",
+        "the same constant, at the module that now owns it",
+    ),
+}
+
+
+def _deprecated_constant_value(name: str) -> object:
+    """The live value behind a deprecated constant alias."""
+    if name == "_GATE_BROKEN_CATEGORIES":
+        return DEPRECATED_FAIL_OPEN_CATEGORIES
+    if name == "CLASSIFICATION_VERDICT":
+        return PreflightClassification.VERDICT.value
+    if name == "CLASSIFICATION_GATE_BROKEN":
+        return PreflightClassification.GATE_BROKEN.value
+    if name == "CLASSIFICATION_SOURCE_UNVERIFIABLE":
+        return PreflightClassification.SOURCE_UNVERIFIABLE.value
+    if name == "GATE_RETRY":
+        return gate_retry_policy(GATE_ATTEMPTS_DEFAULT)
+    # Imported here rather than at module scope: a module-level re-export would
+    # resolve before ``__getattr__`` ever ran, handing the name back silently and
+    # leaving the one consumer of it with no migration signal at all.
+    from application_sdk.handler.contracts import (  # noqa: PLC0415
+        UNVERIFIABLE_CHECK_NAME,
+    )
+
+    return UNVERIFIABLE_CHECK_NAME
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v3.40.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _deprecated_constant_value(name)
