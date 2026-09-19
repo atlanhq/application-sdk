@@ -444,4 +444,96 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri=f"{_HELP_BASE}#b007",
     ),
+    RuleDefinition(
+        id="B008",
+        canonical_reference=(
+            "atlan-openapi-app app/connector.py — every third-party import names a "
+            "public module (application_sdk.app, application_sdk.contracts, "
+            "application_sdk.errors, httpx, pyatlan_v9.model.assets). None of the "
+            "four reference apps imports an underscore-prefixed module or name it "
+            "does not own, in app code or in tests."
+        ),
+        scope=RuleScope.APP,
+        name="PrivateModuleImport",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="sdk-private-surface",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.34.0",
+        rationale=(
+            "An underscore-prefixed module or name carries no compatibility "
+            "promise from whoever owns it: its owner renames and deletes internals "
+            "without a deprecation cycle. Python enforces none of this — a leading "
+            "underscore is a convention with no runtime meaning — so the boundary "
+            "holds only as long as nobody crosses it. Fifteen connector repos "
+            "crossed the SDK's and stopped collecting tests when 3.36.0 reshaped "
+            "application_sdk/execution/_temporal/preflight_gate.py; the two names "
+            "with the widest blast radius, _GATE_BROKEN_CATEGORIES (nine repos) "
+            "and _is_gate_broken (two), were both private and both imported from "
+            "app test suites, most likely copied from the SDK's own tests "
+            "(FND-2388). Nothing about that failure is specific to the SDK: "
+            "pandas._libs, temporalio.api._grpc and pydantic._internal are equally "
+            "free to change under an app, with the same absence of warning. An app "
+            "sits at the leaf of the dependency chain, so everything it imports is "
+            "somebody else's and the rule is 'nothing foreign and private' rather "
+            "than 'nothing of the SDK's'. The app's OWN privates are never flagged "
+            "— it owns no published surface, so how it organises its internals is "
+            "its business. This is also the only app-side piece of the FND-2388 "
+            "work, and deliberately so: deprecation manifests and removal gates are "
+            "promises made by whoever owns a surface, and an app owns none. It is "
+            "the consumer-side half of a pair — the SDK's surface-removal gate "
+            "blocks deleting a PUBLIC name without a deprecation cycle but only "
+            "reports deleting a private one, because freezing internals would tax "
+            "every refactor, and B008 is what makes that split safe. WARN rather "
+            "than BLOCK because the fleet has these imports today, and a BLOCK tier "
+            "would turn a correct diagnosis into the fleet-wide red wall this whole "
+            "line of work exists to prevent; revisit once the count nears zero."
+        ),
+        short_description=(
+            "Imports or uses an underscore-prefixed module or name the app does "
+            "not own — foreign internals change without a deprecation cycle"
+        ),
+        full_description=(
+            "Flags any import or attribute use that reaches a private module or\n"
+            "name the app does not own.  Six shapes are matched:\n"
+            "\n"
+            "* ``from application_sdk.execution._temporal.preflight_gate import X``\n"
+            "  — a private component anywhere in the module path;\n"
+            "* ``import application_sdk.execution._temporal.worker``;\n"
+            "* ``from application_sdk.execution._temporal import preflight_gate``\n"
+            "  — private component in the package being imported from;\n"
+            "* ``from application_sdk.app.base import _helper`` — public module,\n"
+            "  private name;\n"
+            "* ``from pandas._libs import x`` — any third party, not just the SDK;\n"
+            "* ``import application_sdk as sdk`` … ``sdk.execution._temporal.x``\n"
+            "  — module-qualified use, where the import line itself is clean.\n"
+            "\n"
+            "**The app's own privates are never flagged.**  A relative import\n"
+            "(``from ._helpers import x``) is own code by construction, and an\n"
+            "absolute import rooted at one of the repo's own top-level packages\n"
+            "(``app``, ``tests``, ``local``, …) is too.  An app publishes no\n"
+            "surface and owes no compatibility promise, so how it organises its\n"
+            "internals is its own business.  Dunders are never matched either.\n"
+            "\n"
+            "**Tests are in scope, and deliberately so.**  All fifteen repos\n"
+            "FND-2388 wedged broke in ``tests/``, not in ``app/`` — no production\n"
+            "code imported a removed name.  A rule that skipped test files would\n"
+            "have reported nothing at all on the incident it exists for.\n"
+            "\n"
+            "**Remediation.**  Import the public equivalent, or test through the\n"
+            "public behaviour rather than the internal helper — an app asserting\n"
+            "on an SDK private is testing the SDK, which the SDK's own suite\n"
+            "already does.  Where no public equivalent exists, that is a gap in\n"
+            "the package worth raising rather than routing around; say so in the\n"
+            "suppression: ``# conformance: ignore[B008] no public equivalent —\n"
+            "tracked in <id>``.\n"
+            "\n"
+            "Coverage limit (intentional): a reach-through whose base is not a\n"
+            "module alias bound in the same file — e.g. a private attribute on an\n"
+            "object returned by a factory — is not matched, biased toward zero\n"
+            "false positives.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#b008",
+    ),
 )

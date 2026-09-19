@@ -28,6 +28,7 @@ from application_sdk.execution._temporal.preflight_gate import (
 from application_sdk.handler.base import DefaultHandler
 from application_sdk.handler.contracts import (
     PreflightCheck,
+    PreflightGateMode,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
@@ -80,7 +81,7 @@ class TestSelfReportedDurationsAreUnvalidated:
         gate = build_preflight_gate_activity(
             _MisreportingHandler(_IMPOSSIBLE_DURATION_MS),
             app_name="myapp",
-            enforce=False,
+            mode=PreflightGateMode.SOFT,
             budget_seconds=0.3,
         )
         started = time.monotonic()
@@ -99,7 +100,7 @@ class TestSelfReportedDurationsAreUnvalidated:
         gate = build_preflight_gate_activity(
             _MisreportingHandler(_IMPOSSIBLE_DURATION_MS),
             app_name="myapp",
-            enforce=False,
+            mode=PreflightGateMode.SOFT,
             budget_seconds=0.3,
         )
         with mock.patch(f"{_GATE}.logger") as m:
@@ -118,7 +119,7 @@ class TestSelfReportedDurationsAreUnvalidated:
         gate = build_preflight_gate_activity(
             _MisreportingHandler(_IMPOSSIBLE_DURATION_MS),
             app_name="myapp",
-            enforce=False,
+            mode=PreflightGateMode.SOFT,
             budget_seconds=GATE_TIMEOUT_DEFAULT_SECONDS,
         )
         started = time.monotonic()

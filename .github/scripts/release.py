@@ -7,6 +7,7 @@ import sys
 
 import release_guard
 import semver
+from conventional_breaking import declares_breaking_change
 
 PYPROJECT = "pyproject.toml"
 
@@ -146,15 +147,14 @@ def parse_conventional_commits(commits: list[str]) -> tuple[bool, bool, bool]:
     is_feature = False
     is_fix = False
 
-    breaking_pattern = "!:"
-    breaking_change = "BREAKING CHANGE:"
     feature_pattern = r"^feat[(!:]"
     fix_pattern = r"^fix[(!:]"
 
     for commit in commits:
-        if re.search(
-            breaking_pattern, commit, re.MULTILINE | re.IGNORECASE
-        ) or re.search(breaking_change, commit, re.MULTILINE | re.IGNORECASE):
+        # The breaking predicate lives in conventional_breaking so the surface
+        # gate can ask the same question and get the same answer (FND-2388).
+        # Behaviour here is unchanged: same two patterns, same flags.
+        if declares_breaking_change(commit):
             is_breaking = True
         elif re.search(feature_pattern, commit, re.MULTILINE | re.IGNORECASE):
             is_feature = True

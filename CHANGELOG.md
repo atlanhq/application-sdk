@@ -1,5 +1,30 @@
 # Changelog
 
+## v3.36.1 (September 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.0...v3.36.1
+
+### Bug Fixes
+
+- restore the gate symbols #3685 removed, as deprecated aliases (#3843) (by @cmgrote in [cd13c20](https://github.com/atlanhq/application-sdk/commit/cd13c20))
+
+
+## v3.36.0 (September 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.35.0...v3.36.0
+
+### Features
+
+- split the APP_OWNER bucket with a failure.classified label (#3830) (by @AtMrun in [7a26a72](https://github.com/atlanhq/application-sdk/commit/7a26a72))
+
+### Bug Fixes
+
+- resolve the [] element step in both artifact validators (#3831) (by @AtMrun in [588f0b2](https://github.com/atlanhq/application-sdk/commit/588f0b2))
+- treat one binding under two store names as a single store (#3832) (by @chaitanyaparaskar-atlan in [0683252](https://github.com/atlanhq/application-sdk/commit/0683252))
+- type read-only / unwritable local-write OSError at the activity boundary (#3829) (by @Dexters-Hub in [af1a299](https://github.com/atlanhq/application-sdk/commit/af1a299))
+- enforce the gate by origin and apply the mode to a dead frame (#3685) (by @fyzanshaik-atlan in [b9dc12d](https://github.com/atlanhq/application-sdk/commit/b9dc12d))
+
+
 ## v3.35.0 (September 17, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.34.3...v3.35.0

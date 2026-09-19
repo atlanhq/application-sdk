@@ -91,6 +91,87 @@
       "symbol": "DiscoveryError"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CLASSIFICATION_GATE_BROKEN is deprecated; use PreflightClassification.GATE_BROKEN \u2014 the enum member carrying the same wire value. Will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "CLASSIFICATION_GATE_BROKEN"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CLASSIFICATION_SOURCE_UNVERIFIABLE is deprecated; use PreflightClassification.SOURCE_UNVERIFIABLE \u2014 the enum member carrying the same wire value. Will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "CLASSIFICATION_SOURCE_UNVERIFIABLE"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CLASSIFICATION_VERDICT is deprecated; use PreflightClassification.VERDICT \u2014 the enum member carrying the same wire value. Will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "CLASSIFICATION_VERDICT"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "GATE_RETRY is deprecated; use gate_retry_policy(GATE_ATTEMPTS_DEFAULT) \u2014 the policy built from an app's declared attempts. Will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "GATE_RETRY"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UNVERIFIABLE_CHECK_NAME is deprecated; use application_sdk.handler.contracts.UNVERIFIABLE_CHECK_NAME \u2014 the same constant, at the module that now owns it. Will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "UNVERIFIABLE_CHECK_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_GATE_BROKEN_CATEGORIES is deprecated; use DEPRECATED_FAIL_OPEN_CATEGORIES \u2014 the identical frozenset under its honest name. Will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "_GATE_BROKEN_CATEGORIES"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "_is_gate_broken is deprecated; use classify_gate_failure, whose GateFailure separates a genuinely broken gate from the deprecated fail-open idiom this predicate conflated \u2014 will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "_is_gate_broken"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "resolve_gate_attempts is deprecated; use gate_attempts, which returns (attempts, complaint) and leaves the logging to its caller \u2014 will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "resolve_gate_attempts"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "resolve_gate_budget_seconds is deprecated; use gate_budget_seconds, which returns (budget, complaint) and leaves the logging to its caller \u2014 will be removed in v3.40.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.preflight_gate",
+      "removal_version": "3.40.0",
+      "symbol": "resolve_gate_budget_seconds"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass \u2014 will be removed in v4.0",

@@ -34,6 +34,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     GATE_TIMEOUT_DEFAULT_SECONDS,
     INTERACTIVE_RAISE_OUTCOMES,
     PREFLIGHT_CHECK_EVENT,
+    PREFLIGHT_FALLBACK_CODE,
     PreflightGateInput,
     PreflightSurface,
     _config_from_snapshot,
@@ -55,6 +56,7 @@ from application_sdk.handler.contracts import (
     AuthStatus,
     MetadataInput,
     PreflightCheck,
+    PreflightGateMode,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
@@ -107,9 +109,11 @@ class _VerdictHandler(DefaultHandler):
         return self._output
 
 
-def _verdict_gate(output: PreflightOutput, *, enforce: bool = True):
+def _verdict_gate(
+    output: PreflightOutput, *, mode: PreflightGateMode = PreflightGateMode.HARD
+):
     return build_preflight_gate_activity(
-        _VerdictHandler(output), app_name="myapp", enforce=enforce
+        _VerdictHandler(output), app_name="myapp", mode=mode
     )
 
 
@@ -237,8 +241,12 @@ class TestPreflightGateActivity:
         handler = _StubHandler()
         gate = _gate(handler)
         with _infra_patches(None, secret_store=None):
-            with pytest.raises(DependencyUnavailableError):
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(PreflightGateInput(credential_guid="guid-123"))
+        assert excinfo.value.type == "DependencyUnavailableError"
+        assert (
+            excinfo.value.details[0].category is FailureCategory.DEPENDENCY_UNAVAILABLE
+        )
         assert handler.preflight_input is None  # bailed before calling the handler
 
     async def test_gate_clears_context_after_call(self) -> None:
@@ -757,7 +765,10 @@ class TestPreflightGateOutcomeEvent:
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out)(PreflightGateInput())
         ev = _outcome_event(ml)
-        assert ev["outcome"] == "proceeded" and ev["reason"] == "partial"
+        # The failed check has no typed error, so the reason is the same sentinel
+        # an untyped block carries; a typed failure would carry its own code.
+        assert ev["outcome"] == "proceeded"
+        assert ev["reason"] == PREFLIGHT_FALLBACK_CODE
         assert ev["entrypoint"] == "<implicit>"
         # Advisory failure: WARNING is the one level semantically for it, and
         # F005 bans the handler from emitting it — so the gate must.
@@ -826,7 +837,9 @@ class TestPreflightGateOutcomeEvent:
             ],
         )
         with mock.patch(_LOGGER) as ml:
-            result = await _verdict_gate(out, enforce=False)(PreflightGateInput())
+            result = await _verdict_gate(out, mode=PreflightGateMode.SOFT)(
+                PreflightGateInput()
+            )
         assert result is out
         assert result.status is PreflightStatus.NOT_READY  # verdict untouched
         ev = _outcome_event(ml)
@@ -872,7 +885,7 @@ class TestPreflightGateOutcomeEvent:
             ],
         )
         with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out, enforce=False)(PreflightGateInput())
+            await _verdict_gate(out, mode=PreflightGateMode.SOFT)(PreflightGateInput())
         assert _outcome_level(ml) == "info"
         assert _outcome_event(ml)[FAILURE_AUDIENCE_KEY] == "USER"
         ml.error.assert_not_called()
@@ -905,7 +918,7 @@ class TestPreflightGateOutcomeEvent:
     async def test_proceeded_carries_gate_mode_soft(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
         with mock.patch(_LOGGER) as ml:
-            await _verdict_gate(out, enforce=False)(PreflightGateInput())
+            await _verdict_gate(out, mode=PreflightGateMode.SOFT)(PreflightGateInput())
         ev = _outcome_event(ml)
         # a soft app's healthy runs proceed normally, still tagged soft
         assert ev["outcome"] == "proceeded"
@@ -1122,8 +1135,9 @@ class TestPreflightGateMultiCredential:
             {"guid-a": DependencyUnavailableError(message="down", service="vault")}
         )
         with _infra_patches(resolver):
-            with pytest.raises(DependencyUnavailableError):
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(self._input())
+        assert excinfo.value.type == "DependencyUnavailableError"
         assert handler.preflight_input is None
 
     async def test_credential_vault_outage_propagates(self) -> None:
@@ -1140,8 +1154,10 @@ class TestPreflightGateMultiCredential:
         gate = _gate(handler)
         resolver = _resolver_by_guid({"guid-a": outage, "guid-o": {"bucket": "b"}})
         with _infra_patches(resolver):
-            with pytest.raises(CredentialVaultError):
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(self._input())
+        assert excinfo.value.type == "CredentialVaultError"
+        assert excinfo.value.__cause__ is outage
         assert handler.preflight_input is None
 
     async def test_named_path_redacts_every_group_secret(self) -> None:
@@ -1164,8 +1180,9 @@ class TestPreflightGateMultiCredential:
         handler = _StubHandler()
         gate = _gate(handler)
         with _infra_patches(None, secret_store=None):
-            with pytest.raises(DependencyUnavailableError):
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(self._input())
+        assert excinfo.value.type == "DependencyUnavailableError"
         assert handler.preflight_input is None
 
     async def test_absent_guids_skip_resolution_with_empty_groups(self) -> None:
@@ -1466,7 +1483,7 @@ class TestOrphanedAttemptEmission:
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="connectivity", passed=False)],
         )
-        gate = _verdict_gate(out, enforce=False)
+        gate = _verdict_gate(out, mode=PreflightGateMode.SOFT)
         # activity.info() as the abandoned attempt sees it: its start_to_close
         # deadline passed minutes ago, so Temporal has stopped waiting and may
         # already be running the next attempt.
@@ -1502,7 +1519,7 @@ class TestHeartbeatCleanupCannotOutrankTheVerdict:
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="connectivity", passed=False)],
         )
-        gate = _verdict_gate(out, enforce=True)
+        gate = _verdict_gate(out, mode=PreflightGateMode.HARD)
         with (
             mock.patch(
                 "application_sdk.execution.heartbeat.auto_heartbeat_loop",
@@ -1517,7 +1534,8 @@ class TestHeartbeatCleanupCannotOutrankTheVerdict:
 
     async def test_soft_mode_ready_survives_a_stuck_heartbeat_task(self) -> None:
         gate = _verdict_gate(
-            PreflightOutput(status=PreflightStatus.READY, checks=[]), enforce=False
+            PreflightOutput(status=PreflightStatus.READY, checks=[]),
+            mode=PreflightGateMode.SOFT,
         )
         with (
             mock.patch(
@@ -1542,7 +1560,7 @@ class TestLiveAttemptStillEmits:
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="connectivity", passed=False)],
         )
-        gate = _verdict_gate(out, enforce=False)
+        gate = _verdict_gate(out, mode=PreflightGateMode.SOFT)
         live_attempt = SimpleNamespace(
             attempt=1,
             start_to_close_timeout=timedelta(seconds=60),
@@ -1565,7 +1583,7 @@ class TestLiveAttemptStillEmits:
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="connectivity", passed=False)],
         )
-        gate = _verdict_gate(out, enforce=False)
+        gate = _verdict_gate(out, mode=PreflightGateMode.SOFT)
         near_deadline = SimpleNamespace(
             attempt=1,
             start_to_close_timeout=timedelta(seconds=60),
@@ -1586,8 +1604,10 @@ class TestGateHeartbeat:
 
     async def test_heartbeat_sent_while_handler_runs(self) -> None:
         beat = asyncio.Event()
+        beats: list[int] = []
 
-        def _record_beat() -> None:
+        def _record_beat(attempt: int) -> None:
+            beats.append(attempt)
             beat.set()
 
         class _WaitingReadyHandler(DefaultHandler):
@@ -1596,7 +1616,10 @@ class TestGateHeartbeat:
                 return PreflightOutput(status=PreflightStatus.READY, checks=[])
 
         gate = build_preflight_gate_activity(
-            _WaitingReadyHandler(), app_name="myapp", enforce=False, budget_seconds=2
+            _WaitingReadyHandler(),
+            app_name="myapp",
+            mode=PreflightGateMode.SOFT,
+            budget_seconds=2,
         )
         with (
             mock.patch(f"{_GATE}.gate_heartbeat_timings", return_value=(60.0, 0.01)),
@@ -1604,6 +1627,7 @@ class TestGateHeartbeat:
         ):
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.READY
+        assert beats[0] == 1
 
     async def test_min_budget_heartbeat_still_fits_inside_start_to_close(self) -> None:
         # The knobs are derived, not fixed: at the 5s budget floor a fixed 60s
@@ -1630,7 +1654,7 @@ class TestCancelledAttemptSuppression:
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="connectivity", passed=False)],
         )
-        gate = _verdict_gate(out, enforce=False)
+        gate = _verdict_gate(out, mode=PreflightGateMode.SOFT)
         inside_deadline = SimpleNamespace(
             attempt=1,
             start_to_close_timeout=timedelta(seconds=60),
@@ -1652,7 +1676,7 @@ class TestCancelledAttemptSuppression:
             checks=[PreflightCheck(name="connectivity", passed=False)],
         )
         for age_seconds, expect_row in ((0, True), (300, False)):
-            gate = _verdict_gate(out, enforce=False)
+            gate = _verdict_gate(out, mode=PreflightGateMode.SOFT)
             naive = SimpleNamespace(
                 attempt=1,
                 start_to_close_timeout=timedelta(seconds=60),
@@ -1674,7 +1698,7 @@ class TestCancelledAttemptSuppression:
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="connectivity", passed=False)],
         )
-        gate = _verdict_gate(out, enforce=False)
+        gate = _verdict_gate(out, mode=PreflightGateMode.SOFT)
         incident = SimpleNamespace(
             attempt=1,
             start_to_close_timeout=timedelta(seconds=155),
@@ -1706,7 +1730,7 @@ class TestAnAbandonedAttemptWritesNothingAnywhere:
         )
 
     async def test_an_attempt_past_its_deadline_does_not_persist(self) -> None:
-        gate = _verdict_gate(self._not_ready(), enforce=False)
+        gate = _verdict_gate(self._not_ready(), mode=PreflightGateMode.SOFT)
         dead_attempt = SimpleNamespace(
             attempt=1,
             start_to_close_timeout=timedelta(seconds=60),
@@ -1722,7 +1746,7 @@ class TestAnAbandonedAttemptWritesNothingAnywhere:
         persist.assert_not_called()
 
     async def test_a_cancelled_attempt_does_not_persist(self) -> None:
-        gate = _verdict_gate(self._not_ready(), enforce=False)
+        gate = _verdict_gate(self._not_ready(), mode=PreflightGateMode.SOFT)
         inside_deadline = SimpleNamespace(
             attempt=1,
             start_to_close_timeout=timedelta(seconds=60),
@@ -1742,7 +1766,8 @@ class TestAnAbandonedAttemptWritesNothingAnywhere:
         # The READY path too: it reaches _emit_outcome by a different branch,
         # and a stale "this source is fine" row is the worse one to leave.
         gate = _verdict_gate(
-            PreflightOutput(status=PreflightStatus.READY, checks=[]), enforce=False
+            PreflightOutput(status=PreflightStatus.READY, checks=[]),
+            mode=PreflightGateMode.SOFT,
         )
         dead_attempt = SimpleNamespace(
             attempt=1,
@@ -1768,7 +1793,7 @@ class TestAnAbandonedAttemptWritesNothingAnywhere:
         # non-final attempt _no_verdict defers by raising and never reaches the
         # emit site, which would make the assertion below vacuous.
         gate = build_preflight_gate_activity(
-            _Crashing(), app_name="myapp", enforce=False, attempts=1
+            _Crashing(), app_name="myapp", mode=PreflightGateMode.SOFT, attempts=1
         )
         dead_attempt = SimpleNamespace(
             attempt=1,
@@ -1813,7 +1838,7 @@ class TestTheVerdictIsPersisted:
                 PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
             ],
         )
-        gate = _verdict_gate(out, enforce=False)
+        gate = _verdict_gate(out, mode=PreflightGateMode.SOFT)
         with mock.patch(f"{_GATE}.persist_check_result") as persist:
             await gate(self._input())
         assert persist.call_count == 1
@@ -1827,7 +1852,7 @@ class TestTheVerdictIsPersisted:
                 PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
             ],
         )
-        gate = _verdict_gate(out, enforce=True)
+        gate = _verdict_gate(out, mode=PreflightGateMode.HARD)
         with mock.patch(f"{_GATE}.persist_check_result") as persist:
             with pytest.raises(ApplicationError):
                 await gate(self._input())
@@ -1839,7 +1864,7 @@ class TestTheVerdictIsPersisted:
                 raise RuntimeError("driver blew up")
 
         gate = build_preflight_gate_activity(
-            _Crashing(), app_name="myapp", enforce=False
+            _Crashing(), app_name="myapp", mode=PreflightGateMode.SOFT
         )
         with mock.patch(f"{_GATE}.persist_check_result") as persist:
             result = await gate(self._input())
@@ -1889,7 +1914,7 @@ class TestPersistenceCanNeverFailTheRun:
         assert result.status is PreflightStatus.READY
 
     async def test_a_soft_mode_verdict_is_still_returned(self) -> None:
-        gate = _verdict_gate(self._not_ready(), enforce=False)
+        gate = _verdict_gate(self._not_ready(), mode=PreflightGateMode.SOFT)
         with self._exploding():
             result = await gate(self._input())
         assert result.status is PreflightStatus.NOT_READY
@@ -1901,7 +1926,7 @@ class TestPersistenceCanNeverFailTheRun:
         # the run too, but as an untyped fault — so the workflow would fail open
         # instead of reporting a preflight block, and the customer would see the
         # wrong reason for the wrong outcome.
-        gate = _verdict_gate(self._not_ready(), enforce=True)
+        gate = _verdict_gate(self._not_ready(), mode=PreflightGateMode.HARD)
         with self._exploding(), pytest.raises(ApplicationError) as excinfo:
             await gate(self._input())
         assert "store down" not in str(excinfo.value)
@@ -1912,7 +1937,7 @@ class TestPersistenceCanNeverFailTheRun:
                 raise RuntimeError("driver blew up")
 
         gate = build_preflight_gate_activity(
-            _Crashing(), app_name="myapp", enforce=False
+            _Crashing(), app_name="myapp", mode=PreflightGateMode.SOFT
         )
         with self._exploding():
             result = await gate(self._input())
@@ -1975,7 +2000,10 @@ class TestPreflightGateStorageChecks:
     async def test_relocation_blocks_hard_gate_with_typed_code(self) -> None:
         """A failed probe downgrades READY and blocks in hard mode, platform-attributed."""
         gate = build_preflight_gate_activity(
-            _StubHandler(), app_name="myapp", enforce=True, verify_storage=True
+            _StubHandler(),
+            app_name="myapp",
+            mode=PreflightGateMode.HARD,
+            verify_storage=True,
         )
         with self._storage_patches([self._reloc_result()]):
             with pytest.raises(ApplicationError) as excinfo:
@@ -1988,7 +2016,10 @@ class TestPreflightGateStorageChecks:
     async def test_relocation_soft_gate_reports_not_ready(self) -> None:
         """Soft mode: verdict honestly NOT_READY, run proceeds (no raise)."""
         gate = build_preflight_gate_activity(
-            _StubHandler(), app_name="myapp", enforce=False, verify_storage=True
+            _StubHandler(),
+            app_name="myapp",
+            mode=PreflightGateMode.SOFT,
+            verify_storage=True,
         )
         with self._storage_patches([self._reloc_result()]):
             result = await gate(PreflightGateInput())
@@ -2001,7 +2032,10 @@ class TestPreflightGateStorageChecks:
 
     async def test_healthy_storage_appends_passed_check(self) -> None:
         gate = build_preflight_gate_activity(
-            _StubHandler(), app_name="myapp", enforce=True, verify_storage=True
+            _StubHandler(),
+            app_name="myapp",
+            mode=PreflightGateMode.HARD,
+            verify_storage=True,
         )
         with self._storage_patches([self._passed_result()]):
             result = await gate(PreflightGateInput())
@@ -2020,7 +2054,7 @@ class TestPreflightGateStorageChecks:
         gate = build_preflight_gate_activity(
             _VerdictHandler(verdict),
             app_name="myapp",
-            enforce=False,
+            mode=PreflightGateMode.SOFT,
             verify_storage=True,
         )
         with self._storage_patches([self._passed_result()]) as checker:
@@ -2033,7 +2067,10 @@ class TestPreflightGateStorageChecks:
         import application_sdk.constants as constants_mod
 
         gate = build_preflight_gate_activity(
-            _StubHandler(), app_name="myapp", enforce=True, verify_storage=True
+            _StubHandler(),
+            app_name="myapp",
+            mode=PreflightGateMode.HARD,
+            verify_storage=True,
         )
         with ExitStack() as stack:
             stack.enter_context(
@@ -2056,7 +2093,7 @@ class TestPreflightGateStorageChecks:
         gate = build_preflight_gate_activity(
             _StubHandler(),
             app_name="myapp",
-            enforce=True,
+            mode=PreflightGateMode.HARD,
             budget_seconds=5,
             verify_storage=True,
         )
@@ -2071,7 +2108,10 @@ class TestPreflightGateStorageChecks:
     async def test_sdr_mode_uses_role_aware_mapping(self) -> None:
         """In SDR mode the deployment store maps via the SDR role split (USER)."""
         gate = build_preflight_gate_activity(
-            _StubHandler(), app_name="myapp", enforce=False, verify_storage=True
+            _StubHandler(),
+            app_name="myapp",
+            mode=PreflightGateMode.SOFT,
+            verify_storage=True,
         )
         with self._storage_patches([self._reloc_result()], sdr_mode=True):
             result = await gate(PreflightGateInput())
@@ -2097,7 +2137,7 @@ class TestPreflightGateStorageChecks:
         gate = build_preflight_gate_activity(
             _StubHandler(),
             app_name="myapp",
-            enforce=True,
+            mode=PreflightGateMode.HARD,
             attempts=2,
             verify_storage=True,
         )
@@ -2120,7 +2160,7 @@ class TestPreflightGateStorageChecks:
         gate = build_preflight_gate_activity(
             _StubHandler(),
             app_name="myapp",
-            enforce=True,
+            mode=PreflightGateMode.HARD,
             attempts=2,
             verify_storage=True,
         )
@@ -2205,7 +2245,7 @@ class TestPreflightGateStorageChecks:
             failed = await _append_storage_checks(result, 150.0, _time.monotonic())
         assert failed is True
         assert result.status is PreflightStatus.NOT_READY
-        block = _build_block_error(result, "myapp")
+        block = _build_block_error(result, "myapp", 1)
         assert block.details[0].code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
     async def test_partial_verdict_is_downgraded(self) -> None:
@@ -2256,7 +2296,7 @@ class TestPreflightGateStorageChecks:
         gate = build_preflight_gate_activity(
             _StubHandler(),
             app_name="myapp",
-            enforce=True,
+            mode=PreflightGateMode.HARD,
             budget_seconds=5,
             verify_storage=True,
         )
@@ -2295,7 +2335,7 @@ class TestPreflightGateStorageChecks:
         assert result.status is PreflightStatus.NOT_READY
         from application_sdk.storage.errors import StorageBucketRelocationError
 
-        block = _build_block_error(result, "myapp")
+        block = _build_block_error(result, "myapp", 1)
         assert block.details[0].code == StorageBucketRelocationError.code
 
     @pytest.mark.parametrize("declared", [5, 10, 16, 20, 30, 150, 300])
@@ -2309,15 +2349,15 @@ class TestPreflightGateStorageChecks:
         """
         from application_sdk.execution._temporal.preflight_gate import (
             _effective_budget,
-            resolve_gate_budget_seconds,
+            gate_budget_seconds,
         )
 
-        budget = _effective_budget(resolve_gate_budget_seconds(declared))
+        budget = _effective_budget(gate_budget_seconds(declared)[0])
         handler = _StubHandler()
         gate = build_preflight_gate_activity(
             handler,
             app_name="myapp",
-            budget_seconds=resolve_gate_budget_seconds(declared),
+            budget_seconds=gate_budget_seconds(declared)[0],
             verify_storage=True,
         )
         with self._storage_patches([self._passed_result()]):

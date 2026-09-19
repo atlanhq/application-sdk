@@ -2,6 +2,17 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.33.0] - 2026-09-18
+
+### Features
+
+- add the preflight F-series with checks, CI leg and investigation guides (#3710) ([83e35a5](https://github.com/atlanhq/application-sdk/commit/83e35a5))
+
+### Bug fixes
+
+- type read-only / unwritable local-write OSError at the activity boundary (#3829) ([af1a299](https://github.com/atlanhq/application-sdk/commit/af1a299))
+- coalesce fleet Renovate sweeps, and drop the labels duplicating every Tests run (#3820) ([85d6656](https://github.com/atlanhq/application-sdk/commit/85d6656))
+
 ## [0.32.0] - 2026-09-17
 
 ### Features

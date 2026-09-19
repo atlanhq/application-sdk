@@ -258,8 +258,20 @@ def entrypoint_index(app_name: str) -> Mapping[str, str]:
 def resolve_artifact_enforcement(app_cls: type | None) -> bool:
     """Resolve one app's artifact-validation posture. ``True`` = hard.
 
-    Precedence, mirroring :func:`~application_sdk.execution._temporal.worker._resolve_gate_enforcement`
-    exactly because an operator should not have to learn two rules:
+    Two features can redden a healthy run: artifact validation on a validator
+    bug, and the preflight gate on a ``frame_lost`` frame it cannot tell from a
+    worker lost to a rollout. They differ in who owns the fix. A validator bug
+    is SDK-side, so this keeps a deploy-time lever and ops can stand it down
+    without an app release. The gate's posture is the app's own declaration and
+    deliberately has no lever: two frames reading two sources of truth is how the
+    gate once disagreed with itself. An operator whose hard-mode run a node drain
+    reddened at 02:00 re-runs the workflow; if it repeats, the app owner ships
+    ``preflight_gate_mode = "soft"``, and the row's ``frame_lost`` classification
+    keeps those runs countable so that call is made on evidence. The deprecated
+    fail-open train in the gate module is a grace period for one raise idiom,
+    not a stand-down.
+
+    Precedence:
 
     1. ``ATLAN_ARTIFACT_VALIDATION_MODE`` — the deploy-time ops lever, so a fleet
        that starts flagging can be stood down without an app release;
