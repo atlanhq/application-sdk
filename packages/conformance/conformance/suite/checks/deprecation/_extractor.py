@@ -19,15 +19,25 @@ What counts as a machine-readable marker (derived empirically from the SDK):
 2. a class whose ``__init__`` or ``__init_subclass__`` body directly emits
    ``warnings.warn(<msg>, DeprecationWarning, …)`` — attributed to the *class*;
 3. a ``__deprecated_members__ = {"<member>": "<notice>"}`` mapping in an enum's
-   class body — one site per entry, attributed to ``<Enum>.<member>``.
+   class body — one site per entry, attributed to ``<Enum>.<member>``;
+4. a ``_DEPRECATED_CONSTANTS = {"<name>": "<notice>"}`` mapping at module level
+   in a module that also defines ``__getattr__`` (PEP 562) — one site per entry,
+   attributed to the bare constant name.
 
-Marker 3 exists because a decorator cannot reach an enum member: the member is
-an assignment in a class body, so ``@deprecated`` has nothing to attach to. Left
+Markers 3 and 4 exist for the same reason: a decorator cannot reach either
+target. An enum member is an assignment in a class body and a module constant is
+an assignment at module level, so ``@deprecated`` has nothing to attach to. Left
 unsolved, such a deprecation lives in a comment, is invisible here, and gets
 hand-coded into a checker instead — which inverts the design where this manifest
 is the single generated source of truth and the drift gate means what it says.
-The dunder name keeps ``EnumMeta`` from reading the mapping as a member. See
-``application_sdk/common/types.py`` for the authoring-side statement of the
+
+Marker 4 was added by FND-2388. application-sdk#3843 restored six removed
+``preflight_gate`` constants through exactly this shim, and every one of them
+was invisible to the manifest: B001 could not nudge a single app off them. That
+is the gap FND-2388 was filed about, reproduced one layer down. The dunder name
+in marker 3 keeps ``EnumMeta`` from reading the mapping as a member; marker 4's
+name is prescribed by ``docs/standards/symbols.md``. See
+``application_sdk/common/types.py`` for the authoring-side statement of the enum
 convention.
 
 Everything else (a bare ``warnings.warn(DeprecationWarning)`` in some other
@@ -55,6 +65,10 @@ _WARN_INIT_METHODS: frozenset[str] = frozenset({"__init__", "__init_subclass__"}
 
 # Class-body mapping that marks individual enum members as deprecated.
 _DEPRECATED_MEMBERS_ATTR = "__deprecated_members__"
+
+# Module-level mapping that marks removed constants served by a PEP 562
+# ``__getattr__`` shim.  See ``docs/standards/symbols.md``.
+_DEPRECATED_CONSTANTS_ATTR = "_DEPRECATED_CONSTANTS"
 
 # A migration target is named when the notice points at a replacement.  Derived
 # from every notice the SDK writes today: "use X", "Use X instead",
@@ -119,11 +133,11 @@ class DeprecationSite:
     form is exactly the attribute access a consumer writes."""
 
     kind: str
-    """``"function"`` | ``"method"`` | ``"class"`` | ``"enum_member"``."""
+    """``"function"`` | ``"method"`` | ``"class"`` | ``"enum_member"`` | ``"constant"``."""
 
     marker_via: str | None
-    """``"decorator"`` | ``"warn"`` | ``"enum-member"`` for a marked symbol;
-    ``None`` if claim-only."""
+    """``"decorator"`` | ``"warn"`` | ``"enum-member"`` | ``"module-getattr"``
+    for a marked symbol; ``None`` if claim-only."""
 
     message: str
     """The deprecation notice text (best-effort static extraction)."""
@@ -306,6 +320,107 @@ def _deprecated_members(class_node: ast.ClassDef) -> list[tuple[str, str, int]]:
     return out
 
 
+def _module_getattr_tail(tree: ast.Module) -> str:
+    """The shared notice text inside a module's PEP 562 ``__getattr__`` shim.
+
+    The idiom keeps the per-name parts in :data:`_DEPRECATED_CONSTANTS_ATTR` and
+    the sentence they are formatted into — crucially, the removal version —
+    inside ``__getattr__``'s ``warnings.warn`` f-string. Neither half carries a
+    complete notice on its own, so B002/B003 need both glued back together.
+
+    Returns the constant parts of that f-string, or ``""`` when the module has
+    no shim (or one whose message is not statically extractable).
+    """
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        if node.name != "__getattr__":
+            continue
+        for inner in ast.walk(node):
+            message = _is_deprecation_warn_call(inner)
+            if message:
+                return message
+    return ""
+
+
+def _deprecated_constants(tree: ast.Module) -> list[tuple[str, str, int]]:
+    """Return ``(name, notice, lineno)`` for each PEP 562 constant alias.
+
+    The fourth machine-readable marker, and it exists for the same reason the
+    third one does. A module-level constant can carry neither ``@deprecated``
+    (which decorates a def or a class) nor ``__deprecated_members__`` (which
+    lives in an enum body), so the only vehicle left is a module ``__getattr__``
+    that serves the old name once more with a ``DeprecationWarning``. Until this
+    marker existed, the six constants restored that way in application-sdk#3843
+    were invisible to the manifest, and B001 could not nudge a single app off
+    them — the precise gap FND-2388 was filed about, reproduced one layer down.
+
+    Read from a ``_DEPRECATED_CONSTANTS = {...}`` module-level mapping, and only
+    when the module also defines ``__getattr__``: the mapping alone serves
+    nothing, so recording its keys would tell apps a name is available when it
+    is not. ``docs/standards/symbols.md`` prescribes the shape.
+
+    A value may be the notice string itself (preferred — it reads well in a B001
+    finding) or a tuple of parts, which are joined. The module's ``__getattr__``
+    tail is appended in both cases, because that is where the idiom keeps the
+    removal version.
+    """
+    has_getattr = any(
+        isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.name == "__getattr__"
+        for node in tree.body
+    )
+    if not has_getattr:
+        return []
+    # Only the removal VERSION is taken from the shim's message, not its text.
+    # Concatenating the text produced notices like "GATE_BROKEN — the enum
+    # member carrying the same wire value  is deprecated; use  instead — .
+    # Will be removed in v3.40.0." — machine-correct and unreadable, and this
+    # string is exactly what a B001 finding shows a human.
+    tail_version = removal_version(_module_getattr_tail(tree))
+    out: list[tuple[str, str, int]] = []
+    for item in tree.body:
+        if isinstance(item, ast.Assign):
+            targets, value = item.targets, item.value
+        elif isinstance(item, ast.AnnAssign) and item.value is not None:
+            targets, value = [item.target], item.value
+        else:
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == _DEPRECATED_CONSTANTS_ATTR
+            for target in targets
+        ):
+            continue
+        if not isinstance(value, ast.Dict):
+            continue
+        for key, message_node in zip(value.keys, value.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            name = key.value
+            if isinstance(message_node, ast.Tuple | ast.List):
+                parts = [p for p in (_static_str(e) for e in message_node.elts) if p]
+                if not parts:
+                    continue
+                replacement = parts[0]
+                note = parts[1].rstrip(" .") if len(parts) > 1 else ""
+                notice = (
+                    f"{name} is deprecated; use {replacement} — {note}."
+                    if note
+                    else f"{name} is deprecated; use {replacement}."
+                )
+            else:
+                notice = _static_str(message_node)
+            if not notice:
+                continue
+            # The mapping carries the replacement; the shim's f-string carries
+            # the horizon. Only glue the second on when the entry lacks one, so
+            # a self-contained notice string is passed through untouched.
+            if removal_version(notice) is None and tail_version:
+                notice = f"{notice} Will be removed in v{tail_version}."
+            out.append((name, notice, getattr(key, "lineno", item.lineno)))
+    return out
+
+
 def _docstring_claims(node: ast.AST) -> bool:
     """True if *node*'s docstring opens with "Deprecated" or a ``.. deprecated::``."""
     if not isinstance(
@@ -458,5 +573,23 @@ def extract_sites(tree: ast.Module) -> list[DeprecationSite]:
             for item in node.body:
                 if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
                     _visit_def(item, "method")
+
+    # Constants served by a PEP 562 ``__getattr__`` shim. Emitted last because
+    # they are synthesised from a mapping rather than found at a def site, so
+    # source order does not apply to them the way it does above.
+    for name, message, lineno in _deprecated_constants(tree):
+        sites.append(
+            DeprecationSite(
+                symbol=name,
+                kind="constant",
+                marker_via="module-getattr",
+                message=message,
+                has_migration_target=has_migration_target(message),
+                removal_version_raw=removal_version(message),
+                docstring_claim=False,
+                emits_warning=True,
+                lineno=lineno,
+            )
+        )
 
     return sites

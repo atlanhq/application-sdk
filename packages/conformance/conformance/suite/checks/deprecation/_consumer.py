@@ -85,7 +85,13 @@ def scan_consumer(
     # importable and would collide across enums.
     enum_member: dict[str, dict[str, DeprecatedSymbol]] = {}
     for record in manifest.symbols:
-        if record.kind in ("class", "function"):
+        # ``constant`` rides in the class/function bucket because a module
+        # constant is imported by exactly the same statement and matched by
+        # exactly the same module-aware rule — ``from application_sdk.x import
+        # CLASSIFICATION_VERDICT`` differs from importing a class only in what
+        # the name happens to be bound to (FND-2388). It is never subclassed or
+        # called, so the downstream construct/subclass passes simply never hit.
+        if record.kind in ("class", "function", "constant"):
             class_func.setdefault(record.symbol, []).append(record)
         elif record.kind == "method":
             method[record.symbol] = record
