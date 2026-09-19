@@ -87,6 +87,12 @@ that already retried a bad read. So ``--publish-retry-seconds`` (default 240)
 gives ``_publish`` the same tolerance: see :func:`_publish` for which half of
 the failure space is retried and why the other half must stay fatal.
 
+``_install`` was left out of that and kept failing on its first 5xx, which is
+the third bullet above — an outage in the tenant's own control plane reds an
+unrelated PR with a one-line ``install failed after 1 attempt(s)``. It now
+retries the same half of the failure space, inside the budget it already had
+(FND-2429); see :attr:`_InstallReply.transient`.
+
 A FAILED verdict is not always about the app
 --------------------------------------------
 LM's deployment health check is namespace-scoped AND its verdict is an instant:
@@ -150,18 +156,18 @@ _SCAN_POLL_SECONDS = 10
 #: Gap between install retries while LM's catalog snapshot catches up.
 _INSTALL_RETRY_POLL_SECONDS = 20
 
-#: Base gap between publish retries, and the band of jitter added to it.
+#: Base gap between the retries that wait on the *shared* marketplace service —
+#: the publish, and the install's transient branch — and the band of jitter added
+#: to it.
 #:
-#: Jittered rather than fixed — the only place in this file that is. The other
-#: two retries wait on something tenant-local (LM's own catalog sync, one
-#: deployment reconciling), so their spacing affects nobody else. This one waits
-#: on the *shared* marketplace service, which fails for the whole fan-out at
-#: once (see the module docstring), and nothing upstream spaces those runs out.
-#: A fixed interval would put every connector that just failed onto the same
-#: retry beat and re-apply, in lockstep, the load the service was already
-#: failing under.
-_PUBLISH_RETRY_POLL_SECONDS = 15
-_PUBLISH_RETRY_JITTER_SECONDS = 10
+#: Jittered rather than fixed, unlike the waits that are tenant-local (LM's own
+#: catalog sync, one deployment reconciling), whose spacing affects nobody else.
+#: These two wait on a dependency that fails for the whole fan-out at once (see
+#: the module docstring), and nothing upstream spaces those runs out. A fixed
+#: interval would put every connector that just failed onto the same retry beat
+#: and re-apply, in lockstep, the load the service was already failing under.
+_SHARED_RETRY_POLL_SECONDS = 15
+_SHARED_RETRY_JITTER_SECONDS = 10
 
 #: The three waits this script can spend, as module constants rather than
 #: argparse literals, because a caller's job `timeout-minutes` has to stay above
@@ -1323,13 +1329,20 @@ def _publish_is_retryable(response: Response) -> bool:
     return _looks_like_upstream_unreachable(response)
 
 
-def _wait_before_publish_retry(attempt: int, deadline: float, why: str) -> None:
-    """Sleep out one publish-retry gap, never past ``deadline``."""
-    jitter = random.uniform(0, _PUBLISH_RETRY_JITTER_SECONDS)  # noqa: S311 — spacing retries across a fan-out, not a security decision
+def _wait_before_shared_retry(
+    action: str, attempt: int, deadline: float, why: str
+) -> None:
+    """Sleep out one shared-service retry gap, never past ``deadline``.
+
+    ``action`` names the call being retried ("marketplace publish", "install"),
+    so the two callers read differently in the log while spacing themselves the
+    same way — they are waiting on the same degraded service.
+    """
+    jitter = random.uniform(0, _SHARED_RETRY_JITTER_SECONDS)  # noqa: S311 — spacing retries across a fan-out, not a security decision
     remaining = deadline - time.monotonic()
-    gap = max(0.0, min(_PUBLISH_RETRY_POLL_SECONDS + jitter, remaining))
+    gap = max(0.0, min(_SHARED_RETRY_POLL_SECONDS + jitter, remaining))
     print(
-        f"::warning::marketplace publish attempt {attempt} failed ({why}); the "
+        f"::warning::{action} attempt {attempt} failed ({why}); the "
         f"marketplace service is a shared dependency and this is its transient "
         f"shape — retrying in {gap:.0f}s, {max(0.0, remaining):.0f}s of budget left"
     )
@@ -1451,13 +1464,16 @@ def _publish(
                     f"over a {retry_seconds}s budget, none of which got a response. "
                     f"Last: {exc}"
                 ) from exc
-            _wait_before_publish_retry(attempt, deadline, str(exc))
+            _wait_before_shared_retry(
+                "marketplace publish", attempt, deadline, str(exc)
+            )
             continue
 
         if response.ok:
             break
         if _publish_is_retryable(response) and time.monotonic() < deadline:
-            _wait_before_publish_retry(
+            _wait_before_shared_retry(
+                "marketplace publish",
                 attempt,
                 deadline,
                 f"HTTP {response.status} {_render_body(response.body)}",
@@ -1578,6 +1594,21 @@ class _InstallReply:
     def already_installed(self) -> bool:
         return not self.failed and "already installed" in self.message.lower()
 
+    @property
+    def transient(self) -> bool:
+        """True when LM could not answer, rather than answered "no".
+
+        The same split :func:`_publish_is_retryable` draws, read off the
+        authoritative in-body ``status_code`` (which falls back to the HTTP
+        status when LM omits its own, so a bare 502 from Heracles matches too).
+
+        401/403 are excluded by construction: a credential does not come good on
+        a retry, and burning the budget on it buries the one error a human needs
+        to read. 404 is excluded the same way and handled by :attr:`not_found`,
+        whose wait is tenant-local and unjittered.
+        """
+        return self.status_code == 429 or self.status_code >= 500
+
 
 def _install(
     client: TenantClient,
@@ -1640,8 +1671,31 @@ def _install(
             time.sleep(_INSTALL_RETRY_POLL_SECONDS)
             continue
 
+        # Retryable: the shared marketplace service is degraded (FND-2429).
+        # Spends the deadline the catalog-lag branch already has rather than
+        # adding a second budget: every caller's job `timeout-minutes` is
+        # asserted against the sum of the waits this script can spend, so a new
+        # budget would have to raise all of those ceilings to buy a wait the
+        # existing one already covers.
+        if reply.transient and time.monotonic() < deadline:
+            _wait_before_shared_retry(
+                "install",
+                attempt,
+                deadline,
+                f"status_code={reply.status_code} {reply.message or reply.rendered_body}",
+            )
+            continue
+
         hint = ""
-        if reply.not_found:
+        if reply.transient:
+            hint = (
+                " That is LM failing to answer rather than refusing: the "
+                "marketplace service is shared across the whole e2e fan-out and "
+                "degrades for everyone at once. The retry budget "
+                "(--install-retry-seconds) was spent without it recovering, so "
+                "this is an outage to check, not an app change to fix."
+            )
+        elif reply.not_found:
             hint = (
                 " LM never saw the release. Its tenant-catalog snapshot excludes a "
                 "release while it is scan_pending and only picks it up on the next "
