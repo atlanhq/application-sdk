@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.36.2 (September 19, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.1...v3.36.2
+
+### Bug Fixes
+
+- restore the last two names #3685 removed without a migration window (#3853) (by @cmgrote in [4fc1ce8](https://github.com/atlanhq/application-sdk/commit/4fc1ce8))
+
+
 ## v3.36.1 (September 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.0...v3.36.1
