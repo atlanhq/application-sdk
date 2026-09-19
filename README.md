@@ -56,7 +56,7 @@ docker pull registry.atlan.com/public/app-runtime-base:sha-49c027f
 Every release also publishes the **same digest** to GHCR at `ghcr.io/atlanhq/app-runtime-base`, with the same tag ladder. That mirror exists for Atlan's own app CI — GHCR pulls from GitHub-hosted runners avoid the S3 egress that a Harbor pull incurs — and is byte-identical to the Harbor image for a given tag.
 
 > [!NOTE]
-> Use `registry.atlan.com/public/app-runtime-base` in app Dockerfiles: it is the reference for external/partner and tenant use. The GHCR mirror above is for internal CI. Separately, push-to-`main` builds go to `ghcr.io/atlanhq/app-runtime-base-main:sha-<sha7>` (note the `-main` suffix — a different package) and are unversioned dev images, for internal development only.
+> Use `registry.atlan.com/public/app-runtime-base` in app Dockerfiles: it is the reference for external/partner and tenant use. The GHCR mirror above is for internal CI.
 
 ## Contributing
 
