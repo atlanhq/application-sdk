@@ -14,15 +14,33 @@ tripped the interval trigger on the shared buffer.
 from __future__ import annotations
 
 import asyncio
+import builtins
+import sys
 import threading
+import types
+from contextlib import contextmanager
 from typing import Any
 from unittest import mock
 
 import pytest
 
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.utils import in_temporal_workflow
 
 _OBS = "application_sdk.observability.observability"
+
+
+@contextmanager
+def _temporal_import_forbidden():
+    real_import = builtins.__import__
+
+    def guard(name, *args, **kwargs):
+        if name.startswith("temporalio"):
+            raise AssertionError(f"in_temporal_workflow imported {name}")
+        return real_import(name, *args, **kwargs)
+
+    with mock.patch.object(builtins, "__import__", guard):
+        yield
 
 
 class _Obs(AtlanObservability):
@@ -139,27 +157,22 @@ class TestThePredicateNeverImportsTemporal:
     """
 
     def test_false_and_no_import_when_temporal_is_not_loaded(self) -> None:
-        import sys
-
-        from application_sdk.observability.utils import in_temporal_workflow
-
-        with mock.patch.dict(sys.modules, {"temporalio.workflow": None}):
+        with (
+            mock.patch.dict(sys.modules, {"temporalio.workflow": None}),
+            _temporal_import_forbidden(),
+        ):
             assert in_temporal_workflow() is False
 
     def test_false_on_a_partially_initialised_module(self) -> None:
-        import sys
-        import types
-
-        from application_sdk.observability.utils import in_temporal_workflow
-
         half_loaded = types.ModuleType("temporalio.workflow")
-        with mock.patch.dict(sys.modules, {"temporalio.workflow": half_loaded}):
+        with (
+            mock.patch.dict(sys.modules, {"temporalio.workflow": half_loaded}),
+            _temporal_import_forbidden(),
+        ):
             assert in_temporal_workflow() is False
 
     def test_reads_the_loaded_module(self) -> None:
         import temporalio.workflow
-
-        from application_sdk.observability.utils import in_temporal_workflow
 
         with mock.patch.object(temporalio.workflow, "in_workflow", return_value=True):
             assert in_temporal_workflow() is True
