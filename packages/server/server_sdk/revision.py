@@ -63,7 +63,7 @@ import importlib.metadata as importlib_metadata
 import importlib.util
 import io
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
@@ -73,7 +73,17 @@ from server_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 # The distribution whose Requires-Dist entry carries the declared rev.
-SERVER_SDK_DIST = "atlan-server-sdk"
+SERVER_SDK_DIST = "atlan-application-sdk-server"
+
+#: The pre-consolidation name (ARUN-942). The fleet migrates app-by-app, and a
+#: host process serves several apps at once, so an app still declaring the
+#: standalone distribution has to keep a working stamp — matching only the
+#: current name would silently return ``None`` for it, and a null declared rev
+#: is what the host re-pin trigger reads. Drop once no app declares it.
+SERVER_SDK_DIST_LEGACY = "atlan-server-sdk"
+
+#: Accepted names in preference order: an app declaring both stamps the current.
+SERVER_SDK_DISTS: tuple[str, ...] = (SERVER_SDK_DIST, SERVER_SDK_DIST_LEGACY)
 
 #: The Python half of ``app_source_digest``. Every backend ships the declared
 #: package's modules verbatim, so these need no build config to enumerate.
@@ -576,7 +586,7 @@ def _requirement_name(requirement: str) -> str:
 def declared_server_sdk_rev(
     dist: importlib_metadata.Distribution | None,
     *,
-    sdk_dist: str = SERVER_SDK_DIST,
+    sdk_dist: str | Sequence[str] = SERVER_SDK_DISTS,
 ) -> str | None:
     """The app's ``Requires-Dist`` entry for ``atlan-server-sdk``, verbatim.
 
@@ -610,17 +620,25 @@ def declared_server_sdk_rev(
     except Exception:  # pragma: no cover - malformed METADATA
         return None
 
-    target = _canonical(sdk_dist)
-    fallback: str | None = None
-    for raw in requirements:
-        requirement = str(raw).strip()
-        if _canonical(_requirement_name(requirement)) != target:
-            continue
-        if ";" not in requirement:  # unconditional — the base install's rev
-            return requirement
-        if fallback is None:
-            fallback = requirement
-    return fallback
+    targets = (
+        (_canonical(sdk_dist),)
+        if isinstance(sdk_dist, str)
+        else tuple(_canonical(name) for name in sdk_dist)
+    )
+    # Ordered, so a name earlier in `targets` wins outright over a later one.
+    for target in targets:
+        fallback: str | None = None
+        for raw in requirements:
+            requirement = str(raw).strip()
+            if _canonical(_requirement_name(requirement)) != target:
+                continue
+            if ";" not in requirement:  # unconditional — the base install's rev
+                return requirement
+            if fallback is None:
+                fallback = requirement
+        if fallback is not None:
+            return fallback
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -771,6 +789,8 @@ __all__ = [
     "DIGEST_LEN",
     "PRUNED_DIRS",
     "SERVER_SDK_DIST",
+    "SERVER_SDK_DISTS",
+    "SERVER_SDK_DIST_LEGACY",
     "SOURCE_SUFFIXES",
     "UNKNOWN",
     "ServerRevision",

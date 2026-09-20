@@ -906,6 +906,54 @@ def test_declared_rev_falls_back_to_a_marker_gated_entry(tmp_path: Path) -> None
     assert declared.startswith("atlan-server-sdk[workflow] @ git+")
 
 
+def test_declared_rev_resolves_the_consolidated_distribution(tmp_path: Path) -> None:
+    """The post-ARUN-942 name: apps pin packages/server out of application-sdk."""
+    dist = _dist_with_requires(
+        tmp_path,
+        [
+            "atlan-application-sdk-server @ git+https://github.com/atlanhq/"
+            "application-sdk.git@c7da2169#subdirectory=packages/server",
+            "orjson>=3.10.0",
+        ],
+        name="acme-consolidated",
+    )
+    declared = declared_server_sdk_rev(dist)
+    assert declared is not None
+    assert declared.startswith("atlan-application-sdk-server @ git+")
+    assert "subdirectory=packages/server" in declared
+
+
+def test_declared_rev_still_resolves_the_legacy_distribution(tmp_path: Path) -> None:
+    """The fleet migrates app-by-app and one host serves several apps at once, so
+    an app still on the standalone dist has to keep a stamp: a null declared rev
+    is what the host re-pin trigger reads."""
+    dist = _dist_with_requires(
+        tmp_path,
+        ["atlan-server-sdk @ git+https://github.com/atlanhq/server-sdk.git@761bbe53"],
+        name="acme-legacy",
+    )
+    assert declared_server_sdk_rev(dist) == (
+        "atlan-server-sdk @ git+https://github.com/atlanhq/server-sdk.git@761bbe53"
+    )
+
+
+def test_declared_rev_prefers_the_consolidated_name_over_the_legacy_one(
+    tmp_path: Path,
+) -> None:
+    dist = _dist_with_requires(
+        tmp_path,
+        [
+            "atlan-server-sdk @ git+https://github.com/atlanhq/server-sdk.git@old",
+            "atlan-application-sdk-server @ git+https://github.com/atlanhq/"
+            "application-sdk.git@new#subdirectory=packages/server",
+        ],
+        name="acme-both",
+    )
+    declared = declared_server_sdk_rev(dist)
+    assert declared is not None
+    assert declared.startswith("atlan-application-sdk-server @ git+")
+
+
 def test_declared_rev_is_none_when_the_sdk_is_not_required(tmp_path: Path) -> None:
     dist = _dist_with_requires(
         tmp_path, ["orjson>=3.10.0", "fastapi>=0.115.0"], name="acme-nosdk"

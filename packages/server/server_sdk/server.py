@@ -57,6 +57,7 @@ from server_sdk.handler.contracts import (
 )
 from server_sdk.observability.logger_adaptor import get_logger
 from server_sdk.revision import (
+    SERVER_SDK_DIST,
     ServerRevision,
     header_safe,
     resolve_app_version,
@@ -710,8 +711,9 @@ def build_asgi_app(
                     break
 
         if target is not None:
-            with open(target) as f:
-                raw = json.load(f)
+            # Bytes, not text: json accepts them natively, so this drops the
+            # platform-locale decode (P046) rather than papering over it.
+            raw = json.loads(target.read_bytes())
             data: dict[str, Any] = {"config": _orjson_str(raw.get("config", raw))}
             default_connector_type = raw.get("defaultConnectorType")
             if default_connector_type is not None:
@@ -804,7 +806,7 @@ def build_asgi_app(
     async def root() -> dict[str, Any]:
         return {
             "app": app_name or title,
-            "sdk": "atlan-server-sdk",
+            "sdk": SERVER_SDK_DIST,
             "app_version": version,
             "server_revision": revision.as_dict(),
         }
