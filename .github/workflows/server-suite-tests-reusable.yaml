@@ -1,0 +1,45 @@
+name: Server suite tests (reusable)
+
+# Reusable workflow: the server PACKAGE's own pytest unit tests
+# (packages/server/tests/).
+#
+# These are the suites that came across with the runtime from the standalone
+# atlanhq/server-sdk repository (ARUN-942). Nothing else in this repo collects
+# them: the root pyproject's `[tool.pytest.ini_options] testpaths = ["tests"]`
+# never reaches packages/, and the conformance AST walk drops any path component
+# named `tests`. This workflow is the only thing that runs them.
+#
+# Invoked only by sdk-gate.yaml, gated on packages/server/** — so a change to
+# the package's source OR its own pyproject.toml / uv.lock (e.g. a Renovate
+# dependency bump within range pins) re-runs these tests.
+#
+# SDK-private: no consumer app references this workflow.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  suite-tests:
+    name: Suite unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.17"
+
+      - name: Run server package unit tests
+        working-directory: packages/server
+        run: |
+          set -euo pipefail
+          # The package pins its own pyproject.toml / uv.lock; sync all extras +
+          # groups so the `test` deps (pytest, pytest-asyncio, httpx2) and the
+          # capability extras ([sql], [aws], [workflow]) the suites exercise are
+          # present, then run its suite (testpaths = ["tests"], asyncio_mode = auto).
+          uv sync --all-extras --all-groups
+          uv run pytest -v

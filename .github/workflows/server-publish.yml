@@ -1,0 +1,119 @@
+name: Publish Server Package
+
+# Phase B of the server release. Fires when a release PR opened by
+# the Release Server Package workflow (server-release.yml) is
+# merged into main with the `release:server` label. Builds the wheel +
+# sdist from merged main and publishes to PyPI, then creates the
+# server-v<version> annotated tag.
+# No GitHub Release is created — that would interleave server-v* versions
+# with SDK v* releases on the repo releases page.
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: read
+
+jobs:
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event.pull_request.merged == true &&
+        contains(github.event.pull_request.labels.*.name, 'release:server') &&
+        startsWith(github.event.pull_request.head.ref, 'bump-version-server')
+      )
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.17"
+
+      - name: Read release version
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(uvx --from=toml-cli toml get --toml-path=packages/server/pyproject.toml project.version)"
+          if [ -z "$version" ]; then
+            echo "::error::could not parse version from packages/server/pyproject.toml"
+            exit 1
+          fi
+          tag="server-v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Publishing server ${tag} from $(git rev-parse HEAD)"
+
+      - name: Build and publish to PyPI
+        run: |
+          cd packages/server
+          uv build
+          uv publish --trusted-publishing automatic
+
+      - name: Create source tag
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+          merge_sha="${{ steps.meta.outputs.merge_sha }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --tags origin "${tag}" >/dev/null 2>&1; then
+            echo "tag ${tag} already exists on origin; skipping tag push"
+            exit 0
+          fi
+
+          git tag -a "$tag" "$merge_sha" -m "Release server $tag"
+          git push origin "$tag"
+
+      # No GitHub Release is created: server-v* releases would interleave
+      # with SDK v* releases on the repo's releases page, which is confusing.
+      # The annotated tag, PyPI publish, and CHANGELOG.md are the authoritative record.
+
+  fan-out:
+    # After a server release, trigger the self-hosted Renovate runner so
+    # consumers pick up the new atlan-application-sdk-server version within
+    # minutes rather than waiting for the next scheduled (4-hourly) run. Consumers
+    # pin the server package in-range, so this lands as an auto-merging lockFileMaintenance
+    # PR. Skipped automatically when `publish` is skipped (non-release PR) or fails.
+    name: Fan out Renovate to consumers
+    needs: [publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+      - name: Trigger the self-hosted Renovate runner
+        # No dry_run/repos overrides: inherits renovate.yaml's live defaults (full
+        # discovery, dry_run=null). Soft-fail so a fan-out hiccup never fails the
+        # release — the 4-hourly schedule is the backstop.
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+        run: |
+          gh workflow run renovate.yaml --repo atlanhq/application-sdk \
+          || echo "::warning::Could not trigger renovate.yaml — consumers will update on the next scheduled run."

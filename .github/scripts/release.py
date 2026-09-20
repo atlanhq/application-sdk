@@ -29,7 +29,7 @@ def _set_output(key, value):
 # from the SDK bump walk. Path-only exclusion in git log doesn't cover mixed
 # PRs (a squash commit that touches both SDK files and sub-package files), so
 # we also filter by conventional-commit scope on the subject line.
-_SUBPKG_RE = re.compile(r"^[a-z]+\((contract-toolkit|conformance)\)!?:")
+_SUBPKG_RE = re.compile(r"^[a-z]+\((contract-toolkit|conformance|server)\)!?:")
 
 
 def _git(*args: str, quiet: bool = False) -> str:

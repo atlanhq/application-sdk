@@ -1,0 +1,139 @@
+name: Release Server Package
+
+# Fired automatically when a non-release PR that touches packages/server/**
+# is merged to main. Runs .github/scripts/server_release.py to compute the
+# next semver (from conventional commits touching packages/server/** since
+# the last server-v* tag), bumps pyproject.toml + __init__.py, prepends a
+# new entry to packages/server/CHANGELOG.md, and creates or updates the
+# bump-version-server PR labeled release:server.
+# The script excludes lock files from that walk (see PATHSPEC), so a Renovate
+# lockFileMaintenance merge still fires this workflow — the paths filter below
+# can't express the exclusion — but the script no-ops with skip=true instead of
+# minting a release whose only content is lock churn.
+# Merging that PR triggers Publish Server Package (server-publish.yml),
+# which handles the PyPI publish and tag.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+    paths:
+      - "packages/server/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Serialize release runs. When two server PRs merge close together, each
+# merge fires this workflow; without serialization they race to force-push the
+# shared bump branch and the run with the *older* main snapshot can win, dropping
+# the other PR's changelog entry (see PR #2596). cancel-in-progress: false lets
+# the in-flight run finish, then the newest queued run regenerates against a main
+# that includes every merged PR.
+concurrency:
+  group: server-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_LABEL: "release:server"
+  BUMP_BRANCH: "bump-version-server"
+
+jobs:
+  open-release-pr:
+    name: Open or update server release PR
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.pull_request.merged == true &&
+        !startsWith(github.event.pull_request.head.ref, 'bump-version-server')
+      )
+    steps:
+      - name: Mint fleet App token
+        # A real (non-github-actions[bot]) identity is required so the push
+        # below re-fires the bump PR's required checks. No workflow auto-merges
+        # this PR (GitHub blocks self-approval regardless of author identity),
+        # so there's no bypass-actor dependency to preserve here.
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.17"
+
+      - name: Compute version, bump pyproject + __init__, update CHANGELOG
+        id: versions
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # The commit the closed PR produced; empty on workflow_dispatch (the
+          # guard then fails open). release_guard sets skip=true when it is not
+          # on origin/main — a stacked PR merging into its parent feature branch
+          # fires this workflow exactly like a merge into main (#3794).
+          PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: python .github/scripts/server_release.py
+
+      - name: Sanity-build package
+        if: steps.versions.outputs.skip != 'true'
+        run: cd packages/server && uv build
+
+      - name: Push bump branch and open or update PR
+        if: steps.versions.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          new_version="${{ steps.versions.outputs.new }}"
+
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+
+          git checkout -b "${BUMP_BRANCH}"
+          git add packages/server/pyproject.toml \
+                  packages/server/server_sdk/__init__.py \
+                  packages/server/CHANGELOG.md
+          git commit -m "chore(server): release v${new_version}"
+          git push origin "${BUMP_BRANCH}" --force-with-lease
+
+          body_file="$(mktemp)"
+          {
+            echo "Automated release PR for atlan-application-sdk-server v${new_version}."
+            echo
+            echo "Merging this PR triggers Publish Server Package, which builds"
+            echo "the wheel + sdist and publishes to PyPI, then creates the"
+            echo "server-v${new_version} tag."
+            echo
+            echo "## Release notes"
+            echo
+            cat /tmp/server-release-notes.md
+          } > "$body_file"
+
+          # Upsert rather than create-or-skip. The force-push above moves the
+          # branch to a newer version and a freshly generated release-notes
+          # block, but the previous `if` only logged that the PR existed — so a
+          # reused PR kept the *first* run's version in its title and the first
+          # run's release notes in its body. The script re-syncs both, ensures
+          # the release label, and no-ops when nothing changed.
+          python3 .github/scripts/upsert_release_pr.py \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base main \
+            --head "${BUMP_BRANCH}" \
+            --title "chore(server): release v${new_version}" \
+            --body-file "$body_file" \
+            --label "${RELEASE_LABEL}"
