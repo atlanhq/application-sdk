@@ -12,7 +12,6 @@ import asyncio
 from typing import Any
 
 import pytest
-
 from server_sdk.config.s3 import S3ConfigStore
 from server_sdk.config.store import config_objectstore_key
 

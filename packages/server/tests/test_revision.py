@@ -20,6 +20,7 @@ import asyncio
 import base64
 import hashlib
 import importlib
+import importlib.metadata as importlib_metadata
 import json
 import os
 import subprocess
@@ -30,7 +31,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from server_sdk import revision as rev
 from server_sdk.handler.base import DefaultHandler
 from server_sdk.revision import (
@@ -44,14 +44,7 @@ from server_sdk.revision import (
     source_digest_from_record,
     source_digest_from_tree,
 )
-from server_sdk.server import (
-    APP_VERSION_HEADER,
-    SERVER_REVISION_HEADER,
-    build_asgi_app,
-)
-
-import importlib.metadata as importlib_metadata
-
+from server_sdk.server import APP_VERSION_HEADER, SERVER_REVISION_HEADER, build_asgi_app
 
 # ===========================================================================
 # Fixtures / builders

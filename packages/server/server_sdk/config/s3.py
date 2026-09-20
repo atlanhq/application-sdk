@@ -23,8 +23,8 @@ import asyncio
 import os
 from typing import Any
 
-from server_sdk.observability.logger_adaptor import get_logger
 from server_sdk.config.store import _json_dumps, _json_loads
+from server_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 

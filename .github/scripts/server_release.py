@@ -267,9 +267,7 @@ def main():
                 "Publish the current version first, or create the tag manually."
             )
         tag = _run(["git", "rev-list", "--max-parents=0", "HEAD"])
-        print(
-            f"No server tags found; treating as first release (base: {tag[:7]})."
-        )
+        print(f"No server tags found; treating as first release (base: {tag[:7]}).")
 
     subjects, bodies = commits_since_tag(tag)
 

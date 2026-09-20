@@ -142,8 +142,7 @@ _ERROR_MESSAGES = {
         "'fix(conformance):'."
     ),
     "sv-core": (
-        "server package core changes must use 'feat(server):' or "
-        "'fix(server):'."
+        "server package core changes must use 'feat(server):' or " "'fix(server):'."
     ),
     "chore-ci": (
         "Non-source changes must use 'chore:' or 'ci:' (feat:/fix: are reserved "

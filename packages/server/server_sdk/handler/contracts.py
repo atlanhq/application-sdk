@@ -22,7 +22,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-
 from server_sdk.contracts.base import SerializableEnum
 from server_sdk.errors.base import AppError
 from server_sdk.errors.wire import FailureDetails

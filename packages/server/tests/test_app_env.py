@@ -10,9 +10,7 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from server_sdk.config.env import APPENV_PREFIX, AppEnv, prefix_for
-
 
 # ------------------------------------------------------------------ prefixing
 

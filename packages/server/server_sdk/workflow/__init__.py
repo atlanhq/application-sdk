@@ -27,7 +27,6 @@ if TYPE_CHECKING:
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-
 from server_sdk.handler.contracts import normalize_credentials
 from server_sdk.observability.logger_adaptor import get_logger
 
@@ -80,7 +79,9 @@ def starter_from_env(app_name: str) -> "TemporalWorkflowStarter | None":
     host = os.getenv("ATLAN_TEMPORAL_HOST", "")
     if not host:
         return None
-    from server_sdk.workflow.temporal import TemporalWorkflowStarter  # noqa: PLC0415 — imports temporalio; gated above
+    from server_sdk.workflow.temporal import (  # noqa: PLC0415 — imports temporalio; gated above
+        TemporalWorkflowStarter,
+    )
 
     return TemporalWorkflowStarter(
         app_name=app_name,

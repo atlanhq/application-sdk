@@ -123,14 +123,14 @@ def create_aws_client(
         if session is not None:
             return session.client(service, region_name=region)
         if temp_credentials is not None:
-            return boto3.client(
+            return boto3.client(  # pyright: ignore[reportCallIssue]  # dynamic service name
                 service,
                 aws_access_key_id=temp_credentials["AccessKeyId"],
                 aws_secret_access_key=temp_credentials["SecretAccessKey"],
                 aws_session_token=temp_credentials["SessionToken"],
                 region_name=region,
             )
-        return boto3.client(service, region_name=region)
+        return boto3.client(service, region_name=region)  # pyright: ignore[reportCallIssue]
     except Exception as e:  # noqa: BLE001 — normalize to a typed error
         raise AwsClientCreationError(service=service, cause=e) from e
 

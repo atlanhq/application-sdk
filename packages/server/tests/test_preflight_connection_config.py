@@ -24,7 +24,6 @@ from typing import Any, ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
-
 from server_sdk.clients.models import DatabaseConfig
 from server_sdk.clients.sql import BaseSQLClient
 from server_sdk.errors.leaves import InvalidInputError
@@ -565,7 +564,7 @@ def test_keyword_construction_by_field_name_still_works():
     assert PreflightInput(connection_config={"a": 1}).connection_config.get("a") == 1
     assert (
         PreflightInput(
-            connection_config=BaseConnectionConfig(a=1)
+            connection_config=BaseConnectionConfig(a=1)  # pyright: ignore[reportCallIssue]  # extra field is the point
         ).connection_config.get("a")
         == 1
     )

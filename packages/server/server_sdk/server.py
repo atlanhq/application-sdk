@@ -33,7 +33,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi import Path as PathParam
 from fastapi import Query, Request
 from fastapi.responses import JSONResponse
-
 from server_sdk.config.store import (
     CONFIG_KEY_PATTERN,
     ConfigStore,
@@ -42,11 +41,6 @@ from server_sdk.config.store import (
 from server_sdk.errors.base import AppError, HandlerError
 from server_sdk.errors.categories import FailureCategory
 from server_sdk.handler.base import Handler
-from server_sdk.manifest import (
-    ENTRYPOINT_NAME_RE,
-    ComputeManifest,
-    register_manifest_routes,
-)
 from server_sdk.handler.contracts import (
     AuthInput,
     MetadataInput,
@@ -54,6 +48,11 @@ from server_sdk.handler.contracts import (
     PreflightInput,
     PreflightOutput,
     normalize_credentials,
+)
+from server_sdk.manifest import (
+    ENTRYPOINT_NAME_RE,
+    ComputeManifest,
+    register_manifest_routes,
 )
 from server_sdk.observability.logger_adaptor import get_logger
 from server_sdk.revision import (
@@ -456,7 +455,9 @@ def build_asgi_app(
         # Same pattern as the workflow starter: explicit injection wins, else the
         # deployment environment decides (S3_BUCKET set → S3-backed store; unset →
         # None → /config endpoints answer 503 "not configured").
-        from server_sdk.config.s3 import default_config_store  # noqa: PLC0415 — avoids importing boto3-adjacent module unless needed
+        from server_sdk.config.s3 import (  # noqa: PLC0415 — avoids importing boto3-adjacent module unless needed
+            default_config_store,
+        )
 
         config_store = default_config_store()
 
