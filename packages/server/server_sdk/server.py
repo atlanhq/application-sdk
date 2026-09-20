@@ -101,6 +101,10 @@ _CATEGORY_TO_HTTP: dict[FailureCategory, int] = {
     FailureCategory.RATE_LIMITED: 429,
     FailureCategory.TIMEOUT: 504,
     FailureCategory.DEPENDENCY_UNAVAILABLE: 503,
+    # The customer's source being down is a 503, not a 500: it was absent from
+    # this map and fell through to the 500 default, so every connector that
+    # reports SOURCE_UNAVAILABLE was answering as if it had itself broken.
+    FailureCategory.SOURCE_UNAVAILABLE: 503,
     FailureCategory.RESOURCE_EXHAUSTED: 503,
     FailureCategory.DATA_INTEGRITY: 500,
     FailureCategory.INTERNAL: 500,
