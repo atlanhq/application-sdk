@@ -1068,45 +1068,23 @@ def _gate_error(
     )
 
 
-def _build_block_error(
-    result: PreflightOutput, app_name: str, attempt: int
-) -> ApplicationError:
-    """The deliberate ``PreflightFailed`` block for a NOT_READY verdict."""
-    return _gate_error(
-        result,
-        app_name,
-        attempt,
-        error_type=PREFLIGHT_FAILED_ERROR_TYPE,
-        non_retryable=True,
-        message_prefix="Preflight failed",
-    )
-
-
 def _check_connection_qualified_name(
     snapshot: dict[str, Any],
 ) -> PreflightCheck | None:
-    """Validate that the connection qualified name is present when a connection is.
+    """Return a failing :class:`PreflightCheck` when the connection snapshot
+    is present but carries no ``qualifiedName``.
 
-    Returns a *failed* :class:`PreflightCheck` when a ``connection`` object exists
-    in the extraction snapshot but neither ``connection.attributes.qualifiedName``
-    nor the top-level ``connection_qualified_name`` field carry a non-empty value.
-    Returns ``None`` when the check does not apply (no connection data in the
-    snapshot — the workflow does not use a connection widget).
-
-    Runs before credential resolution: no secrets needed, cheap, and catches the
-    defect where the setup wizard submits a Connection snapshot with no
-    ``qualifiedName`` and schedules the workflow anyway — every downstream activity
-    then fails deep in transform with an opaque ``Invalid connection_qualified_name``
-    after minutes of wasted extraction work.
+    Returns ``None`` (skip) when the snapshot contains no connection data at
+    all — the check only applies to workflows that receive a connection.
     """
     top_level_cqn = snapshot.get("connection_qualified_name")
     connection = snapshot.get("connection")
 
-    # No connection data at all — check does not apply.
+    # No connection data in the snapshot → nothing to validate.
     if top_level_cqn is None and connection is None:
         return None
 
-    # Gather the two possible sources of the qualified name.
+    # Try the nested attribute path (camelCase and snake_case).
     attr_qn = ""
     if isinstance(connection, dict):
         attrs = connection.get("attributes")
@@ -1119,11 +1097,9 @@ def _check_connection_qualified_name(
         (top_level_cqn or "").strip() if isinstance(top_level_cqn, str) else ""
     )
 
-    # At least one source must be non-empty.
     if attr_qn or effective_cqn:
         return None
 
-    # A connection exists but has no qualified name — fail the check.
     from application_sdk.errors.leaves import InvalidInputError  # noqa: PLC0415
 
     return PreflightCheck(
@@ -1141,6 +1117,20 @@ def _check_connection_qualified_name(
             ),
             field="connection_qualified_name",
         ).to_failure_details(),
+    )
+
+
+def _build_block_error(
+    result: PreflightOutput, app_name: str, attempt: int
+) -> ApplicationError:
+    """The deliberate ``PreflightFailed`` block for a NOT_READY verdict."""
+    return _gate_error(
+        result,
+        app_name,
+        attempt,
+        error_type=PREFLIGHT_FAILED_ERROR_TYPE,
+        non_retryable=True,
+        message_prefix="Preflight failed",
     )
 
 
@@ -2238,31 +2228,6 @@ def build_preflight_gate_activity(
         started = time.monotonic()
         budget = _effective_budget(budget_seconds)
 
-        # ── Connection qualified name validation ────────────────────
-        # Runs before credential resolution: no secrets needed, cheap.
-        # Catches a broken connection snapshot before any extraction work.
-        cqn_check = _check_connection_qualified_name(input.extraction_snapshot)
-        if cqn_check is not None and not cqn_check.passed:
-            verdict = PreflightOutput(
-                status=PreflightStatus.NOT_READY,
-                checks=[cqn_check],
-                message=cqn_check.resolved_message,
-                error=cqn_check.error,
-            )
-            block_error = _build_block_error(verdict, app_name, _current_attempt())
-            _emit_outcome(
-                PreflightRowOutcome.BLOCKED.value
-                if enforce
-                else PreflightRowOutcome.WOULD_BLOCK.value,
-                block_error.details[0].code,
-                verdict,
-                PreflightClassification.VERDICT,
-                audience=block_error.details[0].audience.value,
-            )
-            if enforce:
-                raise block_error
-            return verdict
-
         from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — lazy: preserves the auto_heartbeat_loop patch seam, same idiom as activities.py
             auto_heartbeat_loop,
             stop_heartbeat_task,
@@ -2290,6 +2255,31 @@ def build_preflight_gate_activity(
             )
         )
         try:
+            # ── Connection qualified name validation ────────────────────
+            # Must run before credential resolution so a broken snapshot
+            # is rejected without touching the secret store.
+            cqn_check = _check_connection_qualified_name(input.extraction_snapshot)
+            if cqn_check is not None and not cqn_check.passed:
+                verdict = PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[cqn_check],
+                    message=cqn_check.resolved_message,
+                    error=cqn_check.error,
+                )
+                block_error = _build_block_error(verdict, app_name, _current_attempt())
+                _emit_outcome(
+                    PreflightRowOutcome.BLOCKED
+                    if enforce
+                    else PreflightRowOutcome.WOULD_BLOCK,
+                    block_error.details[0].code,
+                    verdict,
+                    PreflightClassification.VERDICT,
+                    audience=block_error.details[0].audience.value,
+                )
+                if enforce:
+                    raise block_error
+                return verdict
+
             # Resolve inside the activity (the workflow forwarded only references),
             # under the same deadline the handler gets: a hung vault must end at
             # the budget as the gate's own fault, not at Temporal's kill with no
