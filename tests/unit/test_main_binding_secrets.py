@@ -136,6 +136,35 @@ class TestFetchBindingSecrets:
 
         assert secrets == {"atlan-auth-secret": {"ATLAN_AUTH_CLIENT_ID": "id-1"}}
 
+    async def test_a_required_secret_failure_is_fatal_and_not_retryable(
+        self, tmp_path: Path
+    ) -> None:
+        """The pin that keeps a misconfigured secret out of a retry loop.
+
+        The leaf default is ``retryable=True``, and this ``except`` catches a
+        transient store outage and a missing or misnamed secret alike without
+        being able to tell them apart — only the first is fixed by retrying.
+        Inheriting the default would claim a retry helps for both, so the
+        non-retryable pin is asserted here rather than left to the kwarg.
+        """
+        from application_sdk.errors import DependencyUnavailableError
+        from application_sdk.main import _fetch_binding_secrets
+
+        client = mock.Mock()
+        client.get_secret = mock.AsyncMock(side_effect=RuntimeError("store down"))
+
+        with pytest.raises(DependencyUnavailableError) as excinfo:
+            await _fetch_binding_secrets(
+                client,
+                "atlan-objectstore",
+                components_dir=_components(tmp_path, COMPONENT_WITH_SECRET_STORE),
+                required=True,
+            )
+
+        assert excinfo.value.effective_retryable is False
+        assert excinfo.value.to_failure_details().retryable is False
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+
     async def test_an_absent_component_is_not_an_error(self, tmp_path: Path) -> None:
         from application_sdk.main import _fetch_binding_secrets
 
