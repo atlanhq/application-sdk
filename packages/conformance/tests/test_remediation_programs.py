@@ -195,7 +195,7 @@ def test_hello_world_is_not_a_remediation_reference() -> None:
 
 def test_remediate_finding_requires_the_reference_apps() -> None:
     """A small model must not fix from memory: the contract has to name the
-    four reference apps, tell the model to load the full checkout, and thread
+    three reference apps, tell the model to load the full checkout, and thread
     the per-rule pointer (`canonical_reference`) into the finding it reads."""
     text = _read("functions/remediate-finding.prose.md")
     for app in REFERENCE_APPS:
@@ -535,6 +535,104 @@ def test_dependency_area_lists_every_warn_tier_d_rule() -> None:
         f"WARN-tier D-rule(s) {missing} are not named in the dependency area's "
         "violation-set, so strict-mode /remediate will skip their findings. Add "
         "them to the WARN-tier list and give each a Fix Prescription entry."
+    )
+
+
+SERIES_AREA = {
+    "E": "error-handling",
+    "L": "logging",
+    "C": "ci",
+    "P": "prescriptions",
+    "F": "preflight",
+    "O": "optimizations",
+    "D": "dependency",
+    "B": "deprecation",
+    "I": "dockerfile",
+    "T": "tests",
+    "K": "contract-toolkit",
+    "S": "security",
+}
+
+
+#: Auto-fixable rules that still lack their own `**<ID> Name**` prescription
+#: bullet and are covered only by their area's catch-all paragraph. This is a
+#: ratchet, not an exemption: `test_prescription_backlog_only_shrinks` fails the
+#: moment an id here gains a bullet or stops being auto-fixable, so the list can
+#: only be removed from, and a newly-flagged rule cannot be parked here without
+#: a deliberate edit. Tracked on FND-2477. B005 and B006 were written first —
+#: between them 420 BLOCK findings, and B006 had no guidance at all.
+_PRESCRIPTION_BACKLOG = frozenset(
+    {
+        "E003",
+        "E004",
+        "E007",
+        "E008",
+        "E009",
+        "E010",
+        "E011",
+        "E012",
+        "E014",
+        "E015",
+        "E017",
+        "E018",
+        "E019",
+        "E020",
+        "L003",
+        "L006",
+        "L008",
+        "L009",
+        "L010",
+        "L012",
+        "L014",
+        "L016",
+        "L018",
+        "L019",
+        "P031",
+        "P036",
+        "T025",
+    }
+)
+
+
+def _autofixable_rules_without_a_bullet() -> set[str]:
+    from conformance.suite.rules import CATALOG
+    from conformance.suite.schema.disposition import RuleScope
+
+    missing: set[str] = set()
+    for rule in CATALOG.values():
+        if rule.scope is RuleScope.SDK or not rule.autofixable:
+            continue
+        text = _read(f"areas/{SERIES_AREA[rule.id[0]]}.prose.md")
+        if not re.search(r"\*\*" + rule.id + r"\b", text):
+            missing.add(rule.id)
+    return missing
+
+
+def test_every_autofixable_rule_has_a_per_rule_prescription() -> None:
+    """An auto-fixable rule the lane may act on must tell the model what the
+    edit is — a `**<ID> Name**` bullet in its area's Fix Prescription, not a
+    catch-all "fix guided by the hint". A small model reading a catch-all
+    guesses, and guessing is what the classification was meant to remove. B006
+    shipped with no prescription at all while its flag said auto-fixable, so
+    `/remediate` would have returned not_remediable on 415 BLOCK findings."""
+    unexpected = sorted(_autofixable_rules_without_a_bullet() - _PRESCRIPTION_BACKLOG)
+    assert not unexpected, (
+        "auto-fixable rule(s) with no per-rule prescription bullet in their area "
+        f"prose: {unexpected}. Write the bullet, or — only deliberately — add the "
+        "id to _PRESCRIPTION_BACKLOG."
+    )
+
+
+def test_prescription_backlog_only_shrinks() -> None:
+    """Every id in the backlog must still genuinely lack a bullet.
+
+    Without this the backlog rots: a rule gains a prescription, nobody removes
+    it from the list, and the coverage test silently stops guarding it.
+    """
+    stale = sorted(_PRESCRIPTION_BACKLOG - _autofixable_rules_without_a_bullet())
+    assert not stale, (
+        f"rule(s) {stale} now have a prescription (or are no longer auto-fixable) "
+        "but are still listed in _PRESCRIPTION_BACKLOG — remove them."
     )
 
 

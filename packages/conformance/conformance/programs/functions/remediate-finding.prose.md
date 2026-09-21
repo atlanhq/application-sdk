@@ -125,6 +125,20 @@ contract and `atlan.yaml` is rewritten by regeneration, not by this function.  S
 mandatory, because neither the presence of `contract/app.pkl` nor the contract's
 `amends` line reliably predicts the answer.
 
+**For B006 findings only**, running the ledger generator — and committing the
+`contract_schema.lock.json` it writes in the repo root — is permitted, even
+though that file is neither Python source nor the `Dockerfile`.  Without this
+carve-out B006 is unfixable by construction: it is classified auto-fixable and
+its only remedy writes that one file, so the loop would apply nothing and the
+model would misread its own refusal as a prescription defect.  As with C002's
+`bootstrap`, the model never authors the content — the generator renders it
+from the repo's own contract classes, deterministically, so there is nothing
+to judge or game.  `touched_files` is exactly `["contract_schema.lock.json"]`;
+the generator writes no other path.  This permits **B006 only**: B005 is a
+removal, the generator is append-only and cannot clear it, and deleting the
+ledger to rebuild from empty is never part of a fix — see
+`areas/deprecation.prose.md`.
+
 For C002 findings (and C003's absent-`.gitignore` case) only, invoking
 `atlan-application-sdk-conformance bootstrap` is also permitted, despite it
 writing under `.github/` and `.gitignore`. This is not a carve-out of the
