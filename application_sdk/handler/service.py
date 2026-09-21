@@ -54,6 +54,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
+from typing_extensions import deprecated
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app._generated_tree import (
@@ -2637,6 +2638,11 @@ def _register_workflow_routes(
 # ---------------------------------------------------------------------------
 
 
+@deprecated(
+    "create_app_handler_service is deprecated; the serving runtime moved to "
+    "atlan-application-sdk-server (server_sdk.server.build_asgi_app), which "
+    "installs without the worker dependency tree — will be removed in v4.0"
+)
 def create_app_handler_service(
     handler: Handler,
     *,
@@ -3328,6 +3334,11 @@ def create_app_handler_service(
     return app
 
 
+@deprecated(
+    "run_app_handler_service is deprecated; the serving runtime moved to "
+    "atlan-application-sdk-server (server_sdk.server.build_asgi_app), which "
+    "installs without the worker dependency tree — will be removed in v4.0"
+)
 def run_app_handler_service(
     handler: Handler,
     *,
