@@ -15,7 +15,8 @@ different trust levels:
     production was built from a given commit without trusting a build label.
 
 ``server_sdk_declared_rev``
-    What the app *declares* it wants from ``atlan-server-sdk``, read straight out
+    What the app *declares* it wants from ``atlan-application-sdk-server`` (or the
+    legacy ``atlan-server-sdk``), read straight out
     of the installed distribution's ``METADATA`` ``Requires-Dist``. For the
     hosted apps this is a PEP 508 direct reference carrying a pinned git rev, so
     it is the honest answer to "which server-sdk commit was this app pinned to
@@ -588,12 +589,16 @@ def declared_server_sdk_rev(
     *,
     sdk_dist: str | Sequence[str] = SERVER_SDK_DISTS,
 ) -> str | None:
-    """The app's ``Requires-Dist`` entry for ``atlan-server-sdk``, verbatim.
+    """The app's ``Requires-Dist`` entry for the server distribution, verbatim.
+
+    ``sdk_dist`` defaults to :data:`SERVER_SDK_DISTS`, so the current
+    ``atlan-application-sdk-server`` is preferred and the legacy
+    ``atlan-server-sdk`` is still accepted.
 
     Returned unparsed and unnormalized so the pinned git rev in a PEP 508 direct
     reference survives intact::
 
-        atlan-server-sdk[aws,sql] @ git+https://github.com/atlanhq/server-sdk.git@94ece49...
+        atlan-application-sdk-server[aws,sql] @ git+https://github.com/atlanhq/application-sdk.git@94ece49...
 
     An app pinning the SDK through a marker-gated extra also declares an
     unconditional entry; the unconditional one wins, so what is returned is the

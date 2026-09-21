@@ -6,7 +6,8 @@ pure-Python seam here. ``temporalio`` lives only in
 ``[workflow]`` extra is installed. In the consolidated serving image the extra
 is absent, so :data:`WORKFLOW_EXTRA_AVAILABLE` is ``False``, the route is never
 registered, and ``/workflows/v1/start`` 404s. An app running standalone installs
-``atlan-server-sdk[workflow]`` and gets a functional ``/start`` that dispatches
+``atlan-application-sdk-server[workflow]`` and gets a functional ``/start`` that
+dispatches
 to its own worker.
 
 The route parses the request and emits the standard success/error envelopes; the

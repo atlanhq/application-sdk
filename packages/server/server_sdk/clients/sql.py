@@ -8,7 +8,7 @@ Deliberately scoped to the serving path — server-side-cursor streaming,
 ``read_only_transaction`` snapshot pinning, IAM/role assumption, tolerant
 decoder hooks, and pandas/dataframe paths are worker-side concerns and out of
 scope here. SQLAlchemy is imported lazily so the base install stays free of it
-(install ``atlan-server-sdk[sql]``).
+(install ``atlan-application-sdk-server[sql]``).
 """
 
 from __future__ import annotations
