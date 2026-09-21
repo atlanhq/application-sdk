@@ -12,6 +12,7 @@ from ._helpers import (
     _body_has_bypassing_exit,
     _body_is_only_loop_control_no_logging,
     _body_is_only_pass,
+    _body_returns_typed_failure,
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
@@ -104,6 +105,17 @@ class SilentSwallowMixin:
         scope = redaction_scope(node)
         if _body_always_raises(node.body, scope) and not _body_has_bypassing_exit(
             node.body, scope=scope
+        ):
+            return
+        # Same principle on the other arm: a handler that converts the caught
+        # exception into a typed value and hands it back swallows nothing — the
+        # failure leaves the frame as data for the caller to report, so no log
+        # level decides whether it is visible. Every exit must carry it, and an
+        # unbound `except Exception:` never can.
+        if _body_returns_typed_failure(
+            node,
+            function=self._function_stack[-1] if self._function_stack else None,
+            redaction=scope,
         ):
             return
         # Pass if body has logger.exception() or any log call with exc_info=True

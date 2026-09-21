@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import NamedTuple
 
 from .._ast_common._exc_info import has_exc_info_traceback
@@ -311,20 +311,30 @@ def _derives_from_cause(value: ast.expr, exc_name: str, live: set[str]) -> bool:
     )
 
 
-def _track_redacted(
+def _track_carried(
     stmts: list[ast.stmt],
     exc_name: str,
     live: set[str],
     out: dict[int, frozenset[str]],
+    derives: Callable[[ast.expr, str, set[str]], bool],
 ) -> set[str]:
-    """Propagate redacted-cause locals through *stmts*, recording them at raises.
+    """Propagate cause-carrying locals through *stmts*, recording them at exits.
 
-    Walks in source order and returns the names still holding the caught
-    exception in redacted form once *stmts* has run.  A name is added when it is
-    assigned from an expression that redacts the caught exception — directly, or
-    by reading a name that is live at that point — and dropped the moment it is
-    reassigned, augmented, deleted, unpacked, or rebound by a ``for`` target,
-    ``with ... as``, ``:=``, import, ``def``/``class`` or ``match`` capture.
+    *derives* decides what "carrying" means for the caller — redacted form for
+    :func:`redaction_scope`, typed form for :func:`typed_failure_scope`.  The
+    flow analysis is the same either way, which is the point: both exemptions
+    ask where the caught exception is still reachable at the statement that
+    leaves the handler, and only the leaf test differs.
+
+    Walks in source order and returns the names still carrying the caught
+    exception once *stmts* has run.  A name is added when it is assigned from an
+    expression that carries the caught exception — directly, or by reading a name
+    that is live at that point — and dropped the moment it is reassigned,
+    augmented, deleted, unpacked, or rebound by a ``for`` target, ``with ... as``,
+    ``:=``, import, ``def``/``class`` or ``match`` capture.
+
+    ``out`` records the live set at each ``raise`` and ``return``, keyed by node
+    identity, so a caller can ask what a specific exit carries.
 
     Branch joins keep a name only when *every* path keeps it, and a loop body is
     iterated to a fixpoint, so a name that survives one pass but not the next is
@@ -335,7 +345,9 @@ def _track_redacted(
     for stmt in stmts:
         live -= _walrus_names(stmt)
 
-        if isinstance(stmt, ast.Raise):
+        if isinstance(stmt, (ast.Raise, ast.Return)):
+            # An exit: record what is carried at it, then stop — statements
+            # after it in the same block are unreachable.
             out[id(stmt)] = frozenset(live)
             continue
 
@@ -345,15 +357,13 @@ def _track_redacted(
             # the old `detail`.
             targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
             # `detail: str` with no value is a bare annotation: it binds nothing.
-            derives = stmt.value is not None and _derives_from_cause(
-                stmt.value, exc_name, live
-            )
+            carries = stmt.value is not None and derives(stmt.value, exc_name, live)
             for target in targets:
                 rebound = _rebound_names(target)
                 # Only a plain `name = <expr>` carries the value across whole.
                 # Unpacking (`a, b = ...`) hands each name a *part* of it, which
                 # is not something the sanitizer's output can be assumed to be.
-                if derives and isinstance(target, ast.Name):
+                if carries and isinstance(target, ast.Name):
                     live |= rebound
                 else:
                     live -= rebound
@@ -370,8 +380,8 @@ def _track_redacted(
             continue
 
         if isinstance(stmt, ast.If):
-            taken = _track_redacted(stmt.body, exc_name, live, out)
-            skipped = _track_redacted(stmt.orelse, exc_name, live, out)
+            taken = _track_carried(stmt.body, exc_name, live, out, derives)
+            skipped = _track_carried(stmt.orelse, exc_name, live, out, derives)
             live = taken & skipped
             continue
 
@@ -382,33 +392,38 @@ def _track_redacted(
             # Shrink to a fixpoint: a name killed on a later iteration must not
             # survive because the first pass happened to keep it.
             while True:
-                after = _track_redacted(stmt.body, exc_name, entry, out)
+                after = _track_carried(stmt.body, exc_name, entry, out, derives)
                 narrowed = entry & after
                 if narrowed == entry:
                     break
                 entry = narrowed
             # Zero iterations leaves `live` untouched, so only names that hold on
             # both paths survive; `else` then runs on normal completion.
-            live = _track_redacted(stmt.orelse, exc_name, entry & live, out)
+            live = _track_carried(stmt.orelse, exc_name, entry & live, out, derives)
             continue
 
         if isinstance(stmt, (ast.With, ast.AsyncWith)):
             for item in stmt.items:
                 if item.optional_vars is not None:
                     live -= _rebound_names(item.optional_vars)
-            live = _track_redacted(stmt.body, exc_name, live, out)
+            live = _track_carried(stmt.body, exc_name, live, out, derives)
             continue
 
         if isinstance(stmt, (ast.Try, ast.TryStar)):
-            body_live = _track_redacted(stmt.body, exc_name, live, out)
-            paths = [body_live, _track_redacted(stmt.orelse, exc_name, body_live, out)]
+            body_live = _track_carried(stmt.body, exc_name, live, out, derives)
+            paths = [
+                body_live,
+                _track_carried(stmt.orelse, exc_name, body_live, out, derives),
+            ]
             for handler in stmt.handlers:
                 # A handler can start anywhere in the body, so it inherits the
                 # entry set, minus its own bound exception name.
                 entry = live - ({handler.name} if handler.name else set())
-                paths.append(_track_redacted(handler.body, exc_name, entry, out))
-            live = _track_redacted(
-                stmt.finalbody, exc_name, set.intersection(*paths), out
+                paths.append(
+                    _track_carried(handler.body, exc_name, entry, out, derives)
+                )
+            live = _track_carried(
+                stmt.finalbody, exc_name, set.intersection(*paths), out, derives
             )
             continue
 
@@ -416,7 +431,7 @@ def _track_redacted(
             paths = [set(live)]  # no case matched
             for case in stmt.cases:
                 entry = live - _match_bound_names(case.pattern)
-                paths.append(_track_redacted(case.body, exc_name, entry, out))
+                paths.append(_track_carried(case.body, exc_name, entry, out, derives))
             live = set.intersection(*paths)
             continue
 
@@ -451,14 +466,14 @@ def redaction_scope(handler: ast.ExceptHandler) -> RedactionScope | None:
             message = f"credential rejected: {detail}"
             raise CredentialError(message) from None
 
-    Tracking is flow-sensitive (see :func:`_track_redacted`): a local that is
+    Tracking is flow-sensitive (see :func:`_track_carried`): a local that is
     later overwritten, augmented or only redacted on one branch is not live at
     the raise that follows.
     """
     if handler.name is None:
         return None
     redacted_at: dict[int, frozenset[str]] = {}
-    _track_redacted(handler.body, handler.name, set(), redacted_at)
+    _track_carried(handler.body, handler.name, set(), redacted_at, _derives_from_cause)
     return RedactionScope(handler.name, redacted_at)
 
 
@@ -584,3 +599,238 @@ def _child_stmt_blocks(stmt: ast.stmt) -> list[list[ast.stmt]]:
     if isinstance(stmt, ast.Match):
         blocks.extend(case.body for case in stmt.cases)
     return blocks
+
+
+class TypedFailureScope(NamedTuple):
+    """Where a handler's caught exception survives as typed data.
+
+    ``exc_name`` is the handler's bound exception (``except Exception as exc``).
+    ``carried_at`` maps each ``return``/``raise`` in the handler (by node
+    identity) to the local names holding a typed value built from the caught
+    exception *at that statement*; ``live_at_end`` is the same set for the
+    fall-through path off the end of the handler body.
+    """
+
+    exc_name: str
+    carried_at: dict[int, frozenset[str]]
+    live_at_end: frozenset[str]
+
+
+def _expr_types_cause(expr: ast.expr, exc_name: str) -> bool:
+    """True when *expr* builds a typed value *from* the caught exception.
+
+    The marker is a call to a class-like target — a ``Name`` or ``Attribute``
+    whose leaf identifier is capitalised — that receives the caught binding among
+    its arguments, at any nesting depth::
+
+        SourceUnavailableError(message="…", cause=exc)
+        self._failed_check(name, SourceUnavailableError(cause=exc), start)
+
+    Recognition is by naming convention, the same trade the sanitizer detector
+    makes (see ``_ast_common/_sanitizers.py``): the error leaves live in each
+    app, so the checker cannot resolve them.  Capitalisation is what separates
+    constructing an object from ``str(exc)`` or a bare hand-off to a helper —
+    ``_failed_check(name, exc, start)`` proves nothing about what the value
+    becomes, and under a broad catch nothing about ``exc`` is known either.
+    """
+    for node in ast.walk(expr):
+        if not isinstance(node, ast.Call):
+            continue
+        target = _get_name(node.func)
+        if target is None or not target[:1].isupper():
+            continue
+        for arg in [*node.args, *[kw.value for kw in node.keywords]]:
+            for inner in ast.walk(arg):
+                if isinstance(inner, ast.Name) and inner.id == exc_name:
+                    return True
+    return False
+
+
+def _derives_typed_failure(value: ast.expr, exc_name: str, live: set[str]) -> bool:
+    """True when *value* carries the caught exception out as typed data."""
+    return _expr_types_cause(value, exc_name) or _references_any(value, frozenset(live))
+
+
+def typed_failure_scope(handler: ast.ExceptHandler) -> TypedFailureScope | None:
+    """Find where *handler*'s caught exception survives as typed data.
+
+    ``None`` when the handler does not bind the exception (``except Exception:``)
+    — nothing is named, so nothing can be carried out.
+
+    Like :func:`redaction_scope`, the value is often staged across several
+    statements before the ``return`` hands it back, so the locals are tracked to
+    a fixpoint rather than the return expression alone::
+
+        except Exception as exc:
+            failure = SourceUnavailableError(cause=exc)
+            row = self._failed_check(name, failure, start)
+            return row
+    """
+    if handler.name is None:
+        return None
+    carried_at: dict[int, frozenset[str]] = {}
+    live_at_end = _track_carried(
+        handler.body, handler.name, set(), carried_at, _derives_typed_failure
+    )
+    return TypedFailureScope(handler.name, carried_at, frozenset(live_at_end))
+
+
+def _return_carries_typed_failure(stmt: ast.Return, scope: TypedFailureScope) -> bool:
+    """True when *stmt* hands back a typed value built from the caught exception."""
+    if stmt.value is None:
+        return False
+    return _derives_typed_failure(
+        stmt.value, scope.exc_name, set(scope.carried_at.get(id(stmt), frozenset()))
+    )
+
+
+def _body_always_exits(body: list[ast.stmt]) -> bool:
+    """True when *body* cannot fall off its end — every path returns or raises.
+
+    The mirror of :func:`_body_always_raises` for the typed-failure exemption,
+    which accepts either kind of exit.  Conservative in the same direction: a
+    body whose exits are proven only through a construct this does not model
+    reads as falling through, and a fall-through has to prove itself separately.
+    """
+    for stmt in body:
+        if isinstance(stmt, (ast.Return, ast.Raise)):
+            return True
+        if (
+            isinstance(stmt, ast.If)
+            and stmt.orelse
+            and _body_always_exits(stmt.body)
+            and _body_always_exits(stmt.orelse)
+        ):
+            return True
+    return False
+
+
+def _has_swallowing_exit(
+    body: list[ast.stmt],
+    scope: TypedFailureScope,
+    *,
+    loop_depth: int = 0,
+    redaction: RedactionScope | None = None,
+) -> bool:
+    """True when some path through *body* leaves the handler carrying nothing.
+
+    The counterpart of :func:`_body_has_bypassing_exit` for the typed-failure
+    exemption.  A ``return`` whose value does not carry the caught exception as
+    typed data swallows it — ``return None``, a bare sentinel, a row the tracker
+    cannot reach.  A ``raise`` that drops the cause swallows it too, and a
+    ``break``/``continue`` belonging to a loop *outside* the handler escapes past
+    the exit that would have carried it.
+
+    Recurses through compound statements (tracking loop nesting) but not into
+    nested ``def``/``class`` bodies, whose exits belong to another scope.
+    """
+    for stmt in body:
+        if isinstance(stmt, ast.Return):
+            if not _return_carries_typed_failure(stmt, scope):
+                return True
+            continue
+        if isinstance(stmt, ast.Raise):
+            if not _raise_carries_cause(stmt, redaction):
+                return True
+            continue
+        if isinstance(stmt, (ast.Break, ast.Continue)):
+            if loop_depth == 0:
+                return True
+            continue  # loop control for a loop nested in the handler
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue  # different scope — its return/raise is not a handler exit
+        if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+            if _has_swallowing_exit(
+                stmt.body, scope, loop_depth=loop_depth + 1, redaction=redaction
+            ):
+                return True
+            if _has_swallowing_exit(
+                stmt.orelse, scope, loop_depth=loop_depth, redaction=redaction
+            ):
+                return True
+            continue
+        for block in _child_stmt_blocks(stmt):
+            if _has_swallowing_exit(
+                block, scope, loop_depth=loop_depth, redaction=redaction
+            ):
+                return True
+    return False
+
+
+def _staged_row_is_returned(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    handler: ast.ExceptHandler,
+    names: frozenset[str],
+) -> bool:
+    """True when a local staged in *handler* is returned after the ``try``.
+
+    The last-resort arm of a probe often assigns the typed row and lets the
+    function's single trailing ``return`` hand it back, so cleanup that must run
+    on every path stays in one place::
+
+        except Exception as exc:
+            check = self._failed_check(name, SourceUnavailableError(cause=exc), start)
+        if client is not None:
+            await client.close()
+        return check, None
+
+    Only returns *below* the handler count, and only those outside every except
+    handler in the function: a return inside a sibling handler hands back that
+    handler's value, not this one's.
+    """
+    if not names:
+        return False
+    end = handler.end_lineno or handler.lineno
+    in_handler = {
+        id(node)
+        for candidate in _iter_shallow(function)
+        if isinstance(candidate, ast.ExceptHandler)
+        for node in _iter_shallow(candidate)
+    }
+    for node in _iter_shallow(function):
+        if not isinstance(node, ast.Return) or node.value is None:
+            continue
+        if node.lineno <= end or id(node) in in_handler:
+            continue
+        if _references_any(node.value, names):
+            return True
+    return False
+
+
+def _body_returns_typed_failure(
+    handler: ast.ExceptHandler,
+    *,
+    function: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
+    redaction: RedactionScope | None = None,
+) -> bool:
+    """True when the caught exception leaves *handler* as typed data on every path.
+
+    A broad catch that converts the exception into a typed value and hands it
+    back — a failed check row, a typed result object — is not swallowing it: the
+    failure leaves the frame in inspectable form and whatever consumes the value
+    decides how it is reported, which is the property a cause-preserving re-raise
+    has too.  The log level at such a site is therefore irrelevant to whether the
+    failure is visible, so requiring one (E004's ``exc_info`` exemption, whose
+    accepted levels are exactly the ones F005 forbids inside a preflight gate)
+    grades the wrong thing.
+
+    Every exit must carry it.  A ``return None``, a bare sentinel, a ``raise``
+    that drops the cause, or a ``break``/``continue`` escaping to an outer loop
+    all swallow on that path.  So does ``except Exception:`` with no ``as``
+    binding — nothing is named, so nothing can be carried out.
+
+    A handler that falls off its end carries the failure only if the typed row is
+    still live in a local that the enclosing function returns below the ``try``
+    (:func:`_staged_row_is_returned`); without *function* that shape cannot be
+    proven and does not pass.
+    """
+    scope = typed_failure_scope(handler)
+    if scope is None:
+        return False
+    if _has_swallowing_exit(handler.body, scope, redaction=redaction):
+        return False
+    if _body_always_exits(handler.body):
+        return True
+    return function is not None and _staged_row_is_returned(
+        function, handler, scope.live_at_end
+    )

@@ -141,8 +141,9 @@ root-cause analysis impossible.
 
 - **Compliant example:** atlan-openapi-app app/api_client.py — `_parse_zip` catches Exception per archive member
   and logs with exc_info=True. Where breadth really is the point, atlan-mysql-app
-  app/handler.py `preflight_check` carries an inline ignore[E004] naming the boundary it
-  guards; both shapes are accepted, an unexplained bare breadth is not.
+  app/handler.py `preflight_check` converts the caught exception into a typed
+  PreflightCheck row and returns it, which the rule detects — no suppression needed; all
+  three shapes are accepted, an unexplained bare breadth is not.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
@@ -162,6 +163,20 @@ is how a frame holding a resolved credential avoids emitting a raw traceback;
 severed-and-redacted preserves the cause, severed-and-dropped does not.  Without this
 the only way to clear E004 at such a site is a warning/error log, which is exactly what
 L009 forbids before a raise.
+
+Also exempt: a handler that converts the caught exception into typed data and hands it
+back on *every* path — `return PreflightCheck(passed=False,
+error=SourceUnavailableError(cause=exc).to_failure_details())`, or a row staged in a
+local that the enclosing function returns below the `try`. The failure leaves the frame
+in inspectable form, so no log level decides whether it is visible; demanding one is
+what makes E004 and F005 jointly unsatisfiable at the last-resort arm of a preflight
+probe.  A `return None`, a bare sentinel, a swallowing path before the typed return, a
+raw hand-off of the binding (`failed_check(name, exc, start)` proves nothing about its
+type under a broad catch), and `except Exception:` with no `as` binding all still fire.
+
+The three exemptions are one principle: the exception must leave the frame in some
+inspectable form — re-raised with its trace, re-raised with a redacted cause, or
+returned as typed data.
 
 ---
 
