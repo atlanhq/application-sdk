@@ -33,6 +33,7 @@ from application_sdk.observability.correlation import (
     get_correlation_context,
     set_correlation_context,
 )
+from application_sdk.observability.logger_adaptor import _build_extra_dict
 
 # ---------------------------------------------------------------------------
 # Shared mock dataclasses
@@ -1896,3 +1897,21 @@ class TestLifecycleLinesCarryBuildIdentity:
             if key != "sdk.version":
                 assert kwargs[key] == "", key
         assert kwargs["sdk.version"]
+
+    async def test_build_identity_survives_the_otlp_allowlist(self, act_next):
+        # The call-site kwargs are filtered through the logger's allowlist
+        # before they become the object-store NDJSON / OTLP record. A key the
+        # allowlist drops is invisible to every export however it was logged,
+        # so assert on what the sink keeps, not only on what the call passed.
+        interceptor = _LogActivityInboundInterceptor(act_next)
+        with patch.multiple(_LOG_MOD, **_FULL_IDENTITY):
+            with patch(f"{_LOG_MOD}.activity") as mock_act:
+                mock_act.info.return_value = MockActivityInfo()
+                with patch(f"{_LOG_MOD}.logger") as mock_logger:
+                    await interceptor.execute_activity(MockExecuteActivityInput())
+
+        for token in ("activity.started", "activity.ended"):
+            kwargs = self._info_calls(mock_logger, token)[0].kwargs
+            exported = _build_extra_dict(dict(kwargs))
+            for key in _BUILD_IDENTITY_KEYS:
+                assert exported.get(key) == kwargs[key], f"{token} dropped {key}"

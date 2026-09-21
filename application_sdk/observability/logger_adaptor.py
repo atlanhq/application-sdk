@@ -189,6 +189,16 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "start_to_close_timeout",
         "schedule_to_start_timeout",
         "heartbeat_timeout",
+        # ── Build identity (FND-1936) ────────────────────────────────────
+        # Stamped on the four lifecycle lines by interceptors/log.py so a
+        # run's own exported logs identify the build that produced them.
+        # Named after the matching OTel Resource attributes on purpose, and
+        # listed as exact keys rather than an ``app.`` / ``sdk.`` passthrough
+        # prefix so the allowlist stays closed to arbitrary app-author kwargs.
+        # (``temporal.deployment.*`` rides the existing ``temporal.`` prefix.)
+        "sdk.version",
+        "app.version",
+        "app.commit_sha",
         # ── Outcome / error ──────────────────────────────────────────────
         "status",
         "error_type",

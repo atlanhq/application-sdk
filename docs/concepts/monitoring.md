@@ -421,8 +421,10 @@ contains.
 
 An image without worker versioning or a baked build file logs `""` for the affected fields. The keys
 are always present so the schema stays stable, and an empty value means "this image carries no
-build identity", never a mismatch. The attributes are stamped on the lifecycle lines only, not on
-every record: the equivalent per-pod OTel Resource attributes ride only on the OTLP export, which
+build identity", never a mismatch. All five keys are on the
+[OTLP allowlist](#structured-attributes-and-the-otlp-allowlist), so they survive the filter that
+drops unlisted kwargs. The attributes are stamped on the lifecycle lines only, not on every record:
+the equivalent per-pod OTel Resource attributes ride only on the OTLP export, which
 the object-store NDJSON and the per-run export do not carry. Note that the object-store sink skips
 records emitted inside the workflow sandbox, so on that path the `activity.*` lines are the ones
 that carry the identity. See
