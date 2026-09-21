@@ -61,13 +61,27 @@ description: >
   procedures for how each is populated deterministically). `detect-fix-recheck`
   reverts exactly this file set if the fix fails its gates, so a multi-file fix
   that is later reverted doesn't leave unrelated files mutated in the tree.
-- `impact` — string, **mandatory for every `fix` outcome**.  The impact
-  analysis performed before the edit was applied: which callers, importers,
-  tests, contract/generated artifacts and config files were checked, which
-  consequential edits were folded into this fix (and are therefore in
-  `touched_files`), and which consequences fall outside the write scope and
-  need a human (tests to adjust, a `.github/` file, an owner decision).  A
-  reviewer must be able to read it and know the app is not left half-changed.
+- `impact` — object, **mandatory for every `fix` outcome**, with two parts:
+  `before` — the impact analysis performed before the edit was applied
+  (which callers, importers, tests, contract/generated artifacts and config
+  files were checked, which consequential edits were folded into this fix
+  and are therefore in `touched_files`); and `after` — the consequence review
+  performed once the edit was verified (what the fix changed behaviourally,
+  every follow-on edit made because of it, and every consequence that falls
+  outside the write scope or needs an owner and is therefore an explicit
+  follow-up naming the file and what must change).  A reviewer must be able
+  to read it and know the app is not left half-changed; an empty `after`
+  is a claim that nothing follows from the fix, and is checked as such.
+- `suppression_reason` — required whenever `outcome = "suppress"`, one of
+  `"site-exception"` (the rule is right, this site is a justified carve-out),
+  `"false-positive"` (the code already has the compliant shape and the
+  detector still flags it) or `"prescription-defect"` (the prescribed edit
+  was applied faithfully and cannot clear the finding).  The last two are
+  defects in the conformance suite, not in the app — see step 5 below.
+- `rule_defect_pr` — URL of the PR opened against `atlanhq/application-sdk`
+  by `report-rule-defect`, or `null`.  Mandatory when `suppression_reason` is
+  `"false-positive"` or `"prescription-defect"`; the loop rejects such a
+  suppression without it.
 - `verification` — object, **mandatory for every `fix` outcome**, with four
   booleans: `finding_cleared` (rule-scoped re-detect no longer reports the
   fingerprint), `gate_passed` (the rule's orthogonal gate passed),
@@ -275,6 +289,65 @@ reviewer can see the evidence rather than trust the outcome:
 
 Record the four in `verification`.  If any is `false`, do not report
 `outcome = "fix"`: revert and route to residue naming the failing check.
+
+**4. Review the consequences after verification.**
+
+Verification proves the finding is gone and the existing tests still pass.
+It does not prove the app still does what it did.  Once the four checks are
+`true`, make a second pass over the **whole repo** for what the edit changed
+behaviourally, not textually:
+
+- **control flow** — an `except` that now logs and re-raises instead of
+  swallowing, a `return` that became a `raise`, a blocking call moved onto
+  `run_in_thread()`, a `print` that became a log line at a chosen level: find
+  every caller and ask whether it handles the new behaviour (catches the
+  exception, awaits the result, tolerates the level);
+- **signatures and types** — a renamed import, a retyped contract field, a new
+  required keyword argument: every call site, subclass, fixture and test
+  double that references the old shape;
+- **runtime surfaces the gates do not exercise** — the generated contract and
+  manifest, `atlan.yaml`, `.env.example`, the Dockerfile, CI workflow inputs;
+- **new runtime dependencies** — a dependency or extra the fix now needs, an
+  environment variable it reads, a base-image capability it assumes.
+
+For each consequence: inside the write scope, fix it in the same unit, add the
+file to `touched_files`, and run step 3's four checks once more; outside the
+write scope, or needing an owner decision, write it into `impact.after` as an
+explicit follow-up naming the file and what must change.  A fix whose
+consequences are unlisted is not done — the connector's per-rule sub-issue is
+filled from `impact`.
+
+**5. A suppression is a rule-defect signal.**
+
+If after the loop's attempts the finding is still present, or the only way to
+clear it is an inline `# conformance: ignore[<RULE>]`, stop and classify *why*
+before proposing anything.  Set `suppression_reason` accordingly:
+
+- `site-exception` — the rule is right and this site is a justified carve-out
+  (the rule's `terminal_state` or the area prescription names the case).  The
+  normal strict-mode suppression applies, with the justification.
+- `false-positive` — the code already has the compliant shape (it matches the
+  reference app) and the detector still flags it.  The defect is in the SDK
+  rule, not in the app.
+- `prescription-defect` — the prescribed edit was applied faithfully and the
+  recheck still reports the finding, or it introduces a new finding, or the
+  orthogonal gate rejects it every time.  The defect is in the rule's
+  prescription, or the checker and the prescription disagree.
+
+For `false-positive` and `prescription-defect`, call `report-rule-defect`
+(`functions/report-rule-defect.prose.md`) with the flagged snippet, the
+reference-app lines it matches and what was attempted; it opens a PR against
+the conformance suite in `atlanhq/application-sdk` — a regression test that
+reproduces the defect, the checker or prescription fix when it is local, and a
+body the SDK owners review — and returns `rule_defect_pr`.  A suppression for
+either reason is accepted **only** when its justification cites that PR
+(`# conformance: ignore[L009] false positive — application-sdk#1234`), so the
+burn-down stays honest: the app is unblocked, and the SDK fix is what
+eventually makes the directive unnecessary.  Never suppress a BLOCK-tier
+finding for these reasons; route it to residue with the PR link — the SDK fix
+is the unblock.  The lane never merges that PR and never edits the gate inside
+the app under scan; proposing a change to the gate for humans to accept is the
+sanctioned channel, silently disabling the gate is not.
 
 **Auto-fixable vs migration.**
 

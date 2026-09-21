@@ -223,6 +223,58 @@ def test_remediate_finding_declares_impact_and_verification() -> None:
     assert "not_remediable = true" in text
 
 
+def test_remediate_finding_reviews_consequences_after_verification() -> None:
+    """Verification proves the finding is gone; the consequence review proves
+    the app still works. Both halves of `impact` must be named."""
+    text = _read("functions/remediate-finding.prose.md")
+    assert "`impact.after`" in text
+    assert "Review the consequences after verification" in text
+    for surface in ("control flow", "signatures and types", "runtime surfaces"):
+        assert surface in text, f"consequence review does not cover {surface}"
+
+
+def test_suppression_is_a_rule_defect_signal() -> None:
+    """A suppression that is really a false positive or a prescription defect
+    must become a PR against the suite, not a silent ignore directive."""
+    text = _read("functions/remediate-finding.prose.md")
+    for field in ("`suppression_reason`", "`rule_defect_pr`"):
+        assert field in text, f"remediate-finding does not declare {field}"
+    for reason in ("site-exception", "false-positive", "prescription-defect"):
+        assert reason in text, f"suppression_reason value {reason} not named"
+    assert "report-rule-defect" in text
+    # Line-wrapped prose: assert on the phrase that starts the sentence.
+    assert "Never suppress a BLOCK-tier" in text
+
+
+def test_report_rule_defect_contract_is_bounded() -> None:
+    """The cross-repo PR is the one place the remediator may touch the gate,
+    so the contract has to state the bounds: dedup, reproducer that fails on
+    main, never merge, never edit the app's own gate, and a draft fallback when
+    the token cannot reach application-sdk."""
+    text = _read("functions/report-rule-defect.prose.md")
+    assert "gh pr list" in text
+    assert "fail on `main`" in text
+    assert "xfail(strict=True" in text
+    assert "fix(conformance):" in text
+    assert "Never merge, approve or enable auto-merge" in text
+    assert "`draft`" in text
+    assert "secret values redacted" in text
+    assert "atlanhq/application-sdk" in text
+
+
+def test_loop_rejects_rule_defect_suppression_without_a_pr(loop: str) -> None:
+    """The check runs before the directive is written, like the evidence check,
+    and BLOCK-tier defects are never suppressed."""
+    body = loop.split("### Delegation")[1]
+    guard_at = body.index("result.suppression_reason")
+    apply_at = body.index("apply result.edit")
+    assert guard_at < apply_at, "rule-defect guard must precede apply"
+    assert "not result.rule_defect_pr" in body
+    assert 'finding.disposition == "failing"' in body
+    emit = body.split("emit residue as structured report")[1]
+    assert "rule_defect_pr" in emit
+
+
 def test_detect_violations_surfaces_the_canonical_reference() -> None:
     """The pointer is only useful if the finding carries it."""
     text = _read("functions/detect-violations.prose.md")
@@ -251,6 +303,8 @@ def test_bootstrapped_skill_tells_the_runner_to_load_the_reference_apps() -> Non
         assert app in template, f"bootstrap remediate.md never names {app}"
     assert "remediation/refs/" in template
     assert "migration_brief" in template
+    assert "report-rule-defect" in template
+    assert "impact.after" in template
 
 
 def test_remediate_finding_declares_the_evidence_field() -> None:

@@ -103,6 +103,23 @@ impact analysis and verification*):
    gone (`recheck-narrowest`), the orthogonal gate passed, a whole-series
    re-detect on the touched files introduced **no new finding for any rule**,
    and the fixed site now reads like the reference. All four true, or revert.
+4. **Review the consequences** once verified: what did the fix change
+   behaviourally (control flow, signatures, runtime surfaces the gates do not
+   exercise, new runtime dependencies), and who is affected? Fix what is in
+   scope in the same unit and re-verify; list the rest in `impact.after`. An
+   empty `after` is a claim that nothing follows from the fix.
+5. **A suppression is a rule-defect signal.** If the finding will not clear
+   and the only way out is `# conformance: ignore[<RULE>]`, classify why:
+   `site-exception` (rule is right, this site is a justified carve-out — the
+   normal strict-mode suppression), `false-positive` (code matches the
+   reference app, detector still flags it) or `prescription-defect` (the
+   prescribed edit cannot clear it). For the last two, run
+   `$PROGRAMS/functions/report-rule-defect.prose.md`: it opens a
+   `fix(conformance):` PR against `atlanhq/application-sdk` with a failing
+   reproducer test (and the checker/prescription fix when local), for the SDK
+   owners to review. Suppress only WARN-tier findings for these reasons, and
+   only citing that PR in the justification; BLOCK-tier stays in residue with
+   the PR link. Never merge that PR; never edit this repo's own gate.
 
 `autofixable = true` rules (the **auto-fixable** ruleset) are applied this
 way. `autofixable = false` rules (the **migration** ruleset) are never applied
