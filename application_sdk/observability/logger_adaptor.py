@@ -192,11 +192,16 @@ _KNOWN_EXTRA_KEYS = frozenset(
         # ── Build identity (FND-1936) ────────────────────────────────────
         # Stamped on the four lifecycle lines by interceptors/log.py so a
         # run's own exported logs identify the build that produced them.
-        # Named after the matching OTel Resource attributes on purpose, and
-        # listed as exact keys rather than an ``app.`` / ``sdk.`` passthrough
-        # prefix so the allowlist stays closed to arbitrary app-author kwargs.
+        # The dotted pair is named after the matching OTel Resource
+        # attributes on purpose, and listed as exact keys rather than an
+        # ``app.`` / ``sdk.`` passthrough prefix so the allowlist stays closed
+        # to arbitrary app-author kwargs. ``app.version`` carries the Global
+        # Marketplace version string only; the commit rides in its own key so
+        # neither value has to be guessed apart from the other, matching the
+        # ``app_version`` + ``commit_sha`` pair on the ``worker_start`` event.
         "sdk.version",
         "app.version",
+        "commit_sha",
         # ── Outcome / error ──────────────────────────────────────────────
         "status",
         "error_type",

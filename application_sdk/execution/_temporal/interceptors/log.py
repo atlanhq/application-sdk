@@ -115,10 +115,26 @@ def _build_identity_attrs() -> dict[str, str]:
     * ``sdk.version`` — the application-sdk actually running in the process;
       always populated.
     * ``app.version`` — the app release exactly as Global Marketplace stores
-      it: the value CI baked into ``app/atlan_build.json`` at image build,
-      then the deployer-stamped ``ATLAN_APPLICATION_VERSION``, falling back
-      to the commit SHA on an image that carries no version so the field
-      still identifies the build.
+      it (release tag for semver apps, sha7 for CD apps): the value CI baked
+      into ``app/atlan_build.json`` at image build, then the deployer-stamped
+      ``ATLAN_APPLICATION_VERSION``.
+    * ``commit_sha`` — the git commit the image was built from.
+
+    ``app.version`` deliberately does not fall back to the commit SHA. The
+    name is contracted elsewhere to be the GM ``version`` string *by
+    construction* — the OTel ``target_info`` gauge
+    (``observability/utils.py``) and the preflight results store both publish
+    it under that contract (see
+    ``docs/standards/release-flow.md#what-existing-consumers-see-change``),
+    and an operator reconciles a run against a catalog card by matching it
+    exactly. A fallback would make one string mean three shapes (a semver, a
+    GM sha7, a full git SHA) with nothing to tell them apart, and would make
+    the log attribute disagree with the Resource attribute of the same name
+    on an image that carries no version — the Resource omits ``app.version``
+    when it is empty rather than substituting something else. The two
+    carriers therefore stay two keys, which is what the ``worker_start`` /
+    ``token_refresh`` events already emit (``app_version`` plus
+    ``commit_sha``).
 
     Every value is an import-time constant; nothing here does I/O, which
     matters because the workflow-side call runs under Temporal's sandbox
@@ -135,7 +151,8 @@ def _build_identity_attrs() -> dict[str, str]:
     """
     return {
         "sdk.version": _SDK_VERSION,
-        "app.version": APPLICATION_VERSION or COMMIT_SHA,
+        "app.version": APPLICATION_VERSION,
+        "commit_sha": COMMIT_SHA,
     }
 
 

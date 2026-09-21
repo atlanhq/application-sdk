@@ -1764,6 +1764,7 @@ _LOG_MOD = "application_sdk.execution._temporal.interceptors.log"
 _BUILD_IDENTITY_KEYS = (
     "sdk.version",
     "app.version",
+    "commit_sha",
 )
 
 _FULL_IDENTITY = {
@@ -1779,31 +1780,46 @@ _NO_IDENTITY = {
 
 
 class TestBuildIdentityAttrs:
-    def test_reports_sdk_and_app_version_only(self):
+    def test_reports_sdk_version_app_version_and_commit_sha(self):
         with patch.multiple(_LOG_MOD, **_FULL_IDENTITY):
             attrs = _build_identity_attrs()
-        assert attrs == {"sdk.version": "9.9.9", "app.version": "0.2.3"}
+        assert attrs == {
+            "sdk.version": "9.9.9",
+            "app.version": "0.2.3",
+            "commit_sha": "abc1234def",
+        }
 
     def test_unset_carriers_yield_empty_strings_not_missing_keys(self):
         # An image with no baked build file and no deployer stamp must log
-        # "" for app.version: the schema stays stable and nothing raises.
+        # "" for app.version and commit_sha: the schema stays stable and
+        # nothing raises.
         with patch.multiple(_LOG_MOD, **_NO_IDENTITY):
             attrs = _build_identity_attrs()
         assert set(attrs) == set(_BUILD_IDENTITY_KEYS)
         assert attrs["sdk.version"], "the running SDK is always known"
         assert attrs["app.version"] == ""
+        assert attrs["commit_sha"] == ""
 
-    def test_app_version_falls_back_to_commit_sha(self):
+    def test_app_version_never_falls_back_to_commit_sha(self):
+        # The regression this pins: ``app.version`` is contracted to be the
+        # Global Marketplace version string by construction (the OTel
+        # target_info gauge and the preflight store publish it under that
+        # contract). Substituting a SHA when no version is baked would make
+        # one key mean three shapes and make the log attribute disagree with
+        # the Resource attribute of the same name, which is simply omitted
+        # when empty. The commit rides in its own key instead.
         with patch.multiple(_LOG_MOD, APPLICATION_VERSION="", COMMIT_SHA="abc1234def"):
             attrs = _build_identity_attrs()
-        assert attrs["app.version"] == "abc1234def"
+        assert attrs["app.version"] == ""
+        assert attrs["commit_sha"] == "abc1234def"
 
-    def test_app_version_wins_over_commit_sha_when_present(self):
+    def test_app_version_and_commit_sha_are_independent(self):
         with patch.multiple(
             _LOG_MOD, APPLICATION_VERSION="0.2.3", COMMIT_SHA="abc1234def"
         ):
             attrs = _build_identity_attrs()
         assert attrs["app.version"] == "0.2.3"
+        assert attrs["commit_sha"] == "abc1234def"
 
 
 class TestLifecycleLinesCarryBuildIdentity:
@@ -1831,6 +1847,7 @@ class TestLifecycleLinesCarryBuildIdentity:
     def _assert_full_identity(kwargs):
         assert kwargs["sdk.version"] == "9.9.9"
         assert kwargs["app.version"] == "0.2.3"
+        assert kwargs["commit_sha"] == "abc1234def"
 
     async def test_workflow_started_and_ended_carry_build_identity(self, wf_next):
         interceptor = _LogWorkflowInboundInterceptor(wf_next)
@@ -1862,7 +1879,8 @@ class TestLifecycleLinesCarryBuildIdentity:
 
     async def test_unset_env_logs_empty_strings_and_does_not_raise(self, act_next):
         # No baked build file, no deployer stamp: the run still executes and
-        # every identity key is present, app.version as "" (never dropped).
+        # every identity key is present, app.version and commit_sha as ""
+        # (never dropped).
         interceptor = _LogActivityInboundInterceptor(act_next)
         with patch.multiple(_LOG_MOD, **_NO_IDENTITY):
             with patch(f"{_LOG_MOD}.activity") as mock_act:
