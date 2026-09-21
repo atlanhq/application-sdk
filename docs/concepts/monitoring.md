@@ -404,6 +404,39 @@ the structured attributes, never on the body text.
     human-readable summaries and may change; match on the token prefix and the structured
     attributes, not the body text.
 
+#### Build identity on lifecycle lines
+
+Every lifecycle line also carries the SDK and app release that produced it, so a run's exported
+logs answer "what was running when this broke?" on their own, with no Temporal access. Before this
+the build was named once per worker at startup, which a run-scoped export never contains.
+
+| Attribute | Source | Meaning |
+|-----------|--------|---------|
+| `sdk.version` | `application_sdk.__version__` | The application-sdk actually running; always populated. |
+| `app.version` | baked `app/atlan_build.json`, then `ATLAN_APPLICATION_VERSION` | The app release exactly as Global Marketplace stores it — a release tag for semver apps, a sha7 for CD apps. |
+| `commit_sha` | baked `app/atlan_build.json`, then `ATLAN_COMMIT_SHA` | The git commit the image was built from. |
+
+`app.version` never falls back to the commit SHA. The name is contracted across signals to be the
+Global Marketplace `version` string *by construction* — the OTel `target_info` gauge and the
+preflight results store publish it under that contract, and an operator reconciles a run against a
+catalog card by matching it exactly. A fallback would make one key mean three shapes (a semver, a
+GM sha7, a full git SHA) with nothing to tell them apart, and would make the log attribute disagree
+with the Resource attribute of the same name, which is omitted rather than substituted when empty.
+The commit therefore rides in its own key, matching the `app_version` + `commit_sha` pair the
+`worker_start` event already emits.
+
+An image with no baked build file and no deployer stamp logs `""` for both `app.version` and
+`commit_sha`. The keys are always present so the schema stays stable, and an empty value means
+"this image carries no build identity", never a mismatch. All three keys are on the
+[OTLP allowlist](#structured-attributes-and-the-otlp-allowlist), so they survive the filter that
+drops unlisted kwargs. The attributes are stamped on the lifecycle lines only, not on every record:
+the equivalent per-pod OTel Resource attributes ride only on the OTLP export, which
+the object-store NDJSON and the per-run export do not carry. Note that the object-store sink skips
+records emitted inside the workflow sandbox, so on that path the `activity.*` lines are the ones
+that carry the identity. See
+[Release flow → Image identity](../standards/release-flow.md#image-identity) for where the values
+come from.
+
 ### Asset-validation outcome event
 
 `App.upload()`'s warn-only asset validation (see [Apps → Asset-Validation Outcome](apps.md#asset-validation-outcome))
