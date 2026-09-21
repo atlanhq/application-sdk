@@ -91,3 +91,37 @@ def test_handler_error_still_imports_and_catches() -> None:
 def test_constructing_handler_error_warns() -> None:
     with pytest.warns(DeprecationWarning, match="removed in v4.0"):
         HandlerError("x")
+
+
+# ── a connector subclass may already own `cause` ────────────────────────────
+
+
+def test_a_subclass_may_expose_cause_as_its_own_property() -> None:
+    """redshift_server's error base does exactly this.
+
+    A bare ``self.cause = ...`` in AppError.__init__ raises
+    "property 'cause' has no setter" against such a subclass, which breaks
+    every error that app constructs -- 52 of redshift's server tests at once.
+    """
+
+    class ConnectorError(AppError):
+        def __init__(self, message="", *, cause=None, **kw):
+            super().__init__(message, **kw)
+            self._cause = cause
+            if cause is not None and self.__cause__ is None:
+                self.__cause__ = cause
+
+        @property
+        def cause(self):  # read-only, shadows the base
+            return self._cause
+
+    exc = ValueError("boom")
+    err = ConnectorError("nope", cause=exc)
+    assert err.cause is exc
+    assert err.__cause__ is exc
+    # And the base still routes cause_repr through the override.
+    assert err.to_failure_details().cause_repr == "ValueError: boom"
+
+
+def test_the_base_still_populates_cause_when_not_overridden() -> None:
+    assert AuthError("x", cause=ValueError("b")).cause is not None

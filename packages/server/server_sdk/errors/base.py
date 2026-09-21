@@ -56,12 +56,21 @@ class AppError(Exception):
             # renaming only the base would silently make every one of them
             # non-retryable.
             self.retryable = retryable
-        self.cause = cause
+        # Private + property, not a plain attribute: a connector's own error
+        # base may already expose `cause` as a read-only property (redshift's
+        # does), and a bare `self.cause = ...` raises AttributeError against it
+        # -- breaking every error that app constructs. Sharing `_cause` lets
+        # such a subclass keep its own property and simply overwrite the value.
+        self._cause = cause
         self.app_name = app_name
         self.run_id = run_id
         super().__init__(message)
         if cause is not None and self.__cause__ is None:
             self.__cause__ = cause
+
+    @property
+    def cause(self) -> BaseException | None:
+        return self._cause
 
     @property
     def suggested_action(self) -> str:
