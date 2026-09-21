@@ -143,9 +143,14 @@ def register_start_route(
         # and retries forever, and the tenant's namespace fills with stuck
         # executions an operator has to hunt down. Same 400 and wording as the
         # other two entrypoint checks in this package.
-        if entrypoint_param is not None and not ENTRYPOINT_NAME_RE.match(
-            entrypoint_param
-        ):
+        #
+        # Validated on the RESOLVED selector, not on the query param: it has
+        # three sources, and guarding only ?entrypoint left the deprecated
+        # `workflow_type` body field as an open bypass carrying exactly the same
+        # value into exactly the same dispatch. default_entrypoint is
+        # app-configured rather than caller-supplied, but checking it too turns
+        # a misconfiguration into a 400 here instead of a stuck execution later.
+        if not ENTRYPOINT_NAME_RE.match(selected_entrypoint):
             raise HTTPException(status_code=400, detail="Invalid entrypoint name")
 
         if legacy_workflow_type is not None and entrypoint_param is None:

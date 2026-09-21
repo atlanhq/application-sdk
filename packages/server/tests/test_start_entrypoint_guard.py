@@ -64,3 +64,46 @@ def test_the_rejection_matches_the_other_entrypoint_guards(started) -> None:
     client, _ = started
     resp = client.post("/workflows/v1/start?entrypoint=../x", json={})
     assert resp.json()["detail"] == "Invalid entrypoint name"
+
+
+# ── the selector has three sources; all three must be guarded ───────────────
+
+
+@pytest.mark.parametrize(
+    "entrypoint", ["../../etc/passwd", "9leading", "has space", "a/b"]
+)
+def test_the_legacy_workflow_type_field_cannot_bypass_the_guard(
+    started, entrypoint
+) -> None:
+    """Guarding only ?entrypoint left the deprecated `workflow_type` body field
+    carrying the same value into the same dispatch — a 200 with a real run_id."""
+    client, starter = started
+    resp = client.post("/workflows/v1/start", json={"workflow_type": entrypoint})
+    assert resp.status_code == 400, resp.text
+    assert starter.dispatched == []
+
+
+def test_a_well_formed_legacy_workflow_type_still_works(started) -> None:
+    client, starter = started
+    resp = client.post("/workflows/v1/start", json={"workflow_type": "crawler"})
+    assert resp.status_code == 200, resp.text
+    assert starter.dispatched == ["redshift:crawler"]
+
+
+def test_a_malformed_default_entrypoint_is_caught_too(started) -> None:
+    """App-configured rather than caller-supplied, but a 400 here beats a stuck
+    execution later."""
+    from server_sdk.handler.base import DefaultHandler
+    from server_sdk.server import build_asgi_app
+
+    _, starter = started
+    client = TestClient(
+        build_asgi_app(
+            DefaultHandler(),
+            app_name="redshift",
+            workflow_starter=starter,
+            default_entrypoint="../bad",
+        ),
+        raise_server_exceptions=False,
+    )
+    assert client.post("/workflows/v1/start", json={}).status_code == 400

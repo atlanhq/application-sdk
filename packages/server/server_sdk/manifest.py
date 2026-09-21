@@ -158,7 +158,21 @@ def register_manifest_routes(
             else:
                 raise HTTPException(status_code=404, detail="No manifest available")
 
-        raw = path.read_bytes().replace(
+        # BOTH tokens. A manifest declaring a task queue as
+        # "atlan-{app_name}-{deployment_name}" with only the second substituted
+        # ships "atlan-{app_name}-prod" to the caller, which names a queue no
+        # worker polls -- so submitting the workflow reports success and it then
+        # sits there forever. Silent, and the same failure mode the migration
+        # guide calls out for a process-global ATLAN_APPLICATION_NAME.
+        raw = path.read_bytes()
+        if b"{app_name}" in raw:
+            logger.warning(
+                "Manifest %s still carries the {app_name} token; substituting %r. "
+                "The committed manifest is stale -- regenerate it.",
+                path.name,
+                app_name,
+            )
+        raw = raw.replace(b"{app_name}", app_name.encode()).replace(
             b"{deployment_name}", _deployment_name().encode()
         )
 
