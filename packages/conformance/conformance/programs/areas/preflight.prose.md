@@ -126,8 +126,9 @@ action the source does not support.
 - **F019** — analysis was unresolved.  Set `not_remediable = true` and record
   the unresolved construct so a human can decide whether to refactor toward a
   supported shape or supply behavioral evidence.  Say which of the two the
-  finding admits: a value-level gap (a computed aggregation, an expanded
-  failure constructor, an unresolved error expression, a dynamic `passed`)
+  finding admits: a value-level gap (a computed aggregation or an unresolvable
+  row inside one, an expanded failure constructor, an unresolved error
+  expression, a dynamic `passed`)
   clears once the F016 matrix is complete under `--with-tests`, so completing
   that matrix is a real remedy; a structural gap (unparsed file, unresolved
   `preflight_check`, dynamically bound callback, unresolved input contract)

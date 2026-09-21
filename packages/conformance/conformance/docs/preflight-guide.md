@@ -136,11 +136,20 @@ Two different states share this rule. `ATLAN_PREFLIGHT_GATE_MODE` is **already i
 
 F019 covers two different gaps, and only one of them is clearable by running tests. Read the message: it says which one you have.
 
-A **value-level** gap means the handler was found and analysed, but one expression's value could not be resolved — a computed aggregation passed to `checks=`, an expanded `**kwargs` failure constructor, a computed `suggested_action`, an unresolved error expression on a failed or passed row, an untyped `except` clause, a dynamic `passed`. Each of those names a property that `assert_preflight_result` asserts on **every** executed F016 scenario: failed checks carry a typed `FailureDetails` with a nonblank message and suggested action, passed checks carry none, and the verdict agrees with the mandatory/advisory roles and the short-circuit order. So `detect --series F --with-tests` drops these findings once the F016 matrix comes back complete and passing for every entrypoint. This is deliberately all-or-nothing across the matrix — there is no per-site-to-scenario mapping, so a partial matrix clears nothing.
+A **value-level** gap means the handler was found and analysed, but one expression's value could not be resolved — a computed aggregation passed to `checks=` or a row inside one the analysis cannot read, an expanded `**kwargs` failure constructor, a computed `suggested_action`, an unresolved error expression on a failed or passed row, an untyped `except` clause, a dynamic `passed`. Each of those names a property that `assert_preflight_result` asserts on **every** executed F016 scenario: failed checks carry a typed `FailureDetails` with a nonblank message and suggested action, passed checks carry none, and the verdict agrees with the mandatory/advisory roles and the short-circuit order. So `detect --series F --with-tests` drops these findings once the F016 matrix comes back complete and passing for every entrypoint. This is deliberately all-or-nothing across the matrix — there is no per-site-to-scenario mapping, so a partial matrix clears nothing.
 
 A **structural** gap means the analysis never got to the code: a file that would not parse, a `preflight_check` that does not resolve to a supported async SDK handler, a callback bound dynamically, an input contract class that is not in the registry (so metadata parity was never evaluated). No number of passing scenarios closes these, because executing the handler does not tell the analysis what it failed to read. Their messages do not ask for scenarios; they ask for a statically resolvable shape. Fix the shape.
 
 Two consequences worth stating plainly. Without `--with-tests` nothing is cleared: a static-only run has no execution evidence, and every F019 it reports is honest. And zero F019 warnings is reachable for a handler whose only gaps are value-level, but *not* for one whose dispatch or contracts the analysis cannot resolve at all — that is a permanent marker until the shape changes.
+
+Both halves of the `checks=` gate are about resolvability, not syntax. A bare
+variable — `PreflightOutput(status=NOT_READY, checks=checks)`, the shape the
+short-circuit pattern produces — is reported because the analysis cannot read
+the roles, the order or the verdicts out of it. Rewrapping it in a list display,
+`checks=[*checks]`, is a semantically identical copy and reports the same thing:
+the unpacked element is named on the finding. Building each row inline, or in a
+helper whose returns resolve, is what makes the list readable; completing the
+F016 matrix is what clears it when the rows genuinely cannot be fixed literals.
 
 Re-typing a caught SDK error onto a failed row — `except AppError as exc: ... error=exc.to_failure_details()` — resolves rather than reporting: the clause proves the value is an `AppError`, so the details are typed. Their message and suggested action belong to whichever raise site built the error, and F007 grades them there, not on the row. A clause naming no typed error — `except Exception`, a bare `except:`, a driver class — stays unresolved and says so; narrow it to the `AppError` subclasses the probe raises, or construct a typed error on that path.
 
