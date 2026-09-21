@@ -668,6 +668,19 @@ def main(argv: list[str] | None = None) -> int:
     test_rules = {
         rid for rid in selected_rules if get_rule(rid).mechanism is RuleMechanism.TEST
     }
+    # F019 reports value-level analysis gaps that a complete behavioural
+    # matrix closes (see ``Finding.cleared_by``).  A run that asks for F019
+    # with --with-tests therefore has to execute those scenarios even when
+    # --rule narrowed them out, or the clearing pass below has no evidence to
+    # act on.  Their own findings are dropped again by the --rule filter.
+    if args.with_tests and "F019" in selected_rules:
+        from conformance.suite.checks.preflight._common import SCENARIO_COVERAGE
+
+        test_rules |= {
+            rid
+            for rid in SCENARIO_COVERAGE
+            if rid in CATALOG and _rule_in_scope(get_rule(rid).scope, active_scope)
+        }
     behavior_summary = {
         rid: {"execution": "not_evaluated", "complete": False}
         for rid in sorted(test_rules)
@@ -716,6 +729,23 @@ def main(argv: list[str] | None = None) -> int:
         for f in all_findings
         if _rule_in_scope(get_rule(f.rule_id).scope, active_scope)
     ]
+
+    # Honour the promise the F019 messages make.  A static finding that named
+    # behavioural rules in ``cleared_by`` says the property it could not
+    # resolve is one those rules assert on every executed scenario; when each
+    # of them came back complete in this run, execution closed the gap and the
+    # finding is dropped.  A finding with no ``cleared_by`` — an unparsed file,
+    # an undiscovered handler, an unresolved contract — always stands, because
+    # no scenario tells the analysis what it failed to read.
+    complete_behavior = {
+        rid for rid, entry in behavior_summary.items() if entry.get("complete")
+    }
+    if complete_behavior:
+        all_findings = [
+            f
+            for f in all_findings
+            if not (f.cleared_by and f.cleared_by <= complete_behavior)
+        ]
 
     # --rule: keep exactly the requested rules. The series module may have
     # scanned siblings in the same pass; they are out of this run's contract.

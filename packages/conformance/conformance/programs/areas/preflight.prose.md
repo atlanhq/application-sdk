@@ -125,7 +125,13 @@ action the source does not support.
   `conformance.preflight_testing.SCENARIOS` in the residue note, and stop.
 - **F019** — analysis was unresolved.  Set `not_remediable = true` and record
   the unresolved construct so a human can decide whether to refactor toward a
-  supported shape or supply behavioral evidence.
+  supported shape or supply behavioral evidence.  Say which of the two the
+  finding admits: a value-level gap (a computed aggregation, an expanded
+  failure constructor, an unresolved error expression, a dynamic `passed`)
+  clears once the F016 matrix is complete under `--with-tests`, so completing
+  that matrix is a real remedy; a structural gap (unparsed file, unresolved
+  `preflight_check`, dynamically bound callback, unresolved input contract)
+  never clears that way and only a resolvable shape fixes it.
 
 Never put a credential, a customer identifier or a real tenant value into a
 proposal, a test fixture or `result.evidence`.

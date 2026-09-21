@@ -11,7 +11,7 @@ from conformance.suite.checks.prescriptions._decorator_provenance import (
 )
 from conformance.suite.schema.findings import Finding
 
-from ._common import Registry, Source, find_preflight_check_sites
+from ._common import SCENARIO_COVERAGE, Registry, Source, find_preflight_check_sites
 
 Function = ast.FunctionDef | ast.AsyncFunctionDef
 _UNKNOWN = object()
@@ -81,7 +81,14 @@ class _Checker:
         self.findings: list[Finding] = []
         self.seen: set[tuple[str, int, str]] = set()
 
-    def emit(self, src: Source, node: ast.AST, rule: str, message: str) -> None:
+    def emit(
+        self,
+        src: Source,
+        node: ast.AST,
+        rule: str,
+        message: str,
+        cleared_by: frozenset[str] = frozenset(),
+    ) -> None:
         key = (src.rel, node.lineno, rule)
         if key not in self.seen:
             self.seen.add(key)
@@ -92,6 +99,7 @@ class _Checker:
                     node=node,
                     message=message,
                     directives=src.directives,
+                    cleared_by=cleared_by,
                 )
             )
 
@@ -209,6 +217,7 @@ class _Checker:
                 error,
                 "F019",
                 "Expanded failure constructor arguments are unresolved; verify message and suggested_action in an executed failed-check scenario.",
+                SCENARIO_COVERAGE,
             )
             return
         values = self.defaults(src, error.func)
@@ -221,6 +230,7 @@ class _Checker:
                     error,
                     "F019",
                     "Computed suggested_action is unresolved; verify the final failed-check action is nonblank and appropriate in an executed scenario.",
+                    SCENARIO_COVERAGE,
                 )
             if (
                 value is None
@@ -261,6 +271,7 @@ class _Checker:
                     call,
                     "F019",
                     "Computed preflight aggregation is unresolved: mandatory/advisory roles, short-circuiting, and retry/fallback semantics need executed handler scenarios. This is not a proven verdict violation.",
+                    SCENARIO_COVERAGE,
                 )
             return
         if not checks.elts:
