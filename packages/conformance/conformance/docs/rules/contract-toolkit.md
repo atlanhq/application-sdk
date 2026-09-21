@@ -18,13 +18,13 @@ Suppress a finding on the violating line or the line directly above it:
 | [K001](#k001) | `ContractAmendsLegacyModule` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K002](#k002) | `LegacyContractApi` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K003](#k003) | `ContractLockDrift` | `block` | `app` | `contract-toolkit` | yes | 0.9.0 |
-| [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | yes | 0.9.0 |
 | [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.13.0 |
-| [K007](#k007) | `ToolkitVersionOutdated` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
-| [K008](#k008) | `ToolkitSourceNonCanonical` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
+| [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | yes | 0.13.0 |
+| [K007](#k007) | `ToolkitVersionOutdated` | `warn` | `app` | `contract-toolkit` | yes | 0.12.0 |
+| [K008](#k008) | `ToolkitSourceNonCanonical` | `warn` | `app` | `contract-toolkit` | yes | 0.12.0 |
 | [K009](#k009) | `UnresolvedScaffoldPlaceholder` | `block` | `app` | `contract-toolkit` | — | 0.12.0 |
-| [K010](#k010) | `E2EScaffoldingMissing` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
+| [K010](#k010) | `E2EScaffoldingMissing` | `warn` | `app` | `contract-toolkit` | yes | 0.12.0 |
 | [K011](#k011) | `AppIdMissingFromContract` | `block` | `app` | `contract-toolkit` | yes | 0.14.0 |
 | [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | yes | 0.14.0 |
 | [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
@@ -32,10 +32,10 @@ Suppress a finding on the violating line or the line directly above it:
 | [K015](#k015) | `LegacyWorkflowTypeContractDrift` | `block` | `app` | `contract-toolkit` | — | 0.23.0 |
 | [K016](#k016) | `EntrypointArtifactSchemaMissing` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
 | [K017](#k017) | `ArtifactSchemaWriterMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
-| [K018](#k018) | `ManifestArgNotDeclaredOnInputContract` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
-| [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
+| [K018](#k018) | `ManifestArgNotDeclaredOnInputContract` | `warn` | `app` | `contract-toolkit` | yes | 0.24.0 |
+| [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | yes | 0.24.0 |
 | [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
-| [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | — | 0.26.0 |
+| [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | yes | 0.26.0 |
 
 ---
 
@@ -231,7 +231,7 @@ is justified.
 
 ## K004 — `MissingGeneratedArtifact` {#k004}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.9.0
 
 > contract/app.pkl exists but an expected generated artifact (atlan.yaml / manifest.json / _input.py) is missing — regenerate
 
@@ -336,7 +336,7 @@ proves full freshness.
 
 ## K006 — `ManifestContractFieldMismatch` {#k006}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.13.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.13.0
 
 > app/generated/**/manifest.json references an $.extract.outputs.<field> the entrypoint's Output contract does not declare
 
@@ -392,7 +392,7 @@ and deliberately deferred.
 
 ## K007 — `ToolkitVersionOutdated` {#k007}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.12.0
 
 > app-contract-toolkit dependency resolves to a version below the latest published one — bump and regenerate
 
@@ -428,7 +428,7 @@ comment-only line directly above it) when a deliberate lag is justified.
 
 ## K008 — `ToolkitSourceNonCanonical` {#k008}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.12.0
 
 > app-contract-toolkit is sourced from a non-canonical base URI (fork / local path / wrong host)
 
@@ -524,7 +524,7 @@ in a `.json` output has no comment syntax to suppress and must be regenerated.
 
 ## K010 — `E2EScaffoldingMissing` {#k010}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.12.0
 
 > Single-entrypoint contract/app.pkl exists but generated app/generated/_e2e_base.py is missing
 
@@ -1053,7 +1053,7 @@ honour.
 
 ## K018 — `ManifestArgNotDeclaredOnInputContract` {#k018}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.24.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.24.0
 
 > app/generated/**/manifest.json sends an extract-node arg the entrypoint's Input contract cannot receive
 
@@ -1145,7 +1145,7 @@ hand-edited manifest). If the arg is genuinely not wanted, remove it from
 
 ## K019 — `FormKeyMissingFromManifestArgs` {#k019}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.24.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.24.0
 
 > a contract/app.pkl uiConfig form key has no matching {{...}} placeholder in any generated manifest.json
 
@@ -1267,7 +1267,7 @@ statement that the migration is scheduled, not that the shape is fine.
 
 ## K021 — `FilterFieldRejectsAeString` {#k021}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.26.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.26.0
 
 > An entrypoint Input contract types an include_*/exclude_* filter as a strict dict that rejects the flat JSON string the Automation Engine sends
 
