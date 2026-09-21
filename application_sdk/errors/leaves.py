@@ -175,7 +175,14 @@ class InvalidInputValueError(InvalidInputError, ValueError):
 
     Use plain :class:`InvalidInputError` for new APIs — this exists only so an
     existing ``ValueError`` contract can be typed without a breaking change.
+
+    The ``INVALID_INPUT_`` prefix on the code is the convention every leaf
+    subclass follows (P003), and the distinct code makes the shim countable:
+    a non-zero rate on ``INVALID_INPUT_VALUE`` is the fleet-wide measure of how
+    much still depends on the builtin-``ValueError`` contract.
     """
+
+    code: ClassVar[str] = "INVALID_INPUT_VALUE"
 
 
 @dataclass(kw_only=True)
