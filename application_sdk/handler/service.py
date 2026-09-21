@@ -2683,6 +2683,11 @@ def create_app_handler_service(
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
 
+    .. deprecated:: 3.37
+        Use :func:`server_sdk.build_asgi_app` from ``atlan-application-sdk-server``.
+        It installs without the worker dependency tree and registers the handler
+        routes only, so check the routes your app relies on. Removed in v4.0.
+
     Args:
         handler: The Handler instance to serve.
         app_name: App name for logging context.
@@ -3350,6 +3355,11 @@ def run_app_handler_service(
     **kwargs: Any,
 ) -> None:
     """Create and run the handler service with uvicorn.
+
+    .. deprecated:: 3.37
+        Use :func:`server_sdk.build_asgi_app` with your own ``uvicorn.run``. The
+        consolidated host owns the run loop, so ``atlan-application-sdk-server``
+        ships no blocking entry point. Removed in v4.0.
 
     Convenience wrapper around ``create_app_handler_service()`` that blocks
     until the server is stopped. All keyword arguments are forwarded to
