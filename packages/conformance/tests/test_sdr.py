@@ -1746,7 +1746,7 @@ def test_p051_rule_metadata() -> None:
     assert rule.name == "SdrPreflightUnavailable"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.APP
-    assert rule.autofixable is True
+    assert rule.autofixable is False
     assert rule.rationale.strip()
     assert rule.since == "0.25.0"
     assert rule.category == "sdr-readiness"
