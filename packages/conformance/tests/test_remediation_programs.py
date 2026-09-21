@@ -246,6 +246,31 @@ def test_suppression_is_a_rule_defect_signal() -> None:
     assert "Never suppress a BLOCK-tier" in text
 
 
+def test_b006_may_write_the_contract_ledger() -> None:
+    """B006's only remedy writes `contract_schema.lock.json` at the repo root,
+    which is neither Python source nor the Dockerfile.
+
+    Without an explicit carve-out in the write-scope section the loop applies
+    nothing, and — worse since step 5 exists — the model reads its own refusal
+    as a `prescription-defect` and opens a spurious PR against this repo. The
+    flag and the carve-out have to move together, so assert both: B006 is
+    auto-fixable, and the write scope names the file for it.
+    """
+    from conformance.suite.rules import get_rule
+
+    assert get_rule("B006").autofixable is True, (
+        "B006 is no longer auto-fixable — if that is deliberate, remove the "
+        "write-scope carve-out for contract_schema.lock.json with it."
+    )
+    text = _read("functions/remediate-finding.prose.md")
+    scope = text.split("### Write-scope constraint")[1].split("### Reference apps")[0]
+    assert "contract_schema.lock.json" in scope, (
+        "the write-scope section no longer permits B006 to write "
+        "contract_schema.lock.json — the rule becomes unfixable by construction"
+    )
+    assert "B006" in scope, "the ledger carve-out no longer names B006"
+
+
 def test_report_rule_defect_contract_is_bounded() -> None:
     """The cross-repo PR is the one place the remediator may touch the gate,
     so the contract has to state the bounds: dedup, reproducer that fails on
