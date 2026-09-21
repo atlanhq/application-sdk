@@ -997,6 +997,108 @@ def probe():
     )
 
 
+def test_p004_still_flags_staged_row_when_a_continue_skips_the_later_return() -> None:
+    # The `try` sits in an `if` inside a loop: `continue` skips the loop-body
+    # `return` entirely, and the function then falls off with an implicit None.
+    # The walk must reject the loop owner before the appended sibling `return`
+    # makes the concatenated suffix read as always-exiting.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        if cond(item):
+            try:
+                run(item)
+            except Exception as exc:
+                check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+            continue
+        return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_a_break_skips_the_later_return() -> None:
+    # Same composition with `break` — it leaves the loop past the `return`.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        if cond(item):
+            try:
+                run(item)
+            except Exception as exc:
+                check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+            break
+        return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_a_continue_escapes_through_a_with() -> None:
+    # The `with` between the handler and the loop is walked through, so the
+    # loop-owner check alone would not catch this: the `continue` at the
+    # handler's own depth is what leaves the chain past the return.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        with lock:
+            try:
+                run(item)
+            except Exception as exc:
+                check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+            if cond:
+                continue
+            return check
+"""
+    )
+
+
+def test_p004_no_finding_when_staged_row_is_returned_after_a_nested_try() -> None:
+    # The probe's `try` sits in an outer `try` body (the outer one owns the
+    # `finally` that closes the client) — the outer body runs in sequence after
+    # the inner construct, so the trailing return is genuinely reached.
+    assert "E004" not in _findings(
+        """\
+async def preflight_check(self, input):
+    client = SQLClient()
+    try:
+        try:
+            result = await client.get_results(sql)
+            tables_check = PreflightCheck(name="connectivity", passed=True)
+        except Exception as e:
+            logger.debug("connectivity check failed", exc_info=True)
+            listing_failure = TableListingError(cause=e)
+            tables_check = PreflightCheck(
+                name="connectivity",
+                passed=False,
+                error=listing_failure.to_failure_details(),
+            )
+        return PreflightOutput(status=status, checks=[tables_check])
+    finally:
+        await client.close()
+"""
+    )
+
+
+def test_p004_no_finding_when_loop_control_stays_inside_the_trailing_segment() -> None:
+    # A `break` for a loop nested in the trailing statements is ordinary loop
+    # control — it does not leave the chain, so the return still carries.
+    assert "E004" not in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    for x in xs:
+        if done(x):
+            break
+    return check
+"""
+    )
+
+
 def test_p004_no_finding_when_staged_row_is_returned_from_the_enclosing_if() -> None:
     # The fall-through leaves the `try` and then the `if` arm it sits in; the
     # segments are collected outwards until one is guaranteed to exit.

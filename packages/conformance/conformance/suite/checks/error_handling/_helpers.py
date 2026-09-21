@@ -779,6 +779,47 @@ def _stmt_blocks_of(node: ast.AST) -> Iterator[tuple[str, list[ast.stmt]]]:
             yield field, value
 
 
+#: Blocks whose statements run in sequence after the construct below them, so
+#: the walk in :func:`_trailing_statements` may step outward through one.  A
+#: loop body is deliberately absent — it re-enters rather than continuing past —
+#: and so are a ``finally`` body and an ``except`` body, which are reached by
+#: paths the walk has not established.
+_SEQUENTIAL_OWNER_FIELDS: dict[type, frozenset[str]] = {
+    ast.If: frozenset({"body", "orelse"}),
+    ast.Try: frozenset({"body", "orelse"}),
+    ast.TryStar: frozenset({"body", "orelse"}),
+    ast.With: frozenset({"body"}),
+    ast.AsyncWith: frozenset({"body"}),
+    ast.match_case: frozenset({"body"}),
+}
+
+
+def _escapes_to_outer_loop(stmts: list[ast.stmt], *, loop_depth: int = 0) -> bool:
+    """True when some path through *stmts* breaks or continues out of them.
+
+    Loop control belonging to a loop *nested inside* *stmts* is ordinary and
+    does not count; one at depth zero targets a loop enclosing the whole chain
+    and skips whatever came next, which is what makes the chain unprovable.
+    """
+    for stmt in stmts:
+        if isinstance(stmt, (ast.Break, ast.Continue)):
+            if loop_depth == 0:
+                return True
+            continue
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+            if _escapes_to_outer_loop(stmt.body, loop_depth=loop_depth + 1):
+                return True
+            if _escapes_to_outer_loop(stmt.orelse, loop_depth=loop_depth):
+                return True
+            continue
+        for block in _child_stmt_blocks(stmt):
+            if _escapes_to_outer_loop(block, loop_depth=loop_depth):
+                return True
+    return False
+
+
 def _trailing_statements(
     function: ast.FunctionDef | ast.AsyncFunctionDef, handler: ast.ExceptHandler
 ) -> list[ast.stmt] | None:
@@ -791,9 +832,15 @@ def _trailing_statements(
     the conservative reading: a name rebound in an earlier segment is dropped
     for the later ones, and every ``return`` collected has to carry the failure.
 
-    ``None`` when the fall-through reaches something this does not model — a
-    ``try`` nested in a loop, a ``with``, another handler or a ``match`` — or
-    when it falls off the end of the function, which is an implicit
+    ``None`` when the fall-through reaches something this does not model.  The
+    walk steps outward only through blocks that run in sequence after the one
+    below them — the function body, an ``if`` arm, a ``try``/``else`` body, a
+    ``with`` body, a ``match`` case.  A loop body is not one of them: the next
+    iteration re-enters instead of continuing past, so what follows the loop is
+    not "after" the handler.  A ``break``/``continue`` in a collected segment
+    means the same thing from the other direction — it leaves the chain for a
+    loop enclosing all of it, skipping whatever exit came next — and also gives
+    up.  So does falling off the end of the function, which is an implicit
     ``return None`` and swallows.
     """
     owners: dict[int, tuple[ast.AST, str, list[ast.stmt]]] = {}
@@ -806,7 +853,9 @@ def _trailing_statements(
             for item in block:
                 owners[id(item)] = (node, field, block)
 
-    current: ast.stmt | None = None
+    # Typed as AST, not stmt: the walk can step to an owner that is not a
+    # statement (a `match` case), where `owners` has no entry and it stops.
+    current: ast.AST | None = None
     for node in _iter_shallow(function):
         if isinstance(node, (ast.Try, ast.TryStar)) and any(
             h is handler for h in node.handlers
@@ -822,14 +871,25 @@ def _trailing_statements(
         if entry is None:
             return None
         owner, field, block = entry
+        # Reject an owner the walk cannot step through *before* looking at the
+        # suffix, or a loop-body sibling `return` appended after a segment
+        # ending in `continue` would read as "always exits" when the `continue`
+        # skips that return outright.
+        if owner is function:
+            if field != "body":
+                return None
+        elif field not in _SEQUENTIAL_OWNER_FIELDS.get(type(owner), frozenset()):
+            return None
         index = next(i for i, item in enumerate(block) if item is current)
         segments.extend(block[index + 1 :])
+        if _escapes_to_outer_loop(segments):
+            return None
         if _body_always_exits(segments):
             return segments
         # Nothing below guarantees an exit, so control reaches the enclosing
-        # block too — but only an `if` arm is modelled. A loop, `with`, `try` or
-        # `match` around the handler changes what "after" means.
-        if not (isinstance(owner, ast.If) and field in ("body", "orelse")):
+        # block too — unless there is none left, where falling off the end of
+        # the function is an implicit `return None`.
+        if owner is function:
             return None
         current = owner
 
