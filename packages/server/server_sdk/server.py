@@ -320,6 +320,87 @@ def _default_generated_dir() -> Path:
 # ---------------------------------------------------------------------------
 
 
+#: Largest request body any route accepts, overridable per deployment.
+#: Auth/check/metadata/config payloads are a few KB; 1 MiB is generous. The cap
+#: exists because body reception, ``json.loads`` and the dict copies in
+#: ``normalize_credentials`` all run on the serving event loop, which on a
+#: consolidated host is shared by every hosted app AND the kubelet probes -- so
+#: one unauthenticated caller posting a huge body degrades every co-hosted app
+#: and can push ``/server/health`` past its probe timeout, restarting the pod.
+MAX_REQUEST_BODY_BYTES = int(os.environ.get("SERVER_SDK_MAX_BODY_BYTES") or 1048576)
+
+
+class _BodySizeLimitMiddleware:
+    """Refuse an over-large request body with 413, before it is buffered.
+
+    Raw ASGI for the same reason as :class:`_RevisionHeaderMiddleware`: it runs
+    on every request to every hosted app, so it must not cost a task group per
+    request.
+
+    Two checks, because either alone is bypassable. ``content-length`` is
+    rejected up front so a declared-huge body is never read at all; the
+    streamed byte count then catches a chunked body, which carries no
+    ``content-length`` header.
+    """
+
+    __slots__ = ("app", "max_bytes")
+
+    def __init__(self, app: Any, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        declared = dict(scope.get("headers") or {}).get(b"content-length")
+        if declared is not None:
+            try:
+                if int(declared) > self.max_bytes:
+                    await _send_413(send)
+                    return
+            except ValueError:
+                pass  # malformed header — let the streamed count handle it
+
+        seen = 0
+
+        async def counting_receive() -> Any:
+            nonlocal seen
+            message = await receive()
+            if message.get("type") == "http.request":
+                seen += len(message.get("body") or b"")
+                if seen > self.max_bytes:
+                    # Starve the app rather than hand it a truncated body: a
+                    # short-read would look like a malformed payload.
+                    raise _BodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, counting_receive, send)
+        except _BodyTooLarge:
+            await _send_413(send)
+
+
+class _BodyTooLarge(Exception):
+    """Internal signal from the counting receive; never reaches a handler."""
+
+
+async def _send_413(send: Any) -> None:
+    body = b'{"success":false,"message":"Request body too large"}'
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
 class _RevisionHeaderMiddleware:
     """Stamp every HTTP response with the app version and server revision.
 
@@ -469,6 +550,7 @@ def build_asgi_app(
     app.state.server_revision = revision
     revision_headers = _revision_headers(version, revision)
     app.add_middleware(_RevisionHeaderMiddleware, headers=revision_headers)
+    app.add_middleware(_BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
 
     @app.exception_handler(RequestContractError)
     async def _handle_request_contract_error(

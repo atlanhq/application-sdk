@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from server_sdk.handler.contracts import normalize_credentials
+from server_sdk.manifest import ENTRYPOINT_NAME_RE
 from server_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -134,6 +135,18 @@ def register_start_route(
                     "(or configure a default_entrypoint on the server)."
                 ),
             )
+
+        # The selector becomes the Temporal workflow TYPE (f"{app}:{entrypoint}")
+        # and is dispatched onto the app's real task queue. Unvalidated, an
+        # unauthenticated caller got a 200 with a real run_id for a type no
+        # worker registers: the execution is created, its workflow task fails
+        # and retries forever, and the tenant's namespace fills with stuck
+        # executions an operator has to hunt down. Same 400 and wording as the
+        # other two entrypoint checks in this package.
+        if entrypoint_param is not None and not ENTRYPOINT_NAME_RE.match(
+            entrypoint_param
+        ):
+            raise HTTPException(status_code=400, detail="Invalid entrypoint name")
 
         if legacy_workflow_type is not None and entrypoint_param is None:
             warnings.warn(
