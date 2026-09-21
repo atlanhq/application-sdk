@@ -6,6 +6,13 @@ generator; the K-series (contract-toolkit) is expected to need the same
 entrypoint-contract and field-resolution primitives, which is why this lives
 at ``suite/checks/`` top level rather than inside ``deprecation/``.
 
+Both entrypoint discovery and base-class resolution read the class registry by
+bare name, so a caller that seeds that registry with module-level rebindings
+(:func:`_ast_common.register_alias_records`) gets both for free: an entrypoint
+annotated as ``OpenAPIConnectorInput`` where ``OpenAPIConnectorInput =
+AppInputContract`` resolves to the generated class it names, and a contract
+inheriting from an aliased base resolves that base's fields.
+
 The check uses the same cross-file class-registry machinery as P013/P014:
 ``collect_classes`` + ``resolve_ancestor`` for App-subclass detection, and
 ``is_entrypoint_decorator`` / ``is_task_decorator`` for decorator provenance.
@@ -446,6 +453,34 @@ def resolve_contract_fields(
 # ── Entrypoint contract discovery ─────────────────────────────────────────────
 
 
+def _declared_contract_name(
+    name: str, aliases: dict[str, str], by_name: dict[str, ClassRecord]
+) -> str:
+    """Resolve an annotated contract name to the class that actually declares it.
+
+    Two rebindings sit between the name an entrypoint annotates and the
+    ``ClassDef`` a scan can read fields from: a renamed import (*aliases*), and
+    a module-level rebinding registered into *by_name* by
+    ``register_alias_records``.  The second is the shape a pkl-generated
+    contract takes — ``OpenAPIConnectorInput = AppInputContract`` — and until
+    it was resolved here, the returned name matched no ``ClassDef`` in the
+    scan, so B005/B006 silently checked nothing at all for that contract: the
+    guarantee the ledger exists to provide was simply absent (FND-2605).
+
+    Returning the *declaring* class's name (rather than the local one) is what
+    makes the ledger key stable: an app that later renames or drops the
+    rebinding does not change the contract's ledger identity, and one that
+    moves from a rebinding to a subclass gets the churn exactly once, for the
+    new class, rather than every time the local name changes.
+
+    A no-op for a name that is already a class in the scan, and for one the
+    registry cannot resolve at all.
+    """
+    resolved = aliases.get(name, name)
+    record = by_name.get(resolved)
+    return record.name if record is not None else resolved
+
+
 def collect_entrypoint_contract_names(
     file_trees: dict[Path, ast.AST],
     by_name: dict[str, ClassRecord],
@@ -454,6 +489,12 @@ def collect_entrypoint_contract_names(
 
     Mirrors P013 boundary detection — collects contract class names instead of
     emitting findings.  ``@task`` contract names are excluded.
+
+    Names are reported as the class that *declares* the contract.  When the
+    caller has seeded *by_name* with module-level rebindings (see
+    ``register_alias_records``), a contract annotated under an alias therefore
+    comes back under the aliased class's own name, which is the name the
+    ``ClassDef`` carries and the name the ledger keys on.
     """
     entrypoint_contracts: set[str] = set()
     app_cache: dict[str, bool | None] = {}
@@ -499,11 +540,15 @@ def collect_entrypoint_contract_names(
                     if ann is not None:
                         name = _annotation_terminal_name(ann)
                         if name:
-                            entrypoint_contracts.add(aliases.get(name, name))
+                            entrypoint_contracts.add(
+                                _declared_contract_name(name, aliases, by_name)
+                            )
 
                 if func.returns is not None:
                     name = _annotation_terminal_name(func.returns)
                     if name:
-                        entrypoint_contracts.add(aliases.get(name, name))
+                        entrypoint_contracts.add(
+                            _declared_contract_name(name, aliases, by_name)
+                        )
 
     return frozenset(entrypoint_contracts)

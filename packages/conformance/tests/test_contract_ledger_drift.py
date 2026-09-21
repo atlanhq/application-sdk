@@ -170,3 +170,50 @@ def test_new_consumer_ledger_is_not_seeded_from_the_sdk_ledger(
     # The SDK's own template contracts must not have leaked in.
     assert "QueryExtractionInput" not in contracts
     assert "QueryExtractionOutput" not in contracts
+
+
+def test_generator_records_a_contract_exposed_under_a_module_alias(
+    tmp_path: Path,
+) -> None:
+    """A pkl-generated contract re-bound to a domain name is recorded, not skipped.
+
+    The generator resolves entrypoint contracts by bare class name, so until it
+    saw through the rebinding, ``MyInput = AppInputContract`` produced an empty
+    ledger: every field of the app's real input contract went unrecorded, and
+    B005 then had nothing to compare a later removal against. A clean B006 run
+    in that state meant no protection, not compliance (FND-2605).
+
+    Recorded under the *declaring* class, so the identity survives a rename of
+    the local binding. Inherited fields come through the same resolution, which
+    is why the SDK base's ``app_name`` is recorded here too.
+    """
+    from conformance.tools.generate_contract_ledger import main
+
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (tmp_path / "generated.py").write_text(
+        "from application_sdk.contracts import Input\n\n"
+        "class AppInputContract(Input):\n    include_database_regex: str = ''\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "contracts.py").write_text(
+        "from generated import AppInputContract\n\nMyInput = AppInputContract\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text(
+        "from application_sdk.app import App\n"
+        "from contracts import MyInput\n\n"
+        "class MyApp(App):\n"
+        "    async def run(self, input: MyInput) -> None:\n        pass\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "contract_schema.lock.json"
+    main(["--repo", str(tmp_path), "--outfile", str(out)])
+
+    import json
+
+    recorded = {
+        (f["contract"], f["field"]) for f in json.loads(out.read_text())["fields"]
+    }
+    assert ("AppInputContract", "include_database_regex") in recorded
+    assert ("AppInputContract", "app_name") in recorded
+    assert not any(contract == "MyInput" for contract, _ in recorded)

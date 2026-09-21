@@ -20,7 +20,9 @@ from pathlib import Path
 from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     _parse_directives,
+    collect_module_alias_targets,
     make_finding,
+    register_alias_records,
 )
 from conformance.suite.checks._entrypoint_contract_fields import (
     collect_entrypoint_contract_names,
@@ -270,6 +272,10 @@ def scan_contract_compat(
     # ledger ambiguous — see the B005 presence check below.
     by_name_all: dict[str, list[ClassRecord]] = {}
     aliases_by_rel: dict[str, dict[str, str]] = {}
+    # Module-level rebindings (``OpenAPIConnectorInput = AppInputContract``),
+    # merged into the class registry once every file has been parsed so a
+    # rebinding declared in one module resolves a class defined in another.
+    alias_targets: dict[str, str] = {}
 
     for path in paths:
         try:
@@ -293,6 +299,13 @@ def scan_contract_compat(
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
             by_name_all.setdefault(rec.name, []).append(rec)
+        for local, target in collect_module_alias_targets(tree, aliases).items():
+            alias_targets.setdefault(local, target)
+
+    # Only ``by_name`` is seeded: an alias is another name for a declaration
+    # already in ``by_name_all``, not a second declaration, and adding it there
+    # would make every aliased contract read as an ambiguous name.
+    register_alias_records(by_name, alias_targets)
 
     entrypoint_names = collect_entrypoint_contract_names(file_trees, by_name)
 
@@ -426,8 +439,23 @@ def scan_contract_compat(
             # B006: every live field must be recorded in the ledger
             for fi in live_fields:
                 if (class_node.name, fi.name) not in ledger_by_key:
+                    # An inherited field is a *new* commitment for THIS contract
+                    # even when its declaring base is ledgered under its own
+                    # name: the ledger records each entrypoint contract's own
+                    # wire surface, and it is this contract's entries that B005
+                    # consults if the class later changes base and drops the
+                    # field. Regenerating records it — redeclaring it on the
+                    # subclass is not required and only creates a drift site
+                    # (FND-2605).
                     inherited_note = (
                         " (inherited from a base class or mixin)"
+                        if fi.node is None
+                        else ""
+                    )
+                    inherited_remedy = (
+                        " Inheriting the field is enough: the generator records "
+                        "an inherited field exactly like a declared one, so do "
+                        "not redeclare it on this class to 'keep' it tracked."
                         if fi.node is None
                         else ""
                     )
@@ -448,7 +476,7 @@ def scan_contract_compat(
                                 "the release the CI checker runs — rewrites the ledger "
                                 "byte-identically and leaves the finding standing. "
                                 "The generator is append-only — it "
-                                "can never launder a removal."
+                                f"can never launder a removal.{inherited_remedy}"
                             ),
                             directives=directives,
                         )
