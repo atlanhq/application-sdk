@@ -1689,6 +1689,19 @@ class TestBuildExtraDict:
         out = _build_extra_dict({"attempt": 7})
         assert out["attempt"] == "7"
 
+    def test_build_identity_keys_kept_for_lifecycle_lines(self):
+        # interceptors/log.py stamps these on workflow/activity started/ended
+        # so a run's exported logs identify the build (FND-1936). The dotted
+        # pair sits under no passthrough prefix and commit_sha is undotted, so
+        # each must be listed explicitly; dropping one here silently blinds
+        # every export path.
+        identity = {
+            "sdk.version": "3.36.3",
+            "app.version": "0.2.3",
+            "commit_sha": "abc1234def",
+        }
+        assert _build_extra_dict(dict(identity)) == identity
+
     def test_check_matrix_kept_for_gate_outcome_event(self):
         # The preflight gate emits the per-check matrix as a JSON string;
         # connector-pulse queries it from LogAttributes. Dropping it here
