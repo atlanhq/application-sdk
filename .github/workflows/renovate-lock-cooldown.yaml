@@ -23,8 +23,8 @@ name: Bound the Renovate lock refresh
 # that is first-party and explicitly chosen — the cooldown has no business
 # delaying a deliberate pick, only the unattended upgrade-everything refresh.
 #
-# The lane rewrites four lock files, and the npm one is bounded by a different
-# mechanism from the three Python ones (FND-380): npm can express none of the
+# The lane rewrites five lock files, and the npm one is bounded by a different
+# mechanism from the four Python ones (FND-380): npm can express none of the
 # per-package retention ceilings the uv bound relies on, so that file is gated
 # whole — take the bounded resolve, or restore the base branch's lock verbatim.
 # See renovate_npm_lock_bounded's docstring for the measurements behind that.
@@ -39,6 +39,7 @@ on:
     paths:
       - "uv.lock"
       - "packages/conformance/uv.lock"
+      - "packages/server/uv.lock"
       # The npm lock moves on its own: measured on #3355, whose entire net diff
       # after the uv bound was this one file. Without it here that push runs no
       # job at all and the file merges unbounded.
