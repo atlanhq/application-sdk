@@ -2639,9 +2639,10 @@ def _register_workflow_routes(
 
 
 @deprecated(
-    "create_app_handler_service is deprecated; the serving runtime moved to "
-    "atlan-application-sdk-server (server_sdk.server.build_asgi_app), which "
-    "installs without the worker dependency tree — will be removed in v4.0"
+    "create_app_handler_service is deprecated; use server_sdk.build_asgi_app from "
+    "atlan-application-sdk-server instead — it installs without the worker "
+    "dependency tree and registers the handler routes only, so check the routes "
+    "your app relies on — will be removed in v4.0"
 )
 def create_app_handler_service(
     handler: Handler,
@@ -3335,9 +3336,10 @@ def create_app_handler_service(
 
 
 @deprecated(
-    "run_app_handler_service is deprecated; the serving runtime moved to "
-    "atlan-application-sdk-server (server_sdk.server.build_asgi_app), which "
-    "installs without the worker dependency tree — will be removed in v4.0"
+    "run_app_handler_service is deprecated; use server_sdk.build_asgi_app with your "
+    "own uvicorn.run instead — the consolidated host owns the run loop, so "
+    "atlan-application-sdk-server ships no blocking entry point — will be removed "
+    "in v4.0"
 )
 def run_app_handler_service(
     handler: Handler,

@@ -201,8 +201,8 @@
     {
       "kind": "function",
       "marker_via": "decorator",
-      "message": "create_app_handler_service is deprecated; the serving runtime moved to atlan-application-sdk-server (server_sdk.server.build_asgi_app), which installs without the worker dependency tree \u2014 will be removed in v4.0",
-      "migration_target": false,
+      "message": "create_app_handler_service is deprecated; use server_sdk.build_asgi_app from atlan-application-sdk-server instead \u2014 it installs without the worker dependency tree and registers the handler routes only, so check the routes your app relies on \u2014 will be removed in v4.0",
+      "migration_target": true,
       "module": "application_sdk.handler.service",
       "removal_version": "4.0",
       "symbol": "create_app_handler_service"
@@ -210,8 +210,8 @@
     {
       "kind": "function",
       "marker_via": "decorator",
-      "message": "run_app_handler_service is deprecated; the serving runtime moved to atlan-application-sdk-server (server_sdk.server.build_asgi_app), which installs without the worker dependency tree \u2014 will be removed in v4.0",
-      "migration_target": false,
+      "message": "run_app_handler_service is deprecated; use server_sdk.build_asgi_app with your own uvicorn.run instead \u2014 the consolidated host owns the run loop, so atlan-application-sdk-server ships no blocking entry point \u2014 will be removed in v4.0",
+      "migration_target": true,
       "module": "application_sdk.handler.service",
       "removal_version": "4.0",
       "symbol": "run_app_handler_service"
