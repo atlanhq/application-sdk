@@ -542,4 +542,59 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p028",
     ),
+    RuleDefinition(
+        id="P052",
+        canonical_reference=(
+            'atlan-adf-app app/application.py — the app sets `preflight_gate_mode = "hard"` '
+            "and inherits the SDK's declared type. 69 of 81 fleet apps do the same; the 12 "
+            "that re-annotate it copied a base-class annotation the SDK has since widened."
+        ),
+        scope=RuleScope.APP,
+        name="NarrowedSdkClassVar",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="sdk-owned-declarations",
+        autofixable=False,
+        since="0.42.0",
+        rationale=(
+            "`ClassVar` is invariant, so a subclass whose annotation omits a member the base "
+            "declares is an incompatible override. pyright reports it under the `standard` "
+            "baseline D008 mandates fleet-wide, and the omitted member cannot be used in that "
+            "app until the annotation is edited first — a migration tax levied again on every "
+            "future widening. "
+            "Customer impact: none directly. Nothing fails at runtime, which is why this is "
+            "WARN; the cost is paid by the fleet, as an SDK change that should be a version "
+            "bump becoming an edit in every app that mirrored the old annotation."
+        ),
+        short_description=(
+            "App re-annotates an SDK-owned App ClassVar with a narrower type than the SDK declares"
+        ),
+        full_description=(
+            "Choosing a posture is an assignment::\n"
+            "\n"
+            "    class MyApp(App):\n"
+            '        preflight_gate_mode = "hard"\n'
+            "\n"
+            "Re-stating the annotation is not.  ``App.preflight_gate_mode`` is declared\n"
+            "``ClassVar[\"PreflightGateMode | Literal['hard', 'soft']\"]``; an app that\n"
+            "re-declares it as ``ClassVar[Literal['hard', 'soft']]`` drops the enum member\n"
+            "from an invariant declaration, so ``PreflightGateMode.HARD`` cannot be adopted\n"
+            "there until the annotation is edited.\n"
+            "\n"
+            "The shape is not carelessness.  The SDK declared the plain ``Literal`` form for\n"
+            "this attribute before the enum existed, and still declares it for the sibling\n"
+            "``artifact_validation_mode``, so apps mirrored their base class — ordinary\n"
+            "practice that the SDK's own widening turned into a defect.\n"
+            "\n"
+            "The declared type is resolved from the **installed** SDK on every run, never\n"
+            "from a list written into the rule: a copy of today's union would keep grading\n"
+            "apps against a type the SDK has since widened again, which is this rule's own\n"
+            "failure mode one level up.\n"
+            "\n"
+            "An exact restatement, or a widening, is redundant but not a defect and is not\n"
+            "flagged — the declared type still admits everything the SDK admits.  The\n"
+            "defining class is never flagged for its own declaration.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p052",
+    ),
 )

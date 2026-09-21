@@ -2856,3 +2856,159 @@ def test_p001_fires_on_none_optout_with_any_field(tmp_path: Path) -> None:
     findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
     assert len(findings) == 1
     assert "does NOT set" in findings[0].message
+
+
+# ── P052 NarrowedSdkClassVar ───────────────────────────────────────────────
+#
+# An app that re-annotates an SDK-owned `App` ClassVar with a type narrower
+# than the SDK declares. `ClassVar` is invariant, so the omitted member
+# becomes unusable in that app until the annotation is edited — a migration
+# tax levied again on every future widening.
+#
+# The declared type is resolved from the installed SDK, so these assert
+# against whatever `App` declares in this environment rather than a literal
+# copied into the test, which would pass while the rule went stale.
+
+
+def _p052_attr_with_union() -> str | None:
+    """An `App` ClassVar the SDK declares as a union, or None.
+
+    The rule can only fire where something is available to drop. Finding the
+    attribute rather than naming it keeps these cases true after the SDK
+    widens a different one.
+    """
+    from conformance.suite.checks.prescriptions._narrowed_sdk_classvar import (
+        sdk_app_classvars,
+    )
+
+    for attribute, members in sorted(sdk_app_classvars().items()):
+        if len(members) > 1:
+            return attribute
+    return None
+
+
+def test_p052_fires_when_an_app_drops_a_member_the_sdk_declares() -> None:
+    attribute = _p052_attr_with_union()
+    if attribute is None:
+        pytest.skip("no App ClassVar is declared as a union in this SDK build")
+
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "class MyApp(App):\n"
+        f"    {attribute}: ClassVar[Literal['hard', 'soft']] = 'hard'\n"
+    )
+    assert "P052" in _ids(src)
+
+
+def test_p052_silent_on_the_assignment_that_is_the_prescribed_fix() -> None:
+    """Setting the value is how a posture is chosen; only re-annotating is
+    the defect."""
+    src = "class MyApp(App):\n    preflight_gate_mode = 'hard'\n"
+    assert "P052" not in _ids(src)
+
+
+def test_p052_silent_when_the_app_restates_the_sdk_type_exactly() -> None:
+    """Redundant, and not a defect: the declared type still admits
+    everything the SDK admits."""
+    from conformance.suite.checks.prescriptions._narrowed_sdk_classvar import (
+        sdk_app_classvars,
+    )
+
+    attribute = _p052_attr_with_union()
+    if attribute is None:
+        pytest.skip("no App ClassVar is declared as a union in this SDK build")
+
+    members = " | ".join(sorted(sdk_app_classvars()[attribute]))
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "class MyApp(App):\n"
+        f'    {attribute}: ClassVar["{members}"] = "hard"\n'
+    )
+    assert "P052" not in _ids(src)
+
+
+def test_p052_silent_on_an_attribute_whose_sdk_type_is_not_a_union() -> None:
+    """`artifact_validation_mode` is declared by the SDK as the bare
+    `Literal`, so an app restating it drops nothing. Flagging it would grade
+    an app for matching the SDK."""
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "class MyApp(App):\n"
+        "    artifact_validation_mode: ClassVar[Literal['hard', 'soft']] = 'hard'\n"
+    )
+    assert "P052" not in _ids(src)
+
+
+def test_p052_does_not_fire_on_the_class_that_declares_the_classvar() -> None:
+    """The rule must not fire on the SDK it is defending."""
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "class App:\n"
+        "    preflight_gate_mode: ClassVar[Literal['hard', 'soft']] = 'soft'\n"
+    )
+    assert "P052" not in _ids(src)
+
+
+def test_p052_ignores_a_class_that_does_not_reach_App() -> None:
+    """A local helper with its own hard/soft typing touches no inherited SDK
+    ClassVar."""
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "class DeleteOptions:\n"
+        "    preflight_gate_mode: ClassVar[Literal['hard', 'soft']] = 'hard'\n"
+    )
+    assert "P052" not in _ids(src)
+
+
+def test_p052_reaches_through_an_apps_own_intermediate_base() -> None:
+    attribute = _p052_attr_with_union()
+    if attribute is None:
+        pytest.skip("no App ClassVar is declared as a union in this SDK build")
+
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "class BaseConnectorApp(App):\n"
+        "    pass\n"
+        "class MyApp(BaseConnectorApp):\n"
+        f"    {attribute}: ClassVar[Literal['hard', 'soft']] = 'hard'\n"
+    )
+    assert "P052" in _ids(src)
+
+
+def test_p052_quoting_style_is_not_what_is_graded() -> None:
+    """One fleet index hit was rejected purely on the single-quoted
+    spelling. A rule that distinguished them would grade quoting."""
+    attribute = _p052_attr_with_union()
+    if attribute is None:
+        pytest.skip("no App ClassVar is declared as a union in this SDK build")
+
+    double = (
+        "from typing import ClassVar, Literal\n"
+        "class MyApp(App):\n"
+        f'    {attribute}: ClassVar[Literal["hard", "soft"]] = "hard"\n'
+    )
+    single = (
+        "from typing import ClassVar, Literal\n"
+        "class MyApp(App):\n"
+        f"    {attribute}: ClassVar[Literal['hard', 'soft']] = 'hard'\n"
+    )
+    assert _ids(double).count("P052") == _ids(single).count("P052") == 1
+
+
+def test_p052_is_suppressible_at_the_declaration_site() -> None:
+    """Suppressed, not silenced: the finding is still emitted and counted in
+    its own category, so every opt-out is reported every run."""
+    attribute = _p052_attr_with_union()
+    if attribute is None:
+        pytest.skip("no App ClassVar is declared as a union in this SDK build")
+
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "class MyApp(App):\n"
+        f"    {attribute}: ClassVar[Literal['hard', 'soft']] = 'hard'"
+        "  # conformance: ignore[P052] pinned until the enum lands\n"
+    )
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "P052"]
+
+    assert len(findings) == 1
+    assert findings[0].suppressed is True

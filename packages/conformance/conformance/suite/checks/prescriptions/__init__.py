@@ -97,6 +97,7 @@ from ._error_code_prefix import (
 from ._file_reference import check_p010
 from ._framework_transfer import check_p008
 from ._getattr_contract_field import check_p026
+from ._narrowed_sdk_classvar import check_p052
 from ._prefix_transfer import check_p044
 from ._qualified_name import check_p028
 from ._store_construction import check_p009
@@ -111,7 +112,7 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path", "scan_text"]
 def scan_text(text: str, file: str) -> list[Finding]:
     """Scan a single Python source *text* for per-file findings.
 
-    Runs P001, P002, P008–P012, P015, P026 and P028 — every rule that needs only
+    Runs P001, P002, P008–P012, P015, P026, P028, P044 and P052 — every rule that needs only
     a single file's AST.  P003, P013, P014 and P027 need cross-file context; use
     :func:`scan_all` for full-suite runs.  Kept for symmetry with the per-file
     ``scan_path`` runner contract.
@@ -143,6 +144,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     findings_p026 = check_p026(tree, file, directives)
     findings_p028 = check_p028(tree, file, directives)
     findings_p044 = check_p044(tree, file, directives)
+    findings_p052 = check_p052(tree, file, directives)
 
     return (
         p001._findings
@@ -156,11 +158,12 @@ def scan_text(text: str, file: str) -> list[Finding]:
         + findings_p026
         + findings_p028
         + findings_p044
+        + findings_p052
     )
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P001 + P002 + P008–P012 + P015 + P026 + P028 + P044).
+    """Scan a single Python file (P001 + P002 + P008–P012 + P015 + P026 + P028 + P044 + P052).
 
     P003, P013, P014 and P027 require :func:`scan_all` for cross-file resolution.
     """

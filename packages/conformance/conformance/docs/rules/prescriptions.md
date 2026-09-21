@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**45 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
+**46 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -68,6 +68,7 @@ reassigned.
 | [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
+| [P052](#p052) | `NarrowedSdkClassVar` | `warn` | `app` | `sdk-owned-declarations` | — | 0.42.0 |
 
 ---
 
@@ -2376,5 +2377,52 @@ the agent clears the floor   these render the interactive metadata picker; below
 when the   version can't be read) the picker falls back to a plain text box. This
 follows the same floor gate automatically — no per-connector change   beyond declaring
 the filter widget.
+
+---
+
+## P052 — `NarrowedSdkClassVar` {#p052}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdk-owned-declarations` · **Autofixable:** — · **Since:** 0.42.0
+
+> App re-annotates an SDK-owned App ClassVar with a narrower type than the SDK declares
+
+**Rationale:** `ClassVar` is invariant, so a subclass whose annotation omits a member the base declares
+is an incompatible override. pyright reports it under the `standard` baseline D008
+mandates fleet-wide, and the omitted member cannot be used in that app until the
+annotation is edited first — a migration tax levied again on every future widening.
+Customer impact: none directly. Nothing fails at runtime, which is why this is WARN; the
+cost is paid by the fleet, as an SDK change that should be a version bump becoming an
+edit in every app that mirrored the old annotation.
+
+### What correct looks like
+
+- **Compliant example:** atlan-adf-app app/application.py — the app sets `preflight_gate_mode = "hard"` and
+  inherits the SDK's declared type. 69 of 81 fleet apps do the same; the 12 that
+  re-annotate it copied a base-class annotation the SDK has since widened.
+
+Choosing a posture is an assignment:
+
+```python
+class MyApp(App):
+    preflight_gate_mode = "hard"
+```
+
+Re-stating the annotation is not.  `App.preflight_gate_mode` is declared
+`ClassVar["PreflightGateMode | Literal['hard', 'soft']"]`; an app that re-declares it as
+`ClassVar[Literal['hard', 'soft']]` drops the enum member from an invariant declaration,
+so `PreflightGateMode.HARD` cannot be adopted there until the annotation is edited.
+
+The shape is not carelessness.  The SDK declared the plain `Literal` form for this
+attribute before the enum existed, and still declares it for the sibling
+`artifact_validation_mode`, so apps mirrored their base class — ordinary practice that
+the SDK's own widening turned into a defect.
+
+The declared type is resolved from the **installed** SDK on every run, never from a list
+written into the rule: a copy of today's union would keep grading apps against a type
+the SDK has since widened again, which is this rule's own failure mode one level up.
+
+An exact restatement, or a widening, is redundant but not a defect and is not flagged —
+the declared type still admits everything the SDK admits.  The defining class is never
+flagged for its own declaration.
 
 ---
