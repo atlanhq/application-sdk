@@ -119,9 +119,10 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-openapi-app app/api_client.py — `_parse_zip` catches Exception per "
             "archive member and logs with exc_info=True. Where breadth really is the "
-            "point, atlan-mysql-app app/handler.py `preflight_check` carries an inline "
-            "ignore[E004] naming the boundary it guards; both shapes are accepted, an "
-            "unexplained bare breadth is not."
+            "point, atlan-mysql-app app/handler.py `preflight_check` converts the "
+            "caught exception into a typed PreflightCheck row and returns it, which "
+            "the rule detects — no suppression needed; all three shapes are accepted, "
+            "an unexplained bare breadth is not."
         ),
         scope=RuleScope.BOTH,
         name="BroadExceptClause",
@@ -155,7 +156,22 @@ RULES: tuple[RuleDefinition, ...] = (
             "credential avoids emitting a raw traceback; severed-and-redacted preserves\n"
             "the cause, severed-and-dropped does not.  Without this the only way to\n"
             "clear E004 at such a site is a warning/error log, which is exactly what\n"
-            "L009 forbids before a raise."
+            "L009 forbids before a raise.\n"
+            "\n\nAlso exempt: a handler that converts the caught exception into typed\n"
+            "data and hands it back on *every* path — ``return\n"
+            "PreflightCheck(passed=False,\n"
+            "error=SourceUnavailableError(cause=exc).to_failure_details())``, or a row\n"
+            "staged in a local that the enclosing function returns below the ``try``.\n"
+            "The failure leaves the frame in inspectable form, so no log level decides\n"
+            "whether it is visible; demanding one is what makes E004 and F005 jointly\n"
+            "unsatisfiable at the last-resort arm of a preflight probe.  A ``return\n"
+            "None``, a bare sentinel, a swallowing path before the typed return, a raw\n"
+            "hand-off of the binding (``failed_check(name, exc, start)`` proves nothing\n"
+            "about its type under a broad catch), and ``except Exception:`` with no\n"
+            "``as`` binding all still fire.\n"
+            "\n\nThe three exemptions are one principle: the exception must leave the\n"
+            "frame in some inspectable form — re-raised with its trace, re-raised with a\n"
+            "redacted cause, or returned as typed data."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e004",
     ),

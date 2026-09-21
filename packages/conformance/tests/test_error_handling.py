@@ -745,6 +745,395 @@ def f():
     )
 
 
+# ── E004 — typed-failure exemption (FND-2628) ────────────────────────────────
+
+
+_PREFLIGHT_IMPORTS = (
+    "from application_sdk.handler.base import Handler\n"
+    "from application_sdk.handler.contracts import "
+    "PreflightCheck, PreflightInput, PreflightOutput\n"
+)
+
+
+def _probe(level: str) -> str:
+    """A preflight probe whose last-resort arm returns the failure as typed data."""
+    return (
+        _PREFLIGHT_IMPORTS + "class H(Handler):\n"
+        "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        "        try:\n"
+        "            count = await self._count_dashboards()\n"
+        "        except Exception as exc:\n"
+        f'            logger.{level}("dashboardCountCheck failed", exc_info=True)\n'
+        "            return PreflightOutput(\n"
+        "                checks=[\n"
+        "                    PreflightCheck(\n"
+        '                        name="dashboardCountCheck",\n'
+        "                        passed=False,\n"
+        "                        error=SourceUnavailableError(\n"
+        '                            message="Failed to fetch dashboards.", cause=exc\n'
+        "                        ).to_failure_details(),\n"
+        "                    )\n"
+        "                ]\n"
+        "            )\n"
+        "        return PreflightOutput(checks=[])\n"
+    )
+
+
+def _preflight_ids(root: Path, src: str) -> set[str]:
+    from conformance.suite.checks.preflight import scan_all
+
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "h.py"
+    path.write_text(src)
+    return {f.rule_id for f in scan_all([path], root)}
+
+
+def test_p004_typed_failure_return_is_jointly_satisfiable_with_f005(
+    tmp_path: Path,
+) -> None:
+    """The FND-2628 deadlock: E004 and F005 must both clear on one probe.
+
+    E004's log exemption accepts only warning/error/critical, and F005 forbids
+    warning inside ``preflight_check`` — so no log level clears both, and
+    narrowing the clause is wrong at the last-resort arm of a probe that
+    deliberately fails closed.  The arm converts the exception into a typed
+    failed-check row, so nothing is swallowed and neither rule has anything to
+    report.
+    """
+    debug = _probe("debug")
+    assert "E004" not in _findings(debug)
+    assert "F005" not in _preflight_ids(tmp_path / "debug", debug)
+    # The level is not the escape: the only levels E004's log exemption accepts
+    # are exactly the one F005 forbids in this gate.
+    assert "F005" in _preflight_ids(tmp_path / "warn", _probe("warning"))
+
+
+def test_p004_no_finding_when_typed_failure_is_returned() -> None:
+    # The exception leaves the frame as typed data — the same property a
+    # cause-preserving re-raise has, so no log level decides its visibility.
+    assert "E004" not in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        logger.debug("probe failed", exc_info=True)
+        return failed_check("probe", SourceUnavailableError(cause=exc), start)
+"""
+    )
+
+
+def test_p004_no_finding_when_typed_failure_is_staged_across_statements() -> None:
+    # The row is built over several statements before the return references it —
+    # the fixpoint in typed_failure_scope() resolves the chain.
+    assert "E004" not in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        transient = transient_failure(exc)
+        failure = transient if transient is not None else AuthError(cause=exc)
+        check = PreflightCheck(name="auth", passed=False, error=failure.to_failure_details())
+        return PreflightOutput(status=status, checks=[check])
+"""
+    )
+
+
+def test_p004_no_finding_when_staged_row_is_returned_after_the_try() -> None:
+    # The arm stages the row and lets the function's single trailing return hand
+    # it back, so the cleanup that must run on every path stays in one place.
+    assert "E004" not in _findings(
+        """\
+async def probe(self):
+    client = None
+    try:
+        client = await self._client()
+        return PreflightCheck(name="auth", passed=True), client
+    except Exception as exc:
+        logger.debug("auth failed", exc_info=True)
+        check = self._failed_check("auth", SourceUnavailableError(cause=exc), start)
+    if client is not None:
+        await client.close()
+    return check, None
+"""
+    )
+
+
+def test_p004_still_flags_typed_failure_returned_without_a_binding() -> None:
+    # `except Exception:` names nothing, so nothing of the caught exception can
+    # be carried out — the typed row below is about the probe, not the failure.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception:
+        logger.debug("probe failed", exc_info=True)
+        return failed_check("probe", SourceUnavailableError(message="unreachable"), start)
+"""
+    )
+
+
+def test_p004_still_flags_untyped_handoff_of_the_caught_exception() -> None:
+    # Handing the raw binding to a helper proves nothing about what it becomes,
+    # and under a broad catch nothing about the binding's own type either.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        logger.debug("probe failed", exc_info=True)
+        return failed_check("probe", exc, start)
+"""
+    )
+
+
+def test_p004_still_flags_return_none_after_building_a_typed_failure() -> None:
+    # Building the typed error and then returning a bare sentinel drops it.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        failure = SourceUnavailableError(cause=exc)
+        return None
+"""
+    )
+
+
+def test_p004_still_flags_bare_sentinel_return() -> None:
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        logger.debug("probe failed", exc_info=True)
+        return False
+"""
+    )
+
+
+def test_p004_still_flags_swallowing_path_before_the_typed_return() -> None:
+    # One branch returns the row, the other swallows — not every exit carries it.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        if quiet(exc):
+            return None
+        return failed_check("probe", SourceUnavailableError(cause=exc), start)
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_that_is_never_returned() -> None:
+    # The row is staged and then dropped: the handler falls through and the
+    # function returns something else.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    return None
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_swallowed_on_a_branch_after_the_try() -> None:
+    # One arm below the `try` hands the row back, the other returns None — the
+    # staged row is not what the function hands back on every path.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    if cond:
+        return check
+    return None
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_rebound_after_the_try() -> None:
+    # The name is reassigned below the handler, so the return hands back
+    # something else entirely.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    check = None
+    return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_the_try_sits_in_a_loop() -> None:
+    # A `try` inside a loop changes what "after" means — the next iteration can
+    # overwrite the row before any return is reached, so the shape is not
+    # modelled and the handler has to prove itself some other way.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        try:
+            run(item)
+        except Exception as exc:
+            check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_a_continue_skips_the_later_return() -> None:
+    # The `try` sits in an `if` inside a loop: `continue` skips the loop-body
+    # `return` entirely, and the function then falls off with an implicit None.
+    # The walk must reject the loop owner before the appended sibling `return`
+    # makes the concatenated suffix read as always-exiting.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        if cond(item):
+            try:
+                run(item)
+            except Exception as exc:
+                check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+            continue
+        return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_a_break_skips_the_later_return() -> None:
+    # Same composition with `break` — it leaves the loop past the `return`.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        if cond(item):
+            try:
+                run(item)
+            except Exception as exc:
+                check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+            break
+        return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_a_continue_escapes_through_a_with() -> None:
+    # The `with` between the handler and the loop is walked through, so the
+    # loop-owner check alone would not catch this: the `continue` at the
+    # handler's own depth is what leaves the chain past the return.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        with lock:
+            try:
+                run(item)
+            except Exception as exc:
+                check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+            if cond:
+                continue
+            return check
+"""
+    )
+
+
+def test_p004_no_finding_when_staged_row_is_returned_after_a_nested_try() -> None:
+    # The probe's `try` sits in an outer `try` body (the outer one owns the
+    # `finally` that closes the client) — the outer body runs in sequence after
+    # the inner construct, so the trailing return is genuinely reached.
+    assert "E004" not in _findings(
+        """\
+async def preflight_check(self, input):
+    client = SQLClient()
+    try:
+        try:
+            result = await client.get_results(sql)
+            tables_check = PreflightCheck(name="connectivity", passed=True)
+        except Exception as e:
+            logger.debug("connectivity check failed", exc_info=True)
+            listing_failure = TableListingError(cause=e)
+            tables_check = PreflightCheck(
+                name="connectivity",
+                passed=False,
+                error=listing_failure.to_failure_details(),
+            )
+        return PreflightOutput(status=status, checks=[tables_check])
+    finally:
+        await client.close()
+"""
+    )
+
+
+def test_p004_no_finding_when_loop_control_stays_inside_the_trailing_segment() -> None:
+    # A `break` for a loop nested in the trailing statements is ordinary loop
+    # control — it does not leave the chain, so the return still carries.
+    assert "E004" not in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    for x in xs:
+        if done(x):
+            break
+    return check
+"""
+    )
+
+
+def test_p004_no_finding_when_staged_row_is_returned_from_the_enclosing_if() -> None:
+    # The fall-through leaves the `try` and then the `if` arm it sits in; the
+    # segments are collected outwards until one is guaranteed to exit.
+    assert "E004" not in _findings(
+        """\
+def probe():
+    if enabled:
+        try:
+            run()
+        except Exception as exc:
+            check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+        cleanup()
+        return check
+    return failed_check("probe", DisabledError(), start)
+"""
+    )
+
+
+def test_p004_still_flags_typed_return_escaped_by_an_outer_continue() -> None:
+    # `continue` at the handler's top level targets the loop outside the handler,
+    # skipping the return that would have carried the failure out.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        try:
+            run(item)
+        except Exception as exc:
+            if skip(item):
+                continue
+            return failed_check("probe", SourceUnavailableError(cause=exc), start)
+"""
+    )
+
+
 # ── P005 — ExceptBlockMissingExcInfo ─────────────────────────────────────────
 
 
@@ -2542,10 +2931,7 @@ def test_e004_fires_when_exc_info_is_an_unrelated_name() -> None:
 def test_e005_silent_for_bare_except_is_not_widened_by_the_name_match() -> None:
     # A handler with no `as` binding has no name to match, so an `exc_info=<name>`
     # there stays unrecognised rather than being accepted on faith.
-    src = (
-        "try:\n    x()\nexcept Exception:\n"
-        "    logger.error('failed', exc_info=exc)\n"
-    )
+    src = "try:\n    x()\nexcept Exception:\n    logger.error('failed', exc_info=exc)\n"
     assert "E005" in _findings(src)
 
 

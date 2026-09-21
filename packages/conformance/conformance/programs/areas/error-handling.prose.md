@@ -163,9 +163,14 @@ outcome mirroring the error-handling shape in the reference app named by
   the checker does not flag it.
 
 - **E004 BroadExceptClause** — `except Exception` / `except BaseException`
-  whose body neither re-raises nor logs the trace.
+  whose body neither re-raises, returns the failure as typed data, nor logs the
+  trace.
 
-  **Default to the additive edit: log with `exc_info=True`.**  Add it to the
+  **First, check whether the body already clears the rule** — see the list of
+  already-clearing shapes below.  Adding a log call to one of them is a wrong
+  edit, not a redundant one.
+
+  **Otherwise default to the additive edit: log with `exc_info=True`.**  Add it to the
   log call already in the block, or add
   `logger.error("<what failed>: %s", exc, exc_info=True)` where there is
   none.  This clears the finding (the checker passes a body containing
@@ -188,12 +193,35 @@ outcome mirroring the error-handling shape in the reference app named by
   the fix is `sanitize_cause_repr(exc)` rather than the traceback, which
   clears E004 by the same sanitizer rule and leaks nothing.
 
-  Two things already clear the rule and must not be "fixed": a body that
-  re-raises on every path with the trace preserved (bare `raise`, or
-  `raise X(...) from e`), and a log call whose arguments already flow through
-  a redaction helper.  A boundary that must stay broad and must not log
-  carries an inline `ignore[E004]` naming what it guards; see
-  `atlan-mysql-app app/handler.py`'s `preflight_check`.
+  **Already-clearing shapes — do not "fix" any of these:**
+
+  - a body that re-raises on every path with the trace preserved (bare
+    `raise`, or `raise X(...) from e`);
+  - a `raise X(...) from None` whose raised error carries the caught exception
+    through a redaction helper;
+  - a log call whose arguments already flow through a redaction helper;
+  - a body whose every exit path hands the caught exception back as **typed
+    data** — `return PreflightCheck(passed=False,
+    error=SourceUnavailableError(cause=exc).to_failure_details())`, or a row
+    staged in a local that the enclosing function returns below the `try`.
+
+  That last shape is the one to watch in an unattended lane.  It is the
+  last-resort arm of a preflight probe, which deliberately fails *closed* with
+  a typed verdict rather than letting an unexpected error crash the gate, and
+  it is already clear of E004 — the failure leaves the frame as data and the
+  SDK gate re-emits it at ERROR as the single `Preflight gate outcome` row.
+  **Never add a `warning`/`error` log to it.**  Inside a `preflight_check`
+  override that edit trades an E004 you did not have for an F005 you did not
+  have either: F005 forbids `warning` there because the customer's log view
+  filters at ERROR (FND-901), and an `error` line duplicates the gate's own
+  outcome row.  If such a site still reports E004, the exception is *not*
+  leaving the frame typed — most often it is handed off raw
+  (`failed_check(name, exc, start)` proves nothing about its type under a
+  broad catch) or one arm returns `None`.  Fix that, not the log.
+
+  `atlan-mysql-app app/handler.py`'s `preflight_check` is the reference: its
+  probes convert the caught exception into a typed `PreflightCheck` row and
+  return it, with no suppression and no log above DEBUG.
 
 - **E007 ErrorToReturnValue** — the `except` block returns a sentinel
   (`None`, `{}`, `[]`, `False`) with no logging before the `return`, so the
