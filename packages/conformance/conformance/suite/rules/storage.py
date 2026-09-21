@@ -67,6 +67,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "on the contract instead and let the activity interceptor move the bytes "
             "(BLDX-1398)."
         ),
+        rule_interactions=(
+            "P021 pushes the other way. Where side-effecting file I/O sits in the "
+            "same block as one of these transfers, P021 says move the block into a "
+            "@task and this rule says the transfer must stay in run() — so "
+            "relocating the block wholesale trades one finding for the other "
+            "(observed going 0 -> 2 in FND-2542). Split the block by "
+            "responsibility instead: the @task takes the raw I/O and returns its "
+            "result as typed output, and the transfer stays in run(), keyed off "
+            "that output. That also removes the replay hazard P021 is really "
+            "about, since the branch then reads a recorded task result rather "
+            "than re-probing local state."
+        ),
         short_description=(
             "App calls self.upload()/self.download()/self.upload_refs() inside a "
             "@task method"

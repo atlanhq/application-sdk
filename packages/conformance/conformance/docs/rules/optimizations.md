@@ -60,11 +60,12 @@ dumps|loads` binding).  Bare `.json()` attribute calls (e.g. `response.json()`) 
 never flagged. `json.JSONDecodeError` handling, `json.dump`/`json.load` (file-object
 APIs orjson does not provide), and custom `JSONEncoder` subclasses are out of scope.
 
-NOT autofixable: `orjson` is not a drop-in replacement.  `orjson.dumps` returns `bytes`
-(not `str`), has no `indent=` / `sort_keys=` / `default=` keyword surface (use
-`option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS` and the `default` positional), and
-rejects some inputs stdlib accepts.  A blind `json.`→`orjson.` swap silently changes
-`str`→`bytes` and breaks callers — each site needs human judgement.
+Autofixable per-site, not mechanically: `orjson` is not a drop-in replacement.
+`orjson.dumps` returns `bytes` (not `str`), has no `indent=` / `sort_keys=` / `default=`
+keyword surface (use `option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS` and the
+`default` positional), and rejects some inputs stdlib accepts.  A blind
+`json.`→`orjson.` swap silently changes `str`→`bytes` and breaks callers — each site
+needs human judgement.
 
 ---
 
@@ -163,10 +164,11 @@ Scope is deliberately narrow — only `pyatlan.model.assets` is matched, never t
 `pyatlan`: enums and helpers that legitimately have no v9 equivalent (e.g. `from
 pyatlan.model.enums import AtlanConnectorType`) are out of scope.
 
-NOT autofixable: the v9 models are not a drop-in rename — attribute names and the
-serialization API differ (use `asset.to_nested_bytes()` rather than `.dict()`), so each
-construction site needs review. Suppress with `# conformance: ignore[O004] <reason>`
-when a connector is intentionally pinned to the legacy `AtlasTransformer` surface.
+Not a mechanical rewrite: the v9 models are not a drop-in rename — attribute names and
+the serialization API differ (use `asset.to_nested_bytes()` rather than `.dict()`), so
+each construction site needs review. Suppress with `# conformance: ignore[O004]
+<reason>` when a connector is intentionally pinned to the legacy `AtlasTransformer`
+surface.
 
 ---
 
@@ -231,10 +233,10 @@ shared `application_sdk.common.task_queue` helper (`derive_task_queue` /
 `resolve_manifest_tokens`) lands in the SDK release that ships FND-195 and is the
 canonical target once available.
 
-NOT autofixable: the correct fix depends on where `app_name` is actually available in
-scope — sometimes an f-string is right, sometimes the value needs threading in from a
-caller first. Suppress with `# conformance: ignore[O005] <reason>` for a template
-resolved by a caller in a different file than the one being scanned.
+Not a mechanical rewrite: the correct fix depends on where `app_name` is actually
+available in scope — sometimes an f-string is right, sometimes the value needs threading
+in from a caller first. Suppress with `# conformance: ignore[O005] <reason>` for a
+template resolved by a caller in a different file than the one being scanned.
 
 ---
 
@@ -278,11 +280,11 @@ happened to also be valid bare JSON.  Neither connector's hand-rolled wrapper wa
 calling anything the SDK had a fleet-wide signal for at the time; this rule is that
 signal going forward.
 
-NOT autofixable: `SpillableDict`'s key type is restricted to `str | int | float | bool |
-bytes` and it has no equivalent to a custom `rocksdict.Options` tuning surface, so each
-call site needs review before migrating.  Suppress with `# conformance: ignore[O006]
-<reason>` when a from-scratch wrapper is deliberate (e.g. custom RocksDB tuning, or
-association-list output like `rocks_backed_dict.py`'s `append_to_key` that
+Not a mechanical rewrite: `SpillableDict`'s key type is restricted to `str | int | float
+| bool | bytes` and it has no equivalent to a custom `rocksdict.Options` tuning surface,
+so each call site needs review before migrating.  Suppress with `# conformance:
+ignore[O006] <reason>` when a from-scratch wrapper is deliberate (e.g. custom RocksDB
+tuning, or association-list output like `rocks_backed_dict.py`'s `append_to_key` that
 `SpillableDict` does not provide).
 
 ---
