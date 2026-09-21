@@ -136,9 +136,7 @@ class BaseSQLClient:
         self.engine = create_engine(
             self.get_sqlalchemy_connection_string(),
             connect_args=connect_args,
-            pool_pre_ping=(
-                self.DB_CONFIG.pool_pre_ping if self.DB_CONFIG else True
-            ),
+            pool_pre_ping=(self.DB_CONFIG.pool_pre_ping if self.DB_CONFIG else True),
         )
 
     async def run_query(

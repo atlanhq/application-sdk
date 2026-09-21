@@ -49,10 +49,7 @@ from server_sdk.handler.contracts import (
     PreflightOutput,
     normalize_credentials,
 )
-from server_sdk.handler.request_contract import (
-    RequestContractError,
-    validate_request,
-)
+from server_sdk.handler.request_contract import RequestContractError, validate_request
 from server_sdk.manifest import (
     ENTRYPOINT_NAME_RE,
     ComputeManifest,

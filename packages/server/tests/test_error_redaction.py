@@ -48,8 +48,10 @@ def _wire_blob(obj) -> str:
         # ODBC quotes values containing the ';' separator.
         ("UID=sa;PWD={s3cr;et};Server=x", "UID=sa;PWD=***;Server=x"),
         # Presigned object-store URL: the signature authorises the request.
-        ("https://x.blob.core.windows.net/c?sig=AB%2Fd&se=2026",
-         "https://x.blob.core.windows.net/c?sig=***&se=2026"),
+        (
+            "https://x.blob.core.windows.net/c?sig=AB%2Fd&se=2026",
+            "https://x.blob.core.windows.net/c?sig=***&se=2026",
+        ),
     ],
 )
 def test_redact_secrets(raw: str, expected: str) -> None:
@@ -76,7 +78,9 @@ def test_secret_named_keys_are_masked_not_dropped() -> None:
 
 
 def test_generic_key_names_are_not_swept_up() -> None:
-    assert secret_named_evidence_keys({"object_key": "k", "cache_key": "c"}) == frozenset()
+    assert (
+        secret_named_evidence_keys({"object_key": "k", "cache_key": "c"}) == frozenset()
+    )
 
 
 def test_masking_never_raises() -> None:

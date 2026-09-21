@@ -28,7 +28,9 @@ def _client(**config) -> BaseSQLClient:
 
 
 def test_a_default_naming_a_placeholder_still_fills_it() -> None:
-    url = _client(template=TEMPLATE, defaults={"port": 5439}).get_sqlalchemy_connection_string()
+    url = _client(
+        template=TEMPLATE, defaults={"port": 5439}
+    ).get_sqlalchemy_connection_string()
     assert url == "redshift+psycopg2://u:p@h:5439/d"
 
 
@@ -80,7 +82,9 @@ def test_a_param_value_cannot_inject_another_param(hostile: str) -> None:
 def test_the_ported_fields_exist_at_all() -> None:
     """`parameters` and `pool_pre_ping` are in every application_sdk DB_CONFIG;
     without them a verbatim lift raises TypeError."""
-    cfg = DatabaseConfig(template=TEMPLATE, parameters=["ssl_mode"], pool_pre_ping=False)
+    cfg = DatabaseConfig(
+        template=TEMPLATE, parameters=["ssl_mode"], pool_pre_ping=False
+    )
     assert cfg.parameters == ["ssl_mode"]
     assert cfg.pool_pre_ping is False
     assert DatabaseConfig(template=TEMPLATE).pool_pre_ping is True

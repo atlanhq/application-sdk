@@ -85,7 +85,9 @@ def test_exact_stem_returns_that_file(gen_dir) -> None:
 
 def test_exact_match_wins_over_the_fallback(gen_dir) -> None:
     """Two forms present, so a fallback would pick the wrong one."""
-    d = gen_dir(aaa__first={"config": {"which": "aaa"}}, zzz__last={"config": {"which": "zzz"}})
+    d = gen_dir(
+        aaa__first={"config": {"which": "aaa"}}, zzz__last={"config": {"which": "zzz"}}
+    )
     resp = _client(d).get("/workflows/v1/configmap/zzz-last")
     # config is orjson-serialized compactly, so compare parsed, not by substring.
     assert json.loads(resp.json()["data"]["data"]["config"]) == {"which": "zzz"}
@@ -123,7 +125,9 @@ def test_listing_excludes_the_manifest_but_keeps_credential_templates(gen_dir) -
     """Deliberately a different rule from _is_form_configmap: the setup form's
     credential widget fetches atlan-connectors-<source> as its own configmap,
     so filtering those would drop names that work."""
-    d = gen_dir(snowflake__crawler=FORM, manifest={"dag": {}}, atlan__connectors__s3={"c": 1})
+    d = gen_dir(
+        snowflake__crawler=FORM, manifest={"dag": {}}, atlan__connectors__s3={"c": 1}
+    )
     ids = _client(d).get("/workflows/v1/configmaps").json()["data"]["configmaps"]
     assert "snowflake-crawler" in ids
     assert "manifest" not in ids

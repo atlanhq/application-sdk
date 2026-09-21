@@ -17,10 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 from server_sdk.handler.base import DefaultHandler
 from server_sdk.handler.contracts import AuthInput
-from server_sdk.handler.request_contract import (
-    RequestContractError,
-    validate_request,
-)
+from server_sdk.handler.request_contract import RequestContractError, validate_request
 from server_sdk.server import build_asgi_app
 
 

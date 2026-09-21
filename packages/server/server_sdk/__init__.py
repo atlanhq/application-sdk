@@ -23,7 +23,6 @@ from server_sdk.errors import (
     AuthError,
     DependencyUnavailableError,
     FailureDetails,
-    HandlerError,
     InternalError,
     InvalidInputError,
 )
@@ -62,6 +61,10 @@ from server_sdk.workflow import (
     WorkflowStarter,
     starter_from_env,
 )
+
+# Deprecated (removal v4.0), absent from __all__, kept importable. Its own
+# statement so the noqa cannot mask a genuinely unused import above.
+from server_sdk.errors import HandlerError  # noqa: F401  # isort: skip
 
 __version__ = "0.1.0"
 

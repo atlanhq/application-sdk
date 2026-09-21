@@ -28,7 +28,10 @@ def test_a_leaf_keeps_its_own_default() -> None:
 
 
 def test_a_leaf_default_can_still_be_overridden() -> None:
-    assert SourceUnavailableError("x", retryable=False).to_failure_details().retryable is False
+    assert (
+        SourceUnavailableError("x", retryable=False).to_failure_details().retryable
+        is False
+    )
 
 
 def test_cause_is_chained_and_capped_on_the_wire() -> None:
