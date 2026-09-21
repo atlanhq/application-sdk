@@ -195,10 +195,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         # Named after the matching OTel Resource attributes on purpose, and
         # listed as exact keys rather than an ``app.`` / ``sdk.`` passthrough
         # prefix so the allowlist stays closed to arbitrary app-author kwargs.
-        # (``temporal.deployment.*`` rides the existing ``temporal.`` prefix.)
         "sdk.version",
         "app.version",
-        "app.commit_sha",
         # ── Outcome / error ──────────────────────────────────────────────
         "status",
         "error_type",

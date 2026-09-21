@@ -406,22 +406,18 @@ the structured attributes, never on the body text.
 
 #### Build identity on lifecycle lines
 
-Every lifecycle line also carries the identity of the build that produced it, so a run's exported
+Every lifecycle line also carries the SDK and app release that produced it, so a run's exported
 logs answer "what was running when this broke?" on their own, with no Temporal access. Before this
-the deployment build id was logged once per worker at startup, which a run-scoped export never
-contains.
+the build was named once per worker at startup, which a run-scoped export never contains.
 
 | Attribute | Source | Meaning |
 |-----------|--------|---------|
-| `temporal.deployment.name` | `ATLAN_APP_DEPLOYMENT_NAME` | Worker Deployment name, as Temporal shows it. |
-| `temporal.deployment.build_id` | `ATLAN_APP_BUILD_ID` | The `Build ID` Temporal shows for the same execution. |
 | `sdk.version` | `application_sdk.__version__` | The application-sdk actually running; always populated. |
 | `app.version` | baked `app/atlan_build.json`, then `ATLAN_APPLICATION_VERSION` | The app release as Global Marketplace stores it; falls back to the commit SHA when the image carries no version. |
-| `app.commit_sha` | baked `app/atlan_build.json` | Git commit the image was built from, so a reader can tell a real version from the fallback. |
 
-An image without worker versioning or a baked build file logs `""` for the affected fields. The keys
-are always present so the schema stays stable, and an empty value means "this image carries no
-build identity", never a mismatch. All five keys are on the
+An image with no baked build file and no deployer stamp logs `""` for `app.version`. The keys are
+always present so the schema stays stable, and an empty value means "this image carries no build
+identity", never a mismatch. Both keys are on the
 [OTLP allowlist](#structured-attributes-and-the-otlp-allowlist), so they survive the filter that
 drops unlisted kwargs. The attributes are stamped on the lifecycle lines only, not on every record:
 the equivalent per-pod OTel Resource attributes ride only on the OTLP export, which

@@ -212,7 +212,7 @@ baked rather than the one the deployer stamped:
 | `worker_start` / `token_refresh` events | `app_version`, `commit_sha` | The point of the change. |
 | OTel `target_info` gauge (`observability/utils.py`) | `app.version` | Now the GM `version` string by construction, rather than whatever the deployer stamped. |
 | Preflight results store (`preflight_persist`) | `app_version` | Same. Its "as its catalog card carries it" contract holds more tightly, not less: `gm_version` **is** the string publish sends as `version`. |
-| Lifecycle log lines (`workflow.*` / `activity.*`, `interceptors/log.py`) | `app.version`, `app.commit_sha` | A run's own exported logs identify the build. `app.version` falls back to `commit_sha` on an image with no version; `sdk.version` and `temporal.deployment.build_id` ride alongside. See [Monitoring → Build identity on lifecycle lines](../concepts/monitoring.md#build-identity-on-lifecycle-lines). |
+| Lifecycle log lines (`workflow.*` / `activity.*`, `interceptors/log.py`) | `app.version` | A run's own exported logs identify the app release that produced them, with `sdk.version` alongside. Falls back to `commit_sha` on an image with no version. See [Monitoring → Build identity on lifecycle lines](../concepts/monitoring.md#build-identity-on-lifecycle-lines). |
 
 The two can only disagree when a deployer stamps something other than the GM
 version it deployed — which is the case this change exists to correct. A

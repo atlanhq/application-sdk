@@ -1694,11 +1694,7 @@ class TestBuildExtraDict:
         # so a run's exported logs identify the build (FND-1936). They are
         # dotted but sit under no passthrough prefix, so each must be listed;
         # dropping one here silently blinds every export path.
-        identity = {
-            "sdk.version": "3.36.3",
-            "app.version": "0.2.3",
-            "app.commit_sha": "9f3c2ab",
-        }
+        identity = {"sdk.version": "3.36.3", "app.version": "0.2.3"}
         assert _build_extra_dict(dict(identity)) == identity
 
     def test_check_matrix_kept_for_gate_outcome_event(self):
