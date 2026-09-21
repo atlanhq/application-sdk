@@ -2856,3 +2856,194 @@ def test_p001_fires_on_none_optout_with_any_field(tmp_path: Path) -> None:
     findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
     assert len(findings) == 1
     assert "does NOT set" in findings[0].message
+
+
+# ── P052 NarrowedSdkClassVar ────────────────────────────────────────────────────
+
+# A minimal stand-in for the installed SDK's application_sdk/app/base.py: two
+# Literal-typed ClassVars, one with an extra non-Literal arm (mirrors
+# preflight_gate_mode's `PreflightGateMode | Literal[...]`) and one without
+# (mirrors artifact_validation_mode).
+_FAKE_APP_BASE = (
+    "from __future__ import annotations\n"
+    "from typing import ClassVar, Literal\n"
+    "\n"
+    "class App:\n"
+    "    preflight_gate_mode: ClassVar[\"PreflightGateMode | Literal['hard', 'soft']\"] = (\n"
+    '        "soft"\n'
+    "    )\n"
+    '    artifact_validation_mode: ClassVar[Literal["hard", "soft"]] = "soft"\n'
+)
+
+
+def _install_fake_app_base(root: Path, source: str = _FAKE_APP_BASE) -> None:
+    """Materialise a stand-in installed SDK ``App`` in *root*'s own ``.venv``.
+
+    Mirrors ``test_dependency_conformance._install_fake_dist``: P052 resolves
+    the SDK's declared ClassVar types from the scanned repo's own environment,
+    so tests control that resolution the same way D003's tests control which
+    distributions are "installed".
+    """
+    site = root / ".venv" / "lib" / "python3.13" / "site-packages"
+    pkg = site / "application_sdk" / "app"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "base.py").write_text(source, encoding="utf-8")
+
+
+def _p052_ids(findings: list) -> list[str]:
+    return [f.rule_id for f in findings if f.rule_id == "P052"]
+
+
+def test_p052_fires_on_narrowed_preflight_gate_mode(tmp_path: Path) -> None:
+    _install_fake_app_base(tmp_path)
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "from application_sdk.app import App\n"
+        "\n"
+        "class MyApp(App):\n"
+        '    preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "hard"\n'
+    )
+    assert _p052_ids(_scan_one(tmp_path, src)) == ["P052"]
+
+
+def test_p052_fires_on_narrowed_artifact_validation_mode(tmp_path: Path) -> None:
+    _install_fake_app_base(tmp_path)
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "from application_sdk.app import App\n"
+        "\n"
+        "class MyApp(App):\n"
+        '    artifact_validation_mode: ClassVar[Literal["hard"]] = "hard"\n'
+    )
+    assert _p052_ids(_scan_one(tmp_path, src)) == ["P052"]
+
+
+def test_p052_fires_through_transitive_subclass(tmp_path: Path) -> None:
+    _install_fake_app_base(tmp_path)
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "from application_sdk.app import App\n"
+        "\n"
+        "class BaseConnectorApp(App):\n"
+        "    pass\n"
+        "\n"
+        "class MyApp(BaseConnectorApp):\n"
+        '    preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "hard"\n'
+    )
+    assert _p052_ids(_scan_one(tmp_path, src)) == ["P052"]
+
+
+def test_p052_silent_on_bare_reassignment(tmp_path: Path) -> None:
+    """The fix: no annotation at all inherits the SDK's declared type."""
+    _install_fake_app_base(tmp_path)
+    src = (
+        "from application_sdk.app import App\n"
+        "\n"
+        "class MyApp(App):\n"
+        '    preflight_gate_mode = "hard"\n'
+    )
+    assert _p052_ids(_scan_one(tmp_path, src)) == []
+
+
+def test_p052_silent_on_exact_restatement(tmp_path: Path) -> None:
+    """Redundant, but type-compatible: identical to the SDK's own annotation."""
+    _install_fake_app_base(tmp_path)
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "from application_sdk.app import App\n"
+        "\n"
+        "class MyApp(App):\n"
+        '    artifact_validation_mode: ClassVar[Literal["hard", "soft"]] = "soft"\n'
+    )
+    assert _p052_ids(_scan_one(tmp_path, src)) == []
+
+
+def test_p052_silent_on_widened_to_sdk_full_union(tmp_path: Path) -> None:
+    """An app that restates the SDK's exact full union (not a narrowing)."""
+    _install_fake_app_base(tmp_path)
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "from application_sdk.app import App\n"
+        "\n"
+        "class MyApp(App):\n"
+        "    preflight_gate_mode: ClassVar[\"PreflightGateMode | Literal['hard', 'soft']\"] = (\n"
+        '        "hard"\n'
+        "    )\n"
+    )
+    assert _p052_ids(_scan_one(tmp_path, src)) == []
+
+
+def test_p052_silent_on_sdk_own_declaration(tmp_path: Path) -> None:
+    """Scanning the SDK's own defining class must never self-fire."""
+    _install_fake_app_base(tmp_path)
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "\n"
+        "class App:\n"
+        '    preflight_gate_mode: ClassVar[Literal["hard"]] = "hard"\n'
+    )
+    assert _p052_ids(_scan_one(tmp_path, src)) == []
+
+
+def test_p052_silent_on_unrelated_hard_soft_field(tmp_path: Path) -> None:
+    """A same-shaped field that names no inherited SDK ClassVar is untouched."""
+    _install_fake_app_base(tmp_path)
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "from application_sdk.app import App\n"
+        "\n"
+        "class MyApp(App):\n"
+        '    retry_mode: ClassVar[Literal["hard", "soft"]] = "hard"\n'
+    )
+    assert _p052_ids(_scan_one(tmp_path, src)) == []
+
+
+def test_p052_silent_on_non_app_class_with_same_attribute_name(tmp_path: Path) -> None:
+    """Not a subclass of App -- redeclaring the same name touches no ClassVar."""
+    _install_fake_app_base(tmp_path)
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "\n"
+        "class Helper:\n"
+        '    preflight_gate_mode: ClassVar[Literal["hard"]] = "hard"\n'
+    )
+    assert _p052_ids(_scan_one(tmp_path, src)) == []
+
+
+def test_p052_suppressed_inline(tmp_path: Path) -> None:
+    _install_fake_app_base(tmp_path)
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "from application_sdk.app import App\n"
+        "\n"
+        "class MyApp(App):\n"
+        '    preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "hard"  '
+        "# conformance: ignore[P052] pinned to the bare-string posture on purpose\n"
+    )
+    fs = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P052"]
+    assert fs and all(f.suppressed for f in fs)
+
+
+def test_p052_silent_when_installed_sdk_unresolvable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No repo ``.venv`` and no resolvable interpreter fallback -> stay silent.
+
+    Grading against a guessed type is worse than not grading at all — proven
+    here against a shape that fires in every other test in this section.
+    """
+    from conformance.suite.checks.prescriptions import _narrowed_classvar as mod
+
+    monkeypatch.setattr(mod.importlib.util, "find_spec", lambda name: None)
+    src = (
+        "from typing import ClassVar, Literal\n"
+        "from application_sdk.app import App\n"
+        "\n"
+        "class MyApp(App):\n"
+        '    preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "hard"\n'
+    )
+    assert _p052_ids(_scan_one(tmp_path, src)) == []
+
+
+def test_p052_is_warn_tier() -> None:
+    assert get_rule("P052").tier is EnforcementTier.WARN

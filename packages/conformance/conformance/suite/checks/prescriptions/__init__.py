@@ -51,6 +51,12 @@ Currently implemented:
   ``list[str]``, or the bounded ``Annotated[dict[…], MaxItems(N)]`` form).
   Bounded containers pass payload-safety validation (P001) but are stringly-typed.
   Per-file (like P011/P012).
+* ``P052`` NarrowedSdkClassVar — an ``App`` subclass redeclares an inherited
+  ``ClassVar`` (``preflight_gate_mode``, ``artifact_validation_mode``, …) with a
+  narrower ``Literal`` annotation than the installed SDK declares. ``ClassVar``
+  is invariant, so the narrowed override is incompatible under the pinned
+  pyright baseline. Cross-file only (needs the scanned repo's root to resolve
+  the installed SDK's declaration); requires ``scan_all``.
 
 Inline suppression
 ------------------
@@ -97,6 +103,7 @@ from ._error_code_prefix import (
 from ._file_reference import check_p010
 from ._framework_transfer import check_p008
 from ._getattr_contract_field import check_p026
+from ._narrowed_classvar import check_p052
 from ._prefix_transfer import check_p044
 from ._qualified_name import check_p028
 from ._store_construction import check_p009
@@ -112,9 +119,10 @@ def scan_text(text: str, file: str) -> list[Finding]:
     """Scan a single Python source *text* for per-file findings.
 
     Runs P001, P002, P008–P012, P015, P026 and P028 — every rule that needs only
-    a single file's AST.  P003, P013, P014 and P027 need cross-file context; use
-    :func:`scan_all` for full-suite runs.  Kept for symmetry with the per-file
-    ``scan_path`` runner contract.
+    a single file's AST.  P003, P013, P014, P027 and P052 need cross-file
+    context (P052 additionally needs the scanned repo's root to resolve the
+    installed SDK's declaration); use :func:`scan_all` for full-suite runs.
+    Kept for symmetry with the per-file ``scan_path`` runner contract.
     """
     try:
         tree = ast.parse(text, filename=file)
@@ -162,7 +170,8 @@ def scan_text(text: str, file: str) -> list[Finding]:
 def scan_path(path: Path, root: Path) -> list[Finding]:
     """Scan a single Python file (P001 + P002 + P008–P012 + P015 + P026 + P028 + P044).
 
-    P003, P013, P014 and P027 require :func:`scan_all` for cross-file resolution.
+    P003, P013, P014, P027 and P052 require :func:`scan_all` for cross-file
+    resolution.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -199,6 +208,11 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     Pass 5 — emit P027 (app-wide ``app_state`` read-with-no-writer): resolve key
     constants across all stored trees and flag every ``get_app_state(KEY)`` whose
     ``KEY`` has no populating ``set_app_state`` writer anywhere.
+
+    Pass 6 — emit P052 (narrowed inherited SDK ``ClassVar``): resolve the
+    installed SDK's ``App`` ``ClassVar`` Literal shapes once from *root*, then
+    flag every ``App`` subclass that redeclares one with a strictly narrower
+    annotation.
     """
     findings: list[Finding] = []
 
@@ -305,6 +319,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
     # Pass 5 — emit P027 (app-wide app_state read-with-no-writer)
     findings.extend(check_p027(file_trees, file_directives, root))
+
+    # Pass 6 — emit P052 (narrowed inherited SDK ClassVar)
+    findings.extend(check_p052(file_trees, file_directives, root))
 
     return findings
 

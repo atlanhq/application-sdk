@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**45 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
+**46 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -68,6 +68,7 @@ reassigned.
 | [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | yes | 0.25.0 |
+| [P052](#p052) | `NarrowedSdkClassVar` | `warn` | `app` | `sdk-classvar-override` | yes | 0.36.0 |
 
 ---
 
@@ -2390,5 +2391,55 @@ the agent clears the floor   these render the interactive metadata picker; below
 when the   version can't be read) the picker falls back to a plain text box. This
 follows the same floor gate automatically — no per-connector change   beyond declaring
 the filter widget.
+
+---
+
+## P052 — `NarrowedSdkClassVar` {#p052}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdk-classvar-override` · **Autofixable:** yes · **Since:** 0.36.0
+
+> App subclass redeclares an inherited SDK ClassVar with a narrower Literal annotation than the installed SDK declares
+
+**Rationale:** App declares several configuration switches as ClassVar-typed Literal unions
+(preflight_gate_mode, artifact_validation_mode). ClassVar is invariant under the pyright
+'standard' baseline the fleet is pinned to (D008), so an app subclass that redeclares
+one with a narrower annotation than the SDK's is an incompatible override — pyright
+fails the check the moment the app's CI adopts the stricter posture the narrowed
+annotation itself is usually reaching for (e.g. PreflightGateMode.HARD). Nothing fails
+at runtime — coerce_gate_mode accepts either spelling — so this is WARN, not BLOCK.
+Customer impact: the app's own pyright gate goes red on an unrelated change (any edit
+that touches the file, or a routine pyright/SDK bump) for a reason the diff doesn't
+mention, and the fix looks like reverting the change rather than deleting a stale
+annotation from a past edit.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk/app/base.py — App.preflight_gate_mode is declared
+  ClassVar["PreflightGateMode | Literal['hard', 'soft']"]; that declaration, inherited
+  unchanged, is what a compliant App subclass carries.
+
+`App` declares configuration switches such as `preflight_gate_mode` and
+`artifact_validation_mode` as `ClassVar`-typed `Literal` unions.  An `App` subclass that
+redeclares one of these with its own explicit annotation — instead of leaving it
+inherited — can narrow the type: restating `preflight_gate_mode:
+ClassVar[Literal["hard", "soft"]] = "hard"` drops the `PreflightGateMode` enum arm the
+SDK's own declaration carries.  `ClassVar` is invariant, so the narrowed override is
+incompatible under the pinned pyright baseline, even though nothing fails at runtime.
+
+The Literal member set this rule compares against is read from the *installed*
+`application_sdk` package at scan time — not a list of values copied into the checker —
+so it tracks the SDK's declaration as it evolves rather than grading against a stale
+snapshot.  When the installed SDK cannot be resolved, the rule stays silent rather than
+guess.
+
+Not flagged: a bare re-assignment with no annotation (`preflight_gate_mode = "hard"`),
+which inherits the SDK's declared type outright; an app that restates the SDK's
+annotation exactly (redundant, but type-compatible); an app-local field that shares a
+name with no inherited SDK ClassVar; and the SDK's own declaration site inside `App`
+itself.
+
+Fix: drop the redeclaration — assign the value with no annotation — or restate the SDK's
+full annotation exactly if an explicit annotation is genuinely required.  WARN tier —
+suppress with `# conformance: ignore[P052] <reason>` at the assignment site.
 
 ---

@@ -263,6 +263,21 @@ above.  `classification` is always `"judgment"` for all P-series rules.
 
   The orthogonal test gate (`orthogonal_gate = "tests"`) validates the fix.
 
+- **P052 NarrowedSdkClassVar** — an `App` subclass redeclares an inherited
+  `ClassVar` (`preflight_gate_mode`, `artifact_validation_mode`, …) with a
+  narrower `Literal` annotation than the installed SDK declares. Read the
+  assignment at `finding.line`:
+
+  1. **Preferred — drop the redeclaration.** Delete the type annotation and
+     keep only the assignment (e.g. `preflight_gate_mode = "hard"`), which
+     inherits the SDK's declared type unchanged. Return `outcome = "fix"`.
+  2. If an explicit annotation is genuinely required, restate the SDK's own
+     annotation exactly — copy it from the installed
+     `application_sdk/app/base.py`'s current declaration for that name — rather
+     than a narrower one.
+
+  The orthogonal test gate (`orthogonal_gate = "tests"`) validates the fix.
+
 **Orchestration-seam rules (P004–P007)** — also suggest-only; `classification`
 is always `"judgment"`:
 
