@@ -50,7 +50,13 @@ class Source:
 
 @dataclass(frozen=True)
 class Registry:
-    """Cross-file registry built once in ``scan_all`` and shared by all passes."""
+    """Cross-file registry built once in ``scan_all`` and shared by all passes.
+
+    ``by_name`` maps a bare class name to its record, first-wins across files.
+    A module-level rebinding (``OpenAPIConnectorInput = AppInputContract``) is
+    keyed there too, pointing at the record of the class it names, so a
+    contract declared under an alias resolves like the class itself.
+    """
 
     sources: tuple[Source, ...]
     by_name: dict[str, ClassRecord]
@@ -64,6 +70,7 @@ def build_registry(paths: list[Path], root: Path) -> Registry:
     parse_failures: list[str] = []
     by_name: dict[str, ClassRecord] = {}
     aliases_by_rel: dict[str, dict[str, str]] = {}
+    alias_targets: dict[str, str] = {}
 
     for path in paths:
         try:
@@ -96,6 +103,10 @@ def build_registry(paths: list[Path], root: Path) -> Registry:
         aliases_by_rel[rel] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
+        for local, target in _module_alias_targets(tree, aliases).items():
+            alias_targets.setdefault(local, target)
+
+    _resolve_alias_records(by_name, alias_targets)
 
     return Registry(
         sources=tuple(sources),
@@ -103,6 +114,69 @@ def build_registry(paths: list[Path], root: Path) -> Registry:
         aliases_by_rel=aliases_by_rel,
         parse_failures=tuple(parse_failures),
     )
+
+
+def _module_alias_targets(tree: ast.Module, aliases: dict[str, str]) -> dict[str, str]:
+    """Return module-level ``Local = Target`` bindings as ``{local: target_name}``.
+
+    A contract generated from ``contract/app.pkl`` is imported under its
+    generated name and re-bound to a domain name
+    (``OpenAPIConnectorInput = AppInputContract``); the ``TypeAlias``-annotated
+    form is the same shape. The right-hand side is de-aliased through the
+    file's import aliases so a renamed import still lands on the original class
+    name. Only a plain ``Name``/``Attribute`` value qualifies — ``X = list[Y]``
+    is not an alias of ``Y``.
+    """
+    targets: dict[str, str] = {}
+    for stmt in tree.body:
+        bindings: list[ast.Name]
+        if isinstance(stmt, ast.Assign):
+            bindings = [t for t in stmt.targets if isinstance(t, ast.Name)]
+            value = stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            bindings = [stmt.target]
+            value = stmt.value
+        else:
+            continue
+        if isinstance(value, ast.Name):
+            target = value.id
+        elif isinstance(value, ast.Attribute):
+            target = value.attr
+        else:
+            continue
+        for binding in bindings:
+            if binding.id != target:
+                targets.setdefault(binding.id, aliases.get(target, target))
+    return targets
+
+
+def _resolve_alias_records(
+    by_name: dict[str, ClassRecord], alias_targets: dict[str, str]
+) -> None:
+    """Point every alias name at the :class:`ClassRecord` it ultimately names.
+
+    Without this an entrypoint that declares its input under an alias has no
+    entry in ``by_name`` at all, and every pass that resolves a contract by
+    name reports it as unanalysable while the class sits in the same scan.
+
+    The registry is keyed on bare names and is first-wins, so the chain is
+    followed globally and a real class definition always beats an alias. The
+    walk continues through alias-to-alias hops, which covers a re-export chain
+    across modules; a cycle stops at the name that started it. An alias whose
+    chain never reaches a scanned class is left out, so an unresolvable name
+    still reports conservatively.
+    """
+    for name, first in alias_targets.items():
+        if name in by_name:
+            continue
+        seen = {name}
+        target = first
+        while target not in by_name and target in alias_targets and target not in seen:
+            seen.add(target)
+            target = alias_targets[target]
+        rec = by_name.get(target)
+        if rec is not None:
+            by_name[name] = rec
 
 
 def effective_task_name(
