@@ -254,6 +254,20 @@ an in-repo base class or an SDK-provided mixin (e.g. `PublishInputMixin`) is jus
 ledger-tracked as one declared directly on the contract, so adopting a new mixin can
 also trigger this on the fields it contributes.
 
+Regenerating is the whole fix for an inherited field: **do not redeclare the base's
+fields on the subclass to 'keep' them tracked.**  The generator resolves the full
+base-class chain and records an inherited field exactly like a declared one; a
+hand-copied redeclaration adds no protection and becomes a drift site the moment the
+base changes.
+
+Turning a module-level rebinding (`MyInput = AppInputContract`) into a subclass does
+raise this once per inherited field, and that is the rule working rather than a false
+positive: the subclass is a distinct wire surface, and it is the subclass's own entries
+that B005 consults if it later changes base and drops a field.  One regeneration clears
+all of them.  The rebinding itself is guarded too — it resolves to the class it names,
+so a pkl-generated contract exposed under a domain name is ledgered under the generated
+class's name rather than skipped (FND-2605).
+
 Fix: run the exact command the finding names — in a consumer app that is `uvx
 atlan-application-sdk-conformance==<version> gen-contract-ledger`, version-pinned to the
 checker that raised it — and commit the updated ledger in the same PR as the contract

@@ -1093,3 +1093,222 @@ def test_b005_locally_declared_type_change_still_fires(tmp_path: Path) -> None:
     """The mirror: a field the app declares itself is the app's own change."""
     findings = _scan_typed(tmp_path, "OutputStatus", "str")
     assert "B005" in _ids(findings)
+
+
+# ── Module-level contract aliases (FND-2605) ──────────────────────────────────
+
+_GENERATED_CONTRACT = """\
+class AppInputContract:
+    include_database_regex: str
+    exclude_database_regex: str | None
+"""
+
+_ALIAS_MODULE = """\
+from app.generated import AppInputContract
+
+OpenAPIConnectorInput = AppInputContract
+"""
+
+_ALIAS_ENTRYPOINT = """\
+from application_sdk.app import App
+
+from app.contracts import OpenAPIConnectorInput
+
+
+class MyApp(App):
+    async def run(self, input: OpenAPIConnectorInput) -> None:
+        pass
+"""
+
+_ALIAS_FILES = {
+    "app/generated.py": _GENERATED_CONTRACT,
+    "app/contracts.py": _ALIAS_MODULE,
+    "app/entry.py": _ALIAS_ENTRYPOINT,
+}
+
+
+def _contract_fields_reported(findings: list, rule_id: str) -> set[str]:
+    """The ``Contract.field`` names a rule reported, read out of its messages."""
+    return {f.message.split("'")[1] for f in findings if f.rule_id == rule_id}
+
+
+def test_aliased_entrypoint_contract_is_checked_at_all(tmp_path: Path) -> None:
+    """A contract exposed under a module-level rebinding is guarded, not skipped.
+
+    This is the shape a pkl-generated contract takes in a connector app: the
+    generated class is imported and re-bound to a domain name, and the
+    entrypoint annotates the domain name. Until the rebinding resolved, the
+    annotated name matched no ``ClassDef``, so B005/B006 checked *nothing* for
+    that contract — a clean run against an empty ledger meant no protection at
+    all, not compliance (FND-2605).
+    """
+    findings = _scan(tmp_path, _ALIAS_FILES)
+    assert _contract_fields_reported(findings, "B006") == {
+        "AppInputContract.include_database_regex",
+        "AppInputContract.exclude_database_regex",
+    }
+
+
+def test_aliased_contract_is_ledgered_under_the_declaring_class(
+    tmp_path: Path,
+) -> None:
+    """The ledger key is the declaring class, not the local rebinding's name.
+
+    Keying on the declaring class is what makes the identity stable: renaming
+    or dropping the rebinding does not orphan the contract's ledger entries.
+    """
+    declaring = _make_ledger(
+        ContractField("AppInputContract", "include_database_regex", "str", "active"),
+        ContractField(
+            "AppInputContract", "exclude_database_regex", "str | None", "active"
+        ),
+    )
+    assert _ids(_scan(tmp_path, _ALIAS_FILES, declaring)) == []
+
+    # The mirror: entries keyed on the local rebinding satisfy nothing, which is
+    # what makes the choice of key observable rather than vacuous.
+    local = _make_ledger(
+        ContractField(
+            "OpenAPIConnectorInput", "include_database_regex", "str", "active"
+        ),
+        ContractField(
+            "OpenAPIConnectorInput", "exclude_database_regex", "str | None", "active"
+        ),
+    )
+    assert _contract_fields_reported(_scan(tmp_path, _ALIAS_FILES, local), "B006") == {
+        "AppInputContract.include_database_regex",
+        "AppInputContract.exclude_database_regex",
+    }
+
+
+def test_aliased_contract_field_removal_still_fires(tmp_path: Path) -> None:
+    """B005's guarantee reaches through the rebinding — the point of resolving it."""
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "include_database_regex", "str", "active"),
+        ContractField("AppInputContract", "retired_field", "str", "active"),
+    )
+    findings = _scan(tmp_path, _ALIAS_FILES, ledger)
+    assert _contract_fields_reported(findings, "B005") == {
+        "AppInputContract.retired_field"
+    }
+
+
+def test_alias_chain_across_modules_resolves(tmp_path: Path) -> None:
+    """A re-export chain (generated -> internal -> public) resolves to the class."""
+    findings = _scan(
+        tmp_path,
+        {
+            "app/generated.py": _GENERATED_CONTRACT,
+            "app/_internal.py": (
+                "from typing import TypeAlias\n"
+                "from app.generated import AppInputContract\n"
+                "InternalInput: TypeAlias = AppInputContract\n"
+            ),
+            "app/contracts.py": (
+                "from app._internal import InternalInput\n"
+                "OpenAPIConnectorInput = InternalInput\n"
+            ),
+            "app/entry.py": _ALIAS_ENTRYPOINT,
+        },
+    )
+    assert _contract_fields_reported(findings, "B006") == {
+        "AppInputContract.include_database_regex",
+        "AppInputContract.exclude_database_regex",
+    }
+
+
+def test_alias_of_a_renamed_import_resolves(tmp_path: Path) -> None:
+    """The rebinding's right-hand side is de-aliased through the file's imports."""
+    findings = _scan(
+        tmp_path,
+        {
+            "app/generated.py": _GENERATED_CONTRACT,
+            "app/contracts.py": (
+                "from app.generated import AppInputContract as _Base\n"
+                "OpenAPIConnectorInput = _Base\n"
+            ),
+            "app/entry.py": _ALIAS_ENTRYPOINT,
+        },
+    )
+    assert _contract_fields_reported(findings, "B006") == {
+        "AppInputContract.include_database_regex",
+        "AppInputContract.exclude_database_regex",
+    }
+
+
+def test_non_class_rebinding_is_not_treated_as_an_alias(tmp_path: Path) -> None:
+    """``X = list[Y]`` names no class, so the annotated name stays unresolved.
+
+    An unresolvable name must keep reading as unresolvable rather than being
+    credited with some other class's fields.
+    """
+    findings = _scan(
+        tmp_path,
+        {
+            "app/generated.py": _GENERATED_CONTRACT,
+            "app/contracts.py": (
+                "from app.generated import AppInputContract\n"
+                "OpenAPIConnectorInput = list[AppInputContract]\n"
+            ),
+            "app/entry.py": _ALIAS_ENTRYPOINT,
+        },
+    )
+    assert findings == []
+
+
+def test_alias_never_shadows_a_real_contract_class(tmp_path: Path) -> None:
+    """A class declaration of the same name wins over a rebinding of that name."""
+    findings = _scan(
+        tmp_path,
+        {
+            "app/generated.py": _GENERATED_CONTRACT,
+            "app/contracts.py": ("class OpenAPIConnectorInput:\n    own_field: str\n"),
+            "app/other.py": (
+                "from app.generated import AppInputContract\n"
+                "OpenAPIConnectorInput = AppInputContract\n"
+            ),
+            "app/entry.py": _ALIAS_ENTRYPOINT,
+        },
+    )
+    assert _contract_fields_reported(findings, "B006") == {
+        "OpenAPIConnectorInput.own_field"
+    }
+
+
+def test_contract_inheriting_from_an_aliased_base_resolves_its_fields(
+    tmp_path: Path,
+) -> None:
+    """A base named through a rebinding contributes its fields like any other."""
+    findings = _scan(
+        tmp_path,
+        {
+            "app/generated.py": _GENERATED_CONTRACT,
+            "app/contracts.py": (
+                "from app.generated import AppInputContract\n"
+                "GeneratedBase = AppInputContract\n"
+                "class OpenAPIConnectorInput(GeneratedBase):\n"
+                "    own_field: str\n"
+            ),
+            "app/entry.py": _ALIAS_ENTRYPOINT,
+        },
+    )
+    assert _contract_fields_reported(findings, "B006") == {
+        "OpenAPIConnectorInput.own_field",
+        "OpenAPIConnectorInput.include_database_regex",
+        "OpenAPIConnectorInput.exclude_database_regex",
+    }
+
+
+def test_b006_on_an_inherited_field_says_not_to_redeclare_it(tmp_path: Path) -> None:
+    """The remedy names regeneration and rules out the hand-copy workaround.
+
+    Shipped connector code carries redeclared mixin fields with a comment saying
+    each one must be copied down to stay B005-protected. It never had to be, and
+    every copy is a drift site — so the finding says so where it is read.
+    """
+    findings = _scan(tmp_path, {"base.py": _BASE_FILE, "app.py": _SUBCLASS_FILE})
+    inherited = [
+        f for f in findings if f.rule_id == "B006" and "MyInput.name" in f.message
+    ]
+    assert inherited
+    assert all("do not redeclare it" in f.message for f in inherited)
