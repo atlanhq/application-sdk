@@ -89,8 +89,11 @@ lines around `finding.line` in `finding.file` before proposing a fix.
   except block.  Example: `raise ValueError(msg)` → `raise ValueError(msg)
   from exc`.
 
-**Judgment rules** (`autofixable = false`) — produce a `"fix"` outcome with
-`classification = "judgment"`; always route to residue:
+**Judgment rules** (`autofixable = true` — the lane applies the prescription;
+`classification = "judgment"` — every result is routed to residue for audit,
+because each site needs a call on what to log or raise) — produce a `"fix"`
+outcome mirroring the error-handling shape in the reference app named by
+`finding.canonical_reference`:
 
 - **E002 TypedExceptPass** — the `except SomeError: pass` swallows the
   exception silently.  Propose replacing `pass` with a log call:

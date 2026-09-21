@@ -93,8 +93,13 @@ _Read by `remediate-finding` when `finding.area == "tests"`._
 Consult the finding's `hint` and `message`, then look at the actual source
 lines around `finding.line` in `finding.file` before proposing a fix.
 
-**Judgment rules** (`autofixable = false`, `classification = "judgment"`; route
-to residue):
+**Judgment rules** (`autofixable = true` — every T-series rule is classified
+auto-fixable; `classification = "judgment"`; route to residue).  The write
+scope still excludes `tests/` and `.github/`, so until the lane's write scope
+is widened every T-series result is a **fully worked proposal** — the exact
+decorator, marker, file move or config change, mirrored from the test layout
+of the reference app named by `finding.canonical_reference` — routed to
+residue for a human to apply, not an applied edit:
 
 - **T001 UnmarkedIntegrationTest** — a test function or class under
   `tests/integration/` (or any path the runner identifies as an integration

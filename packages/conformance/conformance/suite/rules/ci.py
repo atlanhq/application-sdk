@@ -142,7 +142,7 @@ RULES: tuple[RuleDefinition, ...] = (
         # support for "some findings under this ID are, some aren't"), so
         # it's set to the conservative/majority-case value rather than a
         # value that would overstate what most C003 findings actually get.
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="skip",
         since="0.4.0",
         rationale=(
@@ -186,7 +186,7 @@ RULES: tuple[RuleDefinition, ...] = (
         # with-retry.sh, add curl/wget retry flags, or (best) stop downloading
         # and take the tool from the runner cache. Picking between those is a
         # judgment call, so findings route to residue rather than a mechanical fix.
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="skip",
         since="0.18.0",
         rationale=(

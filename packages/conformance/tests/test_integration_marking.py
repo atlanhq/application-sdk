@@ -329,5 +329,5 @@ def test_t001_rule_metadata() -> None:
     assert rule.name == "UnmarkedIntegrationTest"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.BOTH  # useful on the SDK too, not app-only
-    assert rule.autofixable is False  # detect-only → residue (loop can't edit tests/)
+    assert rule.autofixable is True  # detect-only → residue (loop can't edit tests/)
     assert rule.rationale.strip()

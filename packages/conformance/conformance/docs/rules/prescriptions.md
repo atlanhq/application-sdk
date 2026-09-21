@@ -23,9 +23,9 @@ reassigned.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | — | 0.3.0 |
-| [P002](#p002) | `CategoryFieldOverride` | `block` | `both` | `category-immutability` | — | 0.3.0 |
-| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `both` | `error-code-shape` | — | 0.3.0 |
+| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | yes | 0.3.0 |
+| [P002](#p002) | `CategoryFieldOverride` | `block` | `both` | `category-immutability` | yes | 0.3.0 |
+| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `both` | `error-code-shape` | yes | 0.3.0 |
 | [P004](#p004) | `DirectTemporalImport` | `warn` | `app` | `orchestration-seam` | — | 0.5.0 |
 | [P005](#p005) | `PrivateOrchestrationInternalImport` | `warn` | `app` | `orchestration-seam` | — | 0.5.0 |
 | [P006](#p006) | `TemporalImportOutsideAdapter` | `warn` | `sdk` | `orchestration-seam` | — | 0.5.0 |
@@ -41,20 +41,20 @@ reassigned.
 | [P016](#p016) | `EntryPointContractCodeDrift` | `block` | `app` | `entrypoint-alignment` | — | 0.6.0 |
 | [P017](#p017) | `ManualWorkerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
 | [P018](#p018) | `ManualServerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
-| [P019](#p019) | `RawHttpToAtlan` | `warn` | `both` | `client-seam` | — | 0.7.0 |
-| [P020](#p020) | `NonDeterministicPrimitiveInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
-| [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
-| [P022](#p022) | `UnawaitedCoroutine` | `block` | `both` | `async-correctness` | — | 0.8.0 |
-| [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
-| [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
+| [P019](#p019) | `RawHttpToAtlan` | `warn` | `both` | `client-seam` | yes | 0.7.0 |
+| [P020](#p020) | `NonDeterministicPrimitiveInWorkflow` | `warn` | `both` | `determinism` | yes | 0.8.0 |
+| [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `both` | `determinism` | yes | 0.8.0 |
+| [P022](#p022) | `UnawaitedCoroutine` | `block` | `both` | `async-correctness` | yes | 0.8.0 |
+| [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | yes | 0.8.0 |
+| [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | yes | 0.8.0 |
 | [P025](#p025) | `AppNameContractCodeDrift` | `block` | `app` | `app-name-alignment` | — | 0.9.0 |
 | [P026](#p026) | `GetattrOnTypedContractField` | `warn` | `app` | `typed-contract-boundary` | — | 0.9.0 |
 | [P027](#p027) | `AppStateAsCrossTaskChannel` | `warn` | `app` | `state-seam` | — | 0.9.0 |
 | [P028](#p028) | `ManualQualifiedNameFString` | `warn` | `app` | `asset-modeling` | — | 0.9.0 |
-| [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
+| [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | yes | 0.9.0 |
 | [P030](#p030) | `SdrUploadNotCalled` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
-| [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | — | 0.13.0 |
-| [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | — | 0.15.0 |
+| [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | yes | 0.13.0 |
+| [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | yes | 0.15.0 |
 | [P037](#p037) | `SdrAgentJsonNotConsumed` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P038](#p038) | `SdrArtifactMisrooted` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
@@ -67,13 +67,13 @@ reassigned.
 | [P048](#p048) | `AppDerivedPersistentArtifactPrefix` | `warn` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
-| [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
+| [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | yes | 0.25.0 |
 
 ---
 
 ## P001 — `UnboundedContractFields` {#p001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** yes · **Since:** 0.3.0
 
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
 
@@ -134,7 +134,7 @@ carve-out is genuinely unavoidable.  Say that in the reason.
 
 ## P002 — `CategoryFieldOverride` {#p002}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `category-immutability` · **Autofixable:** yes · **Since:** 0.3.0
 
 > AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy
 
@@ -174,7 +174,7 @@ sanctioned use is the justified inline suppression `# conformance: ignore[P002]
 
 ## P003 — `ErrorCodePrefixMismatch` {#p003}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `error-code-shape` · **Autofixable:** yes · **Since:** 0.3.0
 
 > AppError subclass code missing or doesn't start with the parent leaf's category prefix
 
@@ -825,7 +825,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P019 — `RawHttpToAtlan` {#p019}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `client-seam` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `client-seam` · **Autofixable:** yes · **Since:** 0.7.0
 
 > Raw HTTP request to an Atlan endpoint (/api/meta, /api/service) instead of the pyatlan client
 
@@ -870,7 +870,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P020 — `NonDeterministicPrimitiveInWorkflow` {#p020}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** yes · **Since:** 0.8.0
 
 > Non-deterministic time/uuid/sleep/random call in workflow-context code
 
@@ -909,7 +909,7 @@ exception with `# conformance: ignore[P020] <reason>`.
 
 ## P021 — `SideEffectIoInWorkflow` {#p021}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** yes · **Since:** 0.8.0
 
 > File / network / env / process I/O in workflow-context code
 
@@ -940,7 +940,7 @@ conformance: ignore[P021] <reason>`.
 
 ## P022 — `UnawaitedCoroutine` {#p022}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.8.0
 
 > A same-class async method is called without await (dropped coroutine)
 
@@ -976,7 +976,7 @@ constructed coroutine is deliberately discarded and that is provably harmless.
 
 ## P023 — `BlockingCallInAsyncDef` {#p023}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.8.0
 
 > Event-loop re-entry bridge or blocking sync call inside an async def
 
@@ -1041,7 +1041,7 @@ to residue.  Land as `WARN`; suppress with `# conformance: ignore[P023] <reason>
 
 ## P024 — `SyncAtlanClientInApp` {#p024}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.8.0
 
 > Synchronous pyatlan AtlanClient used instead of the async client
 
@@ -1253,7 +1253,7 @@ ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
 
 ## P029 — `SdrManifestMissingAgentJson` {#p029}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** yes · **Since:** 0.9.0
 
 > SDR agent manifest must surface agent_json + extraction_method at the top level of dag.extract.inputs.args
 
@@ -1458,7 +1458,7 @@ absence of an upload call is by design, not a gap.
 
 ## P031 — `SharedDefaultExecutorOffload` {#p031}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.13.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.13.0
 
 > Thread offload onto asyncio's shared default executor instead of run_in_thread()
 
@@ -1498,7 +1498,7 @@ Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
 
 ## P036 — `HandRolledProcessIsolation` {#p036}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.15.0
 
 > Bare ProcessPoolExecutor / multiprocessing child instead of the run_fault_isolated() / run_best_effort() seam
 
@@ -2304,7 +2304,7 @@ SARIF.
 
 ## P051 — `SdrPreflightUnavailable` {#p051}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `sdr-readiness` · **Autofixable:** yes · **Since:** 0.25.0
 
 > SDR app locks application-sdk below the 3.30.0 floor for interactive setup (test auth / preflight / metadata browsing)
 

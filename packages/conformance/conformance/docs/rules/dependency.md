@@ -17,9 +17,9 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [D001](#d001) | `UnpinnedSdkDependency` | `block` | `app` | `dependency-pinning` | yes | 0.4.0 |
 | [D002](#d002) | `RedeclaredSdkManagedDependency` | `warn` | `app` | `dependency-pinning` | yes | 0.4.0 |
-| [D003](#d003) | `UnusedDependency` | `warn` | `both` | `dependency-hygiene` | — | 0.5.0 |
+| [D003](#d003) | `UnusedDependency` | `warn` | `both` | `dependency-hygiene` | yes | 0.5.0 |
 | [D004](#d004) | `RedeclaredSdkManagedDependencyInGroups` | `warn` | `app` | `dependency-pinning` | yes | 0.5.0 |
-| [D005](#d005) | `UnknownSdkExtra` | `block` | `app` | `dependency-pinning` | — | 0.5.0 |
+| [D005](#d005) | `UnknownSdkExtra` | `block` | `app` | `dependency-pinning` | yes | 0.5.0 |
 | [D006](#d006) | `IncompatibleRequiresPython` | `warn` | `app` | `python-version` | yes | 0.5.0 |
 | [D007](#d007) | `NonStandardBuildBackend` | `warn` | `app` | `build-system` | yes | 0.5.0 |
 | [D008](#d008) | `WeakenedTypeChecking` | `warn` | `app` | `tooling-baseline` | yes | 0.5.0 |
@@ -27,8 +27,8 @@ Suppress a finding on the violating line or the line directly above it:
 | [D010](#d010) | `QueryTransformerWithoutDuckdb` | `block` | `app` | `runtime-dependencies` | — | 0.18.0 |
 | [D011](#d011) | `ConformanceDependencyContract` | `block` | `app` | `dependency-tooling` | yes | 0.23.0 |
 | [D012](#d012) | `UnpinnedPackageIndex` | `warn` | `both` | `supply-chain` | yes | 0.30.0 |
-| [D013](#d013) | `NonPyPILockfileIndex` | `warn` | `both` | `supply-chain` | — | 0.30.0 |
-| [D014](#d014) | `AbsoluteResolverFence` | `warn` | `both` | `supply-chain` | — | 0.31.0 |
+| [D013](#d013) | `NonPyPILockfileIndex` | `warn` | `both` | `supply-chain` | yes | 0.30.0 |
+| [D014](#d014) | `AbsoluteResolverFence` | `warn` | `both` | `supply-chain` | yes | 0.31.0 |
 | [D015](#d015) | `PyrightExcludeClobbersDefaults` | `warn` | `both` | `tooling-baseline` | yes | 0.32.0 |
 
 ---
@@ -90,7 +90,7 @@ the runtime environment, this rule is skipped silently.
 
 ## D003 — `UnusedDependency` {#d003}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `dependency-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `dependency-hygiene` · **Autofixable:** yes · **Since:** 0.5.0
 
 > A package declared in [project.dependencies] is never imported in source
 
@@ -158,7 +158,7 @@ this rule is skipped silently. Cite: BLDX-1410.
 
 ## D005 — `UnknownSdkExtra` {#d005}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
 
 > Reference to an atlan-application-sdk extra the SDK does not publish
 
@@ -515,7 +515,7 @@ rule pins the index; `D013` checks whether a non-PyPI host has already reached
 
 ## D013 — `NonPyPILockfileIndex` {#d013}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** — · **Since:** 0.30.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.30.0
 
 > uv.lock resolves packages from a host that is not PyPI, or embeds an index credential
 
@@ -567,7 +567,7 @@ inert must not read as a clean result.  Cite: FND-1928.
 
 ## D014 — `AbsoluteResolverFence` {#d014}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** — · **Since:** 0.31.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.31.0
 
 > pyproject.toml pins [tool.uv] exclude-newer to a fixed date, freezing every resolve in the repo
 

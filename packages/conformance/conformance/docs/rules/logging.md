@@ -17,23 +17,23 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [L001](#l001) | `FStringInLogMessage` | `block` | `both` | `log-format` | yes | 0.4.0 |
 | [L002](#l002) | `NonCanonicalLoggerFactory` | `block` | `both` | `log-format` | yes | 0.4.0 |
-| [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `both` | `log-format` | — | 0.4.0 |
+| [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `both` | `log-format` | yes | 0.4.0 |
 | [L004](#l004) | `ExceptBlockMissingExcInfoLog` | `block` | `both` | `missing-traceback` | yes | 0.4.0 |
 | [L005](#l005) | `PrintInProductionCode` | `warn` | `both` | `log-format` | yes | 0.4.0 |
-| [L006](#l006) | `InfoInTightLoop` | `warn` | `both` | `log-level` | — | 0.4.0 |
+| [L006](#l006) | `InfoInTightLoop` | `warn` | `both` | `log-level` | yes | 0.4.0 |
 | [L007](#l007) | `LoggerCriticalUsage` | `warn` | `both` | `log-level` | yes | 0.4.0 |
-| [L008](#l008) | `UnguardedExpensiveDebug` | `warn` | `both` | `log-performance` | — | 0.4.0 |
-| [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `both` | `log-noise` | — | 0.4.0 |
-| [L010](#l010) | `CredentialInLogOutput` | `block` | `both` | `security` | — | 0.4.0 |
+| [L008](#l008) | `UnguardedExpensiveDebug` | `warn` | `both` | `log-performance` | yes | 0.4.0 |
+| [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `both` | `log-noise` | yes | 0.4.0 |
+| [L010](#l010) | `CredentialInLogOutput` | `block` | `both` | `security` | yes | 0.4.0 |
 | [L011](#l011) | `StringConcatenationInLog` | `block` | `both` | `log-format` | yes | 0.4.0 |
-| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `both` | `log-crash` | — | 0.4.0 |
+| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `both` | `log-crash` | yes | 0.4.0 |
 | [L013](#l013) | `StdlibArbitraryKwargs` | `block` | `both` | `log-crash` | yes | 0.4.0 |
-| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `both` | `log-format` | — | 0.4.0 |
+| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `both` | `log-format` | yes | 0.4.0 |
 | [L015](#l015) | `DictConfigDisableExistingLoggers` | `warn` | `both` | `log-config` | yes | 0.4.0 |
-| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `both` | `log-config` | — | 0.4.0 |
+| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `both` | `log-config` | yes | 0.4.0 |
 | [L017](#l017) | `LoggerExceptionUsage` | `warn` | `both` | `log-level` | yes | 0.4.0 |
-| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `both` | `log-format` | — | 0.4.0 |
-| [L019](#l019) | `DiscardedBindResult` | `warn` | `both` | `log-config` | — | 0.4.0 |
+| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `both` | `log-format` | yes | 0.4.0 |
+| [L019](#l019) | `DiscardedBindResult` | `warn` | `both` | `log-config` | yes | 0.4.0 |
 | [L020](#l020) | `DeprecatedLoggingWarn` | `warn` | `both` | `log-format` | yes | 0.4.0 |
 | [L021](#l021) | `MissingLoggingLintRules` | `warn` | `both` | `log-config` | yes | 0.4.0 |
 
@@ -123,7 +123,7 @@ records unfindable on the tenant UI.
 
 ## L003 — `ExtraKwargsWrongFramework` {#l003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > extra={} used where framework expects direct kwargs (or vice versa)
 
@@ -201,7 +201,7 @@ guard. For those, stdout is the user interface, not a logging bypass.
 
 ## L006 — `InfoInTightLoop` {#l006}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.info() inside a tight loop — generates excessive log volume
 
@@ -247,7 +247,7 @@ on the observability platform.
 
 ## L008 — `UnguardedExpensiveDebug` {#l008}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-performance` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-performance` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Expensive computation in logger.debug() argument — evaluates eagerly
 
@@ -284,7 +284,7 @@ if logger.isEnabledFor(logging.DEBUG):
 
 ## L009 — `WarnThenRaiseDuplication` {#l009}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-noise` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-noise` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.warning/error immediately before raise — duplicate log records
 
@@ -306,7 +306,7 @@ available to the caller.  Otherwise: just re-raise.
 
 ## L010 — `CredentialInLogOutput` {#l010}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Credential/secret value in log output — security vulnerability
 
@@ -360,7 +360,7 @@ way that breaks log grouping.  Rewrite as %-style message body.
 
 ## L012 — `StdlibExtraReservedKeyCollision` {#l012}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `log-crash` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `log-crash` · **Autofixable:** yes · **Since:** 0.4.0
 
 > extra={} key collides with stdlib LogRecord attribute — crashes caller
 
@@ -412,7 +412,7 @@ from structlog/loguru. Applies to stdlib only.
 
 ## L014 — `StructlogEventKwargOverwrite` {#l014}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > event= kwarg in structlog silently overwrites the log message
 
@@ -458,7 +458,7 @@ Applies to stdlib only.
 
 ## L016 — `BasicConfigNoopAfterFirstCall` {#l016}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Multiple basicConfig() calls — second+ are silent no-ops
 
@@ -511,7 +511,7 @@ only to satisfy third-party Temporal callers and immediately delegates to
 
 ## L018 — `KwargsInApplicationLogCalls` {#l018}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > kwargs in application log calls — use %-style message body instead
 
@@ -534,7 +534,7 @@ directly in the message body using %-style formatting.
 
 ## L019 — `DiscardedBindResult` {#l019}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.bind() result discarded — bind() returns a new logger
 

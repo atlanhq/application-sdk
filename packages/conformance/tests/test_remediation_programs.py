@@ -171,6 +171,74 @@ def test_every_area_declares_rule_ids(area: str) -> None:
     ), f"{area} forwards rule_ids but never declares it as a parameter"
 
 
+REFERENCE_APPS = (
+    "atlan-mysql-app",
+    "atlan-metabase-app",
+    "atlan-openapi-app",
+    "atlan-hello-world-app",
+)
+
+
+def test_remediate_finding_requires_the_reference_apps() -> None:
+    """A small model must not fix from memory: the contract has to name the
+    four reference apps, tell the model to load the full checkout, and thread
+    the per-rule pointer (`canonical_reference`) into the finding it reads."""
+    text = _read("functions/remediate-finding.prose.md")
+    for app in REFERENCE_APPS:
+        assert app in text, f"remediate-finding never names {app}"
+    assert "`canonical_reference`" in text
+    assert "remediation/refs/" in text
+    assert "git clone" in text
+
+
+def test_remediate_finding_declares_impact_and_verification() -> None:
+    """The result must carry what was checked before the edit and what was
+    verified after it — a reviewer reads evidence, not an outcome — and a
+    migration rule must leave a brief instead of an edit."""
+    text = _read("functions/remediate-finding.prose.md")
+    for field in ("`impact`", "`verification`", "`migration_brief`"):
+        assert field in text, f"remediate-finding does not declare {field}"
+    for check in (
+        "finding_cleared",
+        "gate_passed",
+        "no_new_findings",
+        "matches_reference",
+    ):
+        assert check in text, f"verification does not name {check}"
+    assert "autofixable == false" in text
+    assert "not_remediable = true" in text
+
+
+def test_detect_violations_surfaces_the_canonical_reference() -> None:
+    """The pointer is only useful if the finding carries it."""
+    text = _read("functions/detect-violations.prose.md")
+    assert "atlan/canonicalReference" in text
+    assert "`canonical_reference`" in text
+
+
+def test_loop_carries_the_brief_and_reports_verification(loop: str) -> None:
+    """The loop must not flatten a migration brief into a generic note, and the
+    residue report must show impact/verification next to every item."""
+    body = loop.split("### Delegation")[1]
+    assert "result.migration_brief" in body
+    emit = body.split("emit residue as structured report")[1]
+    assert "result.impact" in emit
+    assert "result.verification" in emit
+    assert "migration_brief" in emit
+
+
+def test_bootstrapped_skill_tells_the_runner_to_load_the_reference_apps() -> None:
+    """The vendored SKILL.md is what a headless lane actually reads; the
+    reference-app duty has to be stated there, not only in the prose."""
+    template = (
+        files("conformance").joinpath("bootstrap/templates/remediate.md").read_text()
+    )
+    for app in REFERENCE_APPS:
+        assert app in template, f"bootstrap remediate.md never names {app}"
+    assert "remediation/refs/" in template
+    assert "migration_brief" in template
+
+
 def test_remediate_finding_declares_the_evidence_field() -> None:
     """`require_cited_evidence` gates on `result.evidence`; the producer contract
     must declare it or the blind-gate areas key off an unspecified model field

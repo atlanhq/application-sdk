@@ -23,18 +23,18 @@ reassigned.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | — | 0.3.0 |
+| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | yes | 0.3.0 |
 | [O002](#o002) | `LegacyAssetSerialization` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
-| [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `both` | `dag-write-path` | — | 0.18.0 |
+| [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `both` | `dag-write-path` | yes | 0.18.0 |
 | [O006](#o006) | `DirectRocksdictImport` | `warn` | `app` | `canonical-dependency` | — | 0.18.0 |
 
 ---
 
 ## O001 — `OrjsonOverStdlibJson` {#o001}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `canonical-dependency` · **Autofixable:** yes · **Since:** 0.3.0
 
 > json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)
 
@@ -171,7 +171,7 @@ when a connector is intentionally pinned to the legacy `AtlasTransformer` surfac
 
 ## O005 — `UnresolvedAppNamePlaceholder` {#o005}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `dag-write-path` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `dag-write-path` · **Autofixable:** yes · **Since:** 0.18.0
 
 > Hardcoded '{app_name}' left unsubstituted in a plain string literal
 

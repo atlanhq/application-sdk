@@ -854,8 +854,12 @@ def test_to_reporting_descriptor_roundtrip() -> None:
     assert descriptor.properties["atlan/tier"] == "block"
     assert descriptor.properties["atlan/mechanism"] == "static"
     assert descriptor.properties["atlan/category"] == "silent-swallow"
-    assert descriptor.properties["atlan/autofixable"] is False
+    assert descriptor.properties["atlan/autofixable"] is True
     assert descriptor.properties["atlan/orthogonalGate"] == "tests"
+    # The reference-app pointer rides the wire so a remediation model reading
+    # only the SARIF knows which file to open before proposing a fix.
+    assert descriptor.properties["atlan/canonicalReference"] == p001.canonical_reference
+    assert "atlan-" in descriptor.properties["atlan/canonicalReference"]
 
 
 def test_to_reporting_descriptor_roundtrip_forces_external_influence() -> None:

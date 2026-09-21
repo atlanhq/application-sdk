@@ -17,7 +17,7 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [I001](#i001) | `DockerfileWrongBaseImage` | `block` | `app` | `dockerfile-base` | yes | 0.5.0 |
 | [I002](#i002) | `DockerfileEntrypointOverride` | `block` | `app` | `dockerfile-entrypoint` | yes | 0.5.0 |
-| [I003](#i003) | `DockerfileAppModuleMissing` | `block` | `app` | `dockerfile-env` | — | 0.5.0 |
+| [I003](#i003) | `DockerfileAppModuleMissing` | `block` | `app` | `dockerfile-env` | yes | 0.5.0 |
 | [I004](#i004) | `DockerfileAppModeHardcoded` | `block` | `app` | `dockerfile-env` | yes | 0.5.0 |
 | [I005](#i005) | `DockerfileRootUser` | `block` | `app` | `dockerfile-security` | yes | 0.5.0 |
 
@@ -95,7 +95,7 @@ environment where daprd is required.  Inline suppression: `# conformance: ignore
 
 ## I003 — `DockerfileAppModuleMissing` {#i003}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-env` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-env` · **Autofixable:** yes · **Since:** 0.5.0
 
 > ENV ATLAN_APP_MODULE is not set; the runtime needs this to locate and instantiate the application class
 

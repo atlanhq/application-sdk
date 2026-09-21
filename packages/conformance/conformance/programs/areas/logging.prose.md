@@ -171,10 +171,12 @@ around `finding.line` in `finding.file` before proposing a fix.
   residue for the owner.
 
 **All other L-series rules** (L003, L006, L008, L009, L010, L012, L014,
-L016, L018, L019) — `autofixable = false`; produce `classification =
-"judgment"` and a best-effort fix guided by the `hint` and `message` in the
-finding.  L010 (CredentialInLogOutput) is a security finding; always route to
-residue and never auto-apply.
+L016, L018, L019) — `autofixable = true` (the lane applies the prescription),
+`classification = "judgment"` (every result is routed to residue for audit,
+because the edit is a per-site call); produce a fix guided by the `hint`, the
+`message` and the logging pattern in the reference app named by
+`finding.canonical_reference`.  L010 (CredentialInLogOutput) is a security
+finding; always route to residue and never auto-apply.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 

@@ -117,7 +117,7 @@ def test_t023_rule_metadata() -> None:
     assert rule.name == "E2EHarnessScaffoldHandWritten"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.APP
-    assert rule.autofixable is False
+    assert rule.autofixable is True
     assert rule.since == "0.18.0"
     assert rule.category == "e2e-ci"
     assert rule.orthogonal_gate == "pkl-eval"

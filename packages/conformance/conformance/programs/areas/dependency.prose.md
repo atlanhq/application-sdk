@@ -292,8 +292,9 @@ fix.  The re-detection gate is authoritative for this area — see
   `# conformance: ignore[D012] <reason>` on the finding's line and name the
   mandate in the justification.
 
-**Advisory rules** (`autofixable = false`, `classification = "judgment"`;
-WARN-tier — route to residue for human decision):
+**Advisory rules** (`autofixable = true` — the lane applies the prescription;
+`classification = "judgment"` — WARN-tier, every result is routed to residue
+for human confirmation):
 
 - **D003 UnusedDependency** — a package declared in `[project.dependencies]`
   (or a `[project.optional-dependencies.*]` / `[dependency-groups.*]` array) is
@@ -408,9 +409,14 @@ WARN-tier — route to residue for human decision):
   SDK's range by hand.  Either way note that `uv lock` must be re-run; the
   relock touches the resolved environment, so route to residue rather than
   auto-applying (the D-series loop does not `uv sync` between edit and gates).
+  D010 is `autofixable = false` — a **migration** rule: return
+  `not_remediable = true` with a `migration_brief` naming the extra to adopt
+  and the relock step, and apply nothing (see `remediate-finding`'s
+  *Reference apps, impact analysis and verification*).
 
-**Judgment rules** (`autofixable = false`, `classification = "judgment"`; route
-to residue):
+**Judgment rules** (`autofixable = true` — the lane applies the prescription;
+`classification = "judgment"` — every result is routed to residue for human
+confirmation):
 
 - **D005 UnknownSdkExtra** — the `atlan-application-sdk[<extra>]` reference
   names an extra the SDK does not publish.  Propose the closest published extra

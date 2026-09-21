@@ -76,7 +76,11 @@ loop until violations is empty or attempts >= max_attempts:
         mode: mode
 
       if result.not_remediable:
-        add finding to residue with note "not remediable in this phase"
+        # A migration rule (finding.autofixable == false) arrives here by
+        # design, carrying the migration brief remediate-finding wrote after
+        # reading the reference app; keep it verbatim so the residue entry is
+        # the starting point for the connector's per-rule sub-issue.
+        add finding to residue with note (result.migration_brief or "not remediable in this phase")
         continue
 
       # Blind-gate areas (P, S) must not accept an uncited value.  Checked
@@ -174,6 +178,11 @@ emit residue as structured report
     - classification and outcome
     - deliver_as_draft (own column — a human applying proposals must see that
       anything delivered from this area ships as a draft with a named reviewer)
+    - impact and verification — `result.impact` (what was checked around the
+      edit, what was folded in, what is left for a human) and
+      `result.verification` (finding_cleared / gate_passed / no_new_findings /
+      matches_reference), or the `migration_brief` for a finding that was not
+      applied because its rule is a migration rule
     - reason the item is in residue (judgment / suppression / recheck-failed / not-remediable)
 ```
 

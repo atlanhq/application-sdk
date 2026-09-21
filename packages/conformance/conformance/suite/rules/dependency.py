@@ -185,7 +185,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="dependency-pinning",
-        autofixable=False,
+        autofixable=True,
         since="0.5.0",
         rationale=(
             "uv silently drops an unknown extra, so a typo like "
@@ -340,7 +340,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="dependency-hygiene",
-        autofixable=False,
+        autofixable=True,
         since="0.5.0",
         rationale=(
             "A package declared in core dependencies but never imported is either dead "
@@ -760,7 +760,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="supply-chain",
-        autofixable=False,
+        autofixable=True,
         since="0.30.0",
         rationale=(
             "D012 is preventive; this is the damage. A uv.lock whose URLs name an internal "
@@ -835,7 +835,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="supply-chain",
-        autofixable=False,
+        autofixable=True,
         since="0.31.0",
         rationale=(
             "A repo-local '[tool.uv] exclude-newer' pinned to a fixed date is written as a "

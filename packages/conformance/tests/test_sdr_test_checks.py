@@ -54,7 +54,7 @@ def test_t002_rule_metadata() -> None:
     assert rule.name == "MissingSdrTestClass"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.APP
-    assert rule.autofixable is False
+    assert rule.autofixable is True
     assert rule.rationale.strip()
     assert rule.since == "0.9.0"
     assert rule.category == "sdr-test-coverage"
@@ -65,7 +65,7 @@ def test_t003_rule_metadata() -> None:
     assert rule.name == "DeprecatedSdrHarness"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.APP
-    assert rule.autofixable is False
+    assert rule.autofixable is True
     assert rule.rationale.strip()
     assert rule.since == "0.9.0"
     assert rule.category == "sdr-test-coverage"

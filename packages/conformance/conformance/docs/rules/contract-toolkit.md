@@ -17,7 +17,7 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [K001](#k001) | `ContractAmendsLegacyModule` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K002](#k002) | `LegacyContractApi` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K003](#k003) | `ContractLockDrift` | `block` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K003](#k003) | `ContractLockDrift` | `block` | `app` | `contract-toolkit` | yes | 0.9.0 |
 | [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.13.0 |
@@ -25,10 +25,10 @@ Suppress a finding on the violating line or the line directly above it:
 | [K008](#k008) | `ToolkitSourceNonCanonical` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
 | [K009](#k009) | `UnresolvedScaffoldPlaceholder` | `block` | `app` | `contract-toolkit` | — | 0.12.0 |
 | [K010](#k010) | `E2EScaffoldingMissing` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
-| [K011](#k011) | `AppIdMissingFromContract` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
-| [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
+| [K011](#k011) | `AppIdMissingFromContract` | `block` | `app` | `contract-toolkit` | yes | 0.14.0 |
+| [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | yes | 0.14.0 |
 | [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
-| [K014](#k014) | `ReleaseModelUndeclared` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
+| [K014](#k014) | `ReleaseModelUndeclared` | `warn` | `app` | `contract-toolkit` | yes | 0.18.0 |
 | [K015](#k015) | `LegacyWorkflowTypeContractDrift` | `block` | `app` | `contract-toolkit` | — | 0.23.0 |
 | [K016](#k016) | `EntrypointArtifactSchemaMissing` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
 | [K017](#k017) | `ArtifactSchemaWriterMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
@@ -169,7 +169,7 @@ comment-only line directly above it.
 
 ## K003 — `ContractLockDrift` {#k003}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.9.0
 
 > contract/PklProject pin does not match the resolved version in PklProject.deps.json — re-resolve the lock
 
@@ -556,7 +556,7 @@ single-entrypoint path.
 
 ## K011 — `AppIdMissingFromContract` {#k011}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.14.0
 
 > atlan.yaml is present but declares no top-level app_id — the marketplace publish will 404
 
@@ -612,7 +612,7 @@ app that still ships an `atlan.yaml`.
 
 ## K012 — `GeneratePoeTaskMissing` {#k012}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.14.0
 
 > pyproject.toml defines no [tool.poe.tasks.generate] task — the SDK Certify step will abort the publish
 
@@ -736,7 +736,7 @@ resolution is to fix the contract and regenerate. Never hand-edit `manifest.json
 
 ## K014 — `ReleaseModelUndeclared` {#k014}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.18.0
 
 > atlan.yaml declares no top-level release_model, so the app silently inherits the 'cd' default and auto-publishes on merge
 

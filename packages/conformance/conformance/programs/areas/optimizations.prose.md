@@ -70,8 +70,15 @@ _Read by `remediate-finding` when `finding.area == "optimizations"`._
 Consult the finding's `hint` and `message`, then look at the actual source
 lines around `finding.line` in `finding.file` before proposing a fix.
 
-**Judgment rules** (`autofixable = false`) — produce a `"fix"` outcome with
-`classification = "judgment"`; always route to residue:
+**Judgment rules** (`classification = "judgment"`; always route to residue).
+Two flags apply in this area: **O001 and O005 are `autofixable = true`** — the
+lane applies the prescription below and residues the result for audit —
+while **O002, O003, O004 and O006 are `autofixable = false`**, *migration*
+rules: for those, apply nothing and return `not_remediable = true` with a
+`migration_brief` built from the reference app named by
+`finding.canonical_reference` (see `remediate-finding`'s *Reference apps,
+impact analysis and verification*).  Produce a `"fix"` outcome only for the
+two auto-fixable rules:
 
 - **O001 OrjsonOverStdlibJson** — the site calls `json.dumps(...)` or
   `json.loads(...)` on the stdlib module.  `orjson` is **not** a drop-in, so

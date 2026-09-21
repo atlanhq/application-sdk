@@ -40,7 +40,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="credential-storage",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "A credential baked into source is committed to version control in plaintext, "
@@ -87,7 +87,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="credential-resolution",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Reading a credential straight from os.environ bypasses the SDK's secret-store "

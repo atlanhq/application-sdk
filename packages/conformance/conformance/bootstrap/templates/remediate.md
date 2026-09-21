@@ -71,6 +71,45 @@ in-loop `bootstrap`, which is per-finding and gated by recheck.
 **zero C002 findings**. One that appears means Phase 0 did not converge, and is
 an independent check on the same property.
 
+## Reference apps — load before any fix, verify against them after
+
+Do not fix from memory. Every app-facing rule names a `canonical_reference`
+(SARIF `atlan/canonicalReference` on the finding): a file in one of the four
+maintained reference apps that already has the compliant shape. Before the
+first edit of a run, make the **full checkout** of all four available:
+
+```
+mkdir -p remediation/refs
+for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app atlan-hello-world-app; do
+  [ -d "remediation/refs/$app" ] || git clone --depth 1 "https://github.com/atlanhq/$app.git" "remediation/refs/$app"
+done
+```
+
+`remediation/refs/` is scratch — never edited, never committed, never in a
+fix's `touched_files`.
+
+For every finding, in this order (the full contract is
+`$PROGRAMS/functions/remediate-finding.prose.md`, section *Reference apps,
+impact analysis and verification*):
+
+1. **Read** the file the finding's `canonical_reference` names — the whole
+   file — then grep that reference app for the same pattern, and mirror it.
+   Never invent an API, kwarg or config key the reference app does not use.
+2. **Analyse the impact** across the whole repo before applying: callers and
+   importers, tests that pin the old behaviour, the contract and generated
+   tree, `pyproject.toml`/`uv.lock`, `.env.example` and docs. Fold every
+   in-scope consequence into the same edit; list the rest in `impact`.
+3. **Verify** after applying and record it in `verification`: the finding is
+   gone (`recheck-narrowest`), the orthogonal gate passed, a whole-series
+   re-detect on the touched files introduced **no new finding for any rule**,
+   and the fixed site now reads like the reference. All four true, or revert.
+
+`autofixable = true` rules (the **auto-fixable** ruleset) are applied this
+way. `autofixable = false` rules (the **migration** ruleset) are never applied
+by the loop: steps 1–2 still run, and the result is a `migration_brief` in
+residue — target state in the reference app, files that would change, the
+external skill to run — for the connector's per-rule sub-issue.
+
 ## Phase 1+ — run the loop
 
 Only after Phase 0 has converged (or been recorded as residue):

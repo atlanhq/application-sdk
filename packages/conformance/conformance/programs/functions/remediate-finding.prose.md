@@ -12,7 +12,13 @@ description: >
 
 - `finding` (object, required) — a finding as returned by `detect-violations`:
   `rule_id`, `area`, `file`, `line`, `column`, `message`, `hint`,
-  `autofixable`, `disposition`, `fingerprint`, `forces_external_influence`.
+  `autofixable`, `disposition`, `fingerprint`, `forces_external_influence`,
+  `canonical_reference`.  `autofixable` is the rule's classification —
+  `true` means an *auto-fixable* rule the lane may apply a prescription for,
+  `false` means a *migration* rule that is never applied by this function
+  (see *Reference apps, impact analysis and verification* below).
+  `canonical_reference` names the reference-app file that already has the
+  compliant shape; it is mandatory reading before any edit.
 - `mode` (string, required) — `"default"` or `"strict"`.  The `suppress`
   outcome is only available for WARNING-tier findings when mode is `"strict"`.
 
@@ -55,6 +61,28 @@ description: >
   procedures for how each is populated deterministically). `detect-fix-recheck`
   reverts exactly this file set if the fix fails its gates, so a multi-file fix
   that is later reverted doesn't leave unrelated files mutated in the tree.
+- `impact` — string, **mandatory for every `fix` outcome**.  The impact
+  analysis performed before the edit was applied: which callers, importers,
+  tests, contract/generated artifacts and config files were checked, which
+  consequential edits were folded into this fix (and are therefore in
+  `touched_files`), and which consequences fall outside the write scope and
+  need a human (tests to adjust, a `.github/` file, an owner decision).  A
+  reviewer must be able to read it and know the app is not left half-changed.
+- `verification` — object, **mandatory for every `fix` outcome**, with four
+  booleans: `finding_cleared` (rule-scoped re-detect no longer reports the
+  fingerprint), `gate_passed` (the rule's orthogonal gate passed),
+  `no_new_findings` (a whole-series re-detect on `touched_files` introduced no
+  finding for any rule that was not there before) and `matches_reference` (the
+  fixed site now has the shape of the file `finding.canonical_reference`
+  names).  All four must be `true` for `outcome = "fix"`; otherwise revert and
+  route to residue naming the check that failed.
+- `migration_brief` — string, set together with `not_remediable = true` for
+  every finding whose rule has `autofixable = false` (a *migration* rule).
+  What the target state looks like in the reference app (file and symbol),
+  which files in this app would have to change, the external skill or
+  migration guide to run when the rule names one, and any owner decision the
+  migration needs.  The loop carries it into residue verbatim so the
+  connector's migration sub-issue starts from it rather than from nothing.
 
 ### Write-scope constraint
 
@@ -159,6 +187,110 @@ invocation that omits `external_influence` still can't skip human review for
 this rule.
 
 No other rule or area may write to `.github/`, `tests/`, or `conformance/`.
+
+### Reference apps, impact analysis and verification
+
+_Applies to every finding in every area, before and after the area
+prescription below.  The model executing this function may be a small one; it
+must not fix from memory, and it must not declare a fix done because the edit
+compiled._
+
+**1. Load the reference app before proposing anything.**
+
+Every app-facing rule names a `canonical_reference`: a concrete file — and
+usually a symbol — in one of the four maintained reference apps that already
+has the compliant shape.  It arrives on the finding as
+`finding.canonical_reference` (SARIF `atlan/canonicalReference`).  Only these
+four apps count; an arbitrary connector may be mid-migration and is not a
+model of anything:
+
+| App | What it is the reference for |
+|---|---|
+| `atlan-mysql-app` | SQL-style connectors: extraction, transform templates, the contract and generated tree, SDR |
+| `atlan-metabase-app` | API-style / BI connectors: pagination, typed clients, asset mapping |
+| `atlan-openapi-app` | packaging and tooling baseline: `pyproject.toml`, pyright, ruff, CI shims |
+| `atlan-hello-world-app` | the minimal skeleton: what an app needs and nothing else |
+
+- Have the **full checkout** of all four available under `remediation/refs/`
+  at `origin/main` for the whole run — the named file is the entry point, but
+  the fix must mirror how the reference app does the pattern *everywhere*, and
+  cross-references (a contract field, a generated artifact, a test fixture)
+  resolve only inside a complete tree:
+
+  ```sh
+  mkdir -p remediation/refs
+  for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app atlan-hello-world-app; do
+    [ -d "remediation/refs/$app" ] || git clone --depth 1 "https://github.com/atlanhq/$app.git" "remediation/refs/$app"
+  done
+  ```
+
+  `remediation/refs/` is scratch.  It is never part of an edit, never appears
+  in `touched_files`, and is never committed.
+- Open the file `finding.canonical_reference` names and read the **whole
+  file**, not the one line.  Then grep that reference app for the same pattern
+  the rule is about — the SDK symbol, decorator, config key, contract field or
+  log call — so the fix mirrors how the reference app does it consistently.
+- **Mirror the reference.**  Do not invent an API, keyword argument, config
+  key or import the reference app does not use.  The finding's `hint` and the
+  area prescription say *what to change*; the reference app says *what the
+  result must look like*.  The app named in `canonical_reference` is
+  authoritative for that rule; the other three are for cross-checking only.
+- If the reference app itself does not exhibit the pattern (or has an open
+  finding for the same rule), do not guess: say so in `impact`, set
+  `classification = "judgment"` and route to residue.
+
+**2. Analyse the impact before applying.**
+
+A one-line fix can break the app somewhere else.  Before `apply`, enumerate —
+with grep across the **whole repo under scan**, not just `finding.file`:
+
+- every caller, importer or subclass of a symbol the edit renames, removes or
+  retypes;
+- every test under `tests/` that pins the old behaviour (this function may not
+  edit `tests/`, but it must list them: the orthogonal gate will run them);
+- the contract and generated tree — `contract/**/*.pkl`, `app/generated/**`,
+  `atlan.yaml`, `artifact_schemas.json`, `contract_schema.lock.json` — whenever
+  the edit touches an `Input`/`Output` contract, an entrypoint name or the app
+  identity;
+- `pyproject.toml` and `uv.lock` whenever a dependency or extra changes;
+- `.env.example`, `README.md` and docs that spell the value being changed.
+
+Fold every consequential change that is inside the write scope into the same
+edit and list it in `touched_files`.  Put everything outside the write scope
+into `impact` so the reviewer — or the connector's per-rule sub-issue — picks
+it up.  Never leave the app half-migrated between two states.
+
+**3. Verify after applying.**
+
+The loop's gates run regardless; this function reports what it verified so a
+reviewer can see the evidence rather than trust the outcome:
+
+- `finding_cleared` — `recheck-narrowest` no longer reports the fingerprint;
+- `gate_passed` — the rule's orthogonal gate (tests / pkl-eval / docker-build)
+  passed;
+- `no_new_findings` — a whole-series re-detect on `touched_files` reports no
+  finding, for **any** rule, that was not present before the edit.  A fix that
+  clears L001 by introducing L011 is not a fix;
+- `matches_reference` — re-open `finding.canonical_reference` and compare: the
+  fixed site now has the reference's shape.
+
+Record the four in `verification`.  If any is `false`, do not report
+`outcome = "fix"`: revert and route to residue naming the failing check.
+
+**Auto-fixable vs migration.**
+
+- `finding.autofixable == true` (an **auto-fixable** rule): follow the area
+  prescription and steps 1–3 above.  The area's apply/suggest mode is
+  unchanged by this section — the suggest-only areas (P, F, S, and I without
+  `apply_unverifiable`) still propose rather than write, and the write-scope
+  constraint still stands — so a T-series or C004 result is a fully worked
+  proposal routed to residue, not an applied edit.
+- `finding.autofixable == false` (a **migration** rule): apply nothing.  Do
+  steps 1 and 2 anyway, then return `not_remediable = true` with a
+  `migration_brief` — target state as the reference app implements it (file
+  and symbol), the files in this app that would change, the external skill or
+  guide to run when the rule names one, and the owner decision if there is
+  one.  The brief is the deliverable; the loop carries it into residue.
 
 ### Dispatch by area
 

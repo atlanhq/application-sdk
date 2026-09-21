@@ -262,6 +262,7 @@ class RuleDefinition(BaseModel):
             superseded_by=self.superseded_by,
             rationale=self.rationale or None,
             forces_external_influence=self.forces_external_influence,
+            canonical_reference=self.canonical_reference or None,
         )
         return ReportingDescriptor(
             id=self.id,

@@ -223,7 +223,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-marking",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Unit/integration separation in CI is enforced purely by pytest markers: "
@@ -277,7 +277,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="sdr-test-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.9.0",
         rationale=(
             "An SDR app that declares self_deployed_runtime: true in atlan.yaml "
@@ -349,7 +349,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="sdr-test-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.9.0",
         rationale=(
             "BaseSDRIntegrationTest is deprecated and removed in v4.0; a subclass "
@@ -453,7 +453,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="dev-entrypoint",
-        autofixable=False,
+        autofixable=True,
         since="0.10.0",
         rationale=(
             "application_sdk.main.main() is the production, "
@@ -528,7 +528,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-assertion-quality",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "Code coverage measures whether a line executed, not whether anything was "
@@ -599,7 +599,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-assertion-quality",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "A test whose body is only 'pass', '...', or a docstring is a placeholder "
@@ -644,7 +644,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-assertion-quality",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "'assert True' and equivalents (assert 1, assert \"x\") satisfy T005's "
@@ -702,7 +702,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-collection",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "pytest only collects files matching its python_files convention "
@@ -759,7 +759,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-collection",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "A module-level pytest.skip(..., allow_module_level=True) that is not "
@@ -820,7 +820,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "Unit tests — method-by-method coverage of helper functions and "
@@ -872,7 +872,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "Integration tests — connecting to the real source and running the app's "
@@ -932,7 +932,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "End-to-end tests — the full pipeline including system apps, operating "
@@ -991,7 +991,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "CI's composite actions locate each tier by directory convention — "
@@ -1045,7 +1045,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="coverage-config",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "A coverage percentage that cannot fail a build is decorative: it is "
@@ -1118,7 +1118,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="coverage-config",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "[tool.coverage.run].omit (or a narrowed source) controls the "
@@ -1184,7 +1184,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.13.0",
         rationale=(
             "The full-DAG e2e worker derives its Temporal task queue as "
@@ -1257,7 +1257,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.13.0",
         rationale=(
             "The companion to T016. T016 polices the worker side (the compose "
@@ -1343,7 +1343,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-collection",
-        autofixable=False,
+        autofixable=True,
         since="0.16.0",
         rationale=(
             "The reusable Tests workflow (application-sdk#2852) runs the "
@@ -1445,7 +1445,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-async-config",
-        autofixable=False,
+        autofixable=True,
         since="0.17.0",
         rationale=(
             "pytest-asyncio has two independent loop-scope knobs in "
@@ -1562,7 +1562,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "The full-DAG e2e is wired once, in the SDK: tests-reusable.yaml owns "
@@ -1645,7 +1645,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "An e2e suite that no workflow can run is worse than no suite at all: it "
@@ -1728,7 +1728,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "P030 polices the silent-zero-assets class statically — a connector whose "
@@ -1805,7 +1805,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -1891,7 +1891,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "BaseE2ETest.mode defaults to RunMode.DIRECT, but the reusable Tests "
@@ -1965,7 +1965,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.22.0",
         rationale=(
             "T012 asks only that tests/e2e/ hold one collectable test, on the agreed "
