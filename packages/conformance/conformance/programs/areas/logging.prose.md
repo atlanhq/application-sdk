@@ -170,13 +170,94 @@ around `finding.line` in `finding.file` before proposing a fix.
   already selects `"G"` on its own, leave it and route the conflict to
   residue for the owner.
 
-**All other L-series rules** (L003, L006, L008, L009, L010, L012, L014,
-L016, L018, L019) — `autofixable = true` (the lane applies the prescription),
-`classification = "judgment"` (every result is routed to residue for audit,
-because the edit is a per-site call); produce a fix guided by the `hint`, the
-`message` and the logging pattern in the reference app named by
-`finding.canonical_reference`.  L010 (CredentialInLogOutput) is a security
-finding; always route to residue and never auto-apply.
+- **L003 ExtraKwargsWrongFramework** — the call passes `extra={...}`, so the
+  context lands in an unindexed nested dict that aggregation queries cannot
+  see.  Move every key into the `%`-style message body as a positional
+  argument and delete the `extra=` kwarg:
+  `logger.info("sync done", extra={"rows": n})` →
+  `logger.info("sync done rows=%d", n)`.  No reference app passes `extra={}`
+  at all — `atlan-metabase-app app/utils.py`'s `to_epoch_ms` logs
+  `"Datetime %r did not match format %r", dt_str, fmt`.  Keep `exc_info`,
+  `stack_info` and `stacklevel`; those are not context kwargs.
+
+- **L006 InfoInTightLoop** — a `logger.info()` sits inside a loop, so the run
+  emits one record per item and the lifecycle milestones drown.  Drop the
+  per-item call to `logger.debug(...)` and, when the loop's outcome is worth
+  an INFO, add **one** summary line after the loop
+  (`logger.info("processed %d assets, %d skipped", total, skipped)`).  Mirror
+  `atlan-metabase-app app/extracts/process.py`, where the per-dashboard skip
+  inside `process_assets` logs at DEBUG.  Do not simply delete the call: the
+  per-item record is still wanted at DEBUG.
+
+- **L008 UnguardedExpensiveDebug** — an argument to `logger.debug()` is
+  computed before the call, so it runs at every level.  Prefer making the
+  argument cheap and letting `%`-style defer the interpolation
+  (`logger.debug("payload %s", obj)` rather than
+  `logger.debug("payload " + json.dumps(obj))`); where the expression is
+  genuinely costly — a `json.dumps` of a large structure, a joined
+  comprehension — wrap the call in `if logger.isEnabledFor(logging.DEBUG):`.
+  `atlan-mysql-app app/client.py`'s `provide_token` shows the cheap form:
+  `"IAM token refreshed for connection (length: %d)", len(token)`.
+
+- **L009 WarnThenRaiseDuplication** — a `logger.warning()`/`logger.error()`
+  immediately precedes a `raise`, so the same failure is recorded twice: once
+  here and once wherever the exception is finally handled.  **Delete the log
+  call** and let the raise be the record — that is the edit in the large
+  majority of sites.  Keep it only when it carries context the caller cannot
+  reconstruct (a loop index, the URL being retried), and then say so in the
+  edit description.  `atlan-metabase-app app/connector.py`'s `transform_data`
+  raises `MissingTypenameInputError` and `MissingOutputPathInputError` with no
+  log line before either.
+
+- **L010 CredentialInLogOutput** — BLOCK, and a security finding.  Log the
+  credential's *name* or *type*, never its value: drop the offending argument
+  or replace it with a non-secret descriptor
+  (`logger.info("using credential %s", cred_name)`), and never a length, a
+  prefix or a mask of the value itself.  `atlan-mysql-app app/client.py`'s
+  `get_iam_role_token` records that AWS credentials were staged and names
+  none of them.  **Always route to residue and never auto-apply**, whatever
+  the mode: a human confirms every credential-shaped change.
+
+- **L012 StdlibExtraReservedKeyCollision** — BLOCK.  A key in `extra={}`
+  collides with a stdlib `LogRecord` attribute (`message`, `module`, `name`,
+  `args`, …), which raises `KeyError` inside `Logger.makeRecord()` and crashes
+  the caller — this is a live runtime break, not a style point.  Rename the
+  key (`module` → `source_module`), or better, move the context into the
+  `%`-style body as L003 prescribes and drop `extra=` entirely.  No reference
+  app builds an `extra={}` dict; `application_sdk/observability/logger_adaptor.py`
+  takes arguments positionally and injects the Temporal context itself.
+
+- **L014 StructlogEventKwargOverwrite** — a structlog call passes `event=`,
+  which *is* structlog's message key, so the domain value silently replaces
+  the log message.  Rename the domain field (`event=` → `event_type=` or the
+  name the payload actually means).  structlog is not a dependency of any
+  reference app; `atlan-metabase-app app/api_types.py` uses the one canonical
+  `get_logger` factory, which is the end state to migrate toward.
+
+- **L016 BasicConfigNoopAfterFirstCall** — `logging.basicConfig()` is called
+  more than once across the repo, and every call after the first is a silent
+  no-op, so which configuration wins depends on import order.  Remove the
+  app's calls: the SDK runtime owns handler configuration exactly once.
+  `atlan-openapi-app app/run_dev.py` boots the runtime and calls it never.
+  If a script genuinely runs outside the SDK runtime, consolidate to a single
+  call in that entrypoint and say so in the edit description.
+
+- **L018 KwargsInApplicationLogCalls** — arbitrary kwargs on an application
+  log call land in an unindexed blob and never reach the message a reader
+  greps.  Append each to the `%`-style template and pass the value
+  positionally: `logger.info("connected", host=h, port=p)` →
+  `logger.info("connected host=%s port=%d", h, p)`.  Mirror
+  `atlan-metabase-app app/connector.py`'s `filter_data`
+  (`"filter_data: include=%s, exclude=%s"`).  `exc_info`, `stack_info` and
+  `stacklevel` are allowed and must be left alone.
+
+- **L019 DiscardedBindResult** — `logger.bind(...)` returns a *new* bound
+  logger and the result is thrown away, so the context is never attached.
+  Assign it and use the bound logger for the calls that need the context
+  (`log = logger.bind(run_id=rid)`).  Where the context is already injected by
+  the SDK adaptor — workflow and run correlation always is — the honest fix is
+  to delete the `bind()` call instead; no reference app calls it, and
+  `atlan-metabase-app app/handler.py` uses the module-level logger directly.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 

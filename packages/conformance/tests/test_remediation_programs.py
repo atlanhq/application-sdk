@@ -554,46 +554,6 @@ SERIES_AREA = {
 }
 
 
-#: Auto-fixable rules that still lack their own `**<ID> Name**` prescription
-#: bullet and are covered only by their area's catch-all paragraph. This is a
-#: ratchet, not an exemption: `test_prescription_backlog_only_shrinks` fails the
-#: moment an id here gains a bullet or stops being auto-fixable, so the list can
-#: only be removed from, and a newly-flagged rule cannot be parked here without
-#: a deliberate edit. Tracked on FND-2477. B005 and B006 were written first —
-#: between them 420 BLOCK findings, and B006 had no guidance at all.
-_PRESCRIPTION_BACKLOG = frozenset(
-    {
-        "E003",
-        "E004",
-        "E007",
-        "E008",
-        "E009",
-        "E010",
-        "E011",
-        "E012",
-        "E014",
-        "E015",
-        "E017",
-        "E018",
-        "E019",
-        "E020",
-        "L003",
-        "L006",
-        "L008",
-        "L009",
-        "L010",
-        "L012",
-        "L014",
-        "L016",
-        "L018",
-        "L019",
-        "P031",
-        "P036",
-        "T025",
-    }
-)
-
-
 def _autofixable_rules_without_a_bullet() -> set[str]:
     from conformance.suite.rules import CATALOG
     from conformance.suite.schema.disposition import RuleScope
@@ -611,28 +571,25 @@ def _autofixable_rules_without_a_bullet() -> set[str]:
 def test_every_autofixable_rule_has_a_per_rule_prescription() -> None:
     """An auto-fixable rule the lane may act on must tell the model what the
     edit is — a `**<ID> Name**` bullet in its area's Fix Prescription, not a
-    catch-all "fix guided by the hint". A small model reading a catch-all
-    guesses, and guessing is what the classification was meant to remove. B006
-    shipped with no prescription at all while its flag said auto-fixable, so
-    `/remediate` would have returned not_remediable on 415 BLOCK findings."""
-    unexpected = sorted(_autofixable_rules_without_a_bullet() - _PRESCRIPTION_BACKLOG)
-    assert not unexpected, (
-        "auto-fixable rule(s) with no per-rule prescription bullet in their area "
-        f"prose: {unexpected}. Write the bullet, or — only deliberately — add the "
-        "id to _PRESCRIPTION_BACKLOG."
-    )
+    catch-all "fix guided by the hint".
 
+    A catch-all tells a cheap model to use judgement, which is the one thing
+    the classification exists to remove: marking a rule auto-fixable is a claim
+    that the edit is known. Two failure shapes this closes, both live before
+    FND-2477: B006 was flagged auto-fixable with no prescription anywhere, so
+    `/remediate` returned not_remediable on 415 BLOCK findings; and 20 more
+    rules were covered only by their area's catch-all paragraph.
 
-def test_prescription_backlog_only_shrinks() -> None:
-    """Every id in the backlog must still genuinely lack a bullet.
-
-    Without this the backlog rots: a rule gains a prescription, nobody removes
-    it from the list, and the coverage test silently stops guarding it.
+    There is no exemption list on purpose. A new auto-fixable rule without a
+    bullet fails here, and the honest ways out are to write the prescription or
+    to classify the rule as migration.
     """
-    stale = sorted(_PRESCRIPTION_BACKLOG - _autofixable_rules_without_a_bullet())
-    assert not stale, (
-        f"rule(s) {stale} now have a prescription (or are no longer auto-fixable) "
-        "but are still listed in _PRESCRIPTION_BACKLOG — remove them."
+    missing = sorted(_autofixable_rules_without_a_bullet())
+    assert not missing, (
+        "auto-fixable rule(s) with no per-rule `**<ID> Name**` prescription "
+        f"bullet in their area's Fix Prescription: {missing}. Write the bullet "
+        "(derive the edit from the checker predicate, not the short "
+        "description), or classify the rule as migration."
     )
 
 

@@ -778,6 +778,36 @@ residue for a human to apply, not an applied edit:
 
   `classification` is always `"judgment"`.
 
+- **T025 EntrypointWithoutE2ECoverage** — the app is in **bundle mode**
+  (`app/generated/` holds one `<name>/manifest.json` subdirectory per
+  entrypoint) and at least one of those entrypoints is exercised by no
+  collectable e2e test class.  The finding names the uncovered entrypoint;
+  the others already have suites, so the shape to copy is in this repo.
+
+  Fix: add one suite per uncovered entrypoint under `tests/e2e/`, subclassing
+  that entrypoint's **generated** base — `app/generated/<name>/_e2e_base.py`
+  exposes `<Name>GeneratedE2EBase`, which is why K010 insists the scaffolding
+  exists.  Mirror `atlan-openapi-app tests/e2e/`, which carries
+  `test_connection_create.py` and `test_connection_reuse.py` so each contract
+  entrypoint of the bundle has one.  Set `mode` explicitly on the new class
+  (T024) — `RunMode.AGENT` for the normal CI-worker run.
+
+  Two things to establish before drafting, because both change the answer:
+  whether the generated base for that entrypoint actually exists (if it does
+  not, this is a **K010** finding first — say so and let the contract
+  regenerate before writing a test against a base that is absent), and
+  whether the entrypoint is genuinely meant to run end to end (a maintenance
+  or teardown entrypoint may legitimately have no full-DAG suite, which is a
+  suppression with that reason, not a fabricated test).
+
+  **Route to residue.** The write scope excludes `tests/`, so the deliverable
+  is a fully worked proposal — the file path, the base class to subclass, the
+  `mode`, and the entrypoint it covers — never an applied edit.  Never draft a
+  suite with no assertions or a stubbed body: that trades T025 for T005/T006
+  and leaves the entrypoint just as unproven.
+
+  `classification` is always `"judgment"`.
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
 When `mode == "strict"` and `finding.disposition == "warning"`, the model may
