@@ -12,16 +12,69 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
+from server_sdk.errors.leaves import InvalidInputError
+from server_sdk.observability.logger_adaptor import get_logger
 
-def parse_credentials_extra(credentials: dict[str, Any]) -> dict[str, Any]:
-    """Return ``credentials['extra']`` as a dict (parsing a JSON string form)."""
-    extra = credentials.get("extra", {})
+logger = get_logger(__name__)
+
+
+def parse_credentials_extra(
+    credentials: dict[str, Any], *, strict: bool = True
+) -> dict[str, Any]:
+    """Return ``credentials['extra']`` as a dict (parsing a JSON string form).
+
+    ``extra`` arrives in two legal shapes -- a nested object, or that same
+    object serialized to a JSON string -- because its producers straddle the
+    v2/v3 credential contract boundary.
+
+    Args:
+        credentials: credential dict that may carry an ``extra`` field.
+        strict: policy for an ``extra`` that is present but unusable. ``True``
+            (the runtime-client policy) raises: a connector cannot build a DSN
+            without it, and a typed credential error beats losing every
+            connection param stored inside it. ``False`` returns ``{}`` and
+            logs, for callers that must never raise.
+
+    Raises:
+        InvalidInputError: ``strict`` and ``extra`` is present but is neither
+            valid JSON nor a JSON object.
+    """
+    extra: Any = credentials.get("extra")
+
+    # isinstance before the emptiness test: `extra` is arbitrarily typed here,
+    # and a bare truthiness check on a container overloading __eq__/__bool__
+    # can raise.
+    if extra is None or (isinstance(extra, str) and not extra.strip()):
+        return {}
+    if isinstance(extra, dict):
+        return extra
+
+    def _reject(message: str, cause: Exception | None = None) -> dict[str, Any]:
+        if not strict:
+            # Never silent: dropping `extra` costs the caller every connection
+            # param inside it. The log carries the reason, never the value.
+            logger.warning(
+                "Dropping unusable credentials extra field, continuing without it "
+                "(any connection params stored inside it will be absent): %s",
+                message,
+                exc_info=cause is not None,
+            )
+            return {}
+        raise InvalidInputError(
+            message=message, field="extra", constraint="json_object"
+        ) from cause
+
     if isinstance(extra, str):
         try:
-            extra = json.loads(extra) if extra.strip() else {}
-        except json.JSONDecodeError:
-            extra = {}
-    return extra if isinstance(extra, dict) else {}
+            extra = json.loads(extra)
+        except json.JSONDecodeError as exc:
+            return _reject("Invalid JSON in credentials extra field", exc)
+
+    if not isinstance(extra, dict):
+        return _reject(
+            f"Credentials extra field decoded to {type(extra).__name__}, not an object"
+        )
+    return extra
 
 
 def _coerce(value: str) -> Any:
