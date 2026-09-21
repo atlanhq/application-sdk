@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.37.0 (September 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.3...v3.37.0
+
+### Features
+
+- hold a restarted worker back, and only when something is coming (#3722) (by @TechyMT in [8940fcc](https://github.com/atlanhq/application-sdk/commit/8940fcc))
+
+### Bug Fixes
+
+- stamp sdk and app version on every lifecycle log line (#3872) (by @vaibhavatlan in [1533fca](https://github.com/atlanhq/application-sdk/commit/1533fca))
+- emit a typed FailureCategory from the SDK's remaining untyped raise sites (#3857) (by @AtMrun in [45a8be1](https://github.com/atlanhq/application-sdk/commit/45a8be1))
+
+
 ## v3.36.3 (September 19, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.2...v3.36.3
