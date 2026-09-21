@@ -49,6 +49,10 @@ from server_sdk.handler.contracts import (
     PreflightOutput,
     normalize_credentials,
 )
+from server_sdk.handler.request_contract import (
+    RequestContractError,
+    validate_request,
+)
 from server_sdk.manifest import (
     ENTRYPOINT_NAME_RE,
     ComputeManifest,
@@ -416,6 +420,51 @@ def build_asgi_app(
     revision_headers = _revision_headers(version, revision)
     app.add_middleware(_RevisionHeaderMiddleware, headers=revision_headers)
 
+    @app.exception_handler(RequestContractError)
+    async def _handle_request_contract_error(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        """Turn a request-body contract failure into a 422 naming the field.
+
+        Registered unconditionally, unlike the ``Exception`` handler below:
+        this only changes responses that are 500s today, so that handler's
+        ``app_package`` opt-in rationale does not apply here.
+
+        Pydantic's ``input`` and ``ctx`` are omitted -- the rejected value can
+        be a credential, and the field path plus the reason is what a caller
+        can act on.
+        """
+        errors = (
+            exc.cause.errors(
+                include_url=False, include_input=False, include_context=False
+            )
+            if isinstance(exc, RequestContractError)
+            else []
+        )
+        detail = [
+            {
+                "field": ".".join(str(part) for part in error["loc"]),
+                "message": error["msg"],
+                "type": error["type"],
+            }
+            for error in errors
+        ]
+        fields = ", ".join(item["field"] for item in detail if item["field"]) or "body"
+        logger.warning(
+            "Rejected a malformed request to %s for app %s: invalid field(s) %s",
+            request.url.path,
+            app_name,
+            fields,
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "success": False,
+                "message": f"Invalid request: {fields}",
+                "detail": detail,
+            },
+        )
+
     if app_package is not None:
         # Opt-in only. Starlette routes an ``Exception`` handler to
         # ``ServerErrorMiddleware``, the one layer outside every user
@@ -497,7 +546,7 @@ def build_asgi_app(
     async def test_auth(request: Request) -> JSONResponse:
         body = normalize_credentials(await request.json())
         _validated_entrypoint(body)
-        auth_input = AuthInput.model_validate(body)
+        auth_input = validate_request(AuthInput, body)
         try:
             logger.info("Auth test started: app=%s", app_name)
             result = await handler.test_auth(auth_input)
@@ -538,7 +587,7 @@ def build_asgi_app(
     async def preflight_check(request: Request) -> JSONResponse:
         body = _normalize_preflight_request(await request.json())
         _validated_entrypoint(body)
-        preflight_input = PreflightInput.model_validate(body)
+        preflight_input = validate_request(PreflightInput, body)
         try:
             logger.info("Preflight check started: app=%s", app_name)
             result = await handler.preflight_check(preflight_input)
@@ -600,7 +649,7 @@ def build_asgi_app(
     async def fetch_metadata(request: Request) -> JSONResponse:
         body = normalize_credentials(await request.json())
         _validated_entrypoint(body)
-        metadata_input = MetadataInput.model_validate(body)
+        metadata_input = validate_request(MetadataInput, body)
         # Mirror the widget routing key onto object_filter when it's empty.
         if not metadata_input.object_filter and metadata_input.metadata_template_key:
             metadata_input = metadata_input.model_copy(
