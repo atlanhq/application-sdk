@@ -14,8 +14,9 @@ scope here. SQLAlchemy is imported lazily so the base install stays free of it
 from __future__ import annotations
 
 import asyncio
+import string
 from typing import Any, AsyncIterator, Optional
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 from server_sdk.clients.models import DatabaseConfig
 from server_sdk.credentials.utils import parse_credentials_extra
@@ -23,6 +24,21 @@ from server_sdk.errors.leaves import InternalError, InvalidInputError
 from server_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+def _add_connection_params(url: str, params: dict[str, Any]) -> str:
+    """Append query parameters to a SQLAlchemy URL.
+
+    Keys and values must be raw, not pre-encoded: both are ``quote_plus``-ed
+    here so a value containing ``&`` or ``=`` cannot inject an extra parameter
+    (an sslmode override, say). Query values use ``quote_plus`` because
+    SQLAlchemy decodes them with ``+`` -> space -- unlike userinfo, which is
+    percent-only and handled separately at the call site.
+    """
+    for key, value in params.items():
+        url += "&" if "?" in url else "?"
+        url += f"{quote_plus(str(key))}={quote_plus(str(value))}"
+    return url
 
 
 class BaseSQLClient:
@@ -58,7 +74,21 @@ class BaseSQLClient:
         # actually sent. Without this a connector declaring ``database`` as
         # required rejects a perfectly valid credential with "Missing required
         # credential field(s): database" while ``extra["database"]`` holds it.
-        merged: dict[str, Any] = {**self.DB_CONFIG.defaults, **self.credentials}
+        # `defaults` carries two kinds of key, and both are in real DB_CONFIGs.
+        # A key naming a template placeholder fills it (e.g. port). A key that
+        # names none is a URL-level connection parameter -- application_sdk's
+        # only meaning for this field -- and used to be dropped silently here,
+        # so a DB_CONFIG lifted from a connector lost connect_timeout,
+        # application_name and, worst, sslmode with no error.
+        placeholders = {
+            name
+            for _, name, _, _ in string.Formatter().parse(self.DB_CONFIG.template)
+            if name
+        }
+        placeholder_defaults = {
+            k: v for k, v in self.DB_CONFIG.defaults.items() if k in placeholders
+        }
+        merged: dict[str, Any] = {**placeholder_defaults, **self.credentials}
         for key, value in parse_credentials_extra(self.credentials).items():
             if not merged.get(key):
                 merged[key] = value
@@ -78,13 +108,22 @@ class BaseSQLClient:
             for k, v in merged.items()
         }
         try:
-            return self.DB_CONFIG.template.format(**encoded)
+            url = self.DB_CONFIG.template.format(**encoded)
         except KeyError as exc:  # missing placeholder
             raise InvalidInputError(
                 message=f"Missing credential for connection template: {exc}",
                 field=str(exc).strip("'"),
                 constraint="required",
             ) from exc
+
+        params = {
+            k: v for k, v in self.DB_CONFIG.defaults.items() if k not in placeholders
+        }
+        for name in self.DB_CONFIG.parameters or []:
+            value = merged.get(name)
+            if value is not None:
+                params[name] = value
+        return _add_connection_params(url, params)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -95,7 +134,11 @@ class BaseSQLClient:
 
         connect_args = (self.DB_CONFIG.connect_args if self.DB_CONFIG else None) or {}
         self.engine = create_engine(
-            self.get_sqlalchemy_connection_string(), connect_args=connect_args
+            self.get_sqlalchemy_connection_string(),
+            connect_args=connect_args,
+            pool_pre_ping=(
+                self.DB_CONFIG.pool_pre_ping if self.DB_CONFIG else True
+            ),
         )
 
     async def run_query(
