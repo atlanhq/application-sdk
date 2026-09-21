@@ -544,4 +544,72 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p028",
     ),
+    RuleDefinition(
+        id="P052",
+        canonical_reference=(
+            "application_sdk/app/base.py — App.preflight_gate_mode is declared "
+            "ClassVar[\"PreflightGateMode | Literal['hard', 'soft']\"]; that "
+            "declaration, inherited unchanged, is what a compliant App subclass "
+            "carries."
+        ),
+        scope=RuleScope.APP,
+        name="NarrowedSdkClassVar",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="sdk-classvar-override",
+        autofixable=True,
+        orthogonal_gate="tests",
+        since="0.36.0",
+        rationale=(
+            "App declares several configuration switches as ClassVar-typed Literal "
+            "unions (preflight_gate_mode, artifact_validation_mode). ClassVar is "
+            "invariant under the pyright 'standard' baseline the fleet is pinned to "
+            "(D008), so an app subclass that redeclares one with a narrower "
+            "annotation than the SDK's is an incompatible override — pyright fails "
+            "the check the moment the app's CI adopts the stricter posture the "
+            "narrowed annotation itself is usually reaching for (e.g. "
+            "PreflightGateMode.HARD). Nothing fails at runtime — coerce_gate_mode "
+            "accepts either spelling — so this is WARN, not BLOCK. "
+            "Customer impact: the app's own pyright gate goes red on an unrelated "
+            "change (any edit that touches the file, or a routine pyright/SDK "
+            "bump) for a reason the diff doesn't mention, and the fix looks like "
+            "reverting the change rather than deleting a stale annotation from a "
+            "past edit."
+        ),
+        short_description=(
+            "App subclass redeclares an inherited SDK ClassVar with a narrower "
+            "Literal annotation than the installed SDK declares"
+        ),
+        full_description=(
+            "``App`` declares configuration switches such as ``preflight_gate_mode``\n"
+            "and ``artifact_validation_mode`` as ``ClassVar``-typed ``Literal``\n"
+            "unions.  An ``App`` subclass that redeclares one of these with its own\n"
+            "explicit annotation — instead of leaving it inherited — can narrow the\n"
+            "type: restating ``preflight_gate_mode: ClassVar[Literal[\"hard\",\n"
+            "\"soft\"]] = \"hard\"`` drops the ``PreflightGateMode`` enum arm the SDK's\n"
+            "own declaration carries.  ``ClassVar`` is invariant, so the narrowed\n"
+            "override is incompatible under the pinned pyright baseline, even though\n"
+            "nothing fails at runtime.\n"
+            "\n"
+            "The Literal member set this rule compares against is read from the\n"
+            "*installed* ``application_sdk`` package at scan time — not a list of\n"
+            "values copied into the checker — so it tracks the SDK's declaration as\n"
+            "it evolves rather than grading against a stale snapshot.  When the\n"
+            "installed SDK cannot be resolved, the rule stays silent rather than\n"
+            "guess.\n"
+            "\n"
+            "Not flagged: a bare re-assignment with no annotation\n"
+            "(``preflight_gate_mode = \"hard\"``), which inherits the SDK's declared\n"
+            "type outright; an app that restates the SDK's annotation exactly\n"
+            "(redundant, but type-compatible); an app-local field that shares a\n"
+            "name with no inherited SDK ClassVar; and the SDK's own declaration\n"
+            "site inside ``App`` itself.\n"
+            "\n"
+            "Fix: drop the redeclaration — assign the value with no annotation — or\n"
+            "restate the SDK's full annotation exactly if an explicit annotation is\n"
+            "genuinely required.  WARN tier — suppress with\n"
+            "``# conformance: ignore[P052] <reason>`` at the assignment site.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p052",
+    ),
 )

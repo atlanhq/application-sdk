@@ -350,6 +350,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # class that can move, or stop being the one a boundary raises, in a minor
     # release. The SDK is the publisher of that surface, so neither rule grades
     # it (CONNECT-970).
+    # P052: narrowed inherited SDK ClassVar — only an App *subclass* can
+    # re-narrow a ClassVar it inherits; the SDK's own App class is the sole
+    # defining site the rule protects, never a subject of it.
     assert app_scoped == {
         "B001",
         "B007",
@@ -415,6 +418,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P028",
         "P029",
         "P030",
+        "P052",
         "F001",
         "F002",
         "F003",
@@ -640,6 +644,11 @@ def test_catalog_p_series_present() -> None:
     application-sdk below 3.30.0, the floor at which the interactive setup
     surfaces (test auth / preflight / metadata browsing) become available; a WARN
     readiness nudge, not a data-loss bug (DISTR-752).
+    P052 is NarrowedSdkClassVar — an App subclass redeclares an inherited
+    ClassVar (preflight_gate_mode, artifact_validation_mode) with a narrower
+    Literal annotation than the installed SDK declares, an incompatible
+    override under the pinned pyright baseline because ClassVar is invariant
+    (fleet sweep).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -691,6 +700,7 @@ def test_catalog_p_series_present() -> None:
         "P049",
         "P050",
         "P051",
+        "P052",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
