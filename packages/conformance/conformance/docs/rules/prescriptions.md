@@ -43,7 +43,7 @@ reassigned.
 | [P018](#p018) | `ManualServerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
 | [P019](#p019) | `RawHttpToAtlan` | `warn` | `both` | `client-seam` | yes | 0.7.0 |
 | [P020](#p020) | `NonDeterministicPrimitiveInWorkflow` | `warn` | `both` | `determinism` | yes | 0.8.0 |
-| [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `both` | `determinism` | yes | 0.8.0 |
+| [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
 | [P022](#p022) | `UnawaitedCoroutine` | `block` | `both` | `async-correctness` | yes | 0.8.0 |
 | [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | yes | 0.8.0 |
 | [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | yes | 0.8.0 |
@@ -54,7 +54,7 @@ reassigned.
 | [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | yes | 0.9.0 |
 | [P030](#p030) | `SdrUploadNotCalled` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
 | [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | yes | 0.13.0 |
-| [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | yes | 0.15.0 |
+| [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | — | 0.15.0 |
 | [P037](#p037) | `SdrAgentJsonNotConsumed` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P038](#p038) | `SdrArtifactMisrooted` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
@@ -67,7 +67,7 @@ reassigned.
 | [P048](#p048) | `AppDerivedPersistentArtifactPrefix` | `warn` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
-| [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | yes | 0.25.0 |
+| [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
 
 ---
 
@@ -916,7 +916,7 @@ exception with `# conformance: ignore[P020] <reason>`.
 
 ## P021 — `SideEffectIoInWorkflow` {#p021}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** yes · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
 
 > File / network / env / process I/O in workflow-context code
 
@@ -1510,7 +1510,7 @@ Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
 
 ## P036 — `HandRolledProcessIsolation` {#p036}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.15.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.15.0
 
 > Bare ProcessPoolExecutor / multiprocessing child instead of the run_fault_isolated() / run_best_effort() seam
 
@@ -2318,7 +2318,7 @@ SARIF.
 
 ## P051 — `SdrPreflightUnavailable` {#p051}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `sdr-readiness` · **Autofixable:** yes · **Since:** 0.25.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
 
 > SDR app locks application-sdk below the 3.30.0 floor for interactive setup (test auth / preflight / metadata browsing)
 
