@@ -21,7 +21,6 @@ from server_sdk.errors.wire import FailureDetails
 
 __all__ = [
     "AppError",
-    "HandlerError",
     "Audience",
     "FailureCategory",
     "FailureDetails",

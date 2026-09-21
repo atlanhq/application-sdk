@@ -109,7 +109,6 @@ __all__ = [
     "ApiMetadataOutput",
     # errors
     "AppError",
-    "HandlerError",
     "AuthError",
     "InvalidInputError",
     "InternalError",

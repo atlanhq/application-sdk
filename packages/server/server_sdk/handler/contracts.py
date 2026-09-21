@@ -420,7 +420,11 @@ class PreflightCheck(BaseModel):
     passed: bool = False
     message: str = ""
     error: FailureDetails | None = None
-    duration_ms: float = 0.0
+    duration_ms: float = -1.0
+    """How long the check took in milliseconds. ``-1.0`` means not measured --
+    the default is a sentinel, not an elapsed time, so an unset value is never
+    mistaken for an instant check. Kept non-optional (not ``None``) so the key
+    survives ``exclude_none`` dumps and stays numeric for ClickHouse readers."""
 
     @field_validator("error", mode="before")
     @classmethod
