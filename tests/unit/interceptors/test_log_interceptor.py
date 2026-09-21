@@ -14,6 +14,7 @@ from application_sdk.execution._temporal.interceptors.log import (
     _APP_NAME_MAX_CHARS,
     _HEADER_APP_NAME,
     LogInterceptor,
+    _build_identity_attrs,
     _correlation_id_or_empty,
     _extract_failure_attrs,
     _LogActivityInboundInterceptor,
@@ -1751,3 +1752,147 @@ class TestLifecycleMessageBodies:
         suffix = _failure_suffix(ValueError("\n  \n"), {"failure.code": "blank"})
         assert suffix.startswith("FAILED (blank)")
         assert "FAILED (blank):" not in suffix  # no empty ": " tail
+
+
+# ---------------------------------------------------------------------------
+# Build identity on lifecycle lines (FND-1936)
+# ---------------------------------------------------------------------------
+
+_LOG_MOD = "application_sdk.execution._temporal.interceptors.log"
+
+_BUILD_IDENTITY_KEYS = (
+    "temporal.deployment.name",
+    "temporal.deployment.build_id",
+    "sdk.version",
+    "app.version",
+    "app.commit_sha",
+)
+
+_FULL_IDENTITY = {
+    "APP_DEPLOYMENT_NAME": "ns/twd-mysql",
+    "APP_BUILD_ID": "0.2.3",
+    "APPLICATION_VERSION": "0.2.3",
+    "COMMIT_SHA": "abc1234def",
+    "_SDK_VERSION": "9.9.9",
+}
+
+_NO_IDENTITY = {
+    "APP_DEPLOYMENT_NAME": "",
+    "APP_BUILD_ID": "",
+    "APPLICATION_VERSION": "",
+    "COMMIT_SHA": "",
+}
+
+
+class TestBuildIdentityAttrs:
+    def test_reports_every_carrier(self):
+        with patch.multiple(_LOG_MOD, **_FULL_IDENTITY):
+            attrs = _build_identity_attrs()
+        assert attrs == {
+            "temporal.deployment.name": "ns/twd-mysql",
+            "temporal.deployment.build_id": "0.2.3",
+            "sdk.version": "9.9.9",
+            "app.version": "0.2.3",
+            "app.commit_sha": "abc1234def",
+        }
+
+    def test_unset_carriers_yield_empty_strings_not_missing_keys(self):
+        # An image without worker versioning or a baked build file must log
+        # "" for each field: the schema stays stable and nothing raises.
+        with patch.multiple(_LOG_MOD, **_NO_IDENTITY):
+            attrs = _build_identity_attrs()
+        assert set(attrs) == set(_BUILD_IDENTITY_KEYS)
+        assert attrs["sdk.version"], "the running SDK is always known"
+        for key in _BUILD_IDENTITY_KEYS:
+            if key != "sdk.version":
+                assert attrs[key] == "", key
+
+    def test_app_version_falls_back_to_commit_sha(self):
+        with patch.multiple(_LOG_MOD, APPLICATION_VERSION="", COMMIT_SHA="abc1234def"):
+            attrs = _build_identity_attrs()
+        assert attrs["app.version"] == "abc1234def"
+        assert attrs["app.commit_sha"] == "abc1234def"
+
+    def test_app_version_wins_over_commit_sha_when_present(self):
+        with patch.multiple(
+            _LOG_MOD, APPLICATION_VERSION="0.2.3", COMMIT_SHA="abc1234def"
+        ):
+            attrs = _build_identity_attrs()
+        assert attrs["app.version"] == "0.2.3"
+        assert attrs["app.commit_sha"] == "abc1234def"
+
+
+class TestLifecycleLinesCarryBuildIdentity:
+    @pytest.fixture
+    def wf_next(self):
+        n = AsyncMock()
+        n.execute_workflow = AsyncMock(return_value="wf-result")
+        return n
+
+    @pytest.fixture
+    def act_next(self):
+        n = AsyncMock()
+        n.execute_activity = AsyncMock(return_value="act-result")
+        return n
+
+    @staticmethod
+    def _info_calls(mock_logger, token: str):
+        return [
+            c
+            for c in mock_logger.info.call_args_list
+            if c.args and c.args[0].startswith(token)
+        ]
+
+    @staticmethod
+    def _assert_full_identity(kwargs):
+        assert kwargs["temporal.deployment.name"] == "ns/twd-mysql"
+        assert kwargs["temporal.deployment.build_id"] == "0.2.3"
+        assert kwargs["sdk.version"] == "9.9.9"
+        assert kwargs["app.version"] == "0.2.3"
+        assert kwargs["app.commit_sha"] == "abc1234def"
+
+    async def test_workflow_started_and_ended_carry_build_identity(self, wf_next):
+        interceptor = _LogWorkflowInboundInterceptor(wf_next)
+        with patch.multiple(_LOG_MOD, **_FULL_IDENTITY):
+            with patch(f"{_LOG_MOD}.workflow") as mock_wf:
+                mock_wf.unsafe.is_replaying.return_value = False
+                mock_wf.info.return_value = MockWorkflowInfo()
+                mock_wf.memo.return_value = {}
+                with patch(f"{_LOG_MOD}.logger") as mock_logger:
+                    await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        for token in ("workflow.started", "workflow.ended"):
+            calls = self._info_calls(mock_logger, token)
+            assert len(calls) == 1, token
+            self._assert_full_identity(calls[0].kwargs)
+
+    async def test_activity_started_and_ended_carry_build_identity(self, act_next):
+        interceptor = _LogActivityInboundInterceptor(act_next)
+        with patch.multiple(_LOG_MOD, **_FULL_IDENTITY):
+            with patch(f"{_LOG_MOD}.activity") as mock_act:
+                mock_act.info.return_value = MockActivityInfo()
+                with patch(f"{_LOG_MOD}.logger") as mock_logger:
+                    await interceptor.execute_activity(MockExecuteActivityInput())
+
+        for token in ("activity.started", "activity.ended"):
+            calls = self._info_calls(mock_logger, token)
+            assert len(calls) == 1, token
+            self._assert_full_identity(calls[0].kwargs)
+
+    async def test_unset_env_logs_empty_strings_and_does_not_raise(self, act_next):
+        # No worker versioning, no baked build file: the run still executes
+        # and every identity key is present with "" (never dropped).
+        interceptor = _LogActivityInboundInterceptor(act_next)
+        with patch.multiple(_LOG_MOD, **_NO_IDENTITY):
+            with patch(f"{_LOG_MOD}.activity") as mock_act:
+                mock_act.info.return_value = MockActivityInfo()
+                with patch(f"{_LOG_MOD}.logger") as mock_logger:
+                    await interceptor.execute_activity(MockExecuteActivityInput())
+
+        act_next.execute_activity.assert_awaited_once()
+        kwargs = self._info_calls(mock_logger, "activity.started")[0].kwargs
+        for key in _BUILD_IDENTITY_KEYS:
+            assert key in kwargs, key
+            if key != "sdk.version":
+                assert kwargs[key] == "", key
+        assert kwargs["sdk.version"]

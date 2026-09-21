@@ -404,6 +404,31 @@ the structured attributes, never on the body text.
     human-readable summaries and may change; match on the token prefix and the structured
     attributes, not the body text.
 
+#### Build identity on lifecycle lines
+
+Every lifecycle line also carries the identity of the build that produced it, so a run's exported
+logs answer "what was running when this broke?" on their own, with no Temporal access. Before this
+the deployment build id was logged once per worker at startup, which a run-scoped export never
+contains.
+
+| Attribute | Source | Meaning |
+|-----------|--------|---------|
+| `temporal.deployment.name` | `ATLAN_APP_DEPLOYMENT_NAME` | Worker Deployment name, as Temporal shows it. |
+| `temporal.deployment.build_id` | `ATLAN_APP_BUILD_ID` | The `Build ID` Temporal shows for the same execution. |
+| `sdk.version` | `application_sdk.__version__` | The application-sdk actually running; always populated. |
+| `app.version` | baked `app/atlan_build.json`, then `ATLAN_APPLICATION_VERSION` | The app release as Global Marketplace stores it; falls back to the commit SHA when the image carries no version. |
+| `app.commit_sha` | baked `app/atlan_build.json` | Git commit the image was built from, so a reader can tell a real version from the fallback. |
+
+An image without worker versioning or a baked build file logs `""` for the affected fields. The keys
+are always present so the schema stays stable, and an empty value means "this image carries no
+build identity", never a mismatch. The attributes are stamped on the lifecycle lines only, not on
+every record: the equivalent per-pod OTel Resource attributes ride only on the OTLP export, which
+the object-store NDJSON and the per-run export do not carry. Note that the object-store sink skips
+records emitted inside the workflow sandbox, so on that path the `activity.*` lines are the ones
+that carry the identity. See
+[Release flow → Image identity](../standards/release-flow.md#image-identity) for where the values
+come from.
+
 ### Asset-validation outcome event
 
 `App.upload()`'s warn-only asset validation (see [Apps → Asset-Validation Outcome](apps.md#asset-validation-outcome))

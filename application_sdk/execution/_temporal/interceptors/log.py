@@ -41,6 +41,12 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
+from application_sdk.constants import (
+    APP_BUILD_ID,
+    APP_DEPLOYMENT_NAME,
+    APPLICATION_VERSION,
+    COMMIT_SHA,
+)
 from application_sdk.errors.base import AppError
 from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution._temporal.preflight_gate import is_preflight_block
@@ -55,6 +61,7 @@ from application_sdk.observability.correlation import (
     set_correlation_context,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.version import __version__ as _SDK_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -97,6 +104,52 @@ def _lifecycle_message(event: str, subject: str) -> str:
     see ``docs/concepts/monitoring.md`` (Lifecycle log lines).
     """
     return f"{event} {subject}".rstrip() if subject else event
+
+
+def _build_identity_attrs() -> dict[str, str]:
+    """Build-identity attributes stamped on every lifecycle line (FND-1936).
+
+    A run's exported logs are scoped to the workflow, not to the worker
+    process that served it, so the once-per-worker startup line naming the
+    deployment build never reaches a run's own export. Carrying the identity
+    on the four lifecycle lines lets a run's logs alone answer "which build
+    produced this?". Both interceptors stamp it: the object-store sink skips
+    workflow-sandbox records, so for that export path only the ``activity.*``
+    lines land.
+
+    * ``temporal.deployment.name`` / ``temporal.deployment.build_id`` — the
+      Worker Deployment version Temporal shows as ``Build ID`` for the same
+      execution, so the logged value reconciles with the UI operators read.
+      ``build_identity()`` is deliberately *not* used: it carries the e2e /
+      publish image tag (a different value) and re-reads env plus a file on
+      every call — a determinism risk under the workflow sandbox for no gain,
+      since neither carrier changes for the life of the container.
+    * ``sdk.version`` — the application-sdk actually running in the process;
+      always populated.
+    * ``app.version`` — the app release exactly as Global Marketplace stores
+      it (baked ``app/atlan_build.json``, then ``ATLAN_APPLICATION_VERSION``),
+      falling back to the commit SHA on an image that carries no version so
+      the field still identifies the build.
+    * ``app.commit_sha`` — emitted alongside so a reader can tell a real
+      version from the fallback.
+
+    Every value is an import-time constant; nothing here does I/O. Empty
+    values are emitted as ``""`` rather than dropped so the log schema stays
+    stable — a reader treats empty as "this image carries no build identity",
+    never as a mismatch (the convention ``build_identity.py`` established).
+
+    These duplicate the per-pod OTel Resource attributes on purpose: the
+    Resource rides only on the OTLP export, while the object-store NDJSON and
+    the per-run export carry record attributes alone. They are stamped on the
+    lifecycle lines only, not on every record, to bound the cost.
+    """
+    return {
+        "temporal.deployment.name": APP_DEPLOYMENT_NAME,
+        "temporal.deployment.build_id": APP_BUILD_ID,
+        "sdk.version": _SDK_VERSION,
+        "app.version": APPLICATION_VERSION or COMMIT_SHA,
+        "app.commit_sha": COMMIT_SHA,
+    }
 
 
 def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
@@ -522,6 +575,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             "temporal.task_queue": info.task_queue or "",
             "temporal.namespace": info.namespace or "",
             "atlan.correlation_id": correlation_id,
+            **_build_identity_attrs(),
         }
 
         try:
@@ -677,6 +731,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
             "temporal.workflow.run_id": info.workflow_run_id or "",
             "temporal.workflow.type": info.workflow_type or "",
             "atlan.correlation_id": correlation_id,
+            **_build_identity_attrs(),
         }
 
         try:
