@@ -147,14 +147,21 @@ root-cause analysis impossible.
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
 (worker loops, HTTP handlers) when properly logged with `exc_info=True`.  A handler that
-unconditionally re-raises while preserving the trace is exempt — bare `raise`, `raise
-X(...)`, or `raise X(...) from e` — because nothing is swallowed; `raise X(...) from
-None` (which discards the trace) and a conditional re-raise that can fall through still
+unconditionally re-raises while preserving the cause is exempt — bare `raise`, `raise
+X(...)`, or `raise X(...) from e` — because nothing is swallowed; a `raise X(...) from
+None` that drops the cause, and a conditional re-raise that can fall through, still
 fire.
 
 Exempt: handlers whose log call formats the exception through a recognised redaction
 helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged at a deliberate
 no-traceback boundary.
+
+Also exempt: `raise X(...) from None` whose raised error carries the caught exception
+through such a helper (directly, or via a local assigned from one).  Severing the chain
+is how a frame holding a resolved credential avoids emitting a raw traceback;
+severed-and-redacted preserves the cause, severed-and-dropped does not.  Without this
+the only way to clear E004 at such a site is a warning/error log, which is exactly what
+L009 forbids before a raise.
 
 ---
 

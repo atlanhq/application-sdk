@@ -411,6 +411,113 @@ except Exception as e:
     )
 
 
+# ---------------------------------------------------------------------------
+# E004 — severed-but-redacted re-raise (FND-2602)
+#
+# `raise X(...) from None` exists so a raw traceback cannot reach the sink when
+# the frame holds a resolved credential.  Severing and *dropping* the cause is
+# trace-loss; severing while the raised error carries the cause through a
+# sanitizer is not.  Without this distinction E004's only escape (log through a
+# sanitizer at warning/error) is exactly what L009 forbids, so a translate-and-
+# sever handler could satisfy neither rule.
+# ---------------------------------------------------------------------------
+
+
+def test_p004_no_finding_when_severed_raise_redacts_cause() -> None:
+    # atlan-openapi-app app/connector.py shape: the cause survives as a
+    # redacted summary in the typed error's own message.
+    assert "E004" not in _findings(
+        """\
+try:
+    store = CloudStore.from_credentials(credential_data)
+except Exception as exc:
+    raise ObjectStoreCredentialError(
+        message=f"credential was rejected: {sanitize_cause_repr(exc)}",
+        field="openapi_credential",
+    ) from None
+"""
+    )
+
+
+def test_p004_no_finding_when_severed_raise_uses_staged_redacted_local() -> None:
+    # The redacted text may be built up over several statements before the
+    # raise references it — the fixpoint in redaction_scope() resolves the chain.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    detail = sanitize_cause_repr(exc)
+    message = f"credential was rejected: {detail}"
+    raise ObjectStoreCredentialError(message) from None
+"""
+    )
+
+
+def test_p004_still_flags_severed_raise_redacting_a_different_value() -> None:
+    # A sanitizer applied to something *other* than the caught exception does
+    # not carry the cause out — the failure is still dropped.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    raise ObjectStoreCredentialError(redact(config)) from None
+"""
+    )
+
+
+def test_p004_still_flags_severed_raise_when_exception_is_unbound() -> None:
+    # `except Exception:` binds no name, so nothing can be carried out redacted.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception:
+    raise ObjectStoreCredentialError(f"rejected: {sanitize_cause_repr(exc)}") from None
+"""
+    )
+
+
+def test_p004_still_flags_swallowing_branch_before_severed_redacted_raise() -> None:
+    # The redaction exemption applies to the raise, not to the handler: a path
+    # that returns before reaching it still swallows.
+    assert "E004" in _findings(
+        """\
+def f():
+    try:
+        run()
+    except Exception as exc:
+        if quiet(exc):
+            return None
+        raise ObjectStoreCredentialError(sanitize_cause_repr(exc)) from None
+"""
+    )
+
+
+def test_p004_severed_redacted_raise_is_jointly_satisfiable_with_l009() -> None:
+    """The FND-2602 deadlock: E004 and L009 must both clear on one handler.
+
+    E004's sanitizer-log exemption only accepts warning/error/critical, which
+    are exactly the levels L009 fires on before a raise.  A handler that severs
+    and redacts instead of logging must therefore clear both rules with no log
+    call at all — otherwise the app carries a permanent warning or a suppression.
+    """
+    from conformance.suite.checks.logging import scan_text as scan_logging
+
+    src = """\
+try:
+    store = CloudStore.from_credentials(credential_data)
+except Exception as exc:
+    raise ObjectStoreCredentialError(
+        message=f"credential was rejected: {sanitize_cause_repr(exc)}",
+        field="openapi_credential",
+    ) from None
+"""
+    assert "E004" not in _findings(src)
+    assert "L009" not in {f.rule_id for f in scan_logging(src, "fake.py")}
+
+
 def test_p004_still_flags_conditional_reraise_that_can_fall_through() -> None:
     # A raise guarded by `if` with no else can be skipped — the fall-through path
     # swallows, so E004 must still fire.

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterator
+from typing import NamedTuple
 
 from .._ast_common._exc_info import has_exc_info_traceback
+from .._ast_common._sanitizers import expr_sanitizes_name
 from ._constants import _BROAD_EXCEPT_TYPES, _LOG_METHODS, BUILTIN_RAISES
 
 
@@ -241,37 +243,125 @@ def _raise_preserves_trace(stmt: ast.Raise) -> bool:
     return True
 
 
-def _body_always_raises(body: list[ast.stmt]) -> bool:
-    """True when *body* is guaranteed to re-raise on every path (trace-preserving).
+class RedactionScope(NamedTuple):
+    """The names a handler can carry its caught exception out through, redacted.
+
+    ``exc_name`` is the handler's bound exception (``except Exception as exc``);
+    ``sanitized_names`` are locals assigned in the handler from an expression
+    that already redacted it, so a raise can reference them instead of calling
+    the sanitizer inline.
+    """
+
+    exc_name: str
+    sanitized_names: frozenset[str]
+
+
+def _references_any(expr: ast.expr, names: frozenset[str]) -> bool:
+    """True when *expr* reads any of *names*."""
+    if not names:
+        return False
+    return any(
+        isinstance(node, ast.Name) and node.id in names for node in ast.walk(expr)
+    )
+
+
+def redaction_scope(handler: ast.ExceptHandler) -> RedactionScope | None:
+    """Collect the redacted forms of *handler*'s caught exception.
+
+    ``None`` when the handler does not bind the exception (``except Exception:``)
+    — nothing is named, so nothing can be carried out in redacted form.
+
+    The local set is a fixpoint, so a message built up in stages resolves::
+
+        except Exception as exc:
+            detail = sanitize_cause_repr(exc)
+            message = f"credential rejected: {detail}"
+            raise CredentialError(message) from None
+    """
+    if handler.name is None:
+        return None
+    names: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in _iter_shallow(handler):
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if not isinstance(target, ast.Name) or target.id in names:
+                continue
+            if expr_sanitizes_name(node.value, handler.name) or _references_any(
+                node.value, frozenset(names)
+            ):
+                names.add(target.id)
+                changed = True
+    return RedactionScope(handler.name, frozenset(names))
+
+
+def _raise_redacts_cause(stmt: ast.Raise, scope: RedactionScope) -> bool:
+    """True when a severed ``raise X(...) from None`` still carries its cause.
+
+    ``from None`` exists precisely so a raw traceback cannot reach the sink —
+    the frame may hold a resolved credential, and the SDK's loguru sinks format
+    tracebacks with ``diagnose`` enabled.  Severing and *dropping* the cause is
+    trace-loss; severing while the raised error's own arguments carry the cause
+    through a sanitizer is not: the failure survives in redacted form, which is
+    the property E004 is about.
+    """
+    if stmt.exc is None:
+        return False
+    return expr_sanitizes_name(stmt.exc, scope.exc_name) or _references_any(
+        stmt.exc, scope.sanitized_names
+    )
+
+
+def _raise_carries_cause(stmt: ast.Raise, scope: RedactionScope | None) -> bool:
+    """True when *stmt* re-raises without losing the original failure."""
+    if _raise_preserves_trace(stmt):
+        return True
+    return scope is not None and _raise_redacts_cause(stmt, scope)
+
+
+def _body_always_raises(
+    body: list[ast.stmt], scope: RedactionScope | None = None
+) -> bool:
+    """True when *body* is guaranteed to re-raise on every path (cause intact).
 
     A top-level ``raise`` makes everything after it unreachable, so the block
     always raises; an ``if``/``else`` whose branches both always-raise does too.
     A ``raise`` that only appears inside a conditional without a matching ``else``
-    is not counted — the other path could still swallow. Any trace-losing
-    ``raise ... from None`` on the guaranteeing path disqualifies the body.
+    is not counted — the other path could still swallow. A ``raise ... from None``
+    on the guaranteeing path disqualifies the body unless *scope* shows it carries
+    the caught exception out in redacted form (see :func:`redaction_scope`).
     """
     for stmt in body:
         if isinstance(stmt, ast.Raise):
-            return _raise_preserves_trace(stmt)
+            return _raise_carries_cause(stmt, scope)
         if (
             isinstance(stmt, ast.If)
             and stmt.orelse
-            and _body_always_raises(stmt.body)
-            and _body_always_raises(stmt.orelse)
+            and _body_always_raises(stmt.body, scope)
+            and _body_always_raises(stmt.orelse, scope)
         ):
             return True
     return False
 
 
-def _body_has_bypassing_exit(body: list[ast.stmt], *, loop_depth: int = 0) -> bool:
+def _body_has_bypassing_exit(
+    body: list[ast.stmt],
+    *,
+    loop_depth: int = 0,
+    scope: RedactionScope | None = None,
+) -> bool:
     """True when some path through *body* leaves the handler without a
-    trace-preserving re-raise.
+    cause-preserving re-raise.
 
     ``_body_always_raises`` only proves that *a* guaranteeing raise is reached;
     it does not see a path that bypasses it. Bypasses:
 
     * ``return`` — exits the enclosing function, swallowing the exception.
-    * ``raise ... from None`` — reaches a raise but discards the traceback.
+    * ``raise ... from None`` — reaches a raise but discards the cause, unless
+      *scope* shows it re-raises with the cause redacted rather than dropped.
     * ``break`` / ``continue`` — only when they belong to a loop *outside* the
       handler (``loop_depth == 0``): they escape to that outer loop and skip the
       trailing raise, so the exception is swallowed. A ``break``/``continue``
@@ -286,7 +376,7 @@ def _body_has_bypassing_exit(body: list[ast.stmt], *, loop_depth: int = 0) -> bo
     for stmt in body:
         if isinstance(stmt, ast.Return):
             return True
-        if isinstance(stmt, ast.Raise) and not _raise_preserves_trace(stmt):
+        if isinstance(stmt, ast.Raise) and not _raise_carries_cause(stmt, scope):
             return True
         if isinstance(stmt, (ast.Break, ast.Continue)):
             if loop_depth == 0:
@@ -298,13 +388,17 @@ def _body_has_bypassing_exit(body: list[ast.stmt], *, loop_depth: int = 0) -> bo
             # break/continue inside the loop body target this loop, not the
             # handler; the loop's ``else`` runs after the loop, so it stays at
             # the handler's depth.
-            if _body_has_bypassing_exit(stmt.body, loop_depth=loop_depth + 1):
+            if _body_has_bypassing_exit(
+                stmt.body, loop_depth=loop_depth + 1, scope=scope
+            ):
                 return True
-            if _body_has_bypassing_exit(stmt.orelse, loop_depth=loop_depth):
+            if _body_has_bypassing_exit(
+                stmt.orelse, loop_depth=loop_depth, scope=scope
+            ):
                 return True
             continue
         for block in _child_stmt_blocks(stmt):
-            if _body_has_bypassing_exit(block, loop_depth=loop_depth):
+            if _body_has_bypassing_exit(block, loop_depth=loop_depth, scope=scope):
                 return True
     return False
 

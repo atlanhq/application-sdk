@@ -19,6 +19,7 @@ from ._helpers import (
     _inherits_logging_filter,
     _is_gather_call,
     _iter_shallow,
+    redaction_scope,
 )
 
 
@@ -92,12 +93,18 @@ class SilentSwallowMixin:
         if not broad:
             return
         exc_type = next(iter(broad))
-        # Pass only if the handler re-raises with the trace preserved on *every*
+        # Pass only if the handler re-raises with the cause preserved on *every*
         # path (bare `raise`, `raise X(...)`, or `raise X(...) from e`): a broad
         # catch that translates-and-chains swallows nothing. A guaranteeing raise
         # alone is not enough — a preceding `return`/`break`/`continue` (swallow)
-        # or `raise ... from None` (trace-loss) bypasses it, so those disqualify.
-        if _body_always_raises(node.body) and not _body_has_bypassing_exit(node.body):
+        # or a `raise ... from None` that drops the cause bypasses it, so those
+        # disqualify. A severed raise that carries the caught exception through a
+        # redaction helper does not: it preserves the cause in the only form that
+        # is safe to emit from a frame holding a resolved credential.
+        scope = redaction_scope(node)
+        if _body_always_raises(node.body, scope) and not _body_has_bypassing_exit(
+            node.body, scope=scope
+        ):
             return
         # Pass if body has logger.exception() or any log call with exc_info=True
         for n in _iter_shallow(node):
