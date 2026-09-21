@@ -2,6 +2,16 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.35.0] - 2026-09-21
+
+### Features
+
+- classify every app-facing rule as auto-fixable or migration and make fixes reference-app driven (#3873) ([ce0e355](https://github.com/atlanhq/application-sdk/commit/ce0e355))
+
+### Bug fixes
+
+- emit a typed FailureCategory from the SDK's remaining untyped raise sites (#3857) ([45a8be1](https://github.com/atlanhq/application-sdk/commit/45a8be1))
+
 ## [0.34.0] - 2026-09-19
 
 ### Features
