@@ -49,6 +49,11 @@ def _f019(findings):
             id="computed-aggregation",
         ),
         pytest.param(
+            HEAD + "  rows = await gather()\n"
+            "  return PreflightOutput(checks=[*rows])\n",
+            id="opaque-row-in-a-list-display",
+        ),
+        pytest.param(
             HEAD + "  fields = build()\n"
             "  return PreflightOutput(checks=[PreflightCheck(passed=False, error=AuthError(**fields).to_failure_details())])\n",
             id="expanded-failure-constructor",

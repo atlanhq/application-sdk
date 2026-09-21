@@ -68,6 +68,11 @@ def _kwargs(node: ast.Call) -> dict[str, ast.expr]:
     return {kw.arg: kw.value for kw in node.keywords if kw.arg is not None}
 
 
+def _describe(node: ast.AST) -> str:
+    text = " ".join(ast.unparse(node).split())
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
 def _nodes(node: ast.AST):
     yield node
     for child in ast.iter_child_nodes(node):
@@ -246,7 +251,77 @@ class _Checker:
                     f"Preflight failure has missing or blank {field}; provide a meaningful explanation and audience-appropriate next action. Unresolved factory values require behavioral validation.",
                 )
 
-    def result(self, src: Source, call: ast.Call) -> None:
+    def row(
+        self,
+        src: Source,
+        func: Function,
+        node: ast.AST,
+        visited: frozenset[int] = frozenset(),
+    ) -> bool:
+        """Whether one element of a ``checks=`` display resolves to a check row.
+
+        The element gate is resolvability, not node type. A list display whose
+        elements the analysis cannot read is exactly as opaque as the variable
+        it was built from, so ``checks=[*checks]`` must report what
+        ``checks=checks`` reports rather than clear it.
+        """
+        if id(node) in visited or len(visited) > 64:
+            return False
+        visited = visited | {id(node)}
+        if isinstance(node, ast.Await):
+            return self.row(src, func, node.value, visited)
+        if isinstance(node, ast.IfExp):
+            return all(
+                self.row(src, func, branch, visited)
+                for branch in (node.body, node.orelse)
+            )
+        if isinstance(node, ast.Starred):
+            return isinstance(node.value, (ast.List, ast.Tuple)) and all(
+                self.row(src, func, element, visited) for element in node.value.elts
+            )
+        if isinstance(node, ast.Name):
+            return self.binding(src, func, node, visited)
+        if not isinstance(node, ast.Call):
+            return False
+        if _sdk(src, node.func, "PreflightCheck"):
+            return True
+        helper = self.helper(src, func, node)
+        if helper is None:
+            return False
+        owner, target = helper
+        returns = [n for n in _nodes(target) if isinstance(n, ast.Return)]
+        return bool(returns) and all(
+            n.value is not None and self.row(owner, target, n.value, visited)
+            for n in returns
+        )
+
+    def binding(
+        self, src: Source, func: Function, node: ast.Name, visited: frozenset[int]
+    ) -> bool:
+        """Resolve a name to its one preceding assignment, or report it opaque.
+
+        More than one assignment, or none, leaves the value unknown: the row
+        the list carries at runtime is then not the one the analysis would read.
+        """
+        bound: list[ast.expr] = []
+        for stmt in _nodes(func):
+            if getattr(stmt, "lineno", node.lineno) >= node.lineno:
+                continue
+            if isinstance(stmt, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == node.id
+                for target in stmt.targets
+            ):
+                bound.append(stmt.value)
+            elif (
+                isinstance(stmt, ast.AnnAssign)
+                and isinstance(stmt.target, ast.Name)
+                and stmt.target.id == node.id
+                and stmt.value is not None
+            ):
+                bound.append(stmt.value)
+        return len(bound) == 1 and self.row(src, func, bound[0], visited)
+
+    def result(self, src: Source, func: Function, call: ast.Call) -> None:
         kwargs = _kwargs(call)
         if _sdk(src, call.func, "PreflightCheck") and "status" in kwargs:
             self.emit(
@@ -283,6 +358,20 @@ class _Checker:
                     "Handler NOT_READY result has no failed check evidence; include the evaluated blocking check.",
                 )
             return
+        for element in checks.elts:
+            if not self.row(src, func, element):
+                self.emit(
+                    src,
+                    element,
+                    "F019",
+                    f"Preflight check row `{_describe(element)}` does not resolve to a "
+                    "PreflightCheck construction, so its mandatory/advisory role and "
+                    "verdict cannot be read from the list; wrapping an opaque "
+                    "aggregation in a list display does not resolve it. Build the row "
+                    "inline or in a resolvable helper, or verify the aggregation in an "
+                    "executed handler scenario.",
+                    SCENARIO_COVERAGE,
+                )
         passed = [
             _literal(_kwargs(c).get("passed"))
             if isinstance(c, ast.Call) and _sdk(src, c.func, "PreflightCheck")
@@ -407,7 +496,7 @@ class _Checker:
                         "Expected typed preflight failure escapes the handler. Return a typed PreflightOutput verdict; the strict gate does not preserve the legacy raised-error fail-open behavior.",
                     )
             if isinstance(node, ast.Call):
-                self.result(src, node)
+                self.result(src, func, node)
                 helper = self.helper(src, func, node)
                 if helper is not None:
                     self.body(helper[0], helper[1], visited, caught)
