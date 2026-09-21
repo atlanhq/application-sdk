@@ -109,10 +109,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P045",
         canonical_reference=(
-            "atlan-hello-world-app app/errors.py — `from application_sdk.errors import "
-            "InvalidInputError`. The package re-exports every error an app should touch; "
-            "reaching into a submodule for the same class buys nothing and forfeits the "
-            "stability promise."
+            "atlan-metabase-app app/errors.py — the one SDK import is `from "
+            "application_sdk.errors import (AppPermissionDeniedError, AuthError, "
+            "InvalidInputError, SourceUnavailableError)`: four leaves from the package "
+            "root, nothing from application_sdk.errors.base or "
+            "application_sdk.storage.formats. Reaching into a submodule for the same "
+            "class forfeits the stability promise."
         ),
         scope=RuleScope.APP,
         name="PrivateErrorClassImport",

@@ -90,11 +90,12 @@ class RuleDefinition(BaseModel):
     rules an app engineer has to act on, and "what does correct look like here"
     is the question the finding text cannot answer.
 
-    Only the four public reference apps count — ``atlan-hello-world-app``,
-    ``atlan-openapi-app``, ``atlan-mysql-app``, ``atlan-metabase-app`` — plus
-    ``application_sdk`` itself for rules about SDK-owned surfaces.  An arbitrary
-    connector may be mid-migration and is not a model of anything (see
-    ``docs/agents/canonical-apps.md``).
+    Only the three remediation reference apps count — ``atlan-openapi-app``,
+    ``atlan-mysql-app``, ``atlan-metabase-app`` — plus ``application_sdk``
+    itself for rules about SDK-owned surfaces.  ``atlan-hello-world-app`` is a
+    scaffold, not a reference: too minimal to be what a fix is mirrored from
+    (owner decision, FND-2477).  An arbitrary connector may be mid-migration
+    and is not a model of anything (see ``docs/agents/canonical-apps.md``).
 
     Name a path, not a sentiment: the value must carry a concrete file so a
     reader can open it.  Two rules may not share the same reference — if they

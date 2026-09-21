@@ -175,8 +175,22 @@ REFERENCE_APPS = (
     "atlan-mysql-app",
     "atlan-metabase-app",
     "atlan-openapi-app",
-    "atlan-hello-world-app",
 )
+
+
+def test_hello_world_is_not_a_remediation_reference() -> None:
+    """Owner decision (FND-2477): the scaffold app is too minimal to be what a
+    fix is mirrored from. Neither the prose nor the vendored skill may send a
+    model there."""
+    for rel in (
+        "functions/remediate-finding.prose.md",
+        "functions/detect-violations.prose.md",
+    ):
+        assert "atlan-hello-world-app" not in _read(rel), rel
+    template = (
+        files("conformance").joinpath("bootstrap/templates/remediate.md").read_text()
+    )
+    assert "atlan-hello-world-app" not in template
 
 
 def test_remediate_finding_requires_the_reference_apps() -> None:

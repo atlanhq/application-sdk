@@ -232,9 +232,10 @@ and bypasses that seam (BLDX-1417).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — the only orchestration import is `from
-  application_sdk.app import App, task`. temporalio appears in none of the four
-  reference apps' source.
+- **Compliant example:** atlan-metabase-app app/connector.py — the only orchestration import is `from
+  application_sdk.app import App, entrypoint, task`, and the string temporalio appears
+  nowhere under that repo's app/ or tests/. Everything a workflow needs, including
+  `now`, `sleep` and `uuid4`, is re-exported through the SDK seam.
 
 A consumer app imports `temporalio` (the raw orchestration engine) directly.  Everything
 an app needs is re-exported through the SDK seam: runtime primitives and decorators via
@@ -424,8 +425,9 @@ FileReference.from_local(path, tier=...) instead (BLDX-1398).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `FileReference(local_path=str(out_path),
-  tier=StorageTier.RETAINED)`. The app supplies the local path and the tier;
+- **Compliant example:** atlan-metabase-app app/connector.py — `transform_data` returns
+  `output_file=FileReference.from_local(out_file, tier=StorageTier.RETAINED)`, and the
+  `_ref` helper builds the raw-file references from only local_path and tier.
   storage_path, is_durable and file_count are stamped by the SDK when it moves the file.
 
 A `FileReference(...)` is constructed with one of the SDK-managed durability fields set
@@ -490,11 +492,11 @@ underlying file (BLDX-1398).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/contracts.py — `greetings_file` and `output_file` are typed
-  `FileReference | None`, so a hand-off survives being scheduled on another pod.
-  atlan-metabase-app app/contracts.py shows the legitimate exception: `output_path`
-  carries an inline ignore[P012] saying it is a task-local scratch base, not a
-  cross-worker reference.
+- **Compliant example:** atlan-openapi-app app/contracts.py — `ExtractSpecOutput.api_spec_file` / `api_path_file`
+  and the matching `TransformInput` fields are typed `FileReference | None`, so the
+  hand-off from extract_spec to transform survives being scheduled on another pod. The
+  only `str` fields in the file are URLs, prefixes and qualified names, none of which is
+  a path on a worker's disk.
 
 An `Input`/`Output` contract subclass declares a `str` / `str | None` field whose name
 or documentation indicates a file or directory path (e.g. `output_path`, `local_dir`, a
@@ -582,9 +584,11 @@ the customer discovers before anyone else does.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/contracts.py — each @task has its own Input/Output pair
-  (GenerateGreetingsInput/Output, SummarizeInput/Output) subclassing the SDK bases. A
-  dict or a bare str across a task boundary has no schema to evolve.
+- **Compliant example:** atlan-openapi-app app/connector.py — each @task is typed with its own pair:
+  `extract_spec(self, input: ExtractSpecInput) -> ExtractSpecOutput`,
+  `download_cloud_spec(...) -> DownloadCloudSpecOutput`, `transform(...) ->
+  TransformOutput`, all subclassing the SDK Input/Output. A dict or a bare str across a
+  task boundary has no schema to evolve.
 
 A method decorated with `@task` must declare:
 
@@ -762,9 +766,10 @@ consistent, SDK-controlled way (BLDX-1411).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/run_dev.py — the worker comes from `run_dev_combined`. No
-  reference app constructs a Temporal Worker or Client; the launcher is what wires
-  interceptors, the activity registry and the task queue together.
+- **Compliant example:** atlan-mysql-app app/run_dev.py — `main()` is a single `await run_dev_combined(MySQLApp,
+  temporal_ui=True, example_input=...)`; no Worker, Client, create_worker or AppWorker
+  is constructed anywhere under app/. The launcher is what wires interceptors, the
+  activity registry and the task queue together.
 
 The app calls `create_worker(...)`, `create_temporal_client(...)`, or `AppWorker(...)`
 directly, imports removed v2 worker/client boot surface (`application_sdk.worker`,
@@ -884,9 +889,11 @@ replay is faithful.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `run()` only sequences @task calls; the clock,
-  the filesystem and the RNG are all touched inside tasks. Workflow code is replayed, so
-  a non-deterministic call there produces a different history on every replay.
+- **Compliant example:** atlan-metabase-app app/connector.py — `transform_data` stamps
+  `last_sync_run_at_ms=int(time.time() * 1000)` inside the @task; neither
+  `extract_metadata` nor `extract_lineage` reads the clock, uuid or the RNG. Workflow
+  code is replayed, so a non-deterministic call there produces a different history on
+  every replay.
 
 Inside an `App` subclass's workflow-context method (`run`, an `@entrypoint` method, or a
 `@signal` / `@query` / `@update` handler) a call reads wall-clock time, generates a
@@ -921,9 +928,11 @@ whose result is durably recorded in workflow history.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `generate_greetings` does the tempfile and the
-  write, and `run()` does neither. The comment on run() states the rule in the app's own
-  words: network, disk and clock live inside a @task.
+- **Compliant example:** atlan-openapi-app app/connector.py — `run()` only validates the input, builds task
+  inputs and awaits `download_cloud_spec`, `extract_spec` and `transform`; the tempfile,
+  the HTTP fetch and the object-store download live inside those tasks. The comment
+  above the download call states the rule in the app's own words: cloud I/O must run in
+  an activity, not workflow code.
 
 Inside an `App` subclass's workflow-context method a call performs side-effecting I/O —
 `open`, `requests`/`httpx`/`urllib`, `socket`, `subprocess`,
@@ -1091,9 +1100,11 @@ reports progress, the same silent-zero-asset class P030 polices at the upload se
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — the App declares `name = "hello-world"` and
-  atlan.yaml carries `name: hello-world`. The task queue is derived from that name, so
-  any disagreement routes work to a queue no worker is listening on.
+- **Compliant example:** atlan-mysql-app app/mysql.py — `MySQLApp` declares `name: ClassVar[str] = "mysql"`,
+  atlan.yaml carries `name: mysql` and .env.example sets `ATLAN_APPLICATION_NAME=mysql`,
+  so the three sources this rule compares agree. The task queue and the artifact path
+  are derived from that name, so any disagreement routes work to a queue no worker is
+  listening on.
 
 Three independent sources declare an app's name:
 
@@ -1163,9 +1174,10 @@ site and the type annotation stops being load-bearing.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `self.require(input.greetings_file,
-  "greetings_file")`. The field is typed, so the right move is to assert it is present,
-  not to getattr past the type with a default that silently changes behaviour.
+- **Compliant example:** atlan-openapi-app app/connector.py — `extract_spec` reads `input.spec_url` as a plain
+  attribute and raises SpecUrlRequiredError when it is empty. The field is typed, so the
+  right move is to read it and assert it is present, not to getattr past the type with a
+  default that silently changes behaviour when the field is renamed.
 
 Inside an `@entrypoint` or `@task` method, a declared field of a typed `Input`/`Output`
 contract parameter is read via `getattr(param, "field", default)` instead of attribute
@@ -2028,9 +2040,11 @@ file just became false (CONNECT-970).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/errors.py — `from application_sdk.errors import
-  InvalidInputError`. The package re-exports every error an app should touch; reaching
-  into a submodule for the same class buys nothing and forfeits the stability promise.
+- **Compliant example:** atlan-metabase-app app/errors.py — the one SDK import is `from application_sdk.errors
+  import (AppPermissionDeniedError, AuthError, InvalidInputError,
+  SourceUnavailableError)`: four leaves from the package root, nothing from
+  application_sdk.errors.base or application_sdk.storage.formats. Reaching into a
+  submodule for the same class forfeits the stability promise.
 
 A consumer app imports a class whose name ends in `Error` from a module under
 `application_sdk.storage.formats` — most often

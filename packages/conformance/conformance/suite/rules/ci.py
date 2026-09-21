@@ -124,9 +124,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="C003",
         canonical_reference=(
-            "atlan-hello-world-app .gitignore — carries the standard entries this rule "
-            "checks for, including `.venv/` and `.claude/worktrees/`. A missing entry is "
-            "usually the newest one, added centrally after the repo was scaffolded."
+            "atlan-openapi-app .gitignore — carries every entry this rule requires, "
+            "including `.venv/`, `.atlan/`, `.claude/worktrees/` and `remediation/`, "
+            "plus the `.mothership/.cache/` line the bootstrap appends. A missing "
+            "entry is usually the newest one, added centrally after the repo was "
+            "scaffolded."
         ),
         fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,

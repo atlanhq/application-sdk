@@ -74,13 +74,13 @@ an independent check on the same property.
 ## Reference apps — load before any fix, verify against them after
 
 Do not fix from memory. Every app-facing rule names a `canonical_reference`
-(SARIF `atlan/canonicalReference` on the finding): a file in one of the four
+(SARIF `atlan/canonicalReference` on the finding): a file in one of the three
 maintained reference apps that already has the compliant shape. Before the
-first edit of a run, make the **full checkout** of all four available:
+first edit of a run, make the **full checkout** of all three available:
 
 ```
 mkdir -p remediation/refs
-for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app atlan-hello-world-app; do
+for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app; do
   [ -d "remediation/refs/$app" ] || git clone --depth 1 "https://github.com/atlanhq/$app.git" "remediation/refs/$app"
 done
 ```

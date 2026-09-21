@@ -150,10 +150,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P010",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — "
-            "`FileReference(local_path=str(out_path), tier=StorageTier.RETAINED)`. The app "
-            "supplies the local path and the tier; storage_path, is_durable and file_count "
-            "are stamped by the SDK when it moves the file."
+            "atlan-metabase-app app/connector.py — `transform_data` returns "
+            "`output_file=FileReference.from_local(out_file, "
+            "tier=StorageTier.RETAINED)`, and the `_ref` helper builds the raw-file "
+            "references from only local_path and tier. storage_path, is_durable and "
+            "file_count are stamped by the SDK when it moves the file."
         ),
         scope=RuleScope.APP,
         name="ManualFileReferenceConstruction",
@@ -234,11 +235,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P012",
         canonical_reference=(
-            "atlan-hello-world-app app/contracts.py — `greetings_file` and `output_file` "
-            "are typed `FileReference | None`, so a hand-off survives being scheduled on "
-            "another pod. atlan-metabase-app app/contracts.py shows the legitimate "
-            "exception: `output_path` carries an inline ignore[P012] saying it is a "
-            "task-local scratch base, not a cross-worker reference."
+            "atlan-openapi-app app/contracts.py — `ExtractSpecOutput.api_spec_file` / "
+            "`api_path_file` and the matching `TransformInput` fields are typed "
+            "`FileReference | None`, so the hand-off from extract_spec to transform "
+            "survives being scheduled on another pod. The only `str` fields in the "
+            "file are URLs, prefixes and qualified names, none of which is a path on a "
+            "worker's disk."
         ),
         scope=RuleScope.APP,
         name="FilePathStringInContract",

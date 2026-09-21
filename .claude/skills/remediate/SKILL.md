@@ -329,11 +329,11 @@ an independent check on the same property.
 ### Reference apps — load before any fix, verify against them after
 
 Do not fix from memory. Every app-facing rule names a `canonical_reference`
-(SARIF `atlan/canonicalReference` on the finding): a file in one of the four
+(SARIF `atlan/canonicalReference` on the finding): a file in one of the three
 maintained reference apps — `atlan-mysql-app`, `atlan-metabase-app`,
-`atlan-openapi-app`, `atlan-hello-world-app` — that already has the compliant
-shape. Before the first edit of a run, make the **full checkout** of all four
-available under `remediation/refs/` (shallow clones of `origin/main`; scratch
+`atlan-openapi-app` — that already has the compliant shape. Before the first
+edit of a run, make the **full checkout** of all three available under
+`remediation/refs/` (shallow clones of `origin/main`; scratch
 only — never edited, never committed, never in a fix's `touched_files`).
 
 For every finding, in this order (contract:

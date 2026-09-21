@@ -190,9 +190,10 @@ committed artifacts look freshly generated.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app contract/PklProject — one pinned dependency,
-  `app-contract-toolkit@0.24.0`, and contract/PklProject.deps.json resolved from it. The
-  pin and the resolved lock are regenerated together; editing one alone is what produces
+- **Compliant example:** atlan-mysql-app contract/PklProject — one pinned dependency,
+  `app-contract-toolkit@0.26.0`, and contract/PklProject.deps.json records the same
+  `@0.26.0` under resolvedDependencies with its sha256. The pin and the resolved lock
+  are regenerated together by `pkl project resolve`; editing one alone is what produces
   the drift.
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
@@ -440,10 +441,11 @@ package. The canonical base URI is read from the baked-in toolkit baseline.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app contract/PklProject — the toolkit URI is
-  `package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<version>`.
-  A fork, a local path, or a different host resolves a renderer nobody else in the fleet
-  is using.
+- **Compliant example:** atlan-openapi-app contract/PklProject — under the `["app-contract-toolkit"]` key the URI
+  is
+  `package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<version>`,
+  the single SDK-published package. A fork, a local path, or a different host resolves a
+  renderer nobody else in the fleet is using.
 
 The `app-contract-toolkit` dependency in `contract/PklProject` is pointed at a base URI
 other than the canonical SDK-published package

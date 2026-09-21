@@ -74,9 +74,9 @@ description: >
     together so residue-routing for such a rule doesn't depend on the model
     remembering to set its own flag on every single call.
   - `canonical_reference` — string or null (from `atlan/canonicalReference`).
-    The file in one of the four reference apps (`atlan-mysql-app`,
-    `atlan-metabase-app`, `atlan-openapi-app`, `atlan-hello-world-app`) that
-    already has the compliant shape for this rule. `remediate-finding` must open
+    The file in one of the three reference apps (`atlan-mysql-app`,
+    `atlan-metabase-app`, `atlan-openapi-app`) that already has the
+    compliant shape for this rule. `remediate-finding` must open
     it before proposing a fix — see its *Reference apps, impact analysis and
     verification* section. Present on every app-facing rule; null only for the
     handful of SDK-only rules.

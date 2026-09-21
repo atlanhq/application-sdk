@@ -35,9 +35,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P004",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — the only orchestration import is "
-            "`from application_sdk.app import App, task`. temporalio appears in none of "
-            "the four reference apps' source."
+            "atlan-metabase-app app/connector.py — the only orchestration import is "
+            "`from application_sdk.app import App, entrypoint, task`, and the string "
+            "temporalio appears nowhere under that repo's app/ or tests/. Everything a "
+            "workflow needs, including `now`, `sleep` and `uuid4`, is re-exported "
+            "through the SDK seam."
         ),
         scope=RuleScope.APP,
         name="DirectTemporalImport",

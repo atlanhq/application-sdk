@@ -89,10 +89,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D002",
         canonical_reference=(
-            "atlan-hello-world-app pyproject.toml — [project.dependencies] holds exactly "
-            "one entry, the SDK. Everything the SDK already resolves (orjson, pydantic, "
-            "temporalio) is imported without being redeclared, so there is one place a "
-            "version can move."
+            "atlan-openapi-app pyproject.toml — [project.dependencies] holds exactly "
+            "one entry, the SDK. orjson and the pyatlan models are imported under app/ "
+            "without being redeclared there or in any dependency group, so there is "
+            "one place a version can move."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -387,10 +387,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D009",
         canonical_reference=(
-            "atlan-hello-world-app pyproject.toml — [tool.poe.tasks.download-components] "
-            "copies the Dapr component YAMLs out of the installed application_sdk wheel. "
-            "Components then match whatever SDK version uv.lock resolved, instead of "
-            "whatever main happened to hold."
+            "atlan-metabase-app pyproject.toml — [tool.poe.tasks.download-components] "
+            "runs `shutil.copytree(pathlib.Path(application_sdk.__file__).parent / "
+            '"components", "components", dirs_exist_ok=True)` under `interpreter = '
+            '"python"`, with a comment saying components/ is gitignored so each '
+            "environment copies the set matching the SDK in uv.lock. No poe task names "
+            "raw.githubusercontent.com."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -671,11 +673,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D012",
         canonical_reference=(
-            "atlan-hello-world-app pyproject.toml — `[[tool.uv.index]]` names pypi at "
-            "https://pypi.org/simple with `default = true`, above a comment recording "
+            "application_sdk pyproject.toml — `[[tool.uv.index]]` names pypi at "
+            "https://pypi.org/simple with `default = true`, below a comment recording "
             "which machine-wide index the pin displaces and why it cannot move to a "
-            "project-level uv.toml. Declared in pyproject.toml, so the repo's [tool.uv] "
-            "constraint-dependencies keep being read."
+            "project-level uv.toml. Declared in pyproject.toml, so the repo's "
+            "[tool.uv] constraint-dependencies keep being read."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
@@ -748,11 +750,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D013",
         canonical_reference=(
-            "atlan-hello-world-app uv.lock — every download URL names "
-            "files.pythonhosted.org, because that repo's D012 pin was in place before "
-            "the lock was last resolved. A lock that has already picked up a proxy host "
-            "is repaired by restoring the committed one, not by re-locking on the "
-            "machine that rewrote it."
+            "atlan-openapi-app uv.lock — every download URL names "
+            "files.pythonhosted.org or pypi.org and none carries userinfo, so CI "
+            "installs from the same host the lock was resolved against. A lock that "
+            "has already picked up a proxy host is repaired by restoring the committed "
+            "one, not by re-locking on the machine that rewrote it."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,

@@ -198,10 +198,10 @@ compiled._
 **1. Load the reference app before proposing anything.**
 
 Every app-facing rule names a `canonical_reference`: a concrete file — and
-usually a symbol — in one of the four maintained reference apps that already
+usually a symbol — in one of the three maintained reference apps that already
 has the compliant shape.  It arrives on the finding as
 `finding.canonical_reference` (SARIF `atlan/canonicalReference`).  Only these
-four apps count; an arbitrary connector may be mid-migration and is not a
+three apps count; an arbitrary connector may be mid-migration and is not a
 model of anything:
 
 | App | What it is the reference for |
@@ -209,9 +209,8 @@ model of anything:
 | `atlan-mysql-app` | SQL-style connectors: extraction, transform templates, the contract and generated tree, SDR |
 | `atlan-metabase-app` | API-style / BI connectors: pagination, typed clients, asset mapping |
 | `atlan-openapi-app` | packaging and tooling baseline: `pyproject.toml`, pyright, ruff, CI shims |
-| `atlan-hello-world-app` | the minimal skeleton: what an app needs and nothing else |
 
-- Have the **full checkout** of all four available under `remediation/refs/`
+- Have the **full checkout** of all three available under `remediation/refs/`
   at `origin/main` for the whole run — the named file is the entry point, but
   the fix must mirror how the reference app does the pattern *everywhere*, and
   cross-references (a contract field, a generated artifact, a test fixture)
@@ -219,7 +218,7 @@ model of anything:
 
   ```sh
   mkdir -p remediation/refs
-  for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app atlan-hello-world-app; do
+  for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app; do
     [ -d "remediation/refs/$app" ] || git clone --depth 1 "https://github.com/atlanhq/$app.git" "remediation/refs/$app"
   done
   ```
@@ -234,7 +233,7 @@ model of anything:
   key or import the reference app does not use.  The finding's `hint` and the
   area prescription say *what to change*; the reference app says *what the
   result must look like*.  The app named in `canonical_reference` is
-  authoritative for that rule; the other three are for cross-checking only.
+  authoritative for that rule; the other two are for cross-checking only.
 - If the reference app itself does not exhibit the pattern (or has an open
   finding for the same rule), do not guess: say so in `impact`, set
   `classification = "judgment"` and route to residue.

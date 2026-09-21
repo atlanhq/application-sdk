@@ -290,9 +290,10 @@ coverage tool is green' and 'the tests actually verify something.'
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app tests/unit/test_connector.py — every test ends in an assertion
-  about the value under test. A test whose body only exercises code is a smoke test
-  wearing a test's name.
+- **Compliant example:** atlan-mysql-app tests/unit/test_parity.py — every test ends in an assertion about the
+  mapped entity: `assert_structure` checks the required keys and relationship refs, and
+  each qualified-name test asserts on the value itself. A test whose body only exercises
+  code is a smoke test wearing a test's name.
 
 A collected test function (`test*`, including methods of a `Test*` class) has a
 non-empty body but contains none of the recognised assertion forms:
@@ -522,9 +523,9 @@ has some logic worth a fast unit test.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app tests/unit/ — three modules covering the connector, the contracts
-  and the dev entrypoint. This tier is the floor and is not exemptable; even the
-  scaffold app has it.
+- **Compliant example:** atlan-mysql-app tests/unit/ — four modules: test_client.py, test_handler.py,
+  test_mysql_app.py and test_parity.py, covering the SQL client, the handler, the app's
+  mappers and the wire-shape parity spec. This tier is the floor and is not exemptable.
 
 No collectable pytest tests (`def test*` / `class Test*` in a `test_*.py` / `*_test.py`
 file) exist under `tests/unit/`. This is the universal floor of the tiering architecture
@@ -560,10 +561,11 @@ the Pkl contract and must not be hand-edited, so the exemption can't live there.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app tests/integration/ — handler auth and preflight against a real MySQL,
-  plus credential resolution against fake secret stores. Where an app genuinely has
-  nothing to exercise at this tier, atlan-hello-world-app pyproject.toml declares
-  `[tool.conformance] exempt_test_tiers` and says why in a comment.
+- **Compliant example:** atlan-mysql-app tests/integration/ — test_mysql_handler.py runs auth, preflight and
+  metadata against a real MySQL, test_credential_resolution.py resolves credentials
+  against fake secret stores, and test_mysql_workflow.py drives the whole extraction on
+  the embedded runtime. None of the three reference apps needs the `[tool.conformance]
+  exempt_test_tiers` opt-out.
 
 No collectable pytest tests exist under `tests/integration/`. Per the agreed tiering
 architecture, integration tests connect to the real source and run the app's extract
@@ -605,9 +607,10 @@ tier exist at all. Exemptable the same way as T011 for scaffold/minimal apps via
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app tests/e2e/test_mysql_e2e.py — one full-DAG suite on the generated e2e
-  base. atlan-hello-world-app instead exempts the tier in pyproject.toml, which is the
-  other legitimate end state.
+- **Compliant example:** atlan-mysql-app tests/e2e/test_mysql_e2e.py — one representative full-DAG suite,
+  `TestMySQLE2E`, that skips itself at module level when ATLAN_BASE_URL / ATLAN_API_KEY
+  are unset, so the tier is collectable everywhere and runs only where a tenant is
+  configured. Each of the three reference apps ships this tier rather than exempting it.
 
 No collectable pytest tests exist under `tests/e2e/`. Per the agreed tiering
 architecture this tier needs only one representative run — the full pipeline including

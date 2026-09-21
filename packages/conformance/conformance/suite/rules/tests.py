@@ -518,9 +518,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T005",
         canonical_reference=(
-            "atlan-hello-world-app tests/unit/test_connector.py — every test ends in an "
-            "assertion about the value under test. A test whose body only exercises code "
-            "is a smoke test wearing a test's name."
+            "atlan-mysql-app tests/unit/test_parity.py — every test ends in an "
+            "assertion about the mapped entity: `assert_structure` checks the required "
+            "keys and relationship refs, and each qualified-name test asserts on the "
+            "value itself. A test whose body only exercises code is a smoke test "
+            "wearing a test's name."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
@@ -810,9 +812,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T010",
         canonical_reference=(
-            "atlan-hello-world-app tests/unit/ — three modules covering the connector, the "
-            "contracts and the dev entrypoint. This tier is the floor and is not "
-            "exemptable; even the scaffold app has it."
+            "atlan-mysql-app tests/unit/ — four modules: test_client.py, "
+            "test_handler.py, test_mysql_app.py and test_parity.py, covering the SQL "
+            "client, the handler, the app's mappers and the wire-shape parity spec. "
+            "This tier is the floor and is not exemptable."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -860,11 +863,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T011",
         canonical_reference=(
-            "atlan-mysql-app tests/integration/ — handler auth and preflight against a "
-            "real MySQL, plus credential resolution against fake secret stores. Where an "
-            "app genuinely has nothing to exercise at this tier, atlan-hello-world-app "
-            "pyproject.toml declares `[tool.conformance] exempt_test_tiers` and says why "
-            "in a comment."
+            "atlan-mysql-app tests/integration/ — test_mysql_handler.py runs auth, "
+            "preflight and metadata against a real MySQL, "
+            "test_credential_resolution.py resolves credentials against fake secret "
+            "stores, and test_mysql_workflow.py drives the whole extraction on the "
+            "embedded runtime. None of the three reference apps needs the "
+            "`[tool.conformance] exempt_test_tiers` opt-out."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -922,9 +926,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T012",
         canonical_reference=(
-            "atlan-mysql-app tests/e2e/test_mysql_e2e.py — one full-DAG suite on the "
-            "generated e2e base. atlan-hello-world-app instead exempts the tier in "
-            "pyproject.toml, which is the other legitimate end state."
+            "atlan-mysql-app tests/e2e/test_mysql_e2e.py — one representative full-DAG "
+            "suite, `TestMySQLE2E`, that skips itself at module level when "
+            "ATLAN_BASE_URL / ATLAN_API_KEY are unset, so the tier is collectable "
+            "everywhere and runs only where a tenant is configured. Each of the three "
+            "reference apps ships this tier rather than exempting it."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,

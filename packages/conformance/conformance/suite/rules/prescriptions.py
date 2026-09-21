@@ -291,10 +291,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P014",
         canonical_reference=(
-            "atlan-hello-world-app app/contracts.py — each @task has its own Input/Output "
-            "pair (GenerateGreetingsInput/Output, SummarizeInput/Output) subclassing the "
-            "SDK bases. A dict or a bare str across a task boundary has no schema to "
-            "evolve."
+            "atlan-openapi-app app/connector.py — each @task is typed with its own "
+            "pair: `extract_spec(self, input: ExtractSpecInput) -> ExtractSpecOutput`, "
+            "`download_cloud_spec(...) -> DownloadCloudSpecOutput`, `transform(...) -> "
+            "TransformOutput`, all subclassing the SDK Input/Output. A dict or a bare "
+            "str across a task boundary has no schema to evolve."
         ),
         scope=RuleScope.APP,
         name="UntypedTaskBoundary",
@@ -405,10 +406,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P026",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — `self.require(input.greetings_file, "
-            '"greetings_file")`. The field is typed, so the right move is to assert it '
-            "is present, not to getattr past the type with a default that silently changes "
-            "behaviour."
+            "atlan-openapi-app app/connector.py — `extract_spec` reads "
+            "`input.spec_url` as a plain attribute and raises SpecUrlRequiredError "
+            "when it is empty. The field is typed, so the right move is to read it and "
+            "assert it is present, not to getattr past the type with a default that "
+            "silently changes behaviour when the field is renamed."
         ),
         scope=RuleScope.APP,
         name="GetattrOnTypedContractField",

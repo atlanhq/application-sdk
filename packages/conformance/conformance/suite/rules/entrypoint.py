@@ -35,10 +35,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P017",
         canonical_reference=(
-            "atlan-hello-world-app app/run_dev.py — the worker comes from "
-            "`run_dev_combined`. No reference app constructs a Temporal Worker or Client; "
-            "the launcher is what wires interceptors, the activity registry and the task "
-            "queue together."
+            "atlan-mysql-app app/run_dev.py — `main()` is a single `await "
+            "run_dev_combined(MySQLApp, temporal_ui=True, example_input=...)`; no "
+            "Worker, Client, create_worker or AppWorker is constructed anywhere under "
+            "app/. The launcher is what wires interceptors, the activity registry and "
+            "the task queue together."
         ),
         scope=RuleScope.APP,
         name="ManualWorkerBootstrap",
