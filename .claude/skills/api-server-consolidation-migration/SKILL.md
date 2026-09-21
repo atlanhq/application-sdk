@@ -449,6 +449,14 @@ Apps built on `server_sdk.build_asgi_app` get it for free. Apps on
 For `application_sdk` apps, call the factory with identity passed in, never
 inferred:
 
+> `create_app_handler_service` is **deprecated** in favour of
+> `server_sdk.build_asgi_app`, and your app will see a B001 conformance warning
+> naming it. It still works and is still the right call for an app that has not
+> moved its serving surface onto `atlan-application-sdk-server` — which is most
+> of them today. Moving is not a rename: `build_asgi_app` registers the handler
+> routes only, so an app relying on the wider route set has real work to do
+> first. Keep using the factory until then.
+
 ```python
 from application_sdk.handler.service import create_app_handler_service
 
