@@ -67,6 +67,52 @@ _Read by `remediate-finding` when `finding.area == "error-handling"`._
 Consult the finding's `hint` and `message`, then look at the actual source
 lines around `finding.line` in `finding.file` before proposing a fix.
 
+#### Credential-boundary contraindication — read before adding `exc_info=True`
+
+The raw exception from a database driver, an HTTP client or an auth call can
+embed credentials: a JDBC URL carrying a password, an `Authorization` header
+or HMAC, connection properties, an OAuth response body.  `exc_info=True`
+serialises the traceback *separately*, so it bypasses whatever redaction the
+message itself performs — adding it at such a site **creates a leak that was
+not there before**.  A production security review over the fleet remediation
+(FND-57) found exactly this shape in five connector repos.
+
+So before adding `exc_info=True`, or adding a log call that formats the
+exception, ask what the caught exception can carry.  If the `try` wraps a
+connect, an authenticate, a token refresh, or any request whose URL, headers
+or body hold a secret, **do not add `exc_info=True`**.  Log through a
+redaction helper instead:
+
+```python
+from application_sdk.errors import redact_secrets, sanitize_cause_repr
+
+logger.error("connect failed: %s", sanitize_cause_repr(exc))
+logger.warning("token refresh failed: %s", redact_secrets(str(exc)))
+```
+
+**This clears the rule, and needs no suppression.**  E004, E005 (and L004 in
+the logging area) all accept a log call whose arguments flow through a
+sanitizer as a deliberate no-traceback boundary — see
+`suite/checks/_ast_common/_sanitizers.py`.  The redacted form is a
+first-class fix, not a carve-out.
+
+Two things to get right, because both fail silently:
+
+- **Recognition is by name.**  The callable must contain `redact`,
+  `sanitiz`, `scrub_secret`, `mask_secret` or `safe_traceback`, or the
+  argument must be a variable named for redacted output (`safe_traceback`,
+  `redacted`, `sanitized`, `masked`, `scrubbed`).  `redact_secrets`,
+  `sanitize_cause_repr`, `safe_traceback` and `redact_wire_value` are public
+  `application_sdk.errors` API and already match.  An app-local helper is
+  fine *if* it is named to the convention — one called `clean_message`
+  redacts correctly and still leaves the finding standing.
+- **Only the log call's own arguments are inspected.**  A sanitizer used
+  elsewhere in the handler does not exempt an unrelated log call.
+
+Never propose an inline `ignore[...]` here.  A suppression records that the
+rule was skipped; the sanitized form records that the credential was handled.
+Only the second is true, and only the second survives review.
+
 **Mechanical rules** (`autofixable = true`) — produce a `"fix"` outcome with
 `classification = "mechanical"`:
 
@@ -137,14 +183,17 @@ outcome mirroring the error-handling shape in the reference app named by
   a residue suggestion, naming the type you inferred and the call inside the
   `try` you inferred it from — never applied in the same unit as the log edit.
 
+  **Check the credential boundary before adding `exc_info=True`** — see the
+  contraindication at the top of this section.  At a connect/auth/token site
+  the fix is `sanitize_cause_repr(exc)` rather than the traceback, which
+  clears E004 by the same sanitizer rule and leaks nothing.
+
   Two things already clear the rule and must not be "fixed": a body that
   re-raises on every path with the trace preserved (bare `raise`, or
-  `raise X(...) from e`), and a log call whose arguments flow through a
-  redaction helper — the sanitizer marks a deliberate no-traceback boundary,
-  so **never add `exc_info=True` there** (same contraindication as E005).  A
-  boundary that must stay broad and must not log carries an inline
-  `ignore[E004]` naming what it guards; see `atlan-mysql-app app/handler.py`'s
-  `preflight_check`.
+  `raise X(...) from e`), and a log call whose arguments already flow through
+  a redaction helper.  A boundary that must stay broad and must not log
+  carries an inline `ignore[E004]` naming what it guards; see
+  `atlan-mysql-app app/handler.py`'s `preflight_check`.
 
 - **E007 ErrorToReturnValue** — the `except` block returns a sentinel
   (`None`, `{}`, `[]`, `False`) with no logging before the `return`, so the
@@ -155,7 +204,10 @@ outcome mirroring the error-handling shape in the reference app named by
   app/extracts/databases.py`'s `fetch_databases_summaries` logs the HTTP
   status and records a residual before returning `[]`.  Where the sentinel
   really is the contract, `atlan-openapi-app app/api_client.py`'s `redact_url`
-  carries an inline `ignore[E007]` saying so.
+  carries an inline `ignore[E007]` saying so.  The log call you add is subject
+  to the credential-boundary contraindication above — at an auth or connect
+  site, format the exception through `sanitize_cause_repr` and omit
+  `exc_info=True`.
 
 - **E008 ImportErrorWithoutLogging** — `except ImportError` with no logging,
   so a missing or broken dependency reads as a normal skip.  Bind the
@@ -174,7 +226,9 @@ outcome mirroring the error-handling shape in the reference app named by
   binds the routing error, logs it, then takes the inline-credentials path.
   A bound name that is never read afterwards is the tell that the handler is
   a placeholder — say so in the edit description rather than inventing a use
-  for it.
+  for it.  These handlers sit on credential paths more often than most, so
+  apply the contraindication above: prefer `sanitize_cause_repr(exc)` to
+  `exc_info=True` wherever the bound exception came from an auth call.
 
 - **E010 AsyncioGatherExceptionsUnexamined** — `asyncio.gather(...,
   return_exceptions=True)` returns exception *instances as values*, and the

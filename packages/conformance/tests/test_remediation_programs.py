@@ -246,6 +246,32 @@ def test_suppression_is_a_rule_defect_signal() -> None:
     assert "Never suppress a BLOCK-tier" in text
 
 
+@pytest.mark.parametrize("area", ["error-handling", "logging"])
+def test_exc_info_prescriptions_carry_the_credential_contraindication(
+    area: str,
+) -> None:
+    """Adding `exc_info=True` at a connect/auth site creates a credential leak.
+
+    The traceback is serialised separately, so it bypasses whatever redaction
+    the message performs — FND-57 found this shape in five connector repos.
+    Both areas prescribe adding `exc_info=True` (E004/E005/E007/E009/E014,
+    L004/L005/L017), so both must carry the contraindication and must point at
+    the sanitizer form, which clears the rule with no suppression.
+    """
+    text = _read(f"areas/{area}.prose.md")
+    assert "Credential-boundary contraindication" in text, (
+        f"{area} prescribes adding exc_info=True with no credential-leak "
+        "contraindication"
+    )
+    # The safe fix has to name a helper the checker actually recognises —
+    # recognition is by name (_ast_common/_sanitizers.py), so a correct but
+    # unrecognised helper would leave the finding standing.
+    assert "sanitize_cause_repr" in text
+    assert "application_sdk.errors" in text
+    # And it must say the sanitized form is a fix, not a carve-out.
+    assert "no suppression" in text
+
+
 def test_b006_may_write_the_contract_ledger() -> None:
     """B006's only remedy writes `contract_schema.lock.json` at the repo root,
     which is neither Python source nor the Dockerfile.

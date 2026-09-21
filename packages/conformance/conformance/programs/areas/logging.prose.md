@@ -64,6 +64,41 @@ _Read by `remediate-finding` when `finding.area == "logging"`._
 Consult the finding's `hint` and `message`, then read the actual source lines
 around `finding.line` in `finding.file` before proposing a fix.
 
+#### Credential-boundary contraindication — read before adding `exc_info=True`
+
+The raw exception from a database driver, an HTTP client or an auth call can
+embed credentials: a JDBC URL carrying a password, an `Authorization` header
+or HMAC, connection properties, an OAuth response body.  `exc_info=True`
+serialises the traceback *separately*, so it bypasses whatever redaction the
+message itself performs — adding it at such a site **creates a leak that was
+not there before**.  A production security review over the fleet remediation
+(FND-57) found exactly this shape in five connector repos.
+
+Before adding `exc_info=True` (L004, and the L005/L017 rewrites that add it),
+ask what the caught exception can carry.  If the `try` wraps a connect, an
+authenticate, a token refresh, or any request whose URL, headers or body hold
+a secret, **do not add it**.  Log through a redaction helper instead:
+
+```python
+from application_sdk.errors import redact_secrets, sanitize_cause_repr
+
+logger.error("connect failed: %s", sanitize_cause_repr(exc))
+```
+
+**This clears the rule, and needs no suppression** — L004 accepts a log call
+whose arguments flow through a sanitizer as a deliberate no-traceback
+boundary (`suite/checks/_ast_common/_sanitizers.py`).  Recognition is **by
+name**: the callable must contain `redact`, `sanitiz`, `scrub_secret`,
+`mask_secret` or `safe_traceback`, or the argument must be a variable named
+for redacted output (`safe_traceback`, `redacted`, `sanitized`, `masked`,
+`scrubbed`).  The `application_sdk.errors` helpers above are public API and
+already match; an app-local helper named `clean_message` redacts correctly
+and still leaves the finding standing.  Only the log call's own arguments are
+inspected, so a sanitizer used elsewhere in the handler does not exempt it.
+
+Never propose an inline `ignore[...]` here: a suppression records that the
+rule was skipped, the sanitized form records that the credential was handled.
+
 **Mechanical rules** (`autofixable = true`, `classification = "mechanical"`):
 
 - **L004 ExceptBlockMissingExcInfoLog** — add `exc_info=True` as a keyword
