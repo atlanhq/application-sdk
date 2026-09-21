@@ -2,6 +2,27 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.36.0] - 2026-09-21
+
+### Features
+
+- reclassify P021, P036 and P051 as migration rules (#3892) ([25b3a49](https://github.com/atlanhq/application-sdk/commit/25b3a49))
+- reclassify the primary-mechanical K-series rules as auto-fixable (#3889) ([db2c7f6](https://github.com/atlanhq/application-sdk/commit/db2c7f6))
+
+### Bug fixes
+
+- E004 exempts a broad catch that returns the exception as typed data (#3890) ([618c413](https://github.com/atlanhq/application-sdk/commit/618c413))
+- F019's checks= gate reads the rows, not the node type (#3888) ([f0190db](https://github.com/atlanhq/application-sdk/commit/f0190db))
+- B005/B006 guard a contract exposed under a module-level alias (#3884) ([90e6989](https://github.com/atlanhq/application-sdk/commit/90e6989))
+- F019 reads the behavioural summary it tells you to write (#3885) ([81b634b](https://github.com/atlanhq/application-sdk/commit/81b634b))
+- resolve module-level contract aliases in the preflight registry (#3883) ([bd39dff](https://github.com/atlanhq/application-sdk/commit/bd39dff))
+- resolve a caught AppError's to_failure_details() in F019 (#3880) ([3fea5cd](https://github.com/atlanhq/application-sdk/commit/3fea5cd))
+- E004 exempts a severed re-raise that redacts its cause (#3879) ([5bf3370](https://github.com/atlanhq/application-sdk/commit/5bf3370))
+
+### Other changes
+
+- chore(deps): update non-critical python dependencies (#3856) ([7e82e71](https://github.com/atlanhq/application-sdk/commit/7e82e71))
+
 ## [0.35.0] - 2026-09-21
 
 ### Features
