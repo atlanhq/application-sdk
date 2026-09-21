@@ -132,6 +132,8 @@ Two different states share this rule. `ATLAN_PREFLIGHT_GATE_MODE` is **already i
 
 **Investigate:** locate the actual handler and follow registries, dynamic imports or factories. Snowflake-style dispatch requires checking every registered probe. **Fix:** use a supported resolvable pattern where appropriate, improve analysis with regression tests, or add executable scenarios for the unresolved path. **Verify:** demonstrate that a known defect on that path is detected. Do not relabel unresolved as compliant or change runtime semantics merely to satisfy static discovery.
 
+Re-typing a caught SDK error onto a failed row — `except AppError as exc: ... error=exc.to_failure_details()` — resolves rather than reporting: the clause proves the value is an `AppError`, so the details are typed. Their message and suggested action belong to whichever raise site built the error, and F007 grades them there, not on the row. A clause naming no typed error — `except Exception`, a bare `except:`, a driver class — stays unresolved and says so; narrow it to the `AppError` subclasses the probe raises, or construct a typed error on that path.
+
 
 ## PARTIAL verdicts — reported by B001, not by an F rule
 
