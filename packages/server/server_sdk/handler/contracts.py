@@ -24,6 +24,7 @@ from pydantic import (
 )
 from server_sdk.contracts.base import SerializableEnum
 from server_sdk.errors.base import AppError
+from server_sdk.errors.redaction import redact_secrets
 from server_sdk.errors.wire import FailureDetails
 from server_sdk.observability.logger_adaptor import get_logger
 
@@ -427,6 +428,14 @@ class PreflightCheck(BaseModel):
         if isinstance(value, AppError):
             return value.to_failure_details()
         return value
+
+    @field_validator("message")
+    @classmethod
+    def _scrub_message(cls, v: str) -> str:
+        # Does not go through FailureDetails, so it needs its own scrub: the
+        # documented fallback for a SQL connector is `message=str(exc)`, and a
+        # driver's str() embeds the DSN.
+        return redact_secrets(v)
 
     @property
     def resolved_message(self) -> str:

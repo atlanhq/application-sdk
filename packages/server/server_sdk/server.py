@@ -150,7 +150,11 @@ def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
-    dumped = check.model_dump(mode="json", exclude_none=True)
+    # cause_repr is the raw exception text behind a typed error. It stays in the
+    # server log and the Temporal payload; the HTTP caller gets typed fields.
+    dumped = check.model_dump(
+        mode="json", exclude_none=True, exclude={"error": {"cause_repr"}}
+    )
     dumped["message"] = check.resolved_message
     if check.resolved_suggested_action:
         dumped["suggested_action"] = check.resolved_suggested_action
@@ -690,18 +694,17 @@ def build_asgi_app(
         target: Path | None = None
         fuzzy: Path | None = None
         requested_norm = _norm_cm_id(config_map_id)
-        if True:
-            for json_file in generated_files:
-                available_configmaps.append(json_file.stem)
-                if json_file.stem == config_map_id:
-                    target = json_file
-                    break
-                if (
-                    fuzzy is None
-                    and _is_form_configmap(json_file.stem)
-                    and _norm_cm_id(json_file.stem) == requested_norm
-                ):
-                    fuzzy = json_file
+        for json_file in generated_files:
+            available_configmaps.append(json_file.stem)
+            if json_file.stem == config_map_id:
+                target = json_file
+                break
+            if (
+                fuzzy is None
+                and _is_form_configmap(json_file.stem)
+                and _norm_cm_id(json_file.stem) == requested_norm
+            ):
+                fuzzy = json_file
         if target is None:
             target = fuzzy
 
@@ -749,13 +752,12 @@ def build_asgi_app(
     async def list_configmaps() -> JSONResponse:
         seen: set[str] = set()
         configmap_ids: list[str] = []
-        if True:
-            for json_file in generated_files:
-                stem = json_file.stem
-                if stem == "manifest" or stem in seen:
-                    continue
-                seen.add(stem)
-                configmap_ids.append(stem)
+        for json_file in generated_files:
+            stem = json_file.stem
+            if stem == "manifest" or stem in seen:
+                continue
+            seen.add(stem)
+            configmap_ids.append(stem)
         return JSONResponse(
             content=_wrap_response(
                 cast("dict[str, Any]", {"configmaps": configmap_ids}),
