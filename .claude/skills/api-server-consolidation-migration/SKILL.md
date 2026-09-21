@@ -395,6 +395,11 @@ from typing import Any
 # Assert before any application_sdk import: the SDK's observability store sink
 # defaults ON and uploads through a Dapr binding, raising in a background task on
 # every flush. setdefault, so explicit host config still wins.
+#
+# Set BOTH names. _STORE_SINK is the primary; _DAPR_SINK is only consulted when
+# the primary is unset (constants.py), so setting the DAPR one alone goes inert
+# the moment anything sets the primary -- including to its default "true".
+os.environ.setdefault("ATLAN_ENABLE_OBSERVABILITY_STORE_SINK", "false")
 os.environ.setdefault("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false")
 
 _ASSETS = pathlib.Path(__file__).resolve().parent / "frontend"
@@ -1038,7 +1043,7 @@ you can delete afterwards").
 | Workflow starts, never runs | Task queue derived from the host's name | Phase 0.1 |
 | Assets/templates 404, no error | CWD-relative path | Phase 0.2 |
 | `StorageBindingNotFoundError` | Dapr object store on the host | Phase 2.5 |
-| Background upload errors on every flush | SDK observability store sink defaults on | Phase 2, `ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK=false` |
+| Background upload errors on every flush | SDK observability store sink defaults on | Phase 2, `ATLAN_ENABLE_OBSERVABILITY_STORE_SINK=false` (set the `_DAPR_SINK` name too; it is only the fallback) |
 | 405 becomes 404 | Catch-all root mount | Phase 0.5 |
 | One app's queue/flag applied to another | `.pth` or import-time env write shipped in the wheel | Phase 0.1b |
 | Host resolve fails on `requires-python` | App floor above the host's | Phase 4 |
