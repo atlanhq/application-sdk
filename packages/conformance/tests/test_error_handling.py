@@ -454,6 +454,106 @@ except Exception as exc:
     )
 
 
+def test_p004_no_finding_when_staged_redacted_local_is_annotated() -> None:
+    # `detail: str = sanitize_cause_repr(exc)` binds exactly as a plain assign
+    # does — an annotation must not cost the handler its exemption.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    detail: str = sanitize_cause_repr(exc)
+    raise ObjectStoreCredentialError(detail) from None
+"""
+    )
+
+
+def test_p004_still_flags_when_redacted_local_is_overwritten_before_raise() -> None:
+    # Tracking is flow-sensitive: `detail` no longer holds the redacted cause by
+    # the time the raise reads it, so the cause is dropped after all.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    detail = sanitize_cause_repr(exc)
+    detail = config
+    raise ObjectStoreCredentialError(detail) from None
+"""
+    )
+
+
+def test_p004_still_flags_when_only_one_branch_redacts_the_local() -> None:
+    # A name is live at the raise only when *every* path into it redacted the
+    # cause — here the else branch substitutes a constant.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    if terse(exc):
+        detail = sanitize_cause_repr(exc)
+    else:
+        detail = "unavailable"
+    raise ObjectStoreCredentialError(detail) from None
+"""
+    )
+
+
+def test_p004_no_finding_when_every_branch_redacts_the_local() -> None:
+    # The converse of the above, so the branch join is pinned in both directions.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    if terse(exc):
+        detail = redact(exc)
+    else:
+        detail = sanitize_cause_repr(exc)
+    raise ObjectStoreCredentialError(detail) from None
+"""
+    )
+
+
+def test_p004_still_flags_when_redacted_local_is_augmented_or_rebound() -> None:
+    # `+=` folds in text that was never redacted; a `for` target rebinds the
+    # name outright. Both drop it from the live set.
+    for mutation in (
+        "    detail += extra\n",
+        "    for detail in parts:\n        note(detail)\n",
+    ):
+        assert "E004" in _findings(
+            """\
+try:
+    run()
+except Exception as exc:
+    detail = sanitize_cause_repr(exc)
+"""
+            + mutation
+            + """\
+    raise ObjectStoreCredentialError(detail) from None
+"""
+        ), mutation
+
+
+def test_p004_still_flags_when_loop_kills_the_local_on_a_later_iteration() -> None:
+    # The loop body is iterated to a fixpoint: `detail` survives the first pass
+    # (it reads the still-live `carrier`) but not the second.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    detail = sanitize_cause_repr(exc)
+    for part in parts:
+        detail = carrier
+        carrier = part
+    raise ObjectStoreCredentialError(detail) from None
+"""
+    )
+
+
 def test_p004_still_flags_severed_raise_redacting_a_different_value() -> None:
     # A sanitizer applied to something *other* than the caught exception does
     # not carry the cause out — the failure is still dropped.
