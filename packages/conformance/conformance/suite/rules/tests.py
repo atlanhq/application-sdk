@@ -223,7 +223,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-marking",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Unit/integration separation in CI is enforced purely by pytest markers: "
@@ -277,7 +277,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="sdr-test-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.9.0",
         rationale=(
             "An SDR app that declares self_deployed_runtime: true in atlan.yaml "
@@ -349,7 +349,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="sdr-test-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.9.0",
         rationale=(
             "BaseSDRIntegrationTest is deprecated and removed in v4.0; a subclass "
@@ -453,7 +453,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="dev-entrypoint",
-        autofixable=False,
+        autofixable=True,
         since="0.10.0",
         rationale=(
             "application_sdk.main.main() is the production, "
@@ -518,9 +518,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T005",
         canonical_reference=(
-            "atlan-hello-world-app tests/unit/test_connector.py — every test ends in an "
-            "assertion about the value under test. A test whose body only exercises code "
-            "is a smoke test wearing a test's name."
+            "atlan-mysql-app tests/unit/test_parity.py — every test ends in an "
+            "assertion about the mapped entity: `assert_structure` checks the required "
+            "keys and relationship refs, and each qualified-name test asserts on the "
+            "value itself. A test whose body only exercises code is a smoke test "
+            "wearing a test's name."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
@@ -528,7 +530,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-assertion-quality",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "Code coverage measures whether a line executed, not whether anything was "
@@ -599,7 +601,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-assertion-quality",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "A test whose body is only 'pass', '...', or a docstring is a placeholder "
@@ -644,7 +646,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-assertion-quality",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "'assert True' and equivalents (assert 1, assert \"x\") satisfy T005's "
@@ -702,7 +704,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-collection",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "pytest only collects files matching its python_files convention "
@@ -759,7 +761,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-collection",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "A module-level pytest.skip(..., allow_module_level=True) that is not "
@@ -810,9 +812,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T010",
         canonical_reference=(
-            "atlan-hello-world-app tests/unit/ — three modules covering the connector, the "
-            "contracts and the dev entrypoint. This tier is the floor and is not "
-            "exemptable; even the scaffold app has it."
+            "atlan-mysql-app tests/unit/ — four modules: test_client.py, "
+            "test_handler.py, test_mysql_app.py and test_parity.py, covering the SQL "
+            "client, the handler, the app's mappers and the wire-shape parity spec. "
+            "This tier is the floor and is not exemptable."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -820,7 +823,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "Unit tests — method-by-method coverage of helper functions and "
@@ -860,11 +863,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T011",
         canonical_reference=(
-            "atlan-mysql-app tests/integration/ — handler auth and preflight against a "
-            "real MySQL, plus credential resolution against fake secret stores. Where an "
-            "app genuinely has nothing to exercise at this tier, atlan-hello-world-app "
-            "pyproject.toml declares `[tool.conformance] exempt_test_tiers` and says why "
-            "in a comment."
+            "atlan-mysql-app tests/integration/ — test_mysql_handler.py runs auth, "
+            "preflight and metadata against a real MySQL, "
+            "test_credential_resolution.py resolves credentials against fake secret "
+            "stores, and test_mysql_workflow.py drives the whole extraction on the "
+            "embedded runtime. None of the three reference apps needs the "
+            "`[tool.conformance] exempt_test_tiers` opt-out."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -872,7 +876,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "Integration tests — connecting to the real source and running the app's "
@@ -922,9 +926,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T012",
         canonical_reference=(
-            "atlan-mysql-app tests/e2e/test_mysql_e2e.py — one full-DAG suite on the "
-            "generated e2e base. atlan-hello-world-app instead exempts the tier in "
-            "pyproject.toml, which is the other legitimate end state."
+            "atlan-mysql-app tests/e2e/test_mysql_e2e.py — one representative full-DAG "
+            "suite, `TestMySQLE2E`, that skips itself at module level when "
+            "ATLAN_BASE_URL / ATLAN_API_KEY are unset, so the tier is collectable "
+            "everywhere and runs only where a tenant is configured. Each of the three "
+            "reference apps ships this tier rather than exempting it."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -932,7 +938,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "End-to-end tests — the full pipeline including system apps, operating "
@@ -991,7 +997,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "CI's composite actions locate each tier by directory convention — "
@@ -1045,7 +1051,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="coverage-config",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "A coverage percentage that cannot fail a build is decorative: it is "
@@ -1118,7 +1124,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="coverage-config",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "[tool.coverage.run].omit (or a narrowed source) controls the "
@@ -1184,7 +1190,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.13.0",
         rationale=(
             "The full-DAG e2e worker derives its Temporal task queue as "
@@ -1257,7 +1263,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.13.0",
         rationale=(
             "The companion to T016. T016 polices the worker side (the compose "
@@ -1343,7 +1349,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-collection",
-        autofixable=False,
+        autofixable=True,
         since="0.16.0",
         rationale=(
             "The reusable Tests workflow (application-sdk#2852) runs the "
@@ -1445,7 +1451,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-async-config",
-        autofixable=False,
+        autofixable=True,
         since="0.17.0",
         rationale=(
             "pytest-asyncio has two independent loop-scope knobs in "
@@ -1562,7 +1568,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "The full-DAG e2e is wired once, in the SDK: tests-reusable.yaml owns "
@@ -1645,7 +1651,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "An e2e suite that no workflow can run is worse than no suite at all: it "
@@ -1728,7 +1734,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "P030 polices the silent-zero-assets class statically — a connector whose "
@@ -1805,7 +1811,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -1891,7 +1897,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "BaseE2ETest.mode defaults to RunMode.DIRECT, but the reusable Tests "
@@ -1965,7 +1971,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.22.0",
         rationale=(
             "T012 asks only that tests/e2e/ hold one collectable test, on the agreed "

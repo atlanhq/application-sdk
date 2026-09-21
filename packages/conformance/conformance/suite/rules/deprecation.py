@@ -243,7 +243,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-backwards-compatibility",
-        autofixable=False,
+        autofixable=True,
         since="0.7.0",
         rationale=(
             "Entrypoint contract fields are a serialization promise to every deployed "
@@ -318,7 +318,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-backwards-compatibility",
-        autofixable=False,
+        autofixable=True,
         since="0.7.0",
         rationale=(
             "B005 can only guard removals and type changes against the committed "

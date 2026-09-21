@@ -171,6 +171,193 @@ def test_every_area_declares_rule_ids(area: str) -> None:
     ), f"{area} forwards rule_ids but never declares it as a parameter"
 
 
+REFERENCE_APPS = (
+    "atlan-mysql-app",
+    "atlan-metabase-app",
+    "atlan-openapi-app",
+)
+
+
+def test_hello_world_is_not_a_remediation_reference() -> None:
+    """Owner decision (FND-2477): the scaffold app is too minimal to be what a
+    fix is mirrored from. Neither the prose nor the vendored skill may send a
+    model there."""
+    for rel in (
+        "functions/remediate-finding.prose.md",
+        "functions/detect-violations.prose.md",
+    ):
+        assert "atlan-hello-world-app" not in _read(rel), rel
+    template = (
+        files("conformance").joinpath("bootstrap/templates/remediate.md").read_text()
+    )
+    assert "atlan-hello-world-app" not in template
+
+
+def test_remediate_finding_requires_the_reference_apps() -> None:
+    """A small model must not fix from memory: the contract has to name the
+    three reference apps, tell the model to load the full checkout, and thread
+    the per-rule pointer (`canonical_reference`) into the finding it reads."""
+    text = _read("functions/remediate-finding.prose.md")
+    for app in REFERENCE_APPS:
+        assert app in text, f"remediate-finding never names {app}"
+    assert "`canonical_reference`" in text
+    assert "remediation/refs/" in text
+    assert "git clone" in text
+
+
+def test_remediate_finding_declares_impact_and_verification() -> None:
+    """The result must carry what was checked before the edit and what was
+    verified after it — a reviewer reads evidence, not an outcome — and a
+    migration rule must leave a brief instead of an edit."""
+    text = _read("functions/remediate-finding.prose.md")
+    for field in ("`impact`", "`verification`", "`migration_brief`"):
+        assert field in text, f"remediate-finding does not declare {field}"
+    for check in (
+        "finding_cleared",
+        "gate_passed",
+        "no_new_findings",
+        "matches_reference",
+    ):
+        assert check in text, f"verification does not name {check}"
+    assert "autofixable == false" in text
+    assert "not_remediable = true" in text
+
+
+def test_remediate_finding_reviews_consequences_after_verification() -> None:
+    """Verification proves the finding is gone; the consequence review proves
+    the app still works. Both halves of `impact` must be named."""
+    text = _read("functions/remediate-finding.prose.md")
+    assert "`impact.after`" in text
+    assert "Review the consequences after verification" in text
+    for surface in ("control flow", "signatures and types", "runtime surfaces"):
+        assert surface in text, f"consequence review does not cover {surface}"
+
+
+def test_suppression_is_a_rule_defect_signal() -> None:
+    """A suppression that is really a false positive or a prescription defect
+    must become a PR against the suite, not a silent ignore directive."""
+    text = _read("functions/remediate-finding.prose.md")
+    for field in ("`suppression_reason`", "`rule_defect_pr`"):
+        assert field in text, f"remediate-finding does not declare {field}"
+    for reason in ("site-exception", "false-positive", "prescription-defect"):
+        assert reason in text, f"suppression_reason value {reason} not named"
+    assert "report-rule-defect" in text
+    # Line-wrapped prose: assert on the phrase that starts the sentence.
+    assert "Never suppress a BLOCK-tier" in text
+
+
+@pytest.mark.parametrize("area", ["error-handling", "logging"])
+def test_exc_info_prescriptions_carry_the_credential_contraindication(
+    area: str,
+) -> None:
+    """Adding `exc_info=True` at a connect/auth site creates a credential leak.
+
+    The traceback is serialised separately, so it bypasses whatever redaction
+    the message performs — FND-57 found this shape in five connector repos.
+    Both areas prescribe adding `exc_info=True` (E004/E005/E007/E009/E014,
+    L004/L005/L017), so both must carry the contraindication and must point at
+    the sanitizer form, which clears the rule with no suppression.
+    """
+    text = _read(f"areas/{area}.prose.md")
+    assert "Credential-boundary contraindication" in text, (
+        f"{area} prescribes adding exc_info=True with no credential-leak "
+        "contraindication"
+    )
+    # The safe fix has to name a helper the checker actually recognises —
+    # recognition is by name (_ast_common/_sanitizers.py), so a correct but
+    # unrecognised helper would leave the finding standing.
+    assert "sanitize_cause_repr" in text
+    assert "application_sdk.errors" in text
+    # And it must say the sanitized form is a fix, not a carve-out.
+    assert "no suppression" in text
+
+
+def test_b006_may_write_the_contract_ledger() -> None:
+    """B006's only remedy writes `contract_schema.lock.json` at the repo root,
+    which is neither Python source nor the Dockerfile.
+
+    Without an explicit carve-out in the write-scope section the loop applies
+    nothing, and — worse since step 5 exists — the model reads its own refusal
+    as a `prescription-defect` and opens a spurious PR against this repo. The
+    flag and the carve-out have to move together, so assert both: B006 is
+    auto-fixable, and the write scope names the file for it.
+    """
+    from conformance.suite.rules import get_rule
+
+    assert get_rule("B006").autofixable is True, (
+        "B006 is no longer auto-fixable — if that is deliberate, remove the "
+        "write-scope carve-out for contract_schema.lock.json with it."
+    )
+    text = _read("functions/remediate-finding.prose.md")
+    scope = text.split("### Write-scope constraint")[1].split("### Reference apps")[0]
+    assert "contract_schema.lock.json" in scope, (
+        "the write-scope section no longer permits B006 to write "
+        "contract_schema.lock.json — the rule becomes unfixable by construction"
+    )
+    assert "B006" in scope, "the ledger carve-out no longer names B006"
+
+
+def test_report_rule_defect_contract_is_bounded() -> None:
+    """The cross-repo PR is the one place the remediator may touch the gate,
+    so the contract has to state the bounds: dedup, reproducer that fails on
+    main, never merge, never edit the app's own gate, and a draft fallback when
+    the token cannot reach application-sdk."""
+    text = _read("functions/report-rule-defect.prose.md")
+    assert "gh pr list" in text
+    assert "fail on `main`" in text
+    assert "xfail(strict=True" in text
+    assert "fix(conformance):" in text
+    assert "Never merge, approve or enable auto-merge" in text
+    assert "`draft`" in text
+    assert "secret values redacted" in text
+    assert "atlanhq/application-sdk" in text
+
+
+def test_loop_rejects_rule_defect_suppression_without_a_pr(loop: str) -> None:
+    """The check runs before the directive is written, like the evidence check,
+    and BLOCK-tier defects are never suppressed."""
+    body = loop.split("### Delegation")[1]
+    guard_at = body.index("result.suppression_reason")
+    apply_at = body.index("apply result.edit")
+    assert guard_at < apply_at, "rule-defect guard must precede apply"
+    assert "not result.rule_defect_pr" in body
+    assert 'finding.disposition == "failing"' in body
+    emit = body.split("emit residue as structured report")[1]
+    assert "rule_defect_pr" in emit
+
+
+def test_detect_violations_surfaces_the_canonical_reference() -> None:
+    """The pointer is only useful if the finding carries it."""
+    text = _read("functions/detect-violations.prose.md")
+    assert "atlan/canonicalReference" in text
+    assert "`canonical_reference`" in text
+
+
+def test_loop_carries_the_brief_and_reports_verification(loop: str) -> None:
+    """The loop must not flatten a migration brief into a generic note, and the
+    residue report must show impact/verification next to every item."""
+    body = loop.split("### Delegation")[1]
+    assert "result.migration_brief" in body
+    emit = body.split("emit residue as structured report")[1]
+    assert "result.impact" in emit
+    assert "result.verification" in emit
+    assert "migration_brief" in emit
+
+
+def test_bootstrapped_skill_tells_the_runner_to_load_the_reference_apps() -> None:
+    """The vendored SKILL.md is what a headless lane actually reads; the
+    reference-app duty has to be stated there, not only in the prose."""
+    template = (
+        files("conformance").joinpath("bootstrap/templates/remediate.md").read_text()
+    )
+    for app in REFERENCE_APPS:
+        assert app in template, f"bootstrap remediate.md never names {app}"
+    assert "remediation/refs/" in template
+    assert "migration_brief" in template
+    assert "report-rule-defect" in template
+    assert "impact.after" in template
+
+
 def test_remediate_finding_declares_the_evidence_field() -> None:
     """`require_cited_evidence` gates on `result.evidence`; the producer contract
     must declare it or the blind-gate areas key off an unspecified model field
@@ -399,6 +586,61 @@ def test_dependency_area_lists_every_warn_tier_d_rule() -> None:
         f"WARN-tier D-rule(s) {missing} are not named in the dependency area's "
         "violation-set, so strict-mode /remediate will skip their findings. Add "
         "them to the WARN-tier list and give each a Fix Prescription entry."
+    )
+
+
+SERIES_AREA = {
+    "E": "error-handling",
+    "L": "logging",
+    "C": "ci",
+    "P": "prescriptions",
+    "F": "preflight",
+    "O": "optimizations",
+    "D": "dependency",
+    "B": "deprecation",
+    "I": "dockerfile",
+    "T": "tests",
+    "K": "contract-toolkit",
+    "S": "security",
+}
+
+
+def _autofixable_rules_without_a_bullet() -> set[str]:
+    from conformance.suite.rules import CATALOG
+    from conformance.suite.schema.disposition import RuleScope
+
+    missing: set[str] = set()
+    for rule in CATALOG.values():
+        if rule.scope is RuleScope.SDK or not rule.autofixable:
+            continue
+        text = _read(f"areas/{SERIES_AREA[rule.id[0]]}.prose.md")
+        if not re.search(r"\*\*" + rule.id + r"\b", text):
+            missing.add(rule.id)
+    return missing
+
+
+def test_every_autofixable_rule_has_a_per_rule_prescription() -> None:
+    """An auto-fixable rule the lane may act on must tell the model what the
+    edit is — a `**<ID> Name**` bullet in its area's Fix Prescription, not a
+    catch-all "fix guided by the hint".
+
+    A catch-all tells a cheap model to use judgement, which is the one thing
+    the classification exists to remove: marking a rule auto-fixable is a claim
+    that the edit is known. Two failure shapes this closes, both live before
+    FND-2477: B006 was flagged auto-fixable with no prescription anywhere, so
+    `/remediate` returned not_remediable on 415 BLOCK findings; and 20 more
+    rules were covered only by their area's catch-all paragraph.
+
+    There is no exemption list on purpose. A new auto-fixable rule without a
+    bullet fails here, and the honest ways out are to write the prescription or
+    to classify the rule as migration.
+    """
+    missing = sorted(_autofixable_rules_without_a_bullet())
+    assert not missing, (
+        "auto-fixable rule(s) with no per-rule `**<ID> Name**` prescription "
+        f"bullet in their area's Fix Prescription: {missing}. Write the bullet "
+        "(derive the edit from the checker predicate, not the short "
+        "description), or classify the rule as migration."
     )
 
 

@@ -104,12 +104,25 @@ Before editing anything, read the rule's own **What correct looks like** block i
 remediation makes a repo worse:
 
 - **Compliant example** — every `app`- and `both`-scoped rule names a file in a
-  maintained reference app (`atlan-hello-world-app`, `atlan-openapi-app`,
-  `atlan-mysql-app`, `atlan-metabase-app`) that already has the shape you are
-  trying to reach. Open it. Copy from those, never from an arbitrary connector:
-  a connector may be mid-migration and is not a model of anything. Several of
-  these blocks also name the *suppression* the reference app carries, which is
-  what a legitimate carve-out looks like when one exists.
+  maintained reference app (`atlan-openapi-app`, `atlan-mysql-app`,
+  `atlan-metabase-app`) that already has the shape you are trying to reach.
+  It also arrives on every finding as `finding.canonical_reference` (SARIF
+  `atlan/canonicalReference`). Open it — the whole file, in a full checkout of
+  the app under `remediation/refs/` — and copy from it, never from an arbitrary
+  connector: a connector may be mid-migration and is not a model of anything.
+  Several of these blocks also name the *suppression* the reference app
+  carries, which is what a legitimate carve-out looks like when one exists.
+  `functions/remediate-finding.prose.md` § *Reference apps, impact analysis and
+  verification* is the binding procedure around every fix: load the reference,
+  analyse impact before applying, verify after (finding cleared, gate passed,
+  no new findings, matches reference), review the behavioural consequences,
+  and treat a suppression that is really a false positive or a prescription
+  defect as a rule defect to report upstream via
+  `functions/report-rule-defect.prose.md` — never as a silent ignore.
+- **Auto-fixable vs migration** — `finding.autofixable` (SARIF
+  `atlan/autofixable`) is the rule's classification. `true`: the area
+  prescription is applied through the procedure above. `false`: a migration
+  rule — nothing is applied; the result is a `migration_brief` in residue.
 - **Interacts with** — the other rule or gate that constrains this fix. Some
   obvious remedies are illegal: a second rule forbids the edit, or an
   append-only guard refuses it. Check before you spend the attempt.

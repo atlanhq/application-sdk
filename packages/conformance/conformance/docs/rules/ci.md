@@ -17,8 +17,8 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [C001](#c001) | `UnpinnedActionReference` | `block` | `both` | `supply-chain` | yes | 0.2.0 |
 | [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `app` | `ci-consistency` | yes | 0.3.0 |
-| [C003](#c003) | `GitignoreMissingEntry` | `warn` | `both` | `ci-consistency` | — | 0.4.0 |
-| [C004](#c004) | `UnretriedToolDownload` | `warn` | `both` | `ci-reliability` | — | 0.18.0 |
+| [C003](#c003) | `GitignoreMissingEntry` | `warn` | `both` | `ci-consistency` | yes | 0.4.0 |
+| [C004](#c004) | `UnretriedToolDownload` | `warn` | `both` | `ci-reliability` | yes | 0.18.0 |
 
 ---
 
@@ -110,7 +110,7 @@ silently reverting the app to Harbor. Set it with `--use-ghcr-base` or by hand; 
 
 ## C003 — `GitignoreMissingEntry` {#c003}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `ci-consistency` · **Autofixable:** yes · **Since:** 0.4.0
 
 > .gitignore is absent or missing a standard required entry
 
@@ -121,9 +121,10 @@ carry.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app .gitignore — carries the standard entries this rule checks for,
-  including `.venv/` and `.claude/worktrees/`. A missing entry is usually the newest
-  one, added centrally after the repo was scaffolded.
+- **Compliant example:** atlan-openapi-app .gitignore — carries every entry this rule requires, including
+  `.venv/`, `.atlan/`, `.claude/worktrees/` and `remediation/`, plus the
+  `.mothership/.cache/` line the bootstrap appends. A missing entry is usually the
+  newest one, added centrally after the repo was scaffolded.
 
 The `atlan-application-sdk-conformance bootstrap` command scaffolds a standard
 .gitignore when the file is absent. This rule flags any required entry that is missing
@@ -140,7 +141,7 @@ overall.
 
 ## C004 — `UnretriedToolDownload` {#c004}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `ci-reliability` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `ci-reliability` · **Autofixable:** yes · **Since:** 0.18.0
 
 > CI downloads a tool over the network with no retry
 

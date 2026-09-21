@@ -13,9 +13,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L001",
         canonical_reference=(
-            'atlan-hello-world-app app/connector.py — `summarize` logs "summarize '
-            'completed record_count=%d message=%s" with the values passed positionally. '
-            "One template, so every run of that line groups together in ClickHouse."
+            "atlan-metabase-app app/connector.py — `extract_collections` logs "
+            '"extract_collections: wrote %d records" with `len(records)` passed '
+            "positionally, and every other @task in the file logs the same way. One "
+            "template per line, so every run of that line groups together in "
+            "ClickHouse."
         ),
         scope=RuleScope.BOTH,
         name="FStringInLogMessage",
@@ -126,7 +128,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Whether kwargs land in indexed top-level fields or an unindexed nested dict "
@@ -222,7 +224,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-level",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Per-item INFO in a large loop emits O(N) records at the level operators "
@@ -281,7 +283,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-performance",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Python evaluates all function arguments before calling the log method, so an "
@@ -313,16 +315,17 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L009",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — `generate_greetings` raises "
-            "InvalidRepeatCountError with no log line before it. The raise is the record; "
-            "whichever handler catches it logs it once."
+            "atlan-metabase-app app/connector.py — `transform_data` raises "
+            "MissingTypenameInputError and MissingOutputPathInputError with no log "
+            "line before either. The raise is the record; whichever handler catches it "
+            "logs it once."
         ),
         scope=RuleScope.BOTH,
         name="WarnThenRaiseDuplication",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-noise",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Logging immediately before re-raising creates two records for one event (raise "
@@ -349,7 +352,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="security",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.4.0",
         rationale=(
@@ -416,7 +419,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="log-crash",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "stdlib's Logger.makeRecord() raises KeyError when an extra={} key collides "
@@ -482,7 +485,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "In structlog the first positional arg is the message (stored as 'event'). "
@@ -501,9 +504,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L015",
         canonical_reference=(
-            "atlan-hello-world-app app/run_dev.py — the app awaits `run_dev_combined` and "
-            "configures no logging of its own. Handler configuration belongs to the SDK "
-            "runtime; an app calling dictConfig is reaching past it."
+            "atlan-metabase-app app/run_dev.py — `main()` awaits "
+            "`run_dev_combined(MetabaseApp, example_input=...)` and the module imports "
+            "only asyncio and the SDK launcher: no `logging`, no dictConfig. Handler "
+            "configuration belongs to the SDK runtime; an app calling dictConfig is "
+            "reaching past it."
         ),
         scope=RuleScope.BOTH,
         name="DictConfigDisableExistingLoggers",
@@ -539,7 +544,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-config",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "basicConfig() is silently ignored if the root logger already has handlers. "
@@ -595,16 +600,17 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L018",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — `generate_greetings` passes its "
-            "values as positional arguments to a %-style template, not as kwargs. Kwargs "
-            "on an application log call do not reach the message a reader greps."
+            'atlan-metabase-app app/connector.py — `filter_data` logs "filter_data: '
+            'include=%s, exclude=%s" with the two filters as positional arguments to '
+            "the %-style template, not as kwargs. Kwargs on an application log call "
+            "land in an unindexed blob and never reach the message a reader greps."
         ),
         scope=RuleScope.BOTH,
         name="KwargsInApplicationLogCalls",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "The adapter auto-injects Temporal context (workflow/run/activity IDs) as the "
@@ -634,7 +640,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-config",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "structlog and loguru bind() returns a *new* logger with the bound context — "

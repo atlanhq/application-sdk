@@ -292,10 +292,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K003",
         canonical_reference=(
-            "atlan-hello-world-app contract/PklProject — one pinned dependency, "
-            "`app-contract-toolkit@0.24.0`, and contract/PklProject.deps.json resolved "
-            "from it. The pin and the resolved lock are regenerated together; editing one "
-            "alone is what produces the drift."
+            "atlan-mysql-app contract/PklProject — one pinned dependency, "
+            "`app-contract-toolkit@0.26.0`, and contract/PklProject.deps.json records "
+            "the same `@0.26.0` under resolvedDependencies with its sha256. The pin "
+            "and the resolved lock are regenerated together by `pkl project resolve`; "
+            "editing one alone is what produces the drift."
         ),
         rule_interactions=(
             "The finding may anchor on generated output (app/generated/**), which is "
@@ -311,7 +312,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.9.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -658,10 +659,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K008",
         canonical_reference=(
-            "atlan-hello-world-app contract/PklProject — the toolkit URI is "
-            "`package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<version>`. "
-            "A fork, a local path, or a different host resolves a renderer nobody else in "
-            "the fleet is using."
+            "atlan-openapi-app contract/PklProject — under the "
+            '`["app-contract-toolkit"]` key the URI is '
+            "`package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<version>`, "
+            "the single SDK-published package. A fork, a local path, or a different "
+            "host resolves a renderer nobody else in the fleet is using."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
@@ -867,7 +869,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.14.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -952,7 +954,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.14.0",
         orthogonal_gate="tests",
         rationale=(
@@ -1117,7 +1119,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         orthogonal_gate="pkl-eval",
         rationale=(

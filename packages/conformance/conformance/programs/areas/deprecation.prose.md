@@ -76,9 +76,66 @@ Consult the finding's `hint` and `message` — for the B-series the message
 carries the SDK's own migration guidance — then read the actual source lines
 around `finding.line` in `finding.file` before proposing anything.
 
+**Mechanical fixes** (`classification = "mechanical"`; the loop applies and
+gates them, and the edit is fully determined by the finding):
+
+- **B006 StaleContractLedger** (writes `contract_schema.lock.json` in the repo
+  root) — a live entrypoint contract field has no entry in the ledger, because
+  the ledger was not regenerated after the field was introduced.  The fix is the
+  command the finding message already carries, **verbatim, keeping its version
+  pin**: `uvx atlan-application-sdk-conformance==<checker version>
+  gen-contract-ledger` in a consumer app, or `uv run
+  atlan-application-sdk-conformance gen-contract-ledger` inside the SDK repo
+  itself.  Never substitute a bare `uv run` in a consumer app: it resolves that
+  repo's *locked* conformance dev dependency, and whenever the lock lags the
+  release the CI checker runs, the generator rewrites the ledger
+  byte-identically and the finding survives — the dead end FND-607 sent a
+  developer down on a BLOCK-tier rule.  Set `touched_files` to
+  `["contract_schema.lock.json"]` and commit it in the same PR; the write-scope
+  carve-out for this file is named in `remediate-finding.prose.md`.
+  **Do not delete the ledger first.**  The generator is append-only, which is
+  exactly right here — B006 means "this field is absent from the ledger", and
+  appending is what records it.  Rebuilding from empty would silently discard
+  every genuine removal the ledger records, turning a recorded history into a
+  blank one; that is a B005 question and never part of a B006 fix.
+  Measured on a connector at suite 0.34.0: two B006 findings, ledger 121 → 123
+  fields, re-detect clean with no B005 introduced.
+
 **Guided fixes** (`classification = "judgment"`; the loop applies and gates them
 with `recheck-narrowest` + the test orthogonal gate, then routes to residue for
 human audit):
+
+- **B005 NonAdditiveContractChange** (app source, the contract class) — a field
+  the ledger records is absent from the live contract, or its type changed.
+  Work in this order and stop at the first step that applies:
+  1. **Suspect a false positive before proposing anything.**  The ledger keys
+     entries by **bare class name**, which is not unique, and three independent
+     families make a B005 finding noise rather than a real removal: the same
+     contract name declared in two modules, where each declaration reads the
+     other's fields as removed; a first ledger seeded from the SDK's own
+     packaged ledger, which bakes SDK template contracts in permanently because
+     the build is append-only; and a class inheriting an SDK *template*
+     contract, whose inherited fields the app-side AST scan cannot see.  On one
+     connector, all 25 B005 findings were noise of these families.  Check
+     whether the named contract is declared more than once in the repo, and
+     whether the ledger carries entries for contracts this app never declares
+     (SDK template names such as `ExtractionInput` / `QueryExtractionOutput`).
+     If either holds this is a **defect in the rule, not in the app**: take the
+     `false-positive` path in `remediate-finding` step 5 so
+     `report-rule-defect` raises it against the suite.  Never suppress it
+     silently.
+  2. **Restore the field** when the removal was unintentional and the ledger
+     entry gives its type — re-declare it on the contract class with that type.
+     Report `classification = "mechanical"` only when the finding names the
+     field and the ledger type round-trips; the recheck gate confirms.
+  3. **Otherwise route to residue** proposing the owner's choice: restore the
+     field, or deprecate and sunset it.
+  **Never propose a sunset for a field still referenced anywhere in the repo.**
+  Grep the whole tree first, including `scripts/` and `*.sh` JSONPath arguments
+  such as `$.extract.outputs.<field>`: a field removed from the contract while a
+  DAG node still reads it is a live break, not a tidy-up.  And regenerating the
+  ledger is **not** a B005 fix — the generator is append-only and, in the
+  finding message's own words, "can never launder a removal".
 
 - **B001 DeprecatedSdkSymbolUsage** (app source) — the app imports, subclasses,
   calls, or reads a symbol the SDK has deprecated.  Apply the migration named in

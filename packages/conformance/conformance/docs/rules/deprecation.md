@@ -27,8 +27,8 @@ reassigned.
 | [B002](#b002) | `MalformedDeprecationNotice` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
 | [B003](#b003) | `OverdueDeprecationRemoval` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
 | [B004](#b004) | `UnmarkedDeprecationClaim` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
-| [B005](#b005) | `NonAdditiveContractChange` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
-| [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
+| [B005](#b005) | `NonAdditiveContractChange` | `block` | `both` | `contract-backwards-compatibility` | yes | 0.7.0 |
+| [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | yes | 0.7.0 |
 | [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `app` | `daft-removal` | — | 0.18.0 |
 | [B008](#b008) | `PrivateModuleImport` | `warn` | `app` | `sdk-private-surface` | — | 0.34.0 |
 
@@ -154,7 +154,7 @@ biased toward low false positives at WARN.
 
 ## B005 — `NonAdditiveContractChange` {#b005}
 
-**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `contract` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `contract` · **Category:** `contract-backwards-compatibility` · **Autofixable:** yes · **Since:** 0.7.0
 
 > An entrypoint contract field was removed or had its type changed
 
@@ -220,7 +220,7 @@ status, and commit the updated ledger in the same PR.
 
 ## B006 — `StaleContractLedger` {#b006}
 
-**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `contract` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `contract` · **Category:** `contract-backwards-compatibility` · **Autofixable:** yes · **Since:** 0.7.0
 
 > An entrypoint contract field is missing from contract_schema.lock.json
 

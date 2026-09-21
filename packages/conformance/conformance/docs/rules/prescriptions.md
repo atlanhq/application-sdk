@@ -23,9 +23,9 @@ reassigned.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | — | 0.3.0 |
-| [P002](#p002) | `CategoryFieldOverride` | `block` | `both` | `category-immutability` | — | 0.3.0 |
-| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `both` | `error-code-shape` | — | 0.3.0 |
+| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | yes | 0.3.0 |
+| [P002](#p002) | `CategoryFieldOverride` | `block` | `both` | `category-immutability` | yes | 0.3.0 |
+| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `both` | `error-code-shape` | yes | 0.3.0 |
 | [P004](#p004) | `DirectTemporalImport` | `warn` | `app` | `orchestration-seam` | — | 0.5.0 |
 | [P005](#p005) | `PrivateOrchestrationInternalImport` | `warn` | `app` | `orchestration-seam` | — | 0.5.0 |
 | [P006](#p006) | `TemporalImportOutsideAdapter` | `warn` | `sdk` | `orchestration-seam` | — | 0.5.0 |
@@ -41,20 +41,20 @@ reassigned.
 | [P016](#p016) | `EntryPointContractCodeDrift` | `block` | `app` | `entrypoint-alignment` | — | 0.6.0 |
 | [P017](#p017) | `ManualWorkerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
 | [P018](#p018) | `ManualServerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
-| [P019](#p019) | `RawHttpToAtlan` | `warn` | `both` | `client-seam` | — | 0.7.0 |
-| [P020](#p020) | `NonDeterministicPrimitiveInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
-| [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
-| [P022](#p022) | `UnawaitedCoroutine` | `block` | `both` | `async-correctness` | — | 0.8.0 |
-| [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
-| [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
+| [P019](#p019) | `RawHttpToAtlan` | `warn` | `both` | `client-seam` | yes | 0.7.0 |
+| [P020](#p020) | `NonDeterministicPrimitiveInWorkflow` | `warn` | `both` | `determinism` | yes | 0.8.0 |
+| [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `both` | `determinism` | yes | 0.8.0 |
+| [P022](#p022) | `UnawaitedCoroutine` | `block` | `both` | `async-correctness` | yes | 0.8.0 |
+| [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | yes | 0.8.0 |
+| [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | yes | 0.8.0 |
 | [P025](#p025) | `AppNameContractCodeDrift` | `block` | `app` | `app-name-alignment` | — | 0.9.0 |
 | [P026](#p026) | `GetattrOnTypedContractField` | `warn` | `app` | `typed-contract-boundary` | — | 0.9.0 |
 | [P027](#p027) | `AppStateAsCrossTaskChannel` | `warn` | `app` | `state-seam` | — | 0.9.0 |
 | [P028](#p028) | `ManualQualifiedNameFString` | `warn` | `app` | `asset-modeling` | — | 0.9.0 |
-| [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
+| [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | yes | 0.9.0 |
 | [P030](#p030) | `SdrUploadNotCalled` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
-| [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | — | 0.13.0 |
-| [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | — | 0.15.0 |
+| [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | yes | 0.13.0 |
+| [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | yes | 0.15.0 |
 | [P037](#p037) | `SdrAgentJsonNotConsumed` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P038](#p038) | `SdrArtifactMisrooted` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
@@ -67,13 +67,13 @@ reassigned.
 | [P048](#p048) | `AppDerivedPersistentArtifactPrefix` | `warn` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
-| [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
+| [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | yes | 0.25.0 |
 
 ---
 
 ## P001 — `UnboundedContractFields` {#p001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** yes · **Since:** 0.3.0
 
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
 
@@ -134,7 +134,7 @@ carve-out is genuinely unavoidable.  Say that in the reason.
 
 ## P002 — `CategoryFieldOverride` {#p002}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `category-immutability` · **Autofixable:** yes · **Since:** 0.3.0
 
 > AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy
 
@@ -174,7 +174,7 @@ sanctioned use is the justified inline suppression `# conformance: ignore[P002]
 
 ## P003 — `ErrorCodePrefixMismatch` {#p003}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `error-code-shape` · **Autofixable:** yes · **Since:** 0.3.0
 
 > AppError subclass code missing or doesn't start with the parent leaf's category prefix
 
@@ -232,9 +232,10 @@ and bypasses that seam (BLDX-1417).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — the only orchestration import is `from
-  application_sdk.app import App, task`. temporalio appears in none of the four
-  reference apps' source.
+- **Compliant example:** atlan-metabase-app app/connector.py — the only orchestration import is `from
+  application_sdk.app import App, entrypoint, task`, and the string temporalio appears
+  nowhere under that repo's app/ or tests/. Everything a workflow needs, including
+  `now`, `sleep` and `uuid4`, is re-exported through the SDK seam.
 
 A consumer app imports `temporalio` (the raw orchestration engine) directly.  Everything
 an app needs is re-exported through the SDK seam: runtime primitives and decorators via
@@ -424,8 +425,9 @@ FileReference.from_local(path, tier=...) instead (BLDX-1398).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `FileReference(local_path=str(out_path),
-  tier=StorageTier.RETAINED)`. The app supplies the local path and the tier;
+- **Compliant example:** atlan-metabase-app app/connector.py — `transform_data` returns
+  `output_file=FileReference.from_local(out_file, tier=StorageTier.RETAINED)`, and the
+  `_ref` helper builds the raw-file references from only local_path and tier.
   storage_path, is_durable and file_count are stamped by the SDK when it moves the file.
 
 A `FileReference(...)` is constructed with one of the SDK-managed durability fields set
@@ -490,11 +492,11 @@ underlying file (BLDX-1398).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/contracts.py — `greetings_file` and `output_file` are typed
-  `FileReference | None`, so a hand-off survives being scheduled on another pod.
-  atlan-metabase-app app/contracts.py shows the legitimate exception: `output_path`
-  carries an inline ignore[P012] saying it is a task-local scratch base, not a
-  cross-worker reference.
+- **Compliant example:** atlan-openapi-app app/contracts.py — `ExtractSpecOutput.api_spec_file` / `api_path_file`
+  and the matching `TransformInput` fields are typed `FileReference | None`, so the
+  hand-off from extract_spec to transform survives being scheduled on another pod. The
+  only `str` fields in the file are URLs, prefixes and qualified names, none of which is
+  a path on a worker's disk.
 
 An `Input`/`Output` contract subclass declares a `str` / `str | None` field whose name
 or documentation indicates a file or directory path (e.g. `output_path`, `local_dir`, a
@@ -582,9 +584,11 @@ the customer discovers before anyone else does.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/contracts.py — each @task has its own Input/Output pair
-  (GenerateGreetingsInput/Output, SummarizeInput/Output) subclassing the SDK bases. A
-  dict or a bare str across a task boundary has no schema to evolve.
+- **Compliant example:** atlan-openapi-app app/connector.py — each @task is typed with its own pair:
+  `extract_spec(self, input: ExtractSpecInput) -> ExtractSpecOutput`,
+  `download_cloud_spec(...) -> DownloadCloudSpecOutput`, `transform(...) ->
+  TransformOutput`, all subclassing the SDK Input/Output. A dict or a bare str across a
+  task boundary has no schema to evolve.
 
 A method decorated with `@task` must declare:
 
@@ -762,9 +766,10 @@ consistent, SDK-controlled way (BLDX-1411).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/run_dev.py — the worker comes from `run_dev_combined`. No
-  reference app constructs a Temporal Worker or Client; the launcher is what wires
-  interceptors, the activity registry and the task queue together.
+- **Compliant example:** atlan-mysql-app app/run_dev.py — `main()` is a single `await run_dev_combined(MySQLApp,
+  temporal_ui=True, example_input=...)`; no Worker, Client, create_worker or AppWorker
+  is constructed anywhere under app/. The launcher is what wires interceptors, the
+  activity registry and the task queue together.
 
 The app calls `create_worker(...)`, `create_temporal_client(...)`, or `AppWorker(...)`
 directly, imports removed v2 worker/client boot surface (`application_sdk.worker`,
@@ -825,7 +830,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P019 — `RawHttpToAtlan` {#p019}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `client-seam` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `client-seam` · **Autofixable:** yes · **Since:** 0.7.0
 
 > Raw HTTP request to an Atlan endpoint (/api/meta, /api/service) instead of the pyatlan client
 
@@ -870,7 +875,7 @@ unavoidable exception and stays visible in SARIF.
 
 ## P020 — `NonDeterministicPrimitiveInWorkflow` {#p020}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** yes · **Since:** 0.8.0
 
 > Non-deterministic time/uuid/sleep/random call in workflow-context code
 
@@ -884,9 +889,11 @@ replay is faithful.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `run()` only sequences @task calls; the clock,
-  the filesystem and the RNG are all touched inside tasks. Workflow code is replayed, so
-  a non-deterministic call there produces a different history on every replay.
+- **Compliant example:** atlan-metabase-app app/connector.py — `transform_data` stamps
+  `last_sync_run_at_ms=int(time.time() * 1000)` inside the @task; neither
+  `extract_metadata` nor `extract_lineage` reads the clock, uuid or the RNG. Workflow
+  code is replayed, so a non-deterministic call there produces a different history on
+  every replay.
 
 Inside an `App` subclass's workflow-context method (`run`, an `@entrypoint` method, or a
 `@signal` / `@query` / `@update` handler) a call reads wall-clock time, generates a
@@ -909,7 +916,7 @@ exception with `# conformance: ignore[P020] <reason>`.
 
 ## P021 — `SideEffectIoInWorkflow` {#p021}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** yes · **Since:** 0.8.0
 
 > File / network / env / process I/O in workflow-context code
 
@@ -921,9 +928,11 @@ whose result is durably recorded in workflow history.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `generate_greetings` does the tempfile and the
-  write, and `run()` does neither. The comment on run() states the rule in the app's own
-  words: network, disk and clock live inside a @task.
+- **Compliant example:** atlan-openapi-app app/connector.py — `run()` only validates the input, builds task
+  inputs and awaits `download_cloud_spec`, `extract_spec` and `transform`; the tempfile,
+  the HTTP fetch and the object-store download live inside those tasks. The comment
+  above the download call states the rule in the app's own words: cloud I/O must run in
+  an activity, not workflow code.
 
 Inside an `App` subclass's workflow-context method a call performs side-effecting I/O —
 `open`, `requests`/`httpx`/`urllib`, `socket`, `subprocess`,
@@ -940,7 +949,7 @@ conformance: ignore[P021] <reason>`.
 
 ## P022 — `UnawaitedCoroutine` {#p022}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.8.0
 
 > A same-class async method is called without await (dropped coroutine)
 
@@ -976,7 +985,7 @@ constructed coroutine is deliberately discarded and that is provably harmless.
 
 ## P023 — `BlockingCallInAsyncDef` {#p023}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.8.0
 
 > Event-loop re-entry bridge or blocking sync call inside an async def
 
@@ -1041,7 +1050,7 @@ to residue.  Land as `WARN`; suppress with `# conformance: ignore[P023] <reason>
 
 ## P024 — `SyncAtlanClientInApp` {#p024}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.8.0
 
 > Synchronous pyatlan AtlanClient used instead of the async client
 
@@ -1091,9 +1100,11 @@ reports progress, the same silent-zero-asset class P030 polices at the upload se
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — the App declares `name = "hello-world"` and
-  atlan.yaml carries `name: hello-world`. The task queue is derived from that name, so
-  any disagreement routes work to a queue no worker is listening on.
+- **Compliant example:** atlan-mysql-app app/mysql.py — `MySQLApp` declares `name: ClassVar[str] = "mysql"`,
+  atlan.yaml carries `name: mysql` and .env.example sets `ATLAN_APPLICATION_NAME=mysql`,
+  so the three sources this rule compares agree. The task queue and the artifact path
+  are derived from that name, so any disagreement routes work to a queue no worker is
+  listening on.
 
 Three independent sources declare an app's name:
 
@@ -1163,9 +1174,10 @@ site and the type annotation stops being load-bearing.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `self.require(input.greetings_file,
-  "greetings_file")`. The field is typed, so the right move is to assert it is present,
-  not to getattr past the type with a default that silently changes behaviour.
+- **Compliant example:** atlan-openapi-app app/connector.py — `extract_spec` reads `input.spec_url` as a plain
+  attribute and raises SpecUrlRequiredError when it is empty. The field is typed, so the
+  right move is to read it and assert it is present, not to getattr past the type with a
+  default that silently changes behaviour when the field is renamed.
 
 Inside an `@entrypoint` or `@task` method, a declared field of a typed `Input`/`Output`
 contract parameter is read via `getattr(param, "field", default)` instead of attribute
@@ -1253,7 +1265,7 @@ ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
 
 ## P029 — `SdrManifestMissingAgentJson` {#p029}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `sdr-readiness` · **Autofixable:** yes · **Since:** 0.9.0
 
 > SDR agent manifest must surface agent_json + extraction_method at the top level of dag.extract.inputs.args
 
@@ -1458,7 +1470,7 @@ absence of an upload call is by design, not a gap.
 
 ## P031 — `SharedDefaultExecutorOffload` {#p031}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.13.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.13.0
 
 > Thread offload onto asyncio's shared default executor instead of run_in_thread()
 
@@ -1498,7 +1510,7 @@ Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
 
 ## P036 — `HandRolledProcessIsolation` {#p036}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.15.0
 
 > Bare ProcessPoolExecutor / multiprocessing child instead of the run_fault_isolated() / run_best_effort() seam
 
@@ -2028,9 +2040,11 @@ file just became false (CONNECT-970).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/errors.py — `from application_sdk.errors import
-  InvalidInputError`. The package re-exports every error an app should touch; reaching
-  into a submodule for the same class buys nothing and forfeits the stability promise.
+- **Compliant example:** atlan-metabase-app app/errors.py — the one SDK import is `from application_sdk.errors
+  import (AppPermissionDeniedError, AuthError, InvalidInputError,
+  SourceUnavailableError)`: four leaves from the package root, nothing from
+  application_sdk.errors.base or application_sdk.storage.formats. Reaching into a
+  submodule for the same class forfeits the stability promise.
 
 A consumer app imports a class whose name ends in `Error` from a module under
 `application_sdk.storage.formats` — most often
@@ -2304,7 +2318,7 @@ SARIF.
 
 ## P051 — `SdrPreflightUnavailable` {#p051}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `sdr-readiness` · **Autofixable:** yes · **Since:** 0.25.0
 
 > SDR app locks application-sdk below the 3.30.0 floor for interactive setup (test auth / preflight / metadata browsing)
 

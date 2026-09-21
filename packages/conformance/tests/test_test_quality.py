@@ -22,7 +22,7 @@ def test_t005_rule_metadata() -> None:
     assert rule.name == "AssertionFreeTest"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.BOTH
-    assert rule.autofixable is False
+    assert rule.autofixable is True
     assert rule.since == "0.12.0"
     assert rule.category == "test-assertion-quality"
 

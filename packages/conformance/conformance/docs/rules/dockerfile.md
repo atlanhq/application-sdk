@@ -17,7 +17,7 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [I001](#i001) | `DockerfileWrongBaseImage` | `block` | `app` | `dockerfile-base` | yes | 0.5.0 |
 | [I002](#i002) | `DockerfileEntrypointOverride` | `block` | `app` | `dockerfile-entrypoint` | yes | 0.5.0 |
-| [I003](#i003) | `DockerfileAppModuleMissing` | `block` | `app` | `dockerfile-env` | — | 0.5.0 |
+| [I003](#i003) | `DockerfileAppModuleMissing` | `block` | `app` | `dockerfile-env` | yes | 0.5.0 |
 | [I004](#i004) | `DockerfileAppModeHardcoded` | `block` | `app` | `dockerfile-env` | yes | 0.5.0 |
 | [I005](#i005) | `DockerfileRootUser` | `block` | `app` | `dockerfile-security` | yes | 0.5.0 |
 
@@ -40,10 +40,11 @@ customer's tenant — a day-one install failure discovered by the customer, not 
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app Dockerfile — `FROM registry.atlan.com/public/app-runtime-base:3`.
-  atlan-mysql-app Dockerfile reaches the same ref through an overridable `ARG
-  BASE_IMAGE`, which is the shape to copy when SDK PRs need to rebuild the connector on
-  a PR-scoped base.
+- **Compliant example:** atlan-openapi-app Dockerfile — `ARG
+  BASE_IMAGE=registry.atlan.com/public/app-runtime-base:3` followed by `FROM
+  ${BASE_IMAGE}`. The committed default is the approved v3 tag, and the ARG is what lets
+  SDK PRs rebuild the connector on a PR-scoped base with --build-arg without the default
+  ever leaving the approved image.
 
 The final-stage `FROM` instruction must be exactly
 `registry.atlan.com/public/app-runtime-base:3` or its GHCR mirror
@@ -95,7 +96,7 @@ environment where daprd is required.  Inline suppression: `# conformance: ignore
 
 ## I003 — `DockerfileAppModuleMissing` {#i003}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-env` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dockerfile-env` · **Autofixable:** yes · **Since:** 0.5.0
 
 > ENV ATLAN_APP_MODULE is not set; the runtime needs this to locate and instantiate the application class
 

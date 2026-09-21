@@ -513,6 +513,42 @@ drafting.
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
 
+**Execution-seam rules (P031, P036)** — suggest-only, WARN-tier;
+`classification` is always `"judgment"`.  Both replace a hand-rolled
+concurrency primitive with the SDK seam that owns its lifecycle, and both need
+`result.evidence` citing the seam's own path plus the reference-app call site —
+the blind gate cannot tell a correct hop from a plausible one.
+
+- **P031 SharedDefaultExecutorOffload** — blocking work is offloaded onto
+  asyncio's **shared default** executor: `asyncio.to_thread(fn, ...)`, or
+  `loop.run_in_executor(None, fn, ...)` (the `None` is what makes it shared).
+  That pool is process-wide, so one app's blocking work starves every other
+  coroutine on the worker.  Draft a swap to the App's own bounded pool —
+  `await self.run_in_thread(fn, arg)` inside an `App`, otherwise
+  `from application_sdk.execution.heartbeat import run_in_thread`.  Keep the
+  callable **passed, not called** (`run_in_thread(fn, arg)`, never
+  `run_in_thread(fn(arg))`), and materialise any lazy iterator inside the
+  thread, exactly as P023 prescribes.  A `run_in_executor` whose first
+  argument is a *real* executor the app owns is a deliberate choice, not this
+  defect — say so and route to residue rather than rewriting it.  Mirror
+  `atlan-openapi-app app/connector.py`.  Cite as evidence
+  `application_sdk/execution/heartbeat.py` (`run_in_thread`) and that call
+  site.
+
+- **P036 HandRolledProcessIsolation** — the code builds a process-based
+  primitive directly: `ProcessPoolExecutor(...)`, `multiprocessing.Process(...)`
+  or `multiprocessing.Pool(...)`.  The SDK seam owns the pool lifecycle, the
+  timeout, and what a crashed child means for the activity — three things a
+  hand-rolled pool gets wrong silently.  Draft a swap to
+  `run_fault_isolated(...)` when a crash must fail the activity, or
+  `run_best_effort(...)` when it must not, both from
+  `application_sdk/execution/heartbeat.py`; state which semantic you assumed
+  and why, because that is the whole decision.  No reference app builds one,
+  so there is no call site to copy — cite the seam module and the two
+  functions' own contracts as evidence.  This is a restructure (the child's
+  entry function and its arguments must be picklable): route to residue with
+  the proposed shape, never a mechanical constructor swap.
+
 **SDR-readiness rules (P029/P030, P037/P038/P039, P042, P051)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on
 `self_deployed_runtime: true` in `atlan.yaml`.  Suggest-only is about *how the

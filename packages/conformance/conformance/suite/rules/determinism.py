@@ -40,17 +40,18 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P020",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — `run()` only sequences @task calls; "
-            "the clock, the filesystem and the RNG are all touched inside tasks. Workflow "
-            "code is replayed, so a non-deterministic call there produces a different "
-            "history on every replay."
+            "atlan-metabase-app app/connector.py — `transform_data` stamps "
+            "`last_sync_run_at_ms=int(time.time() * 1000)` inside the @task; neither "
+            "`extract_metadata` nor `extract_lineage` reads the clock, uuid or the "
+            "RNG. Workflow code is replayed, so a non-deterministic call there "
+            "produces a different history on every replay."
         ),
         scope=RuleScope.BOTH,
         name="NonDeterministicPrimitiveInWorkflow",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="determinism",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
@@ -92,16 +93,19 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P021",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — `generate_greetings` does the "
-            "tempfile and the write, and `run()` does neither. The comment on run() states "
-            "the rule in the app's own words: network, disk and clock live inside a @task."
+            "atlan-openapi-app app/connector.py — `run()` only validates the input, "
+            "builds task inputs and awaits `download_cloud_spec`, `extract_spec` and "
+            "`transform`; the tempfile, the HTTP fetch and the object-store download "
+            "live inside those tasks. The comment above the download call states the "
+            "rule in the app's own words: cloud I/O must run in an activity, not "
+            "workflow code."
         ),
         scope=RuleScope.BOTH,
         name="SideEffectIoInWorkflow",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="determinism",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
@@ -141,7 +145,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
@@ -189,7 +193,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
@@ -273,7 +277,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
@@ -319,7 +323,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.13.0",
         rationale=(
@@ -374,7 +378,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.15.0",
         rationale=(

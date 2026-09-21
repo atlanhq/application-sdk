@@ -854,8 +854,12 @@ def test_to_reporting_descriptor_roundtrip() -> None:
     assert descriptor.properties["atlan/tier"] == "block"
     assert descriptor.properties["atlan/mechanism"] == "static"
     assert descriptor.properties["atlan/category"] == "silent-swallow"
-    assert descriptor.properties["atlan/autofixable"] is False
+    assert descriptor.properties["atlan/autofixable"] is True
     assert descriptor.properties["atlan/orthogonalGate"] == "tests"
+    # The reference-app pointer rides the wire so a remediation model reading
+    # only the SARIF knows which file to open before proposing a fix.
+    assert descriptor.properties["atlan/canonicalReference"] == p001.canonical_reference
+    assert "atlan-" in descriptor.properties["atlan/canonicalReference"]
 
 
 def test_to_reporting_descriptor_roundtrip_forces_external_influence() -> None:
@@ -1296,13 +1300,14 @@ def test_non_app_loci_explain_themselves() -> None:
     )
 
 
-#: The only repos a canonical reference may name.  Four maintained reference
+#: The only repos a canonical reference may name.  Three maintained reference
 #: apps (``docs/agents/canonical-apps.md``) plus the SDK itself for rules about
-#: SDK-owned surfaces.  An arbitrary connector is excluded on purpose: at any
-#: time some are mid-migration and some carry patterns the SDK has deprecated,
-#: so copying from one reproduces the fleet's median staleness.
+#: SDK-owned surfaces.  ``atlan-hello-world-app`` is deliberately absent: it is
+#: the scaffold, too minimal to be what a fix is mirrored from (owner decision,
+#: FND-2477).  An arbitrary connector is excluded on purpose: at any time some
+#: are mid-migration and some carry patterns the SDK has deprecated, so copying
+#: from one reproduces the fleet's median staleness.
 _REFERENCE_REPOS = (
-    "atlan-hello-world-app",
     "atlan-openapi-app",
     "atlan-mysql-app",
     "atlan-metabase-app",

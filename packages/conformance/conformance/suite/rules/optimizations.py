@@ -19,16 +19,17 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O001",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — JSONL is written and read with "
-            "`orjson.dumps` / `orjson.loads`. orjson is a core SDK dependency, so there is "
-            "no install cost to paying for the speed."
+            "atlan-metabase-app app/utils.py — `write_jsonl` and `read_jsonl` "
+            "serialise with `orjson.dumps` / `orjson.loads`, and the stdlib json "
+            "module is imported nowhere under app/. orjson is a core SDK dependency, "
+            "so there is no install cost to paying for the speed."
         ),
         scope=RuleScope.BOTH,
         name="OrjsonOverStdlibJson",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="canonical-dependency",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.3.0",
         rationale=(
@@ -269,8 +270,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O005",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — the App declares `name = "
-            '"hello-world"` and atlan.yaml carries the same literal. The name is '
+            "atlan-metabase-app app/connector.py — `MetabaseApp` declares `name = "
+            '"metabase"` and atlan.yaml carries `name: metabase`; even the upload '
+            "prefix built in `extract_metadata` spells the name out. The name is "
             "resolved once, at declaration; a `{app_name}` left in a plain string is a "
             "substitution nothing will ever perform."
         ),
@@ -279,7 +281,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="dag-write-path",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.18.0",
         rationale=(

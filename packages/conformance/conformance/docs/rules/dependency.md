@@ -17,9 +17,9 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [D001](#d001) | `UnpinnedSdkDependency` | `block` | `app` | `dependency-pinning` | yes | 0.4.0 |
 | [D002](#d002) | `RedeclaredSdkManagedDependency` | `warn` | `app` | `dependency-pinning` | yes | 0.4.0 |
-| [D003](#d003) | `UnusedDependency` | `warn` | `both` | `dependency-hygiene` | — | 0.5.0 |
+| [D003](#d003) | `UnusedDependency` | `warn` | `both` | `dependency-hygiene` | yes | 0.5.0 |
 | [D004](#d004) | `RedeclaredSdkManagedDependencyInGroups` | `warn` | `app` | `dependency-pinning` | yes | 0.5.0 |
-| [D005](#d005) | `UnknownSdkExtra` | `block` | `app` | `dependency-pinning` | — | 0.5.0 |
+| [D005](#d005) | `UnknownSdkExtra` | `block` | `app` | `dependency-pinning` | yes | 0.5.0 |
 | [D006](#d006) | `IncompatibleRequiresPython` | `warn` | `app` | `python-version` | yes | 0.5.0 |
 | [D007](#d007) | `NonStandardBuildBackend` | `warn` | `app` | `build-system` | yes | 0.5.0 |
 | [D008](#d008) | `WeakenedTypeChecking` | `warn` | `app` | `tooling-baseline` | yes | 0.5.0 |
@@ -27,8 +27,8 @@ Suppress a finding on the violating line or the line directly above it:
 | [D010](#d010) | `QueryTransformerWithoutDuckdb` | `block` | `app` | `runtime-dependencies` | — | 0.18.0 |
 | [D011](#d011) | `ConformanceDependencyContract` | `block` | `app` | `dependency-tooling` | yes | 0.23.0 |
 | [D012](#d012) | `UnpinnedPackageIndex` | `warn` | `both` | `supply-chain` | yes | 0.30.0 |
-| [D013](#d013) | `NonPyPILockfileIndex` | `warn` | `both` | `supply-chain` | — | 0.30.0 |
-| [D014](#d014) | `AbsoluteResolverFence` | `warn` | `both` | `supply-chain` | — | 0.31.0 |
+| [D013](#d013) | `NonPyPILockfileIndex` | `warn` | `both` | `supply-chain` | yes | 0.30.0 |
+| [D014](#d014) | `AbsoluteResolverFence` | `warn` | `both` | `supply-chain` | yes | 0.31.0 |
 | [D015](#d015) | `PyrightExcludeClobbersDefaults` | `warn` | `both` | `tooling-baseline` | yes | 0.32.0 |
 
 ---
@@ -74,9 +74,9 @@ duplicate when the SDK pin changes.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app pyproject.toml — [project.dependencies] holds exactly one entry,
-  the SDK. Everything the SDK already resolves (orjson, pydantic, temporalio) is
-  imported without being redeclared, so there is one place a version can move.
+- **Compliant example:** atlan-openapi-app pyproject.toml — [project.dependencies] holds exactly one entry, the
+  SDK. orjson and the pyatlan models are imported under app/ without being redeclared
+  there or in any dependency group, so there is one place a version can move.
 
 Packages pinned by `atlan-application-sdk` (its core `[project.dependencies]`) must not
 be redeclared in the app's `[project.dependencies]` or any
@@ -90,7 +90,7 @@ the runtime environment, this rule is skipped silently.
 
 ## D003 — `UnusedDependency` {#d003}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `dependency-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `dependency-hygiene` · **Autofixable:** yes · **Since:** 0.5.0
 
 > A package declared in [project.dependencies] is never imported in source
 
@@ -158,7 +158,7 @@ this rule is skipped silently. Cite: BLDX-1410.
 
 ## D005 — `UnknownSdkExtra` {#d005}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
 
 > Reference to an atlan-application-sdk extra the SDK does not publish
 
@@ -277,9 +277,11 @@ once deployed in the tenant.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app pyproject.toml — [tool.poe.tasks.download-components] copies the
-  Dapr component YAMLs out of the installed application_sdk wheel. Components then match
-  whatever SDK version uv.lock resolved, instead of whatever main happened to hold.
+- **Compliant example:** atlan-metabase-app pyproject.toml — [tool.poe.tasks.download-components] runs
+  `shutil.copytree(pathlib.Path(application_sdk.__file__).parent / "components",
+  "components", dirs_exist_ok=True)` under `interpreter = "python"`, with a comment
+  saying components/ is gitignored so each environment copies the set matching the SDK
+  in uv.lock. No poe task names raw.githubusercontent.com.
 
 No `[tool.poe.tasks.*]` entry (in either the shorthand `task.shell = "..."` form or the
 full `[tool.poe.tasks.task]` table form) may reference `raw.githubusercontent.com` or
@@ -477,11 +479,10 @@ version moved, no hash moved, only the URLs.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app pyproject.toml — `[[tool.uv.index]]` names pypi at
-  https://pypi.org/simple with `default = true`, above a comment recording which
-  machine-wide index the pin displaces and why it cannot move to a project-level
-  uv.toml. Declared in pyproject.toml, so the repo's [tool.uv] constraint-dependencies
-  keep being read.
+- **Compliant example:** atlan-mysql-app pyproject.toml — `[[tool.uv.index]]` names pypi at
+  https://pypi.org/simple with `default = true`. Declared in pyproject.toml rather than
+  a project-level uv.toml, so the repo's [tool.uv] constraint-dependencies keep being
+  read, and a machine-wide index cannot rewrite uv.lock on whoever resolves next.
 
 The repo's root `pyproject.toml` must declare PyPI as the resolver's default index:
 
@@ -515,7 +516,7 @@ rule pins the index; `D013` checks whether a non-PyPI host has already reached
 
 ## D013 — `NonPyPILockfileIndex` {#d013}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** — · **Since:** 0.30.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.30.0
 
 > uv.lock resolves packages from a host that is not PyPI, or embeds an index credential
 
@@ -534,10 +535,10 @@ code.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app uv.lock — every download URL names files.pythonhosted.org, because
-  that repo's D012 pin was in place before the lock was last resolved. A lock that has
-  already picked up a proxy host is repaired by restoring the committed one, not by
-  re-locking on the machine that rewrote it.
+- **Compliant example:** atlan-openapi-app uv.lock — every download URL names files.pythonhosted.org or pypi.org
+  and none carries userinfo, so CI installs from the same host the lock was resolved
+  against. A lock that has already picked up a proxy host is repaired by restoring the
+  committed one, not by re-locking on the machine that rewrote it.
 
 Every download URL in the repo's `uv.lock` must name a PyPI host —
 `files.pythonhosted.org` or `pypi.org`.  Two branches:
@@ -567,7 +568,7 @@ inert must not read as a clean result.  Cite: FND-1928.
 
 ## D014 — `AbsoluteResolverFence` {#d014}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** — · **Since:** 0.31.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `packaging` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.31.0
 
 > pyproject.toml pins [tool.uv] exclude-newer to a fixed date, freezing every resolve in the repo
 

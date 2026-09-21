@@ -46,10 +46,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="I001",
         canonical_reference=(
-            "atlan-hello-world-app Dockerfile — `FROM "
-            "registry.atlan.com/public/app-runtime-base:3`. atlan-mysql-app Dockerfile "
-            "reaches the same ref through an overridable `ARG BASE_IMAGE`, which is the "
-            "shape to copy when SDK PRs need to rebuild the connector on a PR-scoped base."
+            "atlan-openapi-app Dockerfile — `ARG "
+            "BASE_IMAGE=registry.atlan.com/public/app-runtime-base:3` followed by "
+            "`FROM ${BASE_IMAGE}`. The committed default is the approved v3 tag, and "
+            "the ARG is what lets SDK PRs rebuild the connector on a PR-scoped base "
+            "with --build-arg without the default ever leaving the approved image."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -171,7 +172,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-env",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="docker-build",
         since="0.5.0",
         rationale=(

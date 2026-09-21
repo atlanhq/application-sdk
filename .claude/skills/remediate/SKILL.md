@@ -326,6 +326,48 @@ in-loop `bootstrap`, which is per-finding and gated by recheck.
 **zero C002 findings**. One that appears means Phase 0 did not converge, and is
 an independent check on the same property.
 
+### Reference apps — load before any fix, verify against them after
+
+Do not fix from memory. Every app-facing rule names a `canonical_reference`
+(SARIF `atlan/canonicalReference` on the finding): a file in one of the three
+maintained reference apps — `atlan-mysql-app`, `atlan-metabase-app`,
+`atlan-openapi-app` — that already has the compliant shape. Before the first
+edit of a run, make the **full checkout** of all three available under
+`remediation/refs/` (shallow clones of `origin/main`; scratch
+only — never edited, never committed, never in a fix's `touched_files`).
+
+For every finding, in this order (contract:
+`$PROGRAMS/functions/remediate-finding.prose.md`, section *Reference apps,
+impact analysis and verification*):
+
+1. **Read** the whole file the finding's `canonical_reference` names, grep that
+   reference app for the same pattern, and mirror it — never invent an API,
+   kwarg or config key the reference app does not use.
+2. **Analyse the impact** across the whole repo before applying: callers and
+   importers, tests that pin the old behaviour, the contract and generated
+   tree, `pyproject.toml`/`uv.lock`, `.env.example` and docs. Fold every
+   in-scope consequence into the same edit; list the rest in `impact`.
+3. **Verify** after applying and record it in `verification`: finding gone
+   (`recheck-narrowest`), orthogonal gate passed, whole-series re-detect on the
+   touched files introduced no new finding for any rule, fixed site reads like
+   the reference. All four true, or revert.
+4. **Review the consequences** once verified — what the fix changed
+   behaviourally (control flow, signatures, runtime surfaces the gates do not
+   exercise, new runtime dependencies) and who is affected. Fix what is in
+   scope in the same unit and re-verify; list the rest in `impact.after`.
+5. **A suppression is a rule-defect signal.** If the finding will not clear
+   and the only way out is an inline ignore, classify why: `site-exception`
+   (normal strict-mode suppression), `false-positive` or `prescription-defect`.
+   For the last two run `$PROGRAMS/functions/report-rule-defect.prose.md`: it
+   opens a `fix(conformance):` PR against `atlanhq/application-sdk` with a
+   failing reproducer test (and the fix when local) for the SDK owners to
+   review; suppress WARN-tier only, citing that PR; BLOCK-tier stays in residue
+   with the PR link. Never merge that PR; never edit this repo's own gate.
+
+`autofixable = true` rules (the **auto-fixable** ruleset) are applied this way.
+`autofixable = false` rules (the **migration** ruleset) are never applied by
+the loop: steps 1–2 still run and the result is a `migration_brief` in residue.
+
 ### Phase 1: Baseline
 
 Call `detect-violations` to run the suite and capture the before-state.  Use the

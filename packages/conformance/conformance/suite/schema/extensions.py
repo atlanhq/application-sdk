@@ -92,6 +92,13 @@ class AtlanRuleProperties(BaseModel):
     structural counterpart to the per-result ``atlan/externalInfluence``
     property below, which is set by the remediation layer per-invocation."""
 
+    canonical_reference: str | None = None
+    """A file in one of the four maintained reference apps that already has the
+    compliant shape (``catalog.RuleDefinition.canonical_reference``).  Carried
+    on the wire as ``atlan/canonicalReference`` so a remediation model reading
+    the SARIF — possibly a small one, with no access to the Python catalog —
+    knows exactly which reference-app file to open before proposing a fix."""
+
     def to_properties(self) -> dict[str, Any]:
         """Return a ``properties`` dict ready to merge into a SARIF node."""
         out: dict[str, Any] = {
@@ -113,6 +120,8 @@ class AtlanRuleProperties(BaseModel):
             out["atlan/rationale"] = self.rationale
         if self.forces_external_influence:
             out["atlan/forcesExternalInfluence"] = True
+        if self.canonical_reference:
+            out["atlan/canonicalReference"] = self.canonical_reference
         return out
 
     @classmethod
@@ -132,6 +141,7 @@ class AtlanRuleProperties(BaseModel):
             forces_external_influence=bool(
                 props.get("atlan/forcesExternalInfluence", False)
             ),
+            canonical_reference=props.get("atlan/canonicalReference"),
         )
 
 

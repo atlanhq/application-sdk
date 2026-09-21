@@ -124,9 +124,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="C003",
         canonical_reference=(
-            "atlan-hello-world-app .gitignore — carries the standard entries this rule "
-            "checks for, including `.venv/` and `.claude/worktrees/`. A missing entry is "
-            "usually the newest one, added centrally after the repo was scaffolded."
+            "atlan-openapi-app .gitignore — carries every entry this rule requires, "
+            "including `.venv/`, `.atlan/`, `.claude/worktrees/` and `remediation/`, "
+            "plus the `.mothership/.cache/` line the bootstrap appends. A missing "
+            "entry is usually the newest one, added centrally after the repo was "
+            "scaffolded."
         ),
         fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,
@@ -142,7 +144,7 @@ RULES: tuple[RuleDefinition, ...] = (
         # support for "some findings under this ID are, some aren't"), so
         # it's set to the conservative/majority-case value rather than a
         # value that would overstate what most C003 findings actually get.
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="skip",
         since="0.4.0",
         rationale=(
@@ -186,7 +188,7 @@ RULES: tuple[RuleDefinition, ...] = (
         # with-retry.sh, add curl/wget retry flags, or (best) stop downloading
         # and take the tool from the runner cache. Picking between those is a
         # judgment call, so findings route to residue rather than a mechanical fix.
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="skip",
         since="0.18.0",
         rationale=(

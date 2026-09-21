@@ -23,18 +23,18 @@ reassigned.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | — | 0.3.0 |
+| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | yes | 0.3.0 |
 | [O002](#o002) | `LegacyAssetSerialization` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
-| [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `both` | `dag-write-path` | — | 0.18.0 |
+| [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `both` | `dag-write-path` | yes | 0.18.0 |
 | [O006](#o006) | `DirectRocksdictImport` | `warn` | `app` | `canonical-dependency` | — | 0.18.0 |
 
 ---
 
 ## O001 — `OrjsonOverStdlibJson` {#o001}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `canonical-dependency` · **Autofixable:** yes · **Since:** 0.3.0
 
 > json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)
 
@@ -45,9 +45,10 @@ before migrating.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — JSONL is written and read with `orjson.dumps` /
-  `orjson.loads`. orjson is a core SDK dependency, so there is no install cost to paying
-  for the speed.
+- **Compliant example:** atlan-metabase-app app/utils.py — `write_jsonl` and `read_jsonl` serialise with
+  `orjson.dumps` / `orjson.loads`, and the stdlib json module is imported nowhere under
+  app/. orjson is a core SDK dependency, so there is no install cost to paying for the
+  speed.
 
 `orjson` is already a core dependency of the application SDK, so it is available to
 every app, and it is generally *at least* 10x faster than the stdlib `json` module.
@@ -171,7 +172,7 @@ when a connector is intentionally pinned to the legacy `AtlasTransformer` surfac
 
 ## O005 — `UnresolvedAppNamePlaceholder` {#o005}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `dag-write-path` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `dag-write-path` · **Autofixable:** yes · **Since:** 0.18.0
 
 > Hardcoded '{app_name}' left unsubstituted in a plain string literal
 
@@ -191,8 +192,9 @@ automatic fail.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — the App declares `name = "hello-world"` and
-  atlan.yaml carries the same literal. The name is resolved once, at declaration; a
+- **Compliant example:** atlan-metabase-app app/connector.py — `MetabaseApp` declares `name = "metabase"` and
+  atlan.yaml carries `name: metabase`; even the upload prefix built in
+  `extract_metadata` spells the name out. The name is resolved once, at declaration; a
   `{app_name}` left in a plain string is a substitution nothing will ever perform.
 
 Flags a string `ast.Constant` containing the literal substring `{app_name}` when the

@@ -17,23 +17,23 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [L001](#l001) | `FStringInLogMessage` | `block` | `both` | `log-format` | yes | 0.4.0 |
 | [L002](#l002) | `NonCanonicalLoggerFactory` | `block` | `both` | `log-format` | yes | 0.4.0 |
-| [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `both` | `log-format` | — | 0.4.0 |
+| [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `both` | `log-format` | yes | 0.4.0 |
 | [L004](#l004) | `ExceptBlockMissingExcInfoLog` | `block` | `both` | `missing-traceback` | yes | 0.4.0 |
 | [L005](#l005) | `PrintInProductionCode` | `warn` | `both` | `log-format` | yes | 0.4.0 |
-| [L006](#l006) | `InfoInTightLoop` | `warn` | `both` | `log-level` | — | 0.4.0 |
+| [L006](#l006) | `InfoInTightLoop` | `warn` | `both` | `log-level` | yes | 0.4.0 |
 | [L007](#l007) | `LoggerCriticalUsage` | `warn` | `both` | `log-level` | yes | 0.4.0 |
-| [L008](#l008) | `UnguardedExpensiveDebug` | `warn` | `both` | `log-performance` | — | 0.4.0 |
-| [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `both` | `log-noise` | — | 0.4.0 |
-| [L010](#l010) | `CredentialInLogOutput` | `block` | `both` | `security` | — | 0.4.0 |
+| [L008](#l008) | `UnguardedExpensiveDebug` | `warn` | `both` | `log-performance` | yes | 0.4.0 |
+| [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `both` | `log-noise` | yes | 0.4.0 |
+| [L010](#l010) | `CredentialInLogOutput` | `block` | `both` | `security` | yes | 0.4.0 |
 | [L011](#l011) | `StringConcatenationInLog` | `block` | `both` | `log-format` | yes | 0.4.0 |
-| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `both` | `log-crash` | — | 0.4.0 |
+| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `both` | `log-crash` | yes | 0.4.0 |
 | [L013](#l013) | `StdlibArbitraryKwargs` | `block` | `both` | `log-crash` | yes | 0.4.0 |
-| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `both` | `log-format` | — | 0.4.0 |
+| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `both` | `log-format` | yes | 0.4.0 |
 | [L015](#l015) | `DictConfigDisableExistingLoggers` | `warn` | `both` | `log-config` | yes | 0.4.0 |
-| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `both` | `log-config` | — | 0.4.0 |
+| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `both` | `log-config` | yes | 0.4.0 |
 | [L017](#l017) | `LoggerExceptionUsage` | `warn` | `both` | `log-level` | yes | 0.4.0 |
-| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `both` | `log-format` | — | 0.4.0 |
-| [L019](#l019) | `DiscardedBindResult` | `warn` | `both` | `log-config` | — | 0.4.0 |
+| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `both` | `log-format` | yes | 0.4.0 |
+| [L019](#l019) | `DiscardedBindResult` | `warn` | `both` | `log-config` | yes | 0.4.0 |
 | [L020](#l020) | `DeprecatedLoggingWarn` | `warn` | `both` | `log-format` | yes | 0.4.0 |
 | [L021](#l021) | `MissingLoggingLintRules` | `warn` | `both` | `log-config` | yes | 0.4.0 |
 
@@ -59,9 +59,10 @@ time-to-resolution.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `summarize` logs "summarize completed
-  record_count=%d message=%s" with the values passed positionally. One template, so
-  every run of that line groups together in ClickHouse.
+- **Compliant example:** atlan-metabase-app app/connector.py — `extract_collections` logs "extract_collections:
+  wrote %d records" with `len(records)` passed positionally, and every other @task in
+  the file logs the same way. One template per line, so every run of that line groups
+  together in ClickHouse.
 
 Using an f-string creates a unique message string per call, breaking log grouping and
 aggregation in Grafana/ClickHouse.  It also always evaluates eagerly — __str__ /
@@ -123,7 +124,7 @@ records unfindable on the tenant UI.
 
 ## L003 — `ExtraKwargsWrongFramework` {#l003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > extra={} used where framework expects direct kwargs (or vice versa)
 
@@ -201,7 +202,7 @@ guard. For those, stdout is the user interface, not a logging bypass.
 
 ## L006 — `InfoInTightLoop` {#l006}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.info() inside a tight loop — generates excessive log volume
 
@@ -247,7 +248,7 @@ on the observability platform.
 
 ## L008 — `UnguardedExpensiveDebug` {#l008}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-performance` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-performance` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Expensive computation in logger.debug() argument — evaluates eagerly
 
@@ -284,7 +285,7 @@ if logger.isEnabledFor(logging.DEBUG):
 
 ## L009 — `WarnThenRaiseDuplication` {#l009}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-noise` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-noise` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.warning/error immediately before raise — duplicate log records
 
@@ -294,9 +295,9 @@ without dedup logic.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `generate_greetings` raises
-  InvalidRepeatCountError with no log line before it. The raise is the record; whichever
-  handler catches it logs it once.
+- **Compliant example:** atlan-metabase-app app/connector.py — `transform_data` raises MissingTypenameInputError
+  and MissingOutputPathInputError with no log line before either. The raise is the
+  record; whichever handler catches it logs it once.
 
 Logging an error immediately before re-raising creates duplicate records in the log
 stream, inflating error counts in dashboards.  Acceptable only when adding context not
@@ -306,7 +307,7 @@ available to the caller.  Otherwise: just re-raise.
 
 ## L010 — `CredentialInLogOutput` {#l010}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Credential/secret value in log output — security vulnerability
 
@@ -360,7 +361,7 @@ way that breaks log grouping.  Rewrite as %-style message body.
 
 ## L012 — `StdlibExtraReservedKeyCollision` {#l012}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `log-crash` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `log-crash` · **Autofixable:** yes · **Since:** 0.4.0
 
 > extra={} key collides with stdlib LogRecord attribute — crashes caller
 
@@ -412,7 +413,7 @@ from structlog/loguru. Applies to stdlib only.
 
 ## L014 — `StructlogEventKwargOverwrite` {#l014}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > event= kwarg in structlog silently overwrites the log message
 
@@ -445,8 +446,9 @@ dictConfig() — so a misconfigured call makes all library logging vanish with n
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/run_dev.py — the app awaits `run_dev_combined` and configures
-  no logging of its own. Handler configuration belongs to the SDK runtime; an app
+- **Compliant example:** atlan-metabase-app app/run_dev.py — `main()` awaits `run_dev_combined(MetabaseApp,
+  example_input=...)` and the module imports only asyncio and the SDK launcher: no
+  `logging`, no dictConfig. Handler configuration belongs to the SDK runtime; an app
   calling dictConfig is reaching past it.
 
 `logging.config.dictConfig()`'s `disable_existing_loggers` defaults to `True`, which
@@ -458,7 +460,7 @@ Applies to stdlib only.
 
 ## L016 — `BasicConfigNoopAfterFirstCall` {#l016}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Multiple basicConfig() calls — second+ are silent no-ops
 
@@ -511,7 +513,7 @@ only to satisfy third-party Temporal callers and immediately delegates to
 
 ## L018 — `KwargsInApplicationLogCalls` {#l018}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > kwargs in application log calls — use %-style message body instead
 
@@ -521,9 +523,10 @@ blob aggregation can't reach — context belongs in the message body via %-style
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `generate_greetings` passes its values as
-  positional arguments to a %-style template, not as kwargs. Kwargs on an application
-  log call do not reach the message a reader greps.
+- **Compliant example:** atlan-metabase-app app/connector.py — `filter_data` logs "filter_data: include=%s,
+  exclude=%s" with the two filters as positional arguments to the %-style template, not
+  as kwargs. Kwargs on an application log call land in an unindexed blob and never reach
+  the message a reader greps.
 
 Arbitrary kwargs in log calls are an anti-pattern in this project. Framework context
 (Temporal fields, correlation IDs) is auto-injected by the logging adapter; all other
@@ -534,7 +537,7 @@ directly in the message body using %-style formatting.
 
 ## L019 — `DiscardedBindResult` {#l019}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.bind() result discarded — bind() returns a new logger
 

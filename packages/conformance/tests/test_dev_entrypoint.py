@@ -202,4 +202,4 @@ def test_t004_rule_metadata() -> None:
     rule = get_rule("T004")
     assert rule.name == "DevEntrypointRequiresAppModule"
     assert rule.category == "dev-entrypoint"
-    assert rule.autofixable is False
+    assert rule.autofixable is True

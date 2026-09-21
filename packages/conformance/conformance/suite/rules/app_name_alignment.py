@@ -49,10 +49,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P025",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — the App declares `name = "
-            '"hello-world"` and atlan.yaml carries `name: hello-world`. The task queue '
-            "is derived from that name, so any disagreement routes work to a queue no "
-            "worker is listening on."
+            "atlan-mysql-app app/mysql.py — `MySQLApp` declares `name: ClassVar[str] = "
+            '"mysql"`, atlan.yaml carries `name: mysql` and .env.example sets '
+            "`ATLAN_APPLICATION_NAME=mysql`, so the three sources this rule compares "
+            "agree. The task queue and the artifact path are derived from that name, "
+            "so any disagreement routes work to a queue no worker is listening on."
         ),
         scope=RuleScope.APP,
         name="AppNameContractCodeDrift",

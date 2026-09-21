@@ -64,6 +64,41 @@ _Read by `remediate-finding` when `finding.area == "logging"`._
 Consult the finding's `hint` and `message`, then read the actual source lines
 around `finding.line` in `finding.file` before proposing a fix.
 
+#### Credential-boundary contraindication — read before adding `exc_info=True`
+
+The raw exception from a database driver, an HTTP client or an auth call can
+embed credentials: a JDBC URL carrying a password, an `Authorization` header
+or HMAC, connection properties, an OAuth response body.  `exc_info=True`
+serialises the traceback *separately*, so it bypasses whatever redaction the
+message itself performs — adding it at such a site **creates a leak that was
+not there before**.  A production security review over the fleet remediation
+(FND-57) found exactly this shape in five connector repos.
+
+Before adding `exc_info=True` (L004, and the L005/L017 rewrites that add it),
+ask what the caught exception can carry.  If the `try` wraps a connect, an
+authenticate, a token refresh, or any request whose URL, headers or body hold
+a secret, **do not add it**.  Log through a redaction helper instead:
+
+```python
+from application_sdk.errors import redact_secrets, sanitize_cause_repr
+
+logger.error("connect failed: %s", sanitize_cause_repr(exc))
+```
+
+**This clears the rule, and needs no suppression** — L004 accepts a log call
+whose arguments flow through a sanitizer as a deliberate no-traceback
+boundary (`suite/checks/_ast_common/_sanitizers.py`).  Recognition is **by
+name**: the callable must contain `redact`, `sanitiz`, `scrub_secret`,
+`mask_secret` or `safe_traceback`, or the argument must be a variable named
+for redacted output (`safe_traceback`, `redacted`, `sanitized`, `masked`,
+`scrubbed`).  The `application_sdk.errors` helpers above are public API and
+already match; an app-local helper named `clean_message` redacts correctly
+and still leaves the finding standing.  Only the log call's own arguments are
+inspected, so a sanitizer used elsewhere in the handler does not exempt it.
+
+Never propose an inline `ignore[...]` here: a suppression records that the
+rule was skipped, the sanitized form records that the credential was handled.
+
 **Mechanical rules** (`autofixable = true`, `classification = "mechanical"`):
 
 - **L004 ExceptBlockMissingExcInfoLog** — add `exc_info=True` as a keyword
@@ -170,11 +205,112 @@ around `finding.line` in `finding.file` before proposing a fix.
   already selects `"G"` on its own, leave it and route the conflict to
   residue for the owner.
 
-**All other L-series rules** (L003, L006, L008, L009, L010, L012, L014,
-L016, L018, L019) — `autofixable = false`; produce `classification =
-"judgment"` and a best-effort fix guided by the `hint` and `message` in the
-finding.  L010 (CredentialInLogOutput) is a security finding; always route to
-residue and never auto-apply.
+- **L003 ExtraKwargsWrongFramework** — the call passes `extra={...}`, so the
+  context lands in an unindexed nested dict that aggregation queries cannot
+  see.  Move every key into the `%`-style message body as a positional
+  argument and delete the `extra=` kwarg:
+  `logger.info("sync done", extra={"rows": n})` →
+  `logger.info("sync done rows=%d", n)`.  No reference app passes `extra={}`
+  at all — `atlan-metabase-app app/utils.py`'s `to_epoch_ms` logs
+  `"Datetime %r did not match format %r", dt_str, fmt`.  Keep `exc_info`,
+  `stack_info` and `stacklevel`; those are not context kwargs.
+
+- **L006 InfoInTightLoop** — a `logger.info()` sits inside a loop, so the run
+  emits one record per item and the lifecycle milestones drown.  Drop the
+  per-item call to `logger.debug(...)` and, when the loop's outcome is worth
+  an INFO, add **one** summary line after the loop
+  (`logger.info("processed %d assets, %d skipped", total, skipped)`).  Mirror
+  `atlan-metabase-app app/extracts/process.py`, where the per-dashboard skip
+  inside `process_assets` logs at DEBUG.  Do not simply delete the call: the
+  per-item record is still wanted at DEBUG.
+
+- **L008 UnguardedExpensiveDebug** — an argument to `logger.debug()` is
+  computed before the call, so it runs at every level.  Prefer making the
+  argument cheap and letting `%`-style defer the interpolation
+  (`logger.debug("payload %s", obj)` rather than
+  `logger.debug("payload " + json.dumps(obj))`); where the expression is
+  genuinely costly — a `json.dumps` of a large structure, a joined
+  comprehension — wrap the call in `if logger.isEnabledFor(logging.DEBUG):`.
+  `atlan-mysql-app app/client.py`'s `provide_token` shows the cheap form:
+  `"IAM token refreshed for connection (length: %d)", len(token)`.
+
+- **L009 WarnThenRaiseDuplication** — a bare `logger.warning()` or
+  `logger.error()` statement sits within three statements of a `raise`, so the
+  same failure is recorded twice: here, and again wherever the exception is
+  finally handled.  The cost is inflated error counts on the dashboard, not a
+  lost record.
+
+  **Deleting the log line is the ideal end state and the wrong default.**  It
+  is only correct if the exception really *is* recorded upstream — and these
+  same repos carry open E002/E004/E007/E014 findings, which are precisely
+  handlers that swallow without logging.  Delete into one of those and the
+  failure becomes invisible, with every gate still green: no test covers it,
+  and `no_new_findings` will not see it because the swallow was already there.
+
+  So establish the caller first.  **If you can show the exception is logged
+  upstream** — the handler that catches this type logs it with `exc_info=True`
+  — delete the call; that is the shape `atlan-metabase-app app/connector.py`'s
+  `transform_data` has, raising `MissingTypenameInputError` and
+  `MissingOutputPathInputError` with no log line before either.  **If you
+  cannot** (no handler in the repo, or the handler swallows), do not delete:
+  **downgrade the level** to `logger.debug(...)`.  The rule matches only
+  `warning` and `error`, so a DEBUG line clears the finding, stops inflating
+  the error count, and keeps the local detail for whoever debugs it.
+
+  Keep the line at its current level only when it carries context the
+  exception genuinely cannot (a loop index, the URL being retried) — then the
+  honest fix is to move that context into the exception and delete the log.
+  Say in the edit description which of the three cases you found.
+
+- **L010 CredentialInLogOutput** — BLOCK, and a security finding.  Log the
+  credential's *name* or *type*, never its value: drop the offending argument
+  or replace it with a non-secret descriptor
+  (`logger.info("using credential %s", cred_name)`), and never a length, a
+  prefix or a mask of the value itself.  `atlan-mysql-app app/client.py`'s
+  `get_iam_role_token` records that AWS credentials were staged and names
+  none of them.  **Always route to residue and never auto-apply**, whatever
+  the mode: a human confirms every credential-shaped change.
+
+- **L012 StdlibExtraReservedKeyCollision** — BLOCK.  A key in `extra={}`
+  collides with a stdlib `LogRecord` attribute (`message`, `module`, `name`,
+  `args`, …), which raises `KeyError` inside `Logger.makeRecord()` and crashes
+  the caller — this is a live runtime break, not a style point.  Rename the
+  key (`module` → `source_module`), or better, move the context into the
+  `%`-style body as L003 prescribes and drop `extra=` entirely.  No reference
+  app builds an `extra={}` dict; `application_sdk/observability/logger_adaptor.py`
+  takes arguments positionally and injects the Temporal context itself.
+
+- **L014 StructlogEventKwargOverwrite** — a structlog call passes `event=`,
+  which *is* structlog's message key, so the domain value silently replaces
+  the log message.  Rename the domain field (`event=` → `event_type=` or the
+  name the payload actually means).  structlog is not a dependency of any
+  reference app; `atlan-metabase-app app/api_types.py` uses the one canonical
+  `get_logger` factory, which is the end state to migrate toward.
+
+- **L016 BasicConfigNoopAfterFirstCall** — `logging.basicConfig()` is called
+  more than once across the repo, and every call after the first is a silent
+  no-op, so which configuration wins depends on import order.  Remove the
+  app's calls: the SDK runtime owns handler configuration exactly once.
+  `atlan-openapi-app app/run_dev.py` boots the runtime and calls it never.
+  If a script genuinely runs outside the SDK runtime, consolidate to a single
+  call in that entrypoint and say so in the edit description.
+
+- **L018 KwargsInApplicationLogCalls** — arbitrary kwargs on an application
+  log call land in an unindexed blob and never reach the message a reader
+  greps.  Append each to the `%`-style template and pass the value
+  positionally: `logger.info("connected", host=h, port=p)` →
+  `logger.info("connected host=%s port=%d", h, p)`.  Mirror
+  `atlan-metabase-app app/connector.py`'s `filter_data`
+  (`"filter_data: include=%s, exclude=%s"`).  `exc_info`, `stack_info` and
+  `stacklevel` are allowed and must be left alone.
+
+- **L019 DiscardedBindResult** — `logger.bind(...)` returns a *new* bound
+  logger and the result is thrown away, so the context is never attached.
+  Assign it and use the bound logger for the calls that need the context
+  (`log = logger.bind(run_id=rid)`).  Where the context is already injected by
+  the SDK adaptor — workflow and run correlation always is — the honest fix is
+  to delete the `bind()` call instead; no reference app calls it, and
+  `atlan-metabase-app app/handler.py` uses the module-level logger directly.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
