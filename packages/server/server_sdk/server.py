@@ -212,10 +212,26 @@ def _validated_entrypoint(body: dict[str, Any]) -> None:
 
 _CREDENTIAL_TEMPLATE_PREFIXES = ("atlan-connectors-", "csa-connectors-")
 
+#: Whole stems that are never a setup form. Mirrors
+#: ``application_sdk.app._generated_tree.NON_FORM_STEMS`` -- kept as its own
+#: copy because this package must not depend on application_sdk, so the two
+#: lists have to be checked against each other by test rather than shared.
+#:
+#: ``artifact_schemas`` earns its place the hard way (FND-1682): it sorts before
+#: every real form stem, so once an app declares ``artifactSchemas`` the
+#: alphabetical fallback below serves the schema document as the form. It has no
+#: ``config`` key, so the setup wizard renders blank behind an HTTP 200 --
+#: nothing in the logs, the network tab or pod stderr.
+_MANIFEST_STEM = "manifest"
+_ARTIFACT_SCHEMAS_STEM = "artifact_schemas"
+_NON_FORM_STEMS = frozenset({_MANIFEST_STEM, _ARTIFACT_SCHEMAS_STEM})
+
 
 def _is_form_configmap(stem: str) -> bool:
     """True when a generated JSON stem is a setup-form configmap."""
-    return stem != "manifest" and not stem.startswith(_CREDENTIAL_TEMPLATE_PREFIXES)
+    return stem not in _NON_FORM_STEMS and not stem.startswith(
+        _CREDENTIAL_TEMPLATE_PREFIXES
+    )
 
 
 def _norm_cm_id(stem: str) -> str:
@@ -799,11 +815,19 @@ def build_asgi_app(
 
     @app.get("/workflows/v1/configmaps")
     async def list_configmaps() -> JSONResponse:
+        # Deliberately NOT _is_form_configmap, though the two look
+        # interchangeable. That predicate answers "which single file is the
+        # setup form", for the fallback that must pick exactly one. This
+        # answers "which names does this endpoint respond to", and the
+        # credential templates it would exclude are ones the UI genuinely
+        # fetches -- the setup form's credential widget requests
+        # atlan-connectors-<source> as its own configmap. Filtering them here
+        # would drop names that work.
         seen: set[str] = set()
         configmap_ids: list[str] = []
         for json_file in generated_files:
             stem = json_file.stem
-            if stem == "manifest" or stem in seen:
+            if stem == _MANIFEST_STEM or stem in seen:
                 continue
             seen.add(stem)
             configmap_ids.append(stem)
