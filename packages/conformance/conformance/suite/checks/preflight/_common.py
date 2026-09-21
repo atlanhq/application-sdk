@@ -35,6 +35,18 @@ from conformance.suite.checks.prescriptions._typed_boundaries import (
 _PREFLIGHT_INPUT = "PreflightInput"
 _PREFLIGHT_CHECK = "PreflightCheck"
 
+#: Behavioural rules whose complete, passing matrix closes a *value-level*
+#: F019 gap.  ``conformance.preflight_testing.assert_preflight_result``
+#: asserts, on every executed F016 scenario, exactly the properties those
+#: findings say the static pass could not resolve: every failed check carries
+#: a typed ``FailureDetails`` with a nonblank message and suggested action, no
+#: passed check carries one, and the verdict agrees with the
+#: mandatory/advisory roles and the short-circuit order.  A *structural* gap —
+#: an unparsed file, an undiscovered handler, an unresolved contract class —
+#: never gets this set: executing scenarios does not tell the analysis what it
+#: failed to read.
+SCENARIO_COVERAGE = frozenset({"F016"})
+
 
 @dataclass(frozen=True)
 class Source:
@@ -441,7 +453,7 @@ def coverage_findings(reg: Registry):
                         filename=src.rel,
                         rule_id="F019",
                         node=node,
-                        message="Dynamic preflight callback binding is unresolved; register behavioral scenarios and use a statically resolvable callback.",
+                        message="Dynamic preflight callback binding is unresolved; bind preflight_check to a statically resolvable callback. Executed scenarios do not clear this: the analysis never reaches the callback to check it.",
                         directives=src.directives,
                     )
                 )

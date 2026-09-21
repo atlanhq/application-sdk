@@ -25,6 +25,14 @@ class Finding:
     ``# conformance: ignore[T025:<discriminator>]`` directive can suppress one
     finding without suppressing its siblings. ``None`` (the default) keeps the
     pre-discriminator fingerprint and directive behaviour.
+
+    ``cleared_by`` names the behavioural rules whose *complete, passing*
+    scenario matrix closes the gap this finding reports.  A static checker
+    sets it when the property it could not resolve is one those rules assert
+    on every executed scenario, and the runner then drops the finding from a
+    ``--with-tests`` run in which every named rule came back complete.  The
+    empty default means no amount of execution can close the gap — the
+    analysis never found the code to begin with — so the finding stands.
     """
 
     rule_id: str
@@ -37,6 +45,9 @@ class Finding:
     suppressed: bool = field(default=False, compare=False, hash=False)
     suppression_justification: str | None = field(
         default=None, compare=False, hash=False
+    )
+    cleared_by: frozenset[str] = field(
+        default_factory=frozenset, compare=False, hash=False
     )
 
 

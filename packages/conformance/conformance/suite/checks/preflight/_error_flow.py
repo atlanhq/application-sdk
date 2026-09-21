@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 
-from ._common import Source, find_preflight_check_sites
+from ._common import SCENARIO_COVERAGE, Source, find_preflight_check_sites
 from ._contracts import Function, _Checker, _kwargs, _literal, _nodes, _qualified, _sdk
 
 # A caught-exception binding whose except clause does not name a typed error:
@@ -265,7 +265,8 @@ class ErrorFlow:
                                 src,
                                 node,
                                 "F019",
-                                "Success-path error expression is unresolved; verify passed checks do not carry failure evidence.",
+                                "Success-path error expression is unresolved; verify passed checks do not carry failure evidence in an executed scenario.",
+                                SCENARIO_COVERAGE,
                             )
                     continue
                 if "error" not in kwargs:
@@ -283,7 +284,8 @@ class ErrorFlow:
                         src,
                         node,
                         "F019",
-                        "Failed-check error is a caught exception whose except clause names no typed error, so its failure details are not verified. Narrow the clause to the AppError subclasses the probe raises, or construct a typed error on this path.",
+                        "Failed-check error is a caught exception whose except clause names no typed error, so its failure details are not verified. Narrow the clause to the AppError subclasses the probe raises, construct a typed error on this path, or execute a scenario that drives this failure.",
+                        SCENARIO_COVERAGE,
                     )
                 elif unresolved:
                     self.checker.emit(
@@ -291,6 +293,7 @@ class ErrorFlow:
                         node,
                         "F019",
                         "Failed-check error flow is unresolved; suggested_action and typing are not verified. Execute a real-handler scenario for this output.",
+                        SCENARIO_COVERAGE,
                     )
             child = self.child(context, node)
             if child is not None:

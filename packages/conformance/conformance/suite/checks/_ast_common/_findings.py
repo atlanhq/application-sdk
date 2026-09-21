@@ -16,6 +16,7 @@ def make_finding(
     node: ast.AST,
     message: str,
     directives: dict[int, _IgnoreDirective],
+    cleared_by: frozenset[str] = frozenset(),
 ) -> Finding:
     """Build a :class:`Finding` for *node*, honouring inline suppression directives.
 
@@ -24,6 +25,10 @@ def make_finding(
     ``# conformance: ignore`` with no rule list).  A trailing inline directive on
     a code line never absorbs a finding on the following statement.  Mirrors the
     E-series ``Checker._add`` semantics exactly.
+
+    ``cleared_by`` is carried through to the :class:`Finding` unchanged; see
+    its docstring for what naming a behavioural rule there commits a checker
+    to.
     """
     line: int = getattr(node, "lineno", 1)
     col: int = getattr(node, "col_offset", 0) + 1
@@ -46,4 +51,5 @@ def make_finding(
         message=message,
         suppressed=suppressed,
         suppression_justification=justification,
+        cleared_by=cleared_by,
     )

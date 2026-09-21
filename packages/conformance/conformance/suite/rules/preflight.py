@@ -531,7 +531,20 @@ _CONTRACT_RULES = (
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Report unresolved preflight dispatch and contracts instead of a clean result.",
-        full_description="Report unresolved preflight dispatch and contracts instead of a clean result.",
+        full_description=(
+            "Report unresolved preflight dispatch and contracts instead of a clean "
+            "result. Two kinds of gap are reported, and only one of them is "
+            "clearable by executing tests. A *value-level* gap — a computed "
+            "aggregation, an expanded failure constructor, an unresolved error "
+            "expression, a dynamic ``passed`` — names a property F016 asserts on "
+            "every executed scenario, so a ``--with-tests`` run whose F016 matrix "
+            "is complete and passing drops it. A *structural* gap — an unparsed "
+            "file, a preflight_check the analysis never resolved, a dynamically "
+            "bound callback, an input contract class that is not in the registry — "
+            "stands regardless of how many scenarios pass, because execution does "
+            "not tell the analysis what it failed to read; clear those by making "
+            "the code statically resolvable."
+        ),
         rationale="An undiscovered handler or unresolved contract must not be mistaken for conforming code.",
         help_uri=f"{_HELP_BASE}#f019",
     ),
