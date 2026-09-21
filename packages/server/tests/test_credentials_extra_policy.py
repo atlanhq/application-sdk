@@ -75,3 +75,32 @@ def test_a_malformed_extra_is_not_a_500_at_the_route() -> None:
         json={"credentials": [{"key": "extra", "value": "{not json"}]},
     )
     assert resp.status_code != 500, resp.text
+
+
+# ── the two views of `extra` must agree ─────────────────────────────────────
+
+
+def test_flatten_sees_both_shapes_identically() -> None:
+    """A second, narrower reader is how the two views drift apart.
+
+    flatten_credentials_to_pairs used to hoist `extra` only `if
+    isinstance(extra, dict)`, so the JSON-string form vanished — and the gate
+    then blocked on params the extraction path would have found.
+    """
+    from server_sdk.handler.contracts import flatten_credentials_to_pairs
+
+    nested = {"host": "h", "extra": {"database": "d", "ssl_mode": "require"}}
+    encoded = {"host": "h", "extra": '{"database": "d", "ssl_mode": "require"}'}
+    assert flatten_credentials_to_pairs(nested) == flatten_credentials_to_pairs(encoded)
+    assert {"key": "extra.database", "value": "d"} in flatten_credentials_to_pairs(
+        encoded
+    )
+
+
+def test_flatten_never_raises_on_an_unusable_extra() -> None:
+    """This path runs where no one can tell malformed from absent."""
+    from server_sdk.handler.contracts import flatten_credentials_to_pairs
+
+    assert flatten_credentials_to_pairs({"host": "h", "extra": "{not json"}) == [
+        {"key": "host", "value": "h"}
+    ]

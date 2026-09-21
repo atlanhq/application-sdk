@@ -231,6 +231,43 @@ def _is_form_configmap(stem: str) -> bool:
     )
 
 
+def _rank_form_candidates(generated: list[Path], gen_dir: Path) -> list[Path]:
+    """Eligible setup forms from the cached scan, flat ones first.
+
+    Flat before nested because a flat form is a single-entrypoint app's own
+    form, while a nested one belongs to a named entrypoint and should only be
+    served when nothing better matches.
+    """
+    flat: list[Path] = []
+    nested: list[Path] = []
+    for path in generated:
+        if not _is_form_configmap(path.stem):
+            continue
+        (flat if path.parent == gen_dir else nested).append(path)
+    return flat + nested
+
+
+def _pick_form_candidate(candidates: list[Path], requested: str) -> Path | None:
+    """Choose a form for an id that matched none by name.
+
+    Prefers a candidate that names the request -- by its own stem or by the
+    entrypoint directory holding it -- over position, so a multi-entrypoint app
+    asked for "redshift" does not get whichever directory sorts first.
+    """
+    if not candidates:
+        return None
+    wanted = _norm_cm_id(requested)
+    for path in candidates:
+        if wanted in (_norm_cm_id(path.stem), _norm_cm_id(path.parent.name)):
+            return path
+    for path in candidates:
+        if wanted and (
+            wanted in _norm_cm_id(path.stem) or _norm_cm_id(path.stem) in wanted
+        ):
+            return path
+    return candidates[0]
+
+
 def _norm_cm_id(stem: str) -> str:
     s = stem.lower()
     if s.startswith("atlan-") and not s.startswith(("atlan-connectors-", "atlan-csa-")):
@@ -464,7 +501,10 @@ def build_asgi_app(
         ]
         fields = ", ".join(item["field"] for item in detail if item["field"]) or "body"
         logger.warning(
-            "Rejected a malformed request to %s for app %s: invalid field(s) %s",
+            # %r on the path: it is caller-controlled and percent-decoded, so a
+            # %0A in it would forge a log line. No exc_info here, so this record
+            # is single-line and a forged one would be indistinguishable.
+            "Rejected a malformed request to %r for app %s: invalid field(s) %s",
             request.url.path,
             app_name,
             fields,
@@ -520,6 +560,11 @@ def build_asgi_app(
         Path(generated_dir) if generated_dir is not None else _default_generated_dir()
     )
     generated_files = _scan_generated(gen_dir)
+    # Fallback candidates, resolved once from the cached scan rather than by
+    # globbing per request. Ordered flat-first then by subdirectory, because a
+    # flat form is the single-entrypoint app's own form while a nested one
+    # belongs to a named entrypoint.
+    _form_candidates = _rank_form_candidates(generated_files, gen_dir)
 
     if config_store is None:
         # Same pattern as the workflow starter: explicit injection wins, else the
@@ -770,15 +815,26 @@ def build_asgi_app(
         if target is None:
             target = fuzzy
 
-        # Default-entrypoint fallback: each server hosts exactly one app, so when
-        # a configmap is requested by app id rather than by form stem we serve the
-        # first eligible form configmap in the flat generated dir. Covers the
-        # common flat single-entrypoint case.
-        if target is None and gen_dir.is_dir():
-            for json_file in sorted(gen_dir.glob("*.json")):
-                if _is_form_configmap(json_file.stem):
-                    target = json_file
-                    break
+        # Default-entrypoint fallback: a configmap requested by app id rather
+        # than by form stem. The old version globbed the FLAT dir only, which
+        # 404s every multi-entrypoint app -- redshift ships its forms under
+        # crawler/ and miner/ and nothing at the top level, so its setup wizard
+        # could not load at all. Reads the cached scan, so no per-request
+        # filesystem walk either (_scan_generated's docstring says why).
+        if target is None and _form_candidates:
+            target = _pick_form_candidate(_form_candidates, config_map_id)
+            if target is not None and len(_form_candidates) > 1:
+                # An HTTP 200 carrying the wrong form renders a blank wizard
+                # and looks identical to a working app in the logs, the network
+                # tab and pod stderr. Say that a guess happened.
+                logger.warning(
+                    "ConfigMap %r matched no form by name; serving %r as the "
+                    "default of %d candidates: %s",
+                    config_map_id,
+                    target.stem,
+                    len(_form_candidates),
+                    [c.stem for c in _form_candidates],
+                )
 
         if target is not None:
             # Bytes, not text: json accepts them natively, so this drops the
@@ -802,7 +858,11 @@ def build_asgi_app(
             )
 
         logger.warning(
-            "ConfigMap not found: requested=%s available=%s",
+            # %r, not %s: the path param is caller-controlled and uvicorn
+            # percent-decodes it, so a %0A arrives as a real newline and the
+            # line-oriented formatter would emit a complete forged log line
+            # attributed to a co-hosted app.
+            "ConfigMap not found: requested=%r available=%s",
             config_map_id,
             sorted(available_configmaps),
         )

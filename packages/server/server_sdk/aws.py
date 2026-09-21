@@ -10,8 +10,10 @@ client creation, the assume-role-across-regions loop, and URL assembly.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+from functools import lru_cache
 from typing import Any, ClassVar
 
 from server_sdk.errors.leaves import (
@@ -135,7 +137,19 @@ def create_aws_client(
         raise AwsClientCreationError(service=service, cause=e) from e
 
 
+@lru_cache(maxsize=1)
+def _all_aws_regions() -> tuple[str, ...]:
+    """Cached, immutable region list. The set does not change for the life of
+    the process, and this costs an EC2 round trip on the shared event loop."""
+    return tuple(_fetch_all_aws_regions())
+
+
 def get_all_aws_regions() -> list[str]:
+    """All AWS regions, cached. Returns a fresh list, so callers may mutate it."""
+    return list(_all_aws_regions())
+
+
+def _fetch_all_aws_regions() -> list[str]:
     """All AWS regions via EC2 ``describe_regions``; hardcoded fallback on failure."""
     try:
         import boto3  # noqa: PLC0415 — optional dep: [aws]
@@ -165,15 +179,18 @@ def assume_role_across_regions(
 ) -> dict[str, str]:
     """``sts:AssumeRole`` retried across regions; returns temporary credentials.
 
-    ``region_hint`` (if given and known) is tried first, then every other
-    region. Raises :class:`AuthError` when no region succeeds.
-    """
-    regions = get_all_aws_regions()
-    if region_hint:
-        if region_hint in regions:
-            regions.remove(region_hint)
-        regions.insert(0, region_hint)
+    ``region_hint`` is tried ALONE first, and the full region list is only
+    fetched if that fails. The hint is right in the overwhelming majority of
+    cases (it is derived from the source hostname), and fetching the list costs
+    an EC2 ``describe_regions`` round trip that the success path does not need.
 
+    Every call here blocks. This function is sync because connectors call it
+    from sync code; anything on an async path must use
+    :func:`assume_role_across_regions_async`, or it stalls the event loop for
+    every other app sharing the host process.
+
+    Raises :class:`AuthError` when no region succeeds.
+    """
     import boto3  # noqa: PLC0415 — optional dep: [aws]
 
     kwargs: dict[str, Any] = {
@@ -184,9 +201,8 @@ def assume_role_across_regions(
     if external_id:
         kwargs["ExternalId"] = external_id
 
-    for region in regions:
+    def _try(region: str) -> dict[str, str] | None:
         try:
-            logger.info("Assuming role in region %s", region)
             assumed = boto3.client("sts", region_name=region).assume_role(**kwargs)
             logger.info("Successfully assumed role in region %s", region)
             return assumed["Credentials"]
@@ -194,11 +210,49 @@ def assume_role_across_regions(
             logger.info(
                 "Error assuming role in region %s; trying others", region, exc_info=True
             )
+            return None
+
+    if region_hint:
+        credentials = _try(region_hint)
+        if credentials is not None:
+            return credentials
+
+    regions = [r for r in get_all_aws_regions() if r != region_hint]
+    for region in regions:
+        credentials = _try(region)
+        if credentials is not None:
+            return credentials
 
     raise AuthError(
         message="Failed to assume role in any region",
         auth_method="iam_role",
         failure_reason="sts:AssumeRole failed across all regions",
+    )
+
+
+async def assume_role_across_regions_async(
+    role_arn: str,
+    *,
+    external_id: str | None = None,
+    region_hint: str | None = None,
+    session_name: str = "atlan_jdbc_metadata_extractor",
+    duration_seconds: int = 3600,
+) -> dict[str, str]:
+    """:func:`assume_role_across_regions`, off the event loop.
+
+    The sync form makes one STS round trip on the happy path and up to one per
+    region on the unhappy one, all blocking. On the consolidated host that
+    stalls every co-hosted app, so anything reached from an ``async def`` must
+    come through here. Same thread-offload rule the rest of this package
+    follows for blocking IO.
+    """
+    return await asyncio.to_thread(
+        assume_role_across_regions,
+        role_arn,
+        external_id=external_id,
+        region_hint=region_hint,
+        session_name=session_name,
+        duration_seconds=duration_seconds,
     )
 
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import warnings
 from typing import Any
 
-from server_sdk.errors.categories import FailureCategory
+from server_sdk.errors.categories import Audience, FailureCategory
 from server_sdk.errors.redaction import redact_secrets, sanitize_cause_repr
 from server_sdk.errors.wire import FailureDetails
 
@@ -31,6 +31,11 @@ class AppError(Exception):
     category: FailureCategory = FailureCategory.INTERNAL
     code: str = "INTERNAL"
     retryable: bool = False
+    #: Who can act on this failure. Declared per leaf, matching
+    #: application_sdk's table -- it drives how a failure is surfaced, so a
+    #: leaf silently defaulting to APP_OWNER routes a customer-fixable error
+    #: (bad password, unreachable source) to the wrong reader.
+    audience: Audience = Audience.APP_OWNER
 
     def __init__(
         self,
@@ -80,6 +85,14 @@ class AppError(Exception):
     def cause(self) -> BaseException | None:
         return self._cause
 
+    @cause.setter
+    def cause(self, value: BaseException | None) -> None:
+        # With a getter only, the mirror-image break appears: `self.cause = exc`
+        # is the spelling that works against application_sdk, where cause is a
+        # plain dataclass field. A subclass defining its own read-only property
+        # still shadows this pair entirely.
+        self._cause = value
+
     @property
     def suggested_action(self) -> str:
         return str(self.context.get("suggested_action", ""))
@@ -94,6 +107,7 @@ class AppError(Exception):
             category=self.category,
             code=self.code,
             retryable=self.retryable,
+            audience=type(self).audience,
             message=self.message,
             suggested_action=self.suggested_action or None,
             evidence=evidence,

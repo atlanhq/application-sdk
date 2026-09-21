@@ -23,6 +23,7 @@ from pydantic import (
     model_validator,
 )
 from server_sdk.contracts.base import SerializableEnum
+from server_sdk.credentials.utils import parse_credentials_extra
 from server_sdk.errors.base import AppError
 from server_sdk.errors.redaction import redact_secrets
 from server_sdk.errors.wire import FailureDetails
@@ -274,17 +275,26 @@ def flatten_credentials_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, s
     are ``json.dumps``-serialized.
     """
     pairs: list[dict[str, str]] = []
-    extra = creds_dict.get("extra")
+    # Decode through the shared reader rather than isinstance-ing a dict here.
+    # `extra` legally arrives as a nested object OR as that object serialized to
+    # a JSON string -- its producers straddle the v2/v3 boundary -- and a
+    # narrower second reader is exactly how the two views drift apart: the
+    # string form matched neither branch and simply vanished, so a gate blocked
+    # on params the extraction path would have found.
+    #
+    # strict=False because this path must never raise: it runs where no one is
+    # positioned to tell a malformed credential from an absent one. An unusable
+    # extra is logged inside the reader.
+    extra = parse_credentials_extra(creds_dict, strict=False)
     for key, value in creds_dict.items():
         if key == "extra" or value is None:
             continue
         pairs.append({"key": key, "value": _serialize_credential_value(value)})
-    if isinstance(extra, dict):
-        for key, value in extra.items():
-            if value is not None:
-                pairs.append(
-                    {"key": f"extra.{key}", "value": _serialize_credential_value(value)}
-                )
+    for key, value in extra.items():
+        if value is not None:
+            pairs.append(
+                {"key": f"extra.{key}", "value": _serialize_credential_value(value)}
+            )
     return pairs
 
 

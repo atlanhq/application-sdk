@@ -125,3 +125,51 @@ def test_a_subclass_may_expose_cause_as_its_own_property() -> None:
 
 def test_the_base_still_populates_cause_when_not_overridden() -> None:
     assert AuthError("x", cause=ValueError("b")).cause is not None
+
+
+# ── audience is part of the taxonomy, not a default ─────────────────────────
+
+
+def test_every_leaf_declares_its_audience_on_the_wire() -> None:
+    """to_failure_details() omitted `audience` entirely, so every error read
+    APP_OWNER — routing a customer-fixable failure (bad password, unreachable
+    source) to the wrong reader. Values match application_sdk's table."""
+    from server_sdk.errors.categories import Audience
+    from server_sdk.errors.leaves import (
+        AuthError,
+        DependencyUnavailableError,
+        InternalError,
+        InvalidInputError,
+        SourceUnavailableError,
+    )
+
+    expected = {
+        AuthError: Audience.USER,
+        InvalidInputError: Audience.USER,
+        SourceUnavailableError: Audience.USER,
+        DependencyUnavailableError: Audience.PLATFORM,
+        InternalError: Audience.APP_OWNER,
+    }
+    for leaf, audience in expected.items():
+        assert leaf("x").to_failure_details().audience is audience, leaf.__name__
+
+
+def test_cause_accepts_the_plain_attribute_spelling() -> None:
+    """The mirror of the read-only-property case: `self.cause = exc` is what
+    works against application_sdk, where cause is a plain dataclass field."""
+
+    class ConnectorError(AppError):
+        def __init__(self, message="", *, cause=None, **kw):
+            super().__init__(message, **kw)
+            self.cause = cause  # plain assignment, no property of its own
+
+    exc = ValueError("boom")
+    err = ConnectorError("nope", cause=exc)
+    assert err.cause is exc
+    assert err.to_failure_details().cause_repr == "ValueError: boom"
+
+
+def test_cause_can_be_set_after_construction() -> None:
+    err = AuthError("x")
+    err.cause = ValueError("later")
+    assert err.to_failure_details().cause_repr == "ValueError: later"

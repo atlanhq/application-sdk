@@ -14,7 +14,7 @@ workaround for the leaf not existing.
 from __future__ import annotations
 
 from server_sdk.errors.base import AppError
-from server_sdk.errors.categories import FailureCategory
+from server_sdk.errors.categories import Audience, FailureCategory
 
 
 class AuthError(AppError):
@@ -22,6 +22,7 @@ class AuthError(AppError):
 
     category = FailureCategory.AUTH
     code = "AUTH"
+    audience = Audience.USER
 
 
 class InvalidInputError(AppError):
@@ -29,6 +30,7 @@ class InvalidInputError(AppError):
 
     category = FailureCategory.INVALID_INPUT
     code = "INVALID_INPUT"
+    audience = Audience.USER
 
 
 class InternalError(AppError):
@@ -36,6 +38,7 @@ class InternalError(AppError):
 
     category = FailureCategory.INTERNAL
     code = "INTERNAL"
+    audience = Audience.APP_OWNER
 
 
 class DependencyUnavailableError(AppError):
@@ -43,6 +46,7 @@ class DependencyUnavailableError(AppError):
 
     category = FailureCategory.DEPENDENCY_UNAVAILABLE
     code = "DEPENDENCY_UNAVAILABLE"
+    audience = Audience.PLATFORM
     retryable = True
 
 
@@ -51,6 +55,7 @@ class AppPermissionDeniedError(AppError):
 
     category = FailureCategory.PERMISSION
     code = "PERMISSION"
+    audience = Audience.USER
 
 
 class NotFoundError(AppError):
@@ -58,6 +63,7 @@ class NotFoundError(AppError):
 
     category = FailureCategory.NOT_FOUND
     code = "NOT_FOUND"
+    audience = Audience.USER
 
 
 class AlreadyExistsError(AppError):
@@ -65,6 +71,7 @@ class AlreadyExistsError(AppError):
 
     category = FailureCategory.ALREADY_EXISTS
     code = "ALREADY_EXISTS"
+    audience = Audience.USER
 
 
 class PreconditionError(AppError):
@@ -72,6 +79,7 @@ class PreconditionError(AppError):
 
     category = FailureCategory.PRECONDITION
     code = "PRECONDITION"
+    audience = Audience.USER
 
 
 class RateLimitedError(AppError):
@@ -79,6 +87,7 @@ class RateLimitedError(AppError):
 
     category = FailureCategory.RATE_LIMITED
     code = "RATE_LIMITED"
+    audience = Audience.USER
     retryable = True
 
 
@@ -87,6 +96,7 @@ class AppTimeoutError(AppError):
 
     category = FailureCategory.TIMEOUT
     code = "TIMEOUT"
+    audience = Audience.APP_OWNER
     retryable = True
 
 
@@ -99,6 +109,7 @@ class SourceUnavailableError(AppError):
 
     category = FailureCategory.SOURCE_UNAVAILABLE
     code = "SOURCE_UNAVAILABLE"
+    audience = Audience.USER
     retryable = True
 
 
@@ -107,6 +118,7 @@ class ResourceExhaustedError(AppError):
 
     category = FailureCategory.RESOURCE_EXHAUSTED
     code = "RESOURCE_EXHAUSTED"
+    audience = Audience.PLATFORM
     retryable = True
 
 
@@ -115,6 +127,7 @@ class DataIntegrityError(AppError):
 
     category = FailureCategory.DATA_INTEGRITY
     code = "DATA_INTEGRITY"
+    audience = Audience.APP_OWNER
 
 
 class UnimplementedError(AppError):
@@ -122,6 +135,7 @@ class UnimplementedError(AppError):
 
     category = FailureCategory.UNIMPLEMENTED
     code = "UNIMPLEMENTED"
+    audience = Audience.APP_OWNER
 
 
 class CancelledError(AppError):
@@ -129,3 +143,4 @@ class CancelledError(AppError):
 
     category = FailureCategory.CANCELLED
     code = "CANCELLED"
+    audience = Audience.APP_OWNER
