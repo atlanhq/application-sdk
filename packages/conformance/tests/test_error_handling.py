@@ -947,6 +947,74 @@ def probe():
     )
 
 
+def test_p004_still_flags_staged_row_swallowed_on_a_branch_after_the_try() -> None:
+    # One arm below the `try` hands the row back, the other returns None — the
+    # staged row is not what the function hands back on every path.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    if cond:
+        return check
+    return None
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_rebound_after_the_try() -> None:
+    # The name is reassigned below the handler, so the return hands back
+    # something else entirely.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    check = None
+    return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_the_try_sits_in_a_loop() -> None:
+    # A `try` inside a loop changes what "after" means — the next iteration can
+    # overwrite the row before any return is reached, so the shape is not
+    # modelled and the handler has to prove itself some other way.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        try:
+            run(item)
+        except Exception as exc:
+            check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    return check
+"""
+    )
+
+
+def test_p004_no_finding_when_staged_row_is_returned_from_the_enclosing_if() -> None:
+    # The fall-through leaves the `try` and then the `if` arm it sits in; the
+    # segments are collected outwards until one is guaranteed to exit.
+    assert "E004" not in _findings(
+        """\
+def probe():
+    if enabled:
+        try:
+            run()
+        except Exception as exc:
+            check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+        cleanup()
+        return check
+    return failed_check("probe", DisabledError(), start)
+"""
+    )
+
+
 def test_p004_still_flags_typed_return_escaped_by_an_outer_continue() -> None:
     # `continue` at the handler's top level targets the loop outside the handler,
     # skipping the return that would have carried the failure out.

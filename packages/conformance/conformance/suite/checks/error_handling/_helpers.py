@@ -757,16 +757,93 @@ def _has_swallowing_exit(
     return False
 
 
+def _iter_block(stmts: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """Yield *stmts* and their nested statements, not crossing ``def``/``class``."""
+    for stmt in stmts:
+        yield stmt
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for node in _iter_shallow(stmt):
+            if isinstance(node, ast.stmt):
+                yield node
+
+
+def _stmt_blocks_of(node: ast.AST) -> Iterator[tuple[str, list[ast.stmt]]]:
+    """Yield *node*'s ``(field, block)`` pairs that are lists of statements."""
+    for field, value in ast.iter_fields(node):
+        if (
+            isinstance(value, list)
+            and value
+            and all(isinstance(item, ast.stmt) for item in value)
+        ):
+            yield field, value
+
+
+def _trailing_statements(
+    function: ast.FunctionDef | ast.AsyncFunctionDef, handler: ast.ExceptHandler
+) -> list[ast.stmt] | None:
+    """The statements that run after *handler*'s ``try``, flattened in order.
+
+    A handler that falls off its end hands control to whatever follows the
+    ``try``, and possibly to whatever follows the ``if`` that ``try`` sits in,
+    so the segments are collected outwards until one of them is guaranteed to
+    exit.  Concatenating them models a path where every segment runs, which is
+    the conservative reading: a name rebound in an earlier segment is dropped
+    for the later ones, and every ``return`` collected has to carry the failure.
+
+    ``None`` when the fall-through reaches something this does not model — a
+    ``try`` nested in a loop, a ``with``, another handler or a ``match`` — or
+    when it falls off the end of the function, which is an implicit
+    ``return None`` and swallows.
+    """
+    owners: dict[int, tuple[ast.AST, str, list[ast.stmt]]] = {}
+    for node in (function, *_iter_shallow(function)):
+        if node is not function and isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            continue
+        for field, block in _stmt_blocks_of(node):
+            for item in block:
+                owners[id(item)] = (node, field, block)
+
+    current: ast.stmt | None = None
+    for node in _iter_shallow(function):
+        if isinstance(node, (ast.Try, ast.TryStar)) and any(
+            h is handler for h in node.handlers
+        ):
+            current = node
+            break
+    if current is None:
+        return None
+
+    segments: list[ast.stmt] = []
+    while True:
+        entry = owners.get(id(current))
+        if entry is None:
+            return None
+        owner, field, block = entry
+        index = next(i for i, item in enumerate(block) if item is current)
+        segments.extend(block[index + 1 :])
+        if _body_always_exits(segments):
+            return segments
+        # Nothing below guarantees an exit, so control reaches the enclosing
+        # block too — but only an `if` arm is modelled. A loop, `with`, `try` or
+        # `match` around the handler changes what "after" means.
+        if not (isinstance(owner, ast.If) and field in ("body", "orelse")):
+            return None
+        current = owner
+
+
 def _staged_row_is_returned(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
     handler: ast.ExceptHandler,
-    names: frozenset[str],
+    scope: TypedFailureScope,
 ) -> bool:
-    """True when a local staged in *handler* is returned after the ``try``.
+    """True when a row staged in *handler* is what the function hands back.
 
     The last-resort arm of a probe often assigns the typed row and lets the
-    function's single trailing ``return`` hand it back, so cleanup that must run
-    on every path stays in one place::
+    function's trailing ``return`` hand it back, so cleanup that must run on
+    every path stays in one place::
 
         except Exception as exc:
             check = self._failed_check(name, SourceUnavailableError(cause=exc), start)
@@ -774,27 +851,31 @@ def _staged_row_is_returned(
             await client.close()
         return check, None
 
-    Only returns *below* the handler count, and only those outside every except
-    handler in the function: a return inside a sibling handler hands back that
-    handler's value, not this one's.
+    The statements after the ``try`` are tracked with the same flow analysis the
+    handler body uses, seeded with what the handler staged, so a name reassigned
+    or deleted below it stops counting.  *Every* ``return`` reached from there
+    must carry the failure: one arm returning the row while another returns
+    ``None`` swallows on that path, and a fall-through that reaches the end of
+    the function swallows too.
     """
-    if not names:
+    if not scope.live_at_end:
         return False
-    end = handler.end_lineno or handler.lineno
-    in_handler = {
-        id(node)
-        for candidate in _iter_shallow(function)
-        if isinstance(candidate, ast.ExceptHandler)
-        for node in _iter_shallow(candidate)
-    }
-    for node in _iter_shallow(function):
-        if not isinstance(node, ast.Return) or node.value is None:
-            continue
-        if node.lineno <= end or id(node) in in_handler:
-            continue
-        if _references_any(node.value, names):
-            return True
-    return False
+    trailing = _trailing_statements(function, handler)
+    if not trailing:
+        return False
+    carried: dict[int, frozenset[str]] = {}
+    _track_carried(
+        trailing,
+        scope.exc_name,
+        set(scope.live_at_end),
+        carried,
+        _derives_typed_failure,
+    )
+    below = TypedFailureScope(scope.exc_name, carried, frozenset())
+    returns = [stmt for stmt in _iter_block(trailing) if isinstance(stmt, ast.Return)]
+    if not returns:
+        return False
+    return all(_return_carries_typed_failure(stmt, below) for stmt in returns)
 
 
 def _body_returns_typed_failure(
@@ -831,6 +912,4 @@ def _body_returns_typed_failure(
         return False
     if _body_always_exits(handler.body):
         return True
-    return function is not None and _staged_row_is_returned(
-        function, handler, scope.live_at_end
-    )
+    return function is not None and _staged_row_is_returned(function, handler, scope)
