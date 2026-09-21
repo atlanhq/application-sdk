@@ -117,18 +117,34 @@ outcome mirroring the error-handling shape in the reference app named by
   the checker does not flag it.
 
 - **E004 BroadExceptClause** — `except Exception` / `except BaseException`
-  with no `exc_info=True` logging.  **Two edits clear it and the choice is the
-  judgement**: narrow the clause to the exception the block actually handles
-  (preferred — the specific type is usually knowable from the call inside the
-  `try`), or, where breadth is genuinely the point (a worker loop, an HTTP
-  handler, a per-item boundary), keep it and log with `exc_info=True`.  Mirror
-  `atlan-openapi-app app/api_client.py`'s `_parse_zip`, which catches
-  `Exception` per archive member and logs with `exc_info=True`.  A boundary
-  that must stay broad *and* must not log carries an inline
-  `ignore[E004]` naming what it guards — see `atlan-mysql-app app/handler.py`'s
-  `preflight_check`.  The checker already exempts a call whose arguments flow
-  through a redaction helper, so never add `exc_info=True` at a sanitizer
-  boundary (same contraindication as E005 above).
+  whose body neither re-raises nor logs the trace.
+
+  **Default to the additive edit: log with `exc_info=True`.**  Add it to the
+  log call already in the block, or add
+  `logger.error("<what failed>: %s", exc, exc_info=True)` where there is
+  none.  This clears the finding (the checker passes a body containing
+  `logger.exception()`, or `warning`/`error`/`critical` with `exc_info=True`)
+  and it **changes no control flow** — which is the whole reason it is the
+  default for an unattended lane.  Mirror `atlan-openapi-app
+  app/api_client.py`'s `_parse_zip`, which catches `Exception` per archive
+  member and logs with `exc_info=True`.
+
+  **Do not narrow the clause as the automatic fix.**  Narrowing `except
+  Exception` to a specific type also clears the rule, and it is usually the
+  better end state, but it silently changes *which exceptions propagate*: get
+  the type wrong and an error that used to be handled now escapes, on a path
+  the orthogonal gate very likely does not cover.  Propose a narrowing only as
+  a residue suggestion, naming the type you inferred and the call inside the
+  `try` you inferred it from — never applied in the same unit as the log edit.
+
+  Two things already clear the rule and must not be "fixed": a body that
+  re-raises on every path with the trace preserved (bare `raise`, or
+  `raise X(...) from e`), and a log call whose arguments flow through a
+  redaction helper — the sanitizer marks a deliberate no-traceback boundary,
+  so **never add `exc_info=True` there** (same contraindication as E005).  A
+  boundary that must stay broad and must not log carries an inline
+  `ignore[E004]` naming what it guards; see `atlan-mysql-app app/handler.py`'s
+  `preflight_check`.
 
 - **E007 ErrorToReturnValue** — the `except` block returns a sentinel
   (`None`, `{}`, `[]`, `False`) with no logging before the `return`, so the

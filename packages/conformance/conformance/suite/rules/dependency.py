@@ -673,11 +673,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D012",
         canonical_reference=(
-            "application_sdk pyproject.toml — `[[tool.uv.index]]` names pypi at "
-            "https://pypi.org/simple with `default = true`, below a comment recording "
-            "which machine-wide index the pin displaces and why it cannot move to a "
-            "project-level uv.toml. Declared in pyproject.toml, so the repo's "
-            "[tool.uv] constraint-dependencies keep being read."
+            "atlan-mysql-app pyproject.toml — `[[tool.uv.index]]` names pypi at "
+            "https://pypi.org/simple with `default = true`. Declared in "
+            "pyproject.toml rather than a project-level uv.toml, so the repo's "
+            "[tool.uv] constraint-dependencies keep being read, and a machine-wide "
+            "index cannot rewrite uv.lock on whoever resolves next."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,

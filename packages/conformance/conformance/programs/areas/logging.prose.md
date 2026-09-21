@@ -199,15 +199,33 @@ around `finding.line` in `finding.file` before proposing a fix.
   `atlan-mysql-app app/client.py`'s `provide_token` shows the cheap form:
   `"IAM token refreshed for connection (length: %d)", len(token)`.
 
-- **L009 WarnThenRaiseDuplication** — a `logger.warning()`/`logger.error()`
-  immediately precedes a `raise`, so the same failure is recorded twice: once
-  here and once wherever the exception is finally handled.  **Delete the log
-  call** and let the raise be the record — that is the edit in the large
-  majority of sites.  Keep it only when it carries context the caller cannot
-  reconstruct (a loop index, the URL being retried), and then say so in the
-  edit description.  `atlan-metabase-app app/connector.py`'s `transform_data`
-  raises `MissingTypenameInputError` and `MissingOutputPathInputError` with no
-  log line before either.
+- **L009 WarnThenRaiseDuplication** — a bare `logger.warning()` or
+  `logger.error()` statement sits within three statements of a `raise`, so the
+  same failure is recorded twice: here, and again wherever the exception is
+  finally handled.  The cost is inflated error counts on the dashboard, not a
+  lost record.
+
+  **Deleting the log line is the ideal end state and the wrong default.**  It
+  is only correct if the exception really *is* recorded upstream — and these
+  same repos carry open E002/E004/E007/E014 findings, which are precisely
+  handlers that swallow without logging.  Delete into one of those and the
+  failure becomes invisible, with every gate still green: no test covers it,
+  and `no_new_findings` will not see it because the swallow was already there.
+
+  So establish the caller first.  **If you can show the exception is logged
+  upstream** — the handler that catches this type logs it with `exc_info=True`
+  — delete the call; that is the shape `atlan-metabase-app app/connector.py`'s
+  `transform_data` has, raising `MissingTypenameInputError` and
+  `MissingOutputPathInputError` with no log line before either.  **If you
+  cannot** (no handler in the repo, or the handler swallows), do not delete:
+  **downgrade the level** to `logger.debug(...)`.  The rule matches only
+  `warning` and `error`, so a DEBUG line clears the finding, stops inflating
+  the error count, and keeps the local detail for whoever debugs it.
+
+  Keep the line at its current level only when it carries context the
+  exception genuinely cannot (a loop index, the URL being retried) — then the
+  honest fix is to move that context into the exception and delete the log.
+  Say in the edit description which of the three cases you found.
 
 - **L010 CredentialInLogOutput** — BLOCK, and a security finding.  Log the
   credential's *name* or *type*, never its value: drop the offending argument
