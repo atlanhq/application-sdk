@@ -145,6 +145,51 @@ def test_contract_alias_chain_and_annotated_form(tmp_path):
     assert reg.by_name["PublicInput"] is reg.by_name["AppInputContract"]
 
 
+def test_alias_rebinding_shapes_all_reach_the_class(tmp_path):
+    """Every right-hand side and target shape a rebinding can take resolves.
+
+    ``AttrAlias`` pins the subtlest of them: a qualified ``g.Target`` is an
+    alias of ``Target``, because the registry is keyed on bare names and the
+    module qualifier carries no information it can use.
+    """
+    reg = registry(
+        tmp_path,
+        {
+            "g.py": "class Target:\n    pass\n",
+            "a.py": (
+                "import g\n"
+                "from g import Target as _T\n"
+                "AttrAlias = g.Target\n"
+                "ImportAlias = _T\n"
+                "A = B = Target\n"
+            ),
+        },
+    )
+    target = reg.by_name["Target"]
+    assert target.node.name == "Target"
+    assert target.file == "g.py"
+    for name in ("AttrAlias", "ImportAlias", "A", "B"):
+        assert reg.by_name[name] is target, name
+
+
+def test_self_assignment_does_not_poison_a_real_alias(tmp_path):
+    """``X = X`` must not claim the registry slot a real ``X = Class`` needs.
+
+    Alias targets are recorded first-wins across files, so a self-assignment
+    that got recorded would take the slot and resolve to itself — dropping the
+    binding in the other file, which is the one that names a class.
+    """
+    reg = registry(
+        tmp_path,
+        {
+            "real.py": "class RealClass:\n    pass\n",
+            "a_shim.py": "from real import RealClass\nExported = Exported\n",
+            "b_alias.py": "from real import RealClass\nExported = RealClass\n",
+        },
+    )
+    assert reg.by_name["Exported"] is reg.by_name["RealClass"]
+
+
 def test_non_class_and_cyclic_aliases_are_not_registered(tmp_path):
     """Only a chain landing on a scanned class registers; a cycle terminates."""
     reg = registry(
