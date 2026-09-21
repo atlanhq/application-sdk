@@ -98,3 +98,71 @@ def test_parse_failure_is_incomplete(tmp_path):
 
     reg = registry(tmp_path, {"handler.py": "async def preflight_check(:"})
     assert [f.rule_id for f in coverage_findings(reg)] == ["F019"]
+
+
+def test_module_level_contract_alias_resolves(tmp_path):
+    """An entrypoint input declared under a module-level alias stays analysable.
+
+    ``app/contracts.py`` re-binds the pkl-generated contract to a domain name
+    and the entrypoint annotates that name. Until the registry recorded
+    aliases, the annotated name was absent from ``by_name`` and F019 reported
+    the contract as unanalysable even though its class was in the same scan.
+    """
+    from conformance.suite.checks.preflight._common import (
+        collect_entrypoint_input_contract_names,
+        coverage_findings,
+    )
+
+    reg = registry(
+        tmp_path,
+        {
+            "app/generated/_input.py": "class AppInputContract:\n    include_database_regex: str\n",
+            "app/contracts.py": "from app.generated._input import AppInputContract\nOpenAPIConnectorInput = AppInputContract\n",
+            "app/connector.py": "from application_sdk.app import App\nfrom app.contracts import OpenAPIConnectorInput\nclass Connector(App):\n    async def run(self, input: OpenAPIConnectorInput): pass\n",
+            "app/handler.py": "async def preflight_check(input, ctx):\n    return input.metadata.get('include_database_regex')\n",
+        },
+    )
+
+    assert collect_entrypoint_input_contract_names(reg) == frozenset(
+        {"OpenAPIConnectorInput"}
+    )
+    assert coverage_findings(reg) == []
+    assert reg.by_name["OpenAPIConnectorInput"] is reg.by_name["AppInputContract"]
+    assert _metadata_parity.scan(reg) == []
+
+
+def test_contract_alias_chain_and_annotated_form(tmp_path):
+    """A cross-module re-export chain and a ``TypeAlias`` rebinding both resolve."""
+    reg = registry(
+        tmp_path,
+        {
+            "generated.py": "class AppInputContract:\n    pass\n",
+            "mid.py": "from typing import TypeAlias\nfrom generated import AppInputContract\nMidInput: TypeAlias = AppInputContract\n",
+            "public.py": "from mid import MidInput\nPublicInput = MidInput\n",
+        },
+    )
+    assert reg.by_name["MidInput"] is reg.by_name["AppInputContract"]
+    assert reg.by_name["PublicInput"] is reg.by_name["AppInputContract"]
+
+
+def test_non_class_and_cyclic_aliases_are_not_registered(tmp_path):
+    """Only a chain landing on a scanned class registers; a cycle terminates."""
+    reg = registry(
+        tmp_path,
+        {
+            "mod.py": "VALUE = 3\nAlias = VALUE\nLeft = Right\nRight = Left\nBoxed = list[int]\n"
+        },
+    )
+    assert reg.by_name == {}
+
+
+def test_alias_never_shadows_a_real_class(tmp_path):
+    """A class definition always wins over an alias binding the same name."""
+    reg = registry(
+        tmp_path,
+        {
+            "real.py": "class Target:\n    pass\nclass Shadow:\n    pass\n",
+            "alias.py": "from real import Target\nShadow = Target\n",
+        },
+    )
+    assert reg.by_name["Shadow"].node.name == "Shadow"
