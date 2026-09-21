@@ -25,9 +25,7 @@ class _RecordingStarter:
         self.dispatched.append(f"{request.app_name}:{request.entrypoint}")
         from server_sdk.workflow import StartResult
 
-        return StartResult(
-            workflow_id=request.workflow_id or "wf-1", run_id="run-1"
-        )
+        return StartResult(workflow_id=request.workflow_id or "wf-1", run_id="run-1")
 
 
 @pytest.fixture
@@ -45,7 +43,9 @@ def started():
     ["../../etc/passwd", "9leading-digit", "has space", "semi;colon", "", "a/b"],
     ids=["traversal", "leading-digit", "space", "semicolon", "empty", "slash"],
 )
-def test_a_malformed_entrypoint_is_rejected_before_dispatch(started, entrypoint) -> None:
+def test_a_malformed_entrypoint_is_rejected_before_dispatch(
+    started, entrypoint
+) -> None:
     client, starter = started
     resp = client.post(f"/workflows/v1/start?entrypoint={entrypoint}", json={})
     assert resp.status_code == 400, resp.text

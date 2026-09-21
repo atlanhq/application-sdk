@@ -104,3 +104,43 @@ def test_flatten_never_raises_on_an_unusable_extra() -> None:
     assert flatten_credentials_to_pairs({"host": "h", "extra": "{not json"}) == [
         {"key": "host", "value": "h"}
     ]
+
+
+# ── a credential is whatever the caller sent ────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "password",
+    ["true", "false", "null", '{"a":1}', "[secret]", "123", "P@ssw0rd!", "{not json"],
+)
+def test_a_credential_value_is_never_re_typed(password: str) -> None:
+    """Every wire value is a string, so decoding anything that *looks* like JSON
+    corrupts real credentials: "null" became None and then read as a missing
+    field, "true" became a bool, and one starting with "{" that happened to
+    parse became a dict."""
+    from server_sdk.credentials.utils import credentials_list_to_dict
+
+    got = credentials_list_to_dict([{"key": "password", "value": password}])
+    assert got["password"] == password
+    assert isinstance(got["password"], str)
+
+
+def test_extra_is_still_decoded_both_ways() -> None:
+    """extra is the one key whose value is legitimately structured."""
+    from server_sdk.credentials.utils import credentials_list_to_dict
+
+    top = credentials_list_to_dict([{"key": "extra", "value": '{"database":"dev"}'}])
+    assert top["extra"] == {"database": "dev"}
+
+    hoisted = credentials_list_to_dict(
+        [{"key": "extra.opts", "value": '{"a":1}'}, {"key": "extra.db", "value": "dev"}]
+    )
+    assert hoisted["extra"] == {"opts": {"a": 1}, "db": "dev"}
+
+
+def test_a_password_of_null_still_reaches_the_client() -> None:
+    """The worst case: None read as absent, so the caller got
+    "Missing required credential field(s): password" for a password they sent."""
+    from server_sdk.credentials.utils import credentials_list_to_dict
+
+    assert credentials_list_to_dict([{"key": "password", "value": "null"}])["password"]

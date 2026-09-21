@@ -78,7 +78,15 @@ def parse_credentials_extra(
 
 
 def _coerce(value: str) -> Any:
-    """Best-effort decode a wire string back to its JSON value if it looks like one."""
+    """Best-effort decode a wire string back to its JSON value if it looks like one.
+
+    Applied ONLY to ``extra`` and its hoisted members, never to a plain
+    credential value. Every wire value is a string, so coercing indiscriminately
+    corrupts real credentials: a password of "null" became ``None`` and then read
+    as a missing field, "true" became a bool, and one that happened to start with
+    "{" and parse as JSON became a dict. ``extra`` is the only key whose value is
+    legitimately a structured object.
+    """
     if not isinstance(value, str):
         return value
     stripped = value.strip()
@@ -108,8 +116,11 @@ def credentials_list_to_dict(
             continue
         if key.startswith("extra."):
             extra[key[len("extra.") :]] = _coerce(value)
-        else:
+        elif key == "extra":
             out[key] = _coerce(value)
+        else:
+            # Verbatim. See _coerce: a credential is whatever the caller sent.
+            out[key] = value
     if extra:
         # A top-level "extra" pair can already hold a dict (a JSON object that
         # _coerce parsed); merge into it. If it's present but not a dict

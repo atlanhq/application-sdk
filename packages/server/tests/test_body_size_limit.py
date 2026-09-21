@@ -24,7 +24,9 @@ def client() -> TestClient:
 
 
 def test_an_over_large_declared_body_is_413(client: TestClient) -> None:
-    payload = json.dumps({"credentials": [{"key": "k", "value": "x" * (MAX_REQUEST_BODY_BYTES + 1000)}]})
+    payload = json.dumps(
+        {"credentials": [{"key": "k", "value": "x" * (MAX_REQUEST_BODY_BYTES + 1000)}]}
+    )
     resp = client.post(
         "/workflows/v1/auth",
         content=payload,
