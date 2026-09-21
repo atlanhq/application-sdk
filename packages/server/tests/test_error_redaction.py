@@ -195,3 +195,94 @@ def test_an_app_error_is_coerced_into_failure_details() -> None:
     check = PreflightCheck(name="auth", passed=False, error=AuthError("denied"))
     assert isinstance(check.error, FailureDetails)
     assert check.error.category is AuthError.category
+
+
+# ── every route, not just the one that has an envelope ──────────────────────
+
+
+def _sql_app_that_fails_with(driver_error: str):
+    """An app whose SQL client dies the way a real driver does."""
+    from server_sdk.clients.models import DatabaseConfig
+    from server_sdk.clients.sql import BaseSQLClient
+    from server_sdk.handler.sql import SQLHandler
+    from server_sdk.server import build_asgi_app
+
+    class _Client(BaseSQLClient):
+        DB_CONFIG = DatabaseConfig(
+            template="postgresql://{username}:{password}@{host}/{database}"
+        )
+
+        async def load(self, credentials):
+            raise RuntimeError(driver_error)
+
+    class _Handler(SQLHandler):
+        CLIENT_CLASS = _Client
+
+        def _build_client(self, *a, **k):
+            return _Client()
+
+    return build_asgi_app(_Handler(), app_name="acme")
+
+
+@pytest.mark.parametrize(
+    "path", ["/workflows/v1/auth", "/workflows/v1/check", "/workflows/v1/metadata"]
+)
+def test_no_route_ships_the_dsn_password(path: str) -> None:
+    """Round 1 scrubbed PreflightCheck.message and missed the siblings.
+
+    SQLHandler.test_auth reports a failure as ``message=str(e)`` into
+    AuthOutput, which had no validator -- and heracles calls /auth on every
+    "Test authentication" press, so the password reached the browser.
+    """
+    from fastapi.testclient import TestClient
+
+    driver_error = f'FATAL: password authentication failed; dsn="{DSN}"'
+    client = TestClient(
+        _sql_app_that_fails_with(driver_error), raise_server_exceptions=False
+    )
+    resp = client.post(
+        path,
+        json={
+            "credentials": [
+                {"key": "username", "value": "u"},
+                {"key": "password", "value": "p"},
+                {"key": "host", "value": "h"},
+                {"key": "database", "value": "d"},
+            ]
+        },
+    )
+    assert "sup3rs3cr3t" not in resp.text, resp.text
+
+
+def test_an_app_error_message_is_redacted_at_construction() -> None:
+    """str(exc) feeds every route's HTTPException detail and log line, so the
+    redaction has to happen once, in the constructor."""
+    err = SourceUnavailableError(f"could not connect: {DSN}")
+    assert "sup3rs3cr3t" not in str(err)
+    assert "sup3rs3cr3t" not in err.message
+    assert "warehouse.internal" in err.message  # diagnostic survives
+
+
+# ── the redactor itself must not become the outage ──────────────────────────
+
+
+def test_redaction_is_linear_not_quadratic() -> None:
+    """It runs on the hosted request path, so a pathological string would stall
+    the event loop for every co-hosted app.
+
+    The scheme prefix used to be scanned from every start position, which is
+    O(n^2) and needs no URL to trigger: 200k characters took ~125 seconds.
+    """
+    import time
+
+    def elapsed(n: int) -> float:
+        text = "postgresql://" + "a" * n
+        start = time.perf_counter()
+        redact_secrets(text)
+        return time.perf_counter() - start
+
+    elapsed(20_000)  # warm
+    small, large = elapsed(50_000), elapsed(400_000)
+    # 8x the input must not cost anything like 64x the time.
+    assert large < small * 20, f"{small:.4f}s -> {large:.4f}s looks superlinear"
+    assert large < 2.0, f"400k chars took {large:.2f}s"

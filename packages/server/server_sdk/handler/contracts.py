@@ -395,6 +395,15 @@ class AuthOutput(BaseModel):
     scopes: list[str] = []
     expires_at: str = ""
 
+    @field_validator("message")
+    @classmethod
+    def _scrub_message(cls, v: str) -> str:
+        # Same reason as PreflightCheck.message, and it was missed: SQLHandler
+        # .test_auth reports a failure as `message=str(e)`, and a driver's
+        # str() embeds the DSN. Heracles calls this route on every "Test
+        # authentication" press, so the value reaches the browser network tab.
+        return redact_secrets(v)
+
 
 # ---------------------------------------------------------------------------
 # Preflight
@@ -500,6 +509,12 @@ class PreflightOutput(BaseModel):
     checks: list[PreflightCheck] = []
     message: str = ""
     total_duration_ms: float = 0.0
+
+    @field_validator("message")
+    @classmethod
+    def _scrub_message(cls, v: str) -> str:
+        """The aggregate message, scrubbed like the per-check one."""
+        return redact_secrets(v)
 
 
 # ---------------------------------------------------------------------------

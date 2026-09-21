@@ -117,6 +117,7 @@ from typing import Any, ClassVar
 from server_sdk.clients.sql import BaseSQLClient
 from server_sdk.credentials.utils import credentials_list_to_dict
 from server_sdk.errors.base import AppError
+from server_sdk.errors.redaction import redact_secrets
 from server_sdk.handler.base import Handler
 from server_sdk.handler.contracts import (
     AuthInput,
@@ -169,10 +170,13 @@ class SQLHandler(Handler):
                 status=AuthStatus.SUCCESS, message="Authentication successful"
             )
         except Exception as e:  # noqa: BLE001 — boundary: report FAILED, never 500
+            # Redact here as well as in AuthOutput: the log line is a separate
+            # sink from the wire, and a driver's str() embeds the DSN.
+            detail = redact_secrets(str(e))
             logger.warning(
-                "%s auth test failed: %s", type(self).__name__, e, exc_info=True
+                "%s auth test failed: %s", type(self).__name__, detail, exc_info=True
             )
-            return AuthOutput(status=AuthStatus.FAILED, message=str(e))
+            return AuthOutput(status=AuthStatus.FAILED, message=detail)
         finally:
             if client:
                 await client.close()

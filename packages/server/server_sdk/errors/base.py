@@ -13,7 +13,7 @@ import warnings
 from typing import Any
 
 from server_sdk.errors.categories import FailureCategory
-from server_sdk.errors.redaction import sanitize_cause_repr
+from server_sdk.errors.redaction import redact_secrets, sanitize_cause_repr
 from server_sdk.errors.wire import FailureDetails
 
 
@@ -48,7 +48,14 @@ class AppError(Exception):
         # packages -- and here it used to land in `evidence` as the string
         # "True" while the wire said retryable: false, reporting a retryable
         # source failure as terminal. No error, no warning.
-        self.message = message
+        # Redact at construction, not at each call site. `message` reaches the
+        # wire three ways -- str(exc) in every route's HTTPException detail, the
+        # %s in every route's logger.error, and FailureDetails.message -- and
+        # round 1 only covered the third. The documented fallback for a SQL
+        # connector is `message=str(exc)`, and a driver's str() embeds the DSN,
+        # so all three shipped the source password. Redaction is idempotent, so
+        # the envelope validator re-running on it is harmless.
+        self.message = redact_secrets(message)
         self.context = context
         if retryable is not None:
             # Shadow the class attribute per instance. NOT renamed to
@@ -64,7 +71,8 @@ class AppError(Exception):
         self._cause = cause
         self.app_name = app_name
         self.run_id = run_id
-        super().__init__(message)
+        # The redacted text, so str(exc) and %s interpolation are safe too.
+        super().__init__(self.message)
         if cause is not None and self.__cause__ is None:
             self.__cause__ = cause
 

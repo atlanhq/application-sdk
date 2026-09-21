@@ -23,9 +23,28 @@ from collections.abc import Mapping
 from typing import Any
 
 # Userinfo in URLs of any scheme: postgresql://user:pass@host -> postgresql://***@host.
-# `(?:[^@\s]+@)+` is greedy to the last `@` so a raw `@` inside the password
-# does not leave the tail exposed; over-redacting is the safe direction.
-_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNORECASE)
+# Greedy to the last `@` so a raw `@` inside the password does not leave the
+# tail exposed; over-redacting is the safe direction.
+#
+# Two separate guards against quadratic scanning, both load-bearing.
+#
+# The LOOKBEHIND is the one that matters. `sub` retries at every start
+# position, and inside a long run of scheme-legal characters each retry
+# consumes the whole remaining run before `://` fails -- O(n^2) even with no
+# backtracking, and it needs no URL to trigger. Requiring the scheme to start
+# at a character boundary leaves one viable start per run, so the scan is
+# linear.
+#
+# The POSSESSIVE quantifiers (`*+`, `++`) then stop the give-a-character-back
+# backtracking on top of that.
+#
+# Measured on 'postgresql://' + n 'a's: greedy+unanchored 20k 1.6s / 80k 23s /
+# 200k 125s; possessive alone 32k 2.6s (still quadratic); with the lookbehind,
+# linear. This runs on the hosted request path, where one such string stalls
+# the event loop for every co-hosted app.
+_URL_USERINFO_RE = re.compile(
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*+://)(?:[^@\s]++@)++", re.IGNORECASE
+)
 
 # Secret query/DSN params. `pwd` covers ODBC (`UID=sa;PWD=...`). The braced
 # alternative is tried first because ODBC quotes values containing the `;`
@@ -38,7 +57,7 @@ _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNOREC
 # signature -- not the credential -- is what actually authorises the request.
 _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential"
-    r"|private_key|signature|(?<![a-z0-9_])sig)=)(?:\{[^}]*\}|[^\s&,;#]+)",
+    r"|private_key|signature|(?<![a-z0-9_])sig)=)(?:\{[^}]*+\}|[^\s&,;#]++)",
 )
 
 #: Recursion bound for :func:`redact_wire_value`, so a pathologically deep
