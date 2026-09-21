@@ -51,6 +51,7 @@ AppError  (base — application_sdk.errors)
 │   ├── NotFoundError          NOT_FOUND                  retryable=False  audience=USER
 │   ├── AlreadyExistsError     ALREADY_EXISTS             retryable=False  audience=USER
 │   ├── InvalidInputError      INVALID_INPUT              retryable=False  audience=USER
+│   │   └── InvalidInputValueError  INVALID_INPUT (INVALID_INPUT_VALUE), also a builtin ValueError  retryable=False  audience=USER
 │   ├── PreconditionError      PRECONDITION               retryable=False  audience=USER
 │   ├── RateLimitedError       RATE_LIMITED               retryable=True   audience=USER
 │   ├── DependencyUnavailableError  DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM
@@ -180,6 +181,19 @@ attempt. A subtype rather than a sixteenth leaf, so `except AppTimeoutError:` st
 while the distinct `TIMEOUT_TASK_STALLED` code and the `TaskStalledError` Temporal wire type keep stall
 kills countable apart from `StartToClose` and heartbeat timeouts. App code should not raise it —
 raise the leaf that describes what the source actually did.
+
+### InvalidInputValueError — a compatibility shim, not a leaf to reach for
+
+`InvalidInputValueError(InvalidInputError, ValueError)` exists for one job: typing a public SDK
+entry point whose documented contract was already a bare `ValueError`. `ValueError` stays in the
+bases, so `except ValueError:` in an app keeps catching the failure while the raise now carries a
+typed `INVALID_INPUT` / `USER` envelope. Its own code, `INVALID_INPUT_VALUE`, keeps the shim
+countable apart from the bare leaf — a non-zero rate on it measures how much still depends on the
+builtin contract, which is what decides when it can be retired.
+
+**Do not use it for new APIs.** A new entry point has no `ValueError` contract to preserve, so
+raise plain `InvalidInputError` and let callers catch the typed hierarchy. Copying the shim onto
+new code spreads the builtin dependency this class exists to contain.
 
 ### Raise by failure shape
 

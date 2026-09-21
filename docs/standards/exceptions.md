@@ -258,6 +258,8 @@ When reviewing code, check for:
   ```
   The legacy `application_sdk/common/error_codes.py` `AAF-{COMP}-{ID:03d}` format is retained for backward compatibility only — do not use it in new code.
 
+- **`InvalidInputValueError` — compatibility subtype, not for new code**: `InvalidInputValueError(InvalidInputError, ValueError)` carries the same `INVALID_INPUT` / `USER` envelope as its parent but keeps builtin `ValueError` in the bases, and it owns the code `INVALID_INPUT_VALUE` so the shim stays countable apart from the bare leaf. Use it **only** to type a public entry point that already documented a bare `ValueError`, where switching to `InvalidInputError` alone would break every existing `except ValueError:` catch site. New APIs have no such contract to preserve — raise plain `InvalidInputError`.
+
 - **Audience routing**: Each leaf sets a default `audience` (`USER | PLATFORM | APP_OWNER`) that downstream consumers (AE, SLA dashboards) use to route the failure. Override it on a custom subclass when the default doesn't fit. The enum is closed three-valued — there is no `UNKNOWN` escape hatch; if the locus is unclear, the answer is `APP_OWNER` (the team that wrote the code investigates and reclassifies).
 - **Logging**: Use `AtlanLoggerAdapter` for all logging with proper context
 - **Context**: Always include relevant context in error messages (query, filename, operation, etc.)

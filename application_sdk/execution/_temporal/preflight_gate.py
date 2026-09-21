@@ -2499,8 +2499,10 @@ def _mode_from_deprecated_enforce(
             return mode
         if default is not None:
             return default
+        # conformance: ignore[E012] Python calling-convention error, not a domain failure; the interpreter itself raises TypeError for a missing required keyword, and tests/unit/execution/test_preflight_gate_deprecations.py:228 asserts it
         raise TypeError(f"{callable_name}() missing required keyword argument: 'mode'")
     if mode is not None:
+        # conformance: ignore[E012] Python calling-convention error, not a domain failure; passing two mutually exclusive keywords is a signature misuse, and tests/unit/execution/test_preflight_gate_deprecations.py:218 asserts TypeError
         raise TypeError(
             f"{callable_name}() received both 'mode' and the deprecated 'enforce'; "
             "pass 'mode' alone."

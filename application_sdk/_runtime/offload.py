@@ -35,6 +35,7 @@ from application_sdk._runtime.progress import (
     current_progress_tracker,
     declared_hold_active,
 )
+from application_sdk.errors import InvalidInputValueError
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 
 logger = get_logger(__name__)
@@ -494,11 +495,16 @@ async def run_fault_isolated(
             width gets a fresh child.
         TimeoutError: ``timeout`` elapsed. The child is killed and the pool
             discarded.
-        ValueError: ``max_workers`` is < 1.
+        InvalidInputValueError: ``max_workers`` is < 1 (also a ``ValueError``).
     """
     workers = _DEFAULT_PROCESS_POOL_MAX_WORKERS if max_workers is None else max_workers
     if workers < 1:
-        raise ValueError(f"max_workers must be >= 1, got {workers}")
+        raise InvalidInputValueError(
+            message=f"max_workers must be >= 1, got {workers}",
+            field="max_workers",
+            constraint=">= 1",
+            value_summary=str(workers),
+        )
     loop = asyncio.get_running_loop()
     # Auto-hold, bounded by this call's own `timeout` (ADR-0018 → *Feeding the
     # tracker*, mechanism 2 — the same treatment as `run_in_thread`, since this
