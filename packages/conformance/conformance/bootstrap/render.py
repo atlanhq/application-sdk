@@ -44,6 +44,7 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "checks.yml",
     "commits.yaml",
     "release-gate.yaml",
+    "connector-review-gate.yaml",
     "update-dashboard.yml",
     "release.yaml",
     "tag-and-publish.yaml",

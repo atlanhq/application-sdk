@@ -18,6 +18,8 @@ import pathlib
 import types
 
 import pytest
+import yaml
+from conformance.bootstrap.render import render
 
 _TEMPLATE = (
     pathlib.Path(__file__).resolve().parents[1]
@@ -161,6 +163,33 @@ def test_default_policy_is_sticky(
     """Omitting --policy must behave as sticky, not as head."""
     monkeypatch.setattr("sys.stdin", _stdin(json.dumps([[_review(_TRAILER)]])))
     assert gate.main(["--enforce", "--head-sha", "c" * 40]) == 0
+
+
+def test_check_run_name_is_the_ruleset_contract() -> None:
+    """The job name IS the required-status-check context. Renaming un-protects.
+
+    A ruleset matches on the check-run name, which for an inline job is just
+    the job's `name:`. If this drifts, every repo's ruleset requires a context
+    no check ever reports, and the PRs sit at "Expected" forever instead of
+    failing loudly. Pin it.
+    """
+    workflow = yaml.safe_load(render("connector-review-gate.yaml"))
+    jobs = workflow["jobs"]
+    assert [job["name"] for job in jobs.values()] == ["Connector Review"]
+
+
+def test_gate_reruns_when_the_review_lands() -> None:
+    """Without `pull_request_review`, the check stays red until a push.
+
+    Mothership deletes the label right after dispatch and the review arrives
+    minutes later, so no other PR event marks that moment. `merge_group` is
+    equally load-bearing: a required context that never reports on the queue
+    branch stops the queue permanently.
+    """
+    # PyYAML parses a bare `on:` key as the boolean True.
+    triggers = yaml.safe_load(render("connector-review-gate.yaml"))[True]
+    assert set(triggers) == {"pull_request", "pull_request_review", "merge_group"}
+    assert triggers["pull_request_review"]["types"] == ["submitted"]
 
 
 def test_output_is_ascii_only(gate: types.ModuleType) -> None:
