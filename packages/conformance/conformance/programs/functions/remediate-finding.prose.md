@@ -238,21 +238,30 @@ model of anything:
 | `atlan-metabase-app` | API-style / BI connectors: pagination, typed clients, asset mapping |
 | `atlan-openapi-app` | packaging and tooling baseline: `pyproject.toml`, pyright, ruff, CI shims |
 
-- Have the **full checkout** of all three available under `remediation/refs/`
-  at `origin/main` for the whole run — the named file is the entry point, but
+- Have the **full checkout** of all three available **outside the repo**, at
+  `$REFS` below, at `origin/main` for the whole run — the named file is the entry point, but
   the fix must mirror how the reference app does the pattern *everywhere*, and
   cross-references (a contract field, a generated artifact, a test fixture)
   resolve only inside a complete tree:
 
   ```sh
-  mkdir -p remediation/refs
+  REFS="${XDG_CACHE_HOME:-$HOME/.cache}/atlan-conformance/refs"
+  mkdir -p "$REFS"
   for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app; do
-    [ -d "remediation/refs/$app" ] || git clone --depth 1 "https://github.com/atlanhq/$app.git" "remediation/refs/$app"
+    if [ -d "$REFS/$app/.git" ]; then
+      git -C "$REFS/$app" fetch --depth 1 origin HEAD && git -C "$REFS/$app" checkout --quiet --detach FETCH_HEAD
+    else
+      git clone --depth 1 "https://github.com/atlanhq/$app.git" "$REFS/$app"
+    fi
   done
+  echo "$REFS"
   ```
 
-  `remediation/refs/` is scratch.  It is never part of an edit, never appears
-  in `touched_files`, and is never committed.
+  Refer to the checkouts by the absolute path the snippet echoes.  They must
+  not live in the repo: `detect` scans the whole tree, and a reference app's
+  `@entrypoint`s under `remediation/` were added to the F016 matrix, turning a
+  clean app into dozens of false BLOCK failures.  The checkouts are read-only:
+  never part of an edit, never in `touched_files`, never committed.
 - Open the file `finding.canonical_reference` names and read the **whole
   file**, not the one line.  Then grep that reference app for the same pattern
   the rule is about — the SDK symbol, decorator, config key, contract field or
