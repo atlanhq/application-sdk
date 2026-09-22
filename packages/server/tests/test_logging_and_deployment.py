@@ -87,3 +87,57 @@ def test_they_agree_with_the_env_set(monkeypatch, deployment: str) -> None:
     monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", deployment)
     assert _deployment_name() == deployment
     assert worker_task_queue("redshift") == f"atlan-redshift-{deployment}"
+
+
+# ── a library must not claim the root logger ────────────────────────────────
+
+
+_ROOT_PROBE = (
+    "import logging;"
+    "from server_sdk.observability.logger_adaptor import get_logger;"
+    "get_logger('x');"
+    "print('HANDLERS=' + ','.join(type(h).__name__ for h in logging.getLogger().handlers))"
+)
+
+
+def _root_handlers(extra_path: str | None = None) -> list[str]:
+    import os
+    import subprocess
+
+    env = dict(os.environ)
+    if extra_path:
+        env["PYTHONPATH"] = extra_path + os.pathsep + env.get("PYTHONPATH", "")
+    out = subprocess.run(
+        [sys.executable, "-c", _ROOT_PROBE], capture_output=True, text=True, env=env
+    )
+    line = next(
+        (ln for ln in out.stdout.splitlines() if ln.startswith("HANDLERS=")),
+        "HANDLERS=",
+    )
+    return [h for h in line.removeprefix("HANDLERS=").split(",") if h]
+
+
+def test_standalone_configures_the_root_logger() -> None:
+    """With nothing richer available, this package is the only thing that will
+    set up logging, so it must."""
+    assert _root_handlers() == ["StreamHandler"]
+
+
+def test_it_defers_when_application_sdk_is_installed(tmp_path) -> None:
+    """basicConfig is a NO-OP once root has a handler, and in the host this
+    package always imports first — so claiming root here silently disables
+    application_sdk's stdlib->loguru bridge, and with it the app/deployment
+    stamping, the OTLP exporter and the object-store log sink for every app.
+    """
+    stub = tmp_path / "stub"
+    (stub / "application_sdk").mkdir(parents=True)
+    (stub / "application_sdk" / "__init__.py").write_text("")
+    assert _root_handlers(str(stub)) == []
+
+
+def test_the_redaction_filter_is_attached_either_way() -> None:
+    """Deferring root configuration must not cost the redaction."""
+    from server_sdk.observability.logger_adaptor import _RedactingFilter, get_logger
+
+    logger = get_logger("server_sdk.filter.probe")
+    assert any(isinstance(f, _RedactingFilter) for f in logger.filters)

@@ -6,6 +6,7 @@ and no structured-log machinery on the serving path.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 import traceback
@@ -15,9 +16,37 @@ from server_sdk.errors.redaction import redact_secrets  # noqa: E402
 _CONFIGURED = False
 
 
+def _should_own_root() -> bool:
+    """Whether this package should configure the root logger at all.
+
+    It is a library, and ``logging.basicConfig`` is a process-global mutation
+    that is a NO-OP once root has a handler. So whoever runs first wins — and
+    in the consolidated host that is always server_sdk, because the first entry
+    point loaded imports it before anything imports application_sdk.
+
+    The cost is invisible: application_sdk's ``basicConfig`` installs its
+    stdlib->loguru InterceptHandler, which is what stamps app_name /
+    deployment_name / source onto every stdlib record and fans records out to
+    the structured stdout formatter, the OTLP exporter and the object-store log
+    sink. Claiming root here silently disables all of that for the whole host.
+
+    So: defer when someone already owns root, and defer when application_sdk is
+    merely INSTALLED, because its adaptor is the richer one and should win
+    whichever import order happens. ``find_spec`` does not import it.
+    """
+    if logging.getLogger().handlers:
+        return False
+    return importlib.util.find_spec("application_sdk") is None
+
+
 def _configure() -> None:
     global _CONFIGURED
     if _CONFIGURED:
+        return
+    if not _should_own_root():
+        # Still mark configured: the decision cannot change within a process,
+        # and re-probing would cost a find_spec on every get_logger call.
+        _CONFIGURED = True
         return
     # ATLAN_LOG_LEVEL is the primary name -- it is what the fleet sets, and
     # application_sdk reads it first -- with LOG_LEVEL as the fallback. Reading
@@ -64,18 +93,12 @@ class _RedactingFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str):
-            record.msg = redact_secrets(record.msg)
-        if record.args:
-            args = record.args if isinstance(record.args, tuple) else (record.args,)
-            record.args = tuple(
-                redact_secrets(a)
-                if isinstance(a, str)
-                else redact_secrets(str(a))
-                if isinstance(a, BaseException)
-                else a
-                for a in args
-            )
+        try:
+            text = record.getMessage()
+        except Exception:  # noqa: BLE001 - a bad format string must not lose the line
+            text = f"{record.msg!r} % {record.args!r}"
+        record.msg = redact_secrets(text)
+        record.args = None
         if record.exc_info:
             record.exc_text = redact_secrets(
                 record.exc_text or "".join(traceback.format_exception(*record.exc_info))
