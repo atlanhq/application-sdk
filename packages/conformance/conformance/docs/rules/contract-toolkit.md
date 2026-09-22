@@ -113,16 +113,19 @@ fails, blocking CI (BLDX-1479).
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app contract/app.pkl — the one legacy-looking import it keeps,
-  `Connectors.pkl`, carries an inline ignore[K002] recording the pkl eval that proved
-  App.pkl does not re-export Connectors.* to amending contracts. flatManifestArgs and
-  workflowTypeOverride appear nowhere.
-- **Already correct when:** A justified inline `# conformance: ignore[K002] <reason>` IS the correct end state for a
-  legacy-looking import the canonical base does not replace — where dropping it would
-  lose symbols nothing else re-exports. The bar is evidence, not assertion: the reason
-  records the `pkl eval` that PROVED the replacement does not supply those symbols, as
-  atlan-mysql-app does for `Connectors.pkl`. A directive that only states the import is
-  still needed is unremediated — run the eval and record what it said, or migrate the
-  import.
+  `Connectors.pkl`, needs no suppression: the detector excludes it by design (App.pkl
+  imports it internally and types `connector` as `Connectors.Type` but does not
+  re-export the constants, so every current toolkit example still imports it).
+  flatManifestArgs and workflowTypeOverride appear nowhere.
+- **Already correct when:** `Connectors.pkl` is a detector-level exemption — no directive is needed or licensed. A
+  justified inline `// conformance: ignore[K002] <reason>` IS the correct end state only
+  for a match the scanner actually emits: an import of `Config.pkl`, `Credential.pkl`,
+  or `Renderers.pkl`, or a NativeApp-only property (`flatManifestArgs`,
+  `manifestMetadataArgs`, `workflowTypeOverride`) — where the reason records the `pkl
+  eval` that PROVED the replacement does not supply those symbols, or the match is a
+  scanner false positive (the name appears only inside a string). A directive that only
+  states the import is still needed is unremediated — run the eval and record what it
+  said, or migrate the import.
 
 The `contract/**/*.pkl` file contains one or more NativeApp-only properties or imports
 that do not exist in `App.pkl`:

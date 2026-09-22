@@ -76,18 +76,17 @@ mechanism so credential handling stays uniform and auditable.
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app app/client.py — the two os.environ credential writes in
-  `get_iam_role_token` carry an inline ignore[S002] explaining that the value came from
-  the resolved credentials and is staged into the environment only because boto3's token
-  helper has no explicit-credentials parameter. That justification is what makes them
-  acceptable.
-- **Already correct when:** A justified inline `# conformance: ignore[S002] <reason>` IS the correct end state only
-  where both hold and the reason says both: the value came from the RESOLVED credentials
-  rather than being read raw out of the environment, and it is staged into the
-  environment solely because a third-party API offers no explicit-credentials parameter
-  — as atlan-mysql-app records for boto3's token helper. Naming the library is part of
-  it, so the directive can be retired when that library grows the parameter. A directive
-  over a raw `os.environ` READ of a credential is never terminal: route it through the
-  SDK's credential resolution.
+  `get_iam_role_token` are outside S002's surface: the detector flags only reads
+  (`ast.Load`), never writes. Staging a resolved credential into the environment because
+  boto3's token helper has no explicit-credentials parameter needs no suppression.
+- **Already correct when:** Resolved-credential environment writes (`os.environ[x] = v`) are outside S002's surface
+  — the detector never flags them, so a directive over a write is inert, not a licensed
+  end state. A justified inline `# conformance: ignore[S002] <reason>` IS the correct
+  end state only for a read the detector actually emits — a credential-named `os.getenv`
+  / `os.environ[...]` / `.get` / `.pop` — where the reason names the platform self-auth
+  (or other seam-less) path that cannot go through `context.resolve_credential`. A
+  directive over a raw env READ that could use the SDK seam is never terminal: route it
+  through credential resolution.
 
 Application code reads a credential-named environment variable directly
 (`os.getenv("...SECRET")`, `os.environ["...TOKEN"]`, `os.environ.get("...API_KEY")`)
