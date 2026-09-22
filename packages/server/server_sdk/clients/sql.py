@@ -14,7 +14,10 @@ scope here. SQLAlchemy is imported lazily so the base install stays free of it
 from __future__ import annotations
 
 import asyncio
+import os
 import string
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncIterator, Optional
 from urllib.parse import quote, quote_plus
 
@@ -24,6 +27,35 @@ from server_sdk.errors.leaves import InternalError, InvalidInputError
 from server_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+#: Threads the blocking SQL path may occupy, per process.
+#:
+#: Deliberately NOT the event loop's default executor. That one pool is shared
+#: by everything in the process -- on the consolidated host, all eight apps'
+#: routes AND the config store's boto3 calls -- and it is sized
+#: min(32, cpu + 4), so on a 4-core pod it is 8 threads. One connector whose
+#: source has stopped answering fills it with its own hung queries and every
+#: other app's /config and /auth then block on a free thread. Measured: 15
+#: threads held by one app pushed another app's /config past 3s.
+#:
+#: A private pool bounds that blast radius to the SQL path itself. Sized from
+#: the CPU count with a floor, so a small pod still gets useful concurrency.
+_SQL_EXECUTOR_MAX_WORKERS = max(4, min(16, (os.cpu_count() or 4) * 2))
+_SQL_EXECUTOR: ThreadPoolExecutor | None = None
+_SQL_EXECUTOR_LOCK = threading.Lock()
+
+
+def _sql_executor() -> ThreadPoolExecutor:
+    """The shared-per-process pool for blocking driver calls, built on demand."""
+    global _SQL_EXECUTOR
+    if _SQL_EXECUTOR is None:
+        with _SQL_EXECUTOR_LOCK:
+            if _SQL_EXECUTOR is None:
+                _SQL_EXECUTOR = ThreadPoolExecutor(
+                    max_workers=_SQL_EXECUTOR_MAX_WORKERS,
+                    thread_name_prefix="server_sdk_sql",
+                )
+    return _SQL_EXECUTOR
 
 
 def _add_connection_params(url: str, params: dict[str, Any]) -> str:
@@ -163,7 +195,9 @@ class BaseSQLClient:
             return columns, list(rows)
 
         loop = asyncio.get_running_loop()
-        columns, all_rows = await loop.run_in_executor(None, _execute_and_drain)
+        columns, all_rows = await loop.run_in_executor(
+            _sql_executor(), _execute_and_drain
+        )
         for i in range(0, len(all_rows), batch_size):
             chunk = all_rows[i : i + batch_size]
             yield [dict(zip(columns, row)) for row in chunk]
@@ -173,6 +207,8 @@ class BaseSQLClient:
         if self.engine is not None:
             engine, self.engine = self.engine, None
             try:
-                await asyncio.get_running_loop().run_in_executor(None, engine.dispose)
+                await asyncio.get_running_loop().run_in_executor(
+                    _sql_executor(), engine.dispose
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("engine dispose failed: %s", exc, exc_info=True)
