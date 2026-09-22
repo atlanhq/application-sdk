@@ -11,15 +11,33 @@ import sys
 
 import pytest
 
-_PROBE = (
+# Which branch _configure() takes depends on whether application_sdk is
+# IMPORTABLE, so an ambient install silently swapped the branch under these
+# tests: they passed only because this package's own venv happens not to carry
+# it, and from a venv that does, all five failed. The branch they asserted is
+# also the one the HOST does not take -- the consolidated image installs
+# application_sdk, because automation-engine depends on it -- so the branch
+# production actually runs had no level coverage at all.
+#
+# Pin the branch per test instead of inheriting it from the venv:
+#   absent   -- sys.modules[name] = None is the documented way to make an
+#               import fail; find_spec short-circuits on sys.modules and
+#               answers None, so _should_own_root() sees "not installed"
+#               whether or not it is.
+#   present  -- a stub package first on PYTHONPATH, which find_spec answers
+#               with whether or not the real one is also there.
+_PIN_ABSENT = "import sys; sys.modules['application_sdk'] = None;"
+
+_LEVEL_PROBE = (
+    "{pin}"
     "import logging;"
     "from server_sdk.observability.logger_adaptor import get_logger;"
-    "get_logger('x');"
-    "print(logging.getLevelName(logging.getLogger().level))"
+    "get_logger('server_sdk.probe');"
+    "print(logging.getLevelName(logging.getLogger({logger}).level))"
 )
 
 
-def _root_level(**env: str) -> str:
+def _run(code: str, *, extra_path: str | None = None, **env: str) -> str:
     """A fresh interpreter: logging.basicConfig configures the root once only."""
     import os
 
@@ -27,34 +45,66 @@ def _root_level(**env: str) -> str:
     for name in ("ATLAN_LOG_LEVEL", "LOG_LEVEL"):
         if name not in env:
             child.pop(name, None)
+    if extra_path:
+        child["PYTHONPATH"] = extra_path + os.pathsep + child.get("PYTHONPATH", "")
     out = subprocess.run(
-        [sys.executable, "-c", _PROBE], capture_output=True, text=True, env=child
+        [sys.executable, "-c", code], capture_output=True, text=True, env=child
     )
+    assert out.returncode == 0, out.stderr
     return out.stdout.strip().splitlines()[-1]
 
 
-def test_the_primary_env_name_is_read() -> None:
+@pytest.fixture
+def application_sdk_stub(tmp_path) -> str:
+    """An importable application_sdk that is not the real one."""
+    stub = tmp_path / "stub"
+    (stub / "application_sdk").mkdir(parents=True)
+    (stub / "application_sdk" / "__init__.py").write_text("")
+    return str(stub)
+
+
+@pytest.fixture(params=["absent", "present"])
+def level(request, application_sdk_stub: str):
+    """Read back the configured level through BOTH branches of _configure().
+
+    They set it in different places -- basicConfig on root when this package
+    owns logging, and on the ``server_sdk`` logger when it defers, because root
+    then stays at WARNING and would filter INFO out before any handler ran. The
+    env contract has to hold either way, and the deferred one is the host's.
+    """
+    if request.param == "absent":
+        return lambda **env: _run(
+            _LEVEL_PROBE.format(pin=_PIN_ABSENT, logger=""), **env
+        )
+    return lambda **env: _run(
+        _LEVEL_PROBE.format(pin="", logger="'server_sdk'"),
+        extra_path=application_sdk_stub,
+        **env,
+    )
+
+
+def test_the_primary_env_name_is_read(level) -> None:
     """ATLAN_LOG_LEVEL is what the fleet sets; reading only LOG_LEVEL meant a
     tenant raising the level got no effect at all."""
-    assert _root_level(ATLAN_LOG_LEVEL="DEBUG") == "DEBUG"
+    assert level(ATLAN_LOG_LEVEL="DEBUG") == "DEBUG"
 
 
-def test_the_legacy_name_still_works() -> None:
-    assert _root_level(LOG_LEVEL="DEBUG") == "DEBUG"
+def test_the_legacy_name_still_works(level) -> None:
+    assert level(LOG_LEVEL="DEBUG") == "DEBUG"
 
 
-def test_the_primary_wins_over_the_legacy_name() -> None:
-    assert _root_level(ATLAN_LOG_LEVEL="DEBUG", LOG_LEVEL="ERROR") == "DEBUG"
+def test_the_primary_wins_over_the_legacy_name(level) -> None:
+    assert level(ATLAN_LOG_LEVEL="DEBUG", LOG_LEVEL="ERROR") == "DEBUG"
 
 
-def test_an_unusable_level_degrades_instead_of_crashing() -> None:
+def test_an_unusable_level_degrades_instead_of_crashing(level) -> None:
     """basicConfig raises on an unknown level, and this runs at import of every
     server_sdk module — one typo in a chart value would crashloop the host."""
-    assert _root_level(LOG_LEVEL="nonsense") == "INFO"
+    assert level(LOG_LEVEL="nonsense") == "INFO"
 
 
-def test_unset_is_info() -> None:
-    assert _root_level() == "INFO"
+def test_unset_is_info(level) -> None:
+    assert level() == "INFO"
 
 
 # ── the deployment half of every task queue ─────────────────────────────────
@@ -93,46 +143,35 @@ def test_they_agree_with_the_env_set(monkeypatch, deployment: str) -> None:
 
 
 _ROOT_PROBE = (
+    "{pin}"
     "import logging;"
     "from server_sdk.observability.logger_adaptor import get_logger;"
-    "get_logger('x');"
+    "get_logger('server_sdk.probe');"
     "print('HANDLERS=' + ','.join(type(h).__name__ for h in logging.getLogger().handlers))"
 )
 
 
-def _root_handlers(extra_path: str | None = None) -> list[str]:
-    import os
-    import subprocess
-
-    env = dict(os.environ)
-    if extra_path:
-        env["PYTHONPATH"] = extra_path + os.pathsep + env.get("PYTHONPATH", "")
-    out = subprocess.run(
-        [sys.executable, "-c", _ROOT_PROBE], capture_output=True, text=True, env=env
-    )
-    line = next(
-        (ln for ln in out.stdout.splitlines() if ln.startswith("HANDLERS=")),
-        "HANDLERS=",
-    )
+def _root_handlers(*, pin: str = "", extra_path: str | None = None) -> list[str]:
+    line = _run(_ROOT_PROBE.format(pin=pin), extra_path=extra_path)
+    assert line.startswith("HANDLERS="), line
     return [h for h in line.removeprefix("HANDLERS=").split(",") if h]
 
 
 def test_standalone_configures_the_root_logger() -> None:
     """With nothing richer available, this package is the only thing that will
     set up logging, so it must."""
-    assert _root_handlers() == ["StreamHandler"]
+    assert _root_handlers(pin=_PIN_ABSENT) == ["StreamHandler"]
 
 
-def test_it_defers_when_application_sdk_is_installed(tmp_path) -> None:
+def test_it_defers_when_application_sdk_is_installed(
+    application_sdk_stub: str,
+) -> None:
     """basicConfig is a NO-OP once root has a handler, and in the host this
     package always imports first — so claiming root here silently disables
     application_sdk's stdlib->loguru bridge, and with it the app/deployment
     stamping, the OTLP exporter and the object-store log sink for every app.
     """
-    stub = tmp_path / "stub"
-    (stub / "application_sdk").mkdir(parents=True)
-    (stub / "application_sdk" / "__init__.py").write_text("")
-    assert _root_handlers(str(stub)) == []
+    assert _root_handlers(extra_path=application_sdk_stub) == []
 
 
 def test_the_redaction_filter_is_attached_either_way() -> None:
