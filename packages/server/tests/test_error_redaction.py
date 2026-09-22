@@ -218,7 +218,7 @@ def _sql_app_that_fails_with(driver_error: str):
     class _Handler(SQLHandler):
         CLIENT_CLASS = _Client
 
-        def _build_client(self, *a, **k):
+        def _build_client(self, *a, **k):  # pyright: ignore[reportIncompatibleMethodOverride]
             return _Client()
 
     return build_asgi_app(_Handler(), app_name="acme")

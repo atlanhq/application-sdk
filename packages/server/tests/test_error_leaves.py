@@ -95,7 +95,7 @@ def test_the_pinned_status_table_covers_every_category() -> None:
 @pytest.mark.parametrize(
     ("category", "status"),
     sorted(_EXPECTED_STATUS.items(), key=lambda kv: kv[0].name),
-    ids=lambda v: v.name if isinstance(v, FailureCategory) else str(v),
+    ids=lambda v: v.name if isinstance(v, FailureCategory) else str(v),  # pyright: ignore[reportIndexIssue,reportUnknownLambdaType]
 )
 def test_each_category_pins_its_http_status(
     category: FailureCategory, status: int
@@ -130,7 +130,7 @@ def test_auth_status_map_covers_every_member() -> None:
 @pytest.mark.parametrize(
     ("status", "code"),
     sorted(_EXPECTED_AUTH_STATUS.items(), key=lambda kv: kv[0].name),
-    ids=lambda v: v.name if isinstance(v, AuthStatus) else str(v),
+    ids=lambda v: v.name if isinstance(v, AuthStatus) else str(v),  # pyright: ignore[reportIndexIssue,reportUnknownLambdaType]
 )
 def test_each_auth_status_pins_its_code(status: AuthStatus, code: int) -> None:
     assert status.http_status == code

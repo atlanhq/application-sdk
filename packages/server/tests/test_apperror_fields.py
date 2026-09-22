@@ -112,7 +112,10 @@ def test_a_subclass_may_expose_cause_as_its_own_property() -> None:
                 self.__cause__ = cause
 
         @property
-        def cause(self):  # read-only, shadows the base
+        def cause(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+            # Read-only on purpose: dropping the base's setter is exactly what
+            # redshift_server's error base does, and reproducing it is the
+            # point of this test.
             return self._cause
 
     exc = ValueError("boom")
