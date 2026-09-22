@@ -68,8 +68,20 @@ def worker_task_queue(app_name: str) -> str:
     # is the divergence that module exists to remove -- the worker drops the
     # prefix, so a server advertising "atlan-redshift-local" would name a queue
     # the worker is not polling.
+    # Strip and reject blank. Unstripped, " redshift " produced
+    # "atlan- redshift -prod" and "" produced "atlan--prod" -- queue names no
+    # worker polls, so the submit reports success and the workflow hangs
+    # forever. derive_task_queue answers None for a blank app rather than
+    # manufacturing one, and refusing loudly here is the same decision: a
+    # misconfigured app must fail at build, not at the first workflow.
+    app = app_name.strip()
+    if not app:
+        raise ValueError(
+            "app_name is required to derive a task queue; got "
+            f"{app_name!r}. It must match the app's entry-point name."
+        )
     deployment = _deployment_name()
-    return f"atlan-{app_name}-{deployment}" if deployment else app_name
+    return f"atlan-{app}-{deployment}" if deployment else app
 
 
 def _deployment_name() -> str:

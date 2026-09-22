@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse
 from server_sdk.handler.contracts import normalize_credentials
 from server_sdk.manifest import ENTRYPOINT_NAME_RE
 from server_sdk.observability.logger_adaptor import get_logger
+from server_sdk.handler.request_contract import read_json_object
 
 logger = get_logger(__name__)
 
@@ -118,7 +119,7 @@ def register_start_route(
                 detail="Workflow execution not configured. Set ATLAN_TEMPORAL_HOST.",
             )
 
-        body: dict[str, Any] = await request.json()
+        body: dict[str, Any] = await read_json_object(request)
         explicit_workflow_id: str | None = body.pop("workflow_id", None)
         entrypoint_param: str | None = request.query_params.get("entrypoint")
         legacy_workflow_type: str | None = body.pop("workflow_type", None)

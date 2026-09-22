@@ -49,7 +49,11 @@ from server_sdk.handler.contracts import (
     PreflightOutput,
     normalize_credentials,
 )
-from server_sdk.handler.request_contract import RequestContractError, validate_request
+from server_sdk.handler.request_contract import (
+    RequestContractError,
+    read_json_object,
+    validate_request,
+)
 from server_sdk.manifest import (
     ENTRYPOINT_NAME_RE,
     ComputeManifest,
@@ -542,7 +546,7 @@ def build_asgi_app(
     handler: Handler,
     *,
     title: str | None = None,
-    app_name: str = "",
+    app_name: str,
     config_store: ConfigStore | None = None,
     generated_dir: Path | str | None = None,
     workflow_starter: WorkflowStarter | None = None,
@@ -631,7 +635,7 @@ def build_asgi_app(
             exc.cause.errors(
                 include_url=False, include_input=False, include_context=False
             )
-            if isinstance(exc, RequestContractError)
+            if isinstance(exc, RequestContractError) and exc.cause is not None
             else []
         )
         detail = [
@@ -747,7 +751,7 @@ def build_asgi_app(
     # -- auth ----------------------------------------------------------------
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
-        body = normalize_credentials(await request.json())
+        body = normalize_credentials(await read_json_object(request))
         _validated_entrypoint(body)
         auth_input = validate_request(AuthInput, body)
         try:
@@ -788,7 +792,7 @@ def build_asgi_app(
     # -- check ---------------------------------------------------------------
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
-        body = _normalize_preflight_request(await request.json())
+        body = _normalize_preflight_request(await read_json_object(request))
         _validated_entrypoint(body)
         preflight_input = validate_request(PreflightInput, body)
         try:
@@ -850,7 +854,7 @@ def build_asgi_app(
     # -- metadata ------------------------------------------------------------
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
-        body = normalize_credentials(await request.json())
+        body = normalize_credentials(await read_json_object(request))
         _validated_entrypoint(body)
         metadata_input = validate_request(MetadataInput, body)
         # Mirror the widget routing key onto object_filter when it's empty.
@@ -921,7 +925,7 @@ def build_asgi_app(
         request: Request,
         type: Annotated[str, Query(pattern=CONFIG_KEY_PATTERN)] = "workflows",
     ) -> JSONResponse:
-        body = await request.json()
+        body = await read_json_object(request)
         if type == "workflows":
             warnings.warn(
                 "Saving config with type='workflows' is deprecated; "
