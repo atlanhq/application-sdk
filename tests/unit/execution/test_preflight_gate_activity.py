@@ -2724,3 +2724,28 @@ class TestOutcomeRowNamesTheFailure:
         ev = _outcome_event(ml)
         assert FAILURE_CHECK_KEY not in ev
         assert ev[FAILURE_MESSAGE_KEY] == "Aggregate that describes neither check."
+
+    async def test_same_code_on_two_checks_is_told_apart_by_message(self) -> None:
+        # Two checks fail the same way and only the message distinguishes them.
+        # Matching on code alone would find both, and two matches is no answer —
+        # the name would be dropped for a verdict that can be attributed exactly.
+        blocking = AuthError(message="The second credential is the expired one.")
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=blocking,
+            checks=[
+                PreflightCheck(
+                    name="primaryCredential",
+                    passed=False,
+                    error=AuthError(message="The first credential is fine, advisory."),
+                ),
+                PreflightCheck(
+                    name="secondaryCredential", passed=False, error=blocking
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_CHECK_KEY] == "secondaryCredential"
+        assert ev[FAILURE_MESSAGE_KEY] == "The second credential is the expired one."
