@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**21 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
+**26 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -36,6 +36,11 @@ Suppress a finding on the violating line or the line directly above it:
 | [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | yes | 0.24.0 |
 | [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 | [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | yes | 0.26.0 |
+| [K022](#k022) | `CardDescriptionMissing` | `warn` | `app` | `contract-toolkit` | — | 0.37.0 |
+| [K023](#k023) | `CardIconBlank` | `warn` | `app` | `contract-toolkit` | — | 0.37.0 |
+| [K024](#k024) | `EscapeHatchShadowsTypedField` | `warn` | `app` | `contract-toolkit` | — | 0.37.0 |
+| [K025](#k025) | `BlankStringAssignment` | `warn` | `app` | `contract-toolkit` | — | 0.37.0 |
+| [K026](#k026) | `DeprecatedContractField` | `warn` | `app` | `contract-toolkit` | — | 0.37.0 |
 
 ---
 
@@ -1329,5 +1334,188 @@ WARN and app-scoped, and both no-op on any repo without `app/generated/`.
 **Suppress** with `# conformance: ignore[K021] <reason>` on the `Input` class definition
 (or the comment-only line directly above it) — for example when the string is genuinely
 coerced by a path the static check cannot follow.
+
+---
+
+## K022 — `CardDescriptionMissing` {#k022}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.37.0
+
+> atlan.yaml supplies no marketplace-card description -- no top-level short_description and no entrypoint description
+
+**Rationale:** The marketplace card is the first thing a customer sees when choosing a connector. The
+toolkit emits entrypoints[].description = e.description ?? shortDescription, so an app
+that declares neither publishes a card whose text resolves against the hand-curated
+Global Marketplace App row -- a database value no one reviews, that no diff shows, and
+that nothing keeps in step with the contract. When that row is empty too, the card ships
+blank. A fleet sweep found 50 of 70 contract-driven connectors supplying no description
+of their own and six rendering blank today. Nothing reports it: the app builds,
+publishes and installs successfully. Declaring the text on the contract makes it
+reviewable, survives every regeneration, and feeds both the published entrypoint and the
+GM row.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk contract-toolkit/src/App.pkl -- `shortDescription` is the declared home
+  for card text, and the toolkit feeds it to every entrypoint that does not override it.
+
+The generated `atlan.yaml` carries no usable card text: the top-level
+`short_description` is absent or empty, and no entry in the `entrypoints` listing
+supplies a `description`.
+
+The card falls back to the Global Marketplace App row, which is curated by hand and is
+not derived from the repo. That fallback is invisible in review and renders blank when
+the row is empty.
+
+**Fix.** Set `shortDescription` in `contract/app.pkl` and regenerate (`uv run poe
+generate`). The toolkit feeds it to both the top-level `short_description` and every
+entrypoint that does not override it. Where the app has an Argo predecessor in
+marketplace-packages, restoring that package's description keeps the card reading as it
+did before.
+
+Declaring a per-entrypoint `description` instead also satisfies the rule -- the
+requirement is that the contract supply the text, not where it is written.
+
+---
+
+## K023 — `CardIconBlank` {#k023}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.37.0
+
+> atlan.yaml declares an empty icon_url at app or entrypoint level -- the marketplace card renders with no logo
+
+**Rationale:** `icon` is a required field on App.pkl, so a blank rendered `icon_url` means the value
+was overridden to an empty string, or the manifest was hand-written and the key left
+empty. Either way the marketplace card renders with no logo, and nothing reports it: an
+empty string is a valid YAML scalar, the publish step accepts it, and the install
+succeeds. Six contract-driven connectors are in that state today. This rule checks only
+that a value is present -- whether the URL resolves is a publish-time concern, since a
+static scanner makes no network calls.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app contract/app.pkl -- `icon` set to a reachable assets.atlan.com URL,
+  which `iconUrl` and `logo` both default to.
+
+The generated `atlan.yaml` has a top-level `icon_url` that is absent or empty, or an
+entry in the `entrypoints` listing whose `icon_url` is empty.
+
+`icon` is REQUIRED on `App.pkl` and both `iconUrl` and `logo` default to it, so a blank
+value in the manifest is always an explicit empty override or a hand-written manifest --
+never the toolkit's own output for a well-formed contract.
+
+**Fix.** Set `icon` in `contract/app.pkl` to the asset URL and regenerate (`uv run poe
+generate`).
+
+**Scope.** The rule asserts presence, not reachability. An icon URL that is set but
+returns 404 passes here and is caught by the marketplace card guard at publish.
+
+---
+
+## K024 — `EscapeHatchShadowsTypedField` {#k024}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.37.0
+
+> metadata or atlanYamlOverrides sets a key App.pkl already models as a typed field, silently overriding it
+
+**Rationale:** `metadata` and `atlanYamlOverrides` are deep-merged onto the rendered manifest after
+every typed field, so a key that App.pkl already models silently wins over the typed
+value. The contract then states one thing and ships another, and the override is an
+untyped Mapping<String, Any> that pkl eval cannot check -- a misspelt nested key inside
+it fails silently where the typed field would have failed the build. It also puts the
+value out of reach of toolkit migrations: the 0.17.0 pools refactor rewrote typed deploy
+fields and could not touch an override blob. Fifteen contract-driven connectors shadow a
+typed field today, three of them placing their entire deploy block in the escape hatch.
+Keys the toolkit does not model are the hatch working as intended and are not reported.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app contract/app.pkl -- `atlanYamlOverrides` carries only `dockerfile`,
+  `argo_package_names` and `release_model`, none of which App.pkl models as a typed
+  field.
+
+`contract/app.pkl` routes a manifest key through `metadata` or `atlanYamlOverrides`
+although `App.pkl` declares a typed field for it.
+
+Both hatches deep-merge onto the generated manifest last, so the typed value is
+discarded. Three consequences:
+
+* `pkl eval` type-checks the typed field and not the override * the contract and the
+published manifest disagree, invisibly * toolkit migrations rewrite typed fields and
+skip override blobs
+
+**Fix.** Move the value onto the typed field and delete the override entry, then
+regenerate (`uv run poe generate`) and confirm the manifest is unchanged.
+
+**Not reported.** Keys with no typed equivalent -- currently `release_model`,
+`dockerfile`, `description`, `categories`, `source`, `source_category` and `package_id`
+-- are the only way to set those values and are intentionally out of scope.
+
+---
+
+## K025 — `BlankStringAssignment` {#k025}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.37.0
+
+> A contract String field is assigned an empty string, restating its own default and rendering nothing
+
+**Rationale:** An App.pkl String field that defaults to "" and is then assigned "" restates its own
+default. The toolkit omits empty values from the generated manifest, so the line renders
+nothing -- but it reads in review like a deliberate choice, and someone later treats the
+field as handled. Sixteen contract-driven connectors carry one, most often `docsUrl`,
+whose absence means the marketplace card links nowhere. The rule does not require a
+value; it requires that a field left unset be left out.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app contract/app.pkl -- optional String fields are omitted rather than
+  assigned an empty string.
+
+`contract/app.pkl` assigns `""` to a String field whose `App.pkl` default is already
+`""` -- one of `docsUrl`, `helpdeskLink`, `shortDescription`, `longDescription`,
+`credentialConnectorType` or `credentialAuthTitle`.
+
+The toolkit omits empty values when rendering, so the assignment produces no manifest
+key. It is a no-op that reads like a decision.
+
+**Fix.** Give the field a real value, or delete the line. For `docsUrl` specifically, a
+value is worth adding -- an empty one means the marketplace card carries no
+documentation link.
+
+---
+
+## K026 — `DeprecatedContractField` {#k026}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.37.0
+
+> contract/app.pkl sets a field App.pkl marks deprecated with a stated removal version
+
+**Rationale:** B001 flags deprecated SDK Python symbols; nothing flags a deprecated pkl contract field.
+`emitEntrypoints` is marked @Deprecated in App.pkl with removal stated for the next
+minor toolkit version, and fifteen contract-driven connectors still set it. When the
+field is dropped their contracts stop evaluating -- and because Renovate bumps the
+toolkit automatically, the break arrives on a dependency PR rather than on a change
+anyone made to the contract. A warning now converts a future hard failure into a
+scheduled migration.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app contract/app.pkl -- documents why no `entrypoints` listing is
+  declared instead of reaching for `emitEntrypoints`.
+
+`contract/app.pkl` assigns a field that `App.pkl` marks `@Deprecated`. Currently one
+field qualifies:
+
+`emitEntrypoints` -- *"use the entrypoints listing with packageId set on those that
+should render as marketplace cards, rather than toggling the entire block. Will be
+removed in the next minor version."*
+
+The contract stops evaluating once the field is removed, and the toolkit bump that
+removes it typically arrives as an automated dependency PR.
+
+**Fix.** Declare the `entrypoints` listing and set `packageId` on the entries that
+should render as marketplace cards, then delete the `emitEntrypoints` assignment and
+regenerate. Note that a non-empty `entrypoints` listing switches the toolkit into bundle
+mode, which changes the generated layout -- verify the manifest before merging.
 
 ---
