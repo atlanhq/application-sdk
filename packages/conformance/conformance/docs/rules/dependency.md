@@ -111,7 +111,8 @@ an entry point/plugin, or run as a server (e.g. uvicorn) without an explicit imp
 - **Already correct when:** A justified inline `# conformance: ignore[D003] <reason>` IS the correct end state for a
   dependency that is genuinely loaded without a static import — a driver resolved from a
   dialect/plugin string, an entry-point registration, a CLI invoked as a subprocess. The
-  reason must name the mechanism that loads it, as atlan-mysql-app does for aiomysql. A
+  reason must name the mechanism that loads it — and only where the checker cannot
+  already see that mechanism itself, as it does for atlan-mysql-app's aiomysql. A
   directive that only asserts the dependency is needed is unremediated: if nothing loads
   it dynamically, remove the dependency rather than suppressing the finding.
 

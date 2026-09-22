@@ -85,15 +85,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "justified read."
         ),
         terminal_state=(
-            "Resolved-credential environment writes (`os.environ[x] = v`) are outside "
-            "S002's surface — the detector never flags them, so a directive over a write "
-            "is inert, not a licensed end state. A justified inline "
-            "`# conformance: ignore[S002] <reason>` IS the correct end state only for a "
-            "read the detector actually emits — a credential-named `os.getenv` / "
-            "`os.environ[...]` / `.get` / `.pop` — where the reason names the platform "
-            "self-auth (or other seam-less) path that cannot go through "
-            "`context.resolve_credential`. A directive over a raw env READ that could "
-            "use the SDK seam is never terminal: route it through credential resolution."
+            "Zero findings, reached by resolving the secret through CredentialRef / the "
+            "SecretStore protocol rather than reading it from the environment. S002 "
+            "flags reads only — a credential-named `os.getenv` / `os.environ[...]` / "
+            "`.get` / `.pop` — so only a read can be licensed; a directive over an "
+            "`os.environ[x] = v` write is inert, because the detector never emits there. "
+            "A justified inline `# conformance: ignore[S002] <reason>` IS the correct "
+            "end state for one kind of read: platform / transport self-auth the SDK "
+            "exposes no secret-store seam for — an `ATLAN_*` token the app uses to call "
+            "Atlan itself at process startup, injected into the pod environment before "
+            "any credential context exists. Naming 'platform self-auth' is not "
+            "sufficient on its own: the reason must name the specific value and the "
+            "specific SDK function or seam that cannot supply it, so the suppression "
+            "can be retired when that seam ships (BLDX-1419). A read that could go "
+            "through credential resolution is never terminal — route it through the "
+            "seam instead."
         ),
         scope=RuleScope.APP,
         name="RawEnvCredentialAccess",
