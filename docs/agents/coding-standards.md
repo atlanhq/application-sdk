@@ -143,20 +143,25 @@ customer-facing log view filters at ERROR, so a block must be the ERROR record, 
 beside one). Each row stamps `failure.audience` (who must act) except `proceeded`/`skipped`.
 
 - **Verdict blocks** (`PreflightFailed` from a handler `NOT_READY`) — the outcome row at
-  `error`, no stack trace, audience from the primary check's typed error (typically `USER`).
+  `error`, no stack trace, audience from the primary check's typed error (typically `USER`),
+  plus `failure.check` / `failure.message` naming the check and why it failed.
   The block is an expected typed outcome, not a crash — but it aborted the customer's run.
 - **No-verdict outcomes** (budget overrun, handler crash — `source_unverifiable`; a killed
   frame — `frame_lost`) — the outcome row at `error` with `exc_info`, in both modes: the
   failure is real even when soft mode proceeds. There is a real exception behind these and it
   is the only diagnostic.
 - **Gate plumbing failures** (exception during dispatch — `gate_broken`) — the workflow's
-  `no_verdict` row at `error` with `exc_info=True`, audience `APP_OWNER`.
+  `no_verdict` row at `error` with `exc_info=True`, audience `APP_OWNER`, and `failure.message`
+  from the envelope the plumbing error left at `details[0]` when it is readable.
 - **Advisory failures** (`proceeded` with any failed check — PARTIAL, or READY with a failed
   advisory row) — the outcome row at `warning`. F005 bans the handler from logging the
   warning itself, so the gate owns the one level that case is semantically for.
 - **Clean `proceeded` / `skipped` / verdict `would_block`** — `info`.
 - The interceptor's `workflow.ended` / `activity.ended … BLOCKED (preflight gate)` lifecycle
-  records stay `warning`, terse, no stack.
+  records stay `warning` with no stack or frame, but carry the block's attributed sentence — the
+  same `details[0].message` the outcome row's `failure.message` holds — so the reason is findable
+  by a `Body` search and the two surfaces cannot disagree. A soft-mode `would_block` raises no
+  block, so it has no such record and is reachable through `failure.message` only.
 - **Interactive surfaces** (the HTTP `/workflows/v1/check` endpoint and the SDR
   `sdr:preflight_check` activity) emit the sibling `Preflight check outcome` row via
   `emit_preflight_check_outcome`, with `preflight_surface` naming the surface. The level

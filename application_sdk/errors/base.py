@@ -36,15 +36,32 @@ _TRACEBACK_MAX_LEN = 8000
 #: Recursion bound for :func:`redact_wire_value`. A pathologically deep
 #: hand-built structure must truncate rather than overflow the stack.
 _REDACT_MAX_DEPTH: int = 32
-# Matches userinfo in URLs for any scheme: https://user:pass@host → https://***@host,
-# postgresql://user:pass@host → postgresql://***@host (SQLAlchemy/JDBC-style
-# connection strings embed credentials the same way http URLs do).
-# `(?:[^@\s]+@)+` consumes *all* userinfo segments greedily so a raw `@` inside
-# the password (postgresql://u:p@ss@host) doesn't leave the tail exposed. This
-# is greedy up to the last `@` in a whitespace-free run, so it can over-redact a
-# trailing `@` in a no-space query string — the safe failure direction for a
-# secret redactor.
-_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNORECASE)
+# Matches URL userinfo of any shape — ``user:pass@``, a bare token as the whole
+# userinfo (git remotes, registries, webhook URLs), an empty user with a
+# password (``redis://:pw@``) — up to the ``@`` that ends it, which must come
+# before any ``/`` or whitespace, so an ``@`` in a path or query string is never
+# userinfo. A password containing ``@`` is taken whole: further ``xxx@`` runs
+# before the first ``/`` belong to the same userinfo. The one exemption lives in
+# :func:`_sub_userinfo`: in the Azure blob schemes ``container@account`` is
+# addressing, not a credential, and is left alone while no password is present.
+# The negative lookbehind makes the scheme start at a token boundary — without
+# it the engine, refused at ``abfss://``, retries at ``bfss://`` and redacts the
+# container anyway. (An earlier cut required a ``:`` in the userinfo instead;
+# that dropped the bare-token class the greedy form had always covered.)
+_URL_USERINFO_RE = re.compile(
+    r"(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*://)((?:[^@\s/]*@)+)", re.IGNORECASE
+)
+_STRUCTURAL_USERINFO_SCHEMES = frozenset({"abfss", "abfs", "wasbs", "wasb"})
+
+
+def _sub_userinfo(m: re.Match[str]) -> str:
+    """Replacement for :data:`_URL_USERINFO_RE`: redact, unless it is Azure addressing."""
+    scheme, userinfo = m.group(1), m.group(2)
+    if scheme[:-3].lower() in _STRUCTURAL_USERINFO_SCHEMES and ":" not in userinfo:
+        return m.group(0)
+    return f"{scheme}***@"
+
+
 # Matches secret query params: api_key=value → api_key=***
 # ``pwd`` covers ODBC/DSN keyword syntax (``UID=sa;PWD=…``), which no other
 # keyword here matches — ODBC connectors do not use ``password=``.
@@ -89,7 +106,7 @@ def redact_secrets(text: str) -> str:
     should stringify first (the sibling :func:`sanitize_cause_repr` does this
     for cause exceptions). Non-``str`` input raises ``TypeError`` via ``re``.
     """
-    text = _URL_USERINFO_RE.sub(r"\1***@", text)
+    text = _URL_USERINFO_RE.sub(_sub_userinfo, text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
     return text
 
@@ -178,6 +195,30 @@ def redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) 
 _DEBUG_SOURCE_TAIL_RE = re.compile(r"\n+Debug source:\n.*\Z", re.DOTALL)
 
 
+def redact_and_cap(text: str) -> str:
+    """Redact secrets in ``text``, then cap it, keeping both ends.
+
+    The one cap block: :func:`sanitize_cause_repr` builds on it for cause
+    exceptions, and the preflight outcome rows call it on the handler's own
+    ``message`` before it becomes a log attribute. Not re-exported from
+    ``application_sdk.errors`` — those are its two consumers.
+
+    Truncation keeps both ends because a backend error puts the request URL at
+    the head and what the provider said at the tail; a head-only cut spends the
+    budget on boilerplate. Redaction runs *before* truncation, so retaining a
+    tail can never expose an unredacted secret. (FND-957)
+    """
+    text = redact_secrets(text)
+    if len(text) > _CAUSE_MAX_LEN:
+        elided = len(text) - _CAUSE_HEAD_LEN - _CAUSE_TAIL_LEN
+        text = (
+            text[:_CAUSE_HEAD_LEN]
+            + f"…[{elided} chars elided]…"
+            + text[-_CAUSE_TAIL_LEN:]
+        )
+    return text
+
+
 def sanitize_cause_repr(exc: BaseException) -> str:
     """Return a length-capped, secret-redacted string for a cause exception.
 
@@ -187,15 +228,8 @@ def sanitize_cause_repr(exc: BaseException) -> str:
     truncation, so retaining a tail can never expose an unredacted secret.
     (FND-957)
     """
-    text = _DEBUG_SOURCE_TAIL_RE.sub("", redact_secrets(str(exc)))
-    if len(text) > _CAUSE_MAX_LEN:
-        elided = len(text) - _CAUSE_HEAD_LEN - _CAUSE_TAIL_LEN
-        text = (
-            text[:_CAUSE_HEAD_LEN]
-            + f"…[{elided} chars elided]…"
-            + text[-_CAUSE_TAIL_LEN:]
-        )
-    return f"{type(exc).__name__}: {text}"
+    text = _DEBUG_SOURCE_TAIL_RE.sub("", str(exc))
+    return f"{type(exc).__name__}: {redact_and_cap(text)}"
 
 
 def safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN) -> str:

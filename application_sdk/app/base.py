@@ -2540,6 +2540,9 @@ async def _run_preflight_gate(
         from application_sdk.errors.categories import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             Audience,
         )
+        from application_sdk.errors.wire import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            FailureDetails,
+        )
         from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             PREFLIGHT_OUTCOME_EVENT,
             PreflightClassification,
@@ -2576,6 +2579,7 @@ async def _run_preflight_gate(
         attempt: int,
         checks: list[PreflightCheck] | None = None,
         audience: str | None = None,
+        primary: FailureDetails | None = None,
         exc_info: bool = False,
     ) -> None:
         checks = checks or []
@@ -2591,6 +2595,7 @@ async def _run_preflight_gate(
             budget_seconds=budget,
             attempt=attempt,
             audience=audience,
+            primary=primary,
         )
         if exc_info:
             row["exc_info"] = True
@@ -2648,6 +2653,12 @@ async def _run_preflight_gate(
                 elapsed_ms,
                 attempt=failure.attempt,
                 audience=Audience.APP_OWNER.value,
+                # The plumbing error's own details[0], read off the chain by
+                # classify_gate_failure when it can be parsed — _plumbing_error
+                # leaves it there for exactly this consumer. None only for a bare
+                # exception that carried none; the row then has the stack trace
+                # and no sentence. Same ladder as the other two branches.
+                primary=failure.evidence,
                 exc_info=True,
             )
             return
@@ -2662,6 +2673,7 @@ async def _run_preflight_gate(
             attempt=failure.attempt,
             checks=failure.checks,
             audience=evidence.audience.value,
+            primary=evidence,
             exc_info=True,
         )
         if mode.enforces:
@@ -2933,9 +2945,11 @@ def generate_workflow_class(
             with workflow.unsafe.imports_passed_through():
                 from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
                     is_preflight_block,
+                    preflight_block_message,
                 )
             # A deliberate preflight-gate block logs terse (classification already
-            # on the error's FailureDetails); the marker may sit on a cause.
+            # on the error's FailureDetails); the marker may sit on a cause, so
+            # the reason is read off the block itself, not Temporal's wrapper.
             if is_preflight_block(e):
                 _safe_log(
                     "warning",
@@ -2943,7 +2957,7 @@ def generate_workflow_class(
                     app_name=app_name,
                     run_id=str(run_id),
                     correlation_id=context.correlation_id,
-                    reason=str(e),
+                    reason=preflight_block_message(e) or str(e),
                 )
             else:
                 _safe_log(

@@ -9,6 +9,7 @@ import pytest
 from temporalio.converter import default as default_converter
 from temporalio.exceptions import ApplicationError
 
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError, InvalidInputError
 from application_sdk.execution._temporal.interceptors.log import (
     _APP_NAME_MAX_CHARS,
@@ -328,6 +329,105 @@ class TestLogWorkflowInboundInterceptor:
         assert ended_warn, "cause-wrapped preflight block should log at warning"
         assert not ended_error, "cause-wrapped preflight block must not log at error"
         assert "exc_info" not in ended_warn[0].kwargs
+
+    async def _blocked_workflow_body(self, interceptor, mock_next, exc) -> str:
+        mock_next.execute_workflow = AsyncMock(side_effect=exc)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                with pytest.raises(type(exc)):
+                    await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        (ended,) = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args and c.args[0].startswith("workflow.ended")
+        ]
+        return ended.args[0]
+
+    async def test_preflight_block_body_carries_the_reason(
+        self, interceptor, mock_next
+    ):
+        # The one failure class carved out of _failure_suffix used to drop the
+        # message too, so a Body search for the reason found nothing and the
+        # sentence lived only in a structured attribute one record over. The
+        # greppable token stays; the sentence joins it.
+        body = await self._blocked_workflow_body(
+            interceptor,
+            mock_next,
+            ApplicationError(
+                "Preflight failed: The admin API (admin/workspaces/modified) returned 403.",
+                type="PreflightFailed",
+                non_retryable=True,
+            ),
+        )
+        assert "BLOCKED (preflight gate)" in body
+        assert "admin/workspaces/modified" in body
+
+    async def test_cause_wrapped_block_body_uses_the_blocks_message(
+        self, interceptor, mock_next
+    ):
+        # Temporal wraps the activity's error; the sentence must come from the
+        # PreflightFailed marker on the cause, not from the wrapper.
+        inner = ApplicationError(
+            "Preflight failed: scanner API denied", type="PreflightFailed"
+        )
+        wrapper = RuntimeError("Activity task failed")
+        wrapper.__cause__ = inner
+        body = await self._blocked_workflow_body(interceptor, mock_next, wrapper)
+        assert "scanner API denied" in body
+        assert "Activity task failed" not in body
+
+    async def test_block_body_prefers_the_attributed_primary(
+        self, interceptor, mock_next
+    ):
+        # details[0] is the same FailureDetails the outcome row's
+        # failure.message comes off, so Body and the attribute say one thing.
+        # The rendered message repeats this line's own token and, when several
+        # checks failed, names more than the row does.
+        from application_sdk.errors.wire import FailureDetails
+
+        body = await self._blocked_workflow_body(
+            interceptor,
+            mock_next,
+            ApplicationError(
+                "Preflight failed: secret store lagged; the admin API returned 403",
+                FailureDetails(
+                    code="APP_PERMISSION_DENIED",
+                    message="The admin API returned 403.",
+                    category=FailureCategory.PERMISSION,
+                    audience=Audience.USER,
+                    retryable=False,
+                ),
+                type="PreflightFailed",
+                non_retryable=True,
+            ),
+        )
+        assert body == (
+            "workflow.ended TestWorkflow BLOCKED (preflight gate): "
+            "The admin API returned 403."
+        )
+        assert "secret store lagged" not in body
+
+    async def test_preflight_block_body_is_redacted(self, interceptor, mock_next):
+        # This text comes from PreflightOutput.message / PreflightCheck.message —
+        # plain strings the FailureDetails validator never sees.
+        body = await self._blocked_workflow_body(
+            interceptor,
+            mock_next,
+            ApplicationError(
+                "Preflight failed: connect postgres://u:pw@h/db?password=hunter2",
+                type="PreflightFailed",
+            ),
+        )
+        assert "hunter2" not in body
+        assert "u:pw@" not in body
+        assert "connect postgres://" in body
 
     async def test_unexpected_failure_logs_error_with_stack(
         self, interceptor, mock_next
@@ -1155,6 +1255,34 @@ class TestLogActivityInboundInterceptor:
         kwargs = ended_calls[0][1]
         assert kwargs["otel.status_code"] == "OK"
         assert kwargs["temporal.activity.duration_ms"] >= 0
+
+    async def test_preflight_block_body_carries_the_reason(self, mock_next):
+        mock_next.execute_activity = AsyncMock(
+            side_effect=ApplicationError(
+                "Preflight failed: The admin API (admin/workspaces/modified) returned 403.",
+                type="PreflightFailed",
+                non_retryable=True,
+            )
+        )
+        interceptor = _LogActivityInboundInterceptor(mock_next)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            with (
+                patch(
+                    "application_sdk.execution._temporal.interceptors.log.logger"
+                ) as mock_logger,
+                pytest.raises(ApplicationError),
+            ):
+                await interceptor.execute_activity(MockExecuteActivityInput())
+        (ended,) = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args and c.args[0].startswith("activity.ended")
+        ]
+        assert "BLOCKED (preflight gate)" in ended.args[0]
+        assert "admin/workspaces/modified" in ended.args[0]
 
     async def test_emits_activity_ended_error(self, mock_next):
         mock_next.execute_activity = AsyncMock(

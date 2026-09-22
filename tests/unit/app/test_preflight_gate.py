@@ -19,11 +19,14 @@ from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import SourceUnavailableError
 from application_sdk.execution._temporal.preflight_gate import (
     FAILURE_AUDIENCE_KEY,
+    FAILURE_CHECK_KEY,
+    FAILURE_MESSAGE_KEY,
     GATE_OUTCOME_ROW_KEYS,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     PREFLIGHT_FAILED_ERROR_TYPE,
     PREFLIGHT_NO_VERDICT_ERROR_TYPE,
     PreflightClassification,
+    _plumbing_evidence,
 )
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.contracts import (
@@ -1087,3 +1090,152 @@ class TestACancelledGateActivityFailsOpen:
         assert row["outcome"] == "no_verdict"
         assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
         assert row["reason"] == "CancelledError"
+
+
+def _marker_with_an_advisory_ahead_of_the_blocker() -> ApplicationError:
+    """A marker whose first failed check is NOT the one the verdict is attributed to.
+
+    Production shape: an advisory check fails, then the real fault is pinned on
+    the aggregate. The recovered checks keep advisory-first ordering, so a row
+    that names "the first failed check" names the wrong one.
+    """
+    from application_sdk.errors.leaves import AuthError
+
+    blocker = SourceUnavailableError(
+        message="The SQL Server did not answer in time"
+    ).to_failure_details()
+    advisory = AuthError(message="ADVISORY LINE, not the reason for the block")
+    checks = [
+        {
+            "name": "versionAdvisory",
+            "passed": False,
+            "error": advisory.to_failure_details().model_dump(mode="json"),
+        },
+        {
+            "name": "sourceReachable",
+            "passed": False,
+            "error": blocker.model_dump(mode="json"),
+        },
+    ]
+    return ApplicationError(
+        "Preflight could not reach a verdict",
+        blocker,
+        {"checks": checks},
+        type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+    )
+
+
+class TestTheWorkflowRowNamesTheAttributedCheck:
+    """The workflow frame's row must agree with its own `reason`.
+
+    The frame recovers its evidence off the failure chain, so the objects it
+    holds crossed the wire and are no longer the ones the activity built. A row
+    that names a check by position rather than by attribution points support at
+    an unrelated advisory while `reason` names the real fault.
+    """
+
+    async def test_blocked_row_names_the_check_the_evidence_came_from(
+        self, safe_log
+    ) -> None:
+        from temporalio.exceptions import TimeoutType
+
+        timeout = _temporal_timeout(TimeoutType.START_TO_CLOSE)
+        timeout.__cause__ = _marker_with_an_advisory_ahead_of_the_blocker()
+        _, exec_patch = _exec(side_effect=_real_activity_error(timeout))
+        with _patched(True), exec_patch, pytest.raises(ApplicationError):
+            await _run_preflight_gate(
+                _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
+            )
+        row = _row(safe_log)
+        assert row["outcome"] == "blocked"
+        assert row[FAILURE_MESSAGE_KEY] == "The SQL Server did not answer in time"
+        assert row[FAILURE_CHECK_KEY] == "sourceReachable"
+
+    async def test_frame_lost_block_carries_the_message_and_no_check_name(
+        self, safe_log
+    ) -> None:
+        # A killed frame left no evidence and no checks, so there is no check to
+        # name — but the row's primary is fully populated, and this is the case a
+        # reader most needs the sentence for: the gate itself broke, and there
+        # is no handler-authored row to fall back on.
+        from temporalio.exceptions import TimeoutType
+
+        killed = _real_activity_error(_temporal_timeout(TimeoutType.START_TO_CLOSE))
+        _, exec_patch = _exec(side_effect=killed)
+        with _patched(True), exec_patch, pytest.raises(ApplicationError):
+            await _run_preflight_gate(
+                _ResolvableInput(),
+                "mssql",
+                "crawler",
+                budget_seconds=300,
+                gate_mode="hard",
+            )
+        row = _row(safe_log)
+        assert row["outcome"] == "blocked"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.FRAME_LOST
+        assert "lost worker" in row[FAILURE_MESSAGE_KEY]
+        assert FAILURE_CHECK_KEY not in row
+
+    async def test_gate_broken_row_carries_the_plumbing_failures_message(
+        self, safe_log
+    ) -> None:
+        # The gate's own plumbing raised. Its error leaves the activity with
+        # FailureDetails at details[0] precisely so a consumer has something to
+        # attribute — the row must read it, or the case where the gate itself
+        # broke is the one case with no sentence.
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        plumbing = ApplicationError(
+            "vault down",
+            DependencyUnavailableError(
+                message="Secret store unreachable: vault down", service="secret_store"
+            ).to_failure_details(),
+            type="DependencyUnavailableError",
+        )
+        _, exec_patch = _exec(side_effect=_real_activity_error(plumbing))
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "mssql", "crawler")
+        row = _row(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
+        assert row["reason"] == "DependencyUnavailableError"
+        assert row[FAILURE_MESSAGE_KEY] == "Secret store unreachable: vault down"
+        assert FAILURE_CHECK_KEY not in row
+
+
+class TestPlumbingEvidenceKeepsReadingTheChain:
+    """The two silent-swallow branches of ``_plumbing_evidence``.
+
+    Both step past a link and keep going; a regression in either yields a row
+    with no sentence rather than a failure, so each is pinned on its own.
+    """
+
+    def _plumbing(self) -> ApplicationError:
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        return ApplicationError(
+            "vault down",
+            DependencyUnavailableError(
+                message="Secret store unreachable: vault down", service="secret_store"
+            ).to_failure_details(),
+            type="DependencyUnavailableError",
+        )
+
+    def test_an_unreadable_envelope_on_one_link_does_not_stop_the_read(self) -> None:
+        outer = ApplicationError("wrapper", {"not": "a FailureDetails"}, type="Wrapper")
+        outer.__cause__ = self._plumbing()
+        evidence = _plumbing_evidence(outer)
+        assert evidence is not None
+        assert evidence.message == "Secret store unreachable: vault down"
+
+    def test_a_gate_marker_carrying_details_is_skipped_not_read(self) -> None:
+        # A marker's details are a verdict's evidence — _gate_failure_evidence's
+        # business, never a plumbing failure's.
+        marker = _no_verdict_marker()
+        marker.__cause__ = self._plumbing()
+        evidence = _plumbing_evidence(marker)
+        assert evidence is not None
+        assert evidence.message == "Secret store unreachable: vault down"
+
+    def test_a_bare_chain_yields_nothing(self) -> None:
+        assert _plumbing_evidence(RuntimeError("no envelope anywhere")) is None

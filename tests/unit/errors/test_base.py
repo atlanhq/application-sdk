@@ -551,15 +551,88 @@ def test_safe_traceback_handles_exception_without_traceback() -> None:
     assert "ValueError: never raised" in out
 
 
-def test_redact_secrets_over_redacts_trailing_at_in_no_space_run() -> None:
-    """Deliberate: the greedy userinfo match consumes to the last `@` in a
-    whitespace-free run, so a trailing `@` after the host over-redacts. This
-    is the safe failure direction for a secret redactor — pinned so the
-    behavior is understood as intentional, not a regression."""
+def test_redact_secrets_stops_at_the_path_and_keeps_a_query_email() -> None:
+    """Deliberate reversal of an earlier deliberate pin. The userinfo match
+    used to run to the last `@` in a whitespace-free run — "the safe failure
+    direction for a secret redactor" — and a test here pinned that a trailing
+    `@` after the host over-redacts. That was written for log strings. Once
+    redaction moved onto the ``FailureDetails`` envelope it reached every
+    message the Automation Engine shows a person, and the greedy form wiped
+    ADLS container names and query-string e-mail addresses (next test). The
+    match now ends at the first `/`, so an ``@`` in a path or query string is
+    never userinfo. The password is still fully redacted here; nothing leaks."""
     from application_sdk.errors import redact_secrets
 
-    # The `@b` later in the same no-space run is swallowed up to the last `@`.
-    assert redact_secrets("postgresql://u:p@host/db?to=a@b") == "postgresql://***@b"
-    # A whitespace boundary protects the common "URL then prose" case.
+    # The `@b` in the query string is no longer swallowed; the password is.
+    assert (
+        redact_secrets("postgresql://u:p@host/db?to=a@b")
+        == "postgresql://***@host/db?to=a@b"
+    )
+    # A whitespace boundary still protects the common "URL then prose" case.
     out = redact_secrets("postgresql://u:p@host/db connected as a@b")
     assert out == "postgresql://***@host/db connected as a@b"
+
+
+def test_redact_secrets_keeps_the_azure_container_in_a_passwordless_blob_url() -> None:
+    """``container@account`` in the Azure blob schemes is addressing, not a
+    credential. Every other scheme's userinfo is redacted whatever its shape —
+    see the bare-token test below — so the exemption is scoped to these four
+    schemes, and only while no password is present."""
+    from application_sdk.errors import redact_secrets
+
+    for text in (
+        "Cannot read abfss://raw@lakehouse01.dfs.core.windows.net/bronze/orders",
+        "wasbs://landing@acct.blob.core.windows.net/2026/09/",
+        # Glued to prose: the scheme is still recognised from its own start.
+        "path=abfss://raw@lakehouse01.dfs.core.windows.net/x",
+    ):
+        assert redact_secrets(text) == text
+    # A password in the same position is still a password.
+    assert (
+        redact_secrets("abfss://raw:s3cret@lakehouse01.dfs.core.windows.net/bronze")
+        == "abfss://***@lakehouse01.dfs.core.windows.net/bronze"
+    )
+
+
+def test_redact_secrets_redacts_a_bare_token_used_as_username() -> None:
+    """A token as the whole userinfo — git remotes, registries, webhook URLs —
+    has no ``:`` and is exactly the shape a colon-based rule misses."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets(
+            "https://ghp_16C7e42F292c6912E7710c838347Ae178B4a@github.com/org/x.git"
+        )
+        == "https://***@github.com/org/x.git"
+    )
+    assert (
+        redact_secrets("git clone https://glpat-AbCdEf123456@gitlab.com/acme/repo.git")
+        == "git clone https://***@gitlab.com/acme/repo.git"
+    )
+
+
+def test_redact_secrets_still_takes_the_whole_userinfo_when_the_password_has_an_at() -> (
+    None
+):
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets("postgres://u:p@ss@h/db") == "postgres://***@h/db"
+
+
+def test_redact_secrets_covers_an_empty_username_with_a_password() -> None:
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets("redis://:s3cret@cache.internal:6379/0")
+        == "redis://***@cache.internal:6379/0"
+    )
+
+
+def test_redact_secrets_leaves_a_port_and_query_email_alone() -> None:
+    from application_sdk.errors import redact_secrets
+
+    for text in (
+        "https://host.internal:8080/api?owner=alice@corp.com",
+        "GET https://adb-123.azuredatabricks.net/api/2.0/workspace/list?path=/Users/alice@corp.com/etl failed 403",
+    ):
+        assert redact_secrets(text) == text

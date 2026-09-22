@@ -44,7 +44,10 @@ from temporalio.worker import (
 from application_sdk.constants import APPLICATION_VERSION, COMMIT_SHA
 from application_sdk.errors.base import AppError
 from application_sdk.errors.wire import FailureDetails
-from application_sdk.execution._temporal.preflight_gate import is_preflight_block
+from application_sdk.execution._temporal.preflight_gate import (
+    is_preflight_block,
+    preflight_block_message,
+)
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -188,6 +191,21 @@ def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
     except Exception:  # noqa: S110 — degrade to code+message, never drop the log
         pass
     return f"FAILED ({code}): {msg}{frame}" if msg else f"FAILED ({code}){frame}"
+
+
+def _blocked_suffix(exc: BaseException | None) -> str:
+    """``BLOCKED (preflight gate): <the block's first line>`` for a gate block.
+
+    The one failure class carved out of :func:`_failure_suffix` — no stack, no
+    frame, because a block is a typed outcome and not a crash — used to drop
+    the message as well. That made the reason unfindable by a ``Body`` search:
+    the sentence lived only in a structured attribute on the adjacent record,
+    and a production escalation was filed as log loss on exactly that. The
+    token stays as the greppable prefix; the sentence joins it, capped like
+    every other lifecycle message. Redaction happened upstream, before the cap.
+    """
+    msg = preflight_block_message(exc)[:_FAILURE_MSG_MAX_CHARS]
+    return f"BLOCKED (preflight gate): {msg}" if msg else "BLOCKED (preflight gate)"
 
 
 def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
@@ -618,7 +636,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     # details. Real failures keep the ERROR traceback.
                     if is_preflight_block(exc_caught):
                         blocked_msg = _lifecycle_message(
-                            "workflow.ended", f"{wf_type} BLOCKED (preflight gate)"
+                            "workflow.ended", f"{wf_type} {_blocked_suffix(exc_caught)}"
                         )
                         logger.warning(blocked_msg, **ended_attrs)
                     else:
@@ -773,7 +791,8 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                     # the log. Every other failure keeps the ERROR traceback.
                     if is_preflight_block(exc_caught):
                         blocked_msg = _lifecycle_message(
-                            "activity.ended", f"{act_type} BLOCKED (preflight gate)"
+                            "activity.ended",
+                            f"{act_type} {_blocked_suffix(exc_caught)}",
                         )
                         logger.warning(blocked_msg, **ended_attrs)
                     else:

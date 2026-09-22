@@ -26,6 +26,17 @@ supposed to branch on a field rather than regex a message. That makes the field
 *names*, the enum *spellings*, and the category-to-code relationship a contract,
 not an implementation detail.
 
+`message` and `suggested_action` are **redacted where the envelope is built**, by
+a `field_validator` on the model: URL userinfo of any shape
+(`scheme://user:pass@host` or a bare token as the username → `scheme://***@host`;
+only the Azure blob schemes' `container@account` addressing is left alone, and
+only while no password is present) and secret-named query or DSN parameters
+(`password=`, `api_key=`, `pwd=`, … → `***`). A consumer must not expect raw credential text in either
+field, and must not rely on either as a stable identifier — the same handler
+line can arrive redacted differently if the redaction rules change. The pass is
+idempotent, so an envelope replayed off the wire compares equal. `evidence` is
+handled by key name instead: a secret-named key is rejected, not masked.
+
 What this means in practice:
 
 - **`category` is coarse; `code` is the specific cause.** A consumer that keys a
@@ -137,7 +148,7 @@ Two consequences for changes here:
 | | |
 |---|---|
 | **Produced by** | `_gate_error()` and `_plumbing_error()` in `application_sdk/execution/_temporal/preflight_gate.py`, on every error that leaves the `{app}:preflight` activity, and on the block the workflow raises for a dead gate frame (`build_workflow_block()`, which routes through `_gate_error()`) |
-| **Shape** | An `ApplicationError` whose `details[0]` is one `FailureDetails` (category, code, audience, retryable, message, suggested_action, evidence) and whose `details[1]` is `{"status": ..., "checks": [...], "attempt": N}`, every check in wire form. `status` is `not_ready` on every exit the gate attributes to the source, and `null` on a gate-plumbing failure, where no verdict was reached and the run proceeds. `attempt` is the activity attempt that raised. The wire `type` is `PreflightFailed` for the block, `PreflightNoVerdict` for a non-final attempt's retry marker, and the raising class name (e.g. `DependencyUnavailableError`) for a gate-plumbing failure. `details[0]` is present even when the raising leaf's own evidence cannot be serialised; the gate synthesises one rather than leave the position empty |
+| **Shape** | An `ApplicationError` whose `details[0]` is one `FailureDetails` (category, code, audience, retryable, message, suggested_action, evidence) and whose `details[1]` is `{"status": ..., "checks": [...], "attempt": N}`, every check in wire form. `status` is `not_ready` on every exit the gate attributes to the source, and `null` on a gate-plumbing failure, where no verdict was reached and the run proceeds. `attempt` is the activity attempt that raised. The wire `type` is `PreflightFailed` for the block, `PreflightNoVerdict` for a non-final attempt's retry marker, and the raising class name (e.g. `DependencyUnavailableError`) for a gate-plumbing failure. `details[0]` is present even when the raising leaf's own evidence cannot be serialised; the gate synthesises one rather than leave the position empty. For a verdict with no typed error, `details[0].message` is the handler's `result.message`, else every failed check's line joined with `; `, else a fixed line — the same string the raised error's message and the log rows carry |
 | **Read by** | The Automation Engine, which attributes a failed run from `details[0]` of the terminal failure and of the gate activity's failure; the Temporal UI's activity pane, which renders `details[1]`; the workflow itself, which reads `attempt` and the marker's evidence off a killed frame's chain |
 | **Pinned by** | `TestEveryExitCarriesFailureDetails`, `TestPlumbingPayloadNeverLosesItsPrimary` and `TestEveryGateErrorCarriesTheAttempt` in `tests/unit/execution/test_preflight_gate_classification.py` |
 

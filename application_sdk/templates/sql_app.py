@@ -382,13 +382,16 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
     ``category`` / ``audience`` / ``retryable`` on a generic reconstruction
     leaf.
 
-    Reconstruction is an unredacted trust boundary, so every field copied off
-    the envelope is re-redacted here. The ``FailureDetails`` denylist rejects
-    secret-named evidence *keys* only — never a nested value, and never the
-    ``message`` / ``suggested_action`` / ``cause_repr`` strings — so a
-    pre-redaction-era envelope replayed from Temporal history, a hand-built
-    ``PrimeAuthOutput``, or a future producer that forgets to redact would
-    otherwise put a live DSN back onto the wire when this error re-serialises.
+    Reconstruction re-redacts the two free-text fields it copies. This is
+    defence in depth, not the policy: ``FailureDetails`` redacts ``message`` and
+    ``suggested_action`` in a ``field_validator``, and that validator runs on
+    ``model_validate`` too, so an envelope replayed off Temporal history arrives
+    already scrubbed. Kept because it costs one idempotent pass and this is an
+    unredacted trust boundary — a hand-built ``PrimeAuthOutput`` reaches here
+    without ever having been a ``FailureDetails``. What the envelope still does
+    *not* cover is ``cause_repr`` (redacted at construction by
+    :func:`sanitize_cause_repr` instead) and nested values under an
+    evidence key, where the denylist judges the key name alone.
     """
     message = redact_secrets(details.message)
     suggested_action = (
