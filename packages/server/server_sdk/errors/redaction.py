@@ -23,28 +23,78 @@ from collections.abc import Mapping
 from typing import Any
 
 # Userinfo in URLs of any scheme: postgresql://user:pass@host -> postgresql://***@host.
-# Greedy to the last `@` so a raw `@` inside the password does not leave the
-# tail exposed; over-redacting is the safe direction.
 #
-# Two separate guards against quadratic scanning, both load-bearing.
+# Scanned rather than matched by one regex, because no single pattern is both
+# complete and linear here:
 #
-# The LOOKBEHIND is the one that matters. `sub` retries at every start
-# position, and inside a long run of scheme-legal characters each retry
-# consumes the whole remaining run before `://` fails -- O(n^2) even with no
-# backtracking, and it needs no URL to trigger. Requiring the scheme to start
-# at a character boundary leaves one viable start per run, so the scan is
-# linear.
+#   * The natural pattern ``[a-z][a-z0-9+.-]*://`` is O(n^2). ``sub`` retries at
+#     every start position, and inside a long run of scheme-legal characters
+#     (any hash, base64 blob or long identifier) each retry consumes the whole
+#     remaining run before ``://`` fails. Measured: 20k chars 1.6s, 80k 23s,
+#     200k 125s -- on the shared request path, where that stalls every
+#     co-hosted app.
+#   * Anchoring the scheme with a lookbehind fixes the cost and silently loses
+#     coverage: any class wide enough to stop the rescan also blocks a
+#     legitimate start, so "10.0.0.1postgres://u:p@h" stopped being redacted.
 #
-# The POSSESSIVE quantifiers (`*+`, `++`) then stop the give-a-character-back
-# backtracking on top of that.
-#
-# Measured on 'postgresql://' + n 'a's: greedy+unanchored 20k 1.6s / 80k 23s /
-# 200k 125s; possessive alone 32k 2.6s (still quadratic); with the lookbehind,
-# linear. This runs on the hosted request path, where one such string stalls
-# the event loop for every co-hosted app.
-_URL_USERINFO_RE = re.compile(
-    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*+://)(?:[^@\s]++@)++", re.IGNORECASE
+# So: find each "://" (linear), walk back over the scheme run (the runs
+# partition the string, so linear in total), and redact forward to the LAST
+# "@" of the whitespace-free run -- greedy on purpose, so a raw "@" inside the
+# password cannot leave the tail exposed. Over-redacting is the safe direction.
+_SCHEME_SEP = "://"
+_SCHEME_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"
 )
+_ASCII_LETTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+_WHITESPACE = frozenset(" \t\n\r\f\v")
+
+
+def _redact_url_userinfo(text: str) -> str:
+    """Replace ``scheme://userinfo@`` with ``scheme://***@`` everywhere."""
+    out: list[str] = []
+    cursor = 0  # everything before this is already emitted
+    search = 0
+    while True:
+        sep = text.find(_SCHEME_SEP, search)
+        if sep == -1:
+            break
+        search = sep + len(_SCHEME_SEP)
+        if sep < cursor:
+            continue  # inside a region already rewritten
+
+        # Walk back over the whole scheme-legal run, then forward to the first
+        # ASCII letter in it: a scheme must START with a letter, and the regex
+        # this replaces found that start by trying every position. Taking the
+        # furthest point instead would drop "10.0.0.1postgres://u:p@h", which
+        # the worker-side redactor does redact.
+        run_start = sep
+        while run_start > cursor and text[run_start - 1] in _SCHEME_CHARS:
+            run_start -= 1
+        scheme_start = run_start
+        while scheme_start < sep and text[scheme_start] not in _ASCII_LETTERS:
+            scheme_start += 1
+        if scheme_start == sep:
+            continue  # a run with no letter in it is not a scheme
+
+        last_at = -1
+        i = search
+        while i < len(text) and text[i] not in _WHITESPACE:
+            if text[i] == "@":
+                last_at = i
+            i += 1
+        # `> search`, not `!= -1`: the userinfo needs at least one character.
+        # "x://@h" carries no credential and is left alone, matching the
+        # worker-side redactor.
+        if last_at <= search:
+            continue
+
+        out.append(text[cursor:search])
+        out.append("***@")
+        cursor = last_at + 1
+        search = cursor
+    out.append(text[cursor:])
+    return "".join(out)
+
 
 # Secret query/DSN params. `pwd` covers ODBC (`UID=sa;PWD=...`). The braced
 # alternative is tried first because ODBC quotes values containing the `;`
@@ -98,7 +148,7 @@ _MASK = "***"
 
 def redact_secrets(text: str) -> str:
     """Redact URL userinfo and known secret params in one string."""
-    return _SECRET_PARAM_RE.sub(r"\1***", _URL_USERINFO_RE.sub(r"\1***@", text))
+    return _SECRET_PARAM_RE.sub(r"\1***", _redact_url_userinfo(text))
 
 
 def redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) -> Any:

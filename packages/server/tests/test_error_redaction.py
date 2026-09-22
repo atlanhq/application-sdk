@@ -401,3 +401,59 @@ def test_exc_info_is_cleared_so_a_structured_handler_cannot_re_derive_it() -> No
     record = seen[-1]
     assert record.exc_info is None, "exc_info must be cleared once folded"
     assert "sup3rs3cr3t" not in (record.exc_text or "")
+
+
+# ── coverage parity with the worker-side redactor ───────────────────────────
+# Expected values are application_sdk.errors.base.redact_secrets' actual output,
+# inlined rather than imported: application_sdk is not installed in this
+# package's venv, so importing it would make the whole comparison skip — and a
+# suite that skips reports agreement it never measured.
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # A scheme need not start the run. An earlier lookbehind-anchored
+        # pattern dropped every one of these while claiming parity.
+        ("2postgresql://u:p@h", "2postgresql://***@h"),
+        ("-postgresql://u:p@h", "-postgresql://***@h"),
+        (".postgresql://u:p@h", ".postgresql://***@h"),
+        ("+postgresql://u:p@h", "+postgresql://***@h"),
+        ("x=1&y=2postgresql://u:p@h", "x=1&y=2postgresql://***@h"),
+        ("10.0.0.1postgres://u:p@h", "10.0.0.1postgres://***@h"),
+        # Ordinary shapes.
+        ("see postgresql://u:p@h", "see postgresql://***@h"),
+        ("postgresql://u:p@ss@h:5432/db", "postgresql://***@h:5432/db"),
+        ("a https://x:y@h and b http://p:q@i", "a https://***@h and b http://***@i"),
+        ("ftp://u:p@h  postgres://a:b@c", "ftp://***@h  postgres://***@c"),
+        # Not credentials: no userinfo at all, or no scheme.
+        ("postgresql://h/db", "postgresql://h/db"),
+        ("x://@h", "x://@h"),
+        ("://nope", "://nope"),
+        ("no url here", "no url here"),
+        ("123://u:p@h", "123://u:p@h"),
+    ],
+)
+def test_url_userinfo_coverage_matches_the_worker(raw: str, expected: str) -> None:
+    assert redact_secrets(raw) == expected
+
+
+def test_redaction_stays_linear_on_a_long_scheme_run() -> None:
+    """The completeness fix must not reintroduce the quadratic scan.
+
+    A long run of scheme-legal characters — any hash or base64 blob in an error
+    message — was O(n^2): 200k characters took ~125 seconds on the shared
+    request path.
+    """
+    import time
+
+    def elapsed(n: int) -> float:
+        text = "postgresql://" + "a" * n
+        start = time.perf_counter()
+        redact_secrets(text)
+        return time.perf_counter() - start
+
+    elapsed(20_000)  # warm
+    small, large = elapsed(50_000), elapsed(400_000)
+    assert large < small * 20, f"{small:.4f}s -> {large:.4f}s looks superlinear"
+    assert large < 2.0, f"400k chars took {large:.2f}s"
