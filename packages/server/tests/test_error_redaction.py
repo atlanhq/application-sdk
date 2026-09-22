@@ -549,3 +549,61 @@ def test_redaction_is_linear_on_a_body_full_of_schemes() -> None:
     small, large = elapsed(1000), elapsed(8000)
     assert large < small * 20, f"{small:.4f}s -> {large:.4f}s looks superlinear"
     assert large < 1.0, f"8000 schemes took {large:.2f}s"
+
+
+# ── masking has to follow the structure, like the value redaction does ──────
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected"),
+    [
+        ({"password": "h", "host": "x"}, {"password": "***", "host": "x"}),
+        ({"config": {"password": "h"}}, {"config": {"password": "***"}}),
+        (
+            {"creds": [{"password": "h"}, {"host": "x"}]},
+            {"creds": [{"password": "***"}, {"host": "x"}]},
+        ),
+        ({"a": {"b": {"db_password": "h"}}}, {"a": {"b": {"db_password": "***"}}}),
+        # generic names that merely resemble one must survive
+        (
+            {"object_key": "k", "next_token_id": "t"},
+            {"object_key": "k", "next_token_id": "t"},
+        ),
+    ],
+)
+def test_secret_named_keys_are_masked_at_every_depth(evidence, expected) -> None:
+    """The value redaction always walked the whole structure; the key masking
+    only looked at the top level, so a secret-NAMED key one level down went
+    through untouched — and evidence is routinely nested."""
+    from server_sdk.errors.categories import FailureCategory
+    from server_sdk.errors.wire import FailureDetails
+
+    got = FailureDetails(
+        category=FailureCategory.AUTH,
+        code="AUTH",
+        retryable=False,
+        message="x",
+        evidence=evidence,
+    ).evidence
+    assert got == expected
+
+
+def test_a_pathologically_deep_evidence_truncates_rather_than_hangs() -> None:
+    from server_sdk.errors.categories import FailureCategory
+    from server_sdk.errors.wire import FailureDetails
+
+    deep: dict = {}
+    node = deep
+    for _ in range(80):
+        node["n"] = {}
+        node = node["n"]
+    node["password"] = "hunter2"
+
+    got = FailureDetails(
+        category=FailureCategory.AUTH,
+        code="AUTH",
+        retryable=False,
+        message="x",
+        evidence={"deep": deep},
+    ).evidence
+    assert "hunter2" not in json.dumps(got, default=str)

@@ -176,14 +176,7 @@ def redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) 
             return "…"
         seen.add(id(value))
         try:
-            return {
-                k: (
-                    _MASK
-                    if secret_named_evidence_keys({k: v})
-                    else redact_wire_value(v, seen, depth + 1)
-                )
-                for k, v in value.items()
-            }
+            return {k: redact_wire_value(v, seen, depth + 1) for k, v in value.items()}
         finally:
             seen.discard(id(value))
 
@@ -228,16 +221,42 @@ def secret_named_evidence_keys(evidence: Mapping[str, Any]) -> frozenset[str]:
     )
 
 
-def mask_secret_named_keys(evidence: Mapping[str, Any]) -> dict[str, Any]:
+def mask_secret_named_keys(
+    evidence: Mapping[str, Any], _depth: int = 0
+) -> dict[str, Any]:
     """Replace secret-named values with ``***``, keeping the key.
 
     Keeping the key preserves "a password was involved" for whoever reads the
     envelope, which dropping it silently would not.
+
+    Recurses into nested mappings and sequences. The value redaction already
+    walked the whole structure, so masking only the top level left a
+    secret-NAMED key one level down untouched -- and evidence is routinely
+    nested (a connector attaching its resolved config, say). Bounded by the
+    same depth limit, so a hostile structure truncates rather than hangs.
     """
+    if _depth >= _REDACT_MAX_DEPTH:
+        return {}
     bad = secret_named_evidence_keys(evidence)
-    if not bad:
-        return dict(evidence)
-    return {k: (_MASK if k in bad else v) for k, v in evidence.items()}
+    out: dict[str, Any] = {}
+    for key, value in evidence.items():
+        if key in bad:
+            out[key] = _MASK
+        else:
+            out[key] = _mask_nested(value, _depth + 1)
+    return out
+
+
+def _mask_nested(value: Any, depth: int) -> Any:
+    """Apply :func:`mask_secret_named_keys` to any mapping inside ``value``."""
+    if depth >= _REDACT_MAX_DEPTH:
+        return "…"
+    if isinstance(value, Mapping):
+        return mask_secret_named_keys(value, depth)
+    if isinstance(value, (list, tuple)):
+        masked = [_mask_nested(v, depth + 1) for v in value]
+        return type(value)(masked) if isinstance(value, list) else tuple(masked)
+    return value
 
 
 def sanitize_cause_repr(exc: BaseException) -> str:
