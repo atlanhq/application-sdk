@@ -517,7 +517,7 @@ methods that return a different response shape than v2, which may break frontend
 - Blocking findings: N  (must be 0, or each one listed below with the user's stated reason)
 - Warning findings: M  (each fixed, or in the manual-follow-up list with a reason)
 - Accepted-with-reason: <rule id — reason, per line; "none" if none>
-- Preflight scenarios: executed / graded-from-report / NOT RUN (F016 is blocking — "not run" is a gap, not a pass)
+- Preflight scenarios: executed / graded-from-report / NOT RUN (F016 is blocking — "not run" is a gap, not a pass; a static-only sweep can exit 0 while F016 fails)
 - Conformance CI wired: yes/no (`.github/workflows/conformance.yaml`)
 
 ### Manual follow-up required
@@ -819,7 +819,11 @@ cd <target-path> && uv run --with atlan-application-sdk-conformance \
 
 `uv run --with` overlays the tool onto the app's *resolved* environment rather than an isolated one — this is exactly what the managed CI leg does when `needs-env: true`. `uvx` would give the tool a clean env of its own and the D-series would see nothing.
 
-**(iii) The F-series — executed preflight scenarios.** `F016 PreflightBehaviorContract` is **blocking** and it grades *executed* scenarios. The runner's default is `--static`, which reports every TEST rule as *not evaluated* — so a bare `detect` silently skips a blocking rule. Pick one of:
+**(iii) The F-series — executed preflight scenarios.** `F016 PreflightBehaviorContract` is **blocking** and it grades *executed* scenarios. The runner's default is `--static`, which reports every TEST rule as *not evaluated* — so a bare `detect` silently skips a blocking rule.
+
+> **This is not theoretical.** Measured on `atlan-mysql-app` at conformance 0.36.1: the static sweep in (i) returned **3 findings, all warnings, exit code 0** — a clean pass. The same repo with `--series F --with-tests` returned **13 `F016` errors, exit code 1**. Skip this invocation and you will report a conformant app that fails its own Conformance check.
+
+Pick one of:
 
 ```bash
 # Self-contained: the runner executes the scenarios in a bounded pytest subprocess.
