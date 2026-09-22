@@ -60,10 +60,11 @@ inputs:
     default: "."
     description: |
       Directory the connector repo is checked out at, relative to the
-      workspace root. "." (default) when the connector IS the workspace
-      (connector-integration-tests, sdr-e2e); the checkout path when the
-      caller checks the connector out into a subdirectory
-      (tests-reusable checks out at <app-name>/).
+      workspace root. "." (default) when the connector IS the workspace,
+      which is what every caller in this repo does — build-app-image and
+      connector-integration-tests both take the default. Pass a path only if
+      you check the connector out into a subdirectory; get it wrong and the
+      action misses app.pkl and silently skips regeneration.
 
 runs:
   using: composite
