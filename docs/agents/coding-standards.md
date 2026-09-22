@@ -151,7 +151,8 @@ beside one). Each row stamps `failure.audience` (who must act) except `proceeded
   failure is real even when soft mode proceeds. There is a real exception behind these and it
   is the only diagnostic.
 - **Gate plumbing failures** (exception during dispatch — `gate_broken`) — the workflow's
-  `no_verdict` row at `error` with `exc_info=True`, audience `APP_OWNER`.
+  `no_verdict` row at `error` with `exc_info=True`, audience `APP_OWNER`, and `failure.message`
+  from the envelope the plumbing error left at `details[0]` when it is readable.
 - **Advisory failures** (`proceeded` with any failed check — PARTIAL, or READY with a failed
   advisory row) — the outcome row at `warning`. F005 bans the handler from logging the
   warning itself, so the gate owns the one level that case is semantically for.

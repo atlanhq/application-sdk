@@ -522,7 +522,8 @@ proceeded row `reason` is the verdict status, or the error code of the first fai
 run proceeded past one — a `PARTIAL` that hides a throttled probe behind the word `partial` cannot be
 ranked. On a `gate_broken` fail-open its `reason` names the *underlying* fault — the SDK unwraps Temporal's `ActivityError`/`ApplicationError`
 to the real error type (e.g. `DaprSidecarUnreachableError`), not the wrapper — so a persistent
-platform fault is separable from a transient blip on the dashboard. A deadline overrun carries no
+platform fault is separable from a transient blip on the dashboard, and `failure.message` carries
+the plumbing failure's own line when the envelope it left at `details[0]` is readable. A deadline overrun carries no
 error type to unwrap, so it reports which deadline fired instead: `Timeout:START_TO_CLOSE` (one
 attempt outran its own budget — what a dependency wait wider than the gate's `start_to_close` looks
 like), `Timeout:SCHEDULE_TO_CLOSE` (the retry window closed), or `Timeout:HEARTBEAT`. A boot-time **posture** event
@@ -539,15 +540,20 @@ came from, matched on `(code, message)` rather than object identity: the workflo
 evidence off the failure chain, so what it holds crossed the wire, and a handler may hand one error
 to both the aggregate and a check, which coerce separately. Where several checks failed and none
 matches, the name is **omitted** rather than guessed — a name that contradicts `reason` on its own
-row is worse than no name. A `frame_lost` block has no checks at all and carries the message alone.
-Both keys are conditional, like `failure.audience` and unlike the keys above: a clean `proceeded`
-row carries neither. Every row derives `reason`, `failure.audience`, `failure.check` and
-`failure.message` from one object — the block's primary failure, or the first failed check on a run
-that went ahead — so the four cannot disagree with each other. That is what makes `reason` on a row
-that went ahead with a failed check the **code of that check**, on both surfaces, rather than the
-status: the status is already on the same row under `outcome`, and repeating it under `reason` hides
-which check failed on exactly the runs a dashboard needs to rank. With nothing failed there is no
-object to attribute to, and `reason` is the status. They exist because `reason` is a code and `check_matrix` deliberately holds no messages, so
+row is worse than no name. A `frame_lost` block has no checks at all and carries the message alone,
+as does a `gate_broken` row whose plumbing failure left a readable envelope. When the handler's error
+carries a `suggested_action`, the row also carries it as `failure.suggested_action`, kept separate
+from the message so "what happened" and "what to do" stay separately queryable. All three are
+conditional, like `failure.audience` and unlike the keys above: a clean `proceeded` row carries
+none. Every row derives `reason`, `failure.audience` and the `failure.*` text from one object — the
+block's primary failure, or the first failed check on a run that went ahead — so they describe one
+cause. That is what makes `reason` on a row that went ahead with a failed check the **code of that
+check**, on both surfaces, rather than the status: the status is already on the same row under
+`outcome`, and repeating it under `reason` hides which check failed on exactly the runs a dashboard
+needs to rank. With nothing failed there is no object to attribute to, and `reason` is the status.
+The `BLOCKED` lifecycle line (below) reads the same `details[0]`, so `Body` and `failure.message` are
+one sentence for every verdict shape; only the raised error's own message — the `exception.message`
+on the adjacent record — lists every failed check's line when several failed. They exist because `reason` is a code and `check_matrix` deliberately holds no messages, so
 without them the sentence explaining a block lived only on the adjacent `Completing activity as
 failed` record under `exception.message` — one record away, under a key nobody searches. The same
 two keys are on the interactive `Preflight check outcome` row, from the same helper, so the two

@@ -193,7 +193,7 @@ Rows that gain the keys — any outcome with at least one failed check:
 | `proceeded`, all checks passed | no |
 | `skipped` | no |
 | workflow-frame block from recovered evidence | yes — matched by value, since the evidence crossed the wire |
-| workflow-frame fail-open with no checks | no |
+| workflow-frame `gate_broken` fail-open | message only, when the plumbing envelope is readable; no check to name |
 
 Both rows derive from one helper, so the two surfaces cannot drift — the
 property [`gate_outcome_row`][row]'s own docstring already asks for.
@@ -361,3 +361,49 @@ from #3492, whose name asserted the old intent; it is now
 `test_a_clean_row_keeps_the_status_as_its_reason` beside it for the no-primary
 half, and a `reason` assertion added to the gate/interactive agreement test.
 Reverting the one line turns two of the three red.
+
+## Fourth revision (2026-09-22, after an independent fit-for-purpose review)
+
+The review judged the change against the ticket's acceptance criterion — could
+support's original search now find the reason — and answered *partly*. Every
+defect it reported reproduced.
+
+1. **Row and `Body` could disagree** for an un-migrated handler that set
+   `result.message` and marked a check failed with no text of its own:
+   `_primary_failure` never read `result.message`, so the row said "Preflight
+   check failed" while `Body` carried the real sentence. The second revision's
+   claim that the four keys "cannot disagree" was false. One `_fallback_message()`
+   now feeds the untyped `details[0]` and the raised error's message. Together
+   with the third revision's `Body`-from-`details[0]`, the row and `Body` carry
+   one sentence for every verdict shape; only the raised error's own message
+   lists every failed check's line when several failed.
+2. **The envelope validator over-redacted fleet-wide.** The userinfo pattern
+   was greedy to the last `@` by design, written for log strings; on the
+   Automation Engine-facing `message` it wiped `abfss://container@account` and
+   query-string e-mail addresses. It now requires a password (`user:pass@`) and
+   stops at the first `/`. An earlier test pinned the greedy behaviour as
+   intentional; it is rewritten to pin the reversal, with the reason.
+3. The raised error's message — the `exception.message` on the adjacent record —
+   was built from raw handler strings and never redacted. It is now.
+4. An un-migrated check whose own line is the attribution is named; two
+   untyped lines joined still name nothing.
+5. The `BLOCKED` line no longer spends 18 of its 200 characters on the block's
+   own `Preflight failed:` prefix.
+6. The workflow's `App blocked by preflight gate` record logged `str(e)` — the
+   wrapper's text. It now carries the block's line.
+7. `gate_broken` **does** have something to attribute: `_plumbing_error` leaves
+   `FailureDetails` at `details[0]`, and `_gate_failure_evidence` simply never
+   read it. The second revision's "nothing to attribute" was wrong, and so is
+   the third revision's note that `primary=failure.evidence` is `None` by
+   construction on that branch — it is the plumbing error's `details[0]` when
+   readable. The row now carries the plumbing failure's message.
+8. `failure.suggested_action` is added. The ticket's search included the
+   remediation text; the first revision's "the message alone closes the support
+   gap" was contradicted by the ticket's own evidence.
+
+What support still cannot find by a `Body` search: the wire type name
+`PreflightFailed` (the token `BLOCKED (preflight gate)` is the searchable form of
+that fact), and anything past the first line or the 200-character cap of a
+block's message (`failure.message` on the outcome row keeps the full text). The
+customer-facing log view filters at ERROR; the `Body`-carrying lifecycle lines
+are WARNING, and the ERROR record's `Body` remains the constant event name.
