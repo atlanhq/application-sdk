@@ -140,3 +140,47 @@ def test_the_entrypoint_regex_is_newline_anchored() -> None:
 
     assert ENTRYPOINT_NAME_RE.match("crawler")
     assert not ENTRYPOINT_NAME_RE.match("crawler\n")
+
+
+def test_a_workflow_id_cannot_forge_a_log_record() -> None:
+    """workflow_id comes straight from the request body, and the failure path
+    interpolates it into a log line."""
+    import contextlib
+    import io
+    import logging
+
+    class _Boom:
+        async def start(self, request):
+            raise RuntimeError("temporal down")
+
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    root = logging.getLogger()
+    root.addHandler(handler)
+    previous = root.level
+    root.setLevel(logging.DEBUG)
+    try:
+        client = TestClient(
+            build_asgi_app(
+                DefaultHandler(), app_name="redshift", workflow_starter=_Boom()
+            ),
+            raise_server_exceptions=False,
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            client.post(
+                "/workflows/v1/start?entrypoint=crawler",
+                json={"workflow_id": "wf-1\nERROR forged record"},
+            )
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(previous)
+
+    lines = [
+        ln for ln in buf.getvalue().splitlines() if "Failed to start workflow" in ln
+    ]
+    assert lines, "the failure was not logged at all"
+    assert "\\n" in lines[0], "the newline must be escaped, not emitted"
+    assert not any(
+        ln.strip().startswith("ERROR forged") for ln in buf.getvalue().splitlines()
+    )

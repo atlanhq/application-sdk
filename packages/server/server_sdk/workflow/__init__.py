@@ -208,7 +208,9 @@ def register_start_route(
             raise HTTPException(status_code=400, detail="Invalid input") from None
         except Exception as e:
             logger.error(
-                "Failed to start workflow %s for app %s: %s",
+                # %r on workflow_id: it comes straight from the request body,
+                # so a newline in it would forge a log record.
+                "Failed to start workflow %r for app %s: %s",
                 workflow_id,
                 app_name,
                 e,
