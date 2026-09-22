@@ -92,8 +92,25 @@ two auto-fixable rules:
     bytes.
   - Translate keyword arguments: `indent=2` → `option=orjson.OPT_INDENT_2`;
     `sort_keys=True` → `option=orjson.OPT_SORT_KEYS` (OR-combine multiple
-    options); a `default=` callable stays as the `default` keyword (orjson
-    supports it).  Drop kwargs orjson cannot express and note them in residue.
+    options).  Drop kwargs orjson cannot express and note them in residue.
+  - **A `default=` callable survives the swap but STOPS BEING CALLED for the
+    types orjson serializes natively** — `datetime`, `date`, `time`, `uuid.UUID`,
+    dataclasses and numpy.  `json.dumps` has no native support for any of them,
+    so a `default=` on a stdlib call is very often there precisely to encode
+    one, and orjson silently takes its own path instead.  This is the single
+    highest-risk edit in this rule: the finding clears, the tests that do not
+    assert on the encoded value pass, and the output shape changes.
+    Before swapping any `dumps` that passes `default=`, read the callable.  If
+    it handles a natively-serialized type, add the matching passthrough option
+    so orjson routes that type back to it — `orjson.OPT_PASSTHROUGH_DATETIME`
+    for `datetime`/`date`/`time` — and OR it with any other option.  Where no
+    passthrough exists for the type, the swap is NOT mechanical: leave the site
+    on stdlib `json` and residue it.
+    Seen in the field on a connector whose `default=` mapped `datetime` to
+    epoch-milliseconds because the publish app rejects ISO strings with
+    `ATLAS-404-00-007 invalid value for type date`.  The straight swap reverted
+    every date attribute to ISO; conformance reported a clean fix and only a
+    pre-existing unit test caught it.
   - Ensure `import orjson` is present at module top (it is a core SDK
     dependency); add it if missing.
 

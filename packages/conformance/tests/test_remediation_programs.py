@@ -171,6 +171,34 @@ def test_every_area_declares_rule_ids(area: str) -> None:
     ), f"{area} forwards rule_ids but never declares it as a parameter"
 
 
+def test_o001_prescription_warns_orjson_bypasses_default() -> None:
+    """orjson serializes datetime/date/time/UUID/dataclasses natively and never
+    consults ``default``. ``json.dumps`` supports none of them, so a ``default=``
+    on a stdlib call is very often there to encode exactly one of those — and the
+    swap silently stops calling it.
+
+    The prescription used to say only that ``default=`` "stays as the default
+    keyword (orjson supports it)", which is true and, on its own, misleading: the
+    finding clears, the output shape changes, and a re-detect reports a clean
+    fix. It cost a connector every date attribute on its published assets
+    (ATLAS-404-00-007), caught by a pre-existing unit test rather than by any
+    gate.
+
+    So the prose must name the bypass AND the passthrough option that restores
+    the old behaviour.
+    """
+    text = _read("areas/optimizations.prose.md")
+    start = text.index("**O001 OrjsonOverStdlibJson**")
+    prescription = text[start : text.index("**O002", start)]
+
+    for needle in ("default", "OPT_PASSTHROUGH_DATETIME", "datetime"):
+        assert needle in prescription, (
+            f"O001's prescription does not mention {needle!r} — a `default=` that "
+            "encodes a natively-serialized type will be silently bypassed by the "
+            "swap this rule prescribes"
+        )
+
+
 REFERENCE_APPS = (
     "atlan-mysql-app",
     "atlan-metabase-app",
