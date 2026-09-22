@@ -603,8 +603,15 @@ def build_asgi_app(
     app.state.app_version = version
     app.state.server_revision = revision
     revision_headers = _revision_headers(version, revision)
-    app.add_middleware(_RevisionHeaderMiddleware, headers=revision_headers)
+    # Order matters, and it is the reverse of the reading order:
+    # add_middleware prepends, so the LAST added is the OUTERMOST. The revision
+    # stamper must be outermost so it also stamps the body cap's 413 -- its
+    # docstring claims coverage does not depend on whether a route matched, and
+    # the 413 was the one response that escaped it. The cap still refuses an
+    # oversize body before the app ever reads it; the stamper only edits the
+    # response-start message on the way back out.
     app.add_middleware(_BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
+    app.add_middleware(_RevisionHeaderMiddleware, headers=revision_headers)
 
     @app.exception_handler(RequestContractError)
     async def _handle_request_contract_error(

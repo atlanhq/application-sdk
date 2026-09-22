@@ -99,3 +99,23 @@ def test_the_default_applies_when_unset(monkeypatch) -> None:
 
     monkeypatch.delenv("SERVER_SDK_MAX_BODY_BYTES", raising=False)
     assert _max_request_body_bytes() == 1048576
+
+
+def test_the_413_is_stamped_like_every_other_response(client: TestClient) -> None:
+    """_RevisionHeaderMiddleware's docstring says coverage does not depend on
+    whether a route matched — the 413 was the one response that escaped it,
+    because the cap sat outside the stamper."""
+    stamped = build_asgi_app(
+        DefaultHandler(), app_name="acme", app_package="server_sdk"
+    )
+    probe = TestClient(stamped, raise_server_exceptions=False)
+    oversize = probe.post(
+        "/workflows/v1/auth",
+        content=json.dumps({"x": "y" * (MAX_REQUEST_BODY_BYTES + 500)}),
+        headers={"content-type": "application/json"},
+    )
+    assert oversize.status_code == 413
+    assert "x-atlan-server-revision" in oversize.headers
+    # and the normal path is unchanged
+    ok = probe.post("/workflows/v1/auth", json={"credentials": []})
+    assert "x-atlan-server-revision" in ok.headers
