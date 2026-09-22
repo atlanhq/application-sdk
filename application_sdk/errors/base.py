@@ -36,20 +36,32 @@ _TRACEBACK_MAX_LEN = 8000
 #: Recursion bound for :func:`redact_wire_value`. A pathologically deep
 #: hand-built structure must truncate rather than overflow the stack.
 _REDACT_MAX_DEPTH: int = 32
-# Matches URL userinfo that carries a password: ``scheme://user:pass@host`` →
-# ``scheme://***@host``, any scheme (SQLAlchemy/JDBC/Redis-style included, so
-# ``redis://:s3cret@host`` with an empty user is covered). The userinfo must
-# contain a ``:`` and must end at an ``@`` before any ``/``. A bare username is
-# NOT a credential and is left alone: the earlier greedy form (any run up to
-# the last ``@``) wiped the container in ``abfss://container@account`` and
-# everything up to an e-mail address sitting in a query string — tolerable in
-# a log string, not in a ``FailureDetails.message`` the Automation Engine shows
-# to a person. A password containing ``@`` is still taken whole: once a
-# password-bearing userinfo is found, further ``xxx@`` runs before the first
-# ``/`` belong to it.
+# Matches URL userinfo of any shape — ``user:pass@``, a bare token as the whole
+# userinfo (git remotes, registries, webhook URLs), an empty user with a
+# password (``redis://:pw@``) — up to the ``@`` that ends it, which must come
+# before any ``/`` or whitespace, so an ``@`` in a path or query string is never
+# userinfo. A password containing ``@`` is taken whole: further ``xxx@`` runs
+# before the first ``/`` belong to the same userinfo. The one exemption lives in
+# :func:`_sub_userinfo`: in the Azure blob schemes ``container@account`` is
+# addressing, not a credential, and is left alone while no password is present.
+# The negative lookbehind makes the scheme start at a token boundary — without
+# it the engine, refused at ``abfss://``, retries at ``bfss://`` and redacts the
+# container anyway. (An earlier cut required a ``:`` in the userinfo instead;
+# that dropped the bare-token class the greedy form had always covered.)
 _URL_USERINFO_RE = re.compile(
-    r"([a-z][a-z0-9+.-]*://)(?:[^@\s/]*:[^@\s/]*@)(?:[^@\s/]*@)*", re.IGNORECASE
+    r"(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*://)((?:[^@\s/]*@)+)", re.IGNORECASE
 )
+_STRUCTURAL_USERINFO_SCHEMES = frozenset({"abfss", "abfs", "wasbs", "wasb"})
+
+
+def _sub_userinfo(m: re.Match[str]) -> str:
+    """Replacement for :data:`_URL_USERINFO_RE`: redact, unless it is Azure addressing."""
+    scheme, userinfo = m.group(1), m.group(2)
+    if scheme[:-3].lower() in _STRUCTURAL_USERINFO_SCHEMES and ":" not in userinfo:
+        return m.group(0)
+    return f"{scheme}***@"
+
+
 # Matches secret query params: api_key=value → api_key=***
 # ``pwd`` covers ODBC/DSN keyword syntax (``UID=sa;PWD=…``), which no other
 # keyword here matches — ODBC connectors do not use ``password=``.
@@ -94,7 +106,7 @@ def redact_secrets(text: str) -> str:
     should stringify first (the sibling :func:`sanitize_cause_repr` does this
     for cause exceptions). Non-``str`` input raises ``TypeError`` via ``re``.
     """
-    text = _URL_USERINFO_RE.sub(r"\1***@", text)
+    text = _URL_USERINFO_RE.sub(_sub_userinfo, text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
     return text
 

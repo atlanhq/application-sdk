@@ -380,9 +380,14 @@ defect it reported reproduced.
 2. **The envelope validator over-redacted fleet-wide.** The userinfo pattern
    was greedy to the last `@` by design, written for log strings; on the
    Automation Engine-facing `message` it wiped `abfss://container@account` and
-   query-string e-mail addresses. It now requires a password (`user:pass@`) and
-   stops at the first `/`. An earlier test pinned the greedy behaviour as
-   intentional; it is rewritten to pin the reversal, with the reason.
+   query-string e-mail addresses. It now stops at the first `/` — so an `@` in a
+   path or query string is never userinfo — and exempts only the Azure blob
+   schemes' `container@account` addressing while no password is present; every
+   other userinfo shape, including a bare token as the username, is still
+   redacted. A first cut required a `:` in the userinfo and silently dropped
+   that bare-token class; the mothership review caught it. An earlier test
+   pinned the greedy behaviour as intentional; it is rewritten to pin the new
+   rule, with the reason.
 3. The raised error's message — the `exception.message` on the adjacent record —
    was built from raw handler strings and never redacted. It is now.
 4. An un-migrated check whose own line is the attribution is named; two

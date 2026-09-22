@@ -559,8 +559,8 @@ def test_redact_secrets_stops_at_the_path_and_keeps_a_query_email() -> None:
     redaction moved onto the ``FailureDetails`` envelope it reached every
     message the Automation Engine shows a person, and the greedy form wiped
     ADLS container names and query-string e-mail addresses (next test). The
-    match now ends at the first `/` after a password-bearing ``user:pass@``.
-    The password is still fully redacted here; nothing leaks."""
+    match now ends at the first `/`, so an ``@`` in a path or query string is
+    never userinfo. The password is still fully redacted here; nothing leaks."""
     from application_sdk.errors import redact_secrets
 
     # The `@b` in the query string is no longer swallowed; the password is.
@@ -573,19 +573,42 @@ def test_redact_secrets_stops_at_the_path_and_keeps_a_query_email() -> None:
     assert out == "postgresql://***@host/db connected as a@b"
 
 
-def test_redact_secrets_leaves_a_bare_username_alone() -> None:
-    # A username with no password is not a credential. The greedy form wiped
-    # the ADLS container in ``abfss://container@account`` and everything up to
-    # an e-mail address in a query string, and once redaction moved onto the
-    # FailureDetails envelope that reached every Automation Engine-facing
-    # message, not just log strings.
+def test_redact_secrets_keeps_the_azure_container_in_a_passwordless_blob_url() -> None:
+    """``container@account`` in the Azure blob schemes is addressing, not a
+    credential. Every other scheme's userinfo is redacted whatever its shape —
+    see the bare-token test below — so the exemption is scoped to these four
+    schemes, and only while no password is present."""
     from application_sdk.errors import redact_secrets
 
     for text in (
         "Cannot read abfss://raw@lakehouse01.dfs.core.windows.net/bronze/orders",
-        "GET https://adb-123.azuredatabricks.net/api/2.0/workspace/list?path=/Users/alice@corp.com/etl failed 403",
+        "wasbs://landing@acct.blob.core.windows.net/2026/09/",
+        # Glued to prose: the scheme is still recognised from its own start.
+        "path=abfss://raw@lakehouse01.dfs.core.windows.net/x",
     ):
         assert redact_secrets(text) == text
+    # A password in the same position is still a password.
+    assert (
+        redact_secrets("abfss://raw:s3cret@lakehouse01.dfs.core.windows.net/bronze")
+        == "abfss://***@lakehouse01.dfs.core.windows.net/bronze"
+    )
+
+
+def test_redact_secrets_redacts_a_bare_token_used_as_username() -> None:
+    """A token as the whole userinfo — git remotes, registries, webhook URLs —
+    has no ``:`` and is exactly the shape a colon-based rule misses."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets(
+            "https://ghp_16C7e42F292c6912E7710c838347Ae178B4a@github.com/org/x.git"
+        )
+        == "https://***@github.com/org/x.git"
+    )
+    assert (
+        redact_secrets("git clone https://glpat-AbCdEf123456@gitlab.com/acme/repo.git")
+        == "git clone https://***@gitlab.com/acme/repo.git"
+    )
 
 
 def test_redact_secrets_still_takes_the_whole_userinfo_when_the_password_has_an_at() -> (
@@ -608,5 +631,8 @@ def test_redact_secrets_covers_an_empty_username_with_a_password() -> None:
 def test_redact_secrets_leaves_a_port_and_query_email_alone() -> None:
     from application_sdk.errors import redact_secrets
 
-    text = "https://host.internal:8080/api?owner=alice@corp.com"
-    assert redact_secrets(text) == text
+    for text in (
+        "https://host.internal:8080/api?owner=alice@corp.com",
+        "GET https://adb-123.azuredatabricks.net/api/2.0/workspace/list?path=/Users/alice@corp.com/etl failed 403",
+    ):
+        assert redact_secrets(text) == text

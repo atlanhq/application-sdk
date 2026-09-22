@@ -27,10 +27,11 @@ supposed to branch on a field rather than regex a message. That makes the field
 not an implementation detail.
 
 `message` and `suggested_action` are **redacted where the envelope is built**, by
-a `field_validator` on the model: URL userinfo that carries a password
-(`scheme://user:pass@host` → `scheme://***@host`; a bare username is left
-alone) and secret-named query or DSN parameters (`password=`, `api_key=`,
-`pwd=`, … → `***`). A consumer must not expect raw credential text in either
+a `field_validator` on the model: URL userinfo of any shape
+(`scheme://user:pass@host` or a bare token as the username → `scheme://***@host`;
+only the Azure blob schemes' `container@account` addressing is left alone, and
+only while no password is present) and secret-named query or DSN parameters
+(`password=`, `api_key=`, `pwd=`, … → `***`). A consumer must not expect raw credential text in either
 field, and must not rely on either as a stable identifier — the same handler
 line can arrive redacted differently if the redaction rules change. The pass is
 idempotent, so an envelope replayed off the wire compares equal. `evidence` is
