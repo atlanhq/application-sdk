@@ -39,15 +39,30 @@ def _should_own_root() -> bool:
     return importlib.util.find_spec("application_sdk") is None
 
 
-def _configure() -> None:
-    global _CONFIGURED
-    if _CONFIGURED:
-        return
-    if not _should_own_root():
-        # Still mark configured: the decision cannot change within a process,
-        # and re-probing would cost a find_spec on every get_logger call.
-        _CONFIGURED = True
-        return
+class _UntilRootIsClaimedHandler(logging.StreamHandler):
+    """A stderr sink that switches itself off the moment anyone claims root.
+
+    Deferring to application_sdk leaves a window: its InterceptHandler is
+    installed by a module-level ``basicConfig`` that runs only when
+    ``application_sdk.observability.logger_adaptor`` is IMPORTED, which in the
+    host is after app discovery, mount and revision logging -- and the serving
+    packages deliberately do not depend on application_sdk, so on a host
+    without it nothing imports the bridge at all. Root then has no handler and
+    every server_sdk record below WARNING goes to ``lastResort`` or nowhere.
+
+    Emitting only while root is unclaimed keeps both orders correct without
+    server_sdk ever owning root: no record is dropped before the bridge
+    appears, and nothing is double-printed after it does.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if logging.getLogger().handlers:
+            return
+        super().emit(record)
+
+
+def _resolve_level() -> tuple[str, str, bool]:
+    """Return the level to use, what was asked for, and whether it was unusable."""
     # ATLAN_LOG_LEVEL is the primary name -- it is what the fleet sets, and
     # application_sdk reads it first -- with LOG_LEVEL as the fallback. Reading
     # only LOG_LEVEL meant a tenant raising the level got no effect at all.
@@ -58,7 +73,34 @@ def _configure() -> None:
     # server_sdk module -- so one typo in a chart value would crashloop the whole
     # host, every app with it, rather than degrading one log line.
     unusable = requested not in logging.getLevelNamesMapping()
-    level = "INFO" if unusable else requested
+    return ("INFO" if unusable else requested), requested, unusable
+
+
+def _configure() -> None:
+    global _CONFIGURED
+    if _CONFIGURED:
+        return
+    if not _should_own_root():
+        # Do not own root, but do not go silent either -- see
+        # _UntilRootIsClaimedHandler. The level has to be set on our own logger:
+        # root stays at WARNING, so getEffectiveLevel() would filter INFO out
+        # before any handler ran.
+        level, _requested, _unusable = _resolve_level()
+        pkg = logging.getLogger("server_sdk")
+        if not any(
+            isinstance(h, _UntilRootIsClaimedHandler) for h in pkg.handlers
+        ):
+            handler = _UntilRootIsClaimedHandler()
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+            )
+            pkg.addHandler(handler)
+        pkg.setLevel(level)
+        # Still mark configured: the decision cannot change within a process,
+        # and re-probing would cost a find_spec on every get_logger call.
+        _CONFIGURED = True
+        return
+    level, requested, unusable = _resolve_level()
     # Exactly one basicConfig call: it configures the root logger only the first
     # time, so a warning emitted before it would fix the level at WARNING.
     logging.basicConfig(
@@ -87,9 +129,12 @@ class _RedactingFilter(logging.Filter):
       left the password one line below on the traceback.
 
     A filter rather than discipline at ~25 call sites: the next ``exc_info``
-    would reintroduce it. ``exc_info`` is cleared once folded into
-    ``exc_text``, because a structured/JSON/OTel handler re-derives the
-    traceback from ``exc_info`` and would otherwise bypass the redaction.
+    would reintroduce it. The redacted traceback ends up appended to the
+    MESSAGE, with both ``exc_info`` and ``exc_text`` cleared, so it survives a
+    handler that reads only ``getMessage()`` -- application_sdk's
+    InterceptHandler, which owns root in the host, is exactly that -- while a
+    structured/JSON/OTel sink still cannot re-derive the unredacted chain from
+    the original exception objects.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -107,6 +152,23 @@ class _RedactingFilter(logging.Filter):
         # works, and a tuple there raises the same way. A filter that deletes
         # the line it was protecting is worse than the leak.
         try:
+            self._redact(record)
+            return True
+        except Exception:  # noqa: BLE001 — conformance E011.
+            # This filter runs on EVERY record in a process serving eight apps,
+            # so a raise here would take out logging for all of them. Fail
+            # CLOSED: drop the payload rather than pass a record this filter
+            # could not prove clean. The line survives as a marker so the loss
+            # is visible instead of silent.
+            record.msg = "<log record dropped: redaction failed>"
+            record.args = None
+            record.exc_info = None
+            record.exc_text = None
+            return True
+
+    @staticmethod
+    def _redact(record: logging.LogRecord) -> None:
+        try:
             text = record.getMessage()
         except Exception:  # noqa: BLE001 — a bad format/arg pair must not
             # become an exception in the logging path; fall back to the raw msg
@@ -121,7 +183,17 @@ class _RedactingFilter(logging.Filter):
             record.exc_info = None
         elif record.exc_text:
             record.exc_text = redact_secrets(record.exc_text)
-        return True
+        # Fold the redacted traceback into the message. exc_text alone only
+        # survives a stdlib Formatter; the host gives root to application_sdk's
+        # InterceptHandler, which emits record.exc_info and never reads
+        # exc_text, so clearing exc_info there deleted the stack outright for
+        # every exc_info=True site. Both clears are load-bearing and for
+        # different reasons: exc_info so a loguru/OTel sink cannot re-derive the
+        # UNREDACTED traceback from the live exception objects, exc_text so
+        # logging.Formatter does not then append it a second time.
+        if record.exc_text:
+            record.msg = f"{record.msg}\n{record.exc_text}"
+            record.exc_text = None
 
 
 _REDACTING_FILTER = _RedactingFilter()

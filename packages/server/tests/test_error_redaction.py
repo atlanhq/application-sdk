@@ -356,6 +356,44 @@ def test_the_traceback_survives_redaction() -> None:
     assert "postgresql://***@warehouse.internal:5439/db" in logs
 
 
+def test_the_traceback_survives_a_handler_that_reads_only_the_message() -> None:
+    """The test above witnesses through a stdlib Formatter, which reads
+    ``exc_text``. The host does not: it gives root to application_sdk's
+    InterceptHandler, which emits ``record.getMessage()`` and ``exc_info`` and
+    never looks at ``exc_text``. Folding into exc_text alone therefore deleted
+    the stack outright for every ``exc_info=True`` site in the host -- green
+    suite, no traceback in production. Witness the way the host actually does.
+    """
+    import logging
+
+    from server_sdk.observability.logger_adaptor import get_logger
+
+    class MessageOnly(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list[str] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.seen.append(record.getMessage())
+
+    log = get_logger("server_sdk.tests.message_only")
+    sink = MessageOnly()
+    log.addHandler(sink)
+    log.propagate = False
+    try:
+        try:
+            raise RuntimeError(f'FATAL: boom; dsn="{DSN}"')
+        except RuntimeError:
+            log.error("auth failed", exc_info=True)
+    finally:
+        log.removeHandler(sink)
+
+    out = "\n".join(sink.seen)
+    assert "Traceback" in out
+    assert "postgresql://***@warehouse.internal:5439/db" in out
+    assert not any(secret in out for secret in SECRETS)
+
+
 def test_a_raw_exception_operand_is_redacted() -> None:
     """Some sites pass the exception object itself as the %s operand."""
     import io
@@ -607,3 +645,71 @@ def test_a_pathologically_deep_evidence_truncates_rather_than_hangs() -> None:
         evidence={"deep": deep},
     ).evidence
     assert "hunter2" not in json.dumps(got, default=str)
+
+
+def test_a_nested_non_str_key_does_not_raise_out_of_the_validator() -> None:
+    """Pydantic validates only the TOP-level key type, so once masking started
+    recursing, a nested mapping could arrive with an int key and ``k.lower()``
+    raised AttributeError straight out of a frozen-model validator -- the 500
+    that this module's mask-instead-of-reject divergence exists to prevent.
+    ``{57014: n}`` is the realistic shape: a connector counting rows by SQLSTATE.
+    """
+    masked = mask_secret_named_keys(
+        {"rows_by_sqlstate": {57014: 3}, "password": "p"}
+    )
+    assert masked["password"] == "***"
+    assert masked["rows_by_sqlstate"] == {57014: 3}
+
+
+def test_a_non_dict_mapping_has_its_strings_redacted() -> None:
+    """The two halves of the composed validator have to agree on what a mapping
+    is. ``redact_wire_value`` tested ``dict`` while the masker descended into any
+    ``Mapping``, so a ChainMap shipped a live DSN to the /check body -- next to a
+    masked 'password', which made the response look redacted while it was not.
+    """
+    import collections
+
+    wire = redact_wire_value({"cfg": collections.ChainMap({"dsn": DSN})})
+    assert "postgresql://***@warehouse.internal:5439/db" in repr(wire)
+    assert not any(secret in repr(wire) for secret in SECRETS)
+
+
+def test_masking_keeps_a_namedtuple_a_namedtuple() -> None:
+    """``redact_wire_value`` deliberately rebuilds a NamedTuple so field names
+    survive; the masker flattened it back to a plain tuple one step later. No
+    wire consequence -- JSON is identical -- but in-process readers of
+    ``.evidence`` lost attribute access, and the sibling's comment promised
+    otherwise.
+    """
+    import typing
+
+    class Row(typing.NamedTuple):
+        host: str
+        password: str
+
+    out = mask_secret_named_keys({"row": Row(host="db", password="p")})["row"]
+    assert hasattr(type(out), "_fields")
+    assert out.host == "db"
+
+
+def test_a_redaction_failure_drops_the_payload_instead_of_the_process() -> None:
+    """The filter runs on every record in a process serving eight apps, so a
+    raise inside it would take logging out for all of them. It fails CLOSED:
+    the record still passes (nothing crashes), but carries a marker rather than
+    a payload this filter could not prove clean.
+    """
+    import logging
+    from unittest import mock
+
+    from server_sdk.observability import logger_adaptor
+
+    record = logging.LogRecord(
+        "server_sdk.tests.boom", logging.ERROR, __file__, 1, f"dsn={DSN}", None, None
+    )
+    with mock.patch.object(
+        logger_adaptor, "redact_secrets", side_effect=RuntimeError("regex blew up")
+    ):
+        assert logger_adaptor._REDACTING_FILTER.filter(record) is True
+
+    assert record.getMessage() == "<log record dropped: redaction failed>"
+    assert not any(secret in record.getMessage() for secret in SECRETS)

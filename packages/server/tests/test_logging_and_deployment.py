@@ -141,3 +141,48 @@ def test_the_redaction_filter_is_attached_either_way() -> None:
 
     logger = get_logger("server_sdk.filter.probe")
     assert any(isinstance(f, _RedactingFilter) for f in logger.filters)
+
+
+# ── the deferral window ─────────────────────────────────────────────────────
+
+
+def test_the_fallback_sink_covers_the_window_then_steps_aside() -> None:
+    """Deferring to application_sdk leaves a gap nothing used to cover.
+
+    Its InterceptHandler is installed by a module-level ``basicConfig`` that
+    runs only when its observability module is IMPORTED -- in the host that is
+    after discovery, mount and revision logging, and on a host without
+    application_sdk at all it never happens, because the serving packages
+    deliberately do not depend on it. Root then has no handler and every
+    server_sdk record below WARNING went to ``lastResort`` or nowhere.
+
+    So the fallback emits only while root is unclaimed: no record dropped
+    before the bridge appears, nothing double-printed after it does.
+    """
+    import io
+    import logging
+
+    from server_sdk.observability.logger_adaptor import _UntilRootIsClaimedHandler
+
+    buf = io.StringIO()
+    handler = _UntilRootIsClaimedHandler(buf)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    log = logging.getLogger("server_sdk.tests.window")
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    try:
+        root.handlers = []
+        log.info("during-the-window")
+        assert "during-the-window" in buf.getvalue()
+
+        # Someone claims root, exactly as application_sdk's basicConfig would.
+        root.handlers = [logging.NullHandler()]
+        log.info("after-the-bridge-arrives")
+        assert "after-the-bridge-arrives" not in buf.getvalue()
+    finally:
+        root.handlers = saved
+        log.removeHandler(handler)

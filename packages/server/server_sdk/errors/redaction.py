@@ -168,7 +168,12 @@ def redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) 
     if isinstance(value, str):
         return redact_secrets(value)
 
-    if isinstance(value, dict):
+    # Mapping, not dict: the masking half of this pair (_mask_nested) descends
+    # into any Mapping, so a dict-only test here let strings inside a ChainMap
+    # or MappingProxyType reach the /check body unredacted -- next to a masked
+    # 'password', which makes the response LOOK redacted while it is not. The
+    # branch rebuilds a plain dict, so no Mapping subclass constructor runs.
+    if isinstance(value, Mapping):
         seen = set() if seen is None else seen
         if id(value) in seen:
             return None
@@ -213,11 +218,21 @@ def secret_named_evidence_keys(evidence: Mapping[str, Any]) -> frozenset[str]:
         >>> sorted(secret_named_evidence_keys({"host": "db", "api_key": "x"}))
         ['api_key']
     """
+    # isinstance guard, not str(k): pydantic validates only the TOP-level key
+    # type, so a nested mapping reaches here with any hashable key and a bare
+    # k.lower() raised AttributeError straight out of a frozen-model validator
+    # -- the 500 that this module's mask-instead-of-reject divergence exists to
+    # prevent. Skipping is right rather than coercing: a non-str key cannot be
+    # a secret-NAMED key, and str(b"password") is "b'password'", which matches
+    # neither denylist anyway. Its VALUE still goes through redact_wire_value.
     return frozenset(
         k
         for k in evidence
-        if k.lower() in _EVIDENCE_KEY_DENYLIST
-        or any(k.lower().endswith(s) for s in _EVIDENCE_KEY_SUFFIX_DENYLIST)
+        if isinstance(k, str)
+        and (
+            k.lower() in _EVIDENCE_KEY_DENYLIST
+            or any(k.lower().endswith(s) for s in _EVIDENCE_KEY_SUFFIX_DENYLIST)
+        )
     )
 
 
@@ -255,7 +270,17 @@ def _mask_nested(value: Any, depth: int) -> Any:
         return mask_secret_named_keys(value, depth)
     if isinstance(value, (list, tuple)):
         masked = [_mask_nested(v, depth + 1) for v in value]
-        return type(value)(masked) if isinstance(value, list) else tuple(masked)
+        if isinstance(value, tuple):
+            if hasattr(type(value), "_fields"):
+                # Mirror redact_wire_value: a NamedTuple takes positional
+                # fields. Flattening here undid the preservation one function
+                # above, so in-process readers of .evidence lost the names.
+                try:
+                    return type(value)(*masked)
+                except Exception:  # noqa: BLE001 - connector-authored type
+                    return tuple(masked)
+            return tuple(masked)
+        return type(value)(masked)
     return value
 
 
