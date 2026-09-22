@@ -534,8 +534,10 @@ apps believe they are gated" is only answerable from posture rows.
 
 Any row with at least one failed check also carries `failure.message`, the human line for the
 failure the row is attributed to — the same one `reason` is derived from, so the two always agree.
-It is secret-redacted and length-capped on the way out, because a handler's `message` is authored by
-the app and is not sanitized upstream. Alongside it, `failure.check` names the check that message
+It is length-capped on the way out, and redacted twice over: `FailureDetails` scrubs `message` in its
+own validator, and the emit site scrubs again on the way to the attribute. The raw
+`PreflightOutput.message` / `PreflightCheck.message` an untyped verdict is built from never reach
+that validator, which is why the gate redacts them where it renders them too. Alongside it, `failure.check` names the check that message
 came from, matched on `(code, message)` rather than object identity: the workflow frame recovers its
 evidence off the failure chain, so what it holds crossed the wire, and a handler may hand one error
 to both the aggregate and a check, which coerce separately. Where several checks failed and none

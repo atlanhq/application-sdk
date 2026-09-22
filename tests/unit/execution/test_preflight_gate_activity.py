@@ -2577,9 +2577,12 @@ class TestOutcomeRowNamesTheFailure:
         )
 
     async def test_message_is_redacted_before_it_reaches_the_row(self) -> None:
-        # to_failure_details() passes `message` through raw and only sanitizes
-        # `cause_repr`, and a driver exception routinely carries a connection
-        # string — so the emit site is the last place this can be scrubbed.
+        # Scrubbed by the FailureDetails validator, so this holds whatever route
+        # the message took to reach the row; the emit site's own redact_and_cap
+        # is the cap plus defence in depth. A driver exception routinely carries
+        # a connection string, and this pins that none of it lands as a log
+        # attribute. The sibling below covers the one string the validator
+        # genuinely never sees: a raw PreflightOutput.message.
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
