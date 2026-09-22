@@ -333,7 +333,16 @@ jobs:
             # import the app — so under `with-tests` this leg needs the caller's
             # environment materialised, exactly like the D leg. It stays isolated
             # (and cheap) when the caller leaves `with-tests` at its false default.
-            needs_env: ${{ inputs.with-tests }}
+            #
+            # Spelled as the STRING 'true'/'false', not the boolean input, so it
+            # matches the D leg above. `matrix.needs_env == 'true'` guards the
+            # apt-packages step below, and GHA casts both sides to a number when
+            # the types differ: boolean true -> 1, 'true' -> NaN, so a boolean
+            # here compares false and silently skips the system-deps install on
+            # exactly the repos that declared native deps — `uv sync` would then
+            # fail on this leg. The composite action is unaffected either way
+            # (action inputs stringify), which is what makes it silent.
+            needs_env: ${{ inputs.with-tests && 'true' || 'false' }}
           - series: O
             name: "Optimizations"
             slug: optimizations

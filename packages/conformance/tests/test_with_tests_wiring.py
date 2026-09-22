@@ -242,7 +242,44 @@ def test_preflight_leg_ties_its_environment_to_the_input() -> None:
     legs = {leg["series"]: leg for leg in _matrix_legs()}
     assert _PREFLIGHT_SERIES in legs, sorted(legs)
     needs_env = legs[_PREFLIGHT_SERIES].get("needs_env")
-    assert needs_env == "${{ inputs." + _INPUT + " }}", needs_env
+    assert _INPUT in str(needs_env), needs_env
+
+
+def test_every_needs_env_resolves_to_a_string() -> None:
+    """No leg may hand `matrix.needs_env` a boolean.
+
+    `matrix.needs_env == 'true'` guards the system-deps install step, and
+    GHA casts both sides to a number when their types differ: boolean
+    `true` becomes 1 and `'true'` becomes NaN, so the comparison is false.
+    A leg spelling `needs_env: ${{ inputs.with-tests }}` therefore skips
+    the apt-get step on exactly the repos that declared native deps, and
+    `uv sync` fails on that leg — while the composite action still sees
+    "true", because action inputs stringify. That asymmetry is what makes
+    the bug silent, so it is pinned here rather than left to review.
+
+    Enforced syntactically: a value is acceptable only if it is a quoted
+    literal, or an expression whose branches are quoted literals. A bare
+    `${{ <ref> }}` passthrough is rejected whatever it references.
+    """
+    offenders = {}
+    for leg in _matrix_legs():
+        raw = leg.get("needs_env")
+        if raw is None:
+            continue  # leg opts out entirely; nothing to coerce
+        value = str(raw)
+        if "${{" not in value:
+            # A plain YAML scalar. It must be the string, not a bool.
+            if not isinstance(raw, str):
+                offenders[leg["series"]] = f"{raw!r} is {type(raw).__name__}"
+            continue
+        # An expression: both branches have to be quoted string literals.
+        if "'true'" not in value or "'false'" not in value:
+            offenders[leg["series"]] = value
+    assert not offenders, (
+        "these legs hand matrix.needs_env a value that can resolve to a "
+        f"boolean, which silently fails `== 'true'`: {offenders}. Spell it "
+        "`${{ <cond> && 'true' || 'false' }}`."
+    )
 
 
 def test_no_other_leg_opted_into_the_input() -> None:
