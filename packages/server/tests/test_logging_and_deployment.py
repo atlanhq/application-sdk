@@ -6,7 +6,6 @@ hosted app — so a mistake in either is a whole-host problem, not one app's.
 
 from __future__ import annotations
 
-import logging
 import subprocess
 import sys
 
