@@ -12,6 +12,10 @@ them on a dedicated ``bump-version-*`` branch:
   * contract-toolkit  -> bump-version-contract-toolkit
                          (contract-toolkit/src/PklProject,
                           contract-toolkit/CHANGELOG.md)
+  * server            -> bump-version-server
+                         (packages/server/pyproject.toml,
+                          packages/server/server_sdk/__init__.py,
+                          packages/server/CHANGELOG.md)
 
 A human editing any of these files on a normal branch desyncs the package from
 its published state and wedges the release automation. The motivating incident:
@@ -95,6 +99,21 @@ PACKAGES = (
             "contract-toolkit/src/PklProject": _PKL_VERSION,
         },
         changelog_files=("contract-toolkit/CHANGELOG.md",),
+    ),
+    # server_release.py is built on the conformance model, not the SDK's: it
+    # exits with "tag not found but other server tags exist" when the declared
+    # version has no matching server-v* tag. So a hand-bump here wedges every
+    # later server release exactly as the conformance incident above did -- the
+    # reason this guard exists. The SDK stays unguarded because release.py
+    # derives its previous version from `git describe` and degrades instead.
+    Package(
+        name="server",
+        bump_branch="bump-version-server",
+        version_files={
+            "packages/server/pyproject.toml": _PYPROJECT_VERSION,
+            "packages/server/server_sdk/__init__.py": _PY_DUNDER_VERSION,
+        },
+        changelog_files=("packages/server/CHANGELOG.md",),
     ),
 )
 
