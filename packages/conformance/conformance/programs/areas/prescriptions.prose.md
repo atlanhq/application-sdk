@@ -218,13 +218,92 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      `from application_sdk.contracts.types import MaxItems` if missing.
      Remove the opt-out last.  Return `outcome = "fix"`.
 
-  3. **Keep the opt-out with a justified suppression** — if a field cannot
-     be concretely typed (an `@entrypoint` contract field: B005 forbids
-     changing its recorded type and `ledger-guard` is append-only), draft
-     an inline `# conformance: ignore[P001] <concise justification>` on
-     the declaration line, where the justification explains *why* unbounded
-     fields are unavoidable here (not merely that the rule is suppressed).
-     Do **not** remove `allow_unbounded_fields`.  Return `outcome = "suppress"`.
+  3. **Retire a field nothing populates** — before concluding that an
+     `@entrypoint` field is immovable, check whether it is *live*.  Grep the
+     generated `manifest.json` `dag.<node>.inputs.args` for the field name and
+     grep the repo for constructions of the contract.  A field absent from the
+     manifest and constructed nowhere is dead weight (a defensive
+     `getattr(input, "x", {})` at the read site is the usual tell).
+
+     Retirement is **two steps, in order**: mark it
+     `Field(..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`,
+     regenerate the ledger, **then remove the field from source**.  B005 skips a
+     sunset field only when it is *absent* from source — `live is None and
+     status == "sunset"` — so a sunset field that is still declared is still
+     judged on its type, and marking it alone changes nothing.  An **unmarked**
+     removal fires B005 at BLOCK tier, which is why the order matters.
+
+     Do not narrow a retired field's type "in the same edit" as a shortcut:
+     that is an ordinary retype and is judged as one.  Narrowing in place is
+     free only where `_retype_is_compatible` allows it — an inherited field, a
+     widening, or replacing `Any` with a concrete type in the **same outer
+     shape** (which payload safety requires anyway).  Return `outcome = "fix"`.
+
+  4. **Keep the opt-out with a justified suppression** — the last resort, and
+     it is reached less often than it looks.
+
+     **Do not assume a recorded field is frozen in source.**  `ledger-guard`
+     refuses a change to a *recorded* `type`; `gen-contract-ledger` never
+     deletes an entry and never rewrites a recorded type, so **narrowing the
+     annotation in source leaves the ledger entry untouched and the guard
+     passes**.  A retype that is refused when applied to the ledger file is not
+     the same as one applied to the contract.  Verify, do not infer:
+
+     ```bash
+     uv run atlan-application-sdk-conformance gen-contract-ledger
+     uv run atlan-application-sdk-conformance ledger-guard \
+       --base-ref origin/main --ledger-path contract_schema.lock.json
+     ```
+
+     Only when 1–3 are all genuinely blocked, draft an inline
+     `# conformance: ignore[P001] <concise justification>` on the declaration
+     line, where the justification explains *why* unbounded fields are
+     unavoidable here (not merely that the rule is suppressed) and names which
+     of 1–3 was tried and what refused it.  Do **not** remove
+     `allow_unbounded_fields`.  Return `outcome = "suppress"`.
+
+  **Before returning `outcome = "fix"`: trace the field to its wire and to its
+  consumers.**  A contract field is an interface with three sides, and the type
+  is only one of them.  Narrowing it changes what the app *accepts* and what
+  downstream code *receives*, neither of which the conformance gates observe —
+  `recheck-narrowest` sees the finding clear and the test suite passes if
+  nothing happens to cover the boundary.  Record each of these in `impact`:
+
+  1. **What the wire sends.**  Find the field in the generated
+     `manifest.json` (`dag.<node>.inputs.args`), then find the input that feeds
+     it in `contract/app.pkl`.  The **widget class decides the shape** — e.g.
+     `APITree` is declared `fixed type = "object"` in the contract toolkit, so
+     it sends a nested JSON object, and a narrowed annotation that only accepts
+     a flat mapping would reject a live payload.  The repo does not control this
+     shape and cannot change it from the Python side.
+  2. **What already normalises it.**  A `@field_validator(..., mode="before")`
+     runs *before* validation, so it can absorb a shape difference the
+     annotation would otherwise reject.  Widening that validator is usually how
+     a field gets narrowed safely without touching the wire contract.  Say so
+     in the proposal rather than leaving the reader to infer it.
+  3. **Every consumer, and what it does with the value.**  Grep the field name
+     across the repo.  Ask what each consumer *actually requires* — iteration
+     and truth-testing (`if not x`, `for k in x`) behave identically for a dict
+     and a list, whereas indexing or `.items()` does not.  A narrowing that
+     preserves the operations the consumers perform is safe even when the
+     concrete type changes.
+  4. **Equivalence, demonstrated rather than argued.**  Run the pre-change and
+     post-change paths over every shape the wire has carried — the widget's own
+     output, a JSON string of it, an empty value, a malformed value, and any
+     legacy shape the old validator explicitly handled — and compare the
+     *consumer's* result, not the field's value.  Anything that decides scope
+     (a filter deciding which assets a crawl covers) must produce an identical
+     selection, because a silent change there widens or narrows a customer's
+     crawl without failing anything.  Add those cases as tests in the same unit;
+     the boundary was uncovered or the narrowing would not have been risky.
+
+  Worth expecting: **the old path may be the broken one.**  In one run the
+  pre-change validator turned a bare list into `{name: True}`, which the
+  consumer then iterated — `TypeError: 'bool' object is not iterable`, raised in
+  the task rather than as a validation error.  The narrowing fixed it as a side
+  effect, and the old unit test had pinned the broken intermediate value without
+  ever feeding it to the consumer.  If a shape crashes the legacy path, that is
+  a finding to report in the proposal, not a mismatch to reconcile.
 
 - **P002 CategoryFieldOverride** — a non-canonical subclass of `AppError` (or
   any of its 15 categorical leaves) redeclares the `category` ClassVar in its
