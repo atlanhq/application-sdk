@@ -1819,6 +1819,35 @@ class TestLifecycleMessageBodies:
         assert "could not connect: timeout after 30s" in msg
         assert " — at " in msg and " in " in msg
 
+    async def test_activity_ended_error_message_redacts_secrets(self, act_next):
+        # A driver error quotes its connection string; Body is the most
+        # searchable field, so neither the userinfo password nor the query
+        # param may reach it.
+        act_next.execute_activity = AsyncMock(
+            side_effect=RuntimeError(
+                "connect failed: postgres://u:pw@h/db?password=x timed out"
+            )
+        )
+        interceptor = _LogActivityInboundInterceptor(act_next)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo()
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                with pytest.raises(RuntimeError):
+                    await interceptor.execute_activity(MockExecuteActivityInput())
+        (body,) = [
+            c[0][0]
+            for c in mock_logger.error.call_args_list
+            if c[0][0].startswith("activity.ended")
+        ]
+        assert "***" in body
+        assert "pw" not in body
+        assert "password=x" not in body
+        assert "postgres://" in body and "timed out" in body
+
     async def test_workflow_started_and_ended_messages_name_the_workflow(self, wf_next):
         interceptor = _LogWorkflowInboundInterceptor(wf_next)
         with patch(
@@ -1860,6 +1889,21 @@ class TestLifecycleMessageBodies:
         suffix = _failure_suffix(ValueError("x" * 500), {})
         assert "x" * _FAILURE_MSG_MAX_CHARS in suffix
         assert "x" * (_FAILURE_MSG_MAX_CHARS + 1) not in suffix
+
+    async def test_failure_suffix_redacts_before_truncating(self):
+        # Truncating first can cut a URL's ``@`` off the retained head while
+        # keeping the password before it; without the ``@`` the userinfo regex
+        # no longer matches, so the secret would ship verbatim.
+        from application_sdk.execution._temporal.interceptors.log import (
+            _FAILURE_MSG_MAX_CHARS,
+            _failure_suffix,
+        )
+
+        head = "postgres://u:hunter2"
+        pad = "x" * (_FAILURE_MSG_MAX_CHARS - len(head))
+        suffix = _failure_suffix(ValueError(f"{pad}{head}@h/db"), {})
+        assert "hunter2" not in suffix
+        assert "postgres://***@" in suffix
 
     async def test_failure_suffix_omits_frame_when_traceback_missing(self):
         # An exception that never propagated (or whose traceback was cleared)
