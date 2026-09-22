@@ -515,7 +515,7 @@ methods that return a different response shape than v2, which may break frontend
 - preflight_check: returns PreflightOutput — service auto-converts to v2 camelCase format {authCheck: {success, message}, connectivityCheck: {success, message}}
 
 ### Phase 7 — Conformance verification
-- Rules applicable to this app: 183 (111 app-scoped + 72 both-scoped)
+- Rules applicable to this app: N (count `runs[0].tool.driver.rules` in the SARIF you produced — do not quote a number from the skill)
 - Blocking findings: N  (must be 0, or each one listed below with the user's stated reason)
 - Warning findings: M  (each fixed, or in the manual-follow-up list with a reason)
 - Accepted-with-reason: <rule id — reason, per line; "none" if none>
@@ -779,7 +779,7 @@ Only print this after parity is achieved or the user accepts the result:
 
 **This phase is mandatory and it is the last one.** Run it even if the user skipped Phase 6 — the live run proves the connector *works*, the conformance suite proves it is *shaped like a v3 app*. They catch different things, and this is the one the app's CI will re-run on every PR.
 
-The migration checker (`tools.migrate_v3.check_migration`) only answers "is the v2 shape gone?". The conformance suite answers "is the v3 shape right?" — **183 of its rules apply to an app repo** (111 `app`-scoped + 72 `both`-scoped), and roughly 50 of those are blocking. A migration can pass the checker with zero FAILs and still land a dozen blocking conformance findings.
+The migration checker (`tools.migrate_v3.check_migration`) only answers "is the v2 shape gone?". The conformance suite answers "is the v3 shape right?" — **every `app`- and `both`-scoped rule applies to a connector repo**, which at conformance 0.36.1 was 183 of the 192 in the catalog, roughly 50 of them blocking. The catalog grows each release, so read the count off your own SARIF rather than trusting that number. A migration can pass the checker with zero FAILs and still land a dozen blocking conformance findings.
 
 ### 7a — Prerequisites
 
@@ -825,27 +825,21 @@ cd <target-path> && uv run --with atlan-application-sdk-conformance \
 
 > **This is not theoretical.** Measured on `atlan-mysql-app` at conformance 0.36.1: the static sweep in (i) returned **3 findings, all warnings, exit code 0** — a clean pass. The same repo with `--series F --with-tests` returned **13 `F016` errors, exit code 1**. Skip this invocation and you will report a conformant app that fails its own Conformance check.
 
-Pick one of:
+Use `--with-tests`. The runner executes the scenarios in a bounded pytest subprocess; it needs an importable app environment, so it runs against the resolved env:
 
 ```bash
-# Self-contained: the runner executes the scenarios in a bounded pytest subprocess.
-# Needs an importable app environment, so it uses the resolved env too.
 cd <target-path> && uv run --with atlan-application-sdk-conformance \
   -- atlan-application-sdk-conformance detect \
   --repo . --scope app --with-tests --test-timeout 180 --output conformance-preflight.sarif
 ```
 
-```bash
-# Or: run them once in the job that already installs the app, then grade the report.
-cd <target-path> && uv run pytest -p conformance.preflight_testing \
-  --preflight-report=preflight-report.json
-cd <target-path> && uv run --with atlan-application-sdk-conformance \
-  -- atlan-application-sdk-conformance detect \
-  --repo . --scope app --preflight-report=preflight-report.json \
-  --output conformance-preflight.sarif
-```
-
-Grading is identical between the two; the second just avoids paying for the app install twice. An unreadable report grades as an **execution error, never as conformance** — so "the file was missing" does not quietly become a pass.
+> **There is a second path, and at the time of writing it is not published yet.** `detect --preflight-report=FILE` grades a report an earlier `pytest -p conformance.preflight_testing --preflight-report=FILE` run wrote, so the scenarios execute once in the job that already installs the app instead of twice. It landed on the conformance `main` branch *after* the `0.36.1` tag was cut, so `uvx atlan-application-sdk-conformance detect --preflight-report=...` currently fails with `unrecognized arguments`. **Probe before you use it** — never infer support from a version number:
+> ```bash
+> cd <target-path> && uv run --with atlan-application-sdk-conformance \
+>   -- atlan-application-sdk-conformance detect --help | grep -q preflight-report \
+>   && echo "supported" || echo "not in this release — use --with-tests"
+> ```
+> When it is supported, grading is the same as `--with-tests`, and an unreadable report grades as an **execution error, never as conformance** — "the file was missing" does not quietly become a pass.
 
 > Narrow the loop while fixing: `--series L` runs one series, `--rule P001,P014` runs exactly those rules and scopes findings, the exit code and the emitted SARIF catalog to them.
 
@@ -895,7 +889,7 @@ Do not finish the migration until:
 - **Warning findings: triaged.** Each one is either fixed or in the manual-follow-up list with a one-line reason. They do not block the merge, but they sit in the app's SARIF and its Security tab until someone deals with them.
 - **The Conformance check is wired** — `.github/workflows/conformance.yaml` exists and calls the reusable workflow (step 7a). Verify by opening the PR and confirming the check appears; a migration that clears the suite locally but never runs it in CI regresses on the next commit.
 
-Report the counts honestly. `183 rules applicable · N blocking findings · M warnings · K accepted` beats "conformance passes".
+Report the counts honestly. `<applicable> rules applicable · N blocking findings · M warnings · K accepted` beats "conformance passes". Take the applicable count from the SARIF you just produced (`runs[0].tool.driver.rules`), not from a number quoted in this file — the catalog grows every conformance release.
 
 ---
 
