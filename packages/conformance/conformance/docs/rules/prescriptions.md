@@ -1295,6 +1295,14 @@ silently. The pyatlan asset .creator() factories own the grammar centrally.
   `APIPath.creator()`, so the grammar is pyatlan's. Where a caller genuinely needs the
   string and not the asset, atlan-metabase-app app/qualified_names.py carries a
   per-function ignore[P028] naming the creator whose grammar it mirrors.
+- **Already correct when:** A justified per-function inline `# conformance: ignore[P028] <reason>` IS the correct
+  end state in two cases, and the reason must say which. Either the caller needs the
+  qualifiedName STRING and not the asset, and the f-string mirrors a pyatlan creator's
+  grammar — the reason then names that creator and the module it lives in, so a drift in
+  pyatlan can be traced here. Or no pyatlan creator owns the grammar at all (a Process /
+  ColumnProcess identity, a content-hashed ARS key), in which case the reason says so
+  and the site is centralised as the single source of truth rather than repeated. A
+  directive on a site that could simply call the creator is unremediated.
 
 An f-string composes a slash-delimited `qualifiedName` — it both interpolates a
 `*qualified_name` / `*_qn` value and contains a `/` separator (e.g.

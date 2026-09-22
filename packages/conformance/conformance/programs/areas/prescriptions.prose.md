@@ -197,6 +197,41 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   class-definition time and the app will not import.  That is the edit that
   broke nine apps; do not draft it.
 
+  **Narrowing a value type is a DATA change — diff the payloads, not just the
+  types.**  `ledger-guard`, `validate_payload_safety` and an import check are
+  all *structural*: they prove the retype is permitted, that the annotation is
+  a legal payload type, and that the class defines.  **None of them proves
+  that a payload the app receives today still validates.**  Replacing
+  `dict[str, Any]` with `dict[str, str | int | bool | None]` silently rejects
+  every inbound payload carrying a nested value, and that failure surfaces at
+  submission or mid-run — never in a gate, and never in the re-detect.  A fix
+  can clear the finding, keep the ledger byte-identical, import cleanly, pass
+  the whole test suite, and still break every tenant whose stored credential
+  has one nested key.
+
+  So before drafting, enumerate the shapes the field actually carries, read
+  out of the code rather than imagined:
+
+  - **the field's parser / normalizer.**  The branches it takes
+    (`isinstance(x, dict)`, `isinstance(x, str)`, a JSON-decode fallback) *are*
+    the supported shapes, and its docstring usually lists them outright.
+  - **its producers** — the generated `manifest.json` args, the handler, the
+    integration and e2e fixtures, the local-dev payload.
+  - **the sibling contracts on the same hop.**  If the `@task` contracts
+    downstream already declare the narrow type, then a payload the entrypoint
+    accepts is already dying one hop later, inside an activity, after the
+    workflow has started.  The narrowing is then *aligning* the boundary, not
+    restricting it — which is the strongest argument for the fix and is
+    invisible unless you look for it.
+
+  Then diff accept/reject across the change and put the result in the
+  proposal, one row per shape.  A shape that goes from working to rejected is
+  a **blocker** — widen the annotation until it passes, or the fix is wrong.
+  A shape that moves from "fails mid-run" to "fails at submission" is an
+  improvement, and saying so is what tells a reviewer the narrowing is safe.
+  Writing "non-scalar values are now correctly rejected" without that table is
+  an assumption wearing the costume of a verification.
+
   Then draft, in order of preference:
 
   1. **Type the field concretely (preferred)** — replace `Any` (and

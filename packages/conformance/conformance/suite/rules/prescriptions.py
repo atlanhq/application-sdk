@@ -542,6 +542,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "app/qualified_names.py carries a per-function ignore[P028] naming the creator "
             "whose grammar it mirrors."
         ),
+        terminal_state=(
+            "A justified per-function inline `# conformance: ignore[P028] <reason>` IS "
+            "the correct end state in two cases, and the reason must say which. "
+            "Either the caller needs the qualifiedName STRING and not the asset, and "
+            "the f-string mirrors a pyatlan creator's grammar — the reason then names "
+            "that creator and the module it lives in, so a drift in pyatlan can be "
+            "traced here. Or no pyatlan creator owns the grammar at all (a Process / "
+            "ColumnProcess identity, a content-hashed ARS key), in which case the "
+            "reason says so and the site is centralised as the single source of truth "
+            "rather than repeated. A directive on a site that could simply call the "
+            "creator is unremediated."
+        ),
         scope=RuleScope.APP,
         name="ManualQualifiedNameFString",
         tier=EnforcementTier.WARN,

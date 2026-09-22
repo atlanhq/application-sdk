@@ -257,6 +257,13 @@ unrelated, making the original failure invisible.
   status and records a residual before returning []. Where the sentinel really is the
   contract, atlan-openapi-app app/api_client.py `redact_url` carries an inline
   ignore[E007] saying so.
+- **Already correct when:** A justified inline `# conformance: ignore[E007] <reason>` IS the correct end state where
+  the sentinel genuinely IS the function's contract — the caller is documented to treat
+  the empty/None return as a normal outcome rather than as success. The reason must say
+  which contract, as atlan-openapi-app `redact_url` does. Where the sentinel instead
+  stands in for a failure the caller cannot distinguish from success, the directive is
+  unremediated: either raise, or record the failure to a durable evidence trail and
+  declare the gap (see E020).
 
 Exception is converted to a return value (None, {}, [], False) with no trace.  Callers
 see a wrong result with no idea why.  At minimum log before returning; prefer raising a
@@ -607,6 +614,15 @@ there is no except/raise to key on; the failure is swallowed by a plain if-guard
   empty sentinel carries an inline ignore[E020] naming the residual file that records
   it. Seven such sites exist across app/extracts/, each justified. Without that evidence
   trail the empty return has to raise.
+- **Already correct when:** A justified inline `# conformance: ignore[E020] <reason>` IS the correct end state where
+  three things hold together: the empty return is deliberate, the failure is recorded to
+  a durable evidence trail that the reason NAMES, and the run declares the resulting gap
+  rather than reporting a complete crawl (e.g. OutputStatus.PARTIAL_SUCCESS). The trail
+  makes the gap reviewable; declaring it is what stops a partial crawl being published
+  as a whole one. A directive naming no trail is unremediated, not compliant, and the
+  empty return must raise instead. Do NOT apply the default edit to a site that already
+  meets all three: raising there deletes the app's ability to degrade, so a single flaky
+  endpoint aborts the entire crawl.
 
 An `if` whose test inspects an HTTP response for failure (a negation or comparison on
 `is_success` / `ok` / `status_code`) and whose branch `return`\ s an empty/None sentinel
