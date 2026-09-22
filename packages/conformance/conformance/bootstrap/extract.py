@@ -1027,6 +1027,52 @@ def extract_build_publish_lfs(text: str) -> str:
     return "true" if extract_field(text, "lfs") == "true" else ""
 
 
+def extract_conformance_private_git_deps(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``conformance.yaml``) opts the suite
+    into resolving private ``atlanhq`` git dependencies, else ``""``.
+
+    Same round-trip contract as ``extract_use_ghcr_base`` and the ``lfs``
+    extractors above — a per-repo choice on an *always-overwrite* shim, so it
+    needs both halves or it cannot survive — but with the loudest failure of
+    the set.
+
+    A repo that pins a private ``atlanhq`` package via ``ssh://`` in
+    ``pyproject.toml`` needs this: the D-series leg materialises the
+    environment with ``uv sync``, and an unauthenticated runner can only clone
+    that dep off a warm ``uv`` cache. On a cache miss the leg dies with
+    ``Permission denied (publickey)`` and takes ``Conformance Gate`` — a
+    REQUIRED check — down with it. Soft mode does not save it either:
+    ``exit-zero`` suppresses rule *violations*, and this is an environment
+    crash before ``detect`` ever runs.
+
+    The opt-in is two lines, not one: the input itself, and ``secrets:
+    inherit``, without which the reusable cannot see ``ORG_PAT_GITHUB``. One
+    value renders both, because half the opt-in is not an opt-in.
+
+    Only a literal ``true`` is preserved, for the same reason as every
+    extractor above: an explicit ``false`` restates the reusable's own default
+    and would read as drift on every repo that spells it by saying nothing.
+    """
+    return "true" if extract_field(text, "private-git-deps") == "true" else ""
+
+
+def extract_release_private_git_auth(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``release.yaml``) opts the version-bump
+    job into private ``atlanhq`` git auth, else ``""``.
+
+    The ``release.yaml`` half of the case documented one function up, and it
+    fails the way ``extract_build_publish_lfs`` does: quietly, and late. The
+    bump step runs ``uv lock``, which re-resolves the private ``ssh://`` dep;
+    without auth it dies on ``Permission denied (publickey)``, so no bump PR
+    opens, no ``release`` label lands, and no tag, GitHub Release or
+    marketplace publish can follow. Every PR check stays green throughout —
+    the first symptom is a release that never happens.
+
+    Same value semantics as the rest: only a literal ``true`` survives.
+    """
+    return "true" if extract_field(text, "private_git_auth") == "true" else ""
+
+
 def extract_field(text: str, field: str) -> str:
     """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
 

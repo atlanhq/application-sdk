@@ -71,7 +71,9 @@ from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_apt_packages,
     extract_build_publish_lfs,
+    extract_conformance_private_git_deps,
     extract_field,
+    extract_release_private_git_auth,
     extract_renovate_automerge,
     extract_tests_yaml_params,
     extract_use_ghcr_base,
@@ -315,6 +317,18 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         kwargs["vuln_scan_lfs"] = extract_vulnerability_scan_lfs(on_disk)
     elif name == "conformance.yaml":
         kwargs["exit_zero"] = _extract_exit_zero(on_disk, root)
+        # A repo pinning a private atlanhq dep via ssh:// needs this input (and
+        # the `secrets: inherit` that feeds it ORG_PAT_GITHUB). Without the
+        # read-back it reports permanent C002 drift whose only "fix" (re-run
+        # bootstrap) deletes the line and reds the Conformance Gate itself.
+        kwargs["conformance_private_git_deps"] = extract_conformance_private_git_deps(
+            on_disk
+        )
+    elif name == "release.yaml":
+        # The same per-repo opt-in on the version-bump job. Quieter than the
+        # one above and later: every PR check stays green while the release
+        # path is broken.
+        kwargs["release_private_git_auth"] = extract_release_private_git_auth(on_disk)
     elif name == "checks.yml":
         # The optional system-deps step is a per-repo value like any other
         # rendered param: a repo that legitimately needs build headers before
