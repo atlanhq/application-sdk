@@ -27,6 +27,12 @@ on:
   pull_request:
     types: [opened, synchronize, labeled, unlabeled, reopened]
     branches: [main]
+  # The connector-review gate below is satisfied by a REVIEW landing, not by a
+  # push or a label — mothership deletes the `ai-connector-review` label in a
+  # `finally` right after it dispatches. Without this trigger the gate would
+  # stay red until the author happened to push again.
+  pull_request_review:
+    types: [submitted]
   # A merge queue evaluates required contexts against the `merge_group` event
   # on the gh-readonly-queue/<base>/pr-N-<sha> ref, not against the pull
   # request. Without this trigger no "Release Gate" check-run is ever created
@@ -48,12 +54,17 @@ jobs:
     steps:
       - name: Verify release readiness
         # `github.event.pull_request` does not exist on `merge_group`, so the
-        # label lookup can only run on the pull_request event. A skipped step
+        # label lookup can only run on the PR-scoped events. A skipped step
         # still leaves the job successful, and that success is what reports
         # the green context to the queue. Nothing is lost by passing here: a
         # release PR missing `e2e` fails this gate on the PR itself and so
         # never becomes eligible to enter the queue.
-        if: github.event_name == 'pull_request'
+        #
+        # This deliberately runs on `pull_request_review` too. If it only ran
+        # on `pull_request`, a review landing on a release PR would re-report
+        # "Release Gate" green with this step skipped, and a release PR with
+        # no `e2e` label would slip through on that later, greener run.
+        if: github.event_name != 'merge_group'
         env:
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
@@ -73,3 +84,39 @@ jobs:
 
           echo "Release PR has both 'release' and 'e2e' labels — gate passes."
           echo "Test pass/fail is enforced separately by 'tests / Tests Gate'."
+
+      # Connector review. Rides in this gate rather than in a new required
+      # check because the fleet's branch rulesets are not ours to edit: this
+      # context is already required in every connector repo, so widening what
+      # it means costs no ruleset change. The gate is a no-op in a repo with
+      # no `.mothership/reviewer.yaml` (the script checks), and warns instead
+      # of failing until the `CONNECTOR_REVIEW_GATE` variable is set to
+      # `enforce` — set it at the ORG level to arm the whole fleet at once.
+      # Arm it only once this file has reached every repo, or a repo that
+      # cannot yet report the gate blocks on it.
+      - name: Checkout
+        if: github.event_name != 'merge_group'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify connector review
+        if: github.event_name != 'merge_group'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          ENFORCE: ${{ vars.CONNECTOR_REVIEW_GATE == 'enforce' && '--enforce' || '' }}
+        run: |
+          set -euo pipefail
+          # `|| true` because `pipefail` would otherwise fail this step on a
+          # GitHub 5xx or a rate limit, turning a REQUIRED check red fleet-wide
+          # for an outage that is not the author's fault. An empty stdin is
+          # what the script reads as "could not check", and it passes on that.
+          { gh api "repos/${REPO}/pulls/${PR}/reviews" --paginate --slurp \
+            || true; } \
+            | python3 .github/scripts/connector_review_gate.py \
+                --author "$AUTHOR" \
+                --reviewer-config .mothership/reviewer.yaml \
+                $ENFORCE
