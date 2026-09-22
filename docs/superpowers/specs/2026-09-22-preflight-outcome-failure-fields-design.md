@@ -387,8 +387,10 @@ defect it reported reproduced.
    was built from raw handler strings and never redacted. It is now.
 4. An un-migrated check whose own line is the attribution is named; two
    untyped lines joined still name nothing.
-5. The `BLOCKED` line no longer spends 18 of its 200 characters on the block's
-   own `Preflight failed:` prefix.
+5. The `BLOCKED` line's `Preflight failed:` prefix: a strip was written, then
+   dropped — the third revision's `details[0]` read has no prefix to begin with,
+   and on the details-less fallback the rendered line is kept whole by design
+   ("cost the reader the prefix, not the sentence").
 6. The workflow's `App blocked by preflight gate` record logged `str(e)` — the
    wrapper's text. It now carries the block's line.
 7. `gate_broken` **does** have something to attribute: `_plumbing_error` leaves

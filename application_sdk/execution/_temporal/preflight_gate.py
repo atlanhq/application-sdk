@@ -200,9 +200,6 @@ def preflight_block_message(exc: BaseException | None) -> str:
             continue
         text = _attributed_message(link) or str(getattr(link, "message", None) or link)
         first = (text.strip().splitlines() or [""])[0]
-        # "BLOCKED (preflight gate)" already says it; the prefix would spend
-        # 18 of the line's 200 chars saying it again.
-        first = first.removeprefix(f"{_BLOCK_MESSAGE_PREFIX}: ")
         return redact_secrets(first)
     return ""
 
@@ -787,10 +784,6 @@ FAILURE_SUGGESTED_ACTION_KEY = "failure.suggested_action"
 # block and abort before the retry has had its turn.
 PREFLIGHT_NO_VERDICT_ERROR_TYPE = "PreflightNoVerdict"
 
-# Prefix on the deliberate block's raised message. The interceptor strips it
-# from the BLOCKED lifecycle Body line, which already says what happened.
-_BLOCK_MESSAGE_PREFIX = "Preflight failed"
-
 
 GATE_OUTCOME_ROW_KEYS: tuple[str, ...] = (
     "app_name",
@@ -1297,7 +1290,7 @@ def _build_block_error(
         attempt,
         error_type=PREFLIGHT_FAILED_ERROR_TYPE,
         non_retryable=True,
-        message_prefix=_BLOCK_MESSAGE_PREFIX,
+        message_prefix="Preflight failed",
     )
 
 
