@@ -156,7 +156,7 @@ After identifying the connector type, determine the transformation strategy:
 - See §5b of MIGRATION_PROMPT.md for the full pattern and `tests/integration/test_multi_entrypoint.py` for a canonical example.
 - Inform the user: _"This connector has N workflows. In v3 they become N `@entrypoint` methods on one App class, sharing task helpers and the handler. I'll consolidate them into a single App."_
 
-**REST/API connectors** (BaseMetadataExtractor, Custom App):
+**REST/API connectors** (v2 `BaseMetadataExtractor`, Custom App — note `BaseMetadataExtractor` is deprecated too; the v3 landing place is a plain `App` subclass, or `SqlApp` if it turns out to be SQL-backed):
 - **Default to the asset-mapper approach.** This is the v3-native pattern (see `atlan-openapi-app` as the reference implementation). Inform the user:
   > "REST/API connectors in v3 use the asset-mapper pattern: typed Python records → pure Python mapper functions → pyatlan Asset instances → JSONL. This replaces the v2 `QueryBasedTransformer`/`AtlasTransformer` approach. The reference implementation is `atlan-openapi-app`. Shall I proceed with this approach?"
 - If the user prefers to keep the existing transformer, respect that — but note it as a manual follow-up item in the summary.
@@ -347,26 +347,28 @@ grep -rEn "ParquetFileWriter\b|JsonFileWriter\b|obstore\." <target-path>/app/ \
 grep -rn "allow_unbounded_fields=True" <target-path>/app/ \
   && echo "FAIL (P001, blocking): use ConnectionRef / typed fields instead" || echo "OK"
 
-# 8) self.upload() / self.download() / self.upload_refs() must not be called from inside a
-#    @task — they ARE @task methods, so this nests an activity in an activity and bypasses
-#    the SDK's store routing. Call them from run(). Conformance: P008
-#    FrameworkTransferInsideTask (warn).
-grep -rEn "@task" -A 40 <target-path>/app/ | grep -E "self\.(upload|download|upload_refs)\(" \
-  && echo "CHECK (P008): confirm these are in run(), not inside a @task" || echo "OK"
+# 8) LOCATOR, not a verdict: list every framework-transfer call site, then read each one.
+#    self.upload() / self.download() / self.upload_refs() are themselves @task methods, so
+#    calling one from inside another @task nests an activity in an activity and bypasses
+#    the SDK's store routing. They belong in run(). Conformance: P008
+#    FrameworkTransferInsideTask (warn) decides this properly, with the AST; this grep only
+#    tells you where to look, and a call in run() is the correct case, not a finding.
+grep -rEn "self\.(upload|download|upload_refs)\(" <target-path>/app/ \
+  || echo "OK: no framework transfers in app/"
 
 # 9) No app @task may be named `preflight` — the SDK reserves `{app_name}:preflight` for
 #    the injected preflight gate and registers it unconditionally; the collision fails
 #    worker boot with WorkerActivityNameCollisionError. Conformance: F001
-#    ReservedPreflightActivityName is BLOCKING.
-grep -rEn "@task\(name=\"preflight\"\)|@task[[:space:]]*$" -A 3 <target-path>/app/ \
-  | grep -E "async def preflight\(" \
+#    ReservedPreflightActivityName is BLOCKING. Two shapes collide: an explicit
+#    @task(name="preflight"), and a bare @task on a method named preflight.
+grep -rEn "@task\(name=[\"']preflight[\"']\)|async def preflight\(" <target-path>/app/ \
   && echo "FAIL (F001, blocking): rename the task or fold it into Handler.preflight_check" \
   || echo "OK"
 ```
 
 The checks marked **blocking** above (#7 `P001`, #9 `F001`) are not negotiable — they fail the app's Conformance check in CI. The rest are warn-tier: a connector with a legitimate reason may still ship, but it must be called out in the Phase 5 summary's manual-follow-up list with the reason, because the finding will sit in the app's SARIF until someone does. Default stance: refactor.
 
-Note: check #3 will hit any `os.environ` read inside `app/`; if the connector's entry point lives under `app/main.py` or `app/run_dev.py`, exclude those paths from the grep before treating a hit as a FAIL — and remember conformance itself only grades the credential-named and workflow-context shapes. Checks #8 and #9 are coarse greps meant to prompt a read of the surrounding code, not verdicts; Phase 7 grades them properly with the real AST detectors.
+Note: check #3 will hit any `os.environ` read inside `app/`; if the connector's entry point lives under `app/main.py` or `app/run_dev.py`, exclude those paths from the grep before treating a hit as a FAIL — and remember conformance itself only grades the credential-named and workflow-context shapes. Check #8 is a **locator**: it prints call sites for you to read, and a transfer called from `run()` is the correct shape, not a finding. Check #9's second pattern also matches a plain `async def preflight()` helper with no `@task` on it, which is harmless — read the decorator before acting. In both cases Phase 7 grades the real thing with the AST detectors; these greps only tell you where to look.
 
 ---
 
@@ -1651,7 +1653,7 @@ For resume-on-retry, call `self.heartbeat(HeartbeatDetails(records_done=N))` at 
 
 ### Template base classes auto-register but do not leak workflows
 
-When you `from application_sdk.templates import SqlMetadataExtractor`, Python imports all templates from `__init__.py`. Each template has a concrete `run()`, so `__init_subclass__` registers them in `AppRegistry`. This is harmless: template base classes are abstract (or not concrete subclasses of your connector), so the worker generates Temporal workflow classes only for non-abstract `App` subclasses that have `@entrypoint` methods or an overridden `run()`. You don't need to do anything — just make sure your connector's App class is the one listed in `ATLAN_APP_MODULE`.
+When you `from application_sdk.templates import SqlApp`, Python imports all templates from `__init__.py`. Each template has a concrete `run()`, so `__init_subclass__` registers them in `AppRegistry`. This is harmless: template base classes are abstract (or not concrete subclasses of your connector), so the worker generates Temporal workflow classes only for non-abstract `App` subclasses that have `@entrypoint` methods or an overridden `run()`. You don't need to do anything — just make sure your connector's App class is the one listed in `ATLAN_APP_MODULE`.
 
 ### os.environ is blocked inside Temporal workflow sandbox
 
