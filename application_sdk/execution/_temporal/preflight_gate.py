@@ -777,6 +777,10 @@ FAILURE_AUDIENCE_KEY = "failure.audience"
 # needs an entry in ``_KNOWN_EXTRA_KEYS``.
 FAILURE_CHECK_KEY = "failure.check"
 FAILURE_MESSAGE_KEY = "failure.message"
+# The envelope's own remediation line, when the handler gave one. The
+# escalation's search included the remediation text; keeping it a distinct
+# key means "what happened" and "what to do" stay separately queryable.
+FAILURE_SUGGESTED_ACTION_KEY = "failure.suggested_action"
 
 # Error type for a retryable no-verdict on a non-final attempt. Deliberately not
 # PREFLIGHT_FAILED_ERROR_TYPE: the workflow must not treat it as the deliberate
@@ -1274,6 +1278,8 @@ def _failure_fields(
     fields: dict[str, str] = {}
     if primary.message:
         fields[FAILURE_MESSAGE_KEY] = redact_and_cap(primary.message)
+    if primary.suggested_action:
+        fields[FAILURE_SUGGESTED_ACTION_KEY] = redact_and_cap(primary.suggested_action)
     failed = [c for c in checks if not c.passed]
     named = _attributed_check(failed, primary) if failed else None
     if named is not None:

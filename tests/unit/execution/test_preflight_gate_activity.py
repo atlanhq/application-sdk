@@ -33,6 +33,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     FAILURE_AUDIENCE_KEY,
     FAILURE_CHECK_KEY,
     FAILURE_MESSAGE_KEY,
+    FAILURE_SUGGESTED_ACTION_KEY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     INTERACTIVE_RAISE_OUTCOMES,
     PREFLIGHT_CHECK_EVENT,
@@ -2948,3 +2949,41 @@ class TestOutcomeRowNamesTheFailure:
         ev = _outcome_event(ml)
         assert ev[FAILURE_MESSAGE_KEY] == "a; b"
         assert FAILURE_CHECK_KEY not in ev
+
+    async def test_the_row_carries_the_remediation_when_the_handler_gave_one(
+        self,
+    ) -> None:
+        # The escalation's search included the remediation text. The envelope
+        # already carries it as a distinct field; the row should too.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    error=AppPermissionDeniedError(
+                        message="The admin API returned 403.",
+                        suggested_action="Enable read-only admin APIs for the principal.",
+                    ),
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_SUGGESTED_ACTION_KEY] == (
+            "Enable read-only admin APIs for the principal."
+        )
+
+    async def test_no_remediation_means_no_key(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, error=AuthError(message="bad creds")
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        assert FAILURE_SUGGESTED_ACTION_KEY not in _outcome_event(ml)
