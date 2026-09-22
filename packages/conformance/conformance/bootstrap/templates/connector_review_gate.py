@@ -66,6 +66,10 @@ EXEMPT_AUTHORS = frozenset(
     },
 )
 
+# Kept at module level so the line fits inside the tightest wrap in the fleet
+# and `ruff format` is a no-op at every width (see FND-445).
+NO_REVIEW_HINT = "No connector review yet. Add `ai-connector-review` once CI is green."
+
 PROFILE_MARKER = "<!-- profile:connector-app -->"
 LEGACY_PROFILE_FOOTER = "profile: connector-app"
 COMMIT_RE = re.compile(r"<!-- commit:([0-9a-f]{40}) mode:standard -->")
@@ -111,12 +115,28 @@ def flatten_pages(payload: object) -> list[dict]:
     return flat
 
 
-def find_review(reviews: list[dict], head_sha: str | None = None) -> str | None:
-    """Return the sha of a connector review on this PR, else None.
+def find_review(
+    reviews: list[dict],
+    head_sha: str | None = None,
+) -> tuple[str, str] | None:
+    """Return (sha, state) of the newest connector review, else None.
+
+    ``state`` carries the verdict. ``rover-worker``'s ``toReviewEvent``
+    maps an APPROVE recommendation to a real GitHub APPROVED review, and
+    maps REQUEST_CHANGES / REJECT / CONDITIONAL_APPROVE to COMMENTED. The
+    clamp that would turn an APPROVE into a COMMENT applies only when the
+    security gate is on, and connector repos run ``security_gate: false``.
+    So APPROVED means the reviewer was happy and COMMENTED means it found
+    something.
+
+    The NEWEST matching review wins, so a later clean re-review overrides
+    an earlier one that requested changes. GitHub returns reviews oldest
+    first.
 
     With ``head_sha`` set, only a review of that exact commit counts
     (strict); without it, any connector review on the PR counts (sticky).
     """
+    found: tuple[str, str] | None = None
     for review in reviews:
         login = ((review or {}).get("user") or {}).get("login") or ""
         if login not in REVIEWER_LOGINS:
@@ -124,9 +144,10 @@ def find_review(reviews: list[dict], head_sha: str | None = None) -> str | None:
         sha = reviewed_sha(str(review.get("body") or ""))
         if sha is None:
             continue
-        if head_sha is None or sha == head_sha:
-            return sha
-    return None
+        if head_sha is not None and sha != head_sha:
+            continue
+        found = (sha, str(review.get("state") or ""))
+    return found
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -192,12 +213,24 @@ def main(argv: list[str] | None = None) -> int:
     # Both arguments are always passed, so the caller's shell stays
     # straight-line; the policy decides whether head_sha is consulted.
     wanted = args.head_sha if args.policy == "head" else None
-    sha = find_review(reviews, wanted or None)
-    if sha is not None:
-        print(f"Connector review found for {sha[:8]} - gate passes.")  # noqa: T201
+    found = find_review(reviews, wanted or None)
+
+    if found is not None and found[1] == "APPROVED":
+        print(f"Connector review approved {found[0][:8]} - gate passes.")  # noqa: T201
         return 0
 
-    hint = "No connector review. Add the `ai-connector-review` label once CI is green."
+    # Two different failures, two different things for the author to do.
+    # Saying "no review" when the reviewer ran and asked for changes sends
+    # them to re-label instead of to the findings.
+    if found is None:
+        hint = NO_REVIEW_HINT
+    else:
+        hint = (
+            f"The connector reviewer did not approve {found[0][:8]} "
+            f"(review state: {found[1]}). Fix the findings on the review, "
+            "then add the `ai-connector-review` label again."
+        )
+
     if not args.enforce:
         print(f"::warning::{hint} (not enforced yet)")  # noqa: T201
         return 0

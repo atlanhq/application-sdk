@@ -46,13 +46,16 @@ def gate() -> types.ModuleType:
     return module
 
 
-def _review(body: str, login: str = _BOT) -> dict:
-    return {"user": {"login": login}, "body": body}
+def _review(body: str, login: str = _BOT, state: str = "APPROVED") -> dict:
+    return {"user": {"login": login}, "body": body, "state": state}
 
 
 def test_accepts_the_real_trailer(gate: types.ModuleType) -> None:
     """A genuine connector review is found."""
-    assert gate.find_review([_review(f"Looks good.\n\n{_TRAILER}")]) == _SHA
+    assert gate.find_review([_review(f"Looks good.\n\n{_TRAILER}")]) == (
+        _SHA,
+        "APPROVED",
+    )
 
 
 def test_rejects_a_marker_that_is_not_at_the_tail(gate: types.ModuleType) -> None:
@@ -75,13 +78,13 @@ def test_rejects_the_security_lane(gate: types.ModuleType) -> None:
 def test_accepts_the_legacy_footer_form(gate: types.ModuleType) -> None:
     """Reviews predating the machine marker carry a rendered footer."""
     body = f"Findings.\n\nprofile: connector-app\n<!-- commit:{_SHA} mode:standard -->"
-    assert gate.find_review([_review(body)]) == _SHA
+    assert gate.find_review([_review(body)]) == (_SHA, "APPROVED")
 
 
 def test_strict_mode_requires_the_current_head(gate: types.ModuleType) -> None:
     """With head_sha set, a review of an older commit does not count."""
     reviews = [_review(_TRAILER)]
-    assert gate.find_review(reviews, head_sha=_SHA) == _SHA
+    assert gate.find_review(reviews, head_sha=_SHA) == (_SHA, "APPROVED")
     assert gate.find_review(reviews, head_sha="a" * 40) is None
 
 
@@ -163,6 +166,56 @@ def test_default_policy_is_sticky(
     """Omitting --policy must behave as sticky, not as head."""
     monkeypatch.setattr("sys.stdin", _stdin(json.dumps([[_review(_TRAILER)]])))
     assert gate.main(["--enforce", "--head-sha", "c" * 40]) == 0
+
+
+def test_a_review_with_findings_does_not_pass(
+    gate: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The verdict is the review STATE, not merely that a review exists.
+
+    rover-worker's `toReviewEvent` posts APPROVED for an APPROVE
+    recommendation and COMMENTED for REQUEST_CHANGES / REJECT /
+    CONDITIONAL_APPROVE. Connector repos run `security_gate: false`, so the
+    clamp that would flatten APPROVE to COMMENT never applies to them.
+    """
+    commented = json.dumps([[_review(_TRAILER, state="COMMENTED")]])
+    monkeypatch.setattr("sys.stdin", _stdin(commented))
+    assert gate.main(["--enforce"]) == 1
+
+    approved = json.dumps([[_review(_TRAILER, state="APPROVED")]])
+    monkeypatch.setattr("sys.stdin", _stdin(approved))
+    assert gate.main(["--enforce"]) == 0
+
+
+def test_newest_review_wins(gate: types.ModuleType) -> None:
+    """A later clean re-review must override an earlier rejection.
+
+    Otherwise a PR that was told to fix things could never clear the gate.
+    GitHub returns reviews oldest first.
+    """
+    reviews = [
+        _review(_TRAILER, state="COMMENTED"),
+        _review(_TRAILER, state="APPROVED"),
+    ]
+    assert gate.find_review(reviews) == (_SHA, "APPROVED")
+    assert gate.find_review(list(reversed(reviews))) == (_SHA, "COMMENTED")
+
+
+def test_findings_and_no_review_say_different_things(
+    gate: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Telling an author "no review" when it ran sends them to the wrong place."""
+    monkeypatch.setattr("sys.stdin", _stdin("[]"))
+    gate.main(["--enforce"])
+    assert "No connector review yet" in capsys.readouterr().out
+
+    commented = json.dumps([[_review(_TRAILER, state="COMMENTED")]])
+    monkeypatch.setattr("sys.stdin", _stdin(commented))
+    gate.main(["--enforce"])
+    assert "did not approve" in capsys.readouterr().out
 
 
 def test_check_run_name_is_the_ruleset_contract() -> None:
