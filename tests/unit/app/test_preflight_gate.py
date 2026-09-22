@@ -1174,3 +1174,29 @@ class TestTheWorkflowRowNamesTheAttributedCheck:
         assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.FRAME_LOST
         assert "lost worker" in row[FAILURE_MESSAGE_KEY]
         assert FAILURE_CHECK_KEY not in row
+
+    async def test_gate_broken_row_carries_the_plumbing_failures_message(
+        self, safe_log
+    ) -> None:
+        # The gate's own plumbing raised. Its error leaves the activity with
+        # FailureDetails at details[0] precisely so a consumer has something to
+        # attribute — the row must read it, or the case where the gate itself
+        # broke is the one case with no sentence.
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        plumbing = ApplicationError(
+            "vault down",
+            DependencyUnavailableError(
+                message="Secret store unreachable: vault down", service="secret_store"
+            ).to_failure_details(),
+            type="DependencyUnavailableError",
+        )
+        _, exec_patch = _exec(side_effect=_real_activity_error(plumbing))
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "mssql", "crawler")
+        row = _row(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
+        assert row["reason"] == "DependencyUnavailableError"
+        assert row[FAILURE_MESSAGE_KEY] == "Secret store unreachable: vault down"
+        assert FAILURE_CHECK_KEY not in row

@@ -336,7 +336,38 @@ def classify_gate_failure(exc: BaseException) -> GateFailure:
         )
     if _frame_died(exc):
         return GateFailure(PreflightClassification.FRAME_LOST, None, [], attempt)
-    return GateFailure(PreflightClassification.GATE_BROKEN, None, [], attempt)
+    return GateFailure(
+        PreflightClassification.GATE_BROKEN, _plumbing_evidence(exc), [], attempt
+    )
+
+
+def _plumbing_evidence(exc: BaseException | None) -> FailureDetails | None:
+    """``details[0]`` of a gate-plumbing failure in the chain, when readable.
+
+    :func:`_plumbing_error` leaves ``FailureDetails`` there precisely so a
+    consumer has something to attribute; the workflow's ``gate_broken`` row is
+    that consumer, and without this it was the one row with no sentence for
+    the one case — the gate itself broke — a reader most needs it. The gate's
+    own markers are skipped: those carry a verdict's evidence and belong to
+    :func:`_gate_failure_evidence`. Never raises, and never influences the
+    classification — a plumbing failure is ``gate_broken`` with or without a
+    readable envelope.
+    """
+    for link in _iter_chain(exc):
+        if getattr(link, "type", None) in (
+            PREFLIGHT_FAILED_ERROR_TYPE,
+            PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+        ):
+            continue
+        details = _sequence(getattr(link, "details", None))
+        if not details:
+            continue
+        try:
+            return FailureDetails.model_validate(details[0])
+        # conformance: ignore[E004] best-effort read of another link's envelope on a path that must never raise
+        except Exception:  # noqa: S112 — an unreadable envelope on one link is not a reason to stop reading the chain; the row simply has no sentence
+            continue
+    return None
 
 
 def frame_death_details(
