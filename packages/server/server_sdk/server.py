@@ -361,7 +361,15 @@ class _BodySizeLimitMiddleware:
                     await _send_413(send)
                     return
             except ValueError:
-                pass  # malformed header — let the streamed count handle it
+                # Not fatal: a malformed content-length just means this check
+                # cannot decide, and the streamed byte count below still bounds
+                # the body. Logged so it is visible rather than silently
+                # swallowed (E002).
+                logger.debug(
+                    "Ignoring unparseable content-length %r; "
+                    "the streamed byte count still applies.",
+                    declared,
+                )
 
         seen = 0
 
