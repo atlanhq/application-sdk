@@ -324,6 +324,82 @@ def test_wake_times_out_with_named_error(http: FakeHTTP, df):
         )
 
 
+def test_wake_waits_through_pausing_then_resumes_only_from_paused(http: FakeHTTP, df):
+    # A pause in flight when this run wakes: the pin is PAUSING, settles to
+    # PAUSED, and only THEN is a resume issued (never mid-PAUSING, which errors).
+    _stub_holder_create(http)
+    df["statuses"] = ["PAUSING", "PAUSED", "RESUMING", "PROVISIONED"]
+    assert (
+        wake(
+            "https://api.dataforge.atlan.dev",
+            RID,
+            REPO,
+            1,
+            1,
+            ready_timeout_seconds=600,
+            poll_seconds=1,
+            sleep=lambda _: None,
+        )
+        == "PROVISIONED"
+    )
+    assert df["resumed"] == 1  # resumed once, and only after PAUSING → PAUSED
+
+
+def test_wake_tolerates_a_concurrent_run_resuming_it(http: FakeHTTP, df, monkeypatch):
+    # We read PAUSED, but a concurrent run resumes it before our resume lands, so
+    # the API rejects ours. Because it is no longer PAUSED on re-read, the race
+    # is benign — we keep polling to PROVISIONED instead of failing.
+    _stub_holder_create(http)
+    df["statuses"] = ["PAUSED", "RESUMING", "PROVISIONED"]
+
+    def _boom(base, token, rid):
+        raise DataforgeLifecycleError(
+            "dataforge POST .../resume failed: HTTP 409 (conflict)"
+        )
+
+    monkeypatch.setattr("dataforge_source_lifecycle.resume_resource", _boom)
+    assert (
+        wake(
+            "https://api.dataforge.atlan.dev",
+            RID,
+            REPO,
+            1,
+            1,
+            ready_timeout_seconds=600,
+            poll_seconds=1,
+            sleep=lambda _: None,
+        )
+        == "PROVISIONED"
+    )
+
+
+def test_wake_reraises_when_resume_fails_and_still_paused(
+    http: FakeHTTP, df, monkeypatch
+):
+    # resume errors AND the pin is still PAUSED on re-read — a genuine failure
+    # (e.g. missing resource:lifecycle scope), surfaced as a named error.
+    _stub_holder_create(http)
+    df["statuses"] = ["PAUSED"]  # stays PAUSED on the re-read
+
+    def _boom(base, token, rid):
+        raise DataforgeLifecycleError(
+            "dataforge POST .../resume failed: HTTP 403 (forbidden)"
+        )
+
+    monkeypatch.setattr("dataforge_source_lifecycle.resume_resource", _boom)
+    with pytest.raises(DataforgeLifecycleError, match="forbidden"):
+        wake(
+            "https://api.dataforge.atlan.dev",
+            RID,
+            REPO,
+            1,
+            1,
+            ready_timeout_seconds=600,
+            poll_seconds=1,
+            sleep=lambda _: None,
+        )
+
+
 # --- pause (the refcount) --------------------------------------------------
 
 

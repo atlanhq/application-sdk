@@ -77,9 +77,13 @@ REF_NAMESPACE = "dataforge-source"
 # DataForge's strong guarantee that credentials resolve AND compute is up.
 READY_STATUS = "PROVISIONED"
 
-# The pause/resume cycle states (entity.IsPausedLifecycle): a resume is only
-# meaningful from one of these, and a pause only from PROVISIONED.
-RESUMABLE_STATES = frozenset({"PAUSED", "PAUSING", "RESUMING"})
+# The only state a resume may be issued from. Validated live (FND-1992): the
+# resume/pause path is an async Temporal workflow, and the API rejects a resume
+# issued mid-PAUSING; while RESUMING one is already in flight. So wake kicks a
+# resume ONLY from PAUSED and waits every other non-ready state out — it never
+# issues a resume from PAUSING/RESUMING. Pause is symmetrically valid only from
+# PROVISIONED.
+PAUSED_STATUS = "PAUSED"
 
 # States a wake can never recover from — fail fast with a named class rather
 # than polling to the readiness timeout.
@@ -555,46 +559,44 @@ def wake(
     create_holder(repo, resource_id, run_id, attempt)
     token = exchange_for_service_token(base_url, _github_oidc_token())
 
-    status = resource_status(base_url, token, resource_id)
-    if status in TERMINAL_BAD_STATES:
-        raise DataforgeLifecycleError(
-            f"pinned dataforge resource is {status}; it cannot be woken. "
-            "Re-provision the CI e2e instance."
-        )
-    if status == READY_STATUS:
-        print(
-            f"dataforge source already {READY_STATUS}; holder registered, no resume needed."
-        )
-        return READY_STATUS
-    if status in RESUMABLE_STATES:
-        # Idempotent: another concurrent run may already have resumed it (leaving
-        # it RESUMING). resume() tolerates that; we still poll to readiness.
-        resume_resource(base_url, token, resource_id)
-        print(
-            f"dataforge source was {status}; resume requested, polling to {READY_STATUS}."
-        )
-    else:
-        # PROVISIONING / PROVISIONING_VAULT_PENDING / PENDING_APPROVAL — not a
-        # pause state and not ready. Poll: a transient provisioning tail may
-        # still settle to PROVISIONED. Named class if it never does.
-        print(f"dataforge source is {status}; polling to {READY_STATUS}.")
-
+    # One poll loop over the async state machine (PAUSED→RESUMING→PROVISIONED,
+    # driven by a Temporal workflow). A resume is issued ONLY from PAUSED, and at
+    # most once: the API rejects a resume mid-PAUSING, and while RESUMING one is
+    # already in flight. Every other non-ready state (PAUSING, RESUMING,
+    # PROVISIONING…) is simply waited out — a PAUSING pin settles to PAUSED and
+    # is resumed on a later pass.
     deadline = time.monotonic() + ready_timeout_seconds
-    last = status
-    while time.monotonic() < deadline:
-        sleep(poll_seconds)
-        last = resource_status(base_url, token, resource_id)
-        if last == READY_STATUS:
+    resumed = False
+    status = ""
+    while True:
+        status = resource_status(base_url, token, resource_id)
+        if status == READY_STATUS:
             print(f"dataforge source is {READY_STATUS} — ready.")
             return READY_STATUS
-        if last in TERMINAL_BAD_STATES:
+        if status in TERMINAL_BAD_STATES:
             raise DataforgeLifecycleError(
-                f"pinned dataforge resource went {last} while waking."
+                f"pinned dataforge resource is {status}; it cannot be woken. "
+                "Re-provision the CI e2e instance."
             )
-    raise DataforgeLifecycleError(
-        f"pinned dataforge resource did not reach {READY_STATUS} within "
-        f"{ready_timeout_seconds}s (last status {last}). It may be stuck resuming."
-    )
+        if status == PAUSED_STATUS and not resumed:
+            try:
+                resume_resource(base_url, token, resource_id)
+                print(f"dataforge source was {PAUSED_STATUS}; resume requested.")
+            except DataforgeLifecycleError:
+                # A concurrent run may have resumed it between our read and this
+                # call (PAUSED→RESUMING), which the API rejects. If it is no
+                # longer PAUSED that race is benign — keep polling; otherwise the
+                # resume genuinely failed, so re-raise.
+                if resource_status(base_url, token, resource_id) == PAUSED_STATUS:
+                    raise
+                print("dataforge source was resumed by a concurrent run; polling.")
+            resumed = True
+        if time.monotonic() >= deadline:
+            raise DataforgeLifecycleError(
+                f"pinned dataforge resource did not reach {READY_STATUS} within "
+                f"{ready_timeout_seconds}s (last status {status}). It may be stuck."
+            )
+        sleep(poll_seconds)
 
 
 def pause_source(
@@ -634,12 +636,10 @@ def pause_source(
 
     token = exchange_for_service_token(base_url, _github_oidc_token())
     status = resource_status(base_url, token, resource_id)
-    if status not in {
-        READY_STATUS,
-        "RESUMING",
-        "PROVISIONING",
-        "PROVISIONING_VAULT_PENDING",
-    }:
+    if status != READY_STATUS:
+        # pause is valid ONLY from PROVISIONED (the API requires it, and a pause
+        # issued mid-RESUMING errors). PAUSED/PAUSING need no action; a transient
+        # RESUMING/PROVISIONING is left to settle and be paused on a later pass.
         print(f"dataforge source is {status}; no pause needed.")
         return "already"
     pause_resource(base_url, token, resource_id)
