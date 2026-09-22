@@ -207,8 +207,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "dependencies are never installed and the failure appears only at "
             "runtime.  The published set is read from installed metadata; if "
             "the SDK is not importable, this rule is skipped silently.  The fix "
-            "(map a typo to the intended extra) is judgment, so findings route "
-            "to residue rather than auto-fix.  Cite: BLDX-1410."
+            "(map a typo to the intended extra) is judgment, so the fix is "
+            "written per site rather than applied mechanically.  Cite: BLDX-1410."
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
@@ -348,7 +348,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "was meant to live elsewhere (a test/dev group). Surfacing it turns the "
             "recurring manual question during a version bump — 'is this even used?' — "
             "into a deterministic, reviewable signal. It stays advisory (WARN, no "
-            "autofix) because a dependency can be loaded dynamically, via an entry "
+            "mechanical fix) because a dependency can be loaded dynamically, via an entry "
             "point/plugin, or run as a server (e.g. uvicorn) without an explicit import."
         ),
         short_description=(
@@ -902,7 +902,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "fingerprint and re-notify on an unchanged repo daily, forever.\n"
             "The message names the date; the reader subtracts.\n"
             "\n"
-            "Not autofixable, deliberately.  Deleting the key is one line, but\n"
+            "Deliberately not a mechanical rewrite.  Deleting the key is one line, but\n"
             "the next resolve then jumps the repo across every release the\n"
             "fence was holding back, and at least one instance is a documented\n"
             "owner-gated hold (FND-1125) rather than drift.  Which of those a\n"

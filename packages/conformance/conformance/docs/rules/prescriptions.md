@@ -350,6 +350,14 @@ let the activity interceptor move the bytes (BLDX-1398).
 - **Compliant example:** atlan-mysql-app app/mysql.py — `App.upload()` is called from `run()`, after the tasks
   return. A @task hands its output back as a FileReference and lets the framework move
   it; the transfer is the App's business, not the task's.
+- **Interacts with:** P021 pushes the other way. Where side-effecting file I/O sits in the same block as one
+  of these transfers, P021 says move the block into a @task and this rule says the
+  transfer must stay in run() — so relocating the block wholesale trades one finding for
+  the other (observed going 0 -> 2 in FND-2542). Split the block by responsibility
+  instead: the @task takes the raw I/O and returns its result as typed output, and the
+  transfer stays in run(), keyed off that output. That also removes the replay hazard
+  P021 is really about, since the branch then reads a recorded task result rather than
+  re-probing local state.
 
 An `App` subclass calls `self.upload(...)`, `self.download(...)` or
 `self.upload_refs(...)` from within a `@task`-decorated method.  `App.upload`,
@@ -933,6 +941,17 @@ whose result is durably recorded in workflow history.
   the HTTP fetch and the object-store download live inside those tasks. The comment
   above the download call states the rule in the app's own words: cloud I/O must run in
   an activity, not workflow code.
+- **Interacts with:** P008 bounds the obvious fix. If the flagged I/O shares a block with self.download() /
+  self.upload() / self.upload_refs(), moving the block wholesale into a @task trades
+  this finding for P008 findings: those helpers are framework tasks and must be called
+  from run() (observed going 0 -> 2 in FND-2542). Split by responsibility instead — the
+  @task takes the raw I/O and RETURNS ITS DECISION as typed output, and the transfers
+  stay in run(). Returning the decision is the part that actually fixes replay: a branch
+  taken on os.path.isfile re-probes the disk on every replay and can diverge, whereas a
+  branch taken on a recorded task result cannot. Note the checker flags only the curated
+  call list, so os.path.isfile / os.path.getsize / os.makedirs beside a flagged
+  shutil.copyfile are part of the same defect and are not separately reported — clearing
+  only the flagged line leaves the non-determinism in place.
 
 Inside an `App` subclass's workflow-context method a call performs side-effecting I/O —
 `open`, `requests`/`httpx`/`urllib`, `socket`, `subprocess`,
@@ -1043,8 +1062,9 @@ rather than a finding in its own right.
 
 Blocking sync I/O and filesystem work are reported only **outside** workflow context —
 inside workflow methods the same calls are owned by P020 (sleep) and P021 (file/network
-I/O), so they are not double-counted.  Remediation is a restructure, so findings route
-to residue.  Land as `WARN`; suppress with `# conformance: ignore[P023] <reason>`.
+I/O), so they are not double-counted.  Remediation is a restructure, so a fix is written
+per site rather than applied mechanically.  Land as `WARN`; suppress with `#
+conformance: ignore[P023] <reason>`.
 
 ---
 
@@ -1502,9 +1522,9 @@ flagged — a call-site-owned `ThreadPoolExecutor` is not the shared-pool conten
 rule targets. `application_sdk/_runtime/offload.py` is exempt: that is where
 `run_in_thread()`'s own dedicated-executor dispatch lives.
 
-Remediation is a restructure (swap in `run_in_thread()`), so findings route to residue.
-Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
-<reason>`.
+Remediation is a restructure (swap in `run_in_thread()`), so findings are fixed per
+site, not mechanically.  Land as `WARN`; suppress a reviewed exception with `#
+conformance: ignore[P031] <reason>`.
 
 ---
 

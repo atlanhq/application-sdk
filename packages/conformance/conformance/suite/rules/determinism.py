@@ -131,6 +131,22 @@ RULES: tuple[RuleDefinition, ...] = (
             "suppress a reviewed exception with ``# conformance: ignore[P021]\n"
             "<reason>``.\n"
         ),
+        rule_interactions=(
+            "P008 bounds the obvious fix. If the flagged I/O shares a block with "
+            "self.download() / self.upload() / self.upload_refs(), moving the "
+            "block wholesale into a @task trades this finding for P008 findings: "
+            "those helpers are framework tasks and must be called from run() "
+            "(observed going 0 -> 2 in FND-2542). Split by responsibility "
+            "instead — the @task takes the raw I/O and RETURNS ITS DECISION as "
+            "typed output, and the transfers stay in run(). Returning the "
+            "decision is the part that actually fixes replay: a branch taken on "
+            "os.path.isfile re-probes the disk on every replay and can diverge, "
+            "whereas a branch taken on a recorded task result cannot. Note the "
+            "checker flags only the curated call list, so os.path.isfile / "
+            "os.path.getsize / os.makedirs beside a flagged shutil.copyfile are "
+            "part of the same defect and are not separately reported — clearing "
+            "only the flagged line leaves the non-determinism in place."
+        ),
         help_uri=f"{_HELP_BASE}#p021",
     ),
     RuleDefinition(
@@ -259,8 +275,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "Blocking sync I/O and filesystem work are reported only **outside**\n"
             "workflow context — inside workflow methods the same calls are owned by\n"
             "P020 (sleep) and P021 (file/network I/O), so they are not\n"
-            "double-counted.  Remediation is a restructure, so findings route to\n"
-            "residue.  Land as ``WARN``; suppress with\n"
+            "double-counted.  Remediation is a restructure, so a fix is written per\n"
+            "site rather than applied mechanically.  Land as ``WARN``; suppress with\n"
             "``# conformance: ignore[P023] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p023",
@@ -359,7 +375,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "``run_in_thread()``'s own dedicated-executor dispatch lives.\n"
             "\n"
             "Remediation is a restructure (swap in ``run_in_thread()``), so findings\n"
-            "route to residue.  Land as ``WARN``; suppress a reviewed exception with\n"
+            "are fixed per site, not mechanically.  Land as ``WARN``; suppress a\n"
+            "reviewed exception with\n"
             "``# conformance: ignore[P031] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p031",

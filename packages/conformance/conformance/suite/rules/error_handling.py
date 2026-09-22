@@ -173,6 +173,23 @@ RULES: tuple[RuleDefinition, ...] = (
             "frame in some inspectable form — re-raised with its trace, re-raised with a\n"
             "redacted cause, or returned as typed data."
         ),
+        rule_interactions=(
+            "The set of forms that actually clear this rule is narrower than it "
+            "looks, and two of the exits are closed by other rules. The checker "
+            "accepts logger.exception(), or warning/error/critical carrying "
+            "exc_info=True, or warning/error/critical routed through a redaction "
+            "helper. logger.exception() is not available: L017 forbids it under "
+            "ADR-0011. And DEBUG is accepted by none of the three, even with "
+            "exc_info=True — while E005's own canonical_reference endorses exactly "
+            "that shape (atlan-mysql-app _epoch_ms, 'the level is a volume "
+            "decision; keeping the traceback is not'). So a handler that "
+            "deliberately logs a broad catch at DEBUG with a full traceback "
+            "satisfies E005 and cannot satisfy E004. Raising the level is the only "
+            "way through, which is a real decision on a cleanup path that runs "
+            "inside a finally: the WARNING lands beside the error actually being "
+            "reported. Reported from a consumer app in FND-2542; whether DEBUG "
+            "should join the accepted set is an owner call, not a mechanical fix."
+        ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e004",
     ),
     RuleDefinition(
