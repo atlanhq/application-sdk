@@ -323,25 +323,42 @@ def normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     not forward credentials (``/start`` → Temporal history) can strip them by
     deleting that single key.
     """
+
+    # The remainder, on EVERY path: no credential-shaped key, and no
+    # "credentials". Only the flat-only branch used to build it this way, so a
+    # body carrying BOTH a credentials key and v2 flat keys kept the flat ones
+    # at the top level -- and /start strips exactly one key before handing the
+    # body to Temporal, so the duplicates went into workflow history in
+    # plaintext and stayed there for the retention period.
+    def _rest() -> dict[str, Any]:
+        return {
+            k: v
+            for k, v in body.items()
+            if k not in _CREDENTIAL_KEYS and k != "credentials"
+        }
+
     creds = body.get("credentials")
     if isinstance(creds, list):
-        return body
+        return {**_rest(), "credentials": creds}
     if isinstance(creds, dict):
         logger.info(
             "Converting v2 nested-dict credentials to v3 list, keys=%s",
             list(creds.keys()),
         )
-        rest = {k: v for k, v in body.items() if k != "credentials"}
-        return {**rest, "credentials": flatten_credentials_to_pairs(dict(creds))}
+        return {**_rest(), "credentials": flatten_credentials_to_pairs(dict(creds))}
     if creds is None and _CREDENTIAL_KEYS & body.keys():
         flat = {k: v for k, v in body.items() if k in _CREDENTIAL_KEYS}
-        rest = {k: v for k, v in body.items() if k not in _CREDENTIAL_KEYS}
         logger.info(
             "Converting v2 flat top-level credentials to v3 list, keys=%s",
             list(flat.keys()),
         )
-        return {**rest, "credentials": flatten_credentials_to_pairs(flat)}
-    return body
+        return {**_rest(), "credentials": flatten_credentials_to_pairs(flat)}
+    if creds is not None:
+        # A scalar/unusable `credentials` matches no branch above. It is already
+        # unusable for auth (the contract wants a list), but the flat keys beside
+        # it are real credential material and must not survive into the body.
+        return {**_rest(), "credentials": creds}
+    return _rest()
 
 
 # ---------------------------------------------------------------------------

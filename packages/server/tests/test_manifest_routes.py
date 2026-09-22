@@ -73,7 +73,9 @@ def test_a_manifest_without_the_token_logs_nothing(
 def test_the_app_name_used_is_the_one_registered(gen) -> None:
     """Not a process-global — the host serves many apps from one process."""
     d = gen(crawler={"dag": {"extract": {"task_queue": QUEUE}}})
-    resp = _client(d, app_name="postgres").get("/workflows/v1/manifest?entrypoint=crawler")
+    resp = _client(d, app_name="postgres").get(
+        "/workflows/v1/manifest?entrypoint=crawler"
+    )
     assert _queue(resp) == "atlan-postgres-prod"
 
 
