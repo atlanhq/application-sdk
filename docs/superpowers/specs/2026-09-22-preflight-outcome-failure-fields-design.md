@@ -302,3 +302,42 @@ row already did for the same shape. The two surfaces used to disagree.
 
 Not folded in: `_failure_suffix` puts `str(exc)` into `Body` unredacted for
 every non-preflight failure. Pre-existing, separate, and worth its own issue.
+
+## Third revision (2026-09-22, reviewer follow-up)
+
+Five cheap corrections, taken directly rather than through another review
+round-trip. Four are comments and docs; one is behaviour.
+
+**The behaviour one.** `preflight_block_message` read the block's *rendered*
+message, which `_gate_error` composes as `"Preflight failed: <every failed
+check's line, joined>"`. Two costs. The lifecycle line came out as `BLOCKED
+(preflight gate): Preflight failed: …`, repeating the token it already carries.
+And with more than one failed check the joined line names a check the outcome
+row deliberately omits (see `_attributed_check`), so `Body` and
+`failure.message` could carry different sentences for one block — the exact
+thing the "one attribution ladder" revision existed to prevent, reintroduced on
+a different surface.
+
+It now prefers `details[0]` — the same `FailureDetails` the row's
+`failure.message` comes off — and falls back to the rendered line only for a
+`details[0]` it cannot parse, on the same tolerant terms as
+`_gate_failure_evidence`: a newer producer's shape is not worth costing the
+reader the sentence entirely. `test_the_lifecycle_body_and_the_row_carry_one_sentence`
+pins the agreement against the real builder; a second test pins the fallback.
+
+**The other four.**
+
+- `app/base.py` passes `primary=failure.evidence` on the `GATE_BROKEN` branch,
+  where it is `None` by construction. Kept, not deleted — it follows the same
+  ladder as the other two branches and gains the sentence the day a broken gate
+  learns to type itself — but now commented, because it reads as load-bearing.
+- `templates/sql_app.py`'s `reconstruct` docstring claimed the envelope never
+  redacts `message` / `suggested_action`. The `field_validator` added in this
+  change makes that false, and it runs on `model_validate` too, so a replayed
+  envelope arrives scrubbed. The re-redaction there is now defence in depth for
+  a hand-built `PrimeAuthOutput`; `cause_repr` and nested evidence values are
+  what the envelope genuinely still does not cover.
+- A **soft**-mode `would_block` raises no block, so it has no lifecycle record
+  and no `Body` line — reachable through `failure.message` only. Acceptable for
+  an advisory outcome, but it was an unstated gap. Now stated, in
+  `docs/concepts/apps.md` and `docs/agents/coding-standards.md`.
