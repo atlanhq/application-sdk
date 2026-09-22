@@ -126,18 +126,23 @@ primary: FailureDetails | None = None
 ```
 
 and merges `_failure_fields(checks, primary)` into the row. No new import is
-needed: `FailureDetails` is already a `TYPE_CHECKING` import at
-`preflight_gate.py:73`, and the module has `from __future__ import annotations`,
-so the annotation never evaluates at runtime. The existing
+needed: `FailureDetails` is already imported at `preflight_gate.py:73`, inside
+the module's `workflow.unsafe.imports_passed_through()` block — a real runtime
+import, not a `TYPE_CHECKING` one as an earlier draft of this document said. The existing
 `audience` parameter is left alone — deriving it from `primary` instead would
 be a wider signature change than this needs.
 
-The activity frame passes `verdict.error`, the handler's aggregate, which is
-what `_primary_failure` prefers. The workflow frame passes the `evidence` it
-recovered off the failure chain — the same object its `reason` and
-`failure.audience` come from. Passing nothing there was the review's first
-finding: the row fell back to check order and named an unrelated advisory check
-while `reason` named the real fault.
+Every emit site passes the exact object its `reason` was derived from, or
+`None` when `reason` is just the status: a block passes `_primary_failure()`
+(as `block_error.details[0]`), a run that went ahead passes the new
+`_proceeded_failure()` — which replaced `_proceeded_reason()` and returns the
+object rather than only its code — a no-verdict row passes the rendered
+verdict's primary, and the workflow frame passes the `evidence` it recovered off
+the failure chain. `_failure_fields` derives nothing itself. Two earlier drafts
+of this plumbing were wrong: the first passed nothing from the workflow frame
+(the row named an unrelated advisory while `reason` named the real fault), the
+second passed `verdict.error` and re-derived the rest, which was a second copy
+of `_primary_failure`'s ladder with nothing keeping the two in step.
 
 **Interactive row** — the `Preflight check outcome` emit at
 [preflight_gate.py:1262][int] already computes `primary` on the line above its
@@ -262,3 +267,38 @@ The original spec also mis-stated where the tests would live. They are in
 `tests/unit/execution/test_preflight_gate_activity.py` (activity and interactive
 rows) and `tests/unit/app/test_preflight_gate.py` (workflow frame). Putting none
 in the workflow-frame module is why finding 1 shipped.
+
+## Second revision (2026-09-22, after human review)
+
+Five review points, all taken.
+
+1. **`Body` searchability.** The spec's own evidence was a `Body`-substring
+   search returning zero rows, and the first version of this change would not
+   have altered that: the new keys are attributes. A preflight block is the one
+   failure class carved out of the interceptor's `_failure_suffix`; every other
+   failure gets its message into `Body`, a block logged only
+   `<type> BLOCKED (preflight gate)`. The carve-out's stated intent was dropping
+   the traceback and frame for a typed outcome, not the sentence. Both lifecycle
+   lines now carry the block's first line after the token. The outcome row's own
+   `Body` stays the constant event name — exact-match consumers filter on it.
+2. **Redaction lives on the envelope.** `FailureDetails.message` and
+   `suggested_action` are redacted by a `field_validator` where the envelope is
+   built, covering every consumer at once. The emit-site call is now
+   defence-in-depth plus the cap. `templates/sql_app.py` had already hand-rolled
+   the same policy at another surface; the validator subsumes it.
+3. **One attribution ladder per outcome shape**, above.
+4. **`redact_and_cap`** is the one cap block — `sanitize_cause_repr` builds on
+   it — and is no longer re-exported from `application_sdk.errors`; it has two
+   consumers, both inside the package.
+5. **A `frame_lost` block carries `failure.message`** with no `failure.check`:
+   it has no checks and a fully populated primary. `gate_broken` still carries
+   no message — `classify_gate_failure` returns no evidence for it by
+   construction, so there is nothing to attribute; its diagnostic is the stack
+   trace already attached.
+
+One behaviour change fell out of (3) beyond the row fields: an interactive
+`not_ready` row for an untyped check now stamps `failure.audience`, as the gate
+row already did for the same shape. The two surfaces used to disagree.
+
+Not folded in: `_failure_suffix` puts `str(exc)` into `Body` unredacted for
+every non-preflight failure. Pre-existing, separate, and worth its own issue.
