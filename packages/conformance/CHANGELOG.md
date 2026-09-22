@@ -2,6 +2,13 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.36.1] - 2026-09-22
+
+### Bug fixes
+
+- P001 taught the wrong lesson about what is blocked (#3902) ([544e96e](https://github.com/atlanhq/application-sdk/commit/544e96e))
+- rule feedback from an auto-fixable remediation run (#3891) ([ba7e8ea](https://github.com/atlanhq/application-sdk/commit/ba7e8ea))
+
 ## [0.36.0] - 2026-09-21
 
 ### Features
