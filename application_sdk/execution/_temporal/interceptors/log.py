@@ -42,7 +42,7 @@ from temporalio.worker import (
 )
 
 from application_sdk.constants import APPLICATION_VERSION, COMMIT_SHA
-from application_sdk.errors.base import AppError
+from application_sdk.errors.base import AppError, redact_secrets
 from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution._temporal.preflight_gate import (
     is_preflight_block,
@@ -165,8 +165,11 @@ def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
     Shape: ``FAILED (<failure.code|exception type>): <message> — at
     <file>:<line> in <fn>``. The root-cause frame is the innermost traceback
     frame; the full stacktrace still rides ``exc_info=True`` → OTel
-    ``exception.stacktrace``. Deterministic (string handling only) — safe in
-    the Temporal workflow sandbox.
+    ``exception.stacktrace``. The message is passed through
+    :func:`redact_secrets` — ``Body`` is the most searchable field, so a
+    connection-string password or presigned-URL signature must not land there.
+    Deterministic (string handling and regex only) — safe in the Temporal
+    workflow sandbox.
     """
     code = str(attrs.get("failure.code") or "") or (
         type(exc).__name__ if exc is not None else "unknown"
@@ -178,7 +181,10 @@ def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
         # would be swallowed by the caller's best-effort guard and take the
         # whole ended log with it.
         first_line = (str(exc).strip().splitlines() or [""])[0]
-        msg = first_line[:_FAILURE_MSG_MAX_CHARS]
+        # Redact before the cap: a driver error routinely quotes its connection
+        # string, and truncating first can cut a URL's ``@`` while keeping the
+        # password before it, where the userinfo regex no longer matches.
+        msg = redact_secrets(first_line)[:_FAILURE_MSG_MAX_CHARS]
     frame = ""
     try:
         if exc is not None and exc.__traceback__ is not None:
