@@ -150,7 +150,12 @@ def register_start_route(
         # value into exactly the same dispatch. default_entrypoint is
         # app-configured rather than caller-supplied, but checking it too turns
         # a misconfiguration into a 400 here instead of a stuck execution later.
-        if not ENTRYPOINT_NAME_RE.match(selected_entrypoint):
+        # isinstance first: the legacy `workflow_type` body field is
+        # caller-supplied JSON, so it can be a number, list or object, and
+        # handing that to re.match raises TypeError -> 500 instead of 400.
+        if not isinstance(selected_entrypoint, str) or not ENTRYPOINT_NAME_RE.match(
+            selected_entrypoint
+        ):
             raise HTTPException(status_code=400, detail="Invalid entrypoint name")
 
         if legacy_workflow_type is not None and entrypoint_param is None:

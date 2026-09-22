@@ -327,7 +327,33 @@ def _default_generated_dir() -> Path:
 #: consolidated host is shared by every hosted app AND the kubelet probes -- so
 #: one unauthenticated caller posting a huge body degrades every co-hosted app
 #: and can push ``/server/health`` past its probe timeout, restarting the pod.
-MAX_REQUEST_BODY_BYTES = int(os.environ.get("SERVER_SDK_MAX_BODY_BYTES") or 1048576)
+def _max_request_body_bytes() -> int:
+    """The cap, tolerant of an unusable value.
+
+    A bare int() here raised ValueError at import of server_sdk.server, which
+    crashloops the whole host and every app in it over one typo in a chart
+    value — the same failure the log-level parser already guards against.
+    """
+    raw = (os.environ.get("SERVER_SDK_MAX_BODY_BYTES") or "").strip()
+    if not raw:
+        return 1048576
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring unusable SERVER_SDK_MAX_BODY_BYTES=%r; using the default.", raw
+        )
+        return 1048576
+    if value <= 0:
+        logger.warning(
+            "Ignoring non-positive SERVER_SDK_MAX_BODY_BYTES=%d; using the default.",
+            value,
+        )
+        return 1048576
+    return value
+
+
+MAX_REQUEST_BODY_BYTES = _max_request_body_bytes()
 
 
 class _BodySizeLimitMiddleware:

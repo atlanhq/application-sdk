@@ -107,3 +107,36 @@ def test_a_malformed_default_entrypoint_is_caught_too(started) -> None:
         raise_server_exceptions=False,
     )
     assert client.post("/workflows/v1/start", json={}).status_code == 400
+
+
+# ── anchoring and type, the two ways the guard was still reachable ──────────
+
+
+@pytest.mark.parametrize("suffix", ["\n", "\r\n"])
+def test_a_trailing_newline_does_not_slip_past(started, suffix: str) -> None:
+    """Python's `$` also matches just before a final newline, so "crawler\\n"
+    passed a `^...$` guard. It becomes the Temporal workflow type — naming a
+    queue no worker polls — and it is interpolated into line-oriented logs."""
+    client, starter = started
+    resp = client.post(
+        "/workflows/v1/start", json={"workflow_type": "crawler" + suffix}
+    )
+    assert resp.status_code == 400, resp.text
+    assert starter.dispatched == []
+
+
+@pytest.mark.parametrize("value", [123, 1.5, ["crawler"], {"k": "v"}, True])
+def test_a_non_string_selector_is_400_not_500(started, value) -> None:
+    """The legacy body field is caller-supplied JSON, so it can be any type;
+    handing that to re.match raises TypeError, which is a 500."""
+    client, starter = started
+    resp = client.post("/workflows/v1/start", json={"workflow_type": value})
+    assert resp.status_code == 400, resp.text
+    assert starter.dispatched == []
+
+
+def test_the_entrypoint_regex_is_newline_anchored() -> None:
+    from server_sdk.manifest import ENTRYPOINT_NAME_RE
+
+    assert ENTRYPOINT_NAME_RE.match("crawler")
+    assert not ENTRYPOINT_NAME_RE.match("crawler\n")

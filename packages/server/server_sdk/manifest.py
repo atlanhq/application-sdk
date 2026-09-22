@@ -46,7 +46,11 @@ logger = get_logger(__name__)
 
 # Same constraint as the @entrypoint decorator and application-sdk's dispatcher.
 # Applied BEFORE any filesystem path is built — this is the path-traversal guard.
-ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+# \Z, not $: in Python `$` also matches just before a trailing newline, so
+# "crawler\n" passed this guard. That is a real bypass — the value becomes the
+# Temporal workflow type, so it names a queue no worker polls, and it is
+# interpolated into log records that are line-oriented.
+ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*\Z")
 
 ComputeManifest = Callable[[dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]]
 

@@ -18,9 +18,9 @@ import importlib.util
 
 import pytest
 from server_sdk.clients.typecasters import (
+    _TOLERANT_CODEC_NAME,
     _decode_tolerant_utf8,
     _ensure_tolerant_codec,
-    _TOLERANT_CODEC_NAME,
     install_tolerant_connection_decoder,
 )
 
@@ -85,9 +85,7 @@ def test_the_connection_encodings_map_is_rewritten_in_place() -> None:
     before = dict(ext.encodings)
     try:
         assert install_tolerant_connection_decoder() is True
-        utf8_names = {
-            pg for pg, py in before.items() if "utf" in str(py).lower()
-        }
+        utf8_names = {pg for pg, py in before.items() if "utf" in str(py).lower()}
         assert utf8_names, "psycopg2 should ship at least one utf-8 mapping"
         for pg in utf8_names:
             assert ext.encodings[pg] == _TOLERANT_CODEC_NAME, pg

@@ -67,3 +67,35 @@ def test_the_cap_is_generous_for_real_payloads() -> None:
 
 def test_a_get_route_is_unaffected(client: TestClient) -> None:
     assert client.get("/server/health").status_code == 200
+
+
+# ── the cap must never be the thing that takes the host down ────────────────
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("not-a-number", 1048576),
+        ("-5", 1048576),
+        ("0", 1048576),
+        ("", 1048576),
+        ("2048", 2048),
+    ],
+)
+def test_an_unusable_cap_falls_back_instead_of_crashing_at_import(
+    monkeypatch, value: str, expected: int
+) -> None:
+    """A bare int() raised ValueError at import of server_sdk.server, which
+    crashloops the whole host and every app in it over one typo in a chart
+    value."""
+    from server_sdk.server import _max_request_body_bytes
+
+    monkeypatch.setenv("SERVER_SDK_MAX_BODY_BYTES", value)
+    assert _max_request_body_bytes() == expected
+
+
+def test_the_default_applies_when_unset(monkeypatch) -> None:
+    from server_sdk.server import _max_request_body_bytes
+
+    monkeypatch.delenv("SERVER_SDK_MAX_BODY_BYTES", raising=False)
+    assert _max_request_body_bytes() == 1048576
