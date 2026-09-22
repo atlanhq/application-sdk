@@ -188,6 +188,73 @@ class TestAWSUtils:
         assert kwargs.get("ExternalId") == "my-external-id"
 
     @patch("boto3.client")
+    def test_generate_aws_rds_token_with_iam_role_passes_explicit_credentials(
+        self, mock_client
+    ):
+        """Explicit credentials must reach the STS client, not the default chain.
+
+        Without them a caller holding resolved credentials can only authenticate
+        by staging them into ``os.environ``; ``os.environ`` is process-global, so
+        concurrent callers race over it.
+        """
+        mock_sts = MagicMock()
+        mock_rds = MagicMock()
+        mock_client.side_effect = [mock_sts, mock_rds]
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "assumed_key",
+                "SecretAccessKey": "assumed_secret",
+                "SessionToken": "assumed_token",
+            }
+        }
+        mock_rds.generate_db_auth_token.return_value = "test_token"
+
+        generate_aws_rds_token_with_iam_role(
+            role_arn="arn:aws:iam::123456789012:role/test-role",
+            host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+            user="test_user",
+            aws_access_key_id="caller_key",
+            aws_secret_access_key="caller_secret",
+        )
+
+        sts_kwargs = mock_client.call_args_list[0].kwargs
+        assert sts_kwargs.get("aws_access_key_id") == "caller_key"
+        assert sts_kwargs.get("aws_secret_access_key") == "caller_secret"
+        assert sts_kwargs.get("region_name") == "us-east-1"
+
+    @patch("boto3.client")
+    def test_generate_aws_rds_token_with_iam_role_omits_credentials_when_partial(
+        self, mock_client
+    ):
+        """A half-supplied pair must fall back to the default chain, not send one key.
+
+        Passing only an access key to boto3 raises ``PartialCredentialsError``,
+        so the pair is all-or-nothing.
+        """
+        mock_sts = MagicMock()
+        mock_rds = MagicMock()
+        mock_client.side_effect = [mock_sts, mock_rds]
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "assumed_key",
+                "SecretAccessKey": "assumed_secret",
+                "SessionToken": "assumed_token",
+            }
+        }
+        mock_rds.generate_db_auth_token.return_value = "test_token"
+
+        generate_aws_rds_token_with_iam_role(
+            role_arn="arn:aws:iam::123456789012:role/test-role",
+            host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+            user="test_user",
+            aws_access_key_id="caller_key",
+        )
+
+        sts_kwargs = mock_client.call_args_list[0].kwargs
+        assert "aws_access_key_id" not in sts_kwargs
+        assert "aws_secret_access_key" not in sts_kwargs
+
+    @patch("boto3.client")
     def test_generate_aws_rds_token_with_iam_role_error(self, mock_client):
         """Test error handling in RDS token generation with IAM role."""
         from botocore.exceptions import ClientError

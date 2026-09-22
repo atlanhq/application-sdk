@@ -51,6 +51,8 @@ def generate_aws_rds_token_with_iam_role(
     session_name: str = AWS_SESSION_NAME,
     port: int = 5432,
     region: str | None = None,
+    aws_access_key_id: str | None = None,
+    aws_secret_access_key: str | None = None,
 ) -> str:
     """
     Get temporary AWS credentials by assuming a role and generate RDS auth token.
@@ -63,6 +65,12 @@ def generate_aws_rds_token_with_iam_role(
         session_name (str, optional): Name of the temporary session
         port (int, optional): Database port
         region (str, optional): AWS region name
+        aws_access_key_id (str, optional): Access key for the STS ``assume_role``
+            call. Supply with ``aws_secret_access_key`` to authenticate
+            explicitly instead of via boto3's default credential chain.
+        aws_secret_access_key (str, optional): Secret key paired with
+            ``aws_access_key_id``. Both must be given for either to take effect;
+            otherwise the default chain is used, as before.
     Returns:
         str: RDS authentication token
     """
@@ -73,9 +81,19 @@ def generate_aws_rds_token_with_iam_role(
     try:
         from boto3 import client  # noqa: PLC0415 — optional dep: boto3
 
-        sts_client = client(
-            "sts", region_name=region or get_region_name_from_hostname(host)
-        )
+        resolved_region = region or get_region_name_from_hostname(host)
+        # Take credentials explicitly when the caller has them, mirroring
+        # generate_aws_rds_token_with_iam_user above. Without this parameter a
+        # caller holding resolved credentials can only reach the default chain
+        # by staging them into os.environ and restoring them afterwards — and
+        # os.environ is process-global, so concurrent callers race: one can
+        # observe another's staged value as the "original" and restore a live
+        # credential into the ambient environment instead of clearing it.
+        sts_kwargs: dict[str, Any] = {"region_name": resolved_region}
+        if aws_access_key_id and aws_secret_access_key:
+            sts_kwargs["aws_access_key_id"] = aws_access_key_id
+            sts_kwargs["aws_secret_access_key"] = aws_secret_access_key
+        sts_client = client("sts", **sts_kwargs)
         # Only include ExternalId when set — AWS STS rejects an empty
         # ExternalId (min length 2). Trust policies without an external-id
         # requirement are valid and must not be forced to send one.
@@ -90,7 +108,7 @@ def generate_aws_rds_token_with_iam_role(
         credentials = assumed_role["Credentials"]
         aws_client = create_aws_client(
             service="rds",
-            region=region or get_region_name_from_hostname(host),
+            region=resolved_region,
             temp_credentials=credentials,
         )
         token: str = aws_client.generate_db_auth_token(
