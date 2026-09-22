@@ -63,10 +63,29 @@ def _write(tmp_path: Path, payload: Any) -> Path:
 
 
 def test_load_accepts_a_well_formed_report(tmp_path: Path) -> None:
-    payload = {"tests": {"t": {"rule": _RULE}}, "collection_errors": 0}
+    payload = {
+        "tests": {"t": {"rule": _RULE}},
+        "collection_errors": 0,
+        "exitstatus": 0,
+    }
     execution, data = _load(_write(tmp_path, payload))
     assert execution == "completed"
     assert data == payload
+
+
+@pytest.mark.parametrize("status", [0, 1, 5])
+def test_load_accepts_the_same_statuses_execute_accepts(
+    status: int, tmp_path: Path
+) -> None:
+    """0 passed, 1 tests-failed, 5 nothing-collected — as `_execute` treats them.
+
+    1 and 5 are usable on purpose: an individual scenario's failure is
+    graded per-scenario, and an empty run shows up as missing coverage.
+    Both produce a verdict; they do not license one.
+    """
+    payload = {"tests": {}, "collection_errors": 0, "exitstatus": status}
+    execution, _ = _load(_write(tmp_path, payload))
+    assert execution == "completed", status
 
 
 @pytest.mark.parametrize(
@@ -74,7 +93,13 @@ def test_load_accepts_a_well_formed_report(tmp_path: Path) -> None:
     [
         ("empty object", {}),
         ("a list, not an object", [1, 2]),
-        ("collection errors", {"tests": {}, "collection_errors": 2}),
+        ("collection errors", {"tests": {}, "collection_errors": 2, "exitstatus": 0}),
+        ("interrupted (2)", {"tests": {}, "exitstatus": 2}),
+        ("internal error (3)", {"tests": {}, "exitstatus": 3}),
+        ("usage error (4)", {"tests": {}, "exitstatus": 4}),
+        ("exitstatus absent", {"tests": {}, "collection_errors": 0}),
+        ("exitstatus not an int", {"tests": {}, "exitstatus": "0"}),
+        ("exitstatus is a bool", {"tests": {}, "exitstatus": True}),
     ],
 )
 def test_load_rejects_unusable_evidence(
@@ -123,7 +148,31 @@ def _complete_report(rule: str = _RULE) -> dict[str, Any]:
             for index, scenario in enumerate(SCENARIOS[rule])
         },
         "collection_errors": 0,
+        "exitstatus": 0,
     }
+
+
+def test_a_complete_matrix_from_a_failed_run_is_not_conformance(
+    tmp_path: Path,
+) -> None:
+    """The hole this guard closes, stated as the scenario that hits it.
+
+    Every scenario passed, then the run died — a collection or import
+    error elsewhere in the caller's suite, pytest exit 2. Before the
+    `exitstatus` check this graded `complete: True` with zero findings
+    and cleared F019, so conformance reported a green preflight verdict
+    for a test job that was red.
+
+    The producer here is the caller's whole test suite, not the bounded
+    subprocess, so "something unrelated took the run down after our
+    scenarios passed" is an ordinary event rather than a corner case.
+    """
+    payload = _complete_report()
+    payload["exitstatus"] = 2
+    result = run_behavior(tmp_path, {_RULE}, report=_write(tmp_path, payload))
+    assert result.summary[_RULE]["execution"] == "error"
+    assert result.summary[_RULE]["complete"] is False
+    assert result.findings, "a failed run must not grade as conformance"
 
 
 def test_a_complete_report_grades_as_complete(tmp_path: Path) -> None:
@@ -215,14 +264,25 @@ class _Hook:
         self.deselected.extend(items)
 
 
+class _Report:
+    """Stands in for a pytest CollectReport, which only carries an outcome."""
+
+    def __init__(self, outcome: str) -> None:
+        self.outcome = outcome
+
+
 class _Config:
     def __init__(self, report: str | None, rules: str | None) -> None:
         self._options = {"--preflight-report": report, "--preflight-rules": rules}
         self._preflight_evidence: dict[str, Any] = {"tests": {}, "collection_errors": 0}
         self.hook = _Hook()
+        self.inivalues: list[tuple[str, str]] = []
 
     def getoption(self, name: str) -> Any:
         return self._options[name]
+
+    def addinivalue_line(self, name: str, line: str) -> None:
+        self.inivalues.append((name, line))
 
 
 def _items() -> list[_Item]:
@@ -257,6 +317,31 @@ def test_scoped_run_still_deselects() -> None:
         "::test_other_rule",
     }
     assert set(config._preflight_evidence["tests"]) == {"::test_healthy"}
+
+
+def test_failed_collection_is_counted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`collection_errors` was a guard that counted nothing.
+
+    Both readers checked the field and it was only ever 0, so it read as
+    a safety check while proving nothing. It is the only thing that
+    catches a run under `--continue-on-collection-errors`, where pytest
+    reports the failed collection and still exits 1 — so `exitstatus`
+    alone would let a suite with an unimportable module through.
+    """
+    import conformance.preflight_testing as plugin
+
+    # pytest_configure assigns the module global; monkeypatch records the
+    # current value now and restores it at teardown, so a fake config
+    # cannot outlive this test.
+    monkeypatch.setattr(plugin, "_CONFIG", None)
+    config = _Config("r.json", None)
+    plugin.pytest_configure(config)
+    assert config._preflight_evidence["collection_errors"] == 0
+
+    plugin.pytest_collectreport(_Report("failed"))
+    plugin.pytest_collectreport(_Report("failed"))
+    plugin.pytest_collectreport(_Report("passed"))
+    assert config._preflight_evidence["collection_errors"] == 2
 
 
 def test_no_report_requested_is_a_no_op() -> None:

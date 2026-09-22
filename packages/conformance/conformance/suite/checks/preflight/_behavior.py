@@ -136,12 +136,34 @@ def _load(report: Path) -> tuple[str, dict[str, Any]]:
     deliberately not distinguished from a failed subprocess, because the
     consequence for the caller is identical — re-run the tests — and the
     message the interpreter emits already says so.
+
+    ``exitstatus`` is the load-bearing check, and it is checked against the
+    same ``{0, 1, 5}`` that ``_execute`` applies to its subprocess's return
+    code: passed, tests-failed, nothing-collected. Everything else —
+    interrupted (2), internal error (3), usage error (4) — means the run
+    that produced this file did not finish, and a scenario that passed
+    before the run died proves nothing about a matrix that never completed.
+    Without this, a report whose scenarios all passed graded as
+    ``"completed"`` on a pytest run that exited 2, cleared F019, and
+    reported preflight conformance for a red test job.
+
+    That matters more here than in the subprocess path. ``_execute`` runs
+    only the marked scenarios and watches its own child's return code; the
+    producer of an external report is the caller's *whole* test suite, so
+    anything in it can take the run down after the scenarios have passed.
     """
     try:
         data = json.loads(report.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return "error", {}
-    if not isinstance(data, dict) or not data or data.get("collection_errors"):
+    if not isinstance(data, dict) or not data:
+        return "error", {}
+    # `type(...) is int` rather than isinstance: bool subclasses int, and a
+    # JSON `true` here would otherwise pass as exit status 1.
+    status = data.get("exitstatus")
+    if type(status) is not int or status not in {0, 1, 5}:
+        return "error", {}
+    if data.get("collection_errors"):
         return "error", {}
     return "completed", data
 

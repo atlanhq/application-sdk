@@ -239,12 +239,40 @@ def pytest_addoption(parser: Any) -> None:
     parser.addoption("--preflight-rules", default=None)
 
 
+#: Set by ``pytest_configure``. ``pytest_collectreport``'s hookspec passes
+#: only the report, which carries no route back to the config, and this is a
+#: module plugin with no instance to hang state on — so the config is stashed
+#: here. One session per process, so there is nothing to collide with.
+_CONFIG: Any = None
+
+
 def pytest_configure(config: Any) -> None:
+    global _CONFIG
     config.addinivalue_line(
         "markers",
         "preflight_conformance(rule, scenario, entrypoint): executable preflight scenario",
     )
     config._preflight_evidence = {"tests": {}, "collection_errors": 0}
+    _CONFIG = config
+
+
+def pytest_collectreport(report: Any) -> None:
+    """Count collection failures, so the readers' guard on them is real.
+
+    ``collection_errors`` was initialised to 0 and never incremented, which
+    made it a field that reads like a safety check in both
+    ``_behavior._execute`` and ``_behavior._load`` while proving nothing.
+    ``_execute`` was covered anyway by its subprocess's return code, and
+    ``_load`` now checks ``exitstatus`` — but neither catches a run under
+    ``--continue-on-collection-errors``, where pytest reports the failed
+    collection and still exits 1. A module that failed to import is not a
+    matrix that ran.
+    """
+    if _CONFIG is None or report.outcome != "failed":
+        return
+    evidence = getattr(_CONFIG, "_preflight_evidence", None)
+    if isinstance(evidence, dict):
+        evidence["collection_errors"] = evidence.get("collection_errors", 0) + 1
 
 
 def _register(config: Any, item: Any, data: dict[str, Any]) -> None:
