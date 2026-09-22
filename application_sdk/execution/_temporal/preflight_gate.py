@@ -1021,13 +1021,27 @@ def _primary_failure(result: PreflightOutput, app_name: str) -> FailureDetails:
         (c.error for c in failed if c.error is not None), None
     )
     if primary_error is not None:
-        if primary_error.app_name is None:
-            return primary_error.model_copy(update={"app_name": app_name})
-        return primary_error
-    fallback = failed[0].resolved_message if failed else ""
+        return _stamped(primary_error, app_name)
+    return _fallback_failure(failed[0].resolved_message if failed else "", app_name)
+
+
+def _stamped(details: FailureDetails, app_name: str) -> FailureDetails:
+    """``details`` with ``app_name`` filled in if the producer left it empty."""
+    if details.app_name is None:
+        return details.model_copy(update={"app_name": app_name})
+    return details
+
+
+def _fallback_failure(message: str, app_name: str) -> FailureDetails:
+    """The synthesized primary for a failure nobody typed.
+
+    ``PreconditionError`` carrying the untyped check's own line, stamped with
+    the ``PREFLIGHT_FALLBACK_CODE`` sentinel so the row's ``reason`` marks an
+    un-migrated handler rather than passing off a guess as a real code.
+    """
     return (
         PreconditionError(
-            message=fallback or "Preflight check failed",
+            message=message or "Preflight check failed",
             app_name=app_name,
             retryable=False,
         )
@@ -1120,33 +1134,30 @@ def _attributed_check(
 def _failure_fields(
     checks: list[PreflightCheck], primary: FailureDetails | None
 ) -> dict[str, str]:
-    """The failing check's name and human line, for the outcome rows.
+    """The attributed failure's human line, and the check it belongs to.
 
-    ``primary`` is the failure the verdict is attributed to — the one ``reason``
-    is derived from — so the message on the row always agrees with ``reason``.
-    Without a ``primary`` there is no aggregate to contradict the checks, and
-    the first failed one carrying a typed error is the attribution.
+    ``primary`` is whatever the caller derived ``reason`` from —
+    :func:`_primary_failure` for a block, :func:`_proceeded_failure` for a run
+    that went ahead, the recovered evidence for a dead frame — or ``None`` when
+    ``reason`` is just the status. Nothing is re-derived here, so the row cannot
+    name a cause its own ``reason`` disagrees with.
 
-    The name is best-effort and may be absent; see :func:`_attributed_check`.
-    The message is redacted before it is capped, because ``FailureDetails``
-    carries the handler's own ``message`` unsanitized.
-
-    Empty dict when nothing failed: a clean ``proceeded`` row gains no keys.
+    ``failure.message`` follows ``primary`` whenever there is one, checks or no
+    checks: a lost frame has an empty check list and a fully populated primary,
+    and it is the case a reader most needs the sentence for. The message is
+    capped and redacted (the envelope already redacts; this is the cap, and a
+    second pass costs nothing). ``failure.check`` is best-effort and may be
+    absent — see :func:`_attributed_check`.
     """
-    failed = [c for c in checks if not c.passed]
-    if not failed:
-        return {}
     if primary is None:
-        named = next((c for c in failed if c.error is not None), failed[0])
-        message = named.resolved_message
-    else:
-        named = _attributed_check(failed, primary)
-        message = primary.message
+        return {}
     fields: dict[str, str] = {}
+    if primary.message:
+        fields[FAILURE_MESSAGE_KEY] = redact_and_cap(primary.message)
+    failed = [c for c in checks if not c.passed]
+    named = _attributed_check(failed, primary) if failed else None
     if named is not None:
         fields[FAILURE_CHECK_KEY] = named.name
-    if message:
-        fields[FAILURE_MESSAGE_KEY] = redact_and_cap(message)
     return fields
 
 
@@ -1228,18 +1239,24 @@ def _plumbing_error(
     )
 
 
-def _proceeded_reason(result: PreflightOutput) -> str:
-    """The ``reason`` for a proceeded row: the status, or the failed check's code.
+def _proceeded_failure(result: PreflightOutput, app_name: str) -> FailureDetails | None:
+    """The failure a proceeded row is attributed to, or ``None`` when none failed.
 
     A run that proceeds past a failed advisory check is the one the dashboards
-    need to rank, and a reason of ``PARTIAL`` hides which check failed. The code
-    of the first failed check names it; an untyped failure gets the same sentinel
-    an untyped block does.
+    need to rank, and a reason of ``PARTIAL`` hides which check failed. So the
+    *first* failed check is the attribution — its typed error, or the same
+    fallback an untyped block gets — and the row's ``reason``, ``failure.check``
+    and ``failure.message`` all come off this one object. Unlike
+    :func:`_primary_failure` this does not prefer ``result.error``: a proceeded
+    verdict's aggregate, when a handler sets one, describes why it proceeded,
+    not which check failed.
     """
     failed = next((c for c in result.checks if not c.passed), None)
     if failed is None:
-        return result.status.value
-    return failed.error.code if failed.error is not None else PREFLIGHT_FALLBACK_CODE
+        return None
+    if failed.error is not None:
+        return _stamped(failed.error, app_name)
+    return _fallback_failure(failed.resolved_message, app_name)
 
 
 class PreflightRowOutcome(SerializableEnum):
@@ -1342,15 +1359,17 @@ def emit_preflight_check_outcome(
     """
     warn_if_partial(result)
     failed = [c for c in result.checks if not c.passed]
-    # The aggregate error wins over check order, mirroring _build_block_error:
-    # SDR inserts a non-fatal secret-store row ahead of the real failure and
-    # pins the real one on result.error — first-failed would steal the banner.
-    primary = result.error or next(
-        (c.error for c in failed if c.error is not None), None
-    )
-    reason = result.status.value
+    # The same two ladders the gate row uses, so the two surfaces attribute a
+    # verdict identically: a block to _primary_failure (the aggregate wins —
+    # SDR inserts a non-fatal row ahead of the real failure and pins the real
+    # one on result.error), a run that went ahead to _proceeded_failure.
+    primary: FailureDetails | None
     if result.status is PreflightStatus.NOT_READY:
-        reason = primary.code if primary is not None else PREFLIGHT_FALLBACK_CODE
+        primary = _primary_failure(result, app_name)
+        reason = primary.code
+    else:
+        primary = _proceeded_failure(result, app_name)
+        reason = result.status.value
     extra: dict[str, Any] = {}
     if primary is not None:
         extra[FAILURE_AUDIENCE_KEY] = primary.audience.value
@@ -2113,6 +2132,7 @@ def build_preflight_gate_activity(
             verdict: PreflightOutput,
             classification: PreflightClassification,
             audience: str | None = None,
+            primary: FailureDetails | None = None,
             exc_info: BaseException | None = None,
         ) -> None:
             """Emit the gate's one queryable row, and persist the same verdict.
@@ -2172,7 +2192,7 @@ def build_preflight_gate_activity(
                 budget_seconds=int(budget),
                 attempt=_current_attempt(),
                 audience=audience,
-                primary=verdict.error,
+                primary=primary,
             )
             if exc_info is not None:
                 row["exc_info"] = exc_info
@@ -2235,6 +2255,12 @@ def build_preflight_gate_activity(
                     unverifiable,
                     PreflightClassification.DEPRECATED_FAIL_OPEN,
                     audience=leaf.audience.value,
+                    # The rendered verdict's primary, not leaf.to_failure_details():
+                    # a leaf whose evidence cannot be serialised raises there, and
+                    # this path must never raise. reason/audience still come off
+                    # the leaf's own class attributes for the census; the message
+                    # is the safe rendering (the leaf's own when it serialises).
+                    primary=_primary_failure(unverifiable, app_name),
                     exc_info=exc,
                 )
                 return unverifiable
@@ -2247,6 +2273,7 @@ def build_preflight_gate_activity(
                 unverifiable,
                 PreflightClassification.SOURCE_UNVERIFIABLE,
                 audience=block_error.details[0].audience.value,
+                primary=block_error.details[0],
                 # The exception, not exc_info=True: on the budget-overrun path this
                 # runs outside any ``except`` (the AppTimeoutError is constructed,
                 # not caught), so sys.exc_info() is empty and True would attach
@@ -2447,17 +2474,20 @@ def build_preflight_gate_activity(
                     result,
                     PreflightClassification.VERDICT,
                     audience=block_error.details[0].audience.value,
+                    primary=block_error.details[0],
                 )
                 if enforce:
                     raise block_error
                 # Soft: the verdict stays honest NOT_READY; the gate just does not
                 # enforce it. The would_block row above is the loud record.
                 return result
+            proceeded = _proceeded_failure(result, app_name)
             _emit_outcome(
                 PreflightRowOutcome.PROCEEDED,
-                _proceeded_reason(result),
+                proceeded.code if proceeded is not None else result.status.value,
                 result,
                 PreflightClassification.VERDICT,
+                primary=proceeded,
             )
             return result
         finally:

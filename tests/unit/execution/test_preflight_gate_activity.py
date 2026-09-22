@@ -42,6 +42,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     PreflightRowOutcome,
     PreflightSurface,
     _config_from_snapshot,
+    _primary_failure,
     build_preflight_gate_activity,
     emit_preflight_check_outcome,
     emit_preflight_crash_outcome,
@@ -1344,7 +1345,13 @@ class TestEmitPreflightCheckOutcome:
         )
         kwargs = self._emit(out, surface=PreflightSurface.HTTP).info.call_args.kwargs
         assert kwargs["reason"] == "PREFLIGHT_CHECK_FAILED"
-        assert FAILURE_AUDIENCE_KEY not in kwargs
+        # An untyped block is attributed to the same synthesized fallback the
+        # gate row's details[0] is, so it stamps that fallback's audience — the
+        # two surfaces used to disagree here (gate stamped, interactive did not).
+        assert (
+            kwargs[FAILURE_AUDIENCE_KEY]
+            == _primary_failure(out, "myapp").audience.value
+        )
 
     def test_partial_keeps_status_reason_but_stamps_audience(self) -> None:
         out = PreflightOutput(
@@ -2617,7 +2624,7 @@ class TestOutcomeRowNamesTheFailure:
             duration_ms=1.0,
             budget_seconds=150,
             attempt=1,
-            primary=verdict.error,
+            primary=_primary_failure(verdict, "myapp"),
         )
         assert row[FAILURE_CHECK_KEY] == UNVERIFIABLE_CHECK_NAME
         assert "handler blew up" in row[FAILURE_MESSAGE_KEY]
@@ -2749,3 +2756,48 @@ class TestOutcomeRowNamesTheFailure:
         ev = _outcome_event(ml)
         assert ev[FAILURE_CHECK_KEY] == "secondaryCredential"
         assert ev[FAILURE_MESSAGE_KEY] == "The second credential is the expired one."
+
+    async def test_proceeded_row_message_comes_from_the_same_check_as_reason(
+        self,
+    ) -> None:
+        # `reason` on a proceeded row is the first failed check's code. The
+        # message must come from that same check — not from an aggregate the
+        # handler happened to set — or the row contradicts itself.
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            error=AppPermissionDeniedError(message="aggregate the row must not use"),
+            checks=[
+                PreflightCheck(
+                    name="version",
+                    passed=False,
+                    error=AuthError(message="Source is a minor behind."),
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "proceeded"
+        assert ev["reason"] == "AUTH"
+        assert ev[FAILURE_CHECK_KEY] == "version"
+        assert ev[FAILURE_MESSAGE_KEY] == "Source is a minor behind."
+
+    def test_interactive_proceeded_row_agrees_with_the_gate_row(self) -> None:
+        # Same verdict shape as above, on the interactive surface: the two rows
+        # attribute a proceeded run identically, first failed check wins.
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            error=AppPermissionDeniedError(message="aggregate the row must not use"),
+            checks=[
+                PreflightCheck(
+                    name="version",
+                    passed=False,
+                    error=AuthError(message="Source is a minor behind."),
+                ),
+            ],
+        )
+        log = mock.MagicMock()
+        emit_preflight_check_outcome(log, "myapp", out, surface=PreflightSurface.SDR)
+        kwargs = log.warning.call_args.kwargs
+        assert kwargs[FAILURE_CHECK_KEY] == "version"
+        assert kwargs[FAILURE_MESSAGE_KEY] == "Source is a minor behind."

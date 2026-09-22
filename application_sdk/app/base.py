@@ -2653,6 +2653,7 @@ async def _run_preflight_gate(
                 elapsed_ms,
                 attempt=failure.attempt,
                 audience=Audience.APP_OWNER.value,
+                primary=failure.evidence,
                 exc_info=True,
             )
             return

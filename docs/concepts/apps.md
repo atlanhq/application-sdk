@@ -539,8 +539,11 @@ came from, matched on `(code, message)` rather than object identity: the workflo
 evidence off the failure chain, so what it holds crossed the wire, and a handler may hand one error
 to both the aggregate and a check, which coerce separately. Where several checks failed and none
 matches, the name is **omitted** rather than guessed — a name that contradicts `reason` on its own
-row is worse than no name. Both keys are conditional, like `failure.audience` and unlike the keys
-above: a clean `proceeded` row carries neither. They exist because `reason` is a code and `check_matrix` deliberately holds no messages, so
+row is worse than no name. A `frame_lost` block has no checks at all and carries the message alone.
+Both keys are conditional, like `failure.audience` and unlike the keys above: a clean `proceeded`
+row carries neither. Every row derives `reason`, `failure.audience`, `failure.check` and
+`failure.message` from one object — the block's primary failure, or the first failed check on a run
+that went ahead — so the four cannot disagree with each other. They exist because `reason` is a code and `check_matrix` deliberately holds no messages, so
 without them the sentence explaining a block lived only on the adjacent `Completing activity as
 failed` record under `exception.message` — one record away, under a key nobody searches. The same
 two keys are on the interactive `Preflight check outcome` row, from the same helper, so the two

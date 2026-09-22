@@ -1149,3 +1149,28 @@ class TestTheWorkflowRowNamesTheAttributedCheck:
         assert row["outcome"] == "blocked"
         assert row[FAILURE_MESSAGE_KEY] == "The SQL Server did not answer in time"
         assert row[FAILURE_CHECK_KEY] == "sourceReachable"
+
+    async def test_frame_lost_block_carries_the_message_and_no_check_name(
+        self, safe_log
+    ) -> None:
+        # A killed frame left no evidence and no checks, so there is no check to
+        # name — but the row's primary is fully populated, and this is the case a
+        # reader most needs the sentence for: the gate itself broke, and there
+        # is no handler-authored row to fall back on.
+        from temporalio.exceptions import TimeoutType
+
+        killed = _real_activity_error(_temporal_timeout(TimeoutType.START_TO_CLOSE))
+        _, exec_patch = _exec(side_effect=killed)
+        with _patched(True), exec_patch, pytest.raises(ApplicationError):
+            await _run_preflight_gate(
+                _ResolvableInput(),
+                "mssql",
+                "crawler",
+                budget_seconds=300,
+                gate_mode="hard",
+            )
+        row = _row(safe_log)
+        assert row["outcome"] == "blocked"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.FRAME_LOST
+        assert "lost worker" in row[FAILURE_MESSAGE_KEY]
+        assert FAILURE_CHECK_KEY not in row
