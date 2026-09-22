@@ -1,6 +1,6 @@
 ---
 name: upgrade-v3
-description: Upgrade a connector repo from application-sdk v2 to v3 — runs the import rewriter, performs AI-assisted structural refactoring, and validates the result with the upgrade checker.
+description: Upgrade a connector repo from application-sdk v2 to v3 — runs the import rewriter, performs AI-assisted structural refactoring, validates the result with the upgrade checker, and gates the migration on the conformance suite.
 argument-hint: "<path-to-connector-repo>"
 ---
 
@@ -24,13 +24,28 @@ Performs a complete v2 → v3 upgrade of an application-sdk connector.
 1. Parse `$ARGUMENTS` to get the target path. If no argument is given, stop and ask the user for one.
 2. Confirm the target path exists. If it does not, stop and report the error.
 3. Confirm you are running from within the application-sdk repo by checking that `tools/migrate_v3/rewrite_imports.py` exists. If it does not, stop and tell the user to run this skill from the application-sdk repo root.
-4. **Check the connector's SDK dependency.** Read the connector's `pyproject.toml` and look for `atlan-application-sdk`. The minimum supported v3 version for upgrades is **3.3.0** — earlier 3.x releases are missing `CredentialRef.resolve()`, `self.upload()`-via-`FileReference` plumbing, and the typed credential routing the rest of this skill assumes. The dependency must be:
+4. **Check the connector's SDK dependency.** Read the connector's `pyproject.toml` and look for `atlan-application-sdk`.
+
+   **Shape (conformance `D001 UnpinnedSdkDependency`, blocking):** the specifier must be bounded on *both* ends — a lower bound (`>=` / `==`) and an upper bound (`<` or a `~=` form). An unbounded specifier lets an automated upgrade pull a future major without review, and D001 fails the app's Conformance check.
+
+   **Floor:** at minimum `>=3.30.0,<4.0.0`. That is the floor conformance `P051 SdrPreflightUnavailable` names for interactive setup (test auth / preflight / metadata browse); everything else this skill assumes — `CredentialRef.resolve()`, `self.upload()`-via-`FileReference`, typed credential routing — landed well below it. Example:
    ```toml
-   atlan-application-sdk>=3.3.0,<4.0.0
+   atlan-application-sdk>=3.30.0,<4.0.0
    ```
-   - If it points to a v2 release (e.g. `atlan-application-sdk>=2.x`) or an early v3 (`>=3.0.0`/`>=3.1.0`/`>=3.2.0`), bump the pin to `>=3.3.0,<4.0.0` and run `uv sync`. Refresh `uv.lock` in the same commit.
-   - If the `pyproject.toml` still contains a `[tool.uv.sources]` git override pointing at `main` or `refactor-v3` (a pattern used during v3 development), **remove it** — it's no longer needed now that v3.3.0 is on PyPI, and leaving it in pins the connector to an unstable ref.
-   - If it already depends on `atlan-application-sdk>=3.3.0` from PyPI with no git override, proceed.
+
+   **Do not hard-pin a "latest" version into `pyproject.toml`.** Align the *lock*, not the specifier: bump `uv.lock` to the newest release that has been public for at least 7 days (the org-wide release-age cooldown), which is exactly what the **`baseline-app` skill** does — it upgrades `atlan-application-sdk` and `atlan-application-sdk-conformance` via `uv lock --upgrade-package` with `pyproject.toml` untouched, then resyncs the bootstrap scaffolds. Run `baseline-app` here if the connector is more than a couple of minor versions behind; the conformance gate in Phase 7 grades the result.
+
+   - If it points to a v2 release (e.g. `atlan-application-sdk>=2.x`) or an early v3 (`>=3.0.0` … `>=3.29.0`), raise the lower bound to at least `3.30.0`, keep `<4.0.0`, and run `uv sync`. Refresh `uv.lock` in the same commit.
+   - If the `pyproject.toml` still contains a `[tool.uv.sources]` git override pointing at `main` or `refactor-v3` (a pattern used during v3 development), **remove it** — v3 is on PyPI, and leaving it in pins the connector to an unstable ref.
+   - Extras must name extras the SDK actually publishes (`D005 UnknownSdkExtra`, blocking) — uv silently drops an unknown extra, so the failure only surfaces at runtime. Check the published set against the installed SDK's `Provides-Extra` metadata rather than guessing.
+   - If it already depends on a both-ends-bounded `atlan-application-sdk` at or above the floor from PyPI with no git override, proceed.
+
+4a. **Check the conformance dependency** (`D011 ConformanceDependencyContract`, blocking). Phase 7 gates this migration on the conformance suite, and the app has to own its pin. `atlan-application-sdk-conformance` must be declared in a **dev/test group** — any `[dependency-groups.*]` or `[project.optional-dependencies.*]` array — **not** in `[project.dependencies]` (that ships a dev-only tool in the runtime image), with a specifier that can float so Renovate can carry it forward:
+   ```toml
+   [dependency-groups]
+   dev = ["atlan-application-sdk-conformance>=0.17.0,<1.0.0"]
+   ```
+   If it is missing, add it now — Phase 7 needs it, and adding it late means re-locking after the migration is otherwise done.
 
 4b. **Check temporalio version.** The v3 SDK requires `temporalio` with `VersioningBehavior`. Run in the connector repo root (where `pyproject.toml` is):
    ```bash
@@ -122,10 +137,17 @@ Examine the source files in the target path (exclude test files from this analys
 
 After identifying the connector type, determine the transformation strategy:
 
-**SQL connectors** (SqlMetadataExtractor, SqlQueryExtractor, IncrementalSqlMetadataExtractor):
+**SQL connectors** (v2 `SqlMetadataExtractor`, `SqlQueryExtractor`, `IncrementalSqlMetadataExtractor`):
+
+> **The SQL template base class is now `SqlApp`.** `application_sdk.templates.SqlMetadataExtractor`, `SqlQueryExtractor`, `BaseMetadataExtractor` and `IncrementalSqlMetadataExtractor` are all **deprecated** (removal in v4.0.0) and are flagged by conformance `B001 DeprecatedSdkSymbolUsage`. Subclass `application_sdk.templates.SqlApp` instead:
+> ```python
+> from application_sdk.templates import SqlApp
+> ```
+> For incremental extraction, the SDK's guidance is `SqlApp` with a custom `run()` for the incremental orchestration — there is no drop-in incremental base any more. A migration that lands on a deprecated template will show up as a `B001` finding in Phase 7.
+
 - **Default to the asset-mapper + `FileReference` + `self.upload()` pipeline.** This is the v3-native shape that lets each `@task` stream rows into a typed file output and hand the path downstream — same as `atlan-openapi-app`. The fetch tasks return `FileReference`-typed outputs, the publish step calls `self.upload(UploadInput(local_path=..., storage_path=...))`, and there is no shared `output_path` / scan-the-directory upload step. Inform the user:
   > "v3 SQL connectors use the same asset-mapper + FileReference pipeline as REST connectors: each fetch task writes a typed file and returns a `FileReference`; `self.upload()` carries it to object store. This replaces the v2 `output_path` directory + `upload_to_atlan()` scan pattern. Shall I proceed with this approach?"
-- Only fall back to the legacy transformer (`QueryBasedTransformer` / `AtlasTransformer` inside `transform_data()`) if the user explicitly asks to minimize migration risk and accepts the cleanup follow-up. Note this in the manual-follow-up list — it preserves YAML query files and Daft DataFrames that the team is removing.
+- Only fall back to the legacy transformer (`QueryBasedTransformer` / `AtlasTransformer` inside `transform_data()`) if the user explicitly asks to minimize migration risk and accepts the cleanup follow-up. **All three of `TransformerInterface`, `AtlasTransformer` and `QueryBasedTransformer` are deprecated (removal in v4.0.0)**, so this choice books a `B001 DeprecatedSdkSymbolUsage` finding in Phase 7 that must be accepted explicitly by the user. It also preserves YAML query files and Daft DataFrames the team is removing — `DataframeType.daft` is itself a deprecated enum member (see the `migrate-off-daft` skill). Note it in the manual-follow-up list.
 - **Do NOT** keep the v2 "build one shared `output_path`, write all fetch outputs there, scan-and-upload at the end" pattern. Each task returns its own `FileReference`; uploads happen via `self.upload()`. This was a top review finding on the MSSQL v3 PR.
 
 **Multi-workflow connectors** (more than one `WorkflowInterface` subclass detected):
@@ -179,7 +201,8 @@ Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the co
 - The `connection` field should use `ConnectionRef` from `application_sdk.contracts.types` — the SDK provides this typed model for the well-known connection shape from AE/Heracles.
 - `metadata: dict[str, Any]` is a contracting failure — the connector must know the shape of its inputs; type them explicitly.
 - Must NOT be used on inter-task Input/Output contracts — use `Annotated[list[T], MaxItems(N)]` or `FileReference` instead.
-- The checker will WARN on any `allow_unbounded_fields=True`; reviewers will reject it.
+- Conformance `P001 UnboundedContractFields` is **blocking**, not advisory — `allow_unbounded_fields=True` on any `Input`/`Output` fails the app's Conformance check. (The v2 migration checker only WARNs on it; the conformance suite in Phase 7 is the gate that matters.)
+- While you are typing the boundaries: `P013 UntypedEntrypointBoundary` and `P014 UntypedTaskBoundary` are also blocking. Every `@entrypoint` (and a concrete `run()` override, which is the implicit single-entrypoint form) and every `@task` must take an `Input` subclass and return an `Output` subclass — a bare `dict`, `Any`, a subscripted `dict[str, str]`, or a plain pydantic model all fail.
 
 Apply changes in this order:
 
@@ -196,7 +219,7 @@ Apply changes in this order:
    **`fetch_metadata` must return the correct widget-specific output type:**
    - **SQL connectors** → `SqlMetadataOutput(objects=[SqlMetadataObject(TABLE_CATALOG="...", TABLE_SCHEMA="...")])`
    - **BI/API connectors** → `ApiMetadataOutput(objects=[ApiMetadataObject(value="...", title="...", node_type="...", children=[...])])`
-   - Do NOT use generic `MetadataOutput` or deprecated `MetadataObject` — these emit `DeprecationWarning` and will be removed in v3.1.0.
+   - Do NOT instantiate the generic `MetadataOutput` base directly — its own docstring says so. It exists so the handler return type covers both subtypes via `isinstance`, and it is still exported; it is **not** on the SDK's deprecation manifest, so do not expect it to disappear. The reason to use the widget-specific type is that the frontend widget is chosen from it: `sqltree` renders `SqlMetadataOutput`'s flat rows, the tree widget renders `ApiMetadataOutput`'s nodes. Return the wrong one and the UI renders nothing.
    - Import from `application_sdk.handler` (e.g. `from application_sdk.handler import SqlMetadataOutput, SqlMetadataObject`).
 
    > After completing this step, run:
@@ -264,44 +287,86 @@ uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
 
 All FAIL checks should pass at this point. If any remain, address them before moving to Phase 3.
 
-**Positive-idiom checks (manual — the migration checker does not enforce these).** Each one corresponds to a review finding that blocked the MSSQL v3 PR. Each must come up clean before Phase 3 — if any returns matches, refactor per the "v3 Task Idioms" section below.
+**Positive-idiom checks.** The migration checker does not enforce these, but the **conformance suite does** — every check below names the rule that grades it in Phase 7, so a hit here is a finding there, at the tier shown. Each also corresponds to a review finding that blocked the MSSQL v3 PR. Run them now as a fast local proxy; Phase 7 is the authoritative gate.
 
 ```bash
 # 1) No imports from private SDK modules (any segment starting with `_`).
 #    Catches both top-level (application_sdk._x) and nested (application_sdk.foo._y).
+#    Conformance: B008 PrivateModuleImport (warn), P005 PrivateOrchestrationInternalImport
+#    (warn), P045 PrivateErrorClassImport (warn — import errors from application_sdk.errors).
 grep -rEn "from application_sdk[A-Za-z0-9_.]*\._[A-Za-z0-9_]" <target-path>/app/ \
   && echo "FAIL: private SDK import" || echo "OK: no private SDK imports"
 
 # 2) No asyncio.to_thread inside @task code (use self.run_in_thread)
+#    Conformance: P031 SharedDefaultExecutorOffload (warn) for the offload itself,
+#    P023 BlockingCallInAsyncDef (warn) for a blocking sync call left in an async def.
 grep -rn "asyncio\.to_thread\b" <target-path>/app/ \
   && echo "FAIL: replace with self.run_in_thread" || echo "OK"
 
 # 3) No os.environ reads in app/ — entry points (main.py / run_dev.py) live OUTSIDE
 #    the app/ dir or under a clearly-marked boundary. If your repo puts them under
 #    app/, exclude those paths explicitly.
+#    Conformance does NOT ban os.environ outright; it bans two specific shapes:
+#    S002 RawEnvCredentialAccess (warn) — a CREDENTIAL-named env var read directly, and
+#    P021 SideEffectIoInWorkflow (warn) — env/file/network/process I/O in workflow-context
+#    code. A plain non-credential config read outside the workflow context is not a
+#    conformance finding; it is still worth moving to the Input contract or AppConfig.
 grep -rEn "os\.environ\.get\b|os\.environ\[|os\.getenv\b" <target-path>/app/ \
   && echo "FAIL: move config to Input contract or AppConfig" || echo "OK"
 
 # 4) No full-result materialization (cursor.fetchall / pd.read_sql_query)
+#    No conformance rule grades this one — it stays a review-only guardrail. Keep it:
+#    a materialized result set is what makes a large extraction OOM the worker.
 grep -rEn "\.fetchall\b|pd\.read_sql_query\b|read_sql_query\b" <target-path>/app/ \
   && echo "FAIL: stream via fetchmany() instead" || echo "OK"
 
 # 5) No raw context.get_secret(<guid>) for credentials — use CredentialRef.resolve(input).
 #    (Legitimate non-credential secret lookups are rare; if you have one, document it.)
+#    Conformance: S001 HardcodedCredential (warn), S002 RawEnvCredentialAccess (warn), and
+#    for SDR apps P037 SdrAgentJsonNotConsumed (warn) when resolution is by credential_guid
+#    alone and never routes through the agent-aware path.
 grep -rn "context\.get_secret\b" <target-path>/app/ \
   && echo "FAIL: use CredentialRef.resolve(input) for credentials" || echo "OK"
 
 # 6) No hand-rolled obstore / ParquetFileWriter / JsonFileWriter usage
+#    Conformance: P009 ManualObjectStoreConstruction (warn) for a self-built cloud client
+#    or object store, plus B001 DeprecatedSdkSymbolUsage (warn) — ParquetFileWriter,
+#    ParquetFileReader, JsonFileWriter and JsonFileReader are ALL deprecated (removal v4.0).
+#    The SDK's named replacement is application_sdk.storage.rolling.RollingFileWriter
+#    (time-based rollover, heartbeat-friendly), or write the file locally and return a
+#    FileReference for its directory — the activity interceptor persists it with SHA-256
+#    sidecars and parallel transfers, no caller-side upload code needed.
+#    Related: P010 ManualFileReferenceConstruction (warn) — never set storage_path /
+#    is_durable / file_count yourself; P012 FilePathStringInContract (warn) — a `str` path
+#    on a contract that should be a FileReference; P044 DirectStoragePrefixTransfer (warn).
 grep -rEn "ParquetFileWriter\b|JsonFileWriter\b|obstore\." <target-path>/app/ \
   && echo "FAIL: use FileReference + self.upload()" || echo "OK"
 
-# 7) allow_unbounded_fields should not appear — use ConnectionRef for connection fields,
-#    typed fields for metadata. Reviewers will reject dict[str, Any] escapes.
+# 7) allow_unbounded_fields must not appear — use ConnectionRef for connection fields,
+#    typed fields for metadata. Conformance: P001 UnboundedContractFields is BLOCKING.
 grep -rn "allow_unbounded_fields=True" <target-path>/app/ \
-  && echo "WARN: avoid allow_unbounded_fields; use ConnectionRef / typed fields instead" || echo "OK"
+  && echo "FAIL (P001, blocking): use ConnectionRef / typed fields instead" || echo "OK"
+
+# 8) self.upload() / self.download() / self.upload_refs() must not be called from inside a
+#    @task — they ARE @task methods, so this nests an activity in an activity and bypasses
+#    the SDK's store routing. Call them from run(). Conformance: P008
+#    FrameworkTransferInsideTask (warn).
+grep -rEn "@task" -A 40 <target-path>/app/ | grep -E "self\.(upload|download|upload_refs)\(" \
+  && echo "CHECK (P008): confirm these are in run(), not inside a @task" || echo "OK"
+
+# 9) No app @task may be named `preflight` — the SDK reserves `{app_name}:preflight` for
+#    the injected preflight gate and registers it unconditionally; the collision fails
+#    worker boot with WorkerActivityNameCollisionError. Conformance: F001
+#    ReservedPreflightActivityName is BLOCKING.
+grep -rEn "@task\(name=\"preflight\"\)|@task[[:space:]]*$" -A 3 <target-path>/app/ \
+  | grep -E "async def preflight\(" \
+  && echo "FAIL (F001, blocking): rename the task or fold it into Handler.preflight_check" \
+  || echo "OK"
 ```
 
-These are guardrails, not blockers — a connector with a legitimate reason for any of these patterns may still ship, but it must be called out in the Phase 5 summary's manual-follow-up list with the reason. Default stance: refactor. Note: check #3 will hit any `os.environ` read inside `app/`; if the connector's entry point lives under `app/main.py` or `app/run_dev.py`, exclude those paths from the grep before treating a hit as a FAIL.
+The checks marked **blocking** above (#7 `P001`, #9 `F001`) are not negotiable — they fail the app's Conformance check in CI. The rest are warn-tier: a connector with a legitimate reason may still ship, but it must be called out in the Phase 5 summary's manual-follow-up list with the reason, because the finding will sit in the app's SARIF until someone does. Default stance: refactor.
+
+Note: check #3 will hit any `os.environ` read inside `app/`; if the connector's entry point lives under `app/main.py` or `app/run_dev.py`, exclude those paths from the grep before treating a hit as a FAIL — and remember conformance itself only grades the credential-named and workflow-context shapes. Checks #8 and #9 are coarse greps meant to prompt a read of the surrounding code, not verdicts; Phase 7 grades them properly with the real AST detectors.
 
 ---
 
@@ -322,6 +387,8 @@ uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
 **If only WARNs remain:**
 - Read each WARN item. If it is fixable without modifying test logic, fix it.
 - If a WARN requires modifying test logic, skip it and add it to the manual follow-up list.
+
+> **A clean checker is not a finished migration.** `check_migration` only proves the v2 shape is gone. The conformance suite in **Phase 7** proves the v3 shape is right, and it is the gate the app's CI enforces on every PR. Do not treat "zero FAILs" as done.
 
 ---
 
@@ -346,11 +413,24 @@ After the test suite run, check whether the connector has e2e tests using the v2
 
 1. Search for files under `tests/e2e/` (or `tests/integration/`) that import `BaseTest` or `TestInterface`.
 2. If found, **read the original v2 e2e test file completely**. List every test method and what it asserts before writing a single line of the new file.
-3. Generate a **new** equivalent e2e test file using the v3 `application_sdk.testing.e2e` API (§9 of MIGRATION_PROMPT.md):
+3. Generate a **new** equivalent e2e test file using the v3 `application_sdk.testing.e2e` API (§9 of MIGRATION_PROMPT.md). **Check the symbol names against the SDK before you write them** — several of the original v3 e2e names are now deprecated:
+
+   | Do not use (deprecated, removal v4.0) | Use instead |
+   |---|---|
+   | `application_sdk.testing.e2e.AppConfig` | `application_sdk.testing.harness.AppUnderTest` — the old name collides with `application_sdk.main.AppConfig`, the runtime config object. `app_module`, `image`, `worker_health_port` and `timeout` are **not** carried over; nothing ever read them. |
+   | `application_sdk.testing.e2e.client.AEWorkflowClient`, `BaseE2ETest.client` | `application_sdk.testing.harness.automation_engine.AEClient` + `application_sdk.testing.harness.atlas`, reached from sync code via `application_sdk.testing.harness.run_sync` |
+   | `application_sdk.testing.full_dag.BaseFullDAGE2ETest` | `application_sdk.testing.e2e.BaseE2ETest` |
+   | `application_sdk.testing.full_dag.SQLAppE2EFullTest` | `application_sdk.testing.e2e.SQLAppE2ETest` |
+   | `application_sdk.testing.sdr.BaseSDRIntegrationTest` | No single replacement — SDR is a deployment mode, not a test tier. Split it: auth/preflight → call the handler directly; credential resolution → unit tests; a full DAG → `tests/e2e` with `mode=RunMode.AGENT`. |
+
+   Every one of these is on the SDK's deprecation manifest, so using them books a `B001 DeprecatedSdkSymbolUsage` finding in Phase 7.
+
+   Then:
    - For **each** test method in the original, generate a corresponding `async def test_xxx(deployed_app)` function. The generated file MUST have at least as many test functions as the original has test methods.
    - Extract actual payload values from the original (hardcoded dicts, `default_payload()` bodies, connection IDs) — do **not** substitute placeholder values like `"test-connection"` if the original has real values.
    - If an assertion checks response fields whose format changed (e.g. `result['authenticationCheck']`), keep the assertion but add `# TODO(upgrade-v3): response format changed — update field names`.
-   - Use the `AppConfig` fixture with real values derived from the connector's `pyproject.toml` (`[project].name` in PEP 621 / uv layout, or Helm chart values) — not generic placeholders.
+   - Use the `AppUnderTest` spec with real values derived from the connector's `pyproject.toml` (`[project].name` in PEP 621 / uv layout, or Helm chart values) — not generic placeholders.
+   - Mark everything under `tests/integration/` with a marker the unit job deselects (`integration`, `s3_integration`, `storage_emulator`, …) — conformance `T001 UnmarkedIntegrationTest` (warn) flags an unmarked one, and in practice it leaks into the unit matrix and is skipped by the integration job.
 4. Place the new file alongside the original, named `tests/e2e/test_<connector_name>_v3.py`.
 5. Add `# TODO(upgrade-v3): human must validate this test is equivalent to the original` at the top of the new file.
 6. Do NOT delete or modify the original test file.
@@ -432,11 +512,20 @@ methods that return a different response shape than v2, which may break frontend
 - fetch_metadata: returns SqlMetadataOutput (flat [{TABLE_CATALOG, TABLE_SCHEMA}] for SQL) or ApiMetadataOutput (tree [{value, title, node_type, children}] for BI/API) — `data` is now a flat list, not {objects, total_count}
 - preflight_check: returns PreflightOutput — service auto-converts to v2 camelCase format {authCheck: {success, message}, connectivityCheck: {success, message}}
 
+### Phase 7 — Conformance verification
+- Rules applicable to this app: 183 (111 app-scoped + 72 both-scoped)
+- Blocking findings: N  (must be 0, or each one listed below with the user's stated reason)
+- Warning findings: M  (each fixed, or in the manual-follow-up list with a reason)
+- Accepted-with-reason: <rule id — reason, per line; "none" if none>
+- Preflight scenarios: executed / graded-from-report / NOT RUN (F016 is blocking — "not run" is a gap, not a pass)
+- Conformance CI wired: yes/no (`.github/workflows/conformance.yaml`)
+
 ### Manual follow-up required
 <bulleted list of anything the AI skipped due to the test constraint or ambiguity>
 ```
 
 Remind the user:
+- **Phase 7 is not optional.** If you are reading this summary before running it, the migration is not finished — the conformance suite is what the app's CI will run on the PR.
 - Run `uv run pre-commit run --all-files` in the connector repo before committing.
 - Review all `# TODO(upgrade-v3)` comments — each one marks a location that needs human verification.
 - The typed `Input`/`Output` models for custom `@task` methods should be defined (see §7 of MIGRATION_PROMPT.md) — these were not auto-generated.
@@ -684,6 +773,126 @@ Only print this after parity is achieved or the user accepts the result:
 
 ---
 
+## Phase 7 — Conformance verification (final gate)
+
+**This phase is mandatory and it is the last one.** Run it even if the user skipped Phase 6 — the live run proves the connector *works*, the conformance suite proves it is *shaped like a v3 app*. They catch different things, and this is the one the app's CI will re-run on every PR.
+
+The migration checker (`tools.migrate_v3.check_migration`) only answers "is the v2 shape gone?". The conformance suite answers "is the v3 shape right?" — **183 of its rules apply to an app repo** (111 `app`-scoped + 72 `both`-scoped), and roughly 50 of those are blocking. A migration can pass the checker with zero FAILs and still land a dozen blocking conformance findings.
+
+### 7a — Prerequisites
+
+Everything here runs **from the connector repo root**, not from the application-sdk repo. Scope auto-detects from `[project].name`, so running from the SDK checkout would silently grade the SDK's rules instead of the app's.
+
+1. The app declares `atlan-application-sdk-conformance` in a dev/test group and it is resolved in `uv.lock` (Phase 0, step 4a — `D011`). Confirm and sync:
+   ```bash
+   cd <target-path> && uv sync --all-extras --all-groups
+   ```
+2. **Wire the managed CI so the gate keeps running after you leave.** The bootstrap command installs the conformance workflow shims, the vendored detect action, and the repo-local `/remediate` skill. It always overwrites the managed files, so re-running it eradicates drift (`C002 BootstrapWorkflowDrift`, warn):
+   ```bash
+   cd <target-path> && uvx atlan-application-sdk-conformance bootstrap
+   ```
+   Add `--resync` to also pull the write-if-absent scaffolds (`tests.yaml`, `renovate.json`) structurally forward while preserving their per-repo values. If the repo has never been bootstrapped, `--resync` is the right call.
+
+   > If the connector is more than a couple of SDK minors behind, run the **`baseline-app` skill** instead of hand-rolling steps 1–2. It does the `uv lock --upgrade-package` for both packages, the scaffold resync, the legacy-CI prune, and the Renovate wiring in one pass, and leaves `pyproject.toml` specifiers alone.
+
+### 7b — Run the suite
+
+Three invocations, because three groups of rules need three different environments. Run all three.
+
+**(i) The static sweep — every series, isolated env.** This is the bulk of the catalog:
+
+```bash
+cd <target-path> && uvx atlan-application-sdk-conformance detect \
+  --repo . --scope app --output conformance.sarif
+```
+
+`--scope app` is belt-and-braces: scope already auto-detects from `[project].name`, but stating it means the command still grades the right surface if you paste it somewhere else.
+
+**(ii) The D-series — resolved env.** The dependency rules map declared dependencies to import names through *installed package metadata*, so they need the app's environment actually synced. Without it they under-report:
+
+```bash
+cd <target-path> && uv sync
+cd <target-path> && uv run --with atlan-application-sdk-conformance \
+  -- atlan-application-sdk-conformance detect \
+  --repo . --scope app --series D --output conformance-dependency.sarif
+```
+
+`uv run --with` overlays the tool onto the app's *resolved* environment rather than an isolated one — this is exactly what the managed CI leg does when `needs-env: true`. `uvx` would give the tool a clean env of its own and the D-series would see nothing.
+
+**(iii) The F-series — executed preflight scenarios.** `F016 PreflightBehaviorContract` is **blocking** and it grades *executed* scenarios. The runner's default is `--static`, which reports every TEST rule as *not evaluated* — so a bare `detect` silently skips a blocking rule. Pick one of:
+
+```bash
+# Self-contained: the runner executes the scenarios in a bounded pytest subprocess.
+# Needs an importable app environment, so it uses the resolved env too.
+cd <target-path> && uv run --with atlan-application-sdk-conformance \
+  -- atlan-application-sdk-conformance detect \
+  --repo . --scope app --with-tests --test-timeout 180 --output conformance-preflight.sarif
+```
+
+```bash
+# Or: run them once in the job that already installs the app, then grade the report.
+cd <target-path> && uv run pytest -p conformance.preflight_testing \
+  --preflight-report=preflight-report.json
+cd <target-path> && uv run --with atlan-application-sdk-conformance \
+  -- atlan-application-sdk-conformance detect \
+  --repo . --scope app --preflight-report=preflight-report.json \
+  --output conformance-preflight.sarif
+```
+
+Grading is identical between the two; the second just avoids paying for the app install twice. An unreadable report grades as an **execution error, never as conformance** — so "the file was missing" does not quietly become a pass.
+
+> Narrow the loop while fixing: `--series L` runs one series, `--rule P001,P014` runs exactly those rules and scopes findings, the exit code and the emitted SARIF catalog to them.
+
+### 7c — What a v2 → v3 migration trips most
+
+Read the findings, but check these first — each is something this skill's earlier phases can leave behind, and each has bitten a real migration:
+
+| Rule | Tier | What the migration did wrong |
+|---|---|---|
+| `B001 DeprecatedSdkSymbolUsage` | warn | Landed on `SqlMetadataExtractor` / `SqlQueryExtractor` / `BaseMetadataExtractor` / `IncrementalSqlMetadataExtractor` instead of `SqlApp`; kept `TransformerInterface` / `AtlasTransformer` / `QueryBasedTransformer`; used `ParquetFileWriter` / `JsonFileWriter`; used the deprecated e2e names from Phase 4b's table; called `upload_to_atlan()`; read `DataframeType.daft`. The finding carries the SDK's own migration guidance — follow that, not a guess. |
+| `P013` / `P014` | **block** | A `@task` or `@entrypoint` left with a `dict`, `Any`, or a plain pydantic model on its boundary instead of an SDK `Input`/`Output` subclass. The commonest residue of a hand-merged Workflow + Activities class. |
+| `P001 UnboundedContractFields` | **block** | `allow_unbounded_fields=True` used as the escape hatch while typing contracts (Phase 2b). |
+| `F001 ReservedPreflightActivityName` | **block** | The v2 connector had a `preflight` activity and the codemod carried the name over. The SDK now reserves `{app_name}:preflight` for its injected gate; worker boot fails with `WorkerActivityNameCollisionError`. Rename it, or fold it into `Handler.preflight_check` — which the gate already calls. |
+| `P016 EntryPointContractCodeDrift` | **block** | Multi-workflow consolidation (§2a′) renamed an `@entrypoint` but `app/generated/` still carries the old contract dirs — or vice versa. Re-run `poe generate`. |
+| `P025 AppNameContractCodeDrift` | **block** | The App class was renamed during consolidation, so the SDK-derived name (`cls.name`, else the kebab-cased class name) no longer matches `atlan.yaml` or `.env.example`. |
+| `P022 UnawaitedCoroutine` | **block** | An `execute_activity` call rewritten to a direct method call in Phase 1b, with the `await` dropped. Silent in tests, wrong at runtime. |
+| `D001` / `D005` / `D011` | **block** | The dependency work from Phase 0. |
+| `I001`–`I005` | **block** | The Dockerfile — see the Dockerfile gotcha below. |
+| `P030 SdrUploadNotCalled` | **block** | SDR app (`self_deployed_runtime: true` in `atlan.yaml`) whose `run()` never calls `self.upload()` / `self.upload_refs()`. This is the silent-failure rule: the DAG goes green and nothing lands in Atlan's bucket. |
+| `P008 FrameworkTransferInsideTask` | warn | `self.upload()` called from inside a `@task` rather than from `run()`. |
+| `L001` / `L011` / `L004` / `L002` | **block** | f-strings or `+` concatenation in log messages, `logger.error` in an `except` without `exc_info=True`, a non-canonical logger factory. v2 connector logging is full of all four. |
+| `E001` / `E002` / `E006` | **block** | `except: pass` and friends carried over verbatim. |
+| `T001 UnmarkedIntegrationTest` | warn | A test under `tests/integration/` with no deselecting marker. |
+
+### 7d — Fix the findings
+
+Do **not** hand-fix rule by rule. The conformance package ships a remediation loop and the app repo got it from `bootstrap` in step 7a:
+
+```bash
+cd <target-path> && /remediate                      # everything
+cd <target-path> && /remediate --rule P014,P001     # one batch
+cd <target-path> && /remediate --area logging       # one area
+```
+
+It detects, proposes a fix, **re-runs the suite to verify that fix**, and loops until the gate is clean or the attempt cap is reached — it never grades its own homework. Anything it cannot verify lands in a residue report for a human.
+
+Two constraints from earlier phases still bind, and they outrank a clean gate:
+
+- **Tests stay out of bounds.** If a finding can only be cleared by rewriting test logic, do not clear it — add it to the manual follow-up list. `T`-series findings about test *structure* (markers, coverage config) are fair game; test *bodies* are not.
+- **The SDK Bug Protocol below still applies.** If a rule is wrong, or a rule's prescription cannot be satisfied because of an SDK defect, that is an SDK PR, not a suppression. Never add a `# conformance: ignore[...]` to make a finding go away without the user's explicit agreement and a written reason — the suppression outlives everyone who remembers why it is there.
+
+### 7e — Exit contract
+
+Do not finish the migration until:
+
+- **Blocking findings: zero**, or every remaining one is explicitly accepted by the user with a stated reason, recorded in the Phase 5 summary. "The suite is noisy" is not a reason.
+- **Warning findings: triaged.** Each one is either fixed or in the manual-follow-up list with a one-line reason. They do not block the merge, but they sit in the app's SARIF and its Security tab until someone deals with them.
+- **The Conformance check is wired** — `.github/workflows/conformance.yaml` exists and calls the reusable workflow (step 7a). Verify by opening the PR and confirming the check appears; a migration that clears the suite locally but never runs it in CI regresses on the next commit.
+
+Report the counts honestly. `183 rules applicable · N blocking findings · M warnings · K accepted` beats "conformance passes".
+
+---
+
 ## SDK Bug Protocol — When You Find a Bug in v3 SDK
 
 **This is a HARD, NON-NEGOTIABLE constraint. Read every word.**
@@ -839,7 +1048,7 @@ These are the **positive** rules — what idiomatic v3 task code looks like. The
 A `@task` MUST NOT build a fresh client (engine, pool, auth round-trip) on every call. The first task that needs a client builds it, stores it on `self.app_state`, and every later task in the same worker reuses it. A final `dispose_client` `@task` closes it in the run's `finally` block.
 
 ```python
-class MyApp(App):  # SQL connectors: replace App with SqlMetadataExtractor
+class MyApp(App):  # SQL connectors: replace App with SqlApp
     async def _get_client(self, input: MyInput) -> MyClient:
         cached = self.get_app_state("client")
         if cached is not None:
@@ -864,7 +1073,7 @@ class MyApp(App):  # SQL connectors: replace App with SqlMetadataExtractor
             await self.dispose_client()
 ```
 
-> **SQL connectors:** use `SqlMetadataExtractor` as the base class (it provides `run()` and SQL-specific task scaffolding). The client-caching pattern above is identical regardless of base class.
+> **SQL connectors:** use `application_sdk.templates.SqlApp` as the base class (it provides `run()` and SQL-specific task scaffolding). `SqlMetadataExtractor`, `SqlQueryExtractor` and `IncrementalSqlMetadataExtractor` are deprecated aliases of the old shape — see the box in §2a′. The client-caching pattern above is identical regardless of base class.
 
 `get_app_state` / `set_app_state` are only callable inside `@task` methods — see the corresponding gotcha. Putting the cached object on `app_state` (not a module-level global) is what makes the cache worker-local rather than process-global, which matters when the worker pool runs multiple connectors.
 
@@ -1060,6 +1269,22 @@ async def transform(self, input: TransformInput) -> TransformOutput:
 
 The service layer serializes `result.objects` as a **flat list** in the `data` field — not the old `{objects, total_count, truncated, fetch_duration_ms}` envelope. `total_count`, `truncated`, and `fetch_duration_ms` fields no longer exist on `MetadataOutput`.
 
+### The SDK runs a preflight gate — do not collide with it
+
+The SDK injects a **preflight gate** as the mandatory first activity of every extraction workflow: it calls the app's `Handler.preflight_check` and always reports the verdict. By default the gate is **soft** — every outcome is reported but the run proceeds — and blocking real runs is a per-app opt-in. Three `ClassVar`s on the `App` subclass tune it:
+
+| ClassVar | Default | Meaning |
+|---|---|---|
+| `preflight_gate_mode` | `"soft"` | `"hard"` blocks the run on anything the gate attributes to the source; failures of the gate's own plumbing always fail open. |
+| `preflight_gate_timeout_seconds` | `150` | Budget for the complete check. Ceiling is 300. |
+| `preflight_gate_max_attempts` | `2` | Retry attempts. A budget near the ceiling usually wants `1`. |
+
+**What this means for a v2 → v3 migration:**
+
+- **`F001 ReservedPreflightActivityName` is blocking.** The SDK reserves the activity name `{app_name}:preflight` and registers it unconditionally on the worker. If the v2 connector had a `preflight` activity and the codemod carried the name across — either an explicit `@task(name="preflight")` or a bare `@task` on a method called `preflight` — worker boot fails with `WorkerActivityNameCollisionError`. Rename the task, or fold its logic into `Handler.preflight_check`, which the gate already calls.
+- **Leave the mode alone during the migration.** `soft` is the default for a reason: a migration is not the moment to start blocking real runs on a handler whose behaviour you have just changed. Sizing the budget, choosing which checks block, and switching to `hard` is its own piece of work — use the **`adopt-preflight-gate` skill** for it, after this migration lands.
+- The preflight rules graded in Phase 7 are `F003` (a `PreflightCheck(passed=False)` built without a typed `error=`), `F006` (declare the SDK's `PreflightInput`/`PreflightOutput` on every supported handler), `F007` (non-blank failure messages and audience-appropriate suggested actions) and `F016` (the scenarios actually execute) — all blocking. `F004` (a `preflight_check` metadata key not declared on any entrypoint `Input` contract) is a warning.
+
 ### Preflight response auto-conversion to v2 format
 
 The service layer (`service.py`) automatically converts `PreflightOutput` to the v2 camelCase response format the frontend expects. Each `PreflightCheck` in `result.checks` becomes a camelCase-keyed entry in `data`:
@@ -1159,12 +1384,17 @@ ENV ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
 ENV APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR=false
 ```
 
-Key rules:
-- Base image: `registry.atlan.com/public/app-runtime-base:3` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
-- `COPY app/ app/` — only app code, NOT the entire repo
-- `ATLAN_APP_MODULE` — always a single `module:ClassName` entry; use `@entrypoint` methods to expose multiple workflows (comma-separated multi-app is not supported)
-- No `CMD` — the base image handles mode via `ATLAN_APP_MODE` env var set by Helm (`APPLICATION_MODE` is the v2-compat fallback; use `ATLAN_APP_MODE` for v3)
-- No `entrypoint.sh`, `supervisord.conf`, `otel-config.yaml` — v3 base image handles all of these
+Key rules — **every one of these is a blocking conformance rule** (`I001`–`I005`), so a Dockerfile left in its v2 shape fails the app's Conformance check outright:
+
+- **`I001`** Base image: the final-stage `FROM` must be exactly `registry.atlan.com/public/app-runtime-base:3` **or** its GHCR mirror `ghcr.io/atlanhq/app-runtime-base:3` — the same image published to both registries at one digest, so either may be named. The v3 major tag is the only accepted form: `*-latest`, dev-branch tags (`:main`), pinned patch versions (`:3.2.1`) and raw upstream Python images all fail. Definitely NOT the v2 `ghcr.io/atlanhq/application-sdk-main:2.x`.
+- **`I002`** No `CMD` and no `ENTRYPOINT`. The base image's entrypoint script co-launches `daprd` alongside the app and forwards SIGTERM to both; overriding either instruction disconnects the Dapr sidecar and breaks graceful drain, with no warning. Mode comes from the `ATLAN_APP_MODE` env var set by Helm (`APPLICATION_MODE` is the v2-compat fallback; use `ATLAN_APP_MODE` for v3).
+- **`I003`** `ENV ATLAN_APP_MODULE=<module>:<AppClass>` must be present and non-empty — the runtime imports that module path and instantiates the class. Always a single `module:ClassName` entry; use `@entrypoint` methods to expose multiple workflows (comma-separated multi-app is not supported).
+- **`I004`** `ENV ATLAN_APP_MODE` must **not** appear in the Dockerfile. Runtime mode is deployment-specific — the same image ships in different modes in different environments — so it belongs in the deployment manifest, not the build.
+- **`I005`** The final stage's effective `USER` must not be root. A temporary `USER root` is fine when a later `USER` restores a non-root user (which is exactly what the `apk add git` block above does), and `USER root` in an intermediate builder stage of a multi-stage build is not flagged.
+- `COPY app/ app/` — only app code, NOT the entire repo.
+- No `entrypoint.sh`, `supervisord.conf`, `otel-config.yaml` — the v3 base image handles all of these.
+
+All five carry an inline suppression form (`# conformance: ignore[I00N] <reason>`), but a migration should not need one — if you reach for it, that is a conversation with the user, not a default.
 
 ### output_path and output_prefix must be computed
 
