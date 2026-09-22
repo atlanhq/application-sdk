@@ -63,7 +63,7 @@ inputs:
       workspace root. "." (default) when the connector IS the workspace
       (connector-integration-tests, sdr-e2e); the checkout path when the
       caller checks the connector out into a subdirectory
-      (ae-full-dag-local-reusable checks out at <app-name>/).
+      (tests-reusable checks out at <app-name>/).
 
 runs:
   using: composite

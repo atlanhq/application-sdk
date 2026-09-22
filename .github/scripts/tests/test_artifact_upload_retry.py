@@ -82,10 +82,6 @@ EXEMPT = {
         "workflows/daily-security-scan.yml",
         "security-scan-raw-results",
     ): "scheduled scan; nothing gates on it and there is no merge queue to eject",
-    (
-        "workflows/v3-readiness-check.yaml",
-        "v3-readiness-report",
-    ): "manually dispatched report; not on a PR or merge_group path",
 }
 
 # Files that are not valid YAML, so their steps cannot be inspected. Empty, and
@@ -255,7 +251,11 @@ def test_the_guard_actually_finds_uploads_and_retries():
         total_first += len(first_attempts)
         total_retries += sum(len(v) for v in retries.values())
     assert total_first >= 10, f"only {total_first} first-attempt uploads found"
-    assert total_retries >= 10, f"only {total_retries} retry uploads found"
+    # Floor was 10 until FND-2661 retired the three per-series conformance
+    # reusables (conformance-ci / -error-handling / -logging), which carried a
+    # retry upload each. Any floor above zero proves the classifier is live;
+    # this one keeps headroom so a real regression still trips it.
+    assert total_retries >= 5, f"only {total_retries} retry uploads found"
 
 
 def test_every_gating_upload_has_a_matching_retry_upload():
