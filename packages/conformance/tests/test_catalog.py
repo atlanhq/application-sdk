@@ -1415,6 +1415,35 @@ def test_non_app_loci_explain_themselves() -> None:
     )
 
 
+def test_rules_citing_a_suppression_as_compliant_license_it() -> None:
+    """A rule whose compliant example IS a suppression must say so in ``terminal_state``.
+
+    ``canonical_reference`` answers "what does correct look like here". When
+    that answer is an inline ``ignore[<ID>]``, the rule is stating that a
+    justified directive is the end state — but only ``terminal_state`` licenses
+    one. A remediation lane reads ``terminal_state``, finds nothing, strips the
+    directive and either re-opens settled work every cycle or applies a default
+    edit the reference app deliberately rejected.
+
+    E020 was exactly this: its reference named seven justified suppressions in
+    ``atlan-metabase-app`` as the compliant example while declaring no
+    ``terminal_state`` (FND-2547).
+    """
+    cites_suppression = re.compile(r"ignore\[[A-Z]\d+\]")
+    unlicensed = [
+        r.id
+        for r in load_catalog()
+        if r.canonical_reference
+        and cites_suppression.search(r.canonical_reference)
+        and not r.terminal_state
+    ]
+    assert not unlicensed, (
+        "these rules name an inline suppression as their compliant example but "
+        "declare no terminal_state to license it, so a remediation run cannot "
+        f"tell a deliberate carve-out from an unfixed violation: {unlicensed}"
+    )
+
+
 #: The only repos a canonical reference may name.  Three maintained reference
 #: apps (``docs/agents/canonical-apps.md``) plus the SDK itself for rules about
 #: SDK-owned surfaces.  ``atlan-hello-world-app`` is deliberately absent: it is

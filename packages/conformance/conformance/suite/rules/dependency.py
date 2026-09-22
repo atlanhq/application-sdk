@@ -336,6 +336,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "via _collect_dialect_drivers, so the dependency is counted as used. A "
             "dynamically-loaded dependency the checker can see is not a finding at all."
         ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[D003] <reason>` IS the correct "
+            "end state for a dependency that is genuinely loaded without a static "
+            "import — a driver resolved from a dialect/plugin string, an entry-point "
+            "registration, a CLI invoked as a subprocess. The reason must name the "
+            "mechanism that loads it, as atlan-mysql-app does for aiomysql. A "
+            "directive that only asserts the dependency is needed is unremediated: if "
+            "nothing loads it dynamically, remove the dependency rather than "
+            "suppressing the finding."
+        ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
         name="UnusedDependency",
