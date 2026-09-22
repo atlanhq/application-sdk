@@ -48,13 +48,22 @@ def started():
 @pytest.mark.parametrize(
     ("name", "body"),
     [
-        ("v3 list plus flat keys", {"credentials": [], "host": "db", "password": SECRET}),
+        (
+            "v3 list plus flat keys",
+            {"credentials": [], "host": "db", "password": SECRET},
+        ),
         (
             "populated v3 list plus flat",
             {"credentials": [{"key": "host", "value": "db"}], "password": SECRET},
         ),
-        ("nested dict plus flat", {"credentials": {"username": "svc"}, "password": SECRET}),
-        ("extra beside a v3 list", {"credentials": [], "extra": {"private_key": SECRET}}),
+        (
+            "nested dict plus flat",
+            {"credentials": {"username": "svc"}, "password": SECRET},
+        ),
+        (
+            "extra beside a v3 list",
+            {"credentials": [], "extra": {"private_key": SECRET}},
+        ),
         ("pure flat", {"host": "db", "password": SECRET}),
         ("pure v3 list", {"credentials": [{"key": "password", "value": SECRET}]}),
         ("scalar credentials", {"credentials": "some-guid", "password": SECRET}),
@@ -87,7 +96,9 @@ def test_no_shape_reaches_the_workflow_argument(started, name: str, body: dict) 
 def test_no_credential_key_survives_outside_credentials(body: dict) -> None:
     out = normalize_credentials(dict(body))
     leftover = {
-        k for k in out if k != "credentials" and k in {"host", "password", "username", "extra"}
+        k
+        for k in out
+        if k != "credentials" and k in {"host", "password", "username", "extra"}
     }
     assert not leftover, leftover
 

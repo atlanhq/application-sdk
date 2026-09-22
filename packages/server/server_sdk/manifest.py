@@ -58,12 +58,19 @@ def worker_task_queue(app_name: str) -> str:
     from ``ATLAN_APPLICATION_NAME``, which in the consolidated host names the
     host rather than the hosted app (see the module docstring, trap 2).
     """
-    deployment = os.environ.get("ATLAN_DEPLOYMENT_NAME", "local")
-    return f"atlan-{app_name}-{deployment}"
+    return f"atlan-{app_name}-{_deployment_name()}"
 
 
 def _deployment_name() -> str:
-    return os.environ.get("ATLAN_DEPLOYMENT_NAME") or "default"
+    """The deployment half of every task queue name.
+
+    One definition, because there were two: this returned "default" while
+    worker_task_queue fell back to "local", so with the env unset the manifest
+    served "atlan-<app>-default" while the worker polled "atlan-<app>-local" --
+    a submit onto a queue nobody reads, which reports success and then hangs.
+    "local" is application_sdk's value (DEPLOYMENT_NAME -> LOCAL_ENVIRONMENT).
+    """
+    return os.environ.get("ATLAN_DEPLOYMENT_NAME") or "local"
 
 
 def _manifest_registry(generated_dir: Path) -> dict[str, Path]:
