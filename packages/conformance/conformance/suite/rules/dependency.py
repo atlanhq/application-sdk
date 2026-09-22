@@ -329,10 +329,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D003",
         canonical_reference=(
-            "atlan-mysql-app pyproject.toml — aiomysql is declared with no import to "
-            "justify it, and carries an inline ignore[D003] saying SQLAlchemy loads it "
-            'dynamically from the "mysql+aiomysql" dialect string. A dynamically-loaded '
-            "dependency is real; it just has to say so."
+            "atlan-mysql-app pyproject.toml — aiomysql is declared in "
+            "[project.dependencies] with no Python import anywhere in the repo, and "
+            "carries no suppression. SQLAlchemy loads the driver from the "
+            '"mysql+aiomysql" dialect string in app/client.py, which the checker reads '
+            "via _collect_dialect_drivers, so the dependency is counted as used. A "
+            "dynamically-loaded dependency the checker can see is not a finding at all."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,

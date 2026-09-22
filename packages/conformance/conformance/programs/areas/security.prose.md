@@ -157,6 +157,24 @@ function/class context around `finding.line` before drafting.
      Do **not** fabricate a resolution call against a store that cannot supply the
      value.  Return `outcome = "suppress"`.
 
+     Name the **specific SDK function** that lacks the explicit-credentials
+     parameter, not "no seam exists" in the abstract.  A suppression that names
+     a function can be retired when that function gains the parameter; one that
+     gestures at a general gap never is, and it outlives the problem.  Check
+     first whether a sibling helper already takes credentials explicitly — the
+     gap is often one function wide rather than a design position (FND-2558:
+     `generate_aws_rds_token_with_iam_role` had no such parameter while
+     `generate_aws_rds_token_with_iam_user`, six lines below it, did).
+
+     Prefer fixing the seam over suppressing.  The staging idiom this fallback
+     licenses — write the credential to `os.environ`, call, restore in a
+     `finally` — is **not concurrency-safe**: `os.environ` is process-global, so
+     two callers running under a thread pool or a per-connection hook interleave,
+     and one can restore the other's live credential into the ambient
+     environment instead of clearing it.  When you take this fallback, prefer
+     `try/finally` and say in the proposal that the suppression is waiting on a
+     named SDK change.
+
   Never migrate a dev harness onto the seam: `run_dev*.py` and `scripts/` are
   excluded from detection by design, so an S002 finding there should not occur —
   if one does, treat it as a discover-scope bug, not a remediation target.

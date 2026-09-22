@@ -197,6 +197,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "proved App.pkl does not re-export Connectors.* to amending contracts. "
             "flatManifestArgs and workflowTypeOverride appear nowhere."
         ),
+        terminal_state=(
+            "Zero findings, reached by dropping the legacy import once the canonical "
+            "base supplies the symbol. An inline ignore[K002] is the correct end state "
+            "only where a `pkl eval` has *proved* the import is still load-bearing — "
+            "the base does not re-export the symbol to amending contracts, so removing "
+            "it breaks the build — and the directive records that evaluation. Re-prove "
+            "it when the toolkit version moves; the suppression is pinned to the base "
+            "version it was evaluated against, not to the file."
+        ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="LegacyContractApi",

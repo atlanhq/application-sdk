@@ -75,11 +75,22 @@ mechanism so credential handling stays uniform and auditable.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/client.py — the two os.environ credential writes in
-  `get_iam_role_token` carry an inline ignore[S002] explaining that the value came from
-  the resolved credentials and is staged into the environment only because boto3's token
-  helper has no explicit-credentials parameter. That justification is what makes them
-  acceptable.
+- **Compliant example:** atlan-metabase-app app/credentials.py — `build_credential_ref` resolves the secret
+  through the SDK's `CredentialRef.resolve` (handling both `credential_guid` and agent
+  `agent_json` routing), and the typed MetabaseCredential the API client consumes is
+  populated from that resolved payload. No credential-named environment variable is read
+  anywhere in the module — resolution through the seam is what correct looks like, not a
+  justified read.
+- **Already correct when:** Zero findings, reached by resolving the secret through CredentialRef / the SecretStore
+  protocol rather than os.environ. An inline ignore[S002] is the correct end state in
+  exactly one case: the SDK offers no seam for the call being made — e.g. a helper that
+  authenticates only via boto3's default credential chain, forcing the caller to stage
+  credentials into the environment. Such a suppression must name the specific SDK
+  function that lacks an explicit-credentials parameter, so it can be retired when that
+  seam ships; a suppression that cites only 'platform self-auth' or a general missing
+  seam is not auditable and is not a terminal state. Staging into process-global
+  os.environ is also unsafe under concurrency, so prefer fixing the seam over
+  suppressing (BLDX-1419, FND-2558).
 
 Application code reads a credential-named environment variable directly
 (`os.getenv("...SECRET")`, `os.environ["...TOKEN"]`, `os.environ.get("...API_KEY")`)

@@ -257,6 +257,12 @@ unrelated, making the original failure invisible.
   status and records a residual before returning []. Where the sentinel really is the
   contract, atlan-openapi-app app/api_client.py `redact_url` carries an inline
   ignore[E007] saying so.
+- **Already correct when:** Zero findings, reached by logging the failure and recording a residual before returning.
+  An inline ignore[E007] is the correct end state only where the sentinel return IS the
+  function's documented contract — a caller relies on the sentinel and no failure is
+  being swallowed — and the directive says which contract makes it so. A directive that
+  merely states the return is intentional does not qualify: that is true of every
+  swallowed error.
 
 Exception is converted to a return value (None, {}, [], False) with no trace.  Callers
 see a wrong result with no idea why.  At minimum log before returning; prefer raising a
@@ -607,6 +613,11 @@ there is no except/raise to key on; the failure is swallowed by a plain if-guard
   empty sentinel carries an inline ignore[E020] naming the residual file that records
   it. Seven such sites exist across app/extracts/, each justified. Without that evidence
   trail the empty return has to raise.
+- **Already correct when:** Zero findings, reached by raising on the HTTP failure. An inline ignore[E020] is the
+  correct end state only where the empty return leaves an evidence trail the operator
+  can follow — the directive names the residual file (or equivalent record) that
+  captures the failure, so a partial extract is visible rather than silently short. An
+  empty return with no named record is not a terminal state, however deliberate.
 
 An `if` whose test inspects an HTTP response for failure (a negation or comparison on
 `is_success` / `ok` / `status_code`) and whose branch `return`\ s an empty/None sentinel
