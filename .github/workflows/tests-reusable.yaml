@@ -1735,16 +1735,54 @@ jobs:
       # abandoned ticket self-healing.
       actions: read
     steps:
-      - name: Acquire the tenant leases
-        uses: atlanhq/application-sdk/.github/actions/e2e-tenant-lease@main
+      # This workflow runs in the caller's repo, so the lease driver has to be
+      # fetched. Same sparse + job.workflow_sha shape prepare-tenant's verify
+      # step has always used, and for the same reason: `uses:` cannot take an
+      # expression, so a composite action could only ever be @main — a PR
+      # changing the driver would silently exercise main's copy rather than its
+      # own. Running the checked-out driver in all three modes closes that
+      # window and is what let the lease share `_gh_refs` with the DataForge
+      # refcount instead of carrying a second copy of the transport (FND-2674).
+      #
+      # Every consumer calls this reusable @main, so job.workflow_sha is the
+      # commit @main resolved to; contenders still agree on the ref layout.
+      - name: Fetch SDK CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          mode: acquire
-          app: ${{ inputs.app-name }}
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+
+      - name: Acquire the tenant leases
+        # Inputs routed through env rather than inline ${{ }} so nothing
+        # interpolates into the command line (docs/standards/ci.md).
+        env:
+          APP: ${{ inputs.app-name }}
           # The clouds prepare-tenant will install onto, from the same discovery
           # call that built its matrix. Empty is the single-tenant fallback path
-          # and the action leases "default" for it, which is what prepare-tenant's
+          # and the driver leases "default" for it, which is what prepare-tenant's
           # own fallback leg (`cloud: ""`) verifies.
-          clouds: ${{ needs.discover-e2e.outputs.cloud-list }}
+          CLOUDS: ${{ needs.discover-e2e.outputs.cloud-list }}
+          # The lease lives in the repository the run belongs to. Every run that
+          # contends for a given app's tenant runs there too — a connector PR, a
+          # push, and a cross-repo dispatch from application-sdk all execute in
+          # the app repo. (The one exception, application-sdk's manual install
+          # workflow, is outside the lease domain: see FND-254.)
+          GH_TOKEN: ${{ github.token }}
+        # wait/poll/ttl are deliberately not passed: their defaults live in the
+        # driver, which is the single source the sizing tests read.
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_lease.py \
+            --mode acquire \
+            --repo "$GITHUB_REPOSITORY" \
+            --app "$APP" \
+            --clouds "$CLOUDS" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
 
   # ── Install the app under test onto each cloud's tenant ──────────────────
   # One leg per CLOUD, not per suite × cloud: the installation is tenant-scoped
@@ -1864,21 +1902,21 @@ jobs:
       # equivalent checkout in the e2e job: a PR editing these scripts must run
       # its own version, not main's.
       #
-      # The lease driver is fetched here too, and the lease check below invokes it
-      # directly rather than through the composite action. `uses:` cannot take an
-      # expression, so an action reference can only ever be @main — which means a
-      # PR that adds a mode to the driver would call a main that does not have it
-      # yet and die at argument parsing, and a PR that changes the driver would
-      # silently exercise main's copy instead of its own. Both directions of that
-      # stale window are closed by running the checked-out driver.
+      # The lease driver is fetched here too, and the lease check below invokes
+      # it from the checkout. `uses:` cannot take an expression, so an action
+      # reference can only ever be @main — which means a PR that adds a mode to
+      # the driver would call a main that does not have it yet and die at
+      # argument parsing, and a PR that changes the driver would silently
+      # exercise main's copy instead of its own. Both directions of that stale
+      # window are closed by running the checked-out driver, which is why the
+      # acquire and release jobs now do the same and the composite action is
+      # gone (FND-2674).
       - name: Fetch SDK CI scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
           ref: ${{ job.workflow_sha }}
-          sparse-checkout: |
-            .github/scripts
-            .github/actions/e2e-tenant-lease
+          sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
@@ -1898,7 +1936,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 application-sdk-scripts/.github/actions/e2e-tenant-lease/e2e_tenant_lease.py \
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_lease.py \
             --mode verify \
             --repo "$GITHUB_REPOSITORY" \
             --app "$APP" \
@@ -2504,12 +2542,31 @@ jobs:
       contents: write
       actions: read
     steps:
-      - name: Release the tenant lease
-        uses: atlanhq/application-sdk/.github/actions/e2e-tenant-lease@main
+      # Same fetch-then-run shape as the acquire; see the comment there.
+      - name: Fetch SDK CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          mode: release
-          app: ${{ inputs.app-name }}
-          cloud: ${{ matrix.cloud }}
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+
+      - name: Release the tenant lease
+        env:
+          APP: ${{ inputs.app-name }}
+          CLOUD: ${{ matrix.cloud }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_lease.py \
+            --mode release \
+            --repo "$GITHUB_REPOSITORY" \
+            --app "$APP" \
+            --cloud "$CLOUD" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
 
   # ── Pause the pinned dataforge source on the way out ──────────────────────
   # Mirror of wake-dataforge-source (FND-1992). Runs under `if: always()` so a

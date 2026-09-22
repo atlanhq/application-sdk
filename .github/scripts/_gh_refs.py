@@ -14,10 +14,17 @@ never reaches argv. Every read/write returns a status the caller interprets;
 nothing here raises on a 4xx except a rate limit, which is a ``RateLimited`` so a
 call site cannot forget to distinguish it from a denial.
 
-NOTE (drift): ``e2e-tenant-lease/e2e_tenant_lease.py`` still carries its own copy
-of these primitives — a composite action is checked out in isolation and cannot
-import this module at runtime, so its migration onto this module is a tracked
-fast-follow, not part of the PR that introduced this file.
+Both callers — ``e2e_tenant_lease.py`` and ``dataforge_source_lifecycle.py`` —
+import this module rather than carrying a copy (FND-2674). The lease used to be a
+composite action, which is checked out in isolation and so could not import a
+sibling script; it is now run off the same ``job.workflow_sha`` sparse checkout
+its ``verify`` mode always used, which is what made the single copy possible.
+
+What belongs here is the primitive — how a ref is created, read, listed and
+deleted, and how liveness is decided. What does NOT belong here is what a caller
+does with the answer: the lease treats a live holder as "wait", the DataForge
+refcount treats it as "do not pause". Same question, different policy, and the
+policy stays at the call site.
 """
 
 from __future__ import annotations
@@ -28,7 +35,7 @@ import os
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Transport retry budget (transient curl / 5xx). Kept identical to the lease.
 _TRANSPORT_ATTEMPTS = 3
@@ -36,14 +43,36 @@ _TRANSPORT_BACKOFF_SECONDS = 2
 
 _COMPLETED = "completed"
 
-_SAFE_SLUG_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+# Characters safe in a single ref path component. Deliberately narrower than the
+# rules the VCS itself applies: the keys come from workflow inputs, and a ref name
+# is the one place where "mostly valid" turns into a 422 nobody expected.
+#
+# The two copies this module reconciles disagreed about ".", and the narrower set
+# won (FND-2674) because it is the one that renames nothing: the DataForge pin id
+# genuinely contains a dot today, while no app or cloud name does, so dropping "."
+# leaves BOTH sides' ref names byte-identical and keeping it would have moved the
+# refcount's prefix under live runs.
+#
+# That makes the ".." and ".lock" guards below unreachable for now. They stay
+# because they guard the char SET, not this spelling of it: widening the set is a
+# one-line change, and a ref component that is ".." or ends ".lock" is rejected
+# outright — a failure mode worth keeping closed by construction rather than by
+# remembering.
+_SAFE_SLUG_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
 
 
 def slug(value: str, *, default: str = "default") -> str:
-    """Reduce a free-text key to one safe git ref path component."""
+    """Reduce a free-text key to one safe ref path component.
+
+    An empty result maps to ``default`` rather than producing an empty component,
+    which is rejected — the lease's single-tenant path spells its cloud as a
+    defined-but-empty string and legitimately lands here.
+    """
     cleaned = "".join(
         char if char in _SAFE_SLUG_CHARS else "-" for char in value.strip().lower()
     )
+    # ".." is rejected, a leading "-" is hostile to CLI tooling, and a component
+    # ending ".lock" is reserved.
     while ".." in cleaned:
         cleaned = cleaned.replace("..", "-")
     cleaned = cleaned.strip("-._")
@@ -62,6 +91,11 @@ class Holder:
 
     def is_me(self, run_id: int, attempt: int) -> bool:
         return self.run_id == run_id and self.attempt == attempt
+
+    def run_url(self, repo: str) -> str:
+        """Where to look at the holding run. Derived from its identity, so it is
+        a property of the holder rather than of what a caller does with it."""
+        return f"https://github.com/{repo}/actions/runs/{self.run_id}"
 
 
 @dataclass(frozen=True)
@@ -270,6 +304,27 @@ def try_create_ref(repo: str, ref: str, sha: str) -> str:
     )
 
 
+def read_ref_target(repo: str, ref: str) -> str | None:
+    """The sha one named ref points at, or None if it is unheld or unreadable.
+
+    One API call, and the cheap half of a waiting poll. None deliberately
+    conflates "nobody holds it" with "we could not tell": for a caller racing a
+    CAS both mean "try the CAS", and the CAS is the authority. A caller that
+    cannot tolerate that conflation wants ``list_matching_refs``, which
+    distinguishes an empty listing from a failed one.
+    """
+    # git/ref/<name> wants the ref without the leading "refs/".
+    response = gh_request("GET", f"repos/{repo}/git/ref/{ref.removeprefix('refs/')}")
+    if response.status == 404 or not isinstance(response.body, dict):
+        return None
+    if response.status >= 400:
+        print(f"::warning::could not read the ref {ref} (HTTP {response.status}).")
+        return None
+    target = response.body.get("object") or {}
+    sha = target.get("sha") if isinstance(target, dict) else None
+    return str(sha) if sha else None
+
+
 def delete_ref(repo: str, ref: str) -> bool:
     """Delete a ref. False ⇒ it was already gone, which is not a fault."""
     response = gh_request(
@@ -328,14 +383,26 @@ def read_blob_json(repo: str, blob_sha: str) -> dict | None:
 
 
 def _timestamp(value: object) -> float | None:
+    """Parse an ISO-8601 API timestamp (or an epoch number) to a POSIX float.
+
+    A naive timestamp is read as UTC rather than as runner-local time: the runner
+    can sit in any zone, and reading a UTC instant as local would shift the run's
+    start by hours — in the direction that makes a hold look longer than it was,
+    which is the direction that breaks a live holder.
+    """
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            return None
-    return None
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.timestamp()
 
 
 def holder_is_live(
@@ -365,19 +432,36 @@ def holder_is_live(
         return False
     if ttl_seconds <= 0 or holder.acquired_at is None:
         return True
+
+    # Sanity-check the holder's own timestamp against its run before trusting it.
+    # A ref cannot have been taken before the run that took it existed, so an
+    # earlier acquired_at means the record is wrong — a clock far out of step, or
+    # a corrupted write. Believing it would make the hold time enormous and break
+    # a LIVE holder on the first poll, which is the expensive direction; erring
+    # towards "live" costs a waiter one poll interval.
+    #
+    # A run object with no created_at at all gets the same treatment. It should
+    # never happen, so it means something has changed underneath us, and the
+    # holder's run status is then the only evidence worth acting on.
     run_started = _timestamp(body.get("created_at"))
-    if run_started is not None and holder.acquired_at < run_started:
+    if run_started is None:
+        return True
+    if holder.acquired_at < run_started:
         print(
             f"::warning::the lease record for run {holder.run_id} claims an "
             "acquisition time before that run existed, so it is not trustworthy; "
-            "ignoring the TTL and treating the lease as held."
+            "ignoring the TTL and treating the lease as held. Its run status is "
+            "still authoritative."
         )
         return True
-    if now - holder.acquired_at > ttl_seconds:
+
+    held_for = now - holder.acquired_at
+    if held_for > ttl_seconds:
         print(
             f"::warning::run {holder.run_id} has held the lease for "
-            f"{int(now - holder.acquired_at)}s, past the {ttl_seconds}s TTL, and "
-            f"still reports '{body.get('status')}' — breaking it."
+            f"{int(held_for)}s, past the {ttl_seconds}s TTL, and still reports "
+            f"'{body.get('status')}' — breaking it. If that run is genuinely "
+            "still working, raise ttl-seconds."
         )
         return False
     return True

@@ -721,7 +721,7 @@ On a real PR ref the shared group is the point (supersede the previous commit);
 everywhere else the run must be independent.
 
 **For a shared resource, take a lease instead.** The `(app, cloud)` tenant lease
-in [`e2e-tenant-lease`](../../.github/actions/e2e-tenant-lease/) is the worked
+in [`e2e_tenant_lease.py`](../../.github/scripts/e2e_tenant_lease.py) is the worked
 example (FND-250). It needs no lock server:
 
 * One ref per resource, with a **fixed** name:
@@ -822,6 +822,27 @@ Three further consequences to design for:
   every consumer of the thing you are failing open on and check that it tolerates
   the degraded value; if any one of them does not, the fail-open is fiction, and
   the honest version is to fail where the cause is still in hand.
+
+**The ref transport lives in exactly one module, and that is why the lease is a
+script and not a composite action.** `.github/scripts/_gh_refs.py` holds the
+primitives — the CAS, the blob read/write, the ref listing, holder liveness, and
+the 403-rate-limit/403-permission split — and both the tenant lease and the
+DataForge source refcount import it. A composite action cannot: it is checked out
+in isolation, with no sibling scripts on disk, so it has to carry its own copy.
+The lease was an action, and the copy taken from it for the refcount dropped the
+rate-limit/permission split on the way out — reintroducing the exact conflation
+FND-702 had fixed, caught only in review (FND-1992 / FND-2674). If a mechanism
+needs a primitive that another mechanism already has, a composite action is the
+wrong container for it.
+
+That change also closes a second-order problem worth knowing about: `uses:`
+cannot take an expression, so an action reference can only ever be `@main`. A PR
+that changes an action's driver therefore tests **main's** copy of it, not its
+own. Running the driver off the `job.workflow_sha` sparse checkout the job
+already needs makes a PR exercise its own version. Contenders still agree,
+because every consumer calls the reusable workflow `@main` and `job.workflow_sha`
+is the commit that resolves to — the only run where the two differ is the run
+that is editing the driver.
 
 ### An evicted run still reports, and the newest run owns the required check
 
