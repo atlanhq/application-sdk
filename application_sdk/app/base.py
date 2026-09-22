@@ -2653,12 +2653,11 @@ async def _run_preflight_gate(
                 elapsed_ms,
                 attempt=failure.attempt,
                 audience=Audience.APP_OWNER.value,
-                # None on this branch today: classify_gate_failure only fills
-                # evidence for SOURCE_UNVERIFIABLE, so a gate_broken row carries
-                # no failure.message and the stack trace is what a reader gets.
-                # Passed anyway so the branch follows the same ladder as the
-                # other two, and gains the sentence the day a broken gate learns
-                # to type itself rather than needing to be remembered here.
+                # The plumbing error's own details[0], read off the chain by
+                # classify_gate_failure when it can be parsed — _plumbing_error
+                # leaves it there for exactly this consumer. None only for a bare
+                # exception that carried none; the row then has the stack trace
+                # and no sentence. Same ladder as the other two branches.
                 primary=failure.evidence,
                 exc_info=True,
             )

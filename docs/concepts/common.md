@@ -266,7 +266,8 @@ fd = e.to_failure_details()
 # fd.audience      — Audience enum (routing: who acts)
 # fd.retryable     — bool (resolved from class default or per-instance override)
 # fd.code          — str (app-owned fine-grained code, e.g. "NOT_FOUND_STORAGE")
-# fd.suggested_action — str | None (imperative hint; voice shifts with audience)
+# fd.message       — str (the human line; URL userinfo carrying a password and secret-named params are redacted by the envelope's own validator, at construction and again on model_validate)
+# fd.suggested_action — str | None (imperative hint; voice shifts with audience; redacted the same way as message)
 # fd.evidence      — dict of per-error structured context (dataclass fields)
 # fd.cause_repr    — str | None (sanitised str of wrapped exception: "{ExcType}: {msg}", URL/secret-redacted; cause message capped at 2000 chars; never the live object)
 ```
@@ -351,8 +352,11 @@ safe = redact_wire_value({"dsn": "postgresql://u:p@host/db", "tags": ["pwd=hunte
 # {'dsn': 'postgresql://***@host/db', 'tags': ['pwd=***']}
 ```
 
-Use it on anything handler-authored that crosses a wire: `message`, `suggested_action` and
-`evidence` are not redacted where they are built, unlike `FailureDetails.cause_repr`.
+Use it on anything handler-authored that goes under an `evidence` key: nested values are not
+redacted where they are built. `message` and `suggested_action` **are** — a `field_validator` on
+`FailureDetails` runs `redact_secrets` over both at construction and again on `model_validate`,
+idempotently, so a handler gains nothing by redacting them first. `cause_repr` is redacted where the
+cause is captured, by `sanitize_cause_repr`.
 
 ### Legacy error-code namespaces (backward-compat only)
 
