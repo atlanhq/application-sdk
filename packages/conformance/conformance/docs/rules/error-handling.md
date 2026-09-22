@@ -144,6 +144,18 @@ root-cause analysis impossible.
   app/handler.py `preflight_check` converts the caught exception into a typed
   PreflightCheck row and returns it, which the rule detects — no suppression needed; all
   three shapes are accepted, an unexplained bare breadth is not.
+- **Interacts with:** The set of forms that actually clear this rule is narrower than it looks, and two of the
+  exits are closed by other rules. The checker accepts logger.exception(), or
+  warning/error/critical carrying exc_info=True, or warning/error/critical routed
+  through a redaction helper. logger.exception() is not available: L017 forbids it under
+  ADR-0011. And DEBUG is accepted by none of the three, even with exc_info=True — while
+  E005's own canonical_reference endorses exactly that shape (atlan-mysql-app _epoch_ms,
+  'the level is a volume decision; keeping the traceback is not'). So a handler that
+  deliberately logs a broad catch at DEBUG with a full traceback satisfies E005 and
+  cannot satisfy E004. Raising the level is the only way through, which is a real
+  decision on a cleanup path that runs inside a finally: the WARNING lands beside the
+  error actually being reported. Reported from a consumer app in FND-2542; whether DEBUG
+  should join the accepted set is an owner call, not a mechanical fix.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
@@ -245,6 +257,13 @@ unrelated, making the original failure invisible.
   status and records a residual before returning []. Where the sentinel really is the
   contract, atlan-openapi-app app/api_client.py `redact_url` carries an inline
   ignore[E007] saying so.
+- **Already correct when:** A justified inline `# conformance: ignore[E007] <reason>` IS the correct end state where
+  the sentinel genuinely IS the function's contract — the caller is documented to treat
+  the empty/None return as a normal outcome rather than as success. The reason must say
+  which contract, as atlan-openapi-app `redact_url` does. Where the sentinel instead
+  stands in for a failure the caller cannot distinguish from success, the directive is
+  unremediated: either raise, or record the failure to a durable evidence trail and
+  declare the gap (see E020).
 
 Exception is converted to a return value (None, {}, [], False) with no trace.  Callers
 see a wrong result with no idea why.  At minimum log before returning; prefer raising a
@@ -595,6 +614,15 @@ there is no except/raise to key on; the failure is swallowed by a plain if-guard
   empty sentinel carries an inline ignore[E020] naming the residual file that records
   it. Seven such sites exist across app/extracts/, each justified. Without that evidence
   trail the empty return has to raise.
+- **Already correct when:** A justified inline `# conformance: ignore[E020] <reason>` IS the correct end state where
+  three things hold together: the empty return is deliberate, the failure is recorded to
+  a durable evidence trail that the reason NAMES, and the run declares the resulting gap
+  rather than reporting a complete crawl (e.g. OutputStatus.PARTIAL_SUCCESS). The trail
+  makes the gap reviewable; declaring it is what stops a partial crawl being published
+  as a whole one. A directive naming no trail is unremediated, not compliant, and the
+  empty return must raise instead. Do NOT apply the default edit to a site that already
+  meets all three: raising there deletes the app's ability to degrade, so a single flaky
+  endpoint aborts the entire crawl.
 
 An `if` whose test inspects an HTTP response for failure (a negation or comparison on
 `is_success` / `ok` / `status_code`) and whose branch `return`\ s an empty/None sentinel

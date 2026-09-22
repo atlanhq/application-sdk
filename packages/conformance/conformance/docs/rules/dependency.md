@@ -98,8 +98,8 @@ the runtime environment, this rule is skipped silently.
 slows resolution and widens the supply-chain/CVE surface, or it was meant to live
 elsewhere (a test/dev group). Surfacing it turns the recurring manual question during a
 version bump — 'is this even used?' — into a deterministic, reviewable signal. It stays
-advisory (WARN, no autofix) because a dependency can be loaded dynamically, via an entry
-point/plugin, or run as a server (e.g. uvicorn) without an explicit import.
+advisory (WARN, no mechanical fix) because a dependency can be loaded dynamically, via
+an entry point/plugin, or run as a server (e.g. uvicorn) without an explicit import.
 
 ### What correct looks like
 
@@ -107,6 +107,12 @@ point/plugin, or run as a server (e.g. uvicorn) without an explicit import.
   carries an inline ignore[D003] saying SQLAlchemy loads it dynamically from the
   "mysql+aiomysql" dialect string. A dynamically-loaded dependency is real; it just has
   to say so.
+- **Already correct when:** A justified inline `# conformance: ignore[D003] <reason>` IS the correct end state for a
+  dependency that is genuinely loaded without a static import — a driver resolved from a
+  dialect/plugin string, an entry-point registration, a CLI invoked as a subprocess. The
+  reason must name the mechanism that loads it, as atlan-mysql-app does for aiomysql. A
+  directive that only asserts the dependency is needed is unremediated: if nothing loads
+  it dynamically, remove the dependency rather than suppressing the finding.
 
 Every package in the repo's core `[project.dependencies]` should be imported somewhere
 in the shipped source.  This rule maps each declared distribution to the import name(s)
@@ -180,8 +186,8 @@ Every `atlan-application-sdk[extra]` reference must name an extra the SDK actual
 publishes (its `Provides-Extra` metadata).  An unknown extra is silently dropped by uv,
 so its dependencies are never installed and the failure appears only at runtime.  The
 published set is read from installed metadata; if the SDK is not importable, this rule
-is skipped silently.  The fix (map a typo to the intended extra) is judgment, so
-findings route to residue rather than auto-fix.  Cite: BLDX-1410.
+is skipped silently.  The fix (map a typo to the intended extra) is judgment, so the fix
+is written per site rather than applied mechanically.  Cite: BLDX-1410.
 
 ---
 
@@ -632,11 +638,11 @@ also the one fact that changes on every run: a day count in the message would re
 the SARIF, move the fingerprint and re-notify on an unchanged repo daily, forever. The
 message names the date; the reader subtracts.
 
-Not autofixable, deliberately.  Deleting the key is one line, but the next resolve then
-jumps the repo across every release the fence was holding back, and at least one
-instance is a documented owner-gated hold (FND-1125) rather than drift.  Which of those
-a given fence is cannot be read off the file, so the remediation loop must not decide
-it.
+Deliberately not a mechanical rewrite.  Deleting the key is one line, but the next
+resolve then jumps the repo across every release the fence was holding back, and at
+least one instance is a documented owner-gated hold (FND-1125) rather than drift.  Which
+of those a given fence is cannot be read off the file, so the remediation loop must not
+decide it.
 
 Scope is `both`: a fence bounds the SDK's own resolves exactly as it bounds an app's.
 The fleet does need a release-age bound — it is applied centrally and rolling, by

@@ -105,7 +105,7 @@ E2E coverage is **not** limited to the happy path. Every user-observable scenari
 
 App owners and CI run these commands against the app repo. All must exit 0 for the app to be v3-ready.
 
-**One-click runner:** the SDK ships a GitHub Action at [`.github/workflows/v3-readiness-check.yaml`](../../.github/workflows/v3-readiness-check.yaml). Trigger it from the application-sdk repo's Actions tab with two inputs — `app_repo` (e.g. `atlanhq/atlan-openapi-app` or a full GitHub URL) and `branch` — and it runs §5.1 — §5.2 plus the §1 SDK pin and §3 Dockerfile base-image checks against the target ref, writes a summary, and uploads the `check_migration` report as an artifact. Private app repos require an `APP_REPO_READ_TOKEN` repo secret with `contents: read` on the target.
+There is no one-click runner: the `v3-readiness-check.yaml` workflow that once wrapped §5.1 — §5.2 was removed in FND-2661, having gone unrun since 2026-05-04 with no caller in any repo. Run the commands below against a checkout of the app instead.
 
 ### 5.1 Static check (mandatory)
 

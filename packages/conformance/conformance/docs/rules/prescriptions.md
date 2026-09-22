@@ -89,14 +89,31 @@ mid-run with a serialization error nothing in their configuration explains.
 
 - **Compliant example:** atlan-mysql-app — its generated contract/_input.py subclasses ExtractionInput with no
   allow_unbounded_fields at all, because every filter is a bounded concrete type.
-- **Interacts with:** B005 + ledger-guard box this in. Narrowing an @entrypoint field's value type trips B005,
-  and `conformance ledger-guard` is append-only (status changes and additions allowed;
-  retypes and deletions refused), so the retype cannot land. Wrapping Any in MaxItems
-  clears P001 AND B005 but the class then raises PayloadSafetyError at import: Any is
-  refused unconditionally.
-- **Already correct when:** A justified inline `# conformance: ignore[P001] <reason>` at the declaration site IS the
-  fix for an @entrypoint contract field whose type is recorded in the ledger — every
-  alternative is blocked. Treat such a site as compliant, not as unremediated.
+- **Interacts with:** B005 + ledger-guard bound the fix, but less tightly than they look, and reading them as
+  a wall is how a fixable site gets suppressed. ledger-guard refuses a change to a
+  RECORDED type; gen-contract-ledger never deletes an entry and never rewrites a
+  recorded type — so narrowing the annotation IN SOURCE leaves the ledger entry
+  untouched and the guard passes. A retype rejected when applied to the ledger file is
+  not the same as one applied to the contract; run gen-contract-ledger then ledger-guard
+  and read the result rather than inferring it. Removing a recorded field does fire B005
+  at BLOCK tier; retiring one is the sanctioned route, but read it precisely. B005 skips
+  a sunset field only when it is ABSENT from source (live is None and status ==
+  'sunset'), so retirement is: mark deprecated=True with
+  json_schema_extra={'x-lifecycle': 'sunset'}, regenerate, THEN remove the field. A
+  sunset field still declared with a changed type is still a retype and is judged as
+  one. Narrowing in place is free only where _retype_is_compatible allows it: an
+  inherited field, a widening, or replacing Any with a concrete type in the SAME OUTER
+  SHAPE (which payload safety requires anyway, so it is not optional). Wrapping Any in
+  MaxItems clears P001 AND B005 but the class then raises PayloadSafetyError at import:
+  Any is refused unconditionally. Note also that an app-level OVERRIDE of a base-class
+  field is often what introduces the Any — the SDK's own ExtractionInput already models
+  its filters payload-safely — and dropping an override is not a retype of your contract
+  at all.
+- **Already correct when:** A justified inline `# conformance: ignore[P001] <reason>` at the declaration site is the
+  fix ONLY once narrowing in source, dropping an app-level override, and retiring the
+  field as sunset have each been tried and shown to fail — with the refusal quoted. It
+  is not licensed by the field merely being recorded in the ledger. A site whose
+  justification names no attempted alternative is unremediated, not compliant.
 
 An `Input`/`Output` contract subclass declared with the `allow_unbounded_fields=True`
 class keyword opts out of the SDK's payload-safety enforcement: arbitrary, untyped
@@ -116,19 +133,33 @@ time, so the app does not import at all.  `Any` is refused unconditionally: wrap
 in `MaxItems` does not make it acceptable.  Removing the opt-out is a real fix only when
 every field is concretely typed.
 
-**Deciding what to do.** Three outcomes, in order of preference:
+**Deciding what to do.** Four outcomes, in order of preference.  A field being recorded
+in the ledger does NOT by itself close the first three — reading it that way is what
+turns fixable sites into suppressions.
 
 1. *Type the field concretely.*  For filter maps the SDK already ships `FilterMap`
 (`application_sdk.templates.contracts`), a bounded `dict[str, list[str]]` — see the
-`mysql` reference app, whose generated contract needs no opt-out at all.
+`mysql` reference app, whose generated contract needs no opt-out at all.  Replacing
+`Any` with a concrete type **in the same outer shape** is compatible under B005: payload
+safety refuses `Any` at class-definition time, so the change is required rather than
+optional.  A narrowing that changes the outer shape is not, and is judged as an ordinary
+retype.
 
-2. *Add a new, bounded field* and mark the old one `deprecated` in the ledger.
-Additions and status changes are always allowed.
+2. *Drop an app-level override.*  An `Any` often arrives because the app re-declared a
+field the SDK base already models safely.  Deleting the override inherits the base type,
+and an inherited field is compatible under B005 by construction — the app did not make
+the change and cannot revert it.
 
-3. *Keep the opt-out with a justified suppression.*  This is the right answer, not a
-failure, when the field is an `@entrypoint` contract field: B005 forbids changing its
-recorded type and `ledger-guard` is append-only, so options 1 and 2 are closed and the
-carve-out is genuinely unavoidable.  Say that in the reason.
+3. *Retire a field nothing populates.*  Absent from the generated manifest's args and
+constructed nowhere, it is dead weight.  Mark it `deprecated=True` with `x-lifecycle:
+sunset`, regenerate, **then remove it from source** — B005 skips a sunset field only
+once it is gone.  A sunset field still declared with a changed type is still a retype.
+
+4. *Keep the opt-out with a justified suppression.*  The last resort, reached only after
+1–3 have each been tried and shown to fail, with the refusal quoted in the reason.
+`ledger-guard` rejects a change to a **recorded** type; it does not stop you narrowing
+the annotation in source, because `gen-contract-ledger` never rewrites a recorded type.
+A justification naming no attempted alternative is unremediated, not compliant.
 
 ---
 
@@ -350,6 +381,14 @@ let the activity interceptor move the bytes (BLDX-1398).
 - **Compliant example:** atlan-mysql-app app/mysql.py — `App.upload()` is called from `run()`, after the tasks
   return. A @task hands its output back as a FileReference and lets the framework move
   it; the transfer is the App's business, not the task's.
+- **Interacts with:** P021 pushes the other way. Where side-effecting file I/O sits in the same block as one
+  of these transfers, P021 says move the block into a @task and this rule says the
+  transfer must stay in run() — so relocating the block wholesale trades one finding for
+  the other (observed going 0 -> 2 in FND-2542). Split the block by responsibility
+  instead: the @task takes the raw I/O and returns its result as typed output, and the
+  transfer stays in run(), keyed off that output. That also removes the replay hazard
+  P021 is really about, since the branch then reads a recorded task result rather than
+  re-probing local state.
 
 An `App` subclass calls `self.upload(...)`, `self.download(...)` or
 `self.upload_refs(...)` from within a `@task`-decorated method.  `App.upload`,
@@ -933,6 +972,17 @@ whose result is durably recorded in workflow history.
   the HTTP fetch and the object-store download live inside those tasks. The comment
   above the download call states the rule in the app's own words: cloud I/O must run in
   an activity, not workflow code.
+- **Interacts with:** P008 bounds the obvious fix. If the flagged I/O shares a block with self.download() /
+  self.upload() / self.upload_refs(), moving the block wholesale into a @task trades
+  this finding for P008 findings: those helpers are framework tasks and must be called
+  from run() (observed going 0 -> 2 in FND-2542). Split by responsibility instead — the
+  @task takes the raw I/O and RETURNS ITS DECISION as typed output, and the transfers
+  stay in run(). Returning the decision is the part that actually fixes replay: a branch
+  taken on os.path.isfile re-probes the disk on every replay and can diverge, whereas a
+  branch taken on a recorded task result cannot. Note the checker flags only the curated
+  call list, so os.path.isfile / os.path.getsize / os.makedirs beside a flagged
+  shutil.copyfile are part of the same defect and are not separately reported — clearing
+  only the flagged line leaves the non-determinism in place.
 
 Inside an `App` subclass's workflow-context method a call performs side-effecting I/O —
 `open`, `requests`/`httpx`/`urllib`, `socket`, `subprocess`,
@@ -1043,8 +1093,9 @@ rather than a finding in its own right.
 
 Blocking sync I/O and filesystem work are reported only **outside** workflow context —
 inside workflow methods the same calls are owned by P020 (sleep) and P021 (file/network
-I/O), so they are not double-counted.  Remediation is a restructure, so findings route
-to residue.  Land as `WARN`; suppress with `# conformance: ignore[P023] <reason>`.
+I/O), so they are not double-counted.  Remediation is a restructure, so a fix is written
+per site rather than applied mechanically.  Land as `WARN`; suppress with `#
+conformance: ignore[P023] <reason>`.
 
 ---
 
@@ -1244,6 +1295,14 @@ silently. The pyatlan asset .creator() factories own the grammar centrally.
   `APIPath.creator()`, so the grammar is pyatlan's. Where a caller genuinely needs the
   string and not the asset, atlan-metabase-app app/qualified_names.py carries a
   per-function ignore[P028] naming the creator whose grammar it mirrors.
+- **Already correct when:** A justified per-function inline `# conformance: ignore[P028] <reason>` IS the correct
+  end state in two cases, and the reason must say which. Either the caller needs the
+  qualifiedName STRING and not the asset, and the f-string mirrors a pyatlan creator's
+  grammar — the reason then names that creator and the module it lives in, so a drift in
+  pyatlan can be traced here. Or no pyatlan creator owns the grammar at all (a Process /
+  ColumnProcess identity, a content-hashed ARS key), in which case the reason says so
+  and the site is centralised as the single source of truth rather than repeated. A
+  directive on a site that could simply call the creator is unremediated.
 
 An f-string composes a slash-delimited `qualifiedName` — it both interpolates a
 `*qualified_name` / `*_qn` value and contains a `/` separator (e.g.
@@ -1502,9 +1561,9 @@ flagged — a call-site-owned `ThreadPoolExecutor` is not the shared-pool conten
 rule targets. `application_sdk/_runtime/offload.py` is exempt: that is where
 `run_in_thread()`'s own dedicated-executor dispatch lives.
 
-Remediation is a restructure (swap in `run_in_thread()`), so findings route to residue.
-Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
-<reason>`.
+Remediation is a restructure (swap in `run_in_thread()`), so findings are fixed per
+site, not mechanically.  Land as `WARN`; suppress a reviewed exception with `#
+conformance: ignore[P031] <reason>`.
 
 ---
 
