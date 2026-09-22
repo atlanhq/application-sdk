@@ -531,11 +531,16 @@ like), `Timeout:SCHEDULE_TO_CLOSE` (the retry window closed), or `Timeout:HEARTB
 events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which
 apps believe they are gated" is only answerable from posture rows.
 
-Any row with at least one failed check also carries `failure.check`, the name of the check the
-verdict turned on, and `failure.message`, its human line — secret-redacted and length-capped on the
-way out, because a handler's `message` is authored by the app and is not sanitized upstream. They
-are conditional, like `failure.audience` and unlike the keys above: a clean `proceeded` row carries
-neither. They exist because `reason` is a code and `check_matrix` deliberately holds no messages, so
+Any row with at least one failed check also carries `failure.message`, the human line for the
+failure the row is attributed to — the same one `reason` is derived from, so the two always agree.
+It is secret-redacted and length-capped on the way out, because a handler's `message` is authored by
+the app and is not sanitized upstream. Alongside it, `failure.check` names the check that message
+came from, matched on `(code, message)` rather than object identity: the workflow frame recovers its
+evidence off the failure chain, so what it holds crossed the wire, and a handler may hand one error
+to both the aggregate and a check, which coerce separately. Where several checks failed and none
+matches, the name is **omitted** rather than guessed — a name that contradicts `reason` on its own
+row is worse than no name. Both keys are conditional, like `failure.audience` and unlike the keys
+above: a clean `proceeded` row carries neither. They exist because `reason` is a code and `check_matrix` deliberately holds no messages, so
 without them the sentence explaining a block lived only on the adjacent `Completing activity as
 failed` record under `exception.message` — one record away, under a key nobody searches. The same
 two keys are on the interactive `Preflight check outcome` row, from the same helper, so the two

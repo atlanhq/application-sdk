@@ -1,7 +1,7 @@
 # Preflight outcome rows: name the failing check and its reason
 
 - **Date:** 2026-09-22
-- **Status:** Approved, not yet implemented
+- **Status:** Implemented. Revised after review — see *Revision* at the end.
 - **Branch:** `feat/preflight-outcome-failure-fields` (off `origin/main` @ `0e864d4c`)
 - **Origin:** CONNECT-1821
 
@@ -102,9 +102,10 @@ Derivation, mirroring `_build_block_error`'s precedence exactly so the row can
 never name a different cause than the error actually raised:
 
 1. `failed = [c for c in checks if not c.passed]` — empty → return `{}`
-2. `failure.check` = the name of the check whose `.error is primary`; else
-   `failed[0].name`. The fallback covers the handler-aggregate case, where
-   `result.error` is pinned on the verdict and belongs to no single check.
+2. `failure.check` = the name of the check `primary` describes, matched on
+   `(code, message)`. A lone failed check is unambiguous and is named whether or
+   not it matches. Several failed checks with no match — or several matching
+   equally — has no answer, and the key is omitted rather than guessed.
 3. `failure.message` = `primary.message` if `primary` else
    `failed[0].resolved_message` (the property already encodes the
    `error` -beats- `message` precedence).
@@ -131,11 +132,12 @@ so the annotation never evaluates at runtime. The existing
 `audience` parameter is left alone — deriving it from `primary` instead would
 be a wider signature change than this needs.
 
-Both callers already hold the value: they pass
-`audience=block_error.details[0].audience.value`, so they pass
-`primary=block_error.details[0]` alongside it. The workflow fail-open frame
-often has no checks at all, in which case the helper returns `{}` and the row
-is unchanged.
+The activity frame passes `verdict.error`, the handler's aggregate, which is
+what `_primary_failure` prefers. The workflow frame passes the `evidence` it
+recovered off the failure chain — the same object its `reason` and
+`failure.audience` come from. Passing nothing there was the review's first
+finding: the row fell back to check order and named an unrelated advisory check
+while `reason` named the real fault.
 
 **Interactive row** — the `Preflight check outcome` emit at
 [preflight_gate.py:1262][int] already computes `primary` on the line above its
@@ -157,7 +159,7 @@ onto a widely-read row without scrubbing would be a real leak.
 New helper in `errors/base.py`, beside the existing ones:
 
 ```python
-def redact_and_cap(text: str, max_len: int = _CAUSE_MAX_LEN) -> str:
+def redact_and_cap(text: str) -> str:
     """Redact secrets, then head+tail truncate."""
 ```
 
@@ -185,6 +187,7 @@ Rows that gain the keys — any outcome with at least one failed check:
 | `proceeded` with advisory failed checks | yes |
 | `proceeded`, all checks passed | no |
 | `skipped` | no |
+| workflow-frame block from recovered evidence | yes — matched by value, since the evidence crossed the wire |
 | workflow-frame fail-open with no checks | no |
 
 Both rows derive from one helper, so the two surfaces cannot drift — the
@@ -232,3 +235,30 @@ check_matrix    = [...]
 [wf]: ../../../application_sdk/app/base.py#L2582
 [pass]: ../../../application_sdk/observability/logger_adaptor.py#L284
 [td]: ../../../application_sdk/errors/base.py#L286
+
+## Revision (2026-09-22, post-review)
+
+An independent review found the original `c.error is primary` match wrong in two
+reproducible cases, and it was: identity cannot survive a value object crossing
+a serialization boundary.
+
+1. The workflow frame passed no `primary` at all, so a block from recovered
+   evidence named whichever check happened to fail first. With storage
+   verification on and a killed attempt, the row read
+   `reason=DEPENDENCY_UNAVAILABLE` beside `failure.check=version` — an unrelated
+   advisory. Pointing a reader at the wrong check is worse than the blank row
+   this change set out to fix.
+2. A handler handing one `AppError` to both the aggregate and a check produces
+   two distinct `FailureDetails`, because `PreflightOutput` and `PreflightCheck`
+   coerce independently. Identity missed; so did `==`, because
+   `_primary_failure` stamps `app_name` on the copy it returns.
+
+Fixed by matching on `(code, message)`, by having the workflow frame hand over
+the evidence it already holds, and by omitting `failure.check` when several
+checks failed and none matches — a name that contradicts `reason` on its own row
+is worse than no name. Both cases now have regression tests.
+
+The original spec also mis-stated where the tests would live. They are in
+`tests/unit/execution/test_preflight_gate_activity.py` (activity and interactive
+rows) and `tests/unit/app/test_preflight_gate.py` (workflow frame). Putting none
+in the workflow-frame module is why finding 1 shipped.

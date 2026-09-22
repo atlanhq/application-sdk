@@ -2540,6 +2540,9 @@ async def _run_preflight_gate(
         from application_sdk.errors.categories import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             Audience,
         )
+        from application_sdk.errors.wire import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            FailureDetails,
+        )
         from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             PREFLIGHT_OUTCOME_EVENT,
             PreflightClassification,
@@ -2576,6 +2579,7 @@ async def _run_preflight_gate(
         attempt: int,
         checks: list[PreflightCheck] | None = None,
         audience: str | None = None,
+        primary: FailureDetails | None = None,
         exc_info: bool = False,
     ) -> None:
         checks = checks or []
@@ -2591,6 +2595,7 @@ async def _run_preflight_gate(
             budget_seconds=budget,
             attempt=attempt,
             audience=audience,
+            primary=primary,
         )
         if exc_info:
             row["exc_info"] = True
@@ -2662,6 +2667,7 @@ async def _run_preflight_gate(
             attempt=failure.attempt,
             checks=failure.checks,
             audience=evidence.audience.value,
+            primary=evidence,
             exc_info=True,
         )
         if mode.enforces:

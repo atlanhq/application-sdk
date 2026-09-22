@@ -1085,18 +1085,51 @@ def _gate_error(
     )
 
 
+def _attributed_check(
+    failed: list[PreflightCheck], primary: FailureDetails
+) -> PreflightCheck | None:
+    """The failed check ``primary`` describes, or ``None`` when that is a guess.
+
+    Never identity. The workflow frame recovers its evidence off the failure
+    chain, so the object it holds crossed the wire and is not the one any check
+    carries; a handler may also hand one ``AppError`` to both the aggregate and
+    a check, which ``PreflightOutput`` and ``PreflightCheck`` coerce separately
+    into two distinct ``FailureDetails``. ``==`` fails both times, because
+    :func:`_primary_failure` stamps ``app_name`` on the copy it returns.
+
+    ``(code, message)`` survives both round-trips. A lone failed check is
+    unambiguous whether or not it matches. Anything else — several failed
+    checks and no match, or several matching equally — has no answer, and a
+    wrong name is worse than none: it would contradict ``reason`` on the same
+    row and send a reader after the wrong check.
+    """
+    matched = [
+        c
+        for c in failed
+        if c.error is not None
+        and c.error.code == primary.code
+        and c.error.message == primary.message
+    ]
+    if len(matched) == 1:
+        return matched[0]
+    if not matched and len(failed) == 1:
+        return failed[0]
+    return None
+
+
 def _failure_fields(
     checks: list[PreflightCheck], primary: FailureDetails | None
 ) -> dict[str, str]:
     """The failing check's name and human line, for the outcome rows.
 
-    Precedence mirrors :func:`_build_block_error` exactly, so the row can never
-    name a different cause than the error actually raised: the handler's typed
-    aggregate wins over check order, because SDR inserts a non-fatal row ahead
-    of the real failure and pins the real one on ``result.error``.
+    ``primary`` is the failure the verdict is attributed to — the one ``reason``
+    is derived from — so the message on the row always agrees with ``reason``.
+    Without a ``primary`` there is no aggregate to contradict the checks, and
+    the first failed one carrying a typed error is the attribution.
 
-    The aggregate belongs to no single check, so the name falls back to the
-    first failed check — the one whose failure the aggregate is describing.
+    The name is best-effort and may be absent; see :func:`_attributed_check`.
+    The message is redacted before it is capped, because ``FailureDetails``
+    carries the handler's own ``message`` unsanitized.
 
     Empty dict when nothing failed: a clean ``proceeded`` row gains no keys.
     """
@@ -1104,11 +1137,13 @@ def _failure_fields(
     if not failed:
         return {}
     if primary is None:
-        primary = next((c.error for c in failed if c.error is not None), None)
-    named = next((c for c in failed if c.error is primary), failed[0])
-    message = primary.message if primary is not None else named.resolved_message
+        named = next((c for c in failed if c.error is not None), failed[0])
+        message = named.resolved_message
+    else:
+        named = _attributed_check(failed, primary)
+        message = primary.message
     fields: dict[str, str] = {}
-    if named.name:
+    if named is not None:
         fields[FAILURE_CHECK_KEY] = named.name
     if message:
         fields[FAILURE_MESSAGE_KEY] = redact_and_cap(message)

@@ -2674,3 +2674,53 @@ class TestOutcomeRowNamesTheFailure:
 
         keys = (FAILURE_CHECK_KEY, FAILURE_MESSAGE_KEY)
         assert {k: gate[k] for k in keys} == {k: interactive[k] for k in keys}
+
+    async def test_the_same_error_on_aggregate_and_check_is_matched_by_value(
+        self,
+    ) -> None:
+        # A handler may hand the same AppError to both. PreflightOutput and
+        # PreflightCheck each coerce it independently, so the row sees two
+        # distinct FailureDetails objects describing one failure.
+        blocking = AppPermissionDeniedError(message="The admin API returned 403.")
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=blocking,
+            checks=[
+                PreflightCheck(
+                    name="advisoryFirst", passed=False, error=AuthError(message="noise")
+                ),
+                PreflightCheck(name="scannerApi", passed=False, error=blocking),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_CHECK_KEY] == "scannerApi"
+        assert ev[FAILURE_MESSAGE_KEY] == "The admin API returned 403."
+
+    async def test_an_unattributable_aggregate_omits_the_name_rather_than_guessing(
+        self,
+    ) -> None:
+        # Several checks failed and the aggregate matches none of them, so any
+        # name would be a guess. Naming the wrong check is worse than naming
+        # none: `reason` and `failure.check` would disagree and support would
+        # chase the wrong one.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=AppPermissionDeniedError(
+                message="Aggregate that describes neither check."
+            ).to_failure_details(),
+            checks=[
+                PreflightCheck(
+                    name="first", passed=False, error=AuthError(message="a")
+                ),
+                PreflightCheck(
+                    name="second", passed=False, error=AuthError(message="b")
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert FAILURE_CHECK_KEY not in ev
+        assert ev[FAILURE_MESSAGE_KEY] == "Aggregate that describes neither check."

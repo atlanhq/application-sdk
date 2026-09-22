@@ -19,6 +19,8 @@ from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import SourceUnavailableError
 from application_sdk.execution._temporal.preflight_gate import (
     FAILURE_AUDIENCE_KEY,
+    FAILURE_CHECK_KEY,
+    FAILURE_MESSAGE_KEY,
     GATE_OUTCOME_ROW_KEYS,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     PREFLIGHT_FAILED_ERROR_TYPE,
@@ -1087,3 +1089,63 @@ class TestACancelledGateActivityFailsOpen:
         assert row["outcome"] == "no_verdict"
         assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
         assert row["reason"] == "CancelledError"
+
+
+def _marker_with_an_advisory_ahead_of_the_blocker() -> ApplicationError:
+    """A marker whose first failed check is NOT the one the verdict is attributed to.
+
+    Production shape: an advisory check fails, then the real fault is pinned on
+    the aggregate. The recovered checks keep advisory-first ordering, so a row
+    that names "the first failed check" names the wrong one.
+    """
+    from application_sdk.errors.leaves import AuthError
+
+    blocker = SourceUnavailableError(
+        message="The SQL Server did not answer in time"
+    ).to_failure_details()
+    advisory = AuthError(message="ADVISORY LINE, not the reason for the block")
+    checks = [
+        {
+            "name": "versionAdvisory",
+            "passed": False,
+            "error": advisory.to_failure_details().model_dump(mode="json"),
+        },
+        {
+            "name": "sourceReachable",
+            "passed": False,
+            "error": blocker.model_dump(mode="json"),
+        },
+    ]
+    return ApplicationError(
+        "Preflight could not reach a verdict",
+        blocker,
+        {"checks": checks},
+        type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+    )
+
+
+class TestTheWorkflowRowNamesTheAttributedCheck:
+    """The workflow frame's row must agree with its own `reason`.
+
+    The frame recovers its evidence off the failure chain, so the objects it
+    holds crossed the wire and are no longer the ones the activity built. A row
+    that names a check by position rather than by attribution points support at
+    an unrelated advisory while `reason` names the real fault.
+    """
+
+    async def test_blocked_row_names_the_check_the_evidence_came_from(
+        self, safe_log
+    ) -> None:
+        from temporalio.exceptions import TimeoutType
+
+        timeout = _temporal_timeout(TimeoutType.START_TO_CLOSE)
+        timeout.__cause__ = _marker_with_an_advisory_ahead_of_the_blocker()
+        _, exec_patch = _exec(side_effect=_real_activity_error(timeout))
+        with _patched(True), exec_patch, pytest.raises(ApplicationError):
+            await _run_preflight_gate(
+                _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
+            )
+        row = _row(safe_log)
+        assert row["outcome"] == "blocked"
+        assert row[FAILURE_MESSAGE_KEY] == "The SQL Server did not answer in time"
+        assert row[FAILURE_CHECK_KEY] == "sourceReachable"
