@@ -17,6 +17,7 @@ from application_sdk.common.aws_utils_errors import (
     AwsClientCreationError,
     AwsCredentialSourceConflictError,
     AwsCredentialSourceMissingError,
+    AwsPartialCredentialsError,
     AwsRdsTokenError,
     AwsRegionNotFoundError,
 )
@@ -220,17 +221,14 @@ class TestAWSUtils:
         sts_kwargs = mock_client.call_args_list[0].kwargs
         assert sts_kwargs.get("aws_access_key_id") == "caller_key"
         assert sts_kwargs.get("aws_secret_access_key") == "caller_secret"
+        assert "aws_session_token" not in sts_kwargs
         assert sts_kwargs.get("region_name") == "us-east-1"
 
     @patch("boto3.client")
-    def test_generate_aws_rds_token_with_iam_role_omits_credentials_when_partial(
+    def test_generate_aws_rds_token_with_iam_role_passes_session_token(
         self, mock_client
     ):
-        """A half-supplied pair must fall back to the default chain, not send one key.
-
-        Passing only an access key to boto3 raises ``PartialCredentialsError``,
-        so the pair is all-or-nothing.
-        """
+        """Temporary caller credentials must reach STS with the session token."""
         mock_sts = MagicMock()
         mock_rds = MagicMock()
         mock_client.side_effect = [mock_sts, mock_rds]
@@ -248,11 +246,51 @@ class TestAWSUtils:
             host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
             user="test_user",
             aws_access_key_id="caller_key",
+            aws_secret_access_key="caller_secret",
+            aws_session_token="caller_session",
         )
 
         sts_kwargs = mock_client.call_args_list[0].kwargs
-        assert "aws_access_key_id" not in sts_kwargs
-        assert "aws_secret_access_key" not in sts_kwargs
+        assert sts_kwargs.get("aws_access_key_id") == "caller_key"
+        assert sts_kwargs.get("aws_secret_access_key") == "caller_secret"
+        assert sts_kwargs.get("aws_session_token") == "caller_session"
+
+    def test_generate_aws_rds_token_with_iam_role_raises_when_partial(self):
+        """A half-supplied pair must fail closed, not fall through to the default chain.
+
+        Falling through would assume the role as whatever ambient identity is
+        present (env / instance profile), not the account the caller meant.
+        """
+        with pytest.raises(AwsPartialCredentialsError) as exc_info:
+            generate_aws_rds_token_with_iam_role(
+                role_arn="arn:aws:iam::123456789012:role/test-role",
+                host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+                user="test_user",
+                aws_access_key_id="caller_key",
+            )
+        assert exc_info.value.code == "INVALID_INPUT_AWS_PARTIAL_CREDENTIALS"
+
+    def test_generate_aws_rds_token_with_iam_role_raises_when_secret_only(self):
+        """Secret without access key is the other half of a partial pair."""
+        with pytest.raises(AwsPartialCredentialsError):
+            generate_aws_rds_token_with_iam_role(
+                role_arn="arn:aws:iam::123456789012:role/test-role",
+                host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+                user="test_user",
+                aws_secret_access_key="caller_secret",
+            )
+
+    def test_generate_aws_rds_token_with_iam_role_raises_when_token_without_pair(
+        self,
+    ):
+        """A session token without the key pair is incomplete explicit credentials."""
+        with pytest.raises(AwsPartialCredentialsError):
+            generate_aws_rds_token_with_iam_role(
+                role_arn="arn:aws:iam::123456789012:role/test-role",
+                host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+                user="test_user",
+                aws_session_token="caller_session",
+            )
 
     @patch("boto3.client")
     def test_generate_aws_rds_token_with_iam_role_error(self, mock_client):
