@@ -2987,3 +2987,48 @@ class TestOutcomeRowNamesTheFailure:
         with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
             await _verdict_gate(out)(PreflightGateInput())
         assert FAILURE_SUGGESTED_ACTION_KEY not in _outcome_event(ml)
+
+    async def test_a_crashing_handler_puts_its_message_on_the_block_row(self) -> None:
+        # The source_unverifiable path, through the activity itself rather than
+        # the row builder: a handler that raised instead of answering.
+        class _Crashing(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise RuntimeError("driver blew up: connection reset by peer")
+
+        gate = build_preflight_gate_activity(
+            _Crashing(), app_name="myapp", mode=PreflightGateMode.HARD, attempts=1
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await gate(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "blocked"
+        assert "driver blew up" in ev[FAILURE_MESSAGE_KEY]
+        assert ev[FAILURE_CHECK_KEY] == UNVERIFIABLE_CHECK_NAME
+
+    async def test_a_deprecated_fail_open_leaf_puts_its_message_on_the_row(
+        self,
+    ) -> None:
+        # The no_verdict row for a leaf still on the deprecated fail-open train
+        # carries the leaf's own line, read off the rendered verdict — never
+        # via leaf.to_failure_details(), which can raise for an unserialisable
+        # leaf on a path that must not.
+        class _Throttled(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise DependencyUnavailableError(
+                    message="Source API throttled: 429 after 3 retries",
+                    service="source",
+                )
+
+        gate = build_preflight_gate_activity(
+            _Throttled(), app_name="myapp", mode=PreflightGateMode.HARD, attempts=1
+        )
+        with (
+            warnings.catch_warnings(),
+            mock.patch(_LOGGER) as ml,
+        ):
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "no_verdict"
+        assert ev[FAILURE_MESSAGE_KEY] == "Source API throttled: 429 after 3 retries"
