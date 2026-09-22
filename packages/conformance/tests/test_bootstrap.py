@@ -3330,6 +3330,14 @@ def test_every_reusable_input_has_a_slot_or_a_documented_reason() -> None:
         "two-store",
         # Policy drop, not a slot — see redundant_install_app_to_tenant.
         "install-app-to-tenant",
+        # Policy drop (FND-1992): the dataforge wake/pause opt-in. Deliberately
+        # NOT slotted/resync-managed — a connector may only flip it true once its
+        # DataForge workload binding has been extended with resource:lifecycle
+        # (an out-of-band admin grant), so a structural CI resync must never
+        # toggle it. Same rationale as install-app-to-tenant: a per-repo policy
+        # decision the template does not own. A connector opts in by hand-adding
+        # `dataforge-lifecycle: true` to its tests.yaml at grant time.
+        "dataforge-lifecycle",
     }
     assert declared - slotted == set(), (
         f"tests-reusable.yaml inputs with no slot in the bootstrap template: "

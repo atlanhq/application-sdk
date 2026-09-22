@@ -308,11 +308,16 @@ on:
           whole dataforge chain (VPN, fetch) is continue-on-error, so when
           dataforge is unavailable the connector's hermetic source carries the
           run.
-          READ-ONLY against the source: the job only fetches credentials —
-          it never seeds, curates, or mutates the instance. Curating the
-          dataset is the instance owner's one-time setup (see the
-          connector's e2e README). Empty (the default) disables the fetch
-          entirely; existing callers are unaffected.
+          The FETCH is READ-ONLY against the source: it only reads credentials —
+          it never seeds or curates the instance. Curating the dataset is the
+          instance owner's one-time setup (see the connector's e2e README).
+          Instance LIFECYCLE (resume before the run, pause after) is handled
+          separately by the wake-dataforge-source / pause-dataforge-source jobs
+          in resource mode (FND-1992), which do mutate pause/resume state — a
+          strictly wider privilege (resource:lifecycle) than the fetch's
+          credentials:read, gated on the repo's workload binding. Empty (the
+          default) disables both the fetch and the lifecycle jobs entirely;
+          existing callers are unaffected.
       dataforge-mode:
         required: false
         type: string
@@ -362,6 +367,20 @@ on:
           dataforge-datasource. The default stays "true" because the majority
           of callers are containerizable and must not be reddened by a
           dataforge/VPN outage; opting out is the control for the rest.
+      dataforge-lifecycle:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Opt in to waking the pinned resource-mode source before the run and
+          pausing it after (FND-1992), so a paused instance doesn't red the run
+          and an idle one doesn't bill. OFF by default and deliberately so: the
+          wake exchanges for a resource:lifecycle SERVICE token, which the repo's
+          DataForge workload binding must be extended to allow FIRST — a connector
+          flips this true only once that grant has landed. Resource-mode only
+          (managed/vault sources have nothing to pause); no effect when
+          dataforge-datasource is unset. When false the wake/pause jobs skip and
+          the connector stays on the read-only fetch path exactly as before.
       private-git-deps:
         required: false
         type: boolean
@@ -766,7 +785,11 @@ jobs:
   # the connector ships no integration suite (detect-integration count == 0).
   integration:
     name: Integration
-    needs: [detect-merge-queue, detect-integration]
+    # wake-dataforge-source is in `needs` for ORDERING only — the source must be
+    # awake before the fetch step runs. No wake-result clause is added to the
+    # `if:` below (it already uses always()), so a wake failure does not skip the
+    # tier: a hermetic-fallback connector still falls back (FND-1992).
+    needs: [detect-merge-queue, detect-integration, wake-dataforge-source]
     # Specifying `if` drops the implied success() on `needs`, so require the
     # detection to have actually succeeded (else count is empty and would read
     # as "present"). `always()` is needed because detect-merge-queue is skipped
@@ -944,22 +967,12 @@ jobs:
       # READ-ONLY: the job only fetches credentials; it never seeds or mutates
       # the instance (curation is the instance owner's one-time setup).
       #
-      # Atlan's internal ELBs share Docker's default 172.17/16 bridge subnet;
-      # re-subnet Docker BEFORE the tunnel so containers keep working while
-      # 172.17/16 routes via tun0.
-      - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
-        continue-on-error: true
-        run: |
-          set -e
-          sudo mkdir -p /etc/docker
-          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
-
       # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs. This repo's own globalprotect-connect action (unmodified),
-      # from the job.workflow_sha sparse checkout — same provenance pinning as
-      # the scripts above.
+      # egress IPs. This repo's own globalprotect-connect action, from the
+      # job.workflow_sha sparse checkout — same provenance pinning as the
+      # scripts above. `resubnet-docker` moves Docker off Atlan's 172.17/16
+      # before the tunnel comes up; it was a separate copy-pasted step at each
+      # of the four dataforge call sites until the action absorbed it.
       - name: Connect to GlobalProtect VPN (dataforge path)
         if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
@@ -969,6 +982,7 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
           mothership-url: https://api.dataforge.atlan.dev
+          resubnet-docker: "true"
 
       # Dataforge-sourced connector credentials. The fetch's stdout is captured
       # into a shell variable — values never reach the log — and handed to
@@ -1302,6 +1316,98 @@ jobs:
   # isolation machinery: deployment names, queues and artifact names all pick it
   # up. Legs on different clouds hit different tenants (and therefore different
   # Temporal servers) besides.
+  # ── Wake the pinned dataforge source ahead of every leg ──────────────────
+  # A DataForge-backed connector pins ONE provisioned instance as its e2e source
+  # and leaves it PAUSED between runs to avoid paying for an always-on instance
+  # (FND-1992). A paused instance fails every leg at source resolution, so this
+  # job resumes it and polls to PROVISIONED BEFORE any leg fetches its
+  # credentials. Both the integration tier and the e2e legs `needs:` this job, so
+  # it anchors on nothing and starts as early as possible — the resume+readiness
+  # poll then overlaps the image build and tenant-lease wait, off the critical
+  # path. It registers a per-run holder ref so a concurrent run's pause cannot
+  # pause the instance out from under this run; the paired pause-dataforge-source
+  # job deregisters and pauses on the way out. Resource-mode only.
+  #
+  # Deliberately NOT a hard gate on the legs: it is added to their `needs` for
+  # ORDERING only (no wake-result clause in their `if:`, which already uses
+  # always()), so a wake FAILURE still lets a hermetic-fallback connector fall
+  # back — the failure surfaces as a named ::error:: here and, for a
+  # fallback:false connector, as the fetch's now-legible `resource_paused`.
+  wake-dataforge-source:
+    name: Wake dataforge source
+    needs: [detect-integration, discover-e2e]
+    # Opt-in only (dataforge-lifecycle), so this never activates fleet-wide on
+    # merge before a connector's binding carries resource:lifecycle. And only
+    # when a source will actually be consumed — an integration suite exists, or
+    # the e2e legs will run — so a run that reads the source nowhere never wakes a
+    # paid instance. secrets aren't readable in a job `if:`, so the pin /
+    # repo-creds gate is on the steps below (repo creds win; no pin = nothing).
+    #
+    # Each count is paired with its job's `result == 'success'`, and BOTH pairings
+    # are load-bearing: a SKIPPED job's outputs read as '', and '' != '0' is TRUE,
+    # so an unguarded count clause is constant-true exactly when the job did not
+    # run. Without the discover-e2e pairing a unit-only PR (integration count 0,
+    # discover-e2e skipped for want of the `e2e` label) would wake the pin for a
+    # run that reads it nowhere. Same shape the e2e legs and build-e2e-image use.
+    if: >-
+      always() &&
+      inputs.dataforge-lifecycle &&
+      inputs.dataforge-datasource != '' &&
+      inputs.dataforge-mode == 'resource' &&
+      needs.detect-integration.result == 'success' &&
+      (needs.detect-integration.outputs.count != '0' ||
+       (needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the per-run holder ref
+      actions: read # parity with pause (holder-liveness reaping lives there)
+      id-token: write # OIDC exchange for the resource:lifecycle SERVICE token
+    env:
+      E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+    steps:
+      # api.dataforge.atlan.dev admits only the VPN egress IPs, so — exactly like
+      # the integration / e2e fetch steps — the job sparse-checks-out this
+      # reusable's scripts + globalprotect-connect at job.workflow_sha and dials
+      # the tunnel BEFORE the lifecycle call. Without this every call fails at
+      # connect on POST /oauth/token. All steps gated on the pin being set and
+      # repo creds absent, so a caller without a dataforge pin does nothing.
+      - name: Fetch SDK CI scripts + globalprotect-connect
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/globalprotect-connect
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+      - name: Connect to GlobalProtect VPN (dataforge path)
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        continue-on-error: true
+        uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          mothership-url: https://api.dataforge.atlan.dev
+          resubnet-docker: "true"
+      - name: Wake the pinned dataforge source (resume + readiness poll)
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        # resource-id NOT on argv — the script reads DATAFORGE_RESOURCE_ID from
+        # env, keeping it out of process listings / step debug (Copilot review).
+        env:
+          LEASE_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/dataforge_source_lifecycle.py --mode wake
+
   # ── Build the image ONCE, ahead of the matrix ────────────────────────────
   # The test-image tag is deterministic (`derive_e2e_image_tag.py`), so every cloud
   # leg used to rebuild the identical image. It has to exist before prepare-tenant
@@ -1993,6 +2099,11 @@ jobs:
         sdk-head-recheck,
         lease-tenant,
         prepare-tenant,
+        # Ordering only: the source must be awake before a leg fetches its
+        # credentials. No wake-result clause is added to the `if:` below (it
+        # already uses always()), so a wake failure still lets a hermetic-fallback
+        # connector fall back rather than skipping the leg (FND-1992).
+        wake-dataforge-source,
       ]
     # The superseded clause is gated on the OUTPUT, never on the job result, and
     # it has to be: a skipped lease-tenant is the benign value in the clauses
@@ -2175,22 +2286,9 @@ jobs:
       # the fetch cannot complete (VPN, binding, dataforge down), the connector's
       # hermetic source carries the run instead of failing it.
       #
-      # Atlan's internal ELBs share Docker's default 172.17/16 bridge subnet;
-      # re-subnet Docker BEFORE the tunnel so containers keep working while
-      # 172.17/16 routes via tun0 (deleting the docker0 route instead breaks
-      # buildx — atlan-postgres-app run 31571886125).
-      - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
-        continue-on-error: true
-        run: |
-          set -e
-          sudo mkdir -p /etc/docker
-          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
-
       # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs. This repo's own globalprotect-connect action (unmodified),
-      # from the job.workflow_sha sparse checkout — same provenance pinning
+      # egress IPs. This repo's own globalprotect-connect action, from the
+      # job.workflow_sha sparse checkout — same provenance pinning
       # as the scripts. The health probe targets the dataforge api host —
       # the thing this tunnel actually has to reach. KNOWN LIMIT: the
       # action derives its GP client identity from run/job/attempt, and
@@ -2206,6 +2304,12 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
           mothership-url: https://api.dataforge.atlan.dev
+          # Moves Docker off Atlan's 172.17/16 before the tunnel comes up —
+          # deleting the docker0 route afterwards instead breaks buildx
+          # (atlan-postgres-app run 31571886125). Was a separate copy-pasted
+          # step at each of the four dataforge call sites until the action
+          # absorbed it.
+          resubnet-docker: "true"
           # This is a MATRIX job, so the action's default identity (run id +
           # GITHUB_JOB + attempt) is the same string for every leg and the legs
           # evict each other's VPN sessions — last connect wins, the rest fail
@@ -2406,6 +2510,76 @@ jobs:
           mode: release
           app: ${{ inputs.app-name }}
           cloud: ${{ matrix.cloud }}
+
+  # ── Pause the pinned dataforge source on the way out ──────────────────────
+  # Mirror of wake-dataforge-source (FND-1992). Runs under `if: always()` so a
+  # pass, fail OR cancel gives the instance back — a cancelled or failed run
+  # must not leak a running instance. It deregisters THIS run's holder ref and
+  # then pauses the instance ONLY when no other live run still holds it, so
+  # concurrent runs against one shared pin do not pause each other mid-run; an
+  # abandoned holder from a cancelled run is reaped here (holder-liveness via the
+  # Actions API, TTL backstop), exactly like an abandoned tenant lease.
+  #
+  # A single job (not the per-cloud matrix release-tenant uses) because the pin
+  # is ONE instance shared across every leg, not one tenant per cloud — the
+  # refcount is per-RUN, and the DAG (wake before all legs, this after all of
+  # them) handles the within-run leg overlap. Kept OUT of the Tests Gate / SDK
+  # report needs: a pause hiccup must not red an otherwise-green test run, and it
+  # self-heals on the next run's pause anyway.
+  pause-dataforge-source:
+    name: Pause dataforge source
+    needs: [wake-dataforge-source, integration, e2e]
+    # wake-dataforge-source skipped ⇒ this run didn't opt in / has no consumable
+    # source, so there's nothing to pause.
+    if: >-
+      always() &&
+      inputs.dataforge-lifecycle &&
+      inputs.dataforge-datasource != '' &&
+      inputs.dataforge-mode == 'resource' &&
+      needs.wake-dataforge-source.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # delete holder refs (this run's + reaped abandoned ones)
+      actions: read # tell a live holder from a dead one
+      id-token: write # OIDC exchange for the resource:lifecycle SERVICE token
+    env:
+      E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+    steps:
+      # Same VPN precondition as wake — pause hits the same private API host.
+      - name: Fetch SDK CI scripts + globalprotect-connect
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/globalprotect-connect
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+      - name: Connect to GlobalProtect VPN (dataforge path)
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        continue-on-error: true
+        uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          mothership-url: https://api.dataforge.atlan.dev
+          resubnet-docker: "true"
+      - name: Pause the pinned dataforge source (refcounted, always-runs)
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        env:
+          LEASE_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/dataforge_source_lifecycle.py --mode pause
 
   # ── Callback: report the result back to the application-sdk PR/commit ────
   # that dispatched this run. application-sdk's e2e-apps composite

@@ -31,6 +31,20 @@ inputs:
       sessions. Any matrix caller must pass a per-leg value (e.g. matrix.name).
     required: false
     default: ""
+  resubnet-docker:
+    description: >
+      Move Docker's bridge networks off 172.17/16 before dialling the tunnel.
+      Atlan's internal ELBs share Docker's default 172.17/16 subnet, so once
+      that range routes via tun0 any container on the default bridge loses the
+      network. Re-subnetting must happen BEFORE the connect; deleting the
+      docker0 route afterwards instead breaks buildx (atlan-postgres-app run
+      31571886125). Only callers that run containers alongside the tunnel need
+      it, so it is off by default and the tunnel-only callers (sdk-review,
+      sdk-resolve, the cron workflows) are unaffected. Best-effort: a failure
+      warns and the connect still runs, which is the behaviour the
+      `continue-on-error: true` on the old per-caller step gave.
+    required: false
+    default: "false"
 
 outputs:
   vpn-connected:
@@ -40,6 +54,26 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # Ran as a separate `continue-on-error: true` step in each of the four
+    # dataforge call sites in tests-reusable.yaml — four byte-identical copies of
+    # the same subnet literals, which have to agree or the tunnel shadows
+    # container networking on whichever one drifted. Folded in here, behind an
+    # opt-in input, so the values live in one place.
+    #
+    # Composite steps do not support `continue-on-error`, so the best-effort
+    # tolerance the call sites had is in the shell instead: this must never stop
+    # the connect, because the tunnel is what the caller actually came for.
+    - name: Move docker networks off Atlan's 172.17/16
+      if: inputs.resubnet-docker == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        {
+          sudo mkdir -p /etc/docker &&
+          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json &&
+          sudo systemctl restart docker
+        } || echo "::warning::could not move docker off 172.17/16; containers may lose the network once the tunnel is up."
+
     - name: Connect via OpenConnect
       uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4
       id: openconnect-connection
