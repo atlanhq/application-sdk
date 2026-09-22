@@ -157,7 +157,8 @@ beside one). Each row stamps `failure.audience` (who must act) except `proceeded
   warning itself, so the gate owns the one level that case is semantically for.
 - **Clean `proceeded` / `skipped` / verdict `would_block`** — `info`.
 - The interceptor's `workflow.ended` / `activity.ended … BLOCKED (preflight gate)` lifecycle
-  records stay `warning`, terse, no stack.
+  records stay `warning` with no stack or frame, but carry the block's own first line so the
+  reason is findable by a `Body` search, not only via `failure.message` on the outcome row.
 - **Interactive surfaces** (the HTTP `/workflows/v1/check` endpoint and the SDR
   `sdr:preflight_check` activity) emit the sibling `Preflight check outcome` row via
   `emit_preflight_check_outcome`, with `preflight_surface` naming the surface. The level

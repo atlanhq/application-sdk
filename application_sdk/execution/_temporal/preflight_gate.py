@@ -66,6 +66,7 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.errors.base import (
         AppError,
         redact_and_cap,
+        redact_secrets,
         sanitize_cause_repr,
     )
     from application_sdk.errors.categories import FailureCategory
@@ -165,6 +166,28 @@ def is_preflight_block(exc: BaseException | None) -> bool:
         getattr(link, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
         for link in _iter_chain(exc)
     )
+
+
+def preflight_block_message(exc: BaseException | None) -> str:
+    """The deliberate block's own first line, redacted; ``""`` when there is none.
+
+    For the interceptor's ``BLOCKED (preflight gate)`` lifecycle lines. The
+    block may sit on a cause under Temporal's wrapper, so this reads the
+    marker's message, not the wrapper's. Temporal's ``str()`` prefixes the
+    type (``PreflightFailed: …``); the ``message`` attribute is the clean line.
+
+    Redacted here, not left to the envelope: this text is built from
+    ``PreflightOutput.message`` / ``PreflightCheck.message``, plain strings the
+    ``FailureDetails`` validator never sees. Pure string work — safe in the
+    workflow sandbox.
+    """
+    for link in _iter_chain(exc):
+        if getattr(link, "type", None) != PREFLIGHT_FAILED_ERROR_TYPE:
+            continue
+        text = str(getattr(link, "message", None) or link)
+        first = (text.strip().splitlines() or [""])[0]
+        return redact_secrets(first)
+    return ""
 
 
 class GateFailure(NamedTuple):
