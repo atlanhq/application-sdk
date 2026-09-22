@@ -26,6 +26,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     PREFLIGHT_FAILED_ERROR_TYPE,
     PREFLIGHT_NO_VERDICT_ERROR_TYPE,
     PreflightClassification,
+    _plumbing_evidence,
 )
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.contracts import (
@@ -1200,3 +1201,41 @@ class TestTheWorkflowRowNamesTheAttributedCheck:
         assert row["reason"] == "DependencyUnavailableError"
         assert row[FAILURE_MESSAGE_KEY] == "Secret store unreachable: vault down"
         assert FAILURE_CHECK_KEY not in row
+
+
+class TestPlumbingEvidenceKeepsReadingTheChain:
+    """The two silent-swallow branches of ``_plumbing_evidence``.
+
+    Both step past a link and keep going; a regression in either yields a row
+    with no sentence rather than a failure, so each is pinned on its own.
+    """
+
+    def _plumbing(self) -> ApplicationError:
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        return ApplicationError(
+            "vault down",
+            DependencyUnavailableError(
+                message="Secret store unreachable: vault down", service="secret_store"
+            ).to_failure_details(),
+            type="DependencyUnavailableError",
+        )
+
+    def test_an_unreadable_envelope_on_one_link_does_not_stop_the_read(self) -> None:
+        outer = ApplicationError("wrapper", {"not": "a FailureDetails"}, type="Wrapper")
+        outer.__cause__ = self._plumbing()
+        evidence = _plumbing_evidence(outer)
+        assert evidence is not None
+        assert evidence.message == "Secret store unreachable: vault down"
+
+    def test_a_gate_marker_carrying_details_is_skipped_not_read(self) -> None:
+        # A marker's details are a verdict's evidence — _gate_failure_evidence's
+        # business, never a plumbing failure's.
+        marker = _no_verdict_marker()
+        marker.__cause__ = self._plumbing()
+        evidence = _plumbing_evidence(marker)
+        assert evidence is not None
+        assert evidence.message == "Secret store unreachable: vault down"
+
+    def test_a_bare_chain_yields_nothing(self) -> None:
+        assert _plumbing_evidence(RuntimeError("no envelope anywhere")) is None
