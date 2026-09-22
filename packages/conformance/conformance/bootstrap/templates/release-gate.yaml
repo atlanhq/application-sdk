@@ -100,23 +100,47 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify connector review
+      # Split from the check below, and non-blocking, so a GitHub 5xx or a
+      # rate limit cannot red a REQUIRED check fleet-wide for an outage that
+      # is not the author's fault. `continue-on-error` is the native way to
+      # tolerate that, so neither `run:` block needs an `||` fallback. The
+      # redirect truncates before `gh` executes, so a failed fetch leaves an
+      # EMPTY file — which is precisely the "could not check" signal the
+      # script passes on. A partial write parses as bad JSON and passes too.
+      - name: Fetch PR reviews
         if: github.event_name != 'merge_group'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-          ENFORCE: ${{ vars.CONNECTOR_REVIEW_GATE == 'enforce' && '--enforce' || '' }}
         run: |
           set -euo pipefail
-          # `|| true` because `pipefail` would otherwise fail this step on a
-          # GitHub 5xx or a rate limit, turning a REQUIRED check red fleet-wide
-          # for an outage that is not the author's fault. An empty stdin is
-          # what the script reads as "could not check", and it passes on that.
-          { gh api "repos/${REPO}/pulls/${PR}/reviews" --paginate --slurp \
-            || true; } \
-            | python3 .github/scripts/connector_review_gate.py \
-                --author "$AUTHOR" \
-                --reviewer-config .mothership/reviewer.yaml \
-                $ENFORCE
+          gh api "repos/${REPO}/pulls/${PR}/reviews" --paginate --slurp > reviews.json
+
+      - name: Verify connector review
+        if: github.event_name != 'merge_group'
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # One variable, three settings. Unset = warn only, which is how this
+          # ships. `enforce` = block, sticky: any connector review on the PR
+          # counts. `enforce-head` = block, and only a review of the CURRENT
+          # commit counts.
+          #
+          # Sticky is the default because it matches these repos' own posture
+          # (`dismiss_stale_reviews_on_push: false`) and costs one sandbox run
+          # per PR rather than one per push. Its gap is real and known: a PR
+          # reviewed at commit 1 can merge carrying commit 12. Repos that want
+          # that closed set `enforce-head` and pay for it.
+          ENFORCE: ${{ startsWith(vars.CONNECTOR_REVIEW_GATE, 'enforce') && '--enforce' || '' }}
+          POLICY: ${{ vars.CONNECTOR_REVIEW_GATE == 'enforce-head' && 'head' || 'sticky' }}
+        run: |
+          set -euo pipefail
+          touch reviews.json
+          python3 .github/scripts/connector_review_gate.py \
+            --author "$AUTHOR" \
+            --reviewer-config .mothership/reviewer.yaml \
+            --policy "$POLICY" \
+            --head-sha "$HEAD_SHA" \
+            $ENFORCE < reviews.json

@@ -131,16 +131,61 @@ def test_repo_without_reviewer_config_passes(
     assert gate.main(["--enforce", "--reviewer-config", absent]) == 0
 
 
+def test_policy_head_requires_the_current_commit(
+    gate: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--policy head` is the opt-in that closes the sticky gap.
+
+    Both `--policy` and `--head-sha` are always passed by the workflow, so
+    the default must ignore head_sha rather than requiring the caller to
+    omit it -- that is what keeps the caller's shell free of branching.
+    """
+    payload = json.dumps([[_review(_TRAILER)]])
+    stale = ["--enforce", "--head-sha", "c" * 40]
+
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    assert gate.main([*stale, "--policy", "sticky"]) == 0
+
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    assert gate.main([*stale, "--policy", "head"]) == 1
+
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    assert gate.main(["--enforce", "--policy", "head", "--head-sha", _SHA]) == 0
+
+
+def test_default_policy_is_sticky(
+    gate: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting --policy must behave as sticky, not as head."""
+    monkeypatch.setattr("sys.stdin", _stdin(json.dumps([[_review(_TRAILER)]])))
+    assert gate.main(["--enforce", "--head-sha", "c" * 40]) == 0
+
+
+def test_output_is_ascii_only(gate: types.ModuleType) -> None:
+    """Printed strings stay ASCII; log encoding is not ours to assume."""
+    source = _TEMPLATE.read_text(encoding="utf-8")
+    offenders = [
+        line
+        for line in source.splitlines()
+        if "print(" in line or line.strip().startswith(('f"', '"'))
+        if any(ord(char) > 127 for char in line)
+    ]
+    assert not offenders, offenders
+
+
 def test_empty_stdin_fails_open(
     gate: types.ModuleType,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A transient API fault must not freeze merges fleet-wide.
 
-    The shim runs `gh api ... || true`, so a GitHub 5xx or rate limit
-    reaches this script as an EMPTY stdin — not as an error body. That is
-    the only shape the fail-open has to handle, and it must stay distinct
-    from `[]`, which means "read fine, this PR has no reviews".
+    The shim fetches in a separate `continue-on-error` step whose redirect
+    truncates before `gh` runs, so a GitHub 5xx or rate limit reaches this
+    script as an EMPTY stdin — not as an error body. That is the shape the
+    fail-open has to handle, and it must stay distinct from `[]`, which
+    means "read fine, this PR has no reviews".
     """
     monkeypatch.setattr("sys.stdin", _stdin(""))
     assert gate.main(["--enforce"]) == 0

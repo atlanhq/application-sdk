@@ -1,14 +1,21 @@
 """Decide whether a PR has been reviewed by the connector review lane.
 
-Reads the PR's reviews as JSON on stdin (an array, exactly what
-``gh api repos/OWNER/REPO/pulls/N/reviews --paginate`` prints) and exits
-0 when the gate passes, 1 when it fails. Callers do::
+Reads the PR's reviews as JSON on stdin (what ``gh api
+repos/OWNER/REPO/pulls/N/reviews --paginate --slurp`` prints) and exits 0
+when the gate passes, 1 when it fails. The caller fetches in a separate,
+``continue-on-error`` step and feeds the file in::
 
-    gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
-      | python .github/scripts/connector_review_gate.py --author "$AUTHOR"
+    python .github/scripts/connector_review_gate.py \
+      --author "$AUTHOR" --policy "$POLICY" --head-sha "$HEAD_SHA" \
+      $ENFORCE < reviews.json
 
-This keeps the branching out of YAML (per docs/standards/ci.md) and off
-the network, so the whole decision is unit-testable from a fixture.
+Every argument is passed unconditionally so the caller's ``run:`` block
+stays straight-line (per docs/standards/ci.md): no ``if``, no ``||``, no
+parameter-expansion tricks. All the branching is here, where a test can
+reach it, and none of it touches the network.
+
+An EMPTY stdin means the fetch failed, and the gate passes on it — see
+``main``.
 
 The signal is the trailer mothership appends to every connector review
 body::
@@ -131,9 +138,15 @@ def main(argv: list[str] | None = None) -> int:
         help="PR author login; exempt authors pass without a review",
     )
     parser.add_argument(
+        "--policy",
+        choices=("sticky", "head"),
+        default="sticky",
+        help="sticky: any connector review counts; head: only one of --head-sha",
+    )
+    parser.add_argument(
         "--head-sha",
         default="",
-        help="require a review of this exact commit (strict mode)",
+        help="the PR's current head; only consulted when --policy head",
     )
     parser.add_argument(
         "--reviewer-config",
@@ -149,12 +162,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.reviewer_config and not pathlib.Path(args.reviewer_config).is_file():
         print(  # noqa: T201
-            f"No {args.reviewer_config} — not a connector-review repo, gate passes.",
+            f"No {args.reviewer_config} - not a connector-review repo, gate passes.",
         )
         return 0
 
     if args.author in EXEMPT_AUTHORS:
-        print(f"Author {args.author} is exempt — gate passes.")  # noqa: T201
+        print(f"Author {args.author} is exempt - gate passes.")  # noqa: T201
         return 0
 
     # Fail open on anything that means "could not read", as opposed to "read
@@ -164,21 +177,24 @@ def main(argv: list[str] | None = None) -> int:
     # that genuinely has no reviews arrives as `[]` and still fails below.
     raw = sys.stdin.read().strip()
     if not raw:
-        print("::warning::Could not read PR reviews — gate passes.")  # noqa: T201
+        print("::warning::Could not read PR reviews - gate passes.")  # noqa: T201
         return 0
 
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         print(  # noqa: T201
-            f"::warning::Could not parse PR reviews ({exc}) — gate passes.",
+            f"::warning::Could not parse PR reviews ({exc}) - gate passes.",
         )
         return 0
 
     reviews = flatten_pages(payload)
-    sha = find_review(reviews, args.head_sha or None)
+    # Both arguments are always passed, so the caller's shell stays
+    # straight-line; the policy decides whether head_sha is consulted.
+    wanted = args.head_sha if args.policy == "head" else None
+    sha = find_review(reviews, wanted or None)
     if sha is not None:
-        print(f"Connector review found for {sha[:8]} — gate passes.")  # noqa: T201
+        print(f"Connector review found for {sha[:8]} - gate passes.")  # noqa: T201
         return 0
 
     hint = "No connector review. Add the `ai-connector-review` label once CI is green."
