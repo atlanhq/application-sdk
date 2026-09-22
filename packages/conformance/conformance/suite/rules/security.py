@@ -82,6 +82,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "because boto3's token helper has no explicit-credentials parameter. That "
             "justification is what makes them acceptable."
         ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[S002] <reason>` IS the correct "
+            "end state only where both hold and the reason says both: the value came "
+            "from the RESOLVED credentials rather than being read raw out of the "
+            "environment, and it is staged into the environment solely because a "
+            "third-party API offers no explicit-credentials parameter — as "
+            "atlan-mysql-app records for boto3's token helper. Naming the library is "
+            "part of it, so the directive can be retired when that library grows the "
+            "parameter. A directive over a raw `os.environ` READ of a credential is "
+            "never terminal: route it through the SDK's credential resolution."
+        ),
         scope=RuleScope.APP,
         name="RawEnvCredentialAccess",
         tier=EnforcementTier.WARN,

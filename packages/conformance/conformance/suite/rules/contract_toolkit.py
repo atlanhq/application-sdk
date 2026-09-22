@@ -197,6 +197,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "proved App.pkl does not re-export Connectors.* to amending contracts. "
             "flatManifestArgs and workflowTypeOverride appear nowhere."
         ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[K002] <reason>` IS the correct "
+            "end state for a legacy-looking import the canonical base does not "
+            "replace — where dropping it would lose symbols nothing else re-exports. "
+            "The bar is evidence, not assertion: the reason records the `pkl eval` "
+            "that PROVED the replacement does not supply those symbols, as "
+            "atlan-mysql-app does for `Connectors.pkl`. A directive that only states "
+            "the import is still needed is unremediated — run the eval and record "
+            "what it said, or migrate the import."
+        ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="LegacyContractApi",
