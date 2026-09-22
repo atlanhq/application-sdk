@@ -62,19 +62,27 @@ def worker_task_queue(app_name: str) -> str:
     from ``ATLAN_APPLICATION_NAME``, which in the consolidated host names the
     host rather than the hosted app (see the module docstring, trap 2).
     """
-    return f"atlan-{app_name}-{_deployment_name()}"
+    # Mirrors application_sdk.common.task_queue.derive_task_queue, the single
+    # source of truth: app + deployment -> "atlan-{app}-{deployment}", app alone
+    # -> "{app}" BARE. Manufacturing a deployment segment when the env is unset
+    # is the divergence that module exists to remove -- the worker drops the
+    # prefix, so a server advertising "atlan-redshift-local" would name a queue
+    # the worker is not polling.
+    deployment = _deployment_name()
+    return f"atlan-{app_name}-{deployment}" if deployment else app_name
 
 
 def _deployment_name() -> str:
-    """The deployment half of every task queue name.
+    """``ATLAN_DEPLOYMENT_NAME``, empty when unset.
 
-    One definition, because there were two: this returned "default" while
-    worker_task_queue fell back to "local", so with the env unset the manifest
-    served "atlan-<app>-default" while the worker polled "atlan-<app>-local" --
-    a submit onto a queue nobody reads, which reports success and then hangs.
-    "local" is application_sdk's value (DEPLOYMENT_NAME -> LOCAL_ENVIRONMENT).
+    Deliberately NOT defaulted. There were two defaults here once ("local" and
+    "default") which disagreed with each other; unifying them on "local" then
+    made both disagree with the WORKER, which treats unset as "drop the
+    prefix". There is no safe deployment name to invent, so each caller
+    decides: worker_task_queue drops the segment, and the manifest route leaves
+    the token visible and logs rather than filling it with a guess.
     """
-    return os.environ.get("ATLAN_DEPLOYMENT_NAME") or "local"
+    return os.environ.get("ATLAN_DEPLOYMENT_NAME", "").strip()
 
 
 def _manifest_registry(generated_dir: Path) -> dict[str, Path]:
@@ -183,9 +191,19 @@ def register_manifest_routes(
                 path.relative_to(generated_dir),
                 app_name,
             )
-        raw = raw.replace(b"{app_name}", app_name.encode()).replace(
-            b"{deployment_name}", _deployment_name().encode()
-        )
+        raw = raw.replace(b"{app_name}", app_name.encode())
+        deployment = _deployment_name()
+        if deployment:
+            raw = raw.replace(b"{deployment_name}", deployment.encode())
+        elif b"{deployment_name}" in raw:
+            # Left visible on purpose: with no deployment name there is nothing
+            # correct to substitute, and inventing one yields a queue name that
+            # looks right and is not. An unfilled token is obviously unfinished.
+            logger.warning(
+                "ATLAN_DEPLOYMENT_NAME is unset; leaving the {deployment_name} "
+                "token unfilled in %s.",
+                path.relative_to(generated_dir),
+            )
 
         hook = hooks.get(entrypoint) if entrypoint else None
         if hook is None:

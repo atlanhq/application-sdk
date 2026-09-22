@@ -60,14 +60,24 @@ def test_unset_is_info() -> None:
 # ── the deployment half of every task queue ─────────────────────────────────
 
 
-def test_the_served_manifest_and_the_worker_agree(monkeypatch) -> None:
-    """Two defaults ("default" vs "local") meant the manifest named a queue the
-    worker did not poll, so the submit succeeded and then hung."""
+@pytest.mark.parametrize("unset_as", ["", "   "], ids=["absent", "blank"])
+def test_an_unset_deployment_drops_the_prefix(monkeypatch, unset_as: str) -> None:
+    """application_sdk's derive_task_queue is the single source of truth:
+    app + deployment -> "atlan-{app}-{deployment}", app alone -> "{app}" BARE.
+
+    There were two defaults here once ("default" and "local") which disagreed
+    with each other; unifying them on "local" then made both disagree with the
+    WORKER, which drops the prefix. Either way the submit lands on a queue
+    nobody polls, reports success, and hangs.
+    """
     from server_sdk.manifest import _deployment_name, worker_task_queue
 
-    monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
-    assert worker_task_queue("redshift") == f"atlan-redshift-{_deployment_name()}"
-    assert _deployment_name() == "local"
+    if unset_as:
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", unset_as)
+    else:
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+    assert _deployment_name() == ""
+    assert worker_task_queue("redshift") == "redshift"
 
 
 @pytest.mark.parametrize("deployment", ["prod", "staging"])
