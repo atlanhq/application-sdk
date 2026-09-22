@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from functools import lru_cache
+import threading
 from typing import Any, ClassVar
 
 from server_sdk.errors.leaves import (
@@ -61,6 +61,19 @@ class AwsCredentialSourceConflictError(InvalidInputError):
             message="Multiple AWS credential sources provided",
             field="credential_source",
             constraint="exactly one of session/temp_credentials/default",
+        )
+
+
+class AwsTempCredentialsIncompleteError(InvalidInputError):
+    code: ClassVar[str] = "INVALID_INPUT_AWS_TEMP_CREDENTIALS_INCOMPLETE"
+
+    def __init__(self, *, missing: tuple[str, ...]) -> None:
+        # Key NAMES only. The values are STS credentials, and this message
+        # reaches the caller and the log.
+        super().__init__(
+            message="Incomplete AWS temporary credentials",
+            field="temp_credentials",
+            constraint=f"must contain {', '.join(missing)}",
         )
 
 
@@ -119,6 +132,20 @@ def create_aws_client(
     if sources > 1:
         raise AwsCredentialSourceConflictError()
 
+    # Checked BEFORE the try, not inside it: a KeyError raised in there is
+    # swallowed by the blanket handler and re-raised as AwsClientCreationError,
+    # which is DEPENDENCY_UNAVAILABLE -> 503 -> retryable. So a caller that
+    # passed a dict missing a key -- its own 400-class bug, and one no retry can
+    # fix -- is reported as an AWS outage and retried against AWS.
+    if temp_credentials is not None:
+        missing = tuple(
+            k
+            for k in ("AccessKeyId", "SecretAccessKey", "SessionToken")
+            if not temp_credentials.get(k)
+        )
+        if missing:
+            raise AwsTempCredentialsIncompleteError(missing=missing)
+
     import boto3  # noqa: PLC0415 — optional dep: [aws]
 
     try:
@@ -137,20 +164,63 @@ def create_aws_client(
         raise AwsClientCreationError(service=service, cause=e) from e
 
 
-@lru_cache(maxsize=1)
-def _all_aws_regions() -> tuple[str, ...]:
-    """Cached, immutable region list. The set does not change for the life of
-    the process, and this costs an EC2 round trip on the shared event loop."""
-    return tuple(_fetch_all_aws_regions())
+# Regions AWS had when this was written. A floor for the assume-role sweep when
+# describe_regions is unavailable -- never the cached answer (see below).
+_FALLBACK_REGIONS: tuple[str, ...] = (
+    "ap-northeast-1", "ap-south-1", "ap-southeast-1", "ap-southeast-2",
+    "aws-global", "ca-central-1", "eu-central-1", "eu-north-1",
+    "eu-west-1", "eu-west-2", "eu-west-3", "sa-east-1",
+    "us-east-1", "us-east-2", "us-west-1", "us-west-2",
+)  # fmt: skip
+
+_REGIONS: tuple[str, ...] | None = None
+# The sync form runs under asyncio.to_thread, so two apps can arrive cold at
+# once. Without the lock that is N concurrent describe_regions round trips.
+_REGIONS_LOCK = threading.Lock()
+
+
+def _reset_region_cache() -> None:
+    """Drop the memo. For tests -- the region set is stable in a live process."""
+    global _REGIONS
+    with _REGIONS_LOCK:
+        _REGIONS = None
 
 
 def get_all_aws_regions() -> list[str]:
-    """All AWS regions, cached. Returns a fresh list, so callers may mutate it."""
-    return list(_all_aws_regions())
+    """All AWS regions. Returns a fresh list, so callers may mutate it.
+
+    Memoised only on SUCCESS. Under ``@lru_cache`` the fallback was cached like
+    any other answer, so a single transient describe_regions failure -- an
+    expired instance credential, a throttle, a moment of no egress -- pinned the
+    process to the static list for the life of the pod. That list is missing
+    every region added since it was written, and the one place it is read is the
+    assume-role sweep: a role that only exists in a newer region then fails with
+    "no region succeeded", forever, on a pod that looks healthy. Retrying the
+    fetch costs one EC2 round trip on a path that is already doing STS calls
+    across every region.
+    """
+    global _REGIONS
+    cached = _REGIONS
+    if cached is not None:
+        return list(cached)
+    with _REGIONS_LOCK:
+        # Re-read inside the lock: another thread may have filled it while this
+        # one waited, and that is the case the lock exists for.
+        if _REGIONS is not None:
+            return list(_REGIONS)
+        fetched = _fetch_all_aws_regions()
+        if fetched is None:
+            return list(_FALLBACK_REGIONS)
+        _REGIONS = tuple(fetched)
+        return list(_REGIONS)
 
 
-def _fetch_all_aws_regions() -> list[str]:
-    """All AWS regions via EC2 ``describe_regions``; hardcoded fallback on failure."""
+def _fetch_all_aws_regions() -> list[str] | None:
+    """All AWS regions via EC2 ``describe_regions``; ``None`` if it failed.
+
+    None rather than the fallback list, so the caller can tell a real answer
+    from a degraded one and decline to cache the degraded one.
+    """
     try:
         import boto3  # noqa: PLC0415 — optional dep: [aws]
 
@@ -161,12 +231,7 @@ def _fetch_all_aws_regions() -> list[str]:
             "Failed to retrieve AWS regions dynamically, using fallback list",
             exc_info=True,
         )
-        return [
-            "ap-northeast-1", "ap-south-1", "ap-southeast-1", "ap-southeast-2",
-            "aws-global", "ca-central-1", "eu-central-1", "eu-north-1",
-            "eu-west-1", "eu-west-2", "eu-west-3", "sa-east-1",
-            "us-east-1", "us-east-2", "us-west-1", "us-west-2",
-        ]  # fmt: skip
+        return None
 
 
 def assume_role_across_regions(
