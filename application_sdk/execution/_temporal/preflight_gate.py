@@ -200,6 +200,9 @@ def preflight_block_message(exc: BaseException | None) -> str:
             continue
         text = _attributed_message(link) or str(getattr(link, "message", None) or link)
         first = (text.strip().splitlines() or [""])[0]
+        # "BLOCKED (preflight gate)" already says it; the prefix would spend
+        # 18 of the line's 200 chars saying it again.
+        first = first.removeprefix(f"{_BLOCK_MESSAGE_PREFIX}: ")
         return redact_secrets(first)
     return ""
 
@@ -749,6 +752,10 @@ FAILURE_MESSAGE_KEY = "failure.message"
 # block and abort before the retry has had its turn.
 PREFLIGHT_NO_VERDICT_ERROR_TYPE = "PreflightNoVerdict"
 
+# Prefix on the deliberate block's raised message. The interceptor strips it
+# from the BLOCKED lifecycle Body line, which already says what happened.
+_BLOCK_MESSAGE_PREFIX = "Preflight failed"
+
 
 GATE_OUTCOME_ROW_KEYS: tuple[str, ...] = (
     "app_name",
@@ -1192,9 +1199,19 @@ def _attributed_check(
     matched = [
         c
         for c in failed
-        if c.error is not None
-        and c.error.code == primary.code
-        and c.error.message == primary.message
+        if (
+            c.error is not None
+            and c.error.code == primary.code
+            and c.error.message == primary.message
+        )
+        or (
+            # An un-migrated check: the fallback primary was built from the
+            # failed lines, so a check whose own line is that sentence is the
+            # one it describes. Compared redacted, as the envelope stored it.
+            c.error is None
+            and bool(c.resolved_message)
+            and redact_secrets(c.resolved_message) == primary.message
+        )
     ]
     if len(matched) == 1:
         return matched[0]
@@ -1243,7 +1260,7 @@ def _build_block_error(
         attempt,
         error_type=PREFLIGHT_FAILED_ERROR_TYPE,
         non_retryable=True,
-        message_prefix="Preflight failed",
+        message_prefix=_BLOCK_MESSAGE_PREFIX,
     )
 
 

@@ -369,6 +369,22 @@ class TestLogWorkflowInboundInterceptor:
         assert "BLOCKED (preflight gate)" in body
         assert "admin/workspaces/modified" in body
 
+    async def test_preflight_block_body_drops_the_redundant_prefix(
+        self, interceptor, mock_next
+    ):
+        # "BLOCKED (preflight gate)" already says what happened; the block's own
+        # "Preflight failed: " prefix would spend 18 of the 200-char budget
+        # saying it again, pushing the endpoint off the end of a long message.
+        body = await self._blocked_workflow_body(
+            interceptor,
+            mock_next,
+            ApplicationError(
+                "Preflight failed: The admin API returned 403.", type="PreflightFailed"
+            ),
+        )
+        assert body.endswith("BLOCKED (preflight gate): The admin API returned 403.")
+        assert "Preflight failed:" not in body
+
     async def test_cause_wrapped_block_body_uses_the_blocks_message(
         self, interceptor, mock_next
     ):

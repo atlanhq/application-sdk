@@ -2910,3 +2910,41 @@ class TestOutcomeRowNamesTheFailure:
         assert "hunter2" not in excinfo.value.message
         assert "u:pw@" not in excinfo.value.message
         assert "refused" in excinfo.value.message
+
+    async def test_an_untyped_check_is_named_when_its_line_is_the_attribution(
+        self,
+    ) -> None:
+        # Two un-migrated checks failed; only the first carries text, so the
+        # fallback sentence is that check's own line. Naming it is not a guess.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    message="The admin API returned 403.",
+                ),
+                PreflightCheck(name="workspaceSelection", passed=False),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_MESSAGE_KEY] == "The admin API returned 403."
+        assert ev[FAILURE_CHECK_KEY] == "scannerApiAvailability"
+
+    async def test_two_untyped_lines_joined_name_no_single_check(self) -> None:
+        # Both failed checks carry text, so the attribution is their lines
+        # joined — a sentence that belongs to neither check alone.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="first", passed=False, message="a"),
+                PreflightCheck(name="second", passed=False, message="b"),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_MESSAGE_KEY] == "a; b"
+        assert FAILURE_CHECK_KEY not in ev
