@@ -1346,7 +1346,13 @@ MANIFEST = {
 }
 
 
-def test_manifest_body_carries_version_and_revision(tmp_path: Path) -> None:
+def test_manifest_body_carries_version_and_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A real deployment always has this set; with it unset the manifest route
+    # now deliberately leaves {deployment_name} visible rather than inventing
+    # one (see the sibling test below).
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
     generated = tmp_path / "generated"
     (generated / "crawler").mkdir(parents=True)
     (generated / "crawler" / "manifest.json").write_text(json.dumps(MANIFEST))
@@ -1368,7 +1374,7 @@ def test_manifest_body_carries_version_and_revision(tmp_path: Path) -> None:
     # The DAG heracles reads is untouched, and the deployment token still
     # substitutes.
     assert body["execution_mode"] == "automation-engine"
-    assert body["dag"]["extract"]["inputs"]["task_queue"].startswith("atlan-acme-")
+    assert body["dag"]["extract"]["inputs"]["task_queue"] == "atlan-acme-prod"
     assert "{deployment_name}" not in json.dumps(body["dag"])
     # Headers are on the manifest response too.
     assert_stamped(response, source_digest_from_tree(source))

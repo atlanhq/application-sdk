@@ -99,3 +99,19 @@ def test_a_malformed_entrypoint_is_400_not_a_path_read(gen) -> None:
 def test_an_unknown_entrypoint_is_404(gen) -> None:
     d = gen(crawler={"dag": {}})
     assert _client(d).get("/workflows/v1/manifest?entrypoint=nope").status_code == 404
+
+
+def test_an_unset_deployment_leaves_the_token_visible(
+    gen, monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """There is no correct deployment name to invent when the env is unset, and
+    a plausible-looking wrong queue is worse than an obviously unfinished one:
+    the worker drops the prefix entirely (derive_task_queue), so any
+    manufactured segment names a queue nobody polls."""
+    monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+    d = gen(crawler={"dag": {"extract": {"task_queue": QUEUE}}})
+    with caplog.at_level(logging.WARNING):
+        resp = _client(d).get("/workflows/v1/manifest?entrypoint=crawler")
+    assert resp.status_code == 200
+    assert _queue(resp) == "atlan-redshift-{deployment_name}"
+    assert "ATLAN_DEPLOYMENT_NAME is unset" in caplog.text
