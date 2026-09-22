@@ -86,6 +86,13 @@ def _redact_url_userinfo(text: str) -> str:
         # "x://@h" carries no credential and is left alone, matching the
         # worker-side redactor.
         if last_at <= search:
+            # Skip the whole run, do not just `continue`. No later "://" inside
+            # this same whitespace-free run can find a usable "@" either, since
+            # its own search position is further right — so rescanning the tail
+            # for each one is quadratic. A minified JSON error body (what
+            # obstore and the drivers embed) is exactly that shape: 43KB with
+            # 1000 schemes and no "@" took ~1s before this line.
+            search = i
             continue
 
         out.append(text[cursor:search])
@@ -169,7 +176,14 @@ def redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) 
             return "…"
         seen.add(id(value))
         try:
-            return {k: redact_wire_value(v, seen, depth + 1) for k, v in value.items()}
+            return {
+                k: (
+                    _MASK
+                    if secret_named_evidence_keys({k: v})
+                    else redact_wire_value(v, seen, depth + 1)
+                )
+                for k, v in value.items()
+            }
         finally:
             seen.discard(id(value))
 

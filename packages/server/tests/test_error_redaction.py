@@ -457,3 +457,95 @@ def test_redaction_stays_linear_on_a_long_scheme_run() -> None:
     small, large = elapsed(50_000), elapsed(400_000)
     assert large < small * 20, f"{small:.4f}s -> {large:.4f}s looks superlinear"
     assert large < 2.0, f"400k chars took {large:.2f}s"
+
+
+# ── the filter must redact everything AND destroy nothing ───────────────────
+# Redacting the record's PARTS was wrong twice: it missed every secret that was
+# not a top-level str or exception, and rewriting the format string / re-tupling
+# args made %-formatting raise, which the stdlib swallows into a
+# "--- Logging error ---" and emits nothing. A filter that deletes the line it
+# was protecting is worse than the leak.
+
+
+def _emit(call) -> tuple[str, str]:
+    """Run one logging call; return (what was emitted, what stderr got)."""
+    import contextlib
+    import io
+    import logging
+
+    from server_sdk.observability.logger_adaptor import get_logger
+
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger = get_logger("server_sdk.test.filter")
+    logger.handlers.clear()
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        call(logger)
+    return buf.getvalue().strip(), err.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("name", "call"),
+    [
+        ("exception as msg", lambda lg: lg.error(RuntimeError(f"connect to {DSN}"))),
+        ("dsn inside a list", lambda lg: lg.info("urls %s", [DSN])),
+        ("dsn inside a dict", lambda lg: lg.info("urls %s", {"dsn": DSN})),
+        ("dsn as a str arg", lambda lg: lg.info("ok %s", DSN)),
+        ("dsn in the format string", lambda lg: lg.info(f"ok {DSN}")),
+    ],
+)
+def test_the_filter_redacts_every_shape(name: str, call) -> None:
+    emitted, _ = _emit(call)
+    assert "sup3rs3cr3t" not in emitted.lower(), f"{name}: {emitted}"
+    assert emitted, f"{name}: nothing was emitted"
+
+
+def test_a_secret_named_placeholder_does_not_destroy_the_record() -> None:
+    """Redacting the FORMAT STRING ate the placeholder after a secret-named
+    token, so %-formatting raised and the record vanished."""
+    emitted, err = _emit(
+        lambda lg: lg.info("failed, password=%s rejected for user %s", "hunter2", "bob")
+    )
+    assert "--- Logging error" not in err
+    assert "bob" in emitted
+    assert "hunter2" not in emitted  # the VALUE is what gets redacted
+    assert "password=***" in emitted
+
+
+def test_mapping_args_still_format() -> None:
+    """The stdlib stores a lone Mapping as-is so %(name)s works; re-tupling it
+    made formatting raise."""
+    emitted, err = _emit(
+        lambda lg: lg.info(
+            "connecting as %(user)s to %(host)s", {"user": "u", "host": "h"}
+        )
+    )
+    assert "--- Logging error" not in err
+    assert emitted == "connecting as u to h"
+
+
+def test_redaction_is_linear_on_a_body_full_of_schemes() -> None:
+    """A minified JSON error body — what obstore and the drivers embed — is many
+    "://" with no "@" in one whitespace-free run. Rescanning the tail for each
+    one was quadratic: 43KB took ~1s, slower than the regex it replaced."""
+    import json
+    import time
+
+    def elapsed(n: int) -> float:
+        body = json.dumps(
+            {"tried": [f"https://shard{i}.warehouse.internal/v1/t" for i in range(n)]},
+            separators=(",", ":"),
+        )
+        start = time.perf_counter()
+        redact_secrets(body)
+        return time.perf_counter() - start
+
+    elapsed(200)  # warm
+    small, large = elapsed(1000), elapsed(8000)
+    assert large < small * 20, f"{small:.4f}s -> {large:.4f}s looks superlinear"
+    assert large < 1.0, f"8000 schemes took {large:.2f}s"

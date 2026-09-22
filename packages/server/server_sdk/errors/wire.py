@@ -41,7 +41,7 @@ class FailureDetails(BaseModel):
     @field_validator("evidence")
     @classmethod
     def _scrub_evidence(cls, v: dict[str, Any]) -> dict[str, Any]:
-        return mask_secret_named_keys(redact_wire_value(v))
+        return redact_wire_value(v)
 
     @field_validator("message", "cause_repr", "suggested_action")
     @classmethod

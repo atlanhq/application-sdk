@@ -93,10 +93,25 @@ class _RedactingFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        # Render FIRST, then redact the result, then clear args.
+        #
+        # Redacting the parts instead was wrong twice over. It missed every
+        # secret that was not a top-level str or exception — logger.error(exc),
+        # or a DSN inside a list or dict arg — which is most of them. And
+        # rewriting the FORMAT STRING corrupted it: the secret-param pattern
+        # eats a placeholder that follows a secret-named token, so
+        # "password=%s was rejected" became "password=***", after which
+        # %-formatting raised and the stdlib swallowed the whole record into a
+        # "--- Logging error ---" on stderr. Re-tupling args broke the other
+        # shape: the stdlib stores a lone Mapping as-is so that "%(user)s"
+        # works, and a tuple there raises the same way. A filter that deletes
+        # the line it was protecting is worse than the leak.
         try:
             text = record.getMessage()
-        except Exception:  # noqa: BLE001 - a bad format string must not lose the line
-            text = f"{record.msg!r} % {record.args!r}"
+        except Exception:  # noqa: BLE001 — a bad format/arg pair must not
+            # become an exception in the logging path; fall back to the raw msg
+            # so the record still carries something redacted.
+            text = str(record.msg)
         record.msg = redact_secrets(text)
         record.args = None
         if record.exc_info:
