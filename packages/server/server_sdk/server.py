@@ -358,8 +358,10 @@ def _max_request_body_bytes() -> int:
     try:
         value = int(raw)
     except ValueError:
+        # conformance: ignore[L004] no exc_info: the exception is int() rejecting a string this line already prints, so the stack adds nothing a reader of the message does not already have.
         logger.warning(
-            "Ignoring unusable SERVER_SDK_MAX_BODY_BYTES=%r; using the default.", raw
+            "Ignoring unusable SERVER_SDK_MAX_BODY_BYTES=%r; using the default.",
+            raw,
         )
         return 1048576
     if value <= 0:

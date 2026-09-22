@@ -40,6 +40,7 @@ def _tolerant_utf8_decode(data: Any, errors: str = "strict") -> tuple[str, int]:
     try:
         return codecs.utf_8_decode(data, "strict", True)
     except UnicodeDecodeError:
+        # conformance: ignore[L004] no exc_info on purpose: this runs per VALUE on a decode path, the traceback is the same three frames every time, and a stack per malformed byte would bury the batch it is reporting on.
         logger.warning(
             "Replacing malformed UTF-8 bytes from the source with U+FFFD "
             "(%d bytes); the value is returned rather than failing the batch.",
@@ -61,9 +62,7 @@ def _ensure_tolerant_codec() -> None:
     try:
         codecs.lookup(_TOLERANT_CODEC_NAME)
         return
-    except LookupError:
-        # conformance: ignore[E002] existence probe: LookupError IS the
-        # "not registered yet" answer, and registering is the next statement.
+    except LookupError:  # conformance: ignore[E002] existence probe: LookupError IS the "not registered yet" answer, and registering is the next statement
         pass
 
     def _search(name: str) -> codecs.CodecInfo | None:
