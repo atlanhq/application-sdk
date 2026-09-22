@@ -192,11 +192,14 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K002",
         canonical_reference=(
-            "atlan-mysql-app contract/app.pkl — the one legacy-looking import it keeps, "
-            "`Connectors.pkl`, needs no suppression: the detector excludes it by design "
-            "(App.pkl imports it internally and types `connector` as `Connectors.Type` "
-            "but does not re-export the constants, so every current toolkit example still "
-            "imports it). flatManifestArgs and workflowTypeOverride appear nowhere."
+            "atlan-openapi-app contract/app.pkl — the whole pkl surface the scanner "
+            "reads, and it emits nothing: no `Config.pkl`, `Credential.pkl` or "
+            "`Renderers.pkl` import, and none of flatManifestArgs, "
+            "manifestMetadataArgs or workflowTypeOverride. The `Connectors.pkl` import "
+            "it does keep carries no suppression and needs none — the scanner excludes "
+            "that module by design (App.pkl imports it internally and types `connector` "
+            "as `Connectors.Type` without re-exporting the constants, so every current "
+            "toolkit example still imports it)."
         ),
         terminal_state=(
             "`Connectors.pkl` is a detector-level exemption — no directive is needed or "

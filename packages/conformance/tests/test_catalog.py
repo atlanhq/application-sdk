@@ -1515,6 +1515,69 @@ def test_canonical_references_name_something_checkable() -> None:
     )
 
 
+#: A ``canonical_reference`` that presents an inline suppression as the
+#: compliant shape ("… carries an inline ignore[D003] saying …").
+_REFERENCE_IS_A_SUPPRESSION = re.compile(
+    r"carr(?:y|ies|ied)\s+an\s+inline\s+(?:`?#?\s*conformance:\s*)?ignore\[",
+    re.IGNORECASE,
+)
+
+
+def test_reference_that_is_a_suppression_declares_a_terminal_state() -> None:
+    """If the compliant example IS a suppression, the rule must say so in the field.
+
+    A ``canonical_reference`` reading "… carries an inline ignore[X] explaining
+    why …" tells a reader that the directive is the end state. But the field
+    that a remediation lane actually consults for that is ``terminal_state``,
+    and when it is empty the lane sees a rule with findings and no declared
+    resting point — so it re-opens settled work every cycle, and a reviewer
+    cannot tell a deliberate carve-out from an unfixed violation.
+
+    Worse, prose is not load-bearing: the app that hosted the suppression can
+    delete it the moment the checker improves, and the reference then describes
+    a file state that no longer exists. D003 and S002 both hit this — D003's
+    reference described an ``ignore[D003]`` on ``aiomysql`` that the dialect-
+    string checker made unnecessary, and S002's described two directives an app
+    removed once the missing seam was reported.
+
+    So: cite a suppression as the compliant shape only alongside a
+    ``terminal_state`` that states the condition under which it is correct.
+    Better still, point the reference at code that needs no suppression.
+    """
+    offenders = [
+        r.id
+        for r in load_catalog()
+        if r.canonical_reference
+        and _REFERENCE_IS_A_SUPPRESSION.search(r.canonical_reference)
+        and not r.terminal_state
+    ]
+    assert not offenders, (
+        "canonical_reference presents an inline suppression as the compliant "
+        f"shape but no terminal_state says when that is correct: {offenders} — "
+        "either declare terminal_state, or point the reference at code that "
+        "needs no suppression"
+    )
+
+
+def test_reference_suppression_pattern_does_not_over_match() -> None:
+    """The guard must fire on the real shape and not on a passing mention."""
+    assert _REFERENCE_IS_A_SUPPRESSION.search(
+        "atlan-mysql-app pyproject.toml — aiomysql ... carries an inline "
+        "ignore[D003] saying SQLAlchemy loads it dynamically"
+    )
+    assert _REFERENCE_IS_A_SUPPRESSION.search(
+        "the two os.environ writes carry an inline ignore[S002] explaining that"
+    )
+    # A reference that merely says no suppression is needed must not trip it.
+    assert not _REFERENCE_IS_A_SUPPRESSION.search(
+        "app/handler.py preflight_check returns a typed row, which the rule "
+        "detects — no suppression needed"
+    )
+    assert not _REFERENCE_IS_A_SUPPRESSION.search(
+        "aiomysql is declared with no Python import and carries no suppression"
+    )
+
+
 def test_canonical_references_are_not_shared() -> None:
     """No two rules may point at the same place.
 
