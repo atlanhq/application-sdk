@@ -134,10 +134,12 @@ jobs:
       pull-requests: write
       # The e2e tier's commit status on the SDK commit that dispatched it.
       statuses: write
-      # Mints the run's OIDC token for the dataforge source-credential exchange
-      # (no stored dataforge secret). Never granted by a repository default at
-      # any setting, so it only works when declared here. Inert — the fetch
-      # chain self-skips — in a repo that does not use dataforge.
+      # Mints the run's OIDC token for the dataforge token exchange (no stored
+      # dataforge secret). Never granted by a repository default at any setting,
+      # so it only works when declared here. Feeds both the read-only source
+      # fetch (credentials:read) and, when dataforge-lifecycle is on, the
+      # wake/pause jobs' resource:lifecycle exchange. Inert only in a repo that
+      # uses no dataforge source — the fetch and lifecycle chains self-skip.
       id-token: write
     uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main
     with:
