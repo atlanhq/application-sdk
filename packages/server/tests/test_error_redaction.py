@@ -216,10 +216,17 @@ def _sql_app_that_fails_with(driver_error: str):
             raise RuntimeError(driver_error)
 
     class _Handler(SQLHandler):
-        CLIENT_CLASS = _Client
+        # `client_class`, lowercase, and `_build_client` is `async def`. Getting
+        # either wrong makes the handler fail with a TypeError BEFORE load() is
+        # reached, so the driver error never fires and an
+        # "assert secret not in body" passes without testing anything. That is
+        # exactly what the first version of this file did.
+        client_class = _Client
 
-        def _build_client(self, *a, **k):  # pyright: ignore[reportIncompatibleMethodOverride]
-            return _Client()
+        async def _build_client(self, credentials):
+            client = _Client()
+            await client.load(credentials)
+            return client
 
     return build_asgi_app(_Handler(), app_name="acme")
 
@@ -286,3 +293,111 @@ def test_redaction_is_linear_not_quadratic() -> None:
     # 8x the input must not cost anything like 64x the time.
     assert large < small * 20, f"{small:.4f}s -> {large:.4f}s looks superlinear"
     assert large < 2.0, f"400k chars took {large:.2f}s"
+
+
+# ── the log is a SECOND sink, and it is not the response body ───────────────
+# Pod stderr ships to ClickHouse for tenant vclusters. An earlier fix redacted
+# the %s operand and left exc_info=True in place, so the password landed one
+# line below on the traceback.
+
+
+def _capture_logs(app, body: dict) -> tuple[str, str]:
+    """Drive a route and return (response text, everything logged)."""
+    import io
+    import logging
+
+    from fastapi.testclient import TestClient
+
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    root = logging.getLogger()
+    root.addHandler(handler)
+    previous = root.level
+    root.setLevel(logging.DEBUG)
+    try:
+        resp = TestClient(app, raise_server_exceptions=False).post(
+            body["path"], json=body["json"]
+        )
+        return resp.text, buf.getvalue()
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(previous)
+
+
+SQL_BODY = [
+    {"key": "username", "value": "u"},
+    {"key": "password", "value": "p"},
+    {"key": "host", "value": "h"},
+    {"key": "database", "value": "d"},
+]
+
+
+@pytest.mark.parametrize(
+    "path", ["/workflows/v1/auth", "/workflows/v1/check", "/workflows/v1/metadata"]
+)
+def test_no_route_writes_the_dsn_to_the_log(path: str) -> None:
+    app = _sql_app_that_fails_with(
+        f'FATAL: password authentication failed; dsn="{DSN}"'
+    )
+    text, logs = _capture_logs(app, {"path": path, "json": {"credentials": SQL_BODY}})
+    assert "sup3rs3cr3t" not in text, "wire"
+    assert "sup3rs3cr3t" not in logs, "log sink"
+
+
+def test_the_traceback_survives_redaction() -> None:
+    """Redaction must not cost the diagnostic — an on-call still needs the frames."""
+    app = _sql_app_that_fails_with(f'FATAL: boom; dsn="{DSN}"')
+    _, logs = _capture_logs(
+        app, {"path": "/workflows/v1/auth", "json": {"credentials": SQL_BODY}}
+    )
+    assert "Traceback" in logs
+    assert "password authentication failed" in logs or "boom" in logs
+    assert "postgresql://***@warehouse.internal:5439/db" in logs
+
+
+def test_a_raw_exception_operand_is_redacted() -> None:
+    """Some sites pass the exception object itself as the %s operand."""
+    import io
+    import logging
+
+    from server_sdk.observability.logger_adaptor import get_logger
+
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger = get_logger("server_sdk.test.operand")
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
+        logger.warning("failed: %s", RuntimeError(f'dsn="{DSN}"'))
+    finally:
+        logger.removeHandler(handler)
+    assert "sup3rs3cr3t" not in buf.getvalue()
+    assert "***" in buf.getvalue()
+
+
+def test_exc_info_is_cleared_so_a_structured_handler_cannot_re_derive_it() -> None:
+    """A JSON/OTel handler formats from record.exc_info, bypassing exc_text."""
+    import logging
+
+    from server_sdk.observability.logger_adaptor import get_logger
+
+    seen: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(record)
+
+    logger = get_logger("server_sdk.test.structured")
+    logger.addHandler(_Capture())
+    logger.setLevel(logging.WARNING)
+    try:
+        raise RuntimeError(f'dsn="{DSN}"')
+    except RuntimeError:
+        logger.warning("boom", exc_info=True)
+
+    assert seen, "handler saw no record"
+    record = seen[-1]
+    assert record.exc_info is None, "exc_info must be cleared once folded"
+    assert "sup3rs3cr3t" not in (record.exc_text or "")
