@@ -51,6 +51,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     gate_timeouts,
     input_type_supports_gate,
     is_preflight_block,
+    preflight_block_message,
     preflight_gate_activity_name,
     warn_if_partial,
 )
@@ -2509,6 +2510,54 @@ class TestOutcomeRowNamesTheFailure:
         ev = _outcome_event(ml)
         assert ev.get(FAILURE_CHECK_KEY) == "scannerApiAvailability"
         assert ev.get(FAILURE_MESSAGE_KEY) == "The admin API returned 403."
+
+    async def test_the_lifecycle_body_and_the_row_carry_one_sentence(self) -> None:
+        # The interceptor's BLOCKED line and the row's failure.message both read
+        # details[0], so a Body substring search and a JSONExtract land on the
+        # same text. The block's *rendered* message is the builder's "Preflight
+        # failed: <every failed check's line, joined>", which would repeat the
+        # token the lifecycle line already carries and, here, drag in a check
+        # the row deliberately does not name.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="secretStore",
+                    passed=False,
+                    message="Secret store lagged; retried.",
+                ),
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    error=AppPermissionDeniedError(
+                        message="The admin API returned 403."
+                    ),
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError) as raised:
+            await _verdict_gate(out)(PreflightGateInput())
+        body = preflight_block_message(raised.value)
+        assert body == _outcome_event(ml)[FAILURE_MESSAGE_KEY]
+        assert body == "The admin API returned 403."
+        assert "Secret store lagged" not in body
+        assert not body.startswith("Preflight failed")
+
+    async def test_a_block_without_details_still_yields_its_rendered_line(
+        self,
+    ) -> None:
+        # The fallback: a producer whose details[0] this reader cannot parse
+        # must cost the reader the prefix, not the sentence.
+        block = ApplicationError(
+            "Preflight failed: the scanner API denied the probe",
+            {"not": "a FailureDetails"},
+            type="PreflightFailed",
+            non_retryable=True,
+        )
+        assert (
+            preflight_block_message(block)
+            == "Preflight failed: the scanner API denied the probe"
+        )
 
     async def test_message_is_redacted_before_it_reaches_the_row(self) -> None:
         # to_failure_details() passes `message` through raw and only sanitizes

@@ -9,6 +9,7 @@ import pytest
 from temporalio.converter import default as default_converter
 from temporalio.exceptions import ApplicationError
 
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError, InvalidInputError
 from application_sdk.execution._temporal.interceptors.log import (
     _APP_NAME_MAX_CHARS,
@@ -381,6 +382,37 @@ class TestLogWorkflowInboundInterceptor:
         body = await self._blocked_workflow_body(interceptor, mock_next, wrapper)
         assert "scanner API denied" in body
         assert "Activity task failed" not in body
+
+    async def test_block_body_prefers_the_attributed_primary(
+        self, interceptor, mock_next
+    ):
+        # details[0] is the same FailureDetails the outcome row's
+        # failure.message comes off, so Body and the attribute say one thing.
+        # The rendered message repeats this line's own token and, when several
+        # checks failed, names more than the row does.
+        from application_sdk.errors.wire import FailureDetails
+
+        body = await self._blocked_workflow_body(
+            interceptor,
+            mock_next,
+            ApplicationError(
+                "Preflight failed: secret store lagged; the admin API returned 403",
+                FailureDetails(
+                    code="APP_PERMISSION_DENIED",
+                    message="The admin API returned 403.",
+                    category=FailureCategory.PERMISSION,
+                    audience=Audience.USER,
+                    retryable=False,
+                ),
+                type="PreflightFailed",
+                non_retryable=True,
+            ),
+        )
+        assert body == (
+            "workflow.ended TestWorkflow BLOCKED (preflight gate): "
+            "The admin API returned 403."
+        )
+        assert "secret store lagged" not in body
 
     async def test_preflight_block_body_is_redacted(self, interceptor, mock_next):
         # This text comes from PreflightOutput.message / PreflightCheck.message —

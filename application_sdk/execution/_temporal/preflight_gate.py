@@ -169,25 +169,54 @@ def is_preflight_block(exc: BaseException | None) -> bool:
 
 
 def preflight_block_message(exc: BaseException | None) -> str:
-    """The deliberate block's own first line, redacted; ``""`` when there is none.
+    """The sentence the block is attributed to, redacted; ``""`` when there is none.
 
     For the interceptor's ``BLOCKED (preflight gate)`` lifecycle lines. The
     block may sit on a cause under Temporal's wrapper, so this reads the
-    marker's message, not the wrapper's. Temporal's ``str()`` prefixes the
-    type (``PreflightFailed: …``); the ``message`` attribute is the clean line.
+    marker, not the wrapper. Temporal's ``str()`` prefixes the type
+    (``PreflightFailed: …``); the ``message`` attribute is the clean line.
 
-    Redacted here, not left to the envelope: this text is built from
-    ``PreflightOutput.message`` / ``PreflightCheck.message``, plain strings the
-    ``FailureDetails`` validator never sees. Pure string work — safe in the
-    workflow sandbox.
+    ``details[0]`` is preferred over that rendered message, because it is the
+    ``FailureDetails`` primary — the very object the outcome row's
+    ``failure.message`` comes off. Taking it here means the searchable ``Body``
+    and the structured attribute carry one sentence rather than two: the
+    rendered message is :func:`_gate_error`'s ``"Preflight failed: <every
+    failed check's line, joined>"``, which both repeats the token this lifecycle
+    line already carries and, when more than one check failed, says something
+    the row does not.
+
+    It falls back to the rendered line for a ``details[0]`` this reader cannot
+    parse, on the same terms as :func:`_gate_failure_evidence` — a newer
+    producer's shape is not worth costing the reader the sentence entirely —
+    and for a block raised without details at all.
+
+    Redacted here rather than left to the envelope, because that fallback is
+    built from ``PreflightOutput.message`` / ``PreflightCheck.message``, plain
+    strings the ``FailureDetails`` validator never sees. Pure string work —
+    safe in the workflow sandbox.
     """
     for link in _iter_chain(exc):
         if getattr(link, "type", None) != PREFLIGHT_FAILED_ERROR_TYPE:
             continue
-        text = str(getattr(link, "message", None) or link)
+        text = _attributed_message(link) or str(getattr(link, "message", None) or link)
         first = (text.strip().splitlines() or [""])[0]
         return redact_secrets(first)
     return ""
+
+
+def _attributed_message(link: BaseException) -> str:
+    """``details[0].message`` off a gate error; ``""`` when it cannot be read.
+
+    Tolerant on purpose: this runs on the workflow frame, where ``details[0]``
+    has crossed a JSON boundary, and inside an ``except`` that must never raise.
+    """
+    details = _sequence(getattr(link, "details", None))
+    if not details:
+        return ""
+    try:
+        return FailureDetails.model_validate(details[0]).message
+    except Exception:
+        return ""
 
 
 class GateFailure(NamedTuple):

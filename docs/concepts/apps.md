@@ -549,6 +549,13 @@ failed` record under `exception.message` — one record away, under a key nobody
 two keys are on the interactive `Preflight check outcome` row, from the same helper, so the two
 surfaces cannot drift.
 
+That same sentence is also the `Body` of the interceptor's `… BLOCKED (preflight gate): <message>`
+lifecycle record, so a plain substring search finds a block without knowing to `JSONExtract`
+anything. Both read the block's `details[0]`, so the searchable text and the structured attribute
+cannot say different things. One gap remains by design: a **soft**-mode gate does not raise, so a
+`would_block` row has no lifecycle record to carry the sentence and is reachable through
+`failure.message` only.
+
 `frame_lost` is its own value because the failure chain cannot separate a probe that stalled
 the event loop past the gate's cancel from a worker that died under it. The mode still applies:
 a stalled probe is the common cause and the one its owner can fix, a lost worker is rare and

@@ -2653,6 +2653,12 @@ async def _run_preflight_gate(
                 elapsed_ms,
                 attempt=failure.attempt,
                 audience=Audience.APP_OWNER.value,
+                # None on this branch today: classify_gate_failure only fills
+                # evidence for SOURCE_UNVERIFIABLE, so a gate_broken row carries
+                # no failure.message and the stack trace is what a reader gets.
+                # Passed anyway so the branch follows the same ladder as the
+                # other two, and gains the sentence the day a broken gate learns
+                # to type itself rather than needing to be remembered here.
                 primary=failure.evidence,
                 exc_info=True,
             )
