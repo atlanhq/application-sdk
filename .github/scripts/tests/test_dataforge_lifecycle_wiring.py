@@ -109,3 +109,24 @@ def test_both_jobs_connect_the_vpn_before_calling(jobs: dict) -> None:
         run_steps = [s.get("run", "") for s in steps if "run" in s]
         assert any("dataforge_source_lifecycle.py --mode" in r for r in run_steps), job
         assert not any("--resource-id" in r for r in run_steps), job
+
+
+def test_docker_resubnet_is_not_copy_pasted_back(workflow: dict, jobs: dict) -> None:
+    """The 172.17/16 re-subnet lives in globalprotect-connect, not at call sites.
+
+    Atlan's internal ELBs share Docker's default bridge subnet, so it has to move
+    before the tunnel routes 172.17/16 via tun0. That was four byte-identical
+    inline steps — the subnet literals have to agree across all of them or the
+    one that drifted silently loses container networking. Asserting the literal
+    is absent stops a fifth copy being pasted in rather than the input being set.
+    """
+    assert "default-address-pools" not in _WORKFLOW.read_text(encoding="utf-8")
+
+    # Every dataforge VPN call site opts in, so folding it in changed nothing.
+    for name, job in jobs.items():
+        for step in job.get("steps") or []:
+            if "globalprotect-connect" not in step.get("uses", ""):
+                continue
+            with_ = step.get("with") or {}
+            if with_.get("mothership-url", "").endswith("dataforge.atlan.dev"):
+                assert with_.get("resubnet-docker") == "true", name

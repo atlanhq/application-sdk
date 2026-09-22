@@ -967,22 +967,12 @@ jobs:
       # READ-ONLY: the job only fetches credentials; it never seeds or mutates
       # the instance (curation is the instance owner's one-time setup).
       #
-      # Atlan's internal ELBs share Docker's default 172.17/16 bridge subnet;
-      # re-subnet Docker BEFORE the tunnel so containers keep working while
-      # 172.17/16 routes via tun0.
-      - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
-        continue-on-error: true
-        run: |
-          set -e
-          sudo mkdir -p /etc/docker
-          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
-
       # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs. This repo's own globalprotect-connect action (unmodified),
-      # from the job.workflow_sha sparse checkout — same provenance pinning as
-      # the scripts above.
+      # egress IPs. This repo's own globalprotect-connect action, from the
+      # job.workflow_sha sparse checkout — same provenance pinning as the
+      # scripts above. `resubnet-docker` moves Docker off Atlan's 172.17/16
+      # before the tunnel comes up; it was a separate copy-pasted step at each
+      # of the four dataforge call sites until the action absorbed it.
       - name: Connect to GlobalProtect VPN (dataforge path)
         if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
@@ -992,6 +982,7 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
           mothership-url: https://api.dataforge.atlan.dev
+          resubnet-docker: "true"
 
       # Dataforge-sourced connector credentials. The fetch's stdout is captured
       # into a shell variable — values never reach the log — and handed to
@@ -1386,14 +1377,6 @@ jobs:
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
-      - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
-        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
-        continue-on-error: true
-        run: |
-          set -e
-          sudo mkdir -p /etc/docker
-          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
       - name: Connect to GlobalProtect VPN (dataforge path)
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
@@ -1403,6 +1386,7 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
           mothership-url: https://api.dataforge.atlan.dev
+          resubnet-docker: "true"
       - name: Wake the pinned dataforge source (resume + readiness poll)
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         # resource-id NOT on argv — the script reads DATAFORGE_RESOURCE_ID from
@@ -2294,22 +2278,9 @@ jobs:
       # the fetch cannot complete (VPN, binding, dataforge down), the connector's
       # hermetic source carries the run instead of failing it.
       #
-      # Atlan's internal ELBs share Docker's default 172.17/16 bridge subnet;
-      # re-subnet Docker BEFORE the tunnel so containers keep working while
-      # 172.17/16 routes via tun0 (deleting the docker0 route instead breaks
-      # buildx — atlan-postgres-app run 31571886125).
-      - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
-        continue-on-error: true
-        run: |
-          set -e
-          sudo mkdir -p /etc/docker
-          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
-
       # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs. This repo's own globalprotect-connect action (unmodified),
-      # from the job.workflow_sha sparse checkout — same provenance pinning
+      # egress IPs. This repo's own globalprotect-connect action, from the
+      # job.workflow_sha sparse checkout — same provenance pinning
       # as the scripts. The health probe targets the dataforge api host —
       # the thing this tunnel actually has to reach. KNOWN LIMIT: the
       # action derives its GP client identity from run/job/attempt, and
@@ -2325,6 +2296,12 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
           mothership-url: https://api.dataforge.atlan.dev
+          # Moves Docker off Atlan's 172.17/16 before the tunnel comes up —
+          # deleting the docker0 route afterwards instead breaks buildx
+          # (atlan-postgres-app run 31571886125). Was a separate copy-pasted
+          # step at each of the four dataforge call sites until the action
+          # absorbed it.
+          resubnet-docker: "true"
           # This is a MATRIX job, so the action's default identity (run id +
           # GITHUB_JOB + attempt) is the same string for every leg and the legs
           # evict each other's VPN sessions — last connect wins, the rest fail
@@ -2575,14 +2552,6 @@ jobs:
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
-      - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
-        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
-        continue-on-error: true
-        run: |
-          set -e
-          sudo mkdir -p /etc/docker
-          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
       - name: Connect to GlobalProtect VPN (dataforge path)
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
@@ -2592,6 +2561,7 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
           mothership-url: https://api.dataforge.atlan.dev
+          resubnet-docker: "true"
       - name: Pause the pinned dataforge source (refcounted, always-runs)
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         env:
