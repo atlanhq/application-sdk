@@ -63,7 +63,11 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
-    from application_sdk.errors.base import AppError, sanitize_cause_repr
+    from application_sdk.errors.base import (
+        AppError,
+        redact_and_cap,
+        sanitize_cause_repr,
+    )
     from application_sdk.errors.categories import FailureCategory
     from application_sdk.errors.leaves import (
         AppTimeoutError,
@@ -677,6 +681,17 @@ class PreflightClassification(SerializableEnum):
 # the block is raised and would otherwise carry no audience.
 FAILURE_AUDIENCE_KEY = "failure.audience"
 
+# The failing check's name and its human line. Conditional, like
+# FAILURE_AUDIENCE_KEY and unlike GATE_OUTCOME_ROW_KEYS: a row with nothing
+# failed carries neither. ``reason`` is a code so dashboards can separate fault
+# classes, and ``check_matrix`` deliberately holds no messages, so without these
+# the sentence lived only on the adjacent "Completing activity as failed" record
+# under ``exception.message`` — one record away, under a key nobody searches.
+# They use the ``failure.`` prefix the logger already passes through, so neither
+# needs an entry in ``_KNOWN_EXTRA_KEYS``.
+FAILURE_CHECK_KEY = "failure.check"
+FAILURE_MESSAGE_KEY = "failure.message"
+
 # Error type for a retryable no-verdict on a non-final attempt. Deliberately not
 # PREFLIGHT_FAILED_ERROR_TYPE: the workflow must not treat it as the deliberate
 # block and abort before the retry has had its turn.
@@ -712,6 +727,7 @@ def gate_outcome_row(
     budget_seconds: int,
     attempt: int,
     audience: str | None = None,
+    primary: FailureDetails | None = None,
 ) -> dict[str, Any]:
     """The one ``Preflight gate outcome`` row shape, for the activity and the workflow.
 
@@ -734,6 +750,7 @@ def gate_outcome_row(
     }
     if audience is not None:
         row[FAILURE_AUDIENCE_KEY] = audience
+    row.update(_failure_fields(checks, primary))
     return row
 
 
@@ -1068,6 +1085,36 @@ def _gate_error(
     )
 
 
+def _failure_fields(
+    checks: list[PreflightCheck], primary: FailureDetails | None
+) -> dict[str, str]:
+    """The failing check's name and human line, for the outcome rows.
+
+    Precedence mirrors :func:`_build_block_error` exactly, so the row can never
+    name a different cause than the error actually raised: the handler's typed
+    aggregate wins over check order, because SDR inserts a non-fatal row ahead
+    of the real failure and pins the real one on ``result.error``.
+
+    The aggregate belongs to no single check, so the name falls back to the
+    first failed check — the one whose failure the aggregate is describing.
+
+    Empty dict when nothing failed: a clean ``proceeded`` row gains no keys.
+    """
+    failed = [c for c in checks if not c.passed]
+    if not failed:
+        return {}
+    if primary is None:
+        primary = next((c.error for c in failed if c.error is not None), None)
+    named = next((c for c in failed if c.error is primary), failed[0])
+    message = primary.message if primary is not None else named.resolved_message
+    fields: dict[str, str] = {}
+    if named.name:
+        fields[FAILURE_CHECK_KEY] = named.name
+    if message:
+        fields[FAILURE_MESSAGE_KEY] = redact_and_cap(message)
+    return fields
+
+
 def _build_block_error(
     result: PreflightOutput, app_name: str, attempt: int
 ) -> ApplicationError:
@@ -1274,6 +1321,7 @@ def emit_preflight_check_outcome(
         extra[FAILURE_AUDIENCE_KEY] = primary.audience.value
     if request_id is not None:
         extra["request_id"] = request_id
+    extra.update(_failure_fields(result.checks, primary))
     if not _log_row_is_only_channel(surface):
         emit = log.info
     elif result.status is PreflightStatus.NOT_READY:
@@ -2089,6 +2137,7 @@ def build_preflight_gate_activity(
                 budget_seconds=int(budget),
                 attempt=_current_attempt(),
                 audience=audience,
+                primary=verdict.error,
             )
             if exc_info is not None:
                 row["exc_info"] = exc_info

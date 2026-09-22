@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.36.1
-source-sha:    5371aee5c859329d46f025ef7298beb5c31794ac
-source-date:   2026-09-19T22:52:35+05:30
+sdk-version:   3.37.0
+source-sha:    73c8af7d3c91210825d62eebeab23f38e3c9481b
+source-date:   2026-09-21T22:08:55Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 69 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 70 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -1689,6 +1689,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 ### Functions
+
+#### `redact_and_cap`
+
+- **Import:** `from application_sdk.errors import redact_and_cap`
+- **Signature:** `redact_and_cap(text: str)`
+- **Summary:** Redact secrets in ``text``, then cap it, keeping both ends.
+- **Defined in:** `application_sdk/errors/base.py`
 
 #### `redact_secrets`
 

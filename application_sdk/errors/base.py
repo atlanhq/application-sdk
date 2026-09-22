@@ -178,6 +178,27 @@ def redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) 
 _DEBUG_SOURCE_TAIL_RE = re.compile(r"\n+Debug source:\n.*\Z", re.DOTALL)
 
 
+def redact_and_cap(text: str) -> str:
+    """Redact secrets in ``text``, then cap it, keeping both ends.
+
+    For handler-authored strings that are about to be logged or sent. Unlike
+    :func:`sanitize_cause_repr` it takes a string, not an exception, and adds
+    no type prefix.
+
+    Redaction runs *before* truncation, so retaining a tail can never expose an
+    unredacted secret. (FND-957)
+    """
+    text = redact_secrets(text)
+    if len(text) > _CAUSE_MAX_LEN:
+        elided = len(text) - _CAUSE_HEAD_LEN - _CAUSE_TAIL_LEN
+        text = (
+            text[:_CAUSE_HEAD_LEN]
+            + f"…[{elided} chars elided]…"
+            + text[-_CAUSE_TAIL_LEN:]
+        )
+    return text
+
+
 def sanitize_cause_repr(exc: BaseException) -> str:
     """Return a length-capped, secret-redacted string for a cause exception.
 

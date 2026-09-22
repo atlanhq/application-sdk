@@ -143,7 +143,8 @@ customer-facing log view filters at ERROR, so a block must be the ERROR record, 
 beside one). Each row stamps `failure.audience` (who must act) except `proceeded`/`skipped`.
 
 - **Verdict blocks** (`PreflightFailed` from a handler `NOT_READY`) — the outcome row at
-  `error`, no stack trace, audience from the primary check's typed error (typically `USER`).
+  `error`, no stack trace, audience from the primary check's typed error (typically `USER`),
+  plus `failure.check` / `failure.message` naming the check and why it failed.
   The block is an expected typed outcome, not a crash — but it aborted the customer's run.
 - **No-verdict outcomes** (budget overrun, handler crash — `source_unverifiable`; a killed
   frame — `frame_lost`) — the outcome row at `error` with `exc_info`, in both modes: the

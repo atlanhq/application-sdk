@@ -28,6 +28,7 @@ from dataclasses import dataclass
 # ── New canonical hierarchy ──────────────────────────────────────────────────
 from application_sdk.errors.base import (
     AppError,
+    redact_and_cap,
     redact_secrets,
     redact_wire_value,
     safe_traceback,
@@ -207,6 +208,7 @@ __all__ = [
     "EVENT_PUBLISH",
     "EVENT_BUS",
     "SEGMENT_ERROR",
+    "redact_and_cap",
     "redact_secrets",
     "redact_wire_value",
     "safe_traceback",

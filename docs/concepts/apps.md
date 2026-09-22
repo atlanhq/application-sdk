@@ -531,6 +531,16 @@ like), `Timeout:SCHEDULE_TO_CLOSE` (the retry window closed), or `Timeout:HEARTB
 events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which
 apps believe they are gated" is only answerable from posture rows.
 
+Any row with at least one failed check also carries `failure.check`, the name of the check the
+verdict turned on, and `failure.message`, its human line — secret-redacted and length-capped on the
+way out, because a handler's `message` is authored by the app and is not sanitized upstream. They
+are conditional, like `failure.audience` and unlike the keys above: a clean `proceeded` row carries
+neither. They exist because `reason` is a code and `check_matrix` deliberately holds no messages, so
+without them the sentence explaining a block lived only on the adjacent `Completing activity as
+failed` record under `exception.message` — one record away, under a key nobody searches. The same
+two keys are on the interactive `Preflight check outcome` row, from the same helper, so the two
+surfaces cannot drift.
+
 `frame_lost` is its own value because the failure chain cannot separate a probe that stalled
 the event loop past the gate's cancel from a worker that died under it. The mode still applies:
 a stalled probe is the common cause and the one its owner can fix, a lost worker is rare and

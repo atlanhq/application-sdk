@@ -31,17 +31,22 @@ from application_sdk.execution._temporal.preflight_gate import (
     _LOG_ROW_IS_ONLY_CHANNEL,
     EMPTY_CHECK_MATRIX,
     FAILURE_AUDIENCE_KEY,
+    FAILURE_CHECK_KEY,
+    FAILURE_MESSAGE_KEY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     INTERACTIVE_RAISE_OUTCOMES,
     PREFLIGHT_CHECK_EVENT,
     PREFLIGHT_FALLBACK_CODE,
+    PreflightClassification,
     PreflightGateInput,
+    PreflightRowOutcome,
     PreflightSurface,
     _config_from_snapshot,
     build_preflight_gate_activity,
     emit_preflight_check_outcome,
     emit_preflight_crash_outcome,
     gate_heartbeat_timings,
+    gate_outcome_row,
     gate_timeouts,
     input_type_supports_gate,
     is_preflight_block,
@@ -51,6 +56,7 @@ from application_sdk.execution._temporal.preflight_gate import (
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.contracts import (
+    UNVERIFIABLE_CHECK_NAME,
     AuthInput,
     AuthOutput,
     AuthStatus,
@@ -61,6 +67,7 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
     SqlMetadataOutput,
+    unverifiable_preflight_result,
 )
 from application_sdk.infrastructure.credential_vault import CredentialVaultError
 from application_sdk.observability.logger_adaptor import (
@@ -2464,3 +2471,206 @@ class TestPartialDeprecation:
             warnings.simplefilter("error", DeprecationWarning)
             warn_if_partial(PreflightOutput(status=PreflightStatus.READY))
             warn_if_partial(PreflightOutput(status=PreflightStatus.NOT_READY))
+
+
+class TestOutcomeRowNamesTheFailure:
+    """The outcome row answers "which check, and why" without a second record.
+
+    ``reason`` is a code and ``check_matrix`` carries no message, so before
+    these fields the human line existed only on the adjacent "Completing
+    activity as failed" record under ``exception.message``. A production
+    escalation was filed as log loss on exactly that gap.
+    """
+
+    async def test_block_row_names_the_failing_check_and_its_message(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="credentialScopes", passed=True),
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    error=AppPermissionDeniedError(
+                        message="The admin API returned 403.",
+                        suggested_action="Grant read-only admin API access.",
+                    ),
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev.get(FAILURE_CHECK_KEY) == "scannerApiAvailability"
+        assert ev.get(FAILURE_MESSAGE_KEY) == "The admin API returned 403."
+
+    async def test_message_is_redacted_before_it_reaches_the_row(self) -> None:
+        # to_failure_details() passes `message` through raw and only sanitizes
+        # `cause_repr`, and a driver exception routinely carries a connection
+        # string — so the emit site is the last place this can be scrubbed.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    error=AuthError(
+                        message="connect failed: postgres://u:pw@h/db?password=hunter2"
+                    ),
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        message = _outcome_event(ml)[FAILURE_MESSAGE_KEY]
+        assert "hunter2" not in message
+        assert "u:pw@h" not in message
+        assert "connect failed" in message
+
+    async def test_overlong_message_is_capped_keeping_both_ends(self) -> None:
+        # A head-only cut would spend the budget on boilerplate and delete the
+        # sentence naming what failed, which is always at the tail.
+        message = "HEAD-MARKER" + ("x" * 4000) + "TAIL-MARKER"
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, error=AuthError(message=message)
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        emitted = _outcome_event(ml)[FAILURE_MESSAGE_KEY]
+        assert len(emitted) < len(message)
+        assert emitted.startswith("HEAD-MARKER")
+        assert emitted.endswith("TAIL-MARKER")
+        assert "chars elided" in emitted
+
+    async def test_aggregate_error_wins_but_the_name_comes_from_the_check(self) -> None:
+        # SDR inserts a non-fatal row ahead of the real failure and pins the real
+        # one on result.error, so first-failed would steal the banner. The
+        # aggregate belongs to no single check, so the name still comes from the
+        # failed check it describes.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=AppPermissionDeniedError(
+                message="Scanner API denied."
+            ).to_failure_details(),
+            checks=[
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    error=AuthError(message="a per-check line that must not win"),
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_CHECK_KEY] == "scannerApiAvailability"
+        assert ev[FAILURE_MESSAGE_KEY] == "Scanner API denied."
+
+    async def test_advisory_failure_on_a_proceeded_run_still_names_itself(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[
+                PreflightCheck(name="conn", passed=True),
+                PreflightCheck(
+                    name="version", passed=False, message="Source is a minor behind."
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "proceeded"
+        assert ev[FAILURE_CHECK_KEY] == "version"
+        assert ev[FAILURE_MESSAGE_KEY] == "Source is a minor behind."
+
+    async def test_a_clean_run_carries_neither_key(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[PreflightCheck(name="conn", passed=True)],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "proceeded"
+        assert FAILURE_CHECK_KEY not in ev
+        assert FAILURE_MESSAGE_KEY not in ev
+
+    def test_an_unverifiable_source_names_the_synthesized_check(self) -> None:
+        # The no-verdict path shapes itself as a normal verdict with one failed
+        # check, so it reports through these fields unchanged rather than
+        # needing a parallel path.
+        verdict = unverifiable_preflight_result(
+            RuntimeError("handler blew up"), "myapp"
+        )
+        row = gate_outcome_row(
+            app_name="myapp",
+            entrypoint="crawl",
+            outcome=PreflightRowOutcome.BLOCKED,
+            reason="INTERNAL",
+            checks=verdict.checks,
+            mode=PreflightGateMode.HARD,
+            classification=PreflightClassification.SOURCE_UNVERIFIABLE,
+            duration_ms=1.0,
+            budget_seconds=150,
+            attempt=1,
+            primary=verdict.error,
+        )
+        assert row[FAILURE_CHECK_KEY] == UNVERIFIABLE_CHECK_NAME
+        assert "handler blew up" in row[FAILURE_MESSAGE_KEY]
+
+    def test_the_interactive_row_carries_the_same_two_keys(self) -> None:
+        # Same gap, same fix: the Config-tab surface is where support is sent
+        # when the gate row does not explain itself.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    error=AppPermissionDeniedError(
+                        message="The admin API returned 403."
+                    ),
+                )
+            ],
+        )
+        log = mock.MagicMock()
+        emit_preflight_check_outcome(
+            log, "myapp", out, surface=PreflightSurface.SDR, entrypoint="crawl"
+        )
+        kwargs = log.error.call_args.kwargs
+        assert kwargs[FAILURE_CHECK_KEY] == "scannerApiAvailability"
+        assert kwargs[FAILURE_MESSAGE_KEY] == "The admin API returned 403."
+
+    async def test_both_surfaces_agree_on_the_same_verdict(self) -> None:
+        # One helper feeds both rows precisely so support reads the same answer
+        # whichever surface they land on.
+        def _verdict() -> PreflightOutput:
+            return PreflightOutput(
+                status=PreflightStatus.NOT_READY,
+                checks=[
+                    PreflightCheck(
+                        name="scannerApiAvailability",
+                        passed=False,
+                        error=AppPermissionDeniedError(
+                            message="The admin API returned 403."
+                        ),
+                    )
+                ],
+            )
+
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(_verdict())(PreflightGateInput())
+        gate = _outcome_event(ml)
+
+        log = mock.MagicMock()
+        emit_preflight_check_outcome(
+            log, "myapp", _verdict(), surface=PreflightSurface.SDR
+        )
+        interactive = log.error.call_args.kwargs
+
+        keys = (FAILURE_CHECK_KEY, FAILURE_MESSAGE_KEY)
+        assert {k: gate[k] for k in keys} == {k: interactive[k] for k in keys}
