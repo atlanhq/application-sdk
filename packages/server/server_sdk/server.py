@@ -291,27 +291,45 @@ def _scan_generated(gen_dir: Path) -> list[Path]:
     return sorted(gen_dir.rglob("*.json"))
 
 
-def _default_generated_dir() -> Path:
+def _default_generated_dir(app_name: str) -> Path:
     """Where to read generated contracts from when the app names no directory.
 
-    ``ATLAN_CONTRACT_GENERATED_DIR`` is honoured only when it points at a
-    directory that exists. Two failure modes make that check load-bearing in a
-    consolidated host, and both were observed live: an EMPTY value makes
-    ``Path("")`` the process CWD, so the configmap routes walk the whole
-    filesystem tree under it and serve every co-hosted app's setup forms; and a
-    NON-EMPTY value is a single process-global path that cannot be right for more
-    than one of five apps, so honouring a stale one blanks every app's manifests.
-    An unusable override is therefore ignored in favour of the app-local default.
+    ``ATLAN_CONTRACT_GENERATED_DIR`` is process-global, and on the consolidated
+    host one value cannot be right for eight apps. Three failure modes, all
+    observed: an EMPTY value makes ``Path("")`` the CWD, so the configmap routes
+    walk the whole tree under it and serve every co-hosted app's forms; a
+    NON-EXISTENT value blanks the app's manifests; and a value that exists but
+    belongs to ANOTHER app makes this app serve that app's setup form and
+    manifest, which is the quiet one -- an HTTP 200 carrying the wrong
+    connector's wizard.
+
+    So it is honoured only when this process IS this app. The host sets
+    ``ATLAN_APPLICATION_NAME`` to its own name, never to a hosted app's (that
+    pinning is the migration guide's trap 1), which makes the comparison an
+    exact standalone-vs-hosted test. A hosted app that wants generated files
+    must pass ``generated_dir=`` -- there is no process-global answer for it.
     """
     override = os.environ.get("ATLAN_CONTRACT_GENERATED_DIR", "").strip()
-    if override and Path(override).is_dir():
-        return Path(override)
-    if override:
+    if not override:
+        return Path("app/generated")
+
+    if os.environ.get("ATLAN_APPLICATION_NAME", "").strip() != app_name:
         logger.warning(
-            "Ignoring ATLAN_CONTRACT_GENERATED_DIR=%r: not an existing directory. "
-            "Falling back to the app-local default.",
+            "Ignoring ATLAN_CONTRACT_GENERATED_DIR=%r for app %r: it is a "
+            "process-global path and this process is not that app, so it would "
+            "serve another app's forms. Pass generated_dir= instead.",
             override,
+            app_name,
         )
+        return Path("app/generated")
+
+    if Path(override).is_dir():
+        return Path(override)
+    logger.warning(
+        "Ignoring ATLAN_CONTRACT_GENERATED_DIR=%r: not an existing directory. "
+        "Falling back to the app-local default.",
+        override,
+    )
     return Path("app/generated")
 
 
@@ -673,7 +691,9 @@ def build_asgi_app(
             )
 
     gen_dir = (
-        Path(generated_dir) if generated_dir is not None else _default_generated_dir()
+        Path(generated_dir)
+        if generated_dir is not None
+        else _default_generated_dir(app_name)
     )
     generated_files = _scan_generated(gen_dir)
     # Fallback candidates, resolved once from the cached scan rather than by
