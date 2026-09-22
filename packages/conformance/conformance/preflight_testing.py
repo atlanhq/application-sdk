@@ -231,39 +231,96 @@ def assert_extraction_scheduled(
 
 def pytest_addoption(parser: Any) -> None:
     parser.addoption("--preflight-report")
-    parser.addoption("--preflight-rules", default="F016,F017,F018")
+    # No default: "unset" and "scoped to these rules" are different requests,
+    # and a default string cannot express the first. Unset means "record every
+    # marked scenario and deselect nothing", which is what lets an ordinary
+    # test run produce a report as a by-product. The suite's own subprocess
+    # always passes this explicitly.
+    parser.addoption("--preflight-rules", default=None)
+
+
+#: Set by ``pytest_configure``. ``pytest_collectreport``'s hookspec passes
+#: only the report, which carries no route back to the config, and this is a
+#: module plugin with no instance to hang state on — so the config is stashed
+#: here. One session per process, so there is nothing to collide with.
+_CONFIG: Any = None
 
 
 def pytest_configure(config: Any) -> None:
+    global _CONFIG
     config.addinivalue_line(
         "markers",
         "preflight_conformance(rule, scenario, entrypoint): executable preflight scenario",
     )
     config._preflight_evidence = {"tests": {}, "collection_errors": 0}
+    _CONFIG = config
+
+
+def pytest_collectreport(report: Any) -> None:
+    """Count collection failures, so the readers' guard on them is real.
+
+    ``collection_errors`` was initialised to 0 and never incremented, which
+    made it a field that reads like a safety check in both
+    ``_behavior._execute`` and ``_behavior._load`` while proving nothing.
+    ``_execute`` was covered anyway by its subprocess's return code, and
+    ``_load`` now checks ``exitstatus`` — but neither catches a run under
+    ``--continue-on-collection-errors``, where pytest reports the failed
+    collection and still exits 1. A module that failed to import is not a
+    matrix that ran.
+    """
+    if _CONFIG is None or report.outcome != "failed":
+        return
+    evidence = getattr(_CONFIG, "_preflight_evidence", None)
+    if isinstance(evidence, dict):
+        evidence["collection_errors"] = evidence.get("collection_errors", 0) + 1
+
+
+def _register(config: Any, item: Any, data: dict[str, Any]) -> None:
+    """Record one marked scenario so the report can grade it later."""
+    config._preflight_evidence["tests"][item.nodeid] = {
+        "rule": data.get("rule"),
+        "scenario": data.get("scenario"),
+        "entrypoint": data.get("entrypoint", "default"),
+        "unsupported": bool(data.get("unsupported")),
+        "reason": bool(str(data.get("reason", "")).strip()),
+        "file": item.location[0],
+        "line": item.location[1] + 1,
+        "phases": {},
+    }
 
 
 def pytest_collection_modifyitems(config: Any, items: list[Any]) -> None:
+    """Register the marked scenarios; deselect the rest only when scoped.
+
+    Two callers, two needs. The suite's bounded subprocess passes
+    ``--preflight-rules`` and wants nothing but those scenarios, so the
+    rest is deselected — running an app's whole test suite inside a
+    conformance check would be indefensible.
+
+    An ordinary test run passes no rule scoping. It wants every test it
+    collected to still run, and the report as a by-product, so the
+    scenarios execute exactly once and serve both the coverage run and
+    the conformance verdict. Deselecting there would silently gut the
+    caller's test job, which is why "unset" cannot be a default string.
+    """
     if not config.getoption("--preflight-report"):
         return
-    selected = set(config.getoption("--preflight-rules").split(","))
-    kept, removed = [], []
+    rules = config.getoption("--preflight-rules")
+    scoping = rules is not None
+    selected = set(rules.split(",")) if scoping else set(SCENARIOS)
+    kept: list[Any] = []
+    removed: list[Any] = []
     for item in items:
         marker = item.get_closest_marker("preflight_conformance")
-        if marker is None or marker.kwargs.get("rule") not in selected:
+        if marker is not None and marker.kwargs.get("rule") in selected:
+            _register(config, item, dict(marker.kwargs))
+            kept.append(item)
+        elif scoping:
             removed.append(item)
-            continue
-        kept.append(item)
-        data = marker.kwargs
-        config._preflight_evidence["tests"][item.nodeid] = {
-            "rule": data.get("rule"),
-            "scenario": data.get("scenario"),
-            "entrypoint": data.get("entrypoint", "default"),
-            "unsupported": bool(data.get("unsupported")),
-            "reason": bool(str(data.get("reason", "")).strip()),
-            "file": item.location[0],
-            "line": item.location[1] + 1,
-            "phases": {},
-        }
+        else:
+            kept.append(item)
+    if not scoping:
+        return
     items[:] = kept
     config.hook.pytest_deselected(items=removed)
 

@@ -538,6 +538,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run static analysis only (default); TEST rules are reported as not evaluated.",
     )
+    execution.add_argument(
+        "--preflight-report",
+        metavar="FILE",
+        help=(
+            "Grade the preflight scenarios from a report an earlier pytest run "
+            "wrote, instead of executing them here. Produce it with "
+            "`pytest -p conformance.preflight_testing --preflight-report=FILE`. "
+            "Same grading as --with-tests; the scenarios just run once, in the "
+            "job that already installs the app. An unreadable report grades as "
+            "an execution error, never as conformance."
+        ),
+    )
     parser.add_argument(
         "--test-timeout",
         type=float,
@@ -673,7 +685,8 @@ def main(argv: list[str] | None = None) -> int:
     # with --with-tests therefore has to execute those scenarios even when
     # --rule narrowed them out, or the clearing pass below has no evidence to
     # act on.  Their own findings are dropped again by the --rule filter.
-    if args.with_tests and "F019" in selected_rules:
+    behavioral = bool(args.with_tests or args.preflight_report)
+    if behavioral and "F019" in selected_rules:
         from conformance.suite.checks.preflight._common import SCENARIO_COVERAGE
 
         test_rules |= {
@@ -696,7 +709,7 @@ def main(argv: list[str] | None = None) -> int:
                 for prefix in excluded_prefixes
             )
         )
-    if args.with_tests and test_rules:
+    if behavioral and test_rules:
         from conformance.suite.checks.preflight._behavior import run_behavior
         from conformance.suite.checks.preflight._common import (
             build_registry,
@@ -716,6 +729,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.test_timeout,
                 entries if scope == "app" else ("default",),
                 args.test_python,
+                Path(args.preflight_report) if args.preflight_report else None,
             )
             all_findings.extend(result.findings)
             behavior_summary.update(result.summary)
