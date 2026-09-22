@@ -36,15 +36,20 @@ _TRACEBACK_MAX_LEN = 8000
 #: Recursion bound for :func:`redact_wire_value`. A pathologically deep
 #: hand-built structure must truncate rather than overflow the stack.
 _REDACT_MAX_DEPTH: int = 32
-# Matches userinfo in URLs for any scheme: https://user:pass@host → https://***@host,
-# postgresql://user:pass@host → postgresql://***@host (SQLAlchemy/JDBC-style
-# connection strings embed credentials the same way http URLs do).
-# `(?:[^@\s]+@)+` consumes *all* userinfo segments greedily so a raw `@` inside
-# the password (postgresql://u:p@ss@host) doesn't leave the tail exposed. This
-# is greedy up to the last `@` in a whitespace-free run, so it can over-redact a
-# trailing `@` in a no-space query string — the safe failure direction for a
-# secret redactor.
-_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNORECASE)
+# Matches URL userinfo that carries a password: ``scheme://user:pass@host`` →
+# ``scheme://***@host``, any scheme (SQLAlchemy/JDBC/Redis-style included, so
+# ``redis://:s3cret@host`` with an empty user is covered). The userinfo must
+# contain a ``:`` and must end at an ``@`` before any ``/``. A bare username is
+# NOT a credential and is left alone: the earlier greedy form (any run up to
+# the last ``@``) wiped the container in ``abfss://container@account`` and
+# everything up to an e-mail address sitting in a query string — tolerable in
+# a log string, not in a ``FailureDetails.message`` the Automation Engine shows
+# to a person. A password containing ``@`` is still taken whole: once a
+# password-bearing userinfo is found, further ``xxx@`` runs before the first
+# ``/`` belong to it.
+_URL_USERINFO_RE = re.compile(
+    r"([a-z][a-z0-9+.-]*://)(?:[^@\s/]*:[^@\s/]*@)(?:[^@\s/]*@)*", re.IGNORECASE
+)
 # Matches secret query params: api_key=value → api_key=***
 # ``pwd`` covers ODBC/DSN keyword syntax (``UID=sa;PWD=…``), which no other
 # keyword here matches — ODBC connectors do not use ``password=``.
