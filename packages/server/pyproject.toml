@@ -74,6 +74,11 @@ test = [
     # the capability extras this package defines have to be installed for them
     # to run rather than silently skip.
     "atlan-application-sdk-server[sql,aws,workflow]",
+    # Test-only, never a runtime dependency: the tolerant-decoder seam lives in
+    # psycopg2's `extensions.encodings` map, and without the driver installed
+    # those tests skip -- which is exactly how the psycopg2 half of the decoder
+    # shipped as a silent no-op in the first place.
+    "psycopg2-binary>=2.9.9",
 ]
 
 [tool.hatch.build.targets.wheel]

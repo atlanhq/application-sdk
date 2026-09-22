@@ -43,3 +43,48 @@ jobs:
           # present, then run its suite (testpaths = ["tests"], asyncio_mode = auto).
           uv sync --all-extras --all-groups
           uv run pytest -v
+
+      - name: Prove the THIN base install still imports
+        working-directory: packages/server
+        # The consolidated host installs this package with NO capability extras
+        # and mounts eight apps in one process. The suite above always has
+        # sqlalchemy, boto3 and temporalio present, so a top-level `import
+        # sqlalchemy` added to clients/sql.py would keep every test green and
+        # then ImportError at mount time on the host -- taking all eight apps
+        # down, not just the one that changed. Nothing else in this repo
+        # exercises the shape that actually ships.
+        run: |
+          set -euo pipefail
+          uv venv .venv-base
+          uv pip install --python .venv-base .
+          .venv-base/bin/python - <<'PROBE'
+          import pkgutil, importlib, sys
+          import server_sdk
+
+          # Modules a capability extra deliberately gates. Anything else that
+          # fails to import on the base install is the regression this guards.
+          GATED = {"server_sdk.workflow.temporal"}
+          failed = {}
+          for mod in pkgutil.walk_packages(server_sdk.__path__, "server_sdk."):
+              try:
+                  importlib.import_module(mod.name)
+              except Exception as exc:
+                  failed[mod.name] = f"{type(exc).__name__}: {exc}"
+
+          unexpected = {k: v for k, v in failed.items() if k not in GATED}
+          if unexpected:
+              for name, err in sorted(unexpected.items()):
+                  print(f"BASE INSTALL BROKEN: {name} -> {err}", file=sys.stderr)
+              sys.exit(1)
+
+          # And it must still build a working app, not merely import.
+          from server_sdk.handler.base import DefaultHandler
+          from server_sdk.server import build_asgi_app
+
+          app = build_asgi_app(DefaultHandler(), app_name="base-install-probe")
+          assert app.state.app_name == "base-install-probe"
+          paths = len(app.openapi()["paths"])
+          assert paths > 0, "base install built an app with no routes"
+          print(f"base install OK: {len(list(pkgutil.walk_packages(server_sdk.__path__)))} "
+                f"top-level modules, {paths} paths, gated-out: {sorted(GATED)}")
+          PROBE

@@ -176,7 +176,7 @@ def register_manifest_routes(
             logger.warning(
                 "Manifest %s still carries the {app_name} token; substituting %r. "
                 "The committed manifest is stale -- regenerate it.",
-                path.name,
+                path.relative_to(generated_dir),
                 app_name,
             )
         raw = raw.replace(b"{app_name}", app_name.encode()).replace(
