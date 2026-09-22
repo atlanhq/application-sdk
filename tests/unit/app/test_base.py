@@ -1446,6 +1446,9 @@ class TestGenerateWorkflowClass:
             assert not call.kwargs.get(
                 "exc_info"
             ), "Preflight block must not include exc_info=True"
+            # The reason is the block's own line — not Temporal's rendering of
+            # the wrapper, which prefixes the type or says "Activity task failed".
+            assert call.kwargs.get("reason") == "source unreachable"
         # Also confirm no error-level call was made for the gate block
         error_calls = [
             c

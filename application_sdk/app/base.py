@@ -2946,9 +2946,11 @@ def generate_workflow_class(
             with workflow.unsafe.imports_passed_through():
                 from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
                     is_preflight_block,
+                    preflight_block_message,
                 )
             # A deliberate preflight-gate block logs terse (classification already
-            # on the error's FailureDetails); the marker may sit on a cause.
+            # on the error's FailureDetails); the marker may sit on a cause, so
+            # the reason is read off the block itself, not Temporal's wrapper.
             if is_preflight_block(e):
                 _safe_log(
                     "warning",
@@ -2956,7 +2958,7 @@ def generate_workflow_class(
                     app_name=app_name,
                     run_id=str(run_id),
                     correlation_id=context.correlation_id,
-                    reason=str(e),
+                    reason=preflight_block_message(e) or str(e),
                 )
             else:
                 _safe_log(
