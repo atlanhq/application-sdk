@@ -1,7 +1,4 @@
-"""Tests for .github/actions/e2e-tenant-lease/e2e_tenant_lease.py.
-
-Co-located module (checked out with the composite action in consumer repos); the
-test lives here with the other action-script tests.
+"""Tests for .github/scripts/e2e_tenant_lease.py.
 
 The HTTP client is stubbed at the ``run()`` seam with a fake that speaks real
 curl-shaped responses, so status-code handling — 422 "already exists" (which IS
@@ -30,28 +27,31 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(
-    0, str(Path(__file__).parent.parent.parent / "actions" / "e2e-tenant-lease")
-)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from e2e_tenant_lease import (  # noqa: E402
+# The transport is shared with the DataForge refcount and lives in one module
+# (FND-2674); the lease imports it rather than carrying a copy, so the seam these
+# tests stub — and the names they exercise it through — are _gh_refs'.
+from _gh_refs import (  # noqa: E402
     Holder,
     RateLimited,
     _denied,
     _rate_limited,
+    delete_ref,
+    gh_request,
+    holder_is_live,
+    slug,
+    try_create_ref,
+)
+from e2e_tenant_lease import (  # noqa: E402
     acquire,
     acquire_ordered,
     create_identity_blob,
-    gh_request,
-    holder_is_live,
     lease_ref,
     main,
     read_holder,
     release,
     release_all,
-    release_ref,
-    slug,
-    try_acquire,
     verify_held,
     write_outputs,
 )
@@ -122,7 +122,7 @@ class _completed:
 def http(monkeypatch: pytest.MonkeyPatch) -> FakeHTTP:
     monkeypatch.setenv("GH_TOKEN", "x")
     fake = FakeHTTP()
-    monkeypatch.setattr("e2e_tenant_lease.run", fake)
+    monkeypatch.setattr("_gh_refs.run", fake)
     return fake
 
 
@@ -221,14 +221,14 @@ def test_different_apps_on_one_cloud_do_not_share_a_lease() -> None:
 
 def test_try_acquire_reports_acquired_on_201(http: FakeHTTP) -> None:
     http.route("POST", "/git/refs", (201, {"ref": REF}))
-    assert try_acquire(REPO, REF, BLOB) == "acquired"
+    assert try_create_ref(REPO, REF, BLOB) == "acquired"
 
 
 def test_try_acquire_reports_occupied_on_422(http: FakeHTTP) -> None:
     # This is the lock, not an error path: GitHub evaluates ref creation
     # atomically, so of N simultaneous callers exactly one sees 201.
     http.route("POST", "/git/refs", (422, {"message": "Reference already exists"}))
-    assert try_acquire(REPO, REF, BLOB) == "occupied"
+    assert try_create_ref(REPO, REF, BLOB) == "occupied"
 
 
 @pytest.mark.parametrize("status", [401, 403, 404])
@@ -236,7 +236,7 @@ def test_try_acquire_reports_denied_without_ref_write(
     http: FakeHTTP, status: int
 ) -> None:
     http.route("POST", "/git/refs", (status, {"message": "Resource not accessible"}))
-    assert try_acquire(REPO, REF, BLOB) == "denied"
+    assert try_create_ref(REPO, REF, BLOB) == "denied"
 
 
 def test_try_acquire_raises_on_an_unrelated_422(http: FakeHTTP) -> None:
@@ -244,7 +244,7 @@ def test_try_acquire_raises_on_an_unrelated_422(http: FakeHTTP) -> None:
     # not be swallowed as "someone else holds the lease".
     http.route("POST", "/git/refs", (422, {"message": "Object does not exist"}))
     with pytest.raises(SystemExit):
-        try_acquire(REPO, REF, BLOB)
+        try_create_ref(REPO, REF, BLOB)
 
 
 def test_identity_blob_records_the_run_and_its_acquisition_time(
@@ -263,7 +263,7 @@ def test_the_lease_ref_points_at_the_identity_blob(http: FakeHTTP) -> None:
     # separate "who holds it" write would leave a window with an unidentifiable
     # holder.
     http.route("POST", "/git/refs", (201, {"ref": REF}))
-    try_acquire(REPO, REF, BLOB)
+    try_create_ref(REPO, REF, BLOB)
     assert http.payloads[0] == {"ref": REF, "sha": BLOB}
 
 
@@ -288,7 +288,7 @@ def test_try_acquire_raises_rather_than_denying_on_a_rate_limit(
 ) -> None:
     http.route("POST", "/git/refs", _SECONDARY_LIMIT)
     with pytest.raises(RateLimited) as raised:
-        try_acquire(REPO, REF, BLOB)
+        try_create_ref(REPO, REF, BLOB)
     assert raised.value.retry_after == 45
 
 
@@ -836,7 +836,7 @@ def test_a_transient_transport_failure_is_retried(
             return _curl_failed()
         return _completed('HTTP/2 201\r\n\r\n{"sha": "abc"}')
 
-    monkeypatch.setattr("e2e_tenant_lease.run", flaky)
+    monkeypatch.setattr("_gh_refs.run", flaky)
     response = gh_request("POST", "probe", {"x": 1}, sleep=lambda _s: None)
     assert response.status == 201
     assert len(attempts) == 2
@@ -848,7 +848,7 @@ def test_a_persistent_transport_failure_still_fails(
     # Retries absorb a blip, not an outage — and a lease that cannot be reached
     # must not be quietly treated as free.
     monkeypatch.setenv("GH_TOKEN", "x")
-    monkeypatch.setattr("e2e_tenant_lease.run", lambda cmd, **kw: _curl_failed())
+    monkeypatch.setattr("_gh_refs.run", lambda cmd, **kw: _curl_failed())
     with pytest.raises(SystemExit, match="after 3 attempts"):
         gh_request("GET", "probe", sleep=lambda _s: None)
 
@@ -859,7 +859,7 @@ def test_a_5xx_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
         _completed("HTTP/2 502\r\n\r\n"),
         _completed('HTTP/2 200\r\n\r\n{"ok": true}'),
     ]
-    monkeypatch.setattr("e2e_tenant_lease.run", lambda cmd, **kw: answers.pop(0))
+    monkeypatch.setattr("_gh_refs.run", lambda cmd, **kw: answers.pop(0))
     assert gh_request("GET", "probe", sleep=lambda _s: None).status == 200
 
 
@@ -870,7 +870,7 @@ def test_a_persistent_5xx_is_returned_rather_than_raised(
     # lease is held), which is safer than aborting the job.
     monkeypatch.setenv("GH_TOKEN", "x")
     monkeypatch.setattr(
-        "e2e_tenant_lease.run", lambda cmd, **kw: _completed("HTTP/2 503\r\n\r\n")
+        "_gh_refs.run", lambda cmd, **kw: _completed("HTTP/2 503\r\n\r\n")
     )
     assert gh_request("GET", "probe", sleep=lambda _s: None).status == 503
 
@@ -885,14 +885,14 @@ def test_a_4xx_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
         attempts.append(1)
         return _completed('HTTP/2 422\r\n\r\n{"message": "Reference already exists"}')
 
-    monkeypatch.setattr("e2e_tenant_lease.run", counting)
+    monkeypatch.setattr("_gh_refs.run", counting)
     assert gh_request("POST", "probe", {"x": 1}, sleep=lambda _s: None).status == 422
     assert len(attempts) == 1
 
 
 def test_transport_backoff_grows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GH_TOKEN", "x")
-    monkeypatch.setattr("e2e_tenant_lease.run", lambda cmd, **kw: _curl_failed())
+    monkeypatch.setattr("_gh_refs.run", lambda cmd, **kw: _curl_failed())
     slept: list[int] = []
     with pytest.raises(SystemExit):
         gh_request("GET", "probe", sleep=slept.append)
@@ -1059,7 +1059,7 @@ def test_release_is_quiet_when_the_lease_is_already_gone(http: FakeHTTP) -> None
 
 def test_release_ref_tolerates_an_already_deleted_ref(http: FakeHTTP) -> None:
     http.route("DELETE", "/git/refs/", (422, {"message": "Reference does not exist"}))
-    assert release_ref(REPO, REF) is False
+    assert delete_ref(REPO, REF) is False
 
 
 # --- outputs ---------------------------------------------------------------
@@ -1251,7 +1251,7 @@ def test_missing_token_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     with pytest.raises(SystemExit, match="GH_TOKEN"):
-        try_acquire(REPO, REF, BLOB)
+        try_create_ref(REPO, REF, BLOB)
 
 
 def test_token_is_not_in_the_curl_command_line(http: FakeHTTP) -> None:
@@ -1264,7 +1264,7 @@ def test_token_is_not_in_the_curl_command_line(http: FakeHTTP) -> None:
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("GH_TOKEN", secret)
         http.route("POST", "/git/refs", (422, {"message": "Reference already exists"}))
-        try_acquire(REPO, REF, BLOB)
+        try_create_ref(REPO, REF, BLOB)
 
     cmd = http.cmds[0]
     assert not any(secret in arg for arg in cmd), "token leaked into curl argv"
@@ -1287,7 +1287,7 @@ def test_every_transport_retry_still_carries_the_credential(
             return _curl_failed()
         return _completed('HTTP/2 201\r\n\r\n{"sha": "abc"}')
 
-    monkeypatch.setattr("e2e_tenant_lease.run", flaky)
+    monkeypatch.setattr("_gh_refs.run", flaky)
     gh_request("POST", "probe", {"x": 1}, sleep=lambda _s: None)
 
     assert len(seen) == 2
@@ -1648,12 +1648,7 @@ def test_main_release_gives_back_the_whole_set(
 # --- the wait has to be visible while it is waiting ------------------------
 
 
-_LEASE_SCRIPT = (
-    Path(__file__).parent.parent.parent
-    / "actions"
-    / "e2e-tenant-lease"
-    / "e2e_tenant_lease.py"
-)
+_LEASE_SCRIPT = Path(__file__).parent.parent / "e2e_tenant_lease.py"
 
 
 def test_the_wait_log_streams_rather_than_arriving_at_exit() -> None:
