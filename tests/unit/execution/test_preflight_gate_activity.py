@@ -2871,3 +2871,42 @@ class TestOutcomeRowNamesTheFailure:
         # this verdict; the two used to split here.
         assert kwargs["reason"] == "AUTH"
         assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
+
+    async def test_row_and_raised_error_agree_when_only_the_aggregate_message_is_set(
+        self,
+    ) -> None:
+        # An un-migrated handler puts the sentence on result.message and marks a
+        # check failed with no text of its own. details[0] and the row must
+        # carry that sentence — the raised error's message already did, and the
+        # Body line is built from it, so anything else contradicts Body.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            message="The admin API (admin/workspaces/modified) returned 403.",
+            checks=[PreflightCheck(name="scannerApiAvailability", passed=False)],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_MESSAGE_KEY] == (
+            "The admin API (admin/workspaces/modified) returned 403."
+        )
+        assert ev[FAILURE_CHECK_KEY] == "scannerApiAvailability"
+        # Same string, by construction: the error's message is the prefix plus
+        # exactly what the row carries.
+        assert excinfo.value.message == f"Preflight failed: {ev[FAILURE_MESSAGE_KEY]}"
+        assert excinfo.value.details[0].message == ev[FAILURE_MESSAGE_KEY]
+
+    async def test_untyped_message_is_redacted_in_the_raised_error_too(self) -> None:
+        # The raised error's message becomes exception.message on the adjacent
+        # record. It is built from raw PreflightOutput.message, which the
+        # envelope validator never sees — so it must be redacted where built.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            message="connect postgres://u:pw@h/db?password=hunter2 refused",
+            checks=[PreflightCheck(name="conn", passed=False)],
+        )
+        with mock.patch(_LOGGER), pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert "hunter2" not in excinfo.value.message
+        assert "u:pw@" not in excinfo.value.message
+        assert "refused" in excinfo.value.message

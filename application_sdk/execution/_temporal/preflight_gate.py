@@ -1074,7 +1074,26 @@ def _primary_failure(result: PreflightOutput, app_name: str) -> FailureDetails:
     )
     if primary_error is not None:
         return _stamped(primary_error, app_name)
-    return _fallback_failure(failed[0].resolved_message if failed else "", app_name)
+    return _fallback_failure(_fallback_message(result), app_name)
+
+
+def _fallback_message(result: PreflightOutput) -> str:
+    """The sentence an untyped ``NOT_READY`` verdict is attributed to.
+
+    The aggregate's own line first — a handler that sets ``result.message`` is
+    describing the verdict, and the docstring on :attr:`PreflightOutput.error`
+    has always promised this rung; every failed check's line joined next, so a
+    multi-failure verdict loses none of them; a fixed line last. One source for
+    two consumers: the untyped ``details[0].message`` (via
+    :func:`_fallback_failure`) and the raised error's message in
+    :func:`_gate_error`, so for an untyped verdict the row, the wire envelope,
+    ``exception.message`` and the interceptor's ``Body`` line carry one string
+    by construction. Not redacted here — each consumer redacts where it lands
+    (the envelope validator; ``_gate_error`` explicitly).
+    """
+    failed = [c for c in result.checks if not c.passed]
+    joined = "; ".join(m for m in (c.resolved_message for c in failed) if m)
+    return result.resolved_message or joined or "Preflight check failed"
 
 
 def _stamped(details: FailureDetails, app_name: str) -> FailureDetails:
@@ -1134,14 +1153,15 @@ def _gate_error(
         ApplicationError,
     )
 
-    failed = [c for c in result.checks if not c.passed]
     details = _primary_failure(result, app_name)
-    joined = "; ".join(m for m in (c.resolved_message for c in failed) if m)
-    reason = (
-        result.resolved_message
-        or joined
-        or "Preflight check failed; aborting before extraction"
-    )
+    # The same ladder details[0] falls back to, so for an untyped verdict the
+    # raised message, exception.message and the row's failure.message are one
+    # string. A typed verdict with several failed checks lists every line here
+    # (the Temporal pane reads this) while details[0] carries the primary's —
+    # the row's line is then a subset of Body's, never a different sentence.
+    # Redacted here: this is built from raw handler strings the envelope
+    # validator never sees.
+    reason = redact_secrets(_fallback_message(result))
     return ApplicationError(
         f"{message_prefix}: {reason}",
         details,
