@@ -249,6 +249,22 @@ on:
         required: false
         default: false
         type: boolean
+      with-tests:
+        description: >
+          When true, the F-series (preflight) leg executes its registered scenarios
+          in a bounded pytest subprocess instead of reporting the TEST rules
+          (F016-F018) as not evaluated.  This also resolves the value-level findings
+          F019 reports under static-only analysis: a computed `checks` aggregation
+          cannot have its mandatory/advisory roles or short-circuiting resolved
+          without executed scenarios, so a conforming handler still draws an F019
+          WARN on a static run.
+          Cost: the leg additionally syncs the caller's environment (the scenarios
+          import the app) and runs pytest, so it stops being a cheap static leg.
+          That is why it is opt-in and defaults to false rather than being the
+          standing behaviour.  Default: false (static only).
+        required: false
+        default: false
+        type: boolean
     secrets:
       ORG_PAT_GITHUB:
         required: false
@@ -313,6 +329,11 @@ jobs:
             slug: preflight
             paths: "{**/*.py,.github/**,deploy/**,deployment/**,helm/**,k8s/**}"
             exclude_paths: ${{ inputs.exclude-paths-f }}
+            # F016-F018 execute the app's registered preflight scenarios, which
+            # import the app — so under `with-tests` this leg needs the caller's
+            # environment materialised, exactly like the D leg. It stays isolated
+            # (and cheap) when the caller leaves `with-tests` at its false default.
+            needs_env: ${{ inputs.with-tests }}
           - series: O
             name: "Optimizations"
             slug: optimizations
@@ -490,6 +511,7 @@ jobs:
           exit-zero: ${{ inputs.exit-zero }}
           conformance-ref: ${{ inputs.conformance-ref }}
           needs-env: ${{ matrix.needs_env }}
+          with-tests: ${{ inputs.with-tests }}
 
       # `upload-artifact` classifies the artifact service's finalize 403 as
       # non-retryable and fails on the first occurrence, even though the bytes
