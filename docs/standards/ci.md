@@ -413,7 +413,7 @@ is the driver's signature). The stamp then decides which finding it is:
 run on `bounded_lock_refusal_expired`, because reaching that state means the
 reaper did not run — and the reaper never fails its own job, so the outage is
 otherwise silent. Standing faults are printed and never fatal: a wedge a human is
-legitimately still working through must not red a six-hourly job, or the alarm
+legitimately still working through must not red an hourly job, or the alarm
 stops being read.
 
 The self-healing vocabulary lives twice — in the driver that writes stamps and in
