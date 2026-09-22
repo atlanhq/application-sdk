@@ -10,6 +10,7 @@ runner, so these are deliberately YAML-shape assertions.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -60,11 +61,118 @@ def test_both_jobs_gated_on_opt_in_and_resource_mode(jobs: dict) -> None:
         assert "inputs.dataforge-mode == 'resource'" in cond, job
 
 
+# `inputs.x`, `needs.j.result`, `needs.j.outputs.k` — the only context reads the
+# wake condition makes. Anything else it grows must be added to the contexts below
+# rather than silently defaulting, so _evaluate raises on an unknown token.
+_CONTEXT_READ = re.compile(
+    r"inputs\.[A-Za-z0-9_-]+"
+    r"|needs\.[A-Za-z0-9_-]+\.result"
+    r"|needs\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_-]+"
+)
+
+
+def _evaluate(cond: str, context: dict[str, object]) -> bool:
+    """Evaluate a GitHub Actions job `if:` against a context.
+
+    Substring assertions cannot catch the bug this guards: an unguarded
+    `needs.<job>.outputs.count != '0'` clause is present in the condition either
+    way, and is constant-TRUE when the job was skipped (skipped ⇒ outputs are '',
+    and '' != '0'). Only evaluating the whole expression against a skipped-job
+    context distinguishes the two. `&&`/`||` share Python's and/or precedence, so
+    the translation is faithful for the boolean-and-comparison subset used here.
+    """
+
+    def _value(match: re.Match[str]) -> str:
+        key = match.group(0)
+        if key not in context:
+            raise AssertionError(f"condition reads {key}; add it to the test context")
+        return repr(context[key])
+
+    expr = _CONTEXT_READ.sub(_value, cond.replace("always()", "True"))
+    expr = expr.replace("&&", " and ").replace("||", " or ")
+    return bool(eval(expr, {"__builtins__": {}}, {}))  # noqa: S307 — our own file
+
+
+def _wake_context(**overrides: object) -> dict[str, object]:
+    """An opted-in resource-mode connector whose e2e legs will run."""
+    base: dict[str, object] = {
+        "inputs.dataforge-lifecycle": True,
+        "inputs.dataforge-datasource": "teradata",
+        "inputs.dataforge-mode": "resource",
+        "needs.detect-integration.result": "success",
+        "needs.detect-integration.outputs.count": "3",
+        "needs.discover-e2e.result": "success",
+        "needs.discover-e2e.outputs.count": "2",
+    }
+    return base | overrides
+
+
 def test_wake_only_when_a_source_is_consumed(jobs: dict) -> None:
     # Chris gap: don't wake a paid instance for a run that reads it nowhere.
     cond = _job_if(jobs, "wake-dataforge-source")
-    assert "needs.detect-integration.outputs.count != '0'" in cond
-    assert "needs.discover-e2e.outputs.count != '0'" in cond
+
+    assert _evaluate(cond, _wake_context()), "a run that consumes the source"
+    # Either consumer on its own is enough.
+    assert _evaluate(
+        cond,
+        _wake_context(
+            **{
+                "needs.detect-integration.outputs.count": "0",
+            }
+        ),
+    ), "e2e legs alone consume the source"
+    assert _evaluate(
+        cond,
+        _wake_context(
+            **{
+                "needs.discover-e2e.result": "skipped",
+                "needs.discover-e2e.outputs.count": "",
+            }
+        ),
+    ), "the integration tier alone consumes the source"
+
+    # The regression this exists for: a unit-only PR. detect-integration ran and
+    # found nothing; discover-e2e was SKIPPED for want of the `e2e` label, so its
+    # outputs are '' — and an unguarded `'' != '0'` reads as "e2e will run".
+    assert not _evaluate(
+        cond,
+        _wake_context(
+            **{
+                "needs.detect-integration.outputs.count": "0",
+                "needs.discover-e2e.result": "skipped",
+                "needs.discover-e2e.outputs.count": "",
+            }
+        ),
+    ), "a unit-only run must not wake the pin"
+
+    # And the opt-in still dominates a run that would otherwise consume it.
+    assert not _evaluate(cond, _wake_context(**{"inputs.dataforge-lifecycle": False}))
+    assert not _evaluate(cond, _wake_context(**{"inputs.dataforge-mode": "managed"}))
+    assert not _evaluate(cond, _wake_context(**{"inputs.dataforge-datasource": ""}))
+
+
+def test_evaluator_would_catch_the_unguarded_count(jobs: dict) -> None:
+    """Red-green proof for the guard above: the old expression must FAIL it.
+
+    Without this, `test_wake_only_when_a_source_is_consumed` passing says nothing
+    about whether the evaluator can tell the two expressions apart.
+    """
+    unguarded = (
+        "always() && inputs.dataforge-lifecycle && "
+        "inputs.dataforge-datasource != '' && inputs.dataforge-mode == 'resource' && "
+        "needs.detect-integration.result == 'success' && "
+        "(needs.detect-integration.outputs.count != '0' || "
+        "needs.discover-e2e.outputs.count != '0')"
+    )
+    unit_only = _wake_context(
+        **{
+            "needs.detect-integration.outputs.count": "0",
+            "needs.discover-e2e.result": "skipped",
+            "needs.discover-e2e.outputs.count": "",
+        }
+    )
+    assert _evaluate(unguarded, unit_only), "the bug: skipped discover reads as 'e2e'"
+    assert not _evaluate(_job_if(jobs, "wake-dataforge-source"), unit_only)
 
 
 def test_legs_need_wake_for_ordering_only(jobs: dict) -> None:

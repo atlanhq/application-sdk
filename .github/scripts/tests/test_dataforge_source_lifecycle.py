@@ -222,6 +222,66 @@ def test_pause_pauses_when_no_other_holder(http: FakeHTTP, df):
     assert df["paused"] == 1
 
 
+def test_pause_defers_to_a_holder_that_arrives_mid_decision(http: FakeHTTP, df):
+    """The TOCTOU window: a token exchange and a state read separate the holder
+    listing from the pause, and wake registers its holder BEFORE it resumes. A
+    run that appears in that window is about to use the source, so the pause must
+    see it on the re-check and stand down."""
+    http.route("DELETE", "/git/refs/", (204, None))
+    http.route(
+        "GET",
+        "/git/matching-refs/",
+        (200, [_matching_ref(1)]),  # deciding: only us
+        (200, [_matching_ref(1), _matching_ref(9)]),  # re-check: run 9 arrived
+    )
+    http.route("GET", "/git/blobs/", (200, _holder_blob(1)), (200, _holder_blob(9)))
+    df["statuses"] = ["PROVISIONED"]
+    assert (
+        pause_source(BASE, RID, REPO, 1, 1, ttl_seconds=16200, now=2000.0)
+        == Outcome.KEPT_AWAKE
+    )
+    assert df["paused"] == 0
+
+
+def test_pause_recheck_ignores_a_holder_it_already_weighed(http: FakeHTTP, df):
+    """The re-check compares against the holders already weighed, not "any
+    holder", so a reap whose DELETE failed cannot wedge the pause off forever —
+    run 9 is dead, was reaped, and still comes back in the second listing."""
+    http.route("DELETE", "/git/refs/", (204, None), (500, None))  # reap delete fails
+    http.route(
+        "GET",
+        "/git/matching-refs/",
+        (200, [_matching_ref(1), _matching_ref(9)]),
+        (200, [_matching_ref(1), _matching_ref(9)]),  # the stale ref survives
+    )
+    http.route("GET", "/git/blobs/", (200, _holder_blob(1)), (200, _holder_blob(9)))
+    http.route("GET", "/actions/runs/9", (200, {"status": "completed"}))
+    df["statuses"] = ["PROVISIONED"]
+    assert (
+        pause_source(BASE, RID, REPO, 1, 1, ttl_seconds=16200, now=2000.0)
+        == Outcome.PAUSED
+    )
+    assert df["paused"] == 1
+
+
+def test_pause_kept_awake_when_the_recheck_listing_fails(http: FakeHTTP, df):
+    """A failed re-check errs the same way as a failed first listing: awake."""
+    http.route("DELETE", "/git/refs/", (204, None))
+    http.route(
+        "GET",
+        "/git/matching-refs/",
+        (200, [_matching_ref(1)]),
+        (403, {"message": "rate limited"}),
+    )
+    http.route("GET", "/git/blobs/", (200, _holder_blob(1)))
+    df["statuses"] = ["PROVISIONED"]
+    assert (
+        pause_source(BASE, RID, REPO, 1, 1, ttl_seconds=16200, now=2000.0)
+        == Outcome.KEPT_AWAKE
+    )
+    assert df["paused"] == 0
+
+
 def test_pause_kept_awake_when_other_run_live(http: FakeHTTP, df):
     http.route("DELETE", "/git/refs/", (204, None))
     http.route(

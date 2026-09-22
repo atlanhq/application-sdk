@@ -311,6 +311,14 @@ def pause_source(
     source awake (the same "err live" call ``holder_is_live`` makes for an
     unreadable run) — pausing on a transient API failure is the one outcome this
     job exists to prevent.
+
+    Holders are listed TWICE: once to decide, and again immediately before the
+    pause, because the token exchange and state read in between leave a window a
+    concurrent wake can arrive in. This is not a mutex — a run that registers
+    after the second listing and before the pause lands can still be paused out
+    from under. Closing that fully needs a CAS/lease on the resource itself; the
+    re-check reduces the window from seconds of network to one API call, which is
+    the right trade while one pin sees at most a handful of concurrent runs.
     """
     now = time.time() if now is None else now
     delete_ref(repo, holder_ref(resource_id, run_id, attempt))
@@ -345,6 +353,36 @@ def pause_source(
         # RESUMING/PROVISIONING is left to settle and be paused on a later pass.
         print(f"dataforge source is {status}; no pause needed.")
         return Outcome.ALREADY
+
+    # Re-check immediately before the pause. The listing above is separated from
+    # this call by a token exchange and a state read — seconds of network — and a
+    # concurrent run's wake registers its holder BEFORE it resumes, so a holder
+    # that appears in that window belongs to a run about to use the source. Wake
+    # ordering its holder first is necessary but not sufficient on its own: it
+    # closes the window only if the pauser looks again after it.
+    #
+    # Compared against the holders already weighed, not "any holder", so a reap
+    # whose delete failed cannot wedge the pause off forever — only a NEWLY
+    # arrived run defers it. A listing failure here errs the same way as above:
+    # leave it awake, and let the next run's pause settle it.
+    weighed = {(h.run_id, h.attempt) for h in holders}
+    try:
+        arrivals = [
+            h
+            for h in list_holders(repo, resource_id)
+            if not h.is_me(run_id, attempt) and (h.run_id, h.attempt) not in weighed
+        ]
+    except RefListError as exc:
+        print(f"::warning::{exc}; leaving the dataforge source awake.")
+        return Outcome.KEPT_AWAKE
+    if arrivals:
+        ids = ", ".join(str(h.run_id) for h in arrivals)
+        print(
+            f"run(s) {ids} registered while this pause was deciding; "
+            "leaving the dataforge source awake."
+        )
+        return Outcome.KEPT_AWAKE
+
     pause_resource(base_url, token, resource_id)
     print("no other holders remain; dataforge source pause requested.")
     return Outcome.PAUSED

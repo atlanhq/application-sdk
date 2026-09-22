@@ -1342,13 +1342,21 @@ jobs:
     # the e2e legs will run — so a run that reads the source nowhere never wakes a
     # paid instance. secrets aren't readable in a job `if:`, so the pin /
     # repo-creds gate is on the steps below (repo creds win; no pin = nothing).
+    #
+    # Each count is paired with its job's `result == 'success'`, and BOTH pairings
+    # are load-bearing: a SKIPPED job's outputs read as '', and '' != '0' is TRUE,
+    # so an unguarded count clause is constant-true exactly when the job did not
+    # run. Without the discover-e2e pairing a unit-only PR (integration count 0,
+    # discover-e2e skipped for want of the `e2e` label) would wake the pin for a
+    # run that reads it nowhere. Same shape the e2e legs and build-e2e-image use.
     if: >-
       always() &&
       inputs.dataforge-lifecycle &&
       inputs.dataforge-datasource != '' &&
       inputs.dataforge-mode == 'resource' &&
       needs.detect-integration.result == 'success' &&
-      (needs.detect-integration.outputs.count != '0' || needs.discover-e2e.outputs.count != '0')
+      (needs.detect-integration.outputs.count != '0' ||
+       (needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
