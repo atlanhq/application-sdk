@@ -181,12 +181,15 @@ _DEBUG_SOURCE_TAIL_RE = re.compile(r"\n+Debug source:\n.*\Z", re.DOTALL)
 def redact_and_cap(text: str) -> str:
     """Redact secrets in ``text``, then cap it, keeping both ends.
 
-    For handler-authored strings that are about to be logged or sent. Unlike
-    :func:`sanitize_cause_repr` it takes a string, not an exception, and adds
-    no type prefix.
+    The one cap block: :func:`sanitize_cause_repr` builds on it for cause
+    exceptions, and the preflight outcome rows call it on the handler's own
+    ``message`` before it becomes a log attribute. Not re-exported from
+    ``application_sdk.errors`` — those are its two consumers.
 
-    Redaction runs *before* truncation, so retaining a tail can never expose an
-    unredacted secret. (FND-957)
+    Truncation keeps both ends because a backend error puts the request URL at
+    the head and what the provider said at the tail; a head-only cut spends the
+    budget on boilerplate. Redaction runs *before* truncation, so retaining a
+    tail can never expose an unredacted secret. (FND-957)
     """
     text = redact_secrets(text)
     if len(text) > _CAUSE_MAX_LEN:
@@ -208,15 +211,8 @@ def sanitize_cause_repr(exc: BaseException) -> str:
     truncation, so retaining a tail can never expose an unredacted secret.
     (FND-957)
     """
-    text = _DEBUG_SOURCE_TAIL_RE.sub("", redact_secrets(str(exc)))
-    if len(text) > _CAUSE_MAX_LEN:
-        elided = len(text) - _CAUSE_HEAD_LEN - _CAUSE_TAIL_LEN
-        text = (
-            text[:_CAUSE_HEAD_LEN]
-            + f"…[{elided} chars elided]…"
-            + text[-_CAUSE_TAIL_LEN:]
-        )
-    return f"{type(exc).__name__}: {text}"
+    text = _DEBUG_SOURCE_TAIL_RE.sub("", str(exc))
+    return f"{type(exc).__name__}: {redact_and_cap(text)}"
 
 
 def safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN) -> str:
