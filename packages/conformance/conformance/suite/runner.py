@@ -18,7 +18,7 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -520,6 +520,30 @@ def parse_rule_ids(raw: str) -> set[str]:
     return ids
 
 
+def _is_excluded(rel: str, excluded_prefixes: tuple[str, ...]) -> bool:
+    """Whether repo-relative POSIX path *rel* falls under an ``--exclude`` prefix.
+
+    Matched on path-component boundaries: ``tools`` covers ``tools`` and
+    ``tools/x.py`` but never ``tools_extra/x.py``.
+    """
+    return any(
+        rel == prefix or rel.startswith(prefix + "/") for prefix in excluded_prefixes
+    )
+
+
+def _drop_excluded(
+    paths: Iterable[Path], root: Path, excluded_prefixes: tuple[str, ...]
+) -> list[Path]:
+    """Return *paths* minus those under an ``--exclude`` prefix of *root*."""
+    if not excluded_prefixes:
+        return list(paths)
+    return [
+        p
+        for p in paths
+        if not _is_excluded(p.relative_to(root).as_posix(), excluded_prefixes)
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Atlan conformance suite runner.")
     parser.add_argument("--repo", default=".", metavar="DIR")
@@ -654,16 +678,7 @@ def main(argv: list[str] | None = None) -> int:
         # (e.g. the all-APP D-series when scanning the SDK itself).
         if not _series_in_scope(check.series, active_scope):
             continue
-        paths: list[Path] = []
-        for p in check.discover(root):
-            if excluded_prefixes:
-                rel = p.relative_to(root).as_posix()
-                if any(
-                    rel == prefix or rel.startswith(prefix + "/")
-                    for prefix in excluded_prefixes
-                ):
-                    continue
-            paths.append(p)
+        paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
         if check.scan_all is not None:
             all_findings.extend(check.scan_all(paths, root))
         else:
@@ -704,10 +719,7 @@ def main(argv: list[str] | None = None) -> int:
         all_findings.extend(
             finding
             for finding in scan_removed_config(root)
-            if not any(
-                finding.file == prefix or finding.file.startswith(prefix + "/")
-                for prefix in excluded_prefixes
-            )
+            if not _is_excluded(finding.file, excluded_prefixes)
         )
     if behavioral and test_rules:
         from conformance.suite.checks.preflight._behavior import run_behavior
@@ -716,7 +728,11 @@ def main(argv: list[str] | None = None) -> int:
             entrypoint_contracts,
         )
 
-        paths = preflight.discover(root)
+        # The expected entrypoint set comes from the same tree the static
+        # checks scanned, so --exclude has to apply here too: a reference
+        # app cloned under an excluded scratch dir would otherwise add its
+        # entrypoints to the matrix this app is graded against.
+        paths = _drop_excluded(preflight.discover(root), root, excluded_prefixes)
         entries = tuple(entrypoint_contracts(build_registry(paths, root))) or (
             "default",
         )

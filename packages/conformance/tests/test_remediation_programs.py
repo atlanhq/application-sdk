@@ -201,7 +201,9 @@ def test_remediate_finding_requires_the_reference_apps() -> None:
     for app in REFERENCE_APPS:
         assert app in text, f"remediate-finding never names {app}"
     assert "`canonical_reference`" in text
-    assert "remediation/refs/" in text
+    # Outside the repo: an in-repo clone is scanned by detect (FND-2682).
+    assert "atlan-conformance/refs" in text
+    assert "remediation/refs" not in text
     assert "git clone" in text
 
 
@@ -352,7 +354,8 @@ def test_bootstrapped_skill_tells_the_runner_to_load_the_reference_apps() -> Non
     )
     for app in REFERENCE_APPS:
         assert app in template, f"bootstrap remediate.md never names {app}"
-    assert "remediation/refs/" in template
+    assert "atlan-conformance/refs" in template
+    assert "remediation/refs" not in template
     assert "migration_brief" in template
     assert "report-rule-defect" in template
     assert "impact.after" in template

@@ -108,7 +108,7 @@ remediation makes a repo worse:
   `atlan-metabase-app`) that already has the shape you are trying to reach.
   It also arrives on every finding as `finding.canonical_reference` (SARIF
   `atlan/canonicalReference`). Open it — the whole file, in a full checkout of
-  the app under `remediation/refs/` — and copy from it, never from an arbitrary
+  the app outside the repo (`$REFS`, see `remediate-finding`) — and copy from it, never from an arbitrary
   connector: a connector may be mid-migration and is not a model of anything.
   Several of these blocks also name the *suppression* the reference app
   carries, which is what a legitimate carve-out looks like when one exists.
