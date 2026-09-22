@@ -341,3 +341,23 @@ pins the agreement against the real builder; a second test pins the fallback.
   and no `Body` line — reachable through `failure.message` only. Acceptable for
   an advisory outcome, but it was an unstated gap. Now stated, in
   `docs/concepts/apps.md` and `docs/agents/coding-standards.md`.
+
+**Follow-up finding, same pass.** `emit_preflight_check_outcome` took `primary`
+off `_proceeded_failure` and then set `reason = result.status.value` anyway, so
+an interactive row that went ahead with a failed check reported `partial` while
+the gate row reported that check's code for the identical verdict — and
+`failure.check` / `failure.message` / `failure.audience` on the interactive row
+came off an object its own `reason` did not. That is the split this revision
+existed to close, surviving inside the function that closes it.
+
+`reason` is now `primary.code` whenever there is a primary, on both surfaces.
+The status is not lost: it is on the same row under `outcome`, which is where a
+consumer filtering for partials should already be looking. A row with nothing
+failed has no primary and keeps the status as its reason.
+
+The behaviour was pinned by `test_partial_keeps_status_reason_but_stamps_audience`
+from #3492, whose name asserted the old intent; it is now
+`test_partial_reason_names_the_failed_check_and_stamps_audience`, with
+`test_a_clean_row_keeps_the_status_as_its_reason` beside it for the no-primary
+half, and a `reason` assertion added to the gate/interactive agreement test.
+Reverting the one line turns two of the three red.

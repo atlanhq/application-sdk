@@ -543,7 +543,11 @@ row is worse than no name. A `frame_lost` block has no checks at all and carries
 Both keys are conditional, like `failure.audience` and unlike the keys above: a clean `proceeded`
 row carries neither. Every row derives `reason`, `failure.audience`, `failure.check` and
 `failure.message` from one object — the block's primary failure, or the first failed check on a run
-that went ahead — so the four cannot disagree with each other. They exist because `reason` is a code and `check_matrix` deliberately holds no messages, so
+that went ahead — so the four cannot disagree with each other. That is what makes `reason` on a row
+that went ahead with a failed check the **code of that check**, on both surfaces, rather than the
+status: the status is already on the same row under `outcome`, and repeating it under `reason` hides
+which check failed on exactly the runs a dashboard needs to rank. With nothing failed there is no
+object to attribute to, and `reason` is the status. They exist because `reason` is a code and `check_matrix` deliberately holds no messages, so
 without them the sentence explaining a block lived only on the adjacent `Completing activity as
 failed` record under `exception.message` — one record away, under a key nobody searches. The same
 two keys are on the interactive `Preflight check outcome` row, from the same helper, so the two

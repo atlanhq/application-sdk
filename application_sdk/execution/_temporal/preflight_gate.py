@@ -1418,10 +1418,17 @@ def emit_preflight_check_outcome(
     primary: FailureDetails | None
     if result.status is PreflightStatus.NOT_READY:
         primary = _primary_failure(result, app_name)
-        reason = primary.code
     else:
         primary = _proceeded_failure(result, app_name)
-        reason = result.status.value
+    # Off the same object as failure.check / failure.message / failure.audience,
+    # never re-derived — the row's four attributed fields cannot disagree. A
+    # partial used to report the status here while the gate row reported the
+    # failed check's code for the identical verdict; the argument _proceeded_failure
+    # makes ("a reason of PARTIAL hides which check failed") is not surface-specific,
+    # and `outcome` carries the status on the same row either way. Only a row with a
+    # failed check changes: with nothing failed there is no primary and the status
+    # stands.
+    reason = primary.code if primary is not None else result.status.value
     extra: dict[str, Any] = {}
     if primary is not None:
         extra[FAILURE_AUDIENCE_KEY] = primary.audience.value

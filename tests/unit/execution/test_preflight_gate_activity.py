@@ -1354,7 +1354,11 @@ class TestEmitPreflightCheckOutcome:
             == _primary_failure(out, "myapp").audience.value
         )
 
-    def test_partial_keeps_status_reason_but_stamps_audience(self) -> None:
+    def test_partial_reason_names_the_failed_check_and_stamps_audience(self) -> None:
+        # This row used to report `partial` while the gate row reported the
+        # failed check's code for the identical verdict. A reason of `partial`
+        # says only what `outcome` on the same row already says, and hides which
+        # check failed — the run a dashboard most needs to rank.
         out = PreflightOutput(
             status=PreflightStatus.PARTIAL,
             checks=[
@@ -1366,8 +1370,20 @@ class TestEmitPreflightCheckOutcome:
         )
         kwargs = self._emit(out, surface=PreflightSurface.HTTP).info.call_args.kwargs
         assert kwargs["outcome"] == "partial"
-        assert kwargs["reason"] == "partial"
+        assert kwargs["reason"] == "AUTH"
         assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
+
+    def test_a_clean_row_keeps_the_status_as_its_reason(self) -> None:
+        # Nothing failed, so there is no primary to attribute to and the status
+        # stands. The two new keys stay off the row entirely.
+        out = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[PreflightCheck(name="auth", passed=True)],
+        )
+        kwargs = self._emit(out, surface=PreflightSurface.HTTP).info.call_args.kwargs
+        assert kwargs["reason"] == "ready"
+        assert FAILURE_CHECK_KEY not in kwargs
+        assert FAILURE_MESSAGE_KEY not in kwargs
 
     def test_defaults_omit_optional_attrs(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
@@ -2850,3 +2866,8 @@ class TestOutcomeRowNamesTheFailure:
         kwargs = log.warning.call_args.kwargs
         assert kwargs[FAILURE_CHECK_KEY] == "version"
         assert kwargs[FAILURE_MESSAGE_KEY] == "Source is a minor behind."
+        # reason comes off the same object as the other three, so the row cannot
+        # name one cause and rank another. The gate row emits this same code for
+        # this verdict; the two used to split here.
+        assert kwargs["reason"] == "AUTH"
+        assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
