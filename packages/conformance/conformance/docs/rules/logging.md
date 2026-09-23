@@ -320,9 +320,10 @@ of whether it was ever exploited.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/client.py — `get_iam_role_token` logs that AWS credentials were
-  staged into the environment and names none of them. Log that a credential was used,
-  never the credential.
+- **Compliant example:** atlan-mysql-app app/client.py — `get_iam_role_token`'s "IAM role auth" log line records
+  the role ARN, host, port, region, user and only `bool(external_id)`; it never passes
+  `aws_secret_access_key` to the logger. Log that a credential was used, never the
+  credential.
 
 Credentials in log output are a security vulnerability — logs are often stored in
 plaintext in log aggregation systems, accessible to more people than the credential

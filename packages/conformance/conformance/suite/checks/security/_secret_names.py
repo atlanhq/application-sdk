@@ -3,9 +3,10 @@
 The S-series owns this predicate rather than reusing the L-series
 ``CREDENTIAL_VALUE_SUFFIXES``: the env-var-name surface S002 inspects
 (SCREAMING_SNAKE, ``AWS_``/``AZURE_`` prefixes, ``..._ACCESS_KEY`` forms) genuinely
-diverges from the log-argument surface L010 targets — the L list omits
-``access_key``/``secret_access_key`` and would miss real reads like
-``AWS_SECRET_ACCESS_KEY``.  Keeping a dedicated predicate also avoids a
+diverges from the log-argument surface L010 targets — the L list deliberately
+omits bare ``access_key`` / ``secret_key`` (ambiguous in log arguments — a key
+*ID* or a secret-store lookup key — and L010 is BLOCK tier) and has no
+``passwd``/``credentials`` forms.  Keeping a dedicated predicate also avoids a
 cross-series private import (``security`` reaching into ``logging._helpers``),
 which the check architecture deliberately forbids.
 

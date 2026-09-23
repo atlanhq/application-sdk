@@ -361,6 +361,85 @@ def test_l010_silent_on_all_label_suffixes(suffix: str) -> None:
     assert "L010" not in _ids(src)
 
 
+#: Secret-bearing names that must fire L010 (FND-2707).  ``aws_secret_access_key``
+#: escaped the endswith matcher because its tail is ``access_key``, not ``secret``.
+_L010_SECRET_NAMES = (
+    "aws_secret_access_key",
+    "secret_access_key",
+    "aws_secret_key",
+    "client_secret",
+    "session_token",
+    "aws_session_token",
+    "refresh_token",
+    "private_key_passphrase",
+    "passphrase",
+    "connection_string",
+)
+
+#: Public identifiers and labels that must stay silent.  Bare ``access_key`` and
+#: ``secret_key`` are deliberate non-matches: the first holds the key ID in
+#: S3/MinIO-style configs, the second is a secret-store lookup key in the SDK.
+_L010_PUBLIC_NAMES = (
+    "aws_access_key_id",
+    "access_key_id",
+    "access_key",
+    "aws_access_key",
+    "secret_key",
+    "client_id",
+    "role_arn",
+    "aws_role_arn",
+    "external_id",
+    "secret_key_name",
+    "connection_string_type",
+    "passphrase_label",
+)
+
+
+@pytest.mark.parametrize("name", _L010_SECRET_NAMES)
+def test_l010_fires_on_secret_name_positional(name: str) -> None:
+    # Real shape: atlan-mysql-app get_iam_role_token's "IAM role auth" line
+    # with a secret-bearing variable appended to the format args.
+    src = (
+        "from loguru import logger\n"
+        "logger.info(\n"
+        "    'IAM role auth — role_arn=%s, host=%s, key=%s',\n"
+        "    aws_role_arn,\n"
+        "    host,\n"
+        f"    {name},\n"
+        ")\n"
+    )
+    assert "L010" in _ids(src)
+
+
+@pytest.mark.parametrize("name", _L010_SECRET_NAMES)
+def test_l010_fires_on_secret_name_kwarg_and_attribute(name: str) -> None:
+    assert "L010" in _ids(f"from loguru import logger\nlogger.error('x', {name}=v)\n")
+    assert "L010" in _ids(
+        f"from loguru import logger\nlogger.error('x %s', self.{name})\n"
+    )
+
+
+@pytest.mark.parametrize("name", _L010_PUBLIC_NAMES)
+def test_l010_silent_on_public_identifier(name: str) -> None:
+    src = (
+        "from loguru import logger\n"
+        f"logger.info('using %s', {name})\n"
+        f"logger.info('using', {name}=v)\n"
+    )
+    assert "L010" not in _ids(src)
+
+
+def test_l010_silent_on_secret_store_lookup_key() -> None:
+    # Real shape: the SDK's Dapr credential vault logs the *lookup key* a secret
+    # is stored under — a reference, not the secret — as ``secret_key``.
+    src = (
+        "from loguru import logger\n"
+        "def _get_local_secret(self, secret_key):\n"
+        "    logger.debug('No local secret for key %s', secret_key)\n"
+    )
+    assert "L010" not in _ids(src)
+
+
 def test_l010_silent_for_non_logger_call() -> None:
     # L010 must only fire on recognised logger calls; arbitrary function calls
     # that happen to carry credential-named kwargs must not produce findings.

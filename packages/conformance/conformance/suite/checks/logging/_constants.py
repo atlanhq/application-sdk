@@ -43,9 +43,32 @@ STDLIB_LOG_KWARGS_ALLOWED: frozenset[str] = frozenset(
     {"exc_info", "extra", "stack_info", "stacklevel"}
 )
 
-# L010 — substrings that suggest a variable holds a credential *value*.
-# A variable or kwarg whose name *ends with* one of these (and does NOT end with
-# ``_name``, ``_type``, ``_id``, ``_label``) is treated as a value, not a label.
+# L010 — name *suffixes* that suggest a variable holds a credential *value*.
+# The matcher (``_helpers._is_credential_value_name``) is ``str.endswith`` only:
+# a variable or kwarg whose lower-cased name *ends with* one of these (and does
+# NOT end with a ``CREDENTIAL_LABEL_SUFFIXES`` entry) is treated as a value.  A
+# value word in the *middle* of a name never matches — ``aws_secret_access_key``
+# ends in ``access_key``, so ``"secret"`` alone does not catch it; the compound
+# key forms must be listed as suffixes in their own right.
+#
+# Already covered by a shorter suffix (kept out of the tuple to avoid
+# redundancy, pinned by tests): ``session_token`` / ``refresh_token`` via
+# ``"token"``, ``client_secret`` via ``"secret"``.
+#
+# Deliberately NOT suffixes (ambiguous — this rule is BLOCK tier, scope=both,
+# so a false positive reds every consumer build and the SDK's own gate):
+#
+# * bare ``access_key`` — in S3/MinIO-style configs it holds the public key
+#   *ID* (``application_sdk/storage/cloud.py`` maps ``username=access_key``).
+#   ``access_key_id`` is exempt anyway via the ``_id`` label suffix.  S002's
+#   env-var predicate (``checks/security/_secret_names.py``) does flag bare
+#   ``access_key`` — a deliberate divergence for that surface.
+# * bare ``secret_key`` — means "the key a secret is stored under" as often as
+#   "the secret half of a key pair": the SDK's Dapr credential vault logs
+#   ``secret_key`` as the secret-store *lookup key* (a reference, not a value).
+#   The trade-off: MinIO-style bare ``secret_key`` / ``base_secret_key`` values
+#   escape L010; none is logged in the SDK or the reference apps today.  The
+#   unambiguous AWS forms are listed below instead.
 CREDENTIAL_VALUE_SUFFIXES: tuple[str, ...] = (
     "password",
     "secret",
@@ -57,6 +80,15 @@ CREDENTIAL_VALUE_SUFFIXES: tuple[str, ...] = (
     "private_key",
     "auth_token",
     "access_token",
+    # AWS secret keys — ``aws_secret_access_key``, ``secret_access_key``,
+    # ``aws_secret_key`` (the tail ``access_key`` / ``secret_key`` alone is ambiguous).
+    "secret_access_key",
+    "aws_secret_key",
+    # Unlocks an encrypted private key — ``private_key_passphrase``.
+    "passphrase",
+    # DSNs routinely embed the secret (ODBC ``PWD=``, Azure ``AccountKey=``,
+    # ``user:password@host`` URLs), so the whole string is a credential value.
+    "connection_string",
 )
 
 # Acceptable suffixes for credential-named variables (labels, not values)

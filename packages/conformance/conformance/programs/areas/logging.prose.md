@@ -295,8 +295,9 @@ rule was skipped, the sanitized form records that the credential was handled.
   or replace it with a non-secret descriptor
   (`logger.info("using credential %s", cred_name)`), and never a length, a
   prefix or a mask of the value itself.  `atlan-mysql-app app/client.py`'s
-  `get_iam_role_token` records that AWS credentials were staged and names
-  none of them.  **Always route to residue and never auto-apply**, whatever
+  `get_iam_role_token` "IAM role auth" log line records the role ARN, host,
+  region and user plus only `bool(external_id)`, and never passes
+  `aws_secret_access_key` to the logger.  **Always route to residue and never auto-apply**, whatever
   the mode: a human confirms every credential-shaped change.
 
 - **L012 StdlibExtraReservedKeyCollision** — BLOCK.  A key in `extra={}`

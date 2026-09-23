@@ -343,9 +343,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L010",
         canonical_reference=(
-            "atlan-mysql-app app/client.py — `get_iam_role_token` logs that AWS "
-            "credentials were staged into the environment and names none of them. Log that "
-            "a credential was used, never the credential."
+            'atlan-mysql-app app/client.py — `get_iam_role_token`\'s "IAM role auth" '
+            "log line records the role ARN, host, port, region, user and only "
+            "`bool(external_id)`; it never passes `aws_secret_access_key` to the logger. "
+            "Log that a credential was used, never the credential."
         ),
         scope=RuleScope.BOTH,
         name="CredentialInLogOutput",
