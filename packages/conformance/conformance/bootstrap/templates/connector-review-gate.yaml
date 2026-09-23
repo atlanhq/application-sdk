@@ -1,0 +1,120 @@
+name: Connector Review
+
+# Requires that the AI connector reviewer has reviewed a PR before it merges.
+#
+# Branch-protection target: "Connector Review"
+#
+# That exact string is the contract with the fleet rulesets. A ruleset's
+# required_status_checks `context` is the CHECK-RUN name, which never includes
+# the workflow name, and for an inline job the check-run name is just the job's
+# `name:`. So `Connector Review` below is the string, and renaming that job
+# silently un-protects every repo — the ruleset would then require a context no
+# check ever reports. See release-gate.yaml for the same note.
+#
+# ORDER OF OPERATIONS, and it matters: this workflow must be merged in every
+# connector repo BEFORE the context is added to their rulesets. A required
+# context with no workflow to report it sits at "Expected — waiting for status
+# to be reported" forever, and nothing in that repo can merge.
+#
+# Adding the context while this gate is still in warn-only mode is safe: the
+# job passes, so the check is green. Arming is a separate, reversible step (see
+# CONNECTOR_REVIEW_GATE below).
+#
+# TRUST BOUNDARY — read before arming. `pull_request` and `pull_request_review`
+# both run this file, and the script it calls, from the PR's merge commit. So a
+# PR that edits either, or deletes `.mothership/reviewer.yaml`, passes its own
+# gate. C002 flags the first two as drift but only at WARN, and connector repos
+# need no human approval to merge. Fine while warn-only; NOT fine to arm. The
+# arming-phase fix is to move the check-run out of the PR's reach: mothership
+# posts `Connector Review` itself when a review lands. (Deleting reviewer.yaml
+# does not stop the review — mothership reads it at the PR's base sha.)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+  # The gate is satisfied by a REVIEW landing — not by a push and not by a
+  # label. Mothership deletes the `ai-connector-review` label in a `finally`
+  # immediately after it dispatches, and the review itself arrives 8-22 min
+  # later with no further PR event. Without this trigger the check would stay
+  # red until the author happened to push again. `dismissed` matters just as
+  # much: a dismissed approval comes back from the API as DISMISSED, which the
+  # script already rejects, but without the trigger nothing re-runs to notice.
+  # `edited` likewise: a write-access user can edit the bot's review body, and
+  # an edit that breaks the trailer must re-evaluate, not keep a stale green.
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  # A merge queue evaluates required contexts against the `merge_group` event
+  # on the gh-readonly-queue/<base>/pr-N-<sha> ref, not against the pull
+  # request. Without this trigger no "Connector Review" check-run is ever
+  # created for the merge group, so the required context sits at "Expected"
+  # forever and the queue never drains (FND-851, same shape as release-gate).
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  connector-review:
+    name: Connector Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # `github.event.pull_request` does not exist on `merge_group`, and the
+      # gate has already run on the PR itself. A skipped step leaves the job
+      # successful, and that success is what reports the green context to the
+      # queue. The ruleset merges one entry at a time, so a group is always
+      # exactly one PR and there is nothing extra to re-check.
+      - name: Checkout
+        if: github.event_name != 'merge_group'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Split from the check below, and non-blocking, so a GitHub 5xx or a
+      # rate limit cannot red a REQUIRED check fleet-wide for an outage that
+      # is not the author's fault. `continue-on-error` is the native way to
+      # tolerate that, so neither `run:` block needs an `||` fallback. The
+      # redirect truncates before `gh` executes, so a failed fetch leaves an
+      # EMPTY file — which is precisely the "could not check" signal the
+      # script passes on. A partial write parses as bad JSON and passes too.
+      - name: Fetch PR reviews
+        if: github.event_name != 'merge_group'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/pulls/${PR}/reviews" --paginate --slurp > reviews.json
+
+      - name: Verify connector review
+        if: github.event_name != 'merge_group'
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # One variable, three settings. Unset = warn only, which is how this
+          # ships. `enforce` = block, sticky: any connector review on the PR
+          # counts. `enforce-head` = block, and only a review of the CURRENT
+          # commit counts.
+          #
+          # Sticky is the default because it matches these repos' own posture
+          # (`dismiss_stale_reviews_on_push: false`) and costs one sandbox run
+          # per PR rather than one per push. Its gap is real and known: a PR
+          # reviewed at commit 1 can merge carrying commit 12. Repos that want
+          # that closed set `enforce-head` and pay for it.
+          # Exact matches only: a typo such as `enforce-haed` stays warn-only
+          # rather than silently arming the sticky policy.
+          ENFORCE: ${{ (vars.CONNECTOR_REVIEW_GATE == 'enforce' || vars.CONNECTOR_REVIEW_GATE == 'enforce-head') && '--enforce' || '' }}
+          POLICY: ${{ vars.CONNECTOR_REVIEW_GATE == 'enforce-head' && 'head' || 'sticky' }}
+        run: |
+          set -euo pipefail
+          touch reviews.json
+          python3 .github/scripts/connector_review_gate.py \
+            --author "$AUTHOR" \
+            --reviewer-config .mothership/reviewer.yaml \
+            --policy "$POLICY" \
+            --head-sha "$HEAD_SHA" \
+            $ENFORCE < reviews.json

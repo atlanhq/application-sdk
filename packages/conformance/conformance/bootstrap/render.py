@@ -44,6 +44,7 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "checks.yml",
     "commits.yaml",
     "release-gate.yaml",
+    "connector-review-gate.yaml",
     "update-dashboard.yml",
     "release.yaml",
     "tag-and-publish.yaml",
@@ -116,6 +117,7 @@ MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     ),
     (".github/scripts/build_conformance_args.py", "build_conformance_args.py"),
     (".github/scripts/probe_code_scanning.py", "probe_code_scanning.py"),
+    (".github/scripts/connector_review_gate.py", "connector_review_gate.py"),
 )
 
 # Local connector-review kit. These paths are owned by bootstrap once a repo

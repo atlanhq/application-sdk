@@ -863,7 +863,12 @@ def test_all_shims_have_atlanhq_uses_reference() -> None:
     # `conformance-upload-sarif.yaml` left this set in FND-1994: it is now a
     # thin caller like the rest, so it must carry an `atlanhq/` reference and
     # is no longer exempt.
-    inline_ok = {"release-gate.yaml"}
+    # `connector-review-gate.yaml` is inline for the same reason
+    # `release-gate.yaml` is: a ruleset matches on the check-run name, and for
+    # a job that `uses:` a reusable that name gains a "<caller job id> / "
+    # prefix. The required context here is the bare string "Connector Review",
+    # so the job has to be inline to produce it.
+    inline_ok = {"release-gate.yaml", "connector-review-gate.yaml"}
     for name in MANAGED_WORKFLOWS:
         content = render(name)
         if name in inline_ok:
