@@ -197,6 +197,15 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   class-definition time and the app will not import.  That is the edit that
   broke nine apps; do not draft it.
 
+  **The opt-out does not govern unknown keys.**  `Input` drops keys the
+  contract does not declare (logging which ones, once) whether or not
+  `allow_unbounded_fields` is set — the flag only skips the payload-safety
+  type check.  A contract that receives more args than it reads (an AE DAG
+  node's `credential` / `credential_guid`) does **not** need the opt-out to
+  tolerate them.  A justification that says it does is wrong; once every
+  declared field is concretely typed, the opt-out comes off with nothing
+  else changed.  Do not draft "keep the opt-out" for extra AE node args.
+
   **Narrowing a value type is a DATA change — diff the payloads, not just the
   types.**  `ledger-guard`, `validate_payload_safety` and an import check are
   all *structural*: they prove the retype is permitted, that the annotation is

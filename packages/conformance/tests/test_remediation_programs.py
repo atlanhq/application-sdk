@@ -349,6 +349,19 @@ def test_d003_prose_removes_constraint_floors_rather_than_relocating() -> None:
     assert "do not move a floor" in text
 
 
+def test_p001_prose_says_the_opt_out_does_not_govern_unknown_keys() -> None:
+    """Extra AE node args do not justify keep-the-opt-out (FND-2549).
+
+    The catalog already says Input drops undeclared keys regardless of
+    allow_unbounded_fields; the remediator reads prescriptions.prose.md,
+    not the catalog, so the same paragraph has to live here.
+    """
+    text = " ".join(_read("areas/prescriptions.prose.md").split())
+    assert "does not govern unknown keys" in text
+    assert "credential_guid" in text
+    assert 'Do not draft "keep the opt-out" for extra AE node args' in text
+
+
 def test_d009_prose_verifies_without_poe() -> None:
     """`uv run poe` re-resolves the lock without --frozen (D013 on a laptop)."""
     text = " ".join(_read("areas/dependency.prose.md").split())
