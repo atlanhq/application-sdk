@@ -272,6 +272,22 @@ RULES: tuple[RuleDefinition, ...] = (
             "is unremediated: either raise, or record the failure to a durable "
             "evidence trail and declare the gap (see E020)."
         ),
+        rule_interactions=(
+            "E007 and E004 judge the same handler shape with one shared predicate "
+            "(typed_failure_scope in checks/error_handling/_helpers.py). A return "
+            "that hands the caught exception back as typed data already clears "
+            "both rules: a call that receives the binding wrapped in a typed "
+            "error (`AuthRejectedError(cause=exc)`), including inside a tuple, "
+            "or, under a narrow catch, a call that receives the binding "
+            "directly (`self._failed(name, started, exc)`). Adding a log there "
+            "is a wrong edit, and inside a preflight_check override a "
+            "warning/error log trades the E007 for an F005. E007 applies the "
+            "predicate per return and E004 applies it to every exit. Bare "
+            "sentinels and stringified exceptions (`str(exc)`, `repr(exc)`, an "
+            "f-string or `.format(exc)`) still fire, because a string is the "
+            "failure laundered into a plain value. Found by a consumer app's "
+            "preflight probe arms in FND-2493."
+        ),
         scope=RuleScope.BOTH,
         name="ErrorToReturnValue",
         tier=EnforcementTier.WARN,
@@ -290,6 +306,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Exception is converted to a return value (None, {}, [], False) with no\n"
             "trace.  Callers see a wrong result with no idea why.  At minimum log\n"
             "before returning; prefer raising a domain-specific exception instead.\n"
+            "\n"
+            "A return that hands the caught exception back as typed data is not\n"
+            "flagged: the failure leaves the frame for the caller to report. This\n"
+            "is the same typed-failure predicate E004 uses.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e007",
     ),

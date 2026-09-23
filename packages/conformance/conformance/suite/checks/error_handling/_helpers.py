@@ -609,14 +609,39 @@ class TypedFailureScope(NamedTuple):
     identity) to the local names holding a typed value built from the caught
     exception *at that statement*; ``live_at_end`` is the same set for the
     fall-through path off the end of the handler body.
+
+    ``typed_binding`` is true when every type the handler catches is a specific
+    one (nothing in ``_BROAD_EXCEPT_TYPES``): the binding is then already a typed
+    domain error, so handing it to a helper carries it out as typed data too —
+    see :func:`_expr_types_cause`.
     """
 
     exc_name: str
     carried_at: dict[int, frozenset[str]]
     live_at_end: frozenset[str]
+    typed_binding: bool = False
 
 
-def _expr_types_cause(expr: ast.expr, exc_name: str) -> bool:
+# Calls that turn the caught exception into text.  A string is the failure
+# laundered into a plain value — its type and cause are gone — so passing the
+# binding to one of these never counts as carrying it out as typed data.
+_STRINGIFIERS = frozenset({"str", "repr", "ascii", "format"})
+
+
+def _handler_binds_typed_error(handler: ast.ExceptHandler) -> bool:
+    """True when *handler* catches only specific (non-broad) exception types."""
+    if handler.type is None:
+        return False
+    types = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    names = [_get_name(t) for t in types]
+    return bool(names) and all(
+        name is not None and name not in _BROAD_EXCEPT_TYPES for name in names
+    )
+
+
+def _expr_types_cause(
+    expr: ast.expr, exc_name: str, *, typed_binding: bool = False
+) -> bool:
     """True when *expr* builds a typed value *from* the caught exception.
 
     The marker is a call to a class-like target — a ``Name`` or ``Attribute``
@@ -632,12 +657,24 @@ def _expr_types_cause(expr: ast.expr, exc_name: str) -> bool:
     constructing an object from ``str(exc)`` or a bare hand-off to a helper —
     ``_failed_check(name, exc, start)`` proves nothing about what the value
     becomes, and under a broad catch nothing about ``exc`` is known either.
+
+    Under a narrow catch (*typed_binding*) something is known: the binding is
+    itself an instance of the specific types caught, so a call that receives it
+    directly as an argument — ``self._failed(name, start, exc)`` — hands the
+    typed error on.  Stringifiers (``str(exc)``, ``repr(exc)``,
+    ``"{}".format(exc)``) never count: a string is not typed data.
     """
     for node in ast.walk(expr):
         if not isinstance(node, ast.Call):
             continue
         target = _get_name(node.func)
-        if target is None or not target[:1].isupper():
+        if target is None:
+            continue
+        if typed_binding and target not in _STRINGIFIERS:
+            args = [*node.args, *[kw.value for kw in node.keywords]]
+            if any(isinstance(a, ast.Name) and a.id == exc_name for a in args):
+                return True
+        if not target[:1].isupper():
             continue
         for arg in [*node.args, *[kw.value for kw in node.keywords]]:
             for inner in ast.walk(arg):
@@ -646,9 +683,26 @@ def _expr_types_cause(expr: ast.expr, exc_name: str) -> bool:
     return False
 
 
-def _derives_typed_failure(value: ast.expr, exc_name: str, live: set[str]) -> bool:
+def _derives_typed_failure(
+    value: ast.expr, exc_name: str, live: set[str], *, typed_binding: bool = False
+) -> bool:
     """True when *value* carries the caught exception out as typed data."""
-    return _expr_types_cause(value, exc_name) or _references_any(value, frozenset(live))
+    return _expr_types_cause(
+        value, exc_name, typed_binding=typed_binding
+    ) or _references_any(value, frozenset(live))
+
+
+def _typed_failure_deriver(
+    typed_binding: bool,
+) -> Callable[[ast.expr, str, set[str]], bool]:
+    """:func:`_derives_typed_failure` bound to a handler's ``typed_binding``."""
+
+    def derives(value: ast.expr, exc_name: str, live: set[str]) -> bool:
+        return _derives_typed_failure(
+            value, exc_name, live, typed_binding=typed_binding
+        )
+
+    return derives
 
 
 def typed_failure_scope(handler: ast.ExceptHandler) -> TypedFailureScope | None:
@@ -668,11 +722,18 @@ def typed_failure_scope(handler: ast.ExceptHandler) -> TypedFailureScope | None:
     """
     if handler.name is None:
         return None
+    typed_binding = _handler_binds_typed_error(handler)
     carried_at: dict[int, frozenset[str]] = {}
     live_at_end = _track_carried(
-        handler.body, handler.name, set(), carried_at, _derives_typed_failure
+        handler.body,
+        handler.name,
+        set(),
+        carried_at,
+        _typed_failure_deriver(typed_binding),
     )
-    return TypedFailureScope(handler.name, carried_at, frozenset(live_at_end))
+    return TypedFailureScope(
+        handler.name, carried_at, frozenset(live_at_end), typed_binding
+    )
 
 
 def _return_carries_typed_failure(stmt: ast.Return, scope: TypedFailureScope) -> bool:
@@ -680,7 +741,10 @@ def _return_carries_typed_failure(stmt: ast.Return, scope: TypedFailureScope) ->
     if stmt.value is None:
         return False
     return _derives_typed_failure(
-        stmt.value, scope.exc_name, set(scope.carried_at.get(id(stmt), frozenset()))
+        stmt.value,
+        scope.exc_name,
+        set(scope.carried_at.get(id(stmt), frozenset())),
+        typed_binding=scope.typed_binding,
     )
 
 
@@ -929,9 +993,9 @@ def _staged_row_is_returned(
         scope.exc_name,
         set(scope.live_at_end),
         carried,
-        _derives_typed_failure,
+        _typed_failure_deriver(scope.typed_binding),
     )
-    below = TypedFailureScope(scope.exc_name, carried, frozenset())
+    below = TypedFailureScope(scope.exc_name, carried, frozenset(), scope.typed_binding)
     returns = [stmt for stmt in _iter_block(trailing) if isinstance(stmt, ast.Return)]
     if not returns:
         return False
