@@ -986,9 +986,13 @@ whose result is durably recorded in workflow history.
 
 Inside an `App` subclass's workflow-context method a call performs side-effecting I/O —
 `open`, `requests`/`httpx`/`urllib`, `socket`, `subprocess`,
-`threading`/`multiprocessing`, `os.getenv` / `os.environ[...]`.  Move it into a `@task`
-method: workflow code must be deterministic, and activities are where I/O and external
-state belong.
+`threading`/`multiprocessing`, `os.getenv` / `os.environ[...]`,
+`application_sdk.storage` object-store calls (`download_file`, `upload_file`, …), and
+the data-scale inventory P023 defers to this rule in workflow context: whole-file
+`Path.read_bytes`/`read_text`/`write_*`, pandas and pyarrow readers/writers,
+`json.load`/`pickle.load`-style file serialization, `shutil` tree ops and
+`glob`/`os.walk` traversal. Move it into a `@task` method: workflow code must be
+deterministic, and activities are where I/O and external state belong.
 
 The detected surface is a curated high-signal subset, not an exhaustive list of every
 I/O API.  Remediation is structural (extract a `@task`), so findings route to residue

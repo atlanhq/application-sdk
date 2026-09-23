@@ -176,6 +176,22 @@ _SUBPROCESS_EXACT = frozenset(
     }
 )
 
+
+def is_data_scale_io(target: str) -> bool:
+    """True if *target* is data-scale I/O (P023 outside workflow context, P021 inside)."""
+    return (
+        target in _TREE_FS_EXACT
+        or target.endswith(_TREE_FS_WRAPPER_SUFFIXES)
+        or target in _TREE_FS_WRAPPER_BARE
+        or target in _SERIALIZE_EXACT
+        or target in _DATA_IO_EXACT
+        or target in _TRAVERSAL_EXACT
+        or target.endswith(_DATA_IO_SUFFIXES)
+        or target.endswith(_WHOLE_FILE_SUFFIXES)
+        or target.endswith(_TRAVERSAL_SUFFIXES)
+    )
+
+
 _BRIDGE_HINT = (
     "Running an event loop from inside an async function re-enters the loop and "
     "deadlocks/raises. Await the coroutine directly instead."
