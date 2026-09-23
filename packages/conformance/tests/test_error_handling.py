@@ -2094,6 +2094,18 @@ except Exception as e:
     )
 
 
+def test_e019_no_finding_classified_typed_error() -> None:
+    assert "E019" not in _findings(
+        """\
+try:
+    authenticate()
+except Exception as e:
+    err = classify(e)
+    return AuthOutput(status="FAILED", message=err.message, error=err)
+"""
+    )
+
+
 def test_e019_no_finding_outside_except() -> None:
     # Same construction outside any except block → no exc binding → no E019.
     _none(

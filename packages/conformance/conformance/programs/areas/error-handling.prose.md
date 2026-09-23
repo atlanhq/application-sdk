@@ -370,11 +370,15 @@ outcome mirroring the error-handling shape in the reference app named by
 - **E019 ExceptionTextInContractField** — the same leak as E015, but into a
   returned contract rather than a raise: inside `except … as exc`, a response
   or output contract (`AuthOutput`, `PreflightCheck`, …) is built with the
-  exception interpolated into `message=`, a field a caller renders.  Set a
-  fixed, audience-appropriate message on the contract and log the exception
-  separately with `exc_info=True`.  Mirror `atlan-mysql-app app/handler.py`'s
-  `test_auth`, which returns `"Authentication failed"` and sends the detail to
-  the log.
+  exception interpolated into `message=`, a field a caller renders.  Classify
+  the exception into the app's typed `AppError` (reuse the classifier the
+  preflight checks already use), then return `message=err.message` and
+  `error=err` on the contract.  The user keeps the reason, as authored text.
+  Do not default to a fixed string like `"Authentication failed"`: it clears
+  the rule and discards the reason.  If no class covers the failure (for
+  example bad credentials), add one; do not fall back to a catch-all
+  "unreachable" class.  Mirror `atlan-mysql-app app/handler.py`'s
+  `preflight_check` probes, which return the typed error on the check.
 
 - **E020 HttpFailureToEmptyReturn** — a checked HTTP failure (a test on
   `is_success` / `ok` / `status_code`) returns an empty or `None` sentinel, so
@@ -398,11 +402,9 @@ outcome mirroring the error-handling shape in the reference app named by
   Propose narrowing to `except Exception as exc:` and adding
   `exc_info=True` to any existing log calls in the body.
 
-- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E019, E020)** — produce
+- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E020)** — produce
   `classification = "judgment"` and a best-effort fix guided by the `hint` and
-  `message`.  (E019 is the return/append-value counterpart of E015: route the
-  caught exception into a typed `AppError`/evidence field and keep the contract
-  `message=` a stable, sanitised summary.  E020: replace the empty/None return on
+  `message`.  (E020: replace the empty/None return on
   a checked HTTP-failure branch with a raised typed `AppError` so the failure
   propagates instead of publishing an empty success.)
 

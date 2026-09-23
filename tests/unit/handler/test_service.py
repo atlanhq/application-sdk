@@ -18,6 +18,7 @@ from application_sdk.common.task_queue import (
     derive_task_queue,
 )
 from application_sdk.contracts.base import Input, Output
+from application_sdk.errors.leaves import AuthError
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -106,6 +107,47 @@ class _AuthFailedHandler(Handler):
 
     async def test_auth(self, input: AuthInput) -> AuthOutput:
         return AuthOutput(status=AuthStatus.FAILED, message="bad credentials")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthTypedFailureHandler(Handler):
+    """Handler that returns AuthStatus.FAILED carrying a typed error."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(
+            status=AuthStatus.FAILED,
+            message="Authentication failed",
+            error=AuthError(
+                message="The source rejected the credentials.",
+                suggested_action="Check the username and password.",
+            ),
+        )
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthCausedFailureHandler(Handler):
+    """Handler that builds its typed error from the caught exception (E019 advice)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        try:
+            raise RuntimeError("could not connect to host db.internal user=svc_x")
+        except RuntimeError as exc:
+            return AuthOutput(
+                status=AuthStatus.FAILED,
+                error=AuthError(
+                    message="The source rejected the credentials.", cause=exc
+                ),
+            )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         return PreflightOutput(status=PreflightStatus.READY, message="ready")
@@ -286,6 +328,33 @@ class TestAuthEndpoint:
         assert body["success"] is True
         assert body["data"]["status"] == "success"
         assert body["message"] == "auth ok"
+
+    def test_auth_typed_failure_surfaces_the_error_message(self) -> None:
+        client = _make_client(_AuthTypedFailureHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": [], "connection_id": "test-conn"},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["success"] is False
+        assert body["message"] == "The source rejected the credentials."
+        assert body["data"]["message"] == "The source rejected the credentials."
+        assert body["data"]["error"]["suggested_action"] == (
+            "Check the username and password."
+        )
+
+    def test_auth_typed_failure_never_returns_the_exception_text(self) -> None:
+        client = _make_client(_AuthCausedFailureHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": [], "connection_id": "test-conn"},
+        )
+        body = response.json()
+        assert body["message"] == "The source rejected the credentials."
+        assert "cause_repr" not in body["data"]["error"]
+        assert "db.internal" not in response.text
+        assert "svc_x" not in response.text
 
     def test_auth_success_envelope_has_all_fields(self) -> None:
         client = _make_client()
