@@ -93,6 +93,17 @@ two auto-fixable rules:
   - Translate keyword arguments: `indent=2` → `option=orjson.OPT_INDENT_2`;
     `sort_keys=True` → `option=orjson.OPT_SORT_KEYS` (OR-combine multiple
     options).  Drop kwargs orjson cannot express and note them in residue.
+  - **The output bytes change even with no kwargs to translate.** Two stdlib
+    defaults have no orjson equivalent: `json.dumps` separates with `", "` and
+    `": "` while orjson is always compact, and `ensure_ascii=True` escapes
+    non-ASCII as `\uXXXX` while orjson always writes UTF-8.  So only a call
+    already passing `separators=(",", ":")` **and** `ensure_ascii=False`
+    round-trips byte-identically.  For every other `dumps`, find what consumes
+    the string.  If anything hashes it, commits it, diffs it, signs it or
+    compares it byte-for-byte, prove the change on real input (for a
+    committed file, dump its current content both ways and compare) and say
+    in residue what will change.  Do not rewrite a committed file to match;
+    the edit touches the call site only.
   - **A `default=` callable survives the swap but STOPS BEING CALLED for the
     types orjson serializes natively** — `datetime`, `date`, `time`, `uuid.UUID`,
     and dataclasses.  NumPy is **not** native unless `orjson.OPT_SERIALIZE_NUMPY`
@@ -120,9 +131,12 @@ two auto-fixable rules:
   - Ensure `import orjson` is present at module top (it is a core SDK
     dependency); add it if missing.
 
-  The orthogonal gate **bites** here: a `bytes`/`str` regression on any
-  covered path fails the behavioural tests, so a careless swap is caught by
-  `orthogonal-gate` before the edit survives.  Classification is always
+  The orthogonal gate **bites** here for type errors: a `bytes`/`str`
+  regression on any covered path fails the behavioural tests, so a careless
+  swap is caught by `orthogonal-gate` before the edit survives.  It does
+  **not** bite on byte-level output changes, which parse to the same value
+  and pass any test that compares parsed JSON; the separators/`ensure_ascii`
+  bullet above is the only check for those.  Classification is always
   `"judgment"` (the decode/kwargs call requires reading the call site), so the
   edit is also routed to residue for human confirmation.
 

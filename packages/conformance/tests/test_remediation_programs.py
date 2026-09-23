@@ -697,3 +697,57 @@ def test_dependency_area_has_a_prescription_for_every_d_rule() -> None:
         "area. Every rule the loop can reach needs one, even if it is "
         "`not_remediable = true` and routes straight to residue."
     )
+
+
+def _rule_bullet(area: str, rule_id: str) -> str:
+    """The `**<ID> Name**` bullet for one rule, up to the next top-level bullet."""
+    text = _read(f"areas/{area}.prose.md")
+    match = re.search(r"^- \*\*" + rule_id + r"\b.*?(?=^- \*\*|\Z)", text, re.M | re.S)
+    assert match, f"no `**{rule_id}` bullet in areas/{area}.prose.md"
+    return match.group(0)
+
+
+def test_b005_sunset_marker_is_the_one_the_ledger_generator_reads() -> None:
+    """The B005 retirement path names the exact source marker, and it is one
+    `gen-contract-ledger` actually reads back as `sunset`.
+
+    Before this, the rule offered three different mechanisms: hand-edit the
+    ledger, mark it "in the Pkl widget definition" (a Python Output contract has
+    none), or the prose's bare "deprecate and sunset it". The only one the
+    generator recognises was documented under P001, not under the rule that
+    needs it. An app remediation run had to read `_field_status` to find it,
+    and the rule's own finding had been suppressed for want of it.
+    """
+    import ast
+
+    from conformance.suite.checks._entrypoint_contract_fields import _field_status
+    from conformance.suite.rules import CATALOG
+
+    bullet = _rule_bullet("deprecation", "B005")
+    snippets = re.findall(r"`(Field\([^`]*x-lifecycle[^`]*\))`", bullet)
+    assert snippets, "B005 prescription names no `Field(... x-lifecycle ...)` marker"
+    for snippet in snippets:
+        source = "x: int = " + snippet.replace("<zero value>", "0")
+        node = ast.parse(source).body[0]
+        assert isinstance(node, ast.AnnAssign)
+        assert _field_status(node) == "sunset", snippet
+
+    rule = CATALOG["B005"]
+    for text in (rule.terminal_state, rule.full_description):
+        assert "x-lifecycle" in text
+        assert "Pkl widget" not in text
+
+
+def test_o001_prescription_names_the_byte_changing_defaults() -> None:
+    """A stdlib `json.dumps` with default arguments does not round-trip through
+    orjson byte-for-byte: orjson is always compact and never escapes non-ASCII.
+
+    The parsed value is unchanged, so the orthogonal gate passes, and the only
+    place the difference shows is whatever hashes, commits or byte-compares the
+    output. Found on an app whose vendor-contract refresh script rewrites a
+    committed, `\\u`-escaped JSON file: the prescribed `indent=2 → OPT_INDENT_2`
+    swap would have un-escaped 30 lines of it the next time it ran.
+    """
+    bullet = _rule_bullet("optimizations", "O001")
+    assert "ensure_ascii" in bullet
+    assert "separators" in bullet
