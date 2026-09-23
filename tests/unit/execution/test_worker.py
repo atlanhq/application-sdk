@@ -34,6 +34,7 @@ from application_sdk.execution._temporal.worker import (
     describe_exception_chain,
     read_core_poller_counts,
 )
+from application_sdk.observability.logger_adaptor import GATE_MODE_KEY, GATE_TIMEOUT_KEY
 
 _MINIMAL_START_PARAMS = {
     "task_queue": "test-queue",
@@ -1685,3 +1686,109 @@ class TestPreflightVerifyStorageWiring:
 
         assert _resolve_verify_storage(_On) is True
         assert _resolve_verify_storage(_Off) is False
+
+
+class _GateRoutedInput:
+    """Carries credential routing, so the workflow frame schedules the gate."""
+
+    extraction_method = "direct"
+    credential_guid = "g-1"
+    agent_json = None
+    credential_ref = None
+
+
+class TestWorkerAndWorkflowResolveTheSameGatePolicy:
+    """The worker bakes mode, budget and attempts into the gate activity; the
+    workflow reads the same ClassVars to build the retry policy and to apply
+    the mode to a dead frame. For one app class the two frames must agree,
+    malformed declarations included, or a hard block could be retried, or a
+    soft app blocked, by whichever frame disagrees.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _worker_side() -> dict:
+        seen: list[dict] = []
+        real = _preflight_gate_module.build_preflight_gate_activity
+
+        def spy(*args, **kwargs):
+            seen.append(kwargs)
+            return real(*args, **kwargs)
+
+        with (
+            mock.patch.object(
+                _preflight_gate_module, "build_preflight_gate_activity", spy
+            ),
+            mock.patch("application_sdk.execution._temporal.worker.Worker"),
+        ):
+            create_worker(_make_mock_client())
+        (kwargs,) = seen
+        return kwargs
+
+    @staticmethod
+    async def _workflow_side(app_cls: type) -> tuple[dict, int]:
+        """Drive the workflow frame to a fail-open row, which reports the mode
+        and budget it resolved; return that row and the retry policy's cap."""
+        from datetime import datetime, timezone
+
+        from temporalio.exceptions import ApplicationError as TemporalApplicationError
+
+        from application_sdk.app.base import _run_preflight_gate
+
+        exec_mock = mock.AsyncMock(side_effect=TemporalApplicationError("store down"))
+        with (
+            mock.patch("application_sdk.app.base.workflow.patched", return_value=True),
+            mock.patch("application_sdk.app.base.workflow.execute_activity", exec_mock),
+            mock.patch(
+                "application_sdk.app.base.workflow.now",
+                return_value=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            ),
+            mock.patch("application_sdk.app.base._safe_log") as safe_log,
+        ):
+            await _run_preflight_gate(
+                _GateRoutedInput(),
+                "app",
+                "run",
+                getattr(app_cls, "preflight_gate_timeout_seconds", None),
+                getattr(app_cls, "preflight_gate_max_attempts", None),
+                getattr(app_cls, "preflight_gate_mode", None),
+            )
+        (row,) = [c.kwargs for c in safe_log.call_args_list if "outcome" in c.kwargs]
+        return row, exec_mock.call_args.kwargs["retry_policy"].maximum_attempts
+
+    @pytest.mark.parametrize(
+        ("mode", "attempts", "budget"),
+        [
+            (None, None, None),
+            ("hard", 1, 90),
+            (" HARD ", 3, 30),
+            (_preflight_gate_module.PreflightGateMode.HARD, 99, 4),
+            ("on", "garbage", 10_000),
+        ],
+        ids=["undeclared", "hard", "padded", "enum_clamped", "malformed"],
+    )
+    async def test_both_frames_resolve_the_declared_classvars_alike(
+        self, mode: object, attempts: object, budget: object
+    ) -> None:
+        class _GatedApp(App):
+            preflight_gate_mode = mode
+            preflight_gate_max_attempts = attempts
+            preflight_gate_timeout_seconds = budget
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        worker = self._worker_side()
+        row, workflow_attempts = await self._workflow_side(_GatedApp)
+
+        assert row["outcome"] == "no_verdict"
+        assert row[GATE_MODE_KEY] == worker["mode"].value
+        assert row[GATE_TIMEOUT_KEY] == worker["budget_seconds"]
+        assert workflow_attempts == worker["attempts"]
