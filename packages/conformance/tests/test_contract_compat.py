@@ -1086,6 +1086,26 @@ def test_b005_type_alias_with_a_different_outer_shape_still_fires(
     assert "B005" in _ids(findings)
 
 
+def test_b005_chained_type_alias_off_any_is_not_a_break(tmp_path: Path) -> None:
+    alias = "Inner = dict[str, str]\nFilter = Inner | None"
+    findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, Any] | None")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_chained_type_alias_with_a_different_outer_shape_still_fires(
+    tmp_path: Path,
+) -> None:
+    alias = "Inner = list[str]\nFilter = Inner | None"
+    findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, Any] | None")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_mutually_recursive_type_aliases_terminate(tmp_path: Path) -> None:
+    alias = "A = list[B]\nB = list[A]"
+    findings = _scan_aliased(tmp_path, alias, "A", "dict[str, Any]")
+    assert "B005" in _ids(findings)
+
+
 def test_split_union_does_not_tear_nested_brackets() -> None:
     """A naive split on '|' would break dict[str, int | None] apart."""
     from conformance.suite.checks.deprecation._contract_compat import _split_union
