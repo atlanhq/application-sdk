@@ -1534,31 +1534,49 @@ _SDK_ONLY_REFERENCE_EXEMPT = {
         "no reference app has an `except ImportError` in the code E008 scans "
         "(app/, main.py — tests/ is excluded); verified FND-2702"
     ),
+    "T025": (
+        "no reference app is in bundle mode (each emits a single generated "
+        "manifest), so T025 inspects none of them; the positive shape is the "
+        "SDK e2e harness until a multi-mode reference app exists (FND-2702)"
+    ),
 }
+
+#: A positive citation: a reference-app name immediately followed by a path in
+#: it (``atlan-mysql-app app/handler.py``, ``atlan-openapi-app pyproject.toml``).
+#: A bare mention does not count — T025 once named all three apps only to say
+#: none of them has the shape, and a substring check accepted that.
+_POSITIVE_APP_CITATION = re.compile(
+    r"(?:" + "|".join(re.escape(app) for app in _REFERENCE_APPS) + r")\s+"
+    r"(?:[\w.\-]+/[\w.\-/]*"
+    r"|[\w.\-]+\.(?:py|pkl|ya?ml|json|toml|sql|lock|cfg|txt|md)\b"
+    r"|Dockerfile\b|\.gitignore\b)"
+)
 
 
 def test_autofixable_app_facing_rules_cite_a_reference_app() -> None:
-    """An auto-fixable rule's fix is mirrored from an app, so it must name one.
+    """An auto-fixable rule's fix is mirrored from an app, so it must cite one.
 
     ``test_canonical_references_name_something_checkable`` accepts
     ``application_sdk`` as a reference repo, which is right for a rule whose fix
     is an SDK seam — but an auto-fixable rule is applied by the remediation lane
     by mirroring how a reference app already does it, and an SDK-only reference
     gives the lane nothing to mirror. L012 and P003 both passed the substring
-    check this way while citing no app at all (FND-2702).
+    check this way while citing no app at all (FND-2702). The citation must be
+    positive — an app name followed by a path in it — so naming the apps as
+    counter-examples does not satisfy it.
     """
-    sdk_only = [
+    uncited = [
         r.id
         for r in load_catalog()
         if r.autofixable
         and r.scope in (RuleScope.APP, RuleScope.BOTH)
         and r.canonical_reference
-        and not any(app in r.canonical_reference for app in _REFERENCE_APPS)
+        and not _POSITIVE_APP_CITATION.search(r.canonical_reference)
         and r.id not in _SDK_ONLY_REFERENCE_EXEMPT
     ]
-    assert not sdk_only, (
-        "auto-fixable app-facing rules whose canonical_reference names no "
-        f"reference app — cite a file in one of {list(_REFERENCE_APPS)}: {sdk_only}"
+    assert not uncited, (
+        "auto-fixable app-facing rules whose canonical_reference cites no file "
+        f"in a reference app — cite one in {list(_REFERENCE_APPS)}: {uncited}"
     )
     catalog = {r.id: r for r in load_catalog()}
     stale = [
@@ -1566,7 +1584,7 @@ def test_autofixable_app_facing_rules_cite_a_reference_app() -> None:
         for rule_id in _SDK_ONLY_REFERENCE_EXEMPT
         if rule_id not in catalog
         or not catalog[rule_id].autofixable
-        or any(app in catalog[rule_id].canonical_reference for app in _REFERENCE_APPS)
+        or _POSITIVE_APP_CITATION.search(catalog[rule_id].canonical_reference)
     ]
     assert (
         not stale
@@ -1599,6 +1617,17 @@ def test_canonical_references_do_not_hard_code_counts() -> None:
         "canonical_reference hard-codes a count that will drift as the app "
         f"changes — describe the shape instead: {counted}"
     )
+
+
+def test_positive_app_citation_pattern() -> None:
+    """A citation needs a path after the app name; a bare mention is not one."""
+    assert _POSITIVE_APP_CITATION.search("atlan-mysql-app app/handler.py — …")
+    assert _POSITIVE_APP_CITATION.search("atlan-openapi-app pyproject.toml — …")
+    assert _POSITIVE_APP_CITATION.search("atlan-metabase-app Dockerfile — …")
+    assert not _POSITIVE_APP_CITATION.search(
+        "atlan-openapi-app, atlan-mysql-app and atlan-metabase-app each emit …"
+    )
+    assert not _POSITIVE_APP_CITATION.search("none of the three reference apps")
 
 
 def test_hard_coded_count_pattern() -> None:

@@ -1,6 +1,6 @@
 # Canonical apps
 
-Three public repos are the reference implementations for apps built on this SDK. When you need to know how something *should* look in a consumer app — test layout, contract shape, entrypoint wiring, credential handling — read one of these rather than generalising from an arbitrary `atlan-*-app`. They are also the only repos a conformance rule's `canonical_reference` may name, and every auto-fixable rule names one of them.
+Three public repos are the reference implementations for apps built on this SDK. When you need to know how something *should* look in a consumer app — test layout, contract shape, entrypoint wiring, credential handling — read one of these rather than generalising from an arbitrary `atlan-*-app`. They are also the only apps a conformance rule's `canonical_reference` may name (alongside this SDK, for rules whose fix is an SDK seam). Every auto-fixable app-facing rule cites a file in one of them, except the few with no such site anywhere in the three — each listed with its reason in `_SDK_ONLY_REFERENCE_EXEMPT` in `packages/conformance/tests/test_catalog.py`.
 
 | Repo | Why it's the reference |
 |---|---|

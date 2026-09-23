@@ -1974,16 +1974,15 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T025",
         canonical_reference=(
-            "No reference app is in bundle mode: atlan-openapi-app, atlan-mysql-app and "
-            "atlan-metabase-app each emit a single app/generated/manifest.json, so T025 "
-            "inspects none of them. The coverage it asks for is the SDK harness surface "
-            "in application_sdk/testing/e2e/base.py — one collectable class per "
-            "entrypoint, resolved through `BaseE2ETest.entrypoint` / `manifest_path` "
-            "(`_derive_entrypoint` maps `.../generated/<ep>/manifest.json` to `<ep>`). "
-            "atlan-metabase-app contract/app.pkl is the multi-entrypoint shape T025 "
-            "deliberately does not flag: two @entrypoint methods on one marketplace card "
-            "(the BLDX-1342 route/card split), with extract-lineage run as a DAG node "
-            "inside the single full-DAG e2e."
+            "application_sdk/testing/e2e/base.py — no reference app is in bundle mode "
+            "(each of the three emits a single generated manifest, so T025 inspects "
+            "none of them), and the coverage T025 asks for is this SDK harness surface: "
+            "one collectable class per entrypoint, resolved through "
+            "`BaseE2ETest.entrypoint` / `manifest_path` (`_derive_entrypoint` maps "
+            "`.../generated/<ep>/manifest.json` to `<ep>`). Metabase's contract — two "
+            "@entrypoint methods on one marketplace card (the BLDX-1342 route/card "
+            "split), with extract-lineage run as a DAG node inside the single full-DAG "
+            "e2e — is the multi-entrypoint shape T025 deliberately does not flag."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
