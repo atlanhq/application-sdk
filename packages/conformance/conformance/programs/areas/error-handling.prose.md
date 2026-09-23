@@ -110,11 +110,11 @@ Three things to get right, because all three fail silently:
   elsewhere in the handler does not exempt an unrelated log call.
 - **The level counts.**  For E004 the sanitizer exemption, like the
   `exc_info` one, applies only to `warning`, `error` and `critical`: a
-  `debug` call through a sanitizer does not clear E004 on its own.  Inside a
-  `preflight_check` those are exactly the levels F005 forbids, so a preflight
-  arm clears E004 through the typed-return shape below, not through its log
-  line — keep that line at `debug` with the sanitizer, as
-  `atlan-mysql-app app/handler.py` does.
+  `debug` call through a sanitizer does not clear E004 on its own.  F005
+  forbids `warning`/`warn` inside `preflight_check`; `error`/`critical` are
+  E004-clearing but duplicate the gate's outcome row, so preflight still
+  uses the typed-return shape below, not its log line — keep that line at
+  `debug` with the sanitizer, as `atlan-mysql-app app/handler.py` does.
 
 Never propose an inline `ignore[...]` here.  A suppression records that the
 rule was skipped; the sanitized form records that the credential was handled.

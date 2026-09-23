@@ -277,8 +277,9 @@ def test_exc_info_prescriptions_carry_the_credential_contraindication(
 def test_e004_prose_states_the_sanitizer_level_and_the_inline_row() -> None:
     """The prose must not promise more than `_check_p004` accepts.
 
-    The sanitizer exemption counts only at warning/error/critical — the levels
-    F005 forbids inside preflight — so a prescription that offers a sanitized
+    The sanitizer exemption counts only at warning/error/critical. F005 forbids
+    warning/warn inside preflight_check; error/critical are E004-clearing but
+    duplicate the gate's outcome row, so a prescription that offers a sanitized
     log as clearing E004 at any level sends preflight arms to a fix that does
     not clear (found remediating atlan-cassandra-dse-app, FND-2499).  The prose
     has to name the level and the provable typed shape: the failed
