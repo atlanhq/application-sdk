@@ -480,6 +480,45 @@ local explicitPackageBundleApp = (App) {
   }
 }
 
+// Unmatched-leaf bundle: neither entrypoint name ("managed" / "selfhosted")
+// matches a leaf of "@atlan/docstore" / "@atlan/docstore-server", and neither is a
+// marketplace card, so `packageId` is not an option. `argoPackageName` is the
+// e2e-only explicit mapping; passing null for both reproduces today's contract.
+local function docstoreBundle(managedPkg: String?, selfHostedPkg: String?, selfHostedCard: String?) = (App) {
+  name = "docstore"
+  displayName = "Docstore"
+  icon = "https://assets.atlan.com/assets/snowflake.svg"
+  hasCredentialConfig = false
+  argoPackageNames { "@atlan/docstore"; "@atlan/docstore-server" }
+  entrypoints {
+    new App.Entrypoint {
+      name = "managed"
+      source = "docstore"
+      sourceCategory = "database"
+      argoPackageName = managedPkg
+      contract = bundleCrawlerContract
+    }
+    new App.Entrypoint {
+      name = "selfhosted"
+      source = "docstore"
+      sourceCategory = "database"
+      argoPackageName = selfHostedPkg
+      packageId = selfHostedCard
+      contract = bundleCrawlerContract
+    }
+  }
+}
+
+local docstoreUnset = docstoreBundle(null, null, null)
+local docstoreSet = docstoreBundle("@atlan/docstore", "@atlan/docstore-server", null)
+// Both fields on one entrypoint: the card id stays `packageId`, the e2e
+// identity follows `argoPackageName`.
+local docstoreBoth = docstoreBundle(null, "@atlan/docstore-server", "@atlan/docstore-card")
+local docstoreTypo = docstoreBundle(null, "@atlan/docstore-srv", null)
+
+local function e2eBase(app: App, ep: String): String =
+  app.output.files["app/generated/\(ep)/_e2e_base.py"].text
+
 local bundleCrawlerBase: String =
   bundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
 local bundleMinerBase: String =
@@ -948,6 +987,59 @@ facts {
     explicitCrawlerBase.contains("argo_template_name = \"atlan-unrelated-crawler\"")
     explicitMinerBase.contains("argo_package_name = \"@atlan/unrelated-miner\"")
     explicitMinerBase.contains("argo_template_name = \"atlan-unrelated-miner\"")
+  }
+
+  // ── Bundle _e2e_base.py: explicit e2e-only package (argoPackageName) ──────────
+
+  ["unset: an unmatched bundle keeps today's output (both legs on the first package)"] {
+    // Pins pre-argoPackageName behaviour byte-for-byte on the unmatched shape:
+    // the fallback is the bundle's resolved package plus its argoTemplateName.
+    e2eBase(docstoreUnset, "managed").contains("argo_package_name = \"@atlan/docstore\"")
+    e2eBase(docstoreUnset, "managed").contains("argo_template_name = \"atlan-docstore\"")
+    e2eBase(docstoreUnset, "selfhosted").contains("argo_package_name = \"@atlan/docstore\"")
+    e2eBase(docstoreUnset, "selfhosted").contains("argo_template_name = \"atlan-docstore\"")
+  }
+
+  ["set: each entrypoint gets its own package and derived template"] {
+    e2eBase(docstoreSet, "managed").contains("argo_package_name = \"@atlan/docstore\"")
+    e2eBase(docstoreSet, "managed").contains("argo_template_name = \"atlan-docstore\"")
+    e2eBase(docstoreSet, "selfhosted").contains("argo_package_name = \"@atlan/docstore-server\"")
+    e2eBase(docstoreSet, "selfhosted").contains("argo_template_name = \"atlan-docstore-server\"")
+  }
+
+  ["set: bundle-scoped identity is untouched"] {
+    // One deployed service and one shared credential configmap serve both legs.
+    e2eBase(docstoreSet, "selfhosted").contains("connector_short_name = \"docstore\"")
+    e2eBase(docstoreSet, "selfhosted").contains("connector_config_name = \"atlan-connectors-docstore\"")
+    e2eBase(docstoreSet, "selfhosted").contains("app_service_url = \"http://docstore.docstore-app.svc.cluster.local\"")
+  }
+
+  ["set: marketplace card keying is unchanged (atlan.yaml identical to unset)"] {
+    docstoreSet.output.files["atlan.yaml"].text == docstoreUnset.output.files["atlan.yaml"].text
+    !docstoreSet.output.files["atlan.yaml"].text.contains("package_id")
+    !docstoreSet.output.files["atlan.yaml"].text.contains("marketplace_card")
+  }
+
+  ["set: only the e2e bases differ from the unset contract"] {
+    local setFiles = docstoreSet.output.files.toMap()
+    local unsetFiles = docstoreUnset.output.files.toMap()
+    setFiles.keys == unsetFiles.keys
+    setFiles.keys.every((k) ->
+      k.endsWith("/_e2e_base.py") || setFiles[k].text == unsetFiles[k].text)
+  }
+
+  ["argoPackageName wins the e2e identity; packageId still keys the card"] {
+    e2eBase(docstoreBoth, "selfhosted").contains("argo_package_name = \"@atlan/docstore-server\"")
+    e2eBase(docstoreBoth, "selfhosted").contains("argo_template_name = \"atlan-docstore-server\"")
+    docstoreBoth.output.files["atlan.yaml"].text.contains("package_id: '@atlan/docstore-card'")
+    docstoreBoth.output.files["atlan.yaml"].text.contains("marketplace_card: true")
+  }
+
+  ["argoPackageName must be listed in argoPackageNames"] {
+    // Deterministic guard, not a fuzzy match: a typo fails the eval instead of
+    // generating a suite that submits against a package that is never deployed.
+    module.catch(() -> e2eBase(docstoreTypo, "selfhosted"))
+      .contains("sets argoPackageName = \"@atlan/docstore-srv\", which is not in the bundle's argoPackageNames")
   }
 
   // ── Bundle _e2e_base.py: harness expectations derived from the pipeline ───────

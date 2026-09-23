@@ -2,6 +2,7 @@ amends "pkl:test"
 
 import "../examples/behind-the-scenes/app.pkl" as behindTheScenesApp
 import "../examples/bundle/app.pkl" as bundleApp
+import "../examples/bundle-argo-identity/app.pkl" as bundleArgoIdentityApp
 import "../examples/card-split/app.pkl" as cardSplitApp
 import "../examples/connection-ref/app.pkl" as connectionRefApp
 import "../examples/deploy/app.pkl" as deployApp
@@ -246,6 +247,20 @@ facts {
     cardSplitAtlanYaml.contains("package_id: '@atlan/card-split'")
     cardSplitAtlanYaml.contains("marketplace_card: true")
     !cardSplitAtlanYaml.contains("marketplace_card: false")
+  }
+
+  ["bundle-argo-identity example: argoPackageName routes each e2e base, not the card"] {
+    local yaml: String = bundleArgoIdentityApp.output.files["atlan.yaml"].text
+    local selfHosted: String = bundleArgoIdentityApp.output.files["app/generated/selfhosted/_e2e_base.py"].text
+    local managed: String = bundleArgoIdentityApp.output.files["app/generated/managed/_e2e_base.py"].text
+    managed.contains("argo_package_name = \"@atlan/docstore\"")
+    managed.contains("argo_template_name = \"atlan-docstore\"")
+    selfHosted.contains("argo_package_name = \"@atlan/docstore-server\"")
+    selfHosted.contains("argo_template_name = \"atlan-docstore-server\"")
+    // e2e-only: no entrypoint becomes a marketplace card.
+    !yaml.contains("package_id:")
+    !yaml.contains("marketplace_card:")
+    !yaml.contains("argo_package_name:")
   }
 
   ["marketplaceCard = false suppresses package_id and marketplace_card for single-entrypoint apps"] {

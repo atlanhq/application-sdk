@@ -1,0 +1,49 @@
+/// Bundle Argo identity example — per-entrypoint e2e package for a bundle whose
+/// entrypoint names match none of its Argo package leaves.
+///
+/// `managed` and `selfhosted` share one deployed service, but each runs its own
+/// Argo package. Neither name matches a leaf of `argoPackageNames` ("docstore",
+/// "docstore-server"), and neither entrypoint is a marketplace card, so
+/// `packageId` is not an option (it would also emit `package_id` +
+/// `marketplace_card` and re-key the entrypoint). Without `argoPackageName` both
+/// generated e2e bases would name the first package, and the `selfhosted` suite
+/// would submit the `managed` workflow — and pass.
+///
+/// `argoPackageName` affects only `app/generated/<ep>/_e2e_base.py`:
+///   managed    → argo_package_name "@atlan/docstore",        argo_template_name "atlan-docstore"
+///   selfhosted → argo_package_name "@atlan/docstore-server", argo_template_name "atlan-docstore-server"
+/// `atlan.yaml` is identical to the same contract without it.
+amends "../../src/App.pkl"
+
+import "managed.pkl" as Managed
+import "selfhosted.pkl" as SelfHosted
+
+name = "docstore"
+displayName = "Docstore"
+icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+hasCredentialConfig = false
+
+argoPackageNames {
+  "@atlan/docstore"
+  "@atlan/docstore-server"
+}
+
+entrypoints {
+  new Entrypoint {
+    name = "managed"
+    displayName = "Managed"
+    source = "docstore"
+    sourceCategory = "database"
+    // E2E identity only — must be one of `argoPackageNames`.
+    argoPackageName = "@atlan/docstore"
+    contract = Managed
+  }
+  new Entrypoint {
+    name = "selfhosted"
+    displayName = "Self-hosted"
+    source = "docstore"
+    sourceCategory = "database"
+    argoPackageName = "@atlan/docstore-server"
+    contract = SelfHosted
+  }
+}

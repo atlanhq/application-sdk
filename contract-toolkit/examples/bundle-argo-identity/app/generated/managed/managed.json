@@ -1,0 +1,31 @@
+{
+  "id": "managed",
+  "name": "Managed",
+  "logo": "https://assets.atlan.com/assets/fullscreen-open.svg",
+  "config": {
+    "properties": {
+      "cluster-url": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Cluster URL",
+          "hidden": false,
+          "help": "Managed cluster endpoint.",
+          "placeholder": "docstore.example.com",
+          "grid": 8
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Configuration",
+        "description": "",
+        "id": "configuration",
+        "properties": [
+          "cluster-url"
+        ]
+      }
+    ]
+  }
+}

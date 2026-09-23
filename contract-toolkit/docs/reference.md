@@ -95,7 +95,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
 | `type` | String | `"connector"` | Marketplace type. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
-| `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names — the single knob for Argo package naming. Rendered into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty, consumed by the marketplace; the e2e harness's `argo_package_name` is taken from the first entry (falls back to `@atlan/{name}` when empty). |
+| `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names — the single knob for Argo package naming. Rendered into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty, consumed by the marketplace; the e2e harness's `argo_package_name` is taken from the first entry (falls back to `@atlan/{name}` when empty). In a multi-entrypoint bundle each entrypoint's `_e2e_base.py` resolves its own entry instead — explicitly via `Entrypoint.argoPackageName`, else `Entrypoint.packageId`, else by leaf match. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
 | `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 | `shortDescription` | String | `""` | One-line marketplace card description. Emitted as top-level `short_description` (omitted when empty). |
@@ -853,6 +853,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | `categories` | Listing\<String\> | `[]` | Marketplace category tags for this entrypoint. |
 | `docsUrl` | String? | null | Documentation URL. Falls back to the app-level `docsUrl` when null. |
 | `packageId` | String? | null | Stable marketplace package ID (e.g. `"@atlan/qlik-sense"`). When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`. Required for multi-entrypoint apps to preserve backward compat with legacy Argo workflows that reference the app by its stable card ID. Entrypoints without a `packageId` are routable but do not appear as marketplace cards. |
+| `argoPackageName` | String? | null | **E2E identity only.** Argo package this entrypoint's generated `app/generated/{name}/_e2e_base.py` submits against. When set, `argo_package_name` is this value and `argo_template_name` is `"atlan-{leaf}"` (e.g. `"@atlan/docstore-server"` → `"atlan-docstore-server"`); it takes precedence over `packageId` for the e2e identity. Emits nothing into `atlan.yaml` — no `package_id`, no `marketplace_card`, no card re-keying — and leaves `connector_short_name` / `connector_config_name` bundle-scoped. Must be one of the bundle's `argoPackageNames` (any other value fails the eval). Use it when entrypoint names match no `argoPackageNames` leaf and the entrypoint is not a card. When null, resolution is unchanged: `packageId`, else the leaf/`-{name}`-suffix match, else the bundle's first package and `argoTemplateName`. See [`examples/bundle-argo-identity/`](../examples/bundle-argo-identity/). |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:

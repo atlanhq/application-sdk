@@ -58,6 +58,9 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
   diverse widgets, UIRules, extraNodes.
 - `bundle`: multi-entrypoint app (crawler + miner); shared credential configmap;
   per-entrypoint artifact subfolders.
+- `bundle-argo-identity`: bundle whose entrypoint names match no
+  `argoPackageNames` leaf; `Entrypoint.argoPackageName` routes each generated
+  `_e2e_base.py` to its own Argo package without creating a marketplace card.
 - `deploy`: single-pool migration example — KEDA, resources, env, pool-level `overrides`; shows v0.16.x → v0.17.0 migration path.
 - `pools`: `pools` map (preferred) — named hot/cold worker pools with per-pool `cooldownPeriod` and resources.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.

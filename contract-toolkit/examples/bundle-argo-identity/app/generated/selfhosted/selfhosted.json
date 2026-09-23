@@ -1,0 +1,31 @@
+{
+  "id": "selfhosted",
+  "name": "Self-hosted",
+  "logo": "https://assets.atlan.com/assets/fullscreen-open.svg",
+  "config": {
+    "properties": {
+      "host": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Host",
+          "hidden": false,
+          "help": "Self-hosted server host.",
+          "placeholder": "docstore.internal",
+          "grid": 8
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Configuration",
+        "description": "",
+        "id": "configuration",
+        "properties": [
+          "host"
+        ]
+      }
+    ]
+  }
+}

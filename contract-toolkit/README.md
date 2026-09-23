@@ -98,6 +98,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/full/`](examples/full/) — every overridable feature: JDBC URL auth, all pipeline steps, diverse widgets, UIRules, extraNodes.
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
+- [`examples/bundle-argo-identity/`](examples/bundle-argo-identity/) — bundle whose entrypoint names match no `argoPackageNames` leaf: `argoPackageName` gives each entrypoint's generated `_e2e_base.py` its own Argo package/template without making it a marketplace card.
 - [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
 - [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
 - [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
@@ -482,6 +483,19 @@ app/generated/
 **Shared credentials:** Set `connectorConfigName = "atlan-connectors-teradata"` in each entrypoint contract. The bundle hoists the credential config to `app/generated/` root and deduplicates by filename. Duplicate names with different content fail generation.
 
 See [`examples/bundle/`](examples/bundle/) for a runnable example.
+
+**Per-entrypoint e2e identity:** each entrypoint's generated `app/generated/<ep>/_e2e_base.py` submits against its own Argo package. The toolkit resolves it from `packageId`, or from the `argoPackageNames` entry whose leaf equals the entrypoint name or ends with `-<name>` (`@atlan/teradata-miner` → `miner`). When neither applies — entrypoint names match no leaf, and the entrypoint is not a marketplace card so `packageId` would wrongly add and re-key a card — set `argoPackageName`:
+
+```pkl
+argoPackageNames { "@atlan/docstore"; "@atlan/docstore-server" }
+
+entrypoints {
+  new Entrypoint { name = "managed";    argoPackageName = "@atlan/docstore";        contract = Managed }
+  new Entrypoint { name = "selfhosted"; argoPackageName = "@atlan/docstore-server"; contract = SelfHosted }
+}
+```
+
+It changes only `argo_package_name` / `argo_template_name` (`"atlan-<leaf>"`) in that entrypoint's `_e2e_base.py`; `atlan.yaml` is unchanged, and `connector_short_name` / `connector_config_name` stay bundle-scoped. The value must be listed in `argoPackageNames`. Without it every unmatched entrypoint's base names the first package, and a second entrypoint's suite runs the first entrypoint's workflow. Do not hand-override the `argo_*` attributes in `tests/` instead (conformance T023). See [`examples/bundle-argo-identity/`](examples/bundle-argo-identity/).
 
 ## Widget Types
 

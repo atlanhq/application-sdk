@@ -1,0 +1,26 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: docstore
+display_name: Docstore
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+visibility: public
+argo_package_names:
+- '@atlan/docstore'
+- '@atlan/docstore-server'
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: managed
+  display_name: Managed
+  icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+  type: connector
+  source: docstore
+  source_category: database
+- name: selfhosted
+  display_name: Self-hosted
+  icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+  type: connector
+  source: docstore
+  source_category: database

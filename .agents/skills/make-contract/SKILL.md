@@ -351,6 +351,15 @@ invariant checks.
 - Marketplace-card presence: single-entrypoint uses `marketplaceCard: Boolean`;
   multi-entrypoint controls each card via the entrypoint's `packageId` (set it
   to make the entrypoint a card; omit to keep it routable-only).
+- Per-entrypoint e2e identity (multi-entrypoint only): each
+  `app/generated/<ep>/_e2e_base.py` names its own Argo package — from
+  `packageId`, else the `argoPackageNames` entry whose leaf equals the
+  entrypoint name or ends with `-<name>`. When entrypoint names match no leaf
+  and the entrypoint is not a card, set `argoPackageName` (e2e-only; must be
+  listed in `argoPackageNames`; template derives as `atlan-<leaf>`; emits
+  nothing into `atlan.yaml`). Never set `packageId` just to fix e2e routing — it
+  adds and re-keys a marketplace card — and never hand-override
+  `argo_package_name` / `argo_template_name` in `tests/` (conformance T023).
 - `emitEntrypoints` is **deprecated** and slated for removal — do not adopt it in
   new work; use per-entrypoint `packageId` instead. (An existing app that sets it
   is a pattern to migrate off, not to copy.)

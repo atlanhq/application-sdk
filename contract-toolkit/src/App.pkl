@@ -251,7 +251,8 @@ taskQueuePrefix: String = "atlan-\(name)"
 ///   - rendered into `atlan.yaml` as `argo_package_names` (between `visibility`
 ///     and `build_tag`), consumed by the marketplace; emitted only when non-empty.
 ///   - the e2e test harness's single `argo_package_name`, taken as the first
-///     entry.
+///     entry. In a multi-entrypoint bundle each entrypoint's e2e base picks its
+///     own entry instead — see `Entrypoint.argoPackageName`.
 /// Single-package apps can leave this empty: the harness falls back to
 /// `"@atlan/<name>"` and `atlan.yaml` omits the key. Set one entry for a scoped
 /// or non-standard package, or several for a multi-package app.
@@ -1855,6 +1856,39 @@ open class Entrypoint {
   /// Entrypoints without a `packageId` are always routable via `?entrypoint=` but
   /// do not appear as marketplace cards.
   packageId: String?
+
+  /// Argo WorkflowTemplate package this entrypoint's generated e2e suite submits
+  /// against (e.g. `"@atlan/docdb-cloud"`). E2E identity only.
+  ///
+  /// Default: `null`. The generated `app/generated/<name>/_e2e_base.py` then
+  /// resolves its package exactly as before: `packageId` if set, else the
+  /// `argoPackageNames` entry whose leaf equals the entrypoint name or ends with
+  /// `-<name>`, else the bundle's own package (`argoPackageNames.first`) and
+  /// `argoTemplateName`.
+  ///
+  /// Set it on each entrypoint of a multi-entrypoint bundle whose entrypoint
+  /// names match none of its `argoPackageNames` leaves and which cannot set
+  /// `packageId` because that would also turn the entrypoint into a
+  /// marketplace card and re-key it. Without it every such entrypoint's e2e
+  /// base names the first package, so a second entrypoint's suite submits the
+  /// first entrypoint's workflow and still passes.
+  ///
+  /// What changes: only this entrypoint's `_e2e_base.py` — `argo_package_name`
+  /// is this value verbatim and `argo_template_name` is `"atlan-<leaf>"` (the
+  /// same derivation `packageId` gets). It takes precedence over `packageId`
+  /// for the e2e identity when both are set.
+  ///
+  /// What does not change: `atlan.yaml` (no `package_id`, no
+  /// `marketplace_card`, no new key), `argo_package_names`, the manifest,
+  /// configmaps, `connector_short_name` and `connector_config_name` — those
+  /// stay bundle-scoped because one deployed service and one shared credential
+  /// configmap serve every entrypoint.
+  ///
+  /// Must be one of the bundle's `argoPackageNames`; any other value fails the
+  /// eval, because the marketplace deploys only the packages listed there.
+  /// Has no effect on a single-entrypoint app, whose e2e base uses the
+  /// app-level `argoPackageNames` / `argoTemplateName`.
+  argoPackageName: String?
 
   /// Optional imported contract for this entrypoint.
   /// When set and `emitGeneratedArtifacts` is true, all files from
@@ -3707,8 +3741,10 @@ local function pkgLeaf(pkg: String): String = pkg.split("/").last
 //
 // A bundle ships one package per marketplace card, and a miner leg must submit
 // against the MINER's package/template — submitting against the crawler's runs
-// the wrong workflow and passes. `packageId` states the mapping outright; when it
-// is absent, match on the package leaf, which covers both shapes in the fleet:
+// the wrong workflow and passes. `argoPackageName` states the mapping outright
+// for e2e only (it must be listed in `argoPackageNames`); `packageId` states it
+// too, but also makes the entrypoint a marketplace card. When both are absent,
+// match on the package leaf, which covers both shapes in the fleet:
 //
 //   argoPackageNames { "@atlan/crawler"; "@atlan/miner" }            leaf == ep.name
 //   argoPackageNames { "@atlan/teradata"; "@atlan/teradata-miner" }  leaf ends with the name
@@ -3716,9 +3752,18 @@ local function pkgLeaf(pkg: String): String = pkg.split("/").last
 // Returns null when nothing matches — e.g. teradata's `crawler` entrypoint, whose
 // package is the bare "@atlan/teradata". The caller then falls back to the
 // bundle's own resolved package and template, which is right for exactly that
-// case: the card that carries no suffix IS the bundle's primary one.
+// case: the card that carries no suffix IS the bundle's primary one. A bundle
+// whose entrypoint names match no leaf at all (and whose entrypoints are not
+// cards) sets `argoPackageName` instead — deliberately an explicit mapping, not
+// a looser match.
 local function epMatchedPackage(ep: Entrypoint): String? =
-  if (ep.packageId != null) ep.packageId
+  if (ep.argoPackageName != null)
+    if (argoPackageNames.toList().contains(ep.argoPackageName!!)) ep.argoPackageName
+    else throw("Entrypoint \"\(ep.name)\" sets argoPackageName = \"\(ep.argoPackageName)\", "
+      + "which is not in the bundle's argoPackageNames [\(argoPackageNames.toList().join(", "))]. "
+      + "The e2e suite would submit against a package the marketplace never deploys; "
+      + "add it to argoPackageNames or correct the value.")
+  else if (ep.packageId != null) ep.packageId
   else
     let (suffix = "-" + ep.name)
     let (hits = (new Listing {

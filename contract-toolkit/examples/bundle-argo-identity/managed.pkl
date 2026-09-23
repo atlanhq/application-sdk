@@ -1,0 +1,21 @@
+/// `managed` entrypoint contract for the bundle-argo-identity example.
+amends "../../src/App.pkl"
+
+name = "managed"
+displayName = "Managed"
+icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+hasCredentialConfig = false
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["cluster-url"] = new TextInput {
+          title = "Cluster URL"
+          helpText = "Managed cluster endpoint."
+          placeholderText = "docstore.example.com"
+        }
+      }
+    }
+  }
+}

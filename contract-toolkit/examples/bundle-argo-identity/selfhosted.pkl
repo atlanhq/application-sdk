@@ -1,0 +1,21 @@
+/// `selfhosted` entrypoint contract for the bundle-argo-identity example.
+amends "../../src/App.pkl"
+
+name = "selfhosted"
+displayName = "Self-hosted"
+icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+hasCredentialConfig = false
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["host"] = new TextInput {
+          title = "Host"
+          helpText = "Self-hosted server host."
+          placeholderText = "docstore.internal"
+        }
+      }
+    }
+  }
+}
