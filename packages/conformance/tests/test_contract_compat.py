@@ -1092,6 +1092,24 @@ def test_b005_chained_type_alias_off_any_is_not_a_break(tmp_path: Path) -> None:
     assert "B005" not in _ids(findings)
 
 
+def test_b005_plain_name_alias_is_not_expanded(tmp_path: Path) -> None:
+    findings = _scan_aliased(tmp_path, "Ident = str", "Ident", "str")
+    assert "B005" in _ids(findings)
+    terminal_state = get_rule("B005").terminal_state or ""
+    assert "`X = <name>`" in terminal_state
+
+
+def test_b005_dense_alias_chain_stays_bounded(tmp_path: Path) -> None:
+    import time
+
+    lines = ["A0 = dict[str, str]"]
+    lines += [f"A{i} = dict[A{i - 1}, A{i - 1}]" for i in range(1, 17)]
+    start = time.monotonic()
+    findings = _scan_aliased(tmp_path, "\n".join(lines), "A16", "dict[str, Any]")
+    assert time.monotonic() - start < 2.0
+    assert "B005" in _ids(findings)
+
+
 def test_b005_chained_type_alias_with_a_different_outer_shape_still_fires(
     tmp_path: Path,
 ) -> None:
