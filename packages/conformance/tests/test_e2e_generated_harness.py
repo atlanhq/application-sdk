@@ -124,6 +124,16 @@ def test_t023_rule_metadata() -> None:
     assert rule.rationale.strip()
 
 
+def test_t023_warns_that_bundle_overrides_can_be_load_bearing() -> None:
+    """On a bundle the generated identity can collapse onto the primary
+    entrypoint, so the obvious T023 fix (delete the override) silently points
+    an e2e leg at the wrong workflow. The rule must say so before anyone
+    applies it (found in atlan-mongodbatlas-app, FND-2557)."""
+    text = get_rule("T023").rule_interactions or ""
+    for needle in ("bundle", "packageId", "argoPackageNames", "load-bearing"):
+        assert needle in text, f"T023 rule_interactions does not mention {needle}"
+
+
 def test_t024_rule_metadata() -> None:
     rule = get_rule("T024")
     assert rule.name == "E2ERunModeUnset"

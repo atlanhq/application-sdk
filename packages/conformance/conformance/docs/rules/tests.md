@@ -1286,6 +1286,18 @@ it touched, which is what this rule exists to stop recurring.
   body and the Mustache substitutions all come from the generated
   `MetabaseGeneratedE2EBase` and MetabaseMustacheSubstitutions. Hand-declaring them in
   the test freezes a copy of what the contract will regenerate.
+- **Interacts with:** Multi-entrypoint bundles: the generated per-entrypoint app/generated/<ep>/_e2e_base.py
+  is bundle-scoped by design for `connector_short_name` (and the default
+  `connector_config_name`), and `argo_package_name`/`argo_template_name` are
+  per-entrypoint only when the entrypoint sets `packageId` or its name matches a package
+  leaf in `argoPackageNames`. `packageId` also re-keys the marketplace card, so an app
+  may have dropped it deliberately. When neither applies, the generated values COLLAPSE
+  onto the bundle primary and every entrypoint's e2e leg submits against the same
+  workflow — so an override of these attributes in a subclass of the per-entrypoint
+  generated base can be load-bearing, and deleting it makes a leg test the wrong
+  entrypoint while staying green. Before removing one, compare the override with the
+  generated value; if they differ on a bundle, the fix is in the contract (`packageId`)
+  or the toolkit, not in the test, and the finding stays open until then.
 
 A module under `tests/` declares scaffolding the contract toolkit generates. Three
 shapes are flagged:
