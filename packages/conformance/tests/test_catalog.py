@@ -1434,8 +1434,8 @@ def test_rules_citing_a_suppression_as_compliant_license_it() -> None:
     """
     # Only a suppression of the rule's OWN id is a carve-out that needs a
     # licence. A directive for a different rule is just a site the reference
-    # happens to show — F020 (directive hygiene) cites a well-formed
-    # ``ignore[E020]`` precisely as its compliant shape, and that says nothing
+    # happens to show — F020 (directive hygiene) cites well-formed
+    # ``ignore[P028]`` directives precisely as its compliant shape, and that says nothing
     # about when F020 itself may be suppressed.
     cites_suppression = re.compile(r"ignore\[([A-Z]\d+)\]")
     unlicensed = [

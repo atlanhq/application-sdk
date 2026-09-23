@@ -413,11 +413,14 @@ outcome mirroring the error-handling shape in the reference app named by
   `is_success` / `ok` / `status_code`) returns an empty or `None` sentinel, so
   a failed fetch publishes as an empty success.  Raise a typed error instead
   (see E012 for choosing the category), which is the default edit.  Where the
-  empty return is deliberate, it needs an evidence trail *and* an inline
-  `ignore[E020]` naming it — `atlan-metabase-app app/extracts/databases.py`
-  has exactly that, pointing at the residual file that records the failure,
-  and the same justified shape recurs across `app/extracts/`.  Without that
-  trail the empty return has to raise.
+  empty return is deliberate, meaning one failure must not abort the crawl,
+  keep the raise and catch the typed error in the tolerating function.  The
+  handler logs with `exc_info=True`, records a residual and returns the empty
+  sentinel, and the run declares the gap as `PARTIAL_SUCCESS`.
+  `atlan-metabase-app app/extracts/responses.py` (`json_or_raise`) and
+  `app/extracts/databases.py` show the shape.  A site that already records
+  and declares its gap under an `ignore[E020]` is converted to that typed
+  catch.  Never give it a raise-only edit, which deletes the degradation.
 
 - **E013 LegacyAtlanErrorRaise** — the code raises a deprecated `AtlanError`
   subclass.  Consult the `/typed-failures` prescription: propose replacing
@@ -435,7 +438,9 @@ outcome mirroring the error-handling shape in the reference app named by
   `classification = "judgment"` and a best-effort fix guided by the `hint` and
   `message`.  (E020: replace the empty/None return on
   a checked HTTP-failure branch with a raised typed `AppError` so the failure
-  propagates instead of publishing an empty success.)
+  propagates instead of publishing an empty success.  Where the site degrades
+  deliberately, catch that typed error at the tolerating function rather
+  than suppressing.)
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
