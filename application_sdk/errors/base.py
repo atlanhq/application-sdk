@@ -91,7 +91,7 @@ def _sub_userinfo(m: re.Match[str]) -> str:
 # short enough to appear as the tail of a longer word; the other tokens are
 # distinctive enough not to need one.
 _SECRET_PARAM_RE = re.compile(
-    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key|signature|(?<![a-z0-9_])sig)=)(?:\{[^}]*\}|[^\s&,;#]+)",
+    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?<![a-z0-9_])sig)=)(?:\{[^}]*\}|[^\s&,;#]+)",
 )
 
 
