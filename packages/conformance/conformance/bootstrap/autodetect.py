@@ -15,6 +15,8 @@ from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_apt_packages,
     extract_build_publish_lfs,
+    extract_build_publish_private_git_auth,
+    extract_checks_private_git_deps,
     extract_conformance_private_git_deps,
     extract_field,
     extract_release_private_git_auth,
@@ -152,6 +154,36 @@ def _read_release_private_git_auth(path: pathlib.Path) -> str:
         return ""
     try:
         return extract_release_private_git_auth(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _read_build_publish_private_git_auth(path: pathlib.Path) -> str:
+    """Return ``"true"`` if *path* (a ``build-and-publish.yaml``) opts the
+    release image build into private ``atlanhq`` git auth, else ``""``.
+
+    Same extractor as the C002 drift checker, so a detected opt-in is
+    re-rendered byte-identically and can't read as drift.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return extract_build_publish_private_git_auth(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _read_checks_private_git_deps(path: pathlib.Path) -> str:
+    """Return ``"true"`` if *path* (a ``checks.yml``) opts pre-commit into
+    private ``atlanhq`` git auth, else ``""``.
+
+    Same extractor as the C002 drift checker, so a detected opt-in is
+    re-rendered byte-identically and can't read as drift.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return extract_checks_private_git_deps(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
         return ""
 
@@ -309,6 +341,17 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
     if not kwargs["release_private_git_auth"]:
         kwargs["release_private_git_auth"] = _read_release_private_git_auth(
             root / ".github" / "workflows" / "release.yaml"
+        )
+    # The other two places the same private dep is resolved: certify's
+    # `uv sync` in build-and-publish.yaml, and setup-deps' `uv sync` ahead of
+    # pre-commit in checks.yml. Both shims are always-overwrite too.
+    if not kwargs["build_publish_private_git_auth"]:
+        kwargs["build_publish_private_git_auth"] = _read_build_publish_private_git_auth(
+            root / ".github" / "workflows" / "build-and-publish.yaml"
+        )
+    if not kwargs["checks_private_git_deps"]:
+        kwargs["checks_private_git_deps"] = _read_checks_private_git_deps(
+            root / ".github" / "workflows" / "checks.yml"
         )
     # app-name: atlan.yaml `name:` field, else the repo directory name.
     if not kwargs["app_name"]:

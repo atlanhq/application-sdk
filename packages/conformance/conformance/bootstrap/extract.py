@@ -1073,6 +1073,31 @@ def extract_release_private_git_auth(text: str) -> str:
     return "true" if extract_field(text, "private_git_auth") == "true" else ""
 
 
+def extract_build_publish_private_git_auth(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``build-and-publish.yaml``) opts the
+    release image build into private ``atlanhq`` git auth, else ``""``.
+
+    The certify job's ``uv sync`` re-resolves the private ``ssh://`` dep the
+    same way the release bump's ``uv lock`` does, and dies the same way
+    without auth. ``secrets: inherit`` is already unconditional on this shim,
+    so the opt-in is the one input line. Only a literal ``true`` survives.
+    """
+    return "true" if extract_field(text, "private_git_auth") == "true" else ""
+
+
+def extract_checks_private_git_deps(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``checks.yml``) opts pre-commit into
+    private ``atlanhq`` git auth, else ``""``.
+
+    ``setup-deps`` runs ``uv sync`` before any hook, so a repo pinning a
+    private ``ssh://`` dep fails pre-commit on ``Permission denied
+    (publickey)`` without it. Two lines, like ``conformance.yaml``: the input
+    and the ``secrets: inherit`` feeding it ``ORG_PAT_GITHUB``. Only a
+    literal ``true`` survives.
+    """
+    return "true" if extract_field(text, "private-git-deps") == "true" else ""
+
+
 def extract_field(text: str, field: str) -> str:
     """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
 

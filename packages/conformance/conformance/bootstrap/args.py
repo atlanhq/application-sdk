@@ -133,6 +133,8 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         # above, losing these breaks CI outright rather than degrading it.
         "conformance_private_git_deps": "",
         "release_private_git_auth": "",
+        "build_publish_private_git_auth": "",
+        "checks_private_git_deps": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",

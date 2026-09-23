@@ -71,6 +71,8 @@ from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_apt_packages,
     extract_build_publish_lfs,
+    extract_build_publish_private_git_auth,
+    extract_checks_private_git_deps,
     extract_conformance_private_git_deps,
     extract_field,
     extract_release_private_git_auth,
@@ -307,6 +309,11 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         # (re-run bootstrap) deletes the line — and here that is not caught by a
         # red PR check, because the gap only bites a `release` event.
         kwargs["build_publish_lfs"] = extract_build_publish_lfs(on_disk)
+        # The certify job's private-dep auth. Same shape as release.yaml's:
+        # without the read-back its only "fix" (re-run bootstrap) deletes it.
+        kwargs["build_publish_private_git_auth"] = (
+            extract_build_publish_private_git_auth(on_disk)
+        )
     elif name == "vulnerability-scan.yml":
         # The LFS checkout on the scan's image build is a per-repo value like
         # any other rendered param: an app that vendors LFS-tracked assets into
@@ -336,6 +343,8 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         # this, every such repo would report permanent C002 drift whose only
         # "fix" (re-run bootstrap) deletes the step its CI needs.
         kwargs["system_deps"] = extract_apt_packages(on_disk)
+        # Private-dep auth ahead of pre-commit's `uv sync`, same as above.
+        kwargs["checks_private_git_deps"] = extract_checks_private_git_deps(on_disk)
 
     canonical = render(name, **kwargs)
 
