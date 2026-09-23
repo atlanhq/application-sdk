@@ -27,6 +27,7 @@ from ._pytest_collection import (
     is_test_function,
 )
 from ._scope import SDK_PACKAGE_PREFIX, detect_scope, is_sdk_package_name
+from ._sdk_app import SDK_APP_BASE_NAMES
 from ._toml_suppress import (
     SuppressionsMap,
     _is_suppressed,
@@ -38,6 +39,7 @@ __all__ = [
     "safe_read_json",
     "safe_read_text",
     "EXCLUDE_DIRS",
+    "SDK_APP_BASE_NAMES",
     "SDK_PACKAGE_PREFIX",
     "TOOL_VERSION",
     "SuppressionsMap",
