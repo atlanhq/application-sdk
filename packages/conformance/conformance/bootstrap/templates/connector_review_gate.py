@@ -150,8 +150,8 @@ def find_review(
     return found
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the gate and return the process exit code."""
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the gate's argument parser."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--author",
@@ -179,7 +179,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="fail on a missing review; without it, only warn",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the gate and return the process exit code."""
+    args = _build_parser().parse_args(argv)
 
     if args.reviewer_config and not pathlib.Path(args.reviewer_config).is_file():
         print(  # noqa: T201
