@@ -468,6 +468,12 @@ They differ on who wins because they are different kinds of value. `connectionNa
 
 If the asset declares the attribute but refuses assignment (frozen, or a property with no setter), the value is dropped rather than failing the transform — every asset type that genuinely needs these exposes settable fields.
 
+#### Placeholder `guid` removal
+
+The seam also *removes* one value. pyatlan's `.creator()` methods are wrapped in `@init_guid`, which sets `guid` to a fresh random negative integer on every call. That placeholder means "not yet persisted" to pyatlan's own client; the SDK never saves through that client, so written out it is only noise that changes every run. `atlan-publish-app` hashes the whole entity, so a changing `guid` classifies every entity as DIFF instead of SYNCED and forces a per-entity diff that finds nothing (FND-2720).
+
+`entity_bytes()` therefore clears a placeholder `guid` (a negative-integer string) before the dispatch: set to `UNSET` on a `pyatlan_v9` asset, dropped from a dict. Both envelopes are covered, and the `PYATLAN` path stays on the native encoder. A real guid — a UUID a mapper set on purpose — is kept. Connectors should not clear the guid themselves.
+
 The stamping itself is `application_sdk.common.last_sync.set_last_sync_details_on_asset()`, unwrapped — the seam adds the wider aperture (`entity_bytes` takes an `object`, so the shape may be a dict, may not declare the fields, or may refuse assignment) but not a second definition of what stamping means. An asset object qualifies when it satisfies `LastSyncStampable`, a runtime-checkable Protocol over the three fields; it is a structural type rather than pyatlan's `Asset` because both pyatlan generations are valid targets and they are unrelated classes.
 
 **Resolve `last_sync` once per transform activity**, never per record:
