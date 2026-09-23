@@ -71,7 +71,11 @@ from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_apt_packages,
     extract_build_publish_lfs,
+    extract_build_publish_private_git_auth,
+    extract_checks_private_git_deps,
+    extract_conformance_private_git_deps,
     extract_field,
+    extract_release_private_git_auth,
     extract_renovate_automerge,
     extract_tests_yaml_params,
     extract_use_ghcr_base,
@@ -305,6 +309,11 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         # (re-run bootstrap) deletes the line — and here that is not caught by a
         # red PR check, because the gap only bites a `release` event.
         kwargs["build_publish_lfs"] = extract_build_publish_lfs(on_disk)
+        # The certify job's private-dep auth. Same shape as release.yaml's:
+        # without the read-back its only "fix" (re-run bootstrap) deletes it.
+        kwargs["build_publish_private_git_auth"] = (
+            extract_build_publish_private_git_auth(on_disk)
+        )
     elif name == "vulnerability-scan.yml":
         # The LFS checkout on the scan's image build is a per-repo value like
         # any other rendered param: an app that vendors LFS-tracked assets into
@@ -315,6 +324,18 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         kwargs["vuln_scan_lfs"] = extract_vulnerability_scan_lfs(on_disk)
     elif name == "conformance.yaml":
         kwargs["exit_zero"] = _extract_exit_zero(on_disk, root)
+        # A repo pinning a private atlanhq dep via ssh:// needs this input (and
+        # the `secrets: inherit` that feeds it ORG_PAT_GITHUB). Without the
+        # read-back it reports permanent C002 drift whose only "fix" (re-run
+        # bootstrap) deletes the line and reds the Conformance Gate itself.
+        kwargs["conformance_private_git_deps"] = extract_conformance_private_git_deps(
+            on_disk
+        )
+    elif name == "release.yaml":
+        # The same per-repo opt-in on the version-bump job. Quieter than the
+        # one above and later: every PR check stays green while the release
+        # path is broken.
+        kwargs["release_private_git_auth"] = extract_release_private_git_auth(on_disk)
     elif name == "checks.yml":
         # The optional system-deps step is a per-repo value like any other
         # rendered param: a repo that legitimately needs build headers before
@@ -322,6 +343,8 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         # this, every such repo would report permanent C002 drift whose only
         # "fix" (re-run bootstrap) deletes the step its CI needs.
         kwargs["system_deps"] = extract_apt_packages(on_disk)
+        # Private-dep auth ahead of pre-commit's `uv sync`, same as above.
+        kwargs["checks_private_git_deps"] = extract_checks_private_git_deps(on_disk)
 
     canonical = render(name, **kwargs)
 
