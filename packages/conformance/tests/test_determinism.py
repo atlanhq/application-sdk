@@ -191,6 +191,67 @@ def test_p021_silent_in_task_activity() -> None:
     assert _rule(body, "P021") == []
 
 
+# ── App-family discovery ─────────────────────────────────────────────────────
+#
+# ``run`` on a ``SqlApp`` (or any other ``application_sdk.templates`` base) is
+# the same ``@workflow.run`` as on ``App``. Discovery that anchors only on the
+# literal name ``App`` leaves every SQL connector's workflow body unchecked by
+# P020-P022 and misroutes P023 into it with a fix (``run_in_thread``) that
+# raises ``AppContextError`` in workflow context.
+
+_SQLAPP_HEADER = "from application_sdk.templates import SqlApp, task\n"
+
+
+def _wrap_sqlapp_run(stmts: str, *, base: str = "SqlApp") -> str:
+    indented = "\n".join("        " + line for line in stmts.strip("\n").splitlines())
+    return f"class MyApp({base}):\n    async def run(self, input):\n{indented}\n"
+
+
+def test_p021_flags_io_in_sqlapp_run() -> None:
+    src = "import requests\n" + _wrap_sqlapp_run("r = requests.get('http://x')")
+    assert len(_rule(src, "P021", header=_SQLAPP_HEADER)) == 1
+
+
+def test_p020_flags_primitive_in_aliased_template_base_run() -> None:
+    header = "from application_sdk.templates import IncrementalSqlMetadataExtractor as Base\n"
+    src = "import datetime\n" + _wrap_sqlapp_run(
+        "return datetime.datetime.now()", base="Base"
+    )
+    assert len(_rule(src, "P020", header=header)) == 1
+
+
+def test_p021_flags_io_through_module_local_intermediate_base() -> None:
+    src = (
+        "import requests\n"
+        "class ConnectorBase(SqlApp):\n"
+        "    pass\n"
+        + _wrap_sqlapp_run("r = requests.get('http://x')", base="ConnectorBase")
+    )
+    assert len(_rule(src, "P021", header=_SQLAPP_HEADER)) == 1
+
+
+def test_p023_defers_to_workflow_rules_in_sqlapp_run() -> None:
+    src = "import requests\n" + _wrap_sqlapp_run("r = requests.get('http://x')")
+    assert _rule(src, "P023", header=_SQLAPP_HEADER) == []
+
+
+def test_p023_still_flags_sqlapp_task() -> None:
+    src = (
+        "import requests\n"
+        "class MyApp(SqlApp):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return requests.get('http://x')\n"
+    )
+    assert len(_rule(src, "P023", header=_SQLAPP_HEADER)) == 1
+    assert _rule(src, "P021", header=_SQLAPP_HEADER) == []
+
+
+def test_non_sdk_base_named_like_a_template_is_not_anchored() -> None:
+    src = "import requests\n" + _wrap_sqlapp_run("r = requests.get('http://x')")
+    assert _rule(src, "P021", header="from mylib import SqlApp\n") == []
+
+
 # ── P022 UnawaitedCoroutine ──────────────────────────────────────────────────
 
 
