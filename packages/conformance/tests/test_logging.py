@@ -982,6 +982,170 @@ def test_l002_harness_exemption_does_not_leak_to_prod(tmp_path: Path) -> None:
     assert "app/auth.py" in l002[0].file
 
 
+# Importing the SDK adapter must not exempt a file that still binds its own
+# module logger through a non-SDK factory (FND-2702).  Shapes below are taken
+# from the reference apps and the SDK's own storage/execution modules.
+
+
+def test_l002_fires_mixed_import_with_stdlib_module_logger(tmp_path: Path) -> None:
+    """Reference-app handler shape with the bind swapped to stdlib: must fire."""
+    src = (
+        "import logging\n"
+        "from application_sdk.observability.logger_adaptor import get_logger\n"
+        "\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "async def test_auth():\n"
+        '    logger.error("MySQL auth test failed: %s", "x")\n'
+    )
+    findings = _scan_files(tmp_path, {"app/handler.py": src})
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert len(l002) == 1
+    assert l002[0].line == 4
+    assert "stdlib" in l002[0].message
+    assert "`logger`" in l002[0].message
+
+
+def test_l002_fires_mixed_function_local_sdk_import(tmp_path: Path) -> None:
+    """storage/binding.py shape: a lazily imported SDK get_logger (circular-import
+    workaround) next to a module-level stdlib logger used on the happy path."""
+    src = (
+        "import logging\n"
+        "\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "_logger = None\n"
+        "\n"
+        "def _get_logger():\n"
+        "    global _logger\n"
+        "    if _logger is None:\n"
+        "        from application_sdk.observability.logger_adaptor import get_logger\n"
+        "        _logger = get_logger(__name__)\n"
+        "    return _logger\n"
+        "\n"
+        "def create_store(name):\n"
+        '    _get_logger().warning("bad %s", name)\n'
+        '    logger.info("create_store: name=%r", name)\n'
+    )
+    findings = _scan_files(tmp_path, {"application_sdk/storage/binding.py": src})
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert [f.line for f in l002] == [3]
+
+
+def test_l002_fires_mixed_structlog_and_attribute_target(tmp_path: Path) -> None:
+    """structlog binds and ``self.<attr>`` targets are matched too; ``.log()``
+    counts as a log-emitting call."""
+    src = (
+        "import logging\n"
+        "import structlog\n"
+        "from application_sdk.observability.logger_adaptor import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        "slog = structlog.get_logger()\n"
+        "class Client:\n"
+        "    def __init__(self):\n"
+        "        self._log = logging.getLogger('client')\n"
+        "    def run(self):\n"
+        "        self._log.log(logging.INFO, 'running')\n"
+        "        slog.info('ran')\n"
+        "        logger.info('done')\n"
+    )
+    findings = _scan_files(tmp_path, {"app/client.py": src})
+    l002 = sorted(f.line for f in findings if f.rule_id == "L002")
+    assert l002 == [5, 8]
+
+
+def test_l002_silent_mixed_third_party_level_tuning(tmp_path: Path) -> None:
+    """Quietening a third-party library's logger is not a module-logger bind."""
+    src = (
+        "import logging\n"
+        "from application_sdk.observability.logger_adaptor import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        'logging.getLogger("httpx").setLevel(logging.WARNING)\n'
+        'urllib3_logger = logging.getLogger("urllib3")\n'
+        "urllib3_logger.setLevel(logging.ERROR)\n"
+        "urllib3_logger.propagate = False\n"
+        'logger.info("started")\n'
+    )
+    findings = _scan_files(tmp_path, {"app/main.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_silent_mixed_function_local_level_tuning(tmp_path: Path) -> None:
+    """A function-local ``logger`` rebound to a third-party logger for level
+    tuning is a different binding from the module ``logger`` that emits."""
+    src = (
+        "import logging\n"
+        "from application_sdk.observability.logger_adaptor import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        "def quiet_libraries():\n"
+        '    logger = logging.getLogger("httpx")\n'
+        "    logger.setLevel(logging.WARNING)\n"
+        '    for name in ("urllib3", "botocore"):\n'
+        "        logger = logging.getLogger(name)\n"
+        "        logger.setLevel(logging.ERROR)\n"
+        "def run():\n"
+        '    logger.info("started")\n'
+    )
+    findings = _scan_files(tmp_path, {"app/main.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_fires_mixed_function_local_bind_used_locally(tmp_path: Path) -> None:
+    """Scope-awareness must not hide a function-local bind that emits."""
+    src = (
+        "import logging\n"
+        "from application_sdk.observability.logger_adaptor import get_logger\n"
+        "def run():\n"
+        "    log = logging.getLogger(__name__)\n"
+        '    log.warning("slow")\n'
+    )
+    findings = _scan_files(tmp_path, {"app/main.py": src})
+    assert [f.line for f in findings if f.rule_id == "L002"] == [4]
+
+
+def test_l002_silent_mixed_handler_forwarding(tmp_path: Path) -> None:
+    """execution/_temporal/backend.py shape: a stdlib logger passed as a
+    forwarding target (handler config), never bound or emitted through."""
+    src = (
+        "import logging\n"
+        "from application_sdk.observability.logger_adaptor import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        "def build():\n"
+        "    return LoggingConfig(\n"
+        '        forwarding=LogForwardingConfig(logger=logging.getLogger("temporalio")),\n'
+        "    )\n"
+    )
+    findings = _scan_files(tmp_path, {"app/backend.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_mixed_bind_suppressed_at_bind_line(tmp_path: Path) -> None:
+    """Mixed-file findings sit on the bind line, so a directive there applies."""
+    src = (
+        "import logging\n"
+        "from application_sdk.observability.logger_adaptor import get_logger\n"
+        "# conformance: ignore[L002] vendored module, tracked separately\n"
+        "logger = logging.getLogger(__name__)\n"
+        "logger.info('x')\n"
+    )
+    findings = _scan_files(tmp_path, {"app/vendored.py": src})
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert l002
+    assert all(f.suppressed for f in l002)
+
+
+def test_l002_mixed_bind_exempt_in_dev_harness(tmp_path: Path) -> None:
+    """The dev-harness exemption still applies to mixed files."""
+    src = (
+        "import logging\n"
+        "from application_sdk.observability.logger_adaptor import get_logger\n"
+        "logger = logging.getLogger(__name__)\n"
+        "logger.info('x')\n"
+    )
+    findings = _scan_files(tmp_path, {"scripts/seed.py": src, "run_dev.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
 # ---------------------------------------------------------------------------
 # scan_path round-trip
 # ---------------------------------------------------------------------------

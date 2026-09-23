@@ -155,6 +155,11 @@ rule was skipped, the sanitized form records that the credential was handled.
        add `logger = get_logger(__name__)` at module level.
   3. Remove the now-unused `import logging` / `import structlog` line if no
      other usages remain in the file.
+  Replace only the flagged logger bind.  Leave third-party level or handler
+  wiring alone (`logging.getLogger("httpx").setLevel(...)`, a logger passed as
+  a forwarding target) — it is not a bind and L002 does not flag it.  Adding
+  the `get_logger` import without replacing the bind does not clear the
+  finding.
   Classification is always `"judgment"` — the import change affects the whole
   file and requires verifying that no other symbols from the removed import
   are still in use.

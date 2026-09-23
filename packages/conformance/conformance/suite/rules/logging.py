@@ -58,8 +58,9 @@ RULES: tuple[RuleDefinition, ...] = (
         id="L002",
         canonical_reference=(
             "atlan-mysql-app app/handler.py — `get_logger(__name__)` at module scope, "
-            "imported from application_sdk.observability.logger_adaptor. No reference app "
-            "calls logging.getLogger, structlog.get_logger, or loguru's logger."
+            "imported from application_sdk.observability.logger_adaptor. No reference app's "
+            "production code binds a logger through logging.getLogger, "
+            "structlog.get_logger, or loguru's logger."
         ),
         scope=RuleScope.BOTH,
         name="NonCanonicalLoggerFactory",
@@ -104,6 +105,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "  store;\n"
             "* enforces the project's five-level model\n"
             "  (DEBUG/INFO/WARNING/ERROR/CRITICAL).\n"
+            "\n"
+            "Importing ``get_logger`` does not exempt a file: a logger bound\n"
+            "through ``logging.getLogger()`` / ``structlog.get_logger()`` and\n"
+            "then used for log calls is flagged at the bind line even when the\n"
+            "same file imports the adapter.  Configuring a third-party\n"
+            'library\'s logger inline (``logging.getLogger("httpx").setLevel(...)``,\n'
+            "or passing it as a handler/forwarding target) is not a bind and is\n"
+            "not flagged.\n"
             "\n"
             "Adapter definition files are exempt — the file that defines\n"
             "``AtlanLoggerAdapter`` or ``get_logger`` itself is skipped.  Dev\n"

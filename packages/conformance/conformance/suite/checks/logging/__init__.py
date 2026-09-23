@@ -55,7 +55,11 @@ from conformance.suite.schema.findings import Finding
 
 from ._checker import build_checker
 from ._constants import SERIES
-from ._crossfile import _collect_basicconfig_calls, _detect_factory
+from ._crossfile import (
+    _collect_basicconfig_calls,
+    _detect_factory,
+    _find_non_sdk_logger_binds,
+)
 from ._helpers import is_adapter_file, is_dev_harness
 from ._performance import WarnThenRaiseVisitor
 from ._toml import check_ruff_config
@@ -119,6 +123,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     instead of the canonical SDK adapter.  Block-tier (CNCT-108); dev harnesses
     (``scripts/``, ``run_dev*.py``) are exempt — they never run inside a
     workflow, so the correlation-ID/provenance argument does not apply.
+    Importing the SDK ``get_logger`` does not exempt a file: a module logger
+    bound through a non-SDK factory and used for log calls is still flagged,
+    at the bind line (third-party level tuning is not a bind).
 
     Pass 2b — L016: flag 2nd+ non-main basicConfig() calls.
 
@@ -128,6 +135,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
     # Pass 1 — per-file rules + data collection
     factory_by_file: dict[str, str] = {}  # rel_path -> factory_type
+    # rel_path -> non-SDK logger binds in files that also import the SDK adapter
+    mixed_binds_by_file: dict[str, list[tuple[ast.stmt, str, str]]] = {}
     adapter_by_file: dict[str, bool] = {}  # rel_path -> is adapter/definition file
     directives_by_file: dict[str, dict[int, _IgnoreDirective]] = {}
     basicconfig_calls: list[Finding] = []  # placeholder findings for L016
@@ -170,6 +179,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         factory = _detect_factory(tree)
         if factory is not None:
             factory_by_file[rel_str] = factory
+        if factory == "sdk_adapter":
+            binds = _find_non_sdk_logger_binds(tree)
+            if binds:
+                mixed_binds_by_file[rel_str] = binds
         adapter_by_file[rel_str] = is_adapter_file(tree)
 
         # L016 — collect basicConfig calls from this file
@@ -185,11 +198,31 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         "loguru": "from loguru import logger",
     }
     for rel_str, factory in factory_by_file.items():
-        if factory == "sdk_adapter":
-            continue
         if adapter_by_file.get(rel_str, False):
             continue
         if is_dev_harness(rel_str):
+            continue
+        if factory == "sdk_adapter":
+            # The SDK import alone does not make a file canonical: flag every
+            # module logger it still binds through a non-SDK factory.
+            for bind_node, bind_factory, target in mixed_binds_by_file.get(rel_str, []):
+                findings.append(
+                    make_finding(
+                        filename=rel_str,
+                        rule_id="L002",
+                        node=bind_node,
+                        message=(
+                            f"Non-canonical logger factory "
+                            f"({_FACTORY_LABEL.get(bind_factory, bind_factory)}) — "
+                            f"`{target}` is bound outside the SDK adapter although "
+                            "this file imports `get_logger`; bind it with "
+                            "`get_logger(__name__)` instead. Records emitted through "
+                            "it bypass the adapter that injects Temporal correlation "
+                            "IDs and routes records through OTel."
+                        ),
+                        directives=directives_by_file.get(rel_str, {}),
+                    )
+                )
             continue
         label = _FACTORY_LABEL.get(factory, factory)
         fake_node = ast.Module(body=[], type_ignores=[])
