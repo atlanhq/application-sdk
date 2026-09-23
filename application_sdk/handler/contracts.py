@@ -333,6 +333,26 @@ class AuthOutput(BaseModel):
     expires_at: str = ""
     """ISO-8601 expiry timestamp (empty if no expiry)."""
 
+    error: FailureDetails | None = None
+    """Typed failure for a failed result, e.g. ``AuthError(...).to_failure_details()``.
+
+    A bare ``AppError`` is coerced. On a failed result its ``message`` wins over
+    :attr:`message` (see :attr:`resolved_message`)."""
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def _coerce_error(cls, value: Any) -> Any:
+        if isinstance(value, AppError):
+            return value.to_failure_details()
+        return value
+
+    @property
+    def resolved_message(self) -> str:
+        """Message under the precedence rule: a failed result's ``error`` wins."""
+        if self.error is not None and not self.status.is_success:
+            return self.error.message
+        return self.message
+
 
 class PreflightStatus(SerializableEnum):
     """Overall preflight verdict — decides the gate.

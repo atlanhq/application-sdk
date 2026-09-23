@@ -572,9 +572,10 @@ aggregation bucket instead of one countable signal.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/handler.py — `test_auth` returns the fixed message "Authentication
-  failed"; the exception text goes to the log with exc_info=True, not into the contract
-  field a caller renders.
+- **Compliant example:** atlan-mysql-app app/handler.py — `preflight_check`'s probes classify the caught
+  exception into a typed error and return it on the check's `error=`, so the rendered
+  message is the error's authored text, never the exception's. `test_auth` takes the
+  same shape through `AuthOutput.error`.
 
 Inside an `except … as exc:` block, a call (typically a typed response/output contract
 such as `AuthOutput` or `PreflightCheck`) is constructed with a `message=` keyword that
@@ -585,9 +586,11 @@ interpolation may be an f-string (`f'…{exc}…'`), `str(exc)`, `repr(exc)`, or
 concatenation (`'…: ' + str(exc)`). This is the non-`raise` counterpart of E015: the
 unsanitised upstream text still crosses the typed boundary into a field shown to
 operators and indexed in dashboards, and still collapses distinct failure modes into one
-variable-text bucket.  Keep `message=` a stable human summary and carry the exception
-detail in a typed field (e.g. raise a typed `AppError` with `cause=exc` upstream, or
-record it in a dedicated evidence field) rather than the user-facing contract message.
+variable-text bucket.  Classify the exception into the app's typed `AppError` and return
+it on the contract's `error=` field (`AuthOutput.error` / `PreflightCheck.error`) with
+`message=err.message`: the reason stays visible as authored text, one bucket per failure
+mode.  A fixed string also clears the rule but throws away the reason the caller needs,
+so it is not the default fix.
 
 Detection scope mirrors E015 exactly (they share one matcher): it covers f-string,
 `str(exc)`, `repr(exc)` and string-concatenation (`'…' + str(exc)`) interpolation of the

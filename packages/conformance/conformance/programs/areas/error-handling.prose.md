@@ -338,11 +338,15 @@ outcome mirroring the error-handling shape in the reference app named by
 - **E019 ExceptionTextInContractField** — the same leak as E015, but into a
   returned contract rather than a raise: inside `except … as exc`, a response
   or output contract (`AuthOutput`, `PreflightCheck`, …) is built with the
-  exception interpolated into `message=`, a field a caller renders.  Set a
-  fixed, audience-appropriate message on the contract and log the exception
-  separately with `exc_info=True`.  Mirror `atlan-mysql-app app/handler.py`'s
-  `test_auth`, which returns `"Authentication failed"` and sends the detail to
-  the log.
+  exception interpolated into `message=`, a field a caller renders.  Classify
+  the exception into the app's typed `AppError` (reuse the classifier the
+  preflight checks already use), then return `message=err.message` and
+  `error=err` on the contract.  The user keeps the reason, as authored text.
+  Do not default to a fixed string like `"Authentication failed"`: it clears
+  the rule and discards the reason.  If no class covers the failure (for
+  example bad credentials), add one; do not fall back to a catch-all
+  "unreachable" class.  Mirror `atlan-mysql-app app/handler.py`'s
+  `preflight_check` probes, which return the typed error on the check.
 
 - **E020 HttpFailureToEmptyReturn** — a checked HTTP failure (a test on
   `is_success` / `ok` / `status_code`) returns an empty or `None` sentinel, so
