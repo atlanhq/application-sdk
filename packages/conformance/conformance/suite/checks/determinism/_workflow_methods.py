@@ -44,13 +44,7 @@ _SDK_PREFIX = "application_sdk"
 
 
 def _sdk_app_aliases(tree: ast.AST) -> frozenset[str]:
-    """Return local names bound to an SDK ``App``-family base in this module.
-
-    Any ``from application_sdk.<sub> import <Base> [as alias]`` where ``<Base>``
-    is in :data:`~conformance.suite.checks._ast_common.SDK_APP_BASE_NAMES`, so a
-    connector built on ``SqlApp`` anchors discovery exactly as one built on
-    ``App`` does.
-    """
+    """Return local names bound to an SDK ``App``-family base in this module."""
     bound: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom) or node.level > 0:
@@ -74,12 +68,7 @@ def _base_names(node: ast.ClassDef) -> set[str]:
 
 
 def _app_family_classes(tree: ast.AST) -> list[ast.ClassDef]:
-    """Return every class in *tree* that derives from an SDK ``App``-family base.
-
-    Direct subclasses of an imported SDK base, then — to a fixed point — classes
-    deriving from one of those, so a module-local intermediate base
-    (``class Base(SqlApp)`` / ``class MyApp(Base)``) is still classified.
-    """
+    """Classes deriving from an SDK ``App``-family base, directly or via a local base."""
     family = set(_sdk_app_aliases(tree))
     if not family:
         return []
