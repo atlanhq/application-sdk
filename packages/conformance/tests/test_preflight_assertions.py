@@ -99,7 +99,10 @@ def test_unrelated_workflow_failure_rejected():
             ),
         ],
     )
-    with pytest.raises(AssertionError, match="unrelated reason"):
+    with (
+        pytest.warns(DeprecationWarning, match="retired conformance rule F017"),
+        pytest.raises(AssertionError, match="unrelated reason"),
+    ):
         assert_extraction_scheduled(
             history,
             "extract",

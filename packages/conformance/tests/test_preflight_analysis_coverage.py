@@ -1,11 +1,12 @@
-"""F019 promises executed scenarios clear a value-level gap. Prove it does.
+"""F019 promises a fully defined scenario matrix clears a value-level gap. Prove it.
 
 Two halves. First, that the checkers label each F019 correctly: a *value-level*
 gap (the handler was analysed, one expression's value was not resolved) names
 F016 in ``cleared_by``, a *structural* gap (the analysis never reached the code)
-names nothing. Second, that the runner acts on the label — a ``--with-tests``
-run whose F016 matrix came back complete drops the first kind and keeps the
-second, and a matrix that is anything less than complete drops neither.
+names nothing. Second, that the preflight pass acts on the label: when every
+F016 scenario is defined it drops the first kind and keeps the second, and a
+matrix that is anything less than fully defined drops neither. Nothing is
+executed on either path; whether the scenarios pass is the test gate's measure.
 """
 
 import json
@@ -120,30 +121,54 @@ def test_dynamic_callback_binding_is_never_scenario_cleared(tmp_path):
     ), "a finding no scenario can clear must say so rather than imply otherwise"
 
 
-# --- the runner acts on the label -------------------------------------------
+# --- a fully defined matrix clears the value-level gap ----------------------
 
 
 @pytest.fixture
-def repo(tmp_path):
-    """A repo with one value-level F019 and one structural F019."""
+def repo(tmp_path, monkeypatch):
+    """A repo with one value-level F019 and one structural F019.
+
+    The matrix is narrowed to one scenario so the fixture does not have to
+    define all thirteen; the reader, the clearing pass and the report are the
+    real path.
+    """
+    from conformance.preflight_scenarios import SCENARIOS
+
+    monkeypatch.setitem(SCENARIOS, "F016", ("healthy",))
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname="example-connector"\nversion="1.0.0"\n'
     )
     (tmp_path / "handler.py").write_text(
-        IMPORTS + 'def check(ok):\n return PreflightCheck(name="probe", passed=ok)\n'
+        IMPORTS
+        + 'def check(ok):\n return PreflightCheck(name="probe", passed=ok)\n'
+        + HEAD
+        + "  return None\n"
     )
     (tmp_path / "unparsed.py").write_text("class H(:\n")
     return tmp_path
 
 
-def _run(repo, monkeypatch, summary):
-    from conformance.suite.checks.preflight import _behavior
+SCENARIO = """
+import pytest
+from conformance.preflight_testing import assert_preflight_result
 
-    monkeypatch.setattr(
-        _behavior,
-        "run_behavior",
-        lambda *a, **k: _behavior.BehaviorResult([], dict(summary)),
+
+{decorators}
+def test_healthy():
+    assert_preflight_result(result(), required_checks=set(), observed_checks=set(), expected_status="ready")
+"""
+
+REGISTERED = '@pytest.mark.preflight_conformance(rule="F016", scenario="healthy")'
+
+
+def _define(repo, decorators=REGISTERED):
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / "tests" / "test_contract.py").write_text(
+        SCENARIO.format(decorators=decorators)
     )
+
+
+def _f019_files(repo, *extra):
     output = repo / "report.sarif"
     main(
         [
@@ -151,144 +176,55 @@ def _run(repo, monkeypatch, summary):
             str(repo),
             "--rule",
             "F019",
-            "--with-tests",
             "--output",
             str(output),
             "--exit-zero",
+            *extra,
         ]
     )
-    return json.loads(output.read_text())["runs"][0]
-
-
-COMPLETE = {"F016": {"execution": "completed", "passed": 13, "complete": True}}
-INCOMPLETE = {
-    "F016": {
-        "execution": "completed",
-        "passed": 12,
-        "missing": ["x"],
-        "complete": False,
-    }
-}
-
-
-def test_complete_matrix_clears_only_the_value_level_gap(repo, monkeypatch, capsys):
-    run = _run(repo, monkeypatch, COMPLETE)
-    files = {
+    return {
         row["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
-        for row in run["results"]
+        for row in json.loads(output.read_text())["runs"][0]["results"]
     }
-    assert files == {"unparsed.py"}, "the value-level F019 should have been cleared"
-    assert "unparsed.py" in capsys.readouterr().out
 
 
-def test_incomplete_matrix_clears_nothing(repo, monkeypatch):
-    run = _run(repo, monkeypatch, INCOMPLETE)
-    files = {
-        row["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
-        for row in run["results"]
-    }
-    assert files == {"handler.py", "unparsed.py"}
+def test_defined_matrix_clears_only_the_value_level_gap(repo):
+    """F016 is computed even when the run asked only for F019."""
+    _define(repo)
+    assert _f019_files(repo) == {"unparsed.py"}
 
 
-def test_static_run_clears_nothing(repo):
-    output = repo / "static.sarif"
-    main(
-        ["--repo", str(repo), "--rule", "F019", "--output", str(output), "--exit-zero"]
+def test_undefined_matrix_clears_nothing(repo):
+    assert _f019_files(repo) == {"handler.py", "unparsed.py"}
+
+
+def test_skipped_registration_clears_nothing(repo):
+    _define(repo, '@pytest.mark.skip(reason="later")\n' + REGISTERED)
+    assert _f019_files(repo) == {"handler.py", "unparsed.py"}
+
+
+def test_suppressed_scenario_gap_clears_nothing(repo):
+    """A suppression hides a finding; it does not define the scenario."""
+    _define(
+        repo,
+        REGISTERED
+        + '\n@pytest.mark.skip(reason="later")\n# conformance: ignore[F016] tracked elsewhere',
     )
-    run = json.loads(output.read_text())["runs"][0]
-    files = {
-        row["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
-        for row in run["results"]
-    }
-    assert files == {"handler.py", "unparsed.py"}
-    assert run["properties"].get("atlan/preflightTests", {}).get("F016", {}).get(
-        "execution"
-    ) in (None, "not_evaluated")
+    assert _f019_files(repo) == {"handler.py", "unparsed.py"}
 
 
-def test_f019_alone_still_runs_the_scenario_leg_it_depends_on(repo, monkeypatch):
-    """``--rule F019 --with-tests`` must execute F016, or it has no evidence."""
-    seen: list[set[str]] = []
+def test_clearing_never_executes_the_tests(repo, monkeypatch):
+    """The registered test would fail if run; defining it is still enough."""
+    import subprocess
 
-    from conformance.suite.checks.preflight import _behavior
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("conformance must not start a subprocess for tests")
 
-    def record(root, rule_ids=None, *a, **k):
-        seen.append(set(rule_ids or ()))
-        return _behavior.BehaviorResult([], dict(COMPLETE))
-
-    monkeypatch.setattr(_behavior, "run_behavior", record)
-    main(
-        [
-            "--repo",
-            str(repo),
-            "--rule",
-            "F019",
-            "--with-tests",
-            "--output",
-            str(repo / "report.sarif"),
-            "--exit-zero",
-        ]
-    )
-    assert seen and all("F016" in ids for ids in seen)
-
-
-# --- end to end, with no stub between the scenario and the verdict ----------
-
-SCENARIO = """
-import pytest
-from application_sdk.handler.contracts import PreflightOutput, PreflightCheck, PreflightStatus
-from conformance.preflight_testing import assert_preflight_result
-
-
-@pytest.mark.preflight_conformance(rule="F016", scenario="healthy")
-def test_healthy():
-    result = PreflightOutput(
-        status=PreflightStatus.READY,
-        checks=[PreflightCheck(name="connection", passed=True)],
-    )
-    assert_preflight_result(
-        result,
-        required_checks={"connection"},
-        observed_checks={"connection"},
-        expected_status="ready",
-    )
-"""
-
-
-def test_real_passing_matrix_clears_the_value_level_gap(repo, monkeypatch):
-    """No stub: pytest really runs, the summary is really complete, F019 drops.
-
-    The matrix is narrowed to one scenario so the fixture repo does not have to
-    ship all thirteen; everything downstream of that — the subprocess, the
-    report, the ``complete`` verdict, the clearing pass — is the real path.
-    """
-    from conformance.preflight_testing import SCENARIOS
-
-    monkeypatch.setitem(SCENARIOS, "F016", ("healthy",))
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
     (repo / "tests").mkdir()
-    (repo / "tests" / "test_contract.py").write_text(SCENARIO)
-    output = repo / "e2e.sarif"
-    main(
-        [
-            "--repo",
-            str(repo),
-            "--rule",
-            "F019",
-            "--with-tests",
-            "--output",
-            str(output),
-            "--exit-zero",
-        ]
+    (repo / "tests" / "test_contract.py").write_text(
+        SCENARIO.format(decorators=REGISTERED).replace(
+            "def test_healthy():\n", "def test_healthy():\n    assert False\n"
+        )
     )
-    run = json.loads(output.read_text())["runs"][0]
-    summary = run["properties"]["atlan/preflightTests"]["F016"]
-    assert (summary["execution"], summary["passed"], summary["complete"]) == (
-        "completed",
-        1,
-        True,
-    )
-    files = {
-        row["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
-        for row in run["results"]
-    }
-    assert files == {"unparsed.py"}
+    assert _f019_files(repo) == {"unparsed.py"}

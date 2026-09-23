@@ -520,7 +520,7 @@ methods that return a different response shape than v2, which may break frontend
 - Blocking findings: N  (must be 0, or each one listed below with the user's stated reason)
 - Warning findings: M  (each fixed, or in the manual-follow-up list with a reason)
 - Accepted-with-reason: <rule id — reason, per line; "none" if none>
-- Preflight scenarios: executed / graded-from-report / NOT RUN (F016 is blocking — "not run" is a gap, not a pass; a static-only sweep can exit 0 while F016 fails)
+- Preflight scenarios: all defined / N undefined (F016, warn — conformance checks the scenarios are defined; the Tests job is what runs them, so report their pass/fail from the test run, not from conformance)
 - Conformance CI wired: yes/no (`.github/workflows/conformance.yaml`)
 
 ### Manual follow-up required
@@ -800,7 +800,7 @@ Everything here runs **from the connector repo root**, not from the application-
 
 ### 7b — Run the suite
 
-Three invocations, because three groups of rules need three different environments. Run all three.
+Two invocations, because two groups of rules need two different environments. Run both.
 
 **(i) The static sweep — every series, isolated env.** This is the bulk of the catalog:
 
@@ -822,25 +822,7 @@ cd <target-path> && uv run --with atlan-application-sdk-conformance \
 
 `uv run --with` overlays the tool onto the app's *resolved* environment rather than an isolated one — this is exactly what the managed CI leg does when `needs-env: true`. `uvx` would give the tool a clean env of its own and the D-series would see nothing.
 
-**(iii) The F-series — executed preflight scenarios.** `F016 PreflightBehaviorContract` is **blocking** and it grades *executed* scenarios. The runner's default is `--static`, which reports every TEST rule as *not evaluated* — so a bare `detect` silently skips a blocking rule.
-
-> **This is not theoretical.** Measured on `atlan-mysql-app` at conformance 0.36.1: the static sweep in (i) returned **3 findings, all warnings, exit code 0** — a clean pass. The same repo with `--series F --with-tests` returned **13 `F016` errors, exit code 1**. Skip this invocation and you will report a conformant app that fails its own Conformance check.
-
-Use `--with-tests`. The runner executes the scenarios in a bounded pytest subprocess; it needs an importable app environment, so it runs against the resolved env:
-
-```bash
-cd <target-path> && uv run --with atlan-application-sdk-conformance \
-  -- atlan-application-sdk-conformance detect \
-  --repo . --scope app --with-tests --test-timeout 180 --output conformance-preflight.sarif
-```
-
-> **There is a second path, and at the time of writing it is not published yet.** `detect --preflight-report=FILE` grades a report an earlier `pytest -p conformance.preflight_testing --preflight-report=FILE` run wrote, so the scenarios execute once in the job that already installs the app instead of twice. It landed on the conformance `main` branch *after* the `0.36.1` tag was cut, so `uvx atlan-application-sdk-conformance detect --preflight-report=...` currently fails with `unrecognized arguments`. **Probe before you use it** — never infer support from a version number:
-> ```bash
-> cd <target-path> && uv run --with atlan-application-sdk-conformance \
->   -- atlan-application-sdk-conformance detect --help | grep -q preflight-report \
->   && echo "supported" || echo "not in this release — use --with-tests"
-> ```
-> When it is supported, grading is the same as `--with-tests`, and an unreadable report grades as an **execution error, never as conformance** — "the file was missing" does not quietly become a pass.
+**The preflight scenarios are covered by (i).** `F016 PreflightBehaviorContract` checks that every required preflight scenario is *defined* — registered with `preflight_conformance`, collected, not skipped, and calling `assert_preflight_result` — and it does that statically, so the sweep in (i) already grades it. Conformance never runs the scenarios; whether they pass is the Tests job's measure, so read that from the test run in Phase 4. From conformance 0.39.0, `--with-tests` and `--preflight-report` are deprecated no-ops; on an older pinned version they still execute the scenarios, which is not needed for this phase.
 
 > Narrow the loop while fixing: `--series L` runs one series, `--rule P001,P014` runs exactly those rules and scopes findings, the exit code and the emitted SARIF catalog to them.
 
@@ -1300,7 +1282,7 @@ The SDK injects a **preflight gate** as the mandatory first activity of every ex
 
 - **`F001 ReservedPreflightActivityName` is blocking.** The SDK reserves the activity name `{app_name}:preflight` and registers it unconditionally on the worker. If the v2 connector had a `preflight` activity and the codemod carried the name across — either an explicit `@task(name="preflight")` or a bare `@task` on a method called `preflight` — worker boot fails with `WorkerActivityNameCollisionError`. Rename the task, or fold its logic into `Handler.preflight_check`, which the gate already calls.
 - **Leave the mode alone during the migration.** `soft` is the default for a reason: a migration is not the moment to start blocking real runs on a handler whose behaviour you have just changed. Sizing the budget, choosing which checks block, and switching to `hard` is its own piece of work — use the **`adopt-preflight-gate` skill** for it, after this migration lands.
-- The preflight rules graded in Phase 7 are `F003` (a `PreflightCheck(passed=False)` built without a typed `error=`), `F006` (declare the SDK's `PreflightInput`/`PreflightOutput` on every supported handler), `F007` (non-blank failure messages and audience-appropriate suggested actions) and `F016` (the scenarios actually execute) — all blocking. `F004` (a `preflight_check` metadata key not declared on any entrypoint `Input` contract) is a warning.
+- The preflight rules graded in Phase 7 are `F003` (a `PreflightCheck(passed=False)` built without a typed `error=`), `F006` (declare the SDK's `PreflightInput`/`PreflightOutput` on every supported handler), `F007` (non-blank failure messages and audience-appropriate suggested actions) — all blocking — and `F016` (every required scenario is defined), a warning until the fleet has registered its scenarios. `F004` (a `preflight_check` metadata key not declared on any entrypoint `Input` contract) is a warning.
 
 ### Preflight response auto-conversion to v2 format
 

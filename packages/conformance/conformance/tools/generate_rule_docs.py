@@ -177,11 +177,11 @@ _SERIES_META: list[SeriesMeta] = [
         source_module="conformance/suite/rules/preflight.py",
         output_filename="preflight.md",
         checker=(
-            "`suite.checks.preflight` (F001–F015, F019–F020: cross-file AST over "
-            "the preflight handler, its helpers and the entrypoint contracts; F015 "
-            "also reads deployment manifests) and the opt-in `--with-tests` "
-            "scenario runner (F016–F018: registered pytest scenarios executed in a "
-            "bounded subprocess via `conformance.preflight_testing`)"
+            "`suite.checks.preflight` (cross-file AST over the preflight handler, "
+            "its helpers and the entrypoint contracts; F015 also reads deployment "
+            "manifests, and F016 reads the scenario registrations under `tests/`). "
+            "No rule executes tests: F016 checks the scenario matrix is defined, "
+            "and the test gate checks it passes. F017–F018 are retired"
         ),
         suppression_example=(
             "# conformance: ignore[F005] intentional: progress log, not a failure"

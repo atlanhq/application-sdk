@@ -35,16 +35,16 @@ from conformance.suite.checks.prescriptions._typed_boundaries import (
 _PREFLIGHT_INPUT = "PreflightInput"
 _PREFLIGHT_CHECK = "PreflightCheck"
 
-#: Behavioural rules whose complete, passing matrix closes a *value-level*
-#: F019 gap.  ``conformance.preflight_testing.assert_preflight_result``
-#: asserts, on every executed F016 scenario, exactly the properties those
+#: Rules whose fully defined scenario matrix closes a *value-level* F019
+#: gap.  ``conformance.preflight_testing.assert_preflight_result`` asserts,
+#: in every F016 scenario, exactly the properties those
 #: findings say the static pass could not resolve: every failed check carries
 #: a typed ``FailureDetails`` with a nonblank message and suggested action, no
 #: passed check carries one, and the verdict agrees with the
 #: mandatory/advisory roles and the short-circuit order.  A *structural* gap —
 #: an unparsed file, an undiscovered handler, an unresolved contract class —
-#: never gets this set: executing scenarios does not tell the analysis what it
-#: failed to read.
+#: never gets this set: a test does not tell the analysis what it failed to
+#: read.  Conformance only checks the matrix is defined; the test gate runs it.
 SCENARIO_COVERAGE = frozenset({"F016"})
 
 
