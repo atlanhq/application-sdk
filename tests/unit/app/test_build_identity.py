@@ -14,7 +14,9 @@ it.
 
 from __future__ import annotations
 
+import pathlib
 from dataclasses import dataclass
+from unittest import mock
 
 import pytest
 
@@ -231,3 +233,84 @@ def test_the_baked_key_matches_what_ci_writes() -> None:
         f"the bake step no longer writes a {BUILD_INFO_BUILD_ID_KEY!r} key, so "
         "every released image would silently report no build identity"
     )
+
+
+# ---------------------------------------------------------------------------
+# Build identity in the App lifecycle messages (FND-1936)
+# ---------------------------------------------------------------------------
+
+class TestBuildIdentityInLifecycleMessage:
+    """The marker rides in the log *message*, not in a structured attribute.
+
+    Traced on a real run: the message is the only field that survives every hop
+    of the run-logs path. ``observability.app_logs`` has a fixed Iceberg schema
+    whose ingest pipe maps a known field list onto columns, and heracles then
+    re-projects each record through two closed structs that declare no
+    attributes bag. A marker in the message needs neither to change.
+    """
+
+    @staticmethod
+    def _identity(**patches: str) -> str:
+        from application_sdk.app import base
+
+        with mock.patch.multiple(base, **patches):
+            return base._format_build_identity()
+
+    def test_reports_every_carrier_the_image_has(self) -> None:
+        assert (
+            self._identity(
+                _SDK_VERSION="3.37.0",
+                APPLICATION_VERSION="0.2.3",
+                COMMIT_SHA="184ae7b",
+            )
+            == "sdk=3.37.0 app=0.2.3 commit=184ae7b"
+        )
+
+    def test_sdk_version_is_always_present(self) -> None:
+        # The running SDK is always known, so the marker is never empty and a
+        # reader never has to distinguish "no marker" from "no version".
+        assert (
+            self._identity(_SDK_VERSION="3.37.0", APPLICATION_VERSION="", COMMIT_SHA="")
+            == "sdk=3.37.0"
+        )
+
+    def test_an_empty_carrier_drops_its_key_rather_than_emitting_a_bare_one(
+        self,
+    ) -> None:
+        # "app=" with nothing after it reads as a value of its own to both a
+        # human and a grep. The key is omitted instead.
+        out = self._identity(
+            _SDK_VERSION="3.37.0", APPLICATION_VERSION="", COMMIT_SHA="184ae7b"
+        )
+        assert out == "sdk=3.37.0 commit=184ae7b"
+        assert "app=" not in out
+
+    def test_the_format_answers_the_grep_that_motivated_it(self) -> None:
+        # FND-1936's Why-now: four exported run logs were grepped for a version
+        # and returned nothing. Keys are ``k=v`` and ASCII so the obvious search
+        # hits, and the values stand alone so they can be read straight out.
+        out = self._identity(
+            _SDK_VERSION="3.37.0",
+            APPLICATION_VERSION="0.2.3",
+            COMMIT_SHA="184ae7b",
+        )
+        assert "sdk=" in out
+        assert out.isascii()
+        assert "0.2.3" in out
+
+    def test_both_lifecycle_messages_carry_it(self) -> None:
+        # Start alone is not enough: a run whose logs are truncated from the top
+        # still has to answer which build produced it, and a failed run may
+        # never reach the end. Both boundaries carry the same marker.
+        source = pathlib.Path("application_sdk/app/base.py").read_text()
+        assert 'f"App started {_BUILD_IDENTITY}"' in source
+        assert 'f"App completed {_BUILD_IDENTITY}"' in source
+
+    def test_the_marker_is_resolved_once_at_import(self) -> None:
+        # The call sites run inside Temporal's workflow sandbox, where per-call
+        # work is a determinism risk and buys nothing: no carrier can change for
+        # the life of the container.
+        from application_sdk.app import base
+
+        assert isinstance(base._BUILD_IDENTITY, str)
+        assert base._BUILD_IDENTITY.startswith("sdk=")
