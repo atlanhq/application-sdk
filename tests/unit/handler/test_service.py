@@ -18,6 +18,7 @@ from application_sdk.common.task_queue import (
     derive_task_queue,
 )
 from application_sdk.contracts.base import Input, Output
+from application_sdk.errors.leaves import AuthError
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -106,6 +107,26 @@ class _AuthFailedHandler(Handler):
 
     async def test_auth(self, input: AuthInput) -> AuthOutput:
         return AuthOutput(status=AuthStatus.FAILED, message="bad credentials")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthTypedFailureHandler(Handler):
+    """Handler that returns AuthStatus.FAILED carrying a typed error."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(
+            status=AuthStatus.FAILED,
+            message="Authentication failed",
+            error=AuthError(
+                message="The source rejected the credentials.",
+                suggested_action="Check the username and password.",
+            ),
+        )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         return PreflightOutput(status=PreflightStatus.READY, message="ready")
@@ -286,6 +307,21 @@ class TestAuthEndpoint:
         assert body["success"] is True
         assert body["data"]["status"] == "success"
         assert body["message"] == "auth ok"
+
+    def test_auth_typed_failure_surfaces_the_error_message(self) -> None:
+        client = _make_client(_AuthTypedFailureHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": [], "connection_id": "test-conn"},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["success"] is False
+        assert body["message"] == "The source rejected the credentials."
+        assert body["data"]["message"] == "The source rejected the credentials."
+        assert body["data"]["error"]["suggested_action"] == (
+            "Check the username and password."
+        )
 
     def test_auth_success_envelope_has_all_fields(self) -> None:
         client = _make_client()
