@@ -256,6 +256,16 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "``logging``). Supported class handlers, module callbacks, and directly "
             "resolvable helpers are scanned; dynamic dispatch requires behavioral evidence."
         ),
+        rule_interactions=(
+            "Meets E004 on a broad catch inside the gate's reach. A best-effort "
+            "cleanup helper called from preflight_check (close a client, release a "
+            "session) that catches Exception cannot log at WARNING (this rule), and "
+            "DEBUG does not clear E004 even through a redaction helper. Use "
+            "logger.error (or logger.critical) with the exception routed through a redaction helper "
+            "(safe_traceback, sanitize_cause_repr), or return the failure as typed "
+            "data. A probe arm that already returns a typed PreflightCheck clears "
+            "E004 with no log at all (FND-2628). Found in FND-2569."
+        ),
         help_uri=f"{_HELP_BASE}#f005",
     ),
 )

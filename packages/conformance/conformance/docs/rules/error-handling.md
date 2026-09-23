@@ -155,7 +155,14 @@ root-cause analysis impossible.
   cannot satisfy E004. Raising the level is the only way through, which is a real
   decision on a cleanup path that runs inside a finally: the WARNING lands beside the
   error actually being reported. Reported from a consumer app in FND-2542; whether DEBUG
-  should join the accepted set is an owner call, not a mechanical fix.
+  should join the accepted set is an owner call, not a mechanical fix. The same gap
+  meets F005 inside a preflight_check override, including helpers it calls: a
+  best-effort cleanup handler (close a client, release a session) has no verdict to
+  return, DEBUG does not clear E004 even through a redaction helper, and WARNING is what
+  F005 forbids there. The recommended log that satisfies both is logger.error
+  (logger.critical also clears both) with the exception routed through a redaction
+  helper (safe_traceback, sanitize_cause_repr); the alternative is to return the failure
+  as typed data. Found in a consumer app in FND-2569.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
@@ -165,9 +172,9 @@ X(...)`, or `raise X(...) from e` — because nothing is swallowed; a `raise X(.
 None` that drops the cause, and a conditional re-raise that can fall through, still
 fire.
 
-Exempt: handlers whose log call formats the exception through a recognised redaction
-helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged at a deliberate
-no-traceback boundary.
+Exempt: handlers whose warning/error/critical log call formats the exception through a
+recognised redaction helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged
+at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify.
 
 Also exempt: `raise X(...) from None` whose raised error carries the caught exception
 through such a helper (directly, or via a local assigned from one).  Severing the chain
