@@ -305,31 +305,50 @@ def collect_type_aliases(tree: ast.AST) -> dict[str, ast.expr]:
     return aliases
 
 
+_ALIAS_EXPANSION_BUDGET = 2_000
+
+
+class _AliasBudgetExceeded(Exception):
+    pass
+
+
 class _AliasExpander(ast.NodeTransformer):
     def __init__(
-        self, aliases: dict[str, ast.expr], expanding: frozenset[str] = frozenset()
+        self,
+        aliases: dict[str, ast.expr],
+        expanding: frozenset[str] = frozenset(),
+        spent: list[int] | None = None,
     ) -> None:
         self._aliases = aliases
         self._expanding = expanding
+        self._spent = spent if spent is not None else [0]
 
     def visit_Name(self, node: ast.Name) -> ast.expr:
         target = self._aliases.get(node.id)
         if target is None or node.id in self._expanding:
             return node
-        return _AliasExpander(self._aliases, self._expanding | {node.id}).visit(
-            copy.deepcopy(target)
-        )
+        self._spent[0] += sum(1 for _ in ast.walk(target))
+        if self._spent[0] > _ALIAS_EXPANSION_BUDGET:
+            raise _AliasBudgetExceeded
+        return _AliasExpander(
+            self._aliases, self._expanding | {node.id}, self._spent
+        ).visit(copy.deepcopy(target))
 
 
 def _expand_aliases(annotation: ast.expr, aliases: dict[str, ast.expr]) -> str | None:
     """Canonical type of *annotation* with same-module aliases expanded.
 
     Alias chains are followed; an alias already being expanded is left as its
-    name, so self- and mutually-referential aliases terminate.
+    name, so self- and mutually-referential aliases terminate.  An expansion
+    that grows past ``_ALIAS_EXPANSION_BUDGET`` nodes is abandoned and the
+    annotation is compared unexpanded, so a dense chain cannot blow up.
     """
     if not aliases:
         return None
-    expanded = _AliasExpander(aliases).visit(copy.deepcopy(annotation))
+    try:
+        expanded = _AliasExpander(aliases).visit(copy.deepcopy(annotation))
+    except _AliasBudgetExceeded:
+        return None
     canonical = _canonical_type(expanded)
     return canonical if canonical != _canonical_type(annotation) else None
 
