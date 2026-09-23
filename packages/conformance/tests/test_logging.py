@@ -1687,6 +1687,22 @@ def test_l010_silent_for_resource_token_used_as_path_segment(body: str) -> None:
             "    get(f'/api/reports?report_token={report_token}')\n"
             "    logger.info('report %s', report_token)\n"
         ),
+        # Query/fragment context is the whole f-string, not the previous Constant.
+        (
+            "def f(prefix, private_token):\n"
+            "    get(f'/api?prefix={prefix}/{private_token}')\n"
+            "    logger.info('t %s', private_token)\n"
+        ),
+        (
+            "def f(foo, report_token):\n"
+            "    get(f'/search?q={foo}&path=/{report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        (
+            "def f(report_token):\n"
+            "    get(f'/page#/reports/{report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
         # Header and body uses are not path segments either.
         (
             "def f(report_token):\n"
