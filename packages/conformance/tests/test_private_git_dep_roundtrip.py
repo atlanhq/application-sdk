@@ -46,10 +46,21 @@ def repo(
 
 
 def _bootstrap() -> None:
+    """Run a bare ``bootstrap`` over the cwd, asserting it succeeded.
+
+    Bare on purpose: the bug was that a run with no flags dropped the
+    opt-in, so passing anything here would test the wrong thing.
+    """
     assert _cmd_bootstrap([]) == 0
 
 
 def _seed(root: pathlib.Path, rel: str, **kwargs: str) -> None:
+    """Write a workflow at ``rel``, rendered from its own template.
+
+    Seeding from the template rather than a literal fixture is what makes
+    the round-trip honest: the file bootstrap reads back is the file
+    bootstrap would have written.
+    """
     dest = root / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(render(pathlib.Path(rel).name, **kwargs), encoding="utf-8")
