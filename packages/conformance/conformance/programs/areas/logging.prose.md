@@ -299,6 +299,18 @@ rule was skipped, the sanitized form records that the credential was handled.
   none of them.  **Always route to residue and never auto-apply**, whatever
   the mode: a human confirms every credential-shaped change.
 
+  **Resource identifiers named `*_token` are not credentials — do not delete
+  them from logs.**  Some source APIs call their resource ids tokens (Mode's
+  `report_token`, `collection_token`: the slugs in its public URLs).  The
+  checker already stays silent on a `<noun>_token` the same function
+  interpolates as a URL path segment (`f"/reports/{report_token}/queries"`), so
+  a finding that remains on such a name means the function logs it without
+  using it as a path.  The human confirms it is an id, not a secret; then keep
+  a non-token descriptor in the line (the resource's *name*) and drop the id
+  only if the name carries enough to debug with.  Never rename the variable
+  to dodge the suffix match (`report_token` → `report_id`): that moves the
+  measurement, not the risk.
+
 - **L012 StdlibExtraReservedKeyCollision** — BLOCK.  A key in `extra={}`
   collides with a stdlib `LogRecord` attribute (`message`, `module`, `name`,
   `args`, …), which raises `KeyError` inside `Logger.makeRecord()` and crashes

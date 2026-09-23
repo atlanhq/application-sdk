@@ -333,6 +333,14 @@ Exempt: arguments assigned a redaction placeholder in the module (e.g. password 
 "[REDACTED]" if creds.get("password") else None) — logging them is a presence indicator,
 not a value leak.
 
+Also exempt: a resource identifier some source APIs call a token (Mode's report_token /
+collection_token).  A `<noun>_token` argument is silent only when BOTH hold: the noun is
+not an auth word (access, auth, bearer, refresh, id, session, reset, github, …; bare
+`token` never qualifies), AND the same function interpolates that name as a URL path
+segment (f"/reports/{report_token}/queries").  A secret travels in a header or query
+parameter, not as a path segment of the request it authenticates.  A resource token that
+is only logged — never part of a path — still fires; log a name beside it, or drop it.
+
 ---
 
 ## L011 — `StringConcatenationInLog` {#l011}

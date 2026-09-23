@@ -373,7 +373,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "credential *value* is CRITICAL.\n"
             "\n\nExempt: arguments assigned a redaction placeholder in the module\n"
             '(e.g. password = "[REDACTED]" if creds.get("password") else None) —\n'
-            "logging them is a presence indicator, not a value leak."
+            "logging them is a presence indicator, not a value leak.\n"
+            "\n"
+            "Also exempt: a resource identifier some source APIs call a token\n"
+            "(Mode's report_token / collection_token).  A `<noun>_token` argument is\n"
+            "silent only when BOTH hold: the noun is not an auth word (access, auth,\n"
+            "bearer, refresh, id, session, reset, github, …; bare `token` never\n"
+            "qualifies), AND the same function interpolates that name as a URL path\n"
+            'segment (f"/reports/{report_token}/queries").  A secret travels in a\n'
+            "header or query parameter, not as a path segment of the request it\n"
+            "authenticates.  A resource token that is only logged — never part of a\n"
+            "path — still fires; log a name beside it, or drop it."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l010",
     ),

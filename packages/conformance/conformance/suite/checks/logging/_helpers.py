@@ -272,6 +272,81 @@ def _is_credential_value_name(name: str) -> bool:
     return any(lower.endswith(suf) or lower == suf for suf in CREDENTIAL_VALUE_SUFFIXES)
 
 
+def is_resource_token_name(name: str) -> bool:
+    """True if *name* is ``<noun>_token`` for a noun that is not an auth word.
+
+    Many source APIs call their resource identifiers "tokens" (Mode's
+    ``report_token``, ``collection_token``).  The name alone cannot tell those
+    apart from a secret, so this is only ever a *precondition* for the L010
+    path-segment exemption (:func:`collect_path_segment_names`), never an
+    exemption by itself.  A bare ``token`` and any auth-qualified token
+    (``access_token``, ``refresh_token``, ``github_token``, …) never qualify.
+    """
+    from ._constants import RESOURCE_TOKEN_AUTH_QUALIFIERS
+
+    lower = name.lower().lstrip("_")
+    if not lower.endswith("_token"):
+        return False
+    qualifier = lower[: -len("_token")]
+    if not qualifier:
+        return False
+    return qualifier.rsplit("_", 1)[-1] not in RESOURCE_TOKEN_AUTH_QUALIFIERS
+
+
+def _interpolated_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def collect_path_segment_names(func: ast.AST) -> frozenset[str]:
+    """Names *func* interpolates as a URL path segment in an f-string.
+
+    A segment is ``/{name}`` followed by ``/``, ``?``, ``#``, whitespace or the
+    end of the string — ``f"/api/{ws}/reports/{report_token}/queries"``,
+    ``f"queries/{rpt_token}"``.  A value that opens the authority
+    (``f"https://{token}@host"``: preceded by ``//`` or followed by ``@``/``:``)
+    or sits in a query string (``?`` earlier in the literal) is not a segment.
+
+    A secret is sent in a header or a query parameter, not as a path segment of
+    the request it authenticates, so a ``<noun>_token`` used this way within the
+    same function is a resource identifier.  Nested functions are scanned
+    separately by the caller, so their f-strings are not collected here.
+    """
+    names: set[str] = set()
+    stack: list[ast.AST] = list(ast.iter_child_nodes(func))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        parts = node.values
+        for i, part in enumerate(parts):
+            if i == 0 or not isinstance(part, ast.FormattedValue):
+                continue
+            name = _interpolated_name(part.value)
+            before = parts[i - 1]
+            if name is None or not (
+                isinstance(before, ast.Constant) and isinstance(before.value, str)
+            ):
+                continue
+            prefix = before.value
+            if not prefix.endswith("/") or prefix.endswith("//") or "?" in prefix:
+                continue
+            after = parts[i + 1] if i + 1 < len(parts) else None
+            if after is None or (
+                isinstance(after, ast.Constant)
+                and isinstance(after.value, str)
+                and after.value[:1] in ("/", "?", "#", " ")
+            ):
+                names.add(name)
+    return frozenset(names)
+
+
 # ---------------------------------------------------------------------------
 # Script/CLI detection (L005 exemption) and redaction-placeholder tracking
 # (L010 exemption) — FND-61 follow-up: rule-level fixes so fleet code does not
