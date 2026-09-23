@@ -670,7 +670,10 @@ def test_redact_secrets_keeps_azure_shared_access_key_name() -> None:
     out = redact_secrets(_SB_CONN)
     assert "SharedAccessKeyName=ExamplePolicy" in out
     assert "EntityPath=example-hub" in out
-    assert "sb://example-ns.servicebus.windows.net/" in out
+    # Equality on the Endpoint field (not a hostname `in` check) so CodeQL's
+    # py/incomplete-url-substring-sanitization does not fire on a unit test.
+    endpoint = next(part for part in out.split(";") if part.startswith("Endpoint="))
+    assert endpoint == "Endpoint=sb://example-ns.servicebus.windows.net/"
 
 
 def test_redact_secrets_redacts_azure_storage_account_key() -> None:
