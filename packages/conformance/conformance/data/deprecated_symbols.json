@@ -93,6 +93,24 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "APPLICATION_VERSION is deprecated; use application_sdk.constants.APPLICATION_VERSION \u2014 the same constant, at the module that owns it. Will be removed in v3.41.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.interceptors.log",
+      "removal_version": "3.41.0",
+      "symbol": "APPLICATION_VERSION"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "COMMIT_SHA is deprecated; use application_sdk.constants.COMMIT_SHA \u2014 the same constant, at the module that owns it. Will be removed in v3.41.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.interceptors.log",
+      "removal_version": "3.41.0",
+      "symbol": "COMMIT_SHA"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "CLASSIFICATION_GATE_BROKEN is deprecated; use PreflightClassification.GATE_BROKEN \u2014 the enum member carrying the same wire value. Will be removed in v3.40.0.",
       "migration_target": true,
       "module": "application_sdk.execution._temporal.preflight_gate",
