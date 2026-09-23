@@ -187,7 +187,7 @@ reporting understates their outage and on-call responds late or not at all.
 
 `FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
 canonical answer to *what happened* and is consumed as an immutable reporting metric
-(dashboards, SLA gates, on-call routing). The 15 categorical leaves in
+(dashboards, SLA gates, on-call routing). The categorical leaves in
 `application_sdk.errors.leaves` (and `AppError` itself) are the sole defining sites:
 each leaf binds exactly one `FailureCategory` to its `category` `ClassVar`.
 
@@ -226,7 +226,7 @@ gets a slower, less accurate answer to 'why did my crawl fail'.
   `INVALID_INPUT_OPENAPI_ZIP_NO_SPEC`, `SpecFetchAuthError(AuthError)` →
   `AUTH_OPENAPI_SPEC_FETCH`), and none overrides to_failure_details, so that code is
   what dashboards read. The prefix table itself is application_sdk/errors/leaves.py: the
-  15 categorical leaves and the prefix each one owns.
+  categorical leaves and the prefix each one owns.
 - **Already correct when:** A class whose MRO overrides to_failure_details() builds the wire envelope itself, so
   `code` is not what a dashboard reads and adding a prefixed one would be dead code
   beside the real one. Those are exempt. Overriding qualified_code alone is NOT exempt —
@@ -2144,9 +2144,8 @@ file just became false (CONNECT-970).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/errors.py — the one SDK import is `from application_sdk.errors
-  import (AppPermissionDeniedError, AuthError, InvalidInputError,
-  SourceUnavailableError)`: four leaves from the package root, nothing from
+- **Compliant example:** atlan-metabase-app app/errors.py — its SDK error classes all come from `from
+  application_sdk.errors import (...)`: leaves from the package root, nothing from
   application_sdk.errors.base or application_sdk.storage.formats. Reaching into a
   submodule for the same class forfeits the stability promise.
 

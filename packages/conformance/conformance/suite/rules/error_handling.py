@@ -269,9 +269,12 @@ RULES: tuple[RuleDefinition, ...] = (
         id="E007",
         canonical_reference=(
             "atlan-openapi-app app/api_client.py — `redact_url` catches the ValueError "
-            "from urlsplit, logs it through sanitize_cause_repr, and only then returns its "
-            "'<unparseable url>' sentinel. The sentinel is the function's contract, and "
-            "because the event is logged first it needs no suppression."
+            "from urlsplit, logs it, and only then returns its '<unparseable url>' "
+            "sentinel; the sentinel is the function's contract, and because the event "
+            "is logged first it needs no suppression. It is the credential-boundary "
+            "form of the fix: the log is `logger.debug` through sanitize_cause_repr with "
+            "no exc_info, because the url it guards may be a pre-signed secret held in "
+            "that frame. Outside such a boundary, log with exc_info=True."
         ),
         terminal_state=(
             "A justified inline `# conformance: ignore[E007] <reason>` IS the correct "
@@ -461,11 +464,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E012",
         canonical_reference=(
-            "atlan-mysql-app app/failures.py — eleven leaves, each subclassing an SDK "
-            "category (`InvalidInputError`, `AuthError`, `InternalError`, "
-            "`PreconditionError`, `AppPermissionDeniedError`, `RateLimitedError`, "
-            "`SourceUnavailableError`) and owning a `code`. Raise one of these, never a "
-            "bare ValueError or RuntimeError."
+            "atlan-mysql-app app/failures.py — every leaf subclasses an SDK category "
+            "(e.g. `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns "
+            "a `code`. Raise one of these, never a bare ValueError or RuntimeError."
         ),
         scope=RuleScope.BOTH,
         name="UntypedBuiltinRaise",
@@ -767,7 +768,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "atlan-metabase-app app/extracts/databases.py — each place an HTTP failure "
             "returns an empty sentinel (`fetch_databases_summaries` and "
             "`fetch_database_metadata`) carries an inline ignore[E020] naming the residual "
-            "file that records it. Seven such sites exist across app/extracts/, each "
+            "file that records it; the same shape recurs across app/extracts/, each site "
             "justified. Without that evidence trail the empty return has to raise."
         ),
         terminal_state=(

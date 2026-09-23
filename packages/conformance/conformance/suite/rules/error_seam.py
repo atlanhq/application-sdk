@@ -110,10 +110,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P045",
         canonical_reference=(
-            "atlan-metabase-app app/errors.py — the one SDK import is `from "
-            "application_sdk.errors import (AppPermissionDeniedError, AuthError, "
-            "InvalidInputError, SourceUnavailableError)`: four leaves from the package "
-            "root, nothing from application_sdk.errors.base or "
+            "atlan-metabase-app app/errors.py — its SDK error classes all come from "
+            "`from application_sdk.errors import (...)`: leaves from the package root, "
+            "nothing from application_sdk.errors.base or "
             "application_sdk.storage.formats. Reaching into a submodule for the same "
             "class forfeits the stability promise."
         ),

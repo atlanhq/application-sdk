@@ -1573,6 +1573,43 @@ def test_autofixable_app_facing_rules_cite_a_reference_app() -> None:
     ), f"_SDK_ONLY_REFERENCE_EXEMPT entries no longer needed — remove them: {stale}"
 
 
+#: A count of things inside a reference app ("eleven leaves", "seven such
+#: sites", "five modules"). The apps change weekly and nothing re-counts, so a
+#: number in a reference is a claim that silently goes false — E012's said
+#: "six leaves" while the app had eleven. Describe the shape, not the tally.
+_HARD_CODED_COUNT = re.compile(
+    r"\b(?:two|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+    r"fourteen|fifteen|sixteen|twenty|\d{1,3})\b(?:\s+\w+){0,2}\s+"
+    r"(?:leaves|sites|modules|templates|tests|scenarios|checks|classes|"
+    r"subclasses|entries|widgets|files|shims|keys|fields|categories|steps|"
+    r"nodes|types|directives|calls|records|findings|entrypoints|suites|jobs)\b",
+    re.IGNORECASE,
+)
+
+
+def test_canonical_references_do_not_hard_code_counts() -> None:
+    """A reference describes a shape; it must not assert how many of it exist."""
+    counted = {
+        r.id: m.group(0)
+        for r in load_catalog()
+        if r.canonical_reference
+        and (m := _HARD_CODED_COUNT.search(r.canonical_reference))
+    }
+    assert not counted, (
+        "canonical_reference hard-codes a count that will drift as the app "
+        f"changes — describe the shape instead: {counted}"
+    )
+
+
+def test_hard_coded_count_pattern() -> None:
+    """The guard fires on real tallies and ignores the reference-app count."""
+    assert _HARD_CODED_COUNT.search("app/failures.py — eleven leaves, each …")
+    assert _HARD_CODED_COUNT.search("Seven such sites exist across app/extracts/")
+    assert _HARD_CODED_COUNT.search("the 15 categorical leaves")
+    assert not _HARD_CODED_COUNT.search("none of the three reference apps")
+    assert not _HARD_CODED_COUNT.search("every leaf subclasses an SDK category")
+
+
 def test_canonical_references_never_name_the_scaffold() -> None:
     """``atlan-hello-world-app`` is not a reference app (FND-2477).
 

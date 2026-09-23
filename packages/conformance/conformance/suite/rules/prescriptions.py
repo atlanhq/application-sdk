@@ -181,7 +181,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "``FailureCategory`` is the closed, single-axis taxonomy the SDK owns —\n"
             "every value is the canonical answer to *what happened* and is consumed as\n"
             "an immutable reporting metric (dashboards, SLA gates, on-call routing).\n"
-            "The 15 categorical leaves in ``application_sdk.errors.leaves`` (and\n"
+            "The categorical leaves in ``application_sdk.errors.leaves`` (and\n"
             "``AppError`` itself) are the sole defining sites: each leaf binds exactly\n"
             "one ``FailureCategory`` to its ``category`` ``ClassVar``.\n"
             "\n"
@@ -209,7 +209,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "(InvalidInputError)` → `INVALID_INPUT_OPENAPI_ZIP_NO_SPEC`, "
             "`SpecFetchAuthError(AuthError)` → `AUTH_OPENAPI_SPEC_FETCH`), and none "
             "overrides to_failure_details, so that code is what dashboards read. The "
-            "prefix table itself is application_sdk/errors/leaves.py: the 15 categorical "
+            "prefix table itself is application_sdk/errors/leaves.py: the categorical "
             "leaves and the prefix each one owns."
         ),
         terminal_state=(

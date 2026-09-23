@@ -818,11 +818,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T010",
         canonical_reference=(
-            "atlan-mysql-app tests/unit/ — five modules: test_client.py, "
-            "test_handler.py, test_mysql_app.py, test_parity.py and "
-            "test_preflight_conformance.py, covering the SQL client, the handler, the "
-            "app's mappers, the wire-shape parity spec and the preflight behaviour "
-            "scenarios. This tier is the floor and is not exemptable."
+            "atlan-mysql-app tests/unit/ — unit modules covering the SQL client "
+            "(test_client.py), the handler (test_handler.py), the app's mappers, the "
+            "wire-shape parity spec and the preflight behaviour scenarios. This tier is "
+            "the floor and is not exemptable."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,

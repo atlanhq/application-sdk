@@ -416,7 +416,7 @@ outcome mirroring the error-handling shape in the reference app named by
   empty return is deliberate, it needs an evidence trail *and* an inline
   `ignore[E020]` naming it — `atlan-metabase-app app/extracts/databases.py`
   has exactly that, pointing at the residual file that records the failure,
-  and seven such justified sites exist across `app/extracts/`.  Without that
+  and the same justified shape recurs across `app/extracts/`.  Without that
   trail the empty return has to raise.
 
 - **E013 LegacyAtlanErrorRaise** — the code raises a deprecated `AtlanError`

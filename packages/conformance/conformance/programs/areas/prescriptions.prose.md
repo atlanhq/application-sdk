@@ -341,7 +341,7 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   a finding to report in the proposal, not a mismatch to reconcile.
 
 - **P002 CategoryFieldOverride** — a non-canonical subclass of `AppError` (or
-  any of its 15 categorical leaves) redeclares the `category` ClassVar in its
+  any of its categorical leaves) redeclares the `category` ClassVar in its
   own body.  Read the class definition around `finding.line`, then:
 
   1. Verify that the class inherits from a canonical leaf and that the parent's

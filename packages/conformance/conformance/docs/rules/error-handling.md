@@ -262,9 +262,11 @@ unrelated, making the original failure invisible.
 ### What correct looks like
 
 - **Compliant example:** atlan-openapi-app app/api_client.py — `redact_url` catches the ValueError from urlsplit,
-  logs it through sanitize_cause_repr, and only then returns its '<unparseable url>'
-  sentinel. The sentinel is the function's contract, and because the event is logged
-  first it needs no suppression.
+  logs it, and only then returns its '<unparseable url>' sentinel; the sentinel is the
+  function's contract, and because the event is logged first it needs no suppression. It
+  is the credential-boundary form of the fix: the log is `logger.debug` through
+  sanitize_cause_repr with no exc_info, because the url it guards may be a pre-signed
+  secret held in that frame. Outside such a boundary, log with exc_info=True.
 - **Interacts with:** E007 and E004 judge the same handler shape with one shared predicate
   (typed_failure_scope in checks/error_handling/_helpers.py). A return that hands the
   caught exception back as typed data already clears both rules: a call that receives
@@ -409,10 +411,9 @@ blind, on-call routing can't branch on it, SLA gates can't classify it. (per ADR
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/failures.py — eleven leaves, each subclassing an SDK category
-  (`InvalidInputError`, `AuthError`, `InternalError`, `PreconditionError`,
-  `AppPermissionDeniedError`, `RateLimitedError`, `SourceUnavailableError`) and owning a
-  `code`. Raise one of these, never a bare ValueError or RuntimeError.
+- **Compliant example:** atlan-mysql-app app/failures.py — every leaf subclasses an SDK category (e.g.
+  `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns a `code`. Raise
+  one of these, never a bare ValueError or RuntimeError.
 
 SDK code raises a bare Python builtin.  The Automation Engine receives an opaque string
 — no category, code, audience, or retryable field. Dashboards are blind; on-call routing
@@ -647,9 +648,9 @@ there is no except/raise to key on; the failure is swallowed by a plain if-guard
 
 - **Compliant example:** atlan-metabase-app app/extracts/databases.py — each place an HTTP failure returns an
   empty sentinel (`fetch_databases_summaries` and `fetch_database_metadata`) carries an
-  inline ignore[E020] naming the residual file that records it. Seven such sites exist
-  across app/extracts/, each justified. Without that evidence trail the empty return has
-  to raise.
+  inline ignore[E020] naming the residual file that records it; the same shape recurs
+  across app/extracts/, each site justified. Without that evidence trail the empty
+  return has to raise.
 - **Already correct when:** A justified inline `# conformance: ignore[E020] <reason>` IS the correct end state where
   three things hold together: the empty return is deliberate, the failure is recorded to
   a durable evidence trail that the reason NAMES, and the run declares the resulting gap
