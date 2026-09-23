@@ -186,7 +186,8 @@ they hit with zero changes on their side.
   retirement marker — `deprecated` still requires the field to be present), a type that
   was WIDENED (including nested containers), an INHERITED field whose base class changed
   the type, and a move OFF `Any` that keeps the same outer shape (`Any` replaced in
-  place). To retire a field deliberately, mark it `sunset` in contract_schema.lock.json.
+  place; a type alias declared in the same module is compared by its target, not its
+  name). To retire a field deliberately, mark it `sunset` in contract_schema.lock.json.
   Before treating a removal as dead code, grep the whole repo — including scripts/ and
   *.sh JSONPath args like $.extract.outputs.<field> — for readers the contract does not
   know about.
