@@ -428,6 +428,26 @@ class TestResolveDag:
 
         assert dag.entrypoint == "crawler"
 
+    def test_the_derivation_holds_when_the_class_pins_its_entrypoint(self) -> None:
+        """The contract-generated bases set ``entrypoint`` explicitly
+        (``MinerGeneratedE2EBase.entrypoint = "miner"``). A spec that overrides
+        only ``manifest_path`` must still derive from that manifest: inheriting
+        the class's entrypoint pairs the crawler's DAG with the miner's AE
+        manifest fetch — the documented crawl-then-mine example, as written."""
+
+        class _GeneratedMiner(_Miner):
+            entrypoint = "miner"
+
+        harness = _GeneratedMiner()
+        crawl = harness.resolve_dag(
+            DAGSpec(manifest_path="app/generated/crawler/manifest.json")
+        )
+
+        assert crawl.entrypoint == "crawler"
+        assert crawl.label == "crawler"
+        # A spec that does not move the manifest still inherits the pin.
+        assert harness.resolve_dag(DAGSpec()).entrypoint == "miner"
+
     def test_an_explicit_entrypoint_wins_over_the_derivation(self) -> None:
         dag = _Miner().resolve_dag(
             DAGSpec(

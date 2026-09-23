@@ -1521,6 +1521,11 @@ Four things to know:
   "inherit the class attribute of the same name", so a suite that declares nothing
   runs exactly the one DAG it always did. `dag_runs = ()` is the default and the
   single-run path is unchanged — no signature break, no new required ClassVar.
+  One exception keeps identity consistent: a spec that sets `manifest_path` but not
+  `entrypoint` derives the entrypoint from **its own** manifest, not the class's.
+  The generated bases pin `entrypoint` (`MinerGeneratedE2EBase.entrypoint = "miner"`),
+  so inheriting it would pair the crawler's DAG above with the miner's AE manifest
+  fetch.
 - **Expectations are per run, not just identity.** They decide which Atlas probes
   *run at all*: `expect_connection` gates the connection poll and every count under
   it. A crawl declared inside a miner suite (`expect_connection = False`) would

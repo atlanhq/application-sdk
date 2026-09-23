@@ -616,7 +616,9 @@ class DAGSpec:
     Attributes:
         entrypoint: App-entrypoint for AE's manifest fetch. ``""`` means
             "derive from this spec's ``manifest_path``", the same as the class
-            attribute.
+            attribute. ``None`` inherits the class attribute — unless this spec
+            sets ``manifest_path``, in which case it derives from that manifest,
+            because the class's entrypoint belongs to the class's manifest.
         manifest_path: Path to the manifest whose ``dag`` seeds this run.
         expect_connection: Whether this run is expected to land a Connection.
         expect_lineage: Whether this run is expected to land lineage.
@@ -3048,7 +3050,16 @@ class BaseE2ETest:
         manifest_path = (
             self.manifest_path if spec.manifest_path is None else spec.manifest_path
         )
-        entrypoint = self.entrypoint if spec.entrypoint is None else spec.entrypoint
+        if spec.entrypoint is not None:
+            entrypoint = spec.entrypoint
+        elif spec.manifest_path is not None:
+            # The class's entrypoint is paired with the class's manifest. A spec
+            # that moves the manifest and names no entrypoint derives it from its
+            # own — inheriting a pinned one (the contract-generated bases pin it)
+            # would send another entrypoint's manifest fetch for this DAG.
+            entrypoint = ""
+        else:
+            entrypoint = self.entrypoint
         entrypoint = entrypoint or self._derive_entrypoint(manifest_path)
         return ResolvedDAG(
             label=spec.label or entrypoint or "default",
