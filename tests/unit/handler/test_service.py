@@ -8809,3 +8809,77 @@ class TestBundleMarketplaceEntrypoints:
             assert resp.json()["detail"] == "No manifest available"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+
+# ---------------------------------------------------------------------------
+# Boundary logs must not carry credentials the driver quoted
+# ---------------------------------------------------------------------------
+
+_LEAKY_SECRET = "hunter2-not-a-real-secret"
+_LEAKY_TEXT = (
+    f"connect failed: mongodb://svc:{_LEAKY_SECRET}@db.internal/"
+    f"?tlsCertificateKeyFilePassword={_LEAKY_SECRET}"
+)
+
+
+class _LeakyHandler(Handler):
+    """Every route fails with a driver error that quotes a connection URI.
+
+    ``chained`` wraps it in a HandlerError (the deprecated typed path);
+    otherwise the raw driver error escapes (the unexpected-exception path).
+    """
+
+    def __init__(self, chained: bool) -> None:
+        super().__init__()
+        self._chained = chained
+
+    def _fail(self) -> Exception:
+        driver = RuntimeError(_LEAKY_TEXT)
+        if not self._chained:
+            return driver
+        try:
+            raise driver
+        except RuntimeError as exc:
+            err = HandlerError("source failed")
+            err.__cause__ = exc
+            return err
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        raise self._fail()
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        raise self._fail()
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        raise self._fail()
+
+
+class TestBoundaryLogRedaction:
+    """The HTTP boundary is the only server-side record of a handler failure,
+    so it keeps the traceback — but through the SDK redaction helpers, never
+    as a raw ``exc_info`` that serialises the driver's message verbatim."""
+
+    @pytest.mark.parametrize("chained", [True, False], ids=["handler-error", "raw"])
+    @pytest.mark.parametrize(
+        "route", ["/workflows/v1/auth", "/workflows/v1/check", "/workflows/v1/metadata"]
+    )
+    def test_boundary_log_redacts_message_and_traceback(
+        self, route: str, chained: bool
+    ) -> None:
+        client = _make_client(handler=_LeakyHandler(chained=chained))
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post(route, json={"credentials": []})
+        assert response.status_code >= 500
+        assert _LEAKY_SECRET not in response.text
+
+        boundary = [
+            c
+            for c in ml.error.call_args_list
+            if c.args and isinstance(c.args[0], str) and "(request %s)" in c.args[0]
+        ]
+        assert boundary, f"no boundary log for {route}"
+        for call in boundary:
+            assert "exc_info" not in call.kwargs
+            rendered = call.args[0] % call.args[1:]
+            assert _LEAKY_SECRET not in rendered
+            assert "Traceback" in rendered  # the stack survives, redacted
