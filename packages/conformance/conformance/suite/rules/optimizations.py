@@ -66,8 +66,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O002",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — assets are serialised through "
-            "`asset.to_nested_bytes()`, the v9 wire shape, rather than through `.dict()`."
+            "atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each asset "
+            "through `asset.to_nested_bytes()`, the v9 wire shape, rather than through "
+            "`.dict()`, then decodes that output to build the publish-layer shape and merge "
+            "in extra attributes."
         ),
         scope=RuleScope.APP,
         name="LegacyAssetSerialization",
@@ -107,8 +109,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O003",
         canonical_reference=(
-            "atlan-openapi-app app/asset_mapper.py — `map_connection` is annotated `-> "
-            "Connection`, the pyatlan type it actually builds, so a wrong asset type is a "
+            "atlan-metabase-app app/asset_mapper.py — `map_collection` is annotated `-> "
+            "MetabaseCollection`, the pyatlan_v9 type it constructs and returns "
+            "(`map_dashboard` and `map_bi_process` likewise), so a wrong asset type is a "
             "type error rather than a runtime surprise in the payload."
         ),
         scope=RuleScope.APP,
@@ -124,7 +127,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "constructs a pyatlan asset and returns it, so the return annotation "
             "documents which asset it produces and lets pyright check the call site. "
             "A mapper that builds an asset but declares no return type loses that "
-            "guarantee (BLDX-1492; reference app atlan-openapi-app). WARN/recommendation "
+            "guarantee (BLDX-1492; reference app atlan-metabase-app). WARN/recommendation "
             "because adding the annotation is a safe, mechanical nudge."
         ),
         short_description=(
@@ -136,7 +139,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "imported from ``pyatlan_v9.model.assets`` / ``pyatlan.model.assets``) and\n"
             "**returns that asset**, but carries no ``-> <Asset>`` return annotation.\n"
             "The asset-mapper pattern is typed end-to-end — each ``map_<entity>``\n"
-            "function declares the pyatlan asset it produces (see ``atlan-openapi-app``).\n"
+            "function declares the pyatlan asset it produces (see ``atlan-metabase-app``).\n"
             "\n"
             "Keyed on actually returning the constructed asset (``return Table(...)`` or\n"
             "``asset = Table(...); ... return asset``), not just a ``map_`` name — so a\n"
@@ -153,7 +156,7 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-mysql-app app/mysql.py — `from pyatlan_v9.model.assets import Column, "
             "Database, Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets "
-            "path appears in none of the four reference apps."
+            "path appears nowhere under the three reference apps' app/ directories."
         ),
         scope=RuleScope.APP,
         name="LegacyPyatlanAssetImport",

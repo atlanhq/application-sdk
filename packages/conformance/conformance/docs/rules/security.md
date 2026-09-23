@@ -41,9 +41,10 @@ embedded in the code that ships them.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/credentials.py — credentials arrive as a `CredentialRef` resolved
-  by the SDK, or as an inline dict from the secret store. No string literal is ever
-  assigned to a credential-named variable in the four reference apps.
+- **Compliant example:** atlan-metabase-app app/credentials.py — credentials arrive as a `CredentialRef` built by
+  `build_credential_ref`, or as an inline dict, and the typed `MetabaseCredential`
+  defaults `password` to "". No string literal is assigned to a credential-named
+  variable in any shipped app/ module of the three reference apps.
 
 A non-empty string literal is assigned to (or passed as) a target whose name marks it a
 credential value (`password`, `api_key`, `secret`, `access_key`, `client_secret`,
@@ -81,12 +82,12 @@ mechanism so credential handling stays uniform and auditable.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/credentials.py — `build_credential_ref` resolves the secret
-  through the SDK's `CredentialRef.resolve` (handling both `credential_guid` and agent
-  `agent_json` routing), and the typed MetabaseCredential the API client consumes is
-  populated from that resolved payload. No credential-named environment variable is read
-  anywhere in the module — resolution through the seam is what correct looks like, not a
-  justified read.
+- **Compliant example:** atlan-metabase-app app/credentials.py — `build_credential_ref` routes the input to a
+  `CredentialRef` through the SDK's `CredentialRef.resolve` (`credential_guid` or agent
+  `agent_json`), and app/connector.py `_build_client` fetches the secret with
+  `self.context.resolve_credential_raw` and parses it into the typed MetabaseCredential
+  the API client consumes. No credential-named environment variable is read in either
+  module — resolution through the seam is what correct looks like, not a justified read.
 - **Already correct when:** Zero findings, reached by resolving the secret through CredentialRef / the SecretStore
   protocol rather than reading it from the environment. S002 flags reads only — a
   credential-named `os.getenv` / `os.environ[...]` / `.get` / `.pop` — so only a read

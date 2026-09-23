@@ -38,9 +38,11 @@ customers run.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app .github/workflows/checks.yml — third-party actions are pinned to a
-  full 40-character commit SHA with the human-readable version in a trailing comment.
-  Only atlanhq/application-sdk's own reusable refs use @main.
+- **Compliant example:** atlan-metabase-app .github/workflows/checks.yml — a thin caller whose one `uses:` is
+  `atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main`; its header says
+  the third-party action pins live in that SDK reusable, not in the app. Every `uses:`
+  in the three reference apps is an atlanhq/ ref (exempt) or a local ./ action, so no
+  mutable third-party pin is left to drift.
 
 External actions reused via `uses:` must be pinned to a full-length commit SHA (digest),
 never a mutable tag (@v4) or branch (@main). A tag can be re-pointed to malicious code
@@ -160,9 +162,10 @@ ejected PR that costs a full re-queue. The remediation is almost always a single
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app .github/workflows/checks.yml — tooling arrives through
-  `atlanhq/application-sdk/.github/actions/setup-deps`, which owns the retry, instead of
-  each workflow curling a binary of its own. No reference app downloads a tool inline.
+- **Compliant example:** atlan-openapi-app .github/workflows/checks.yml — a thin caller of
+  `atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main`, whose
+  `setup-deps` step owns the retry, instead of the workflow curling a binary of its own.
+  No workflow or composite action in the three reference apps downloads a tool inline.
 
 Flags a `curl`/`wget` that installs something — it writes the response to a file or
 pipes it into a shell or `tar` — and carries no retry, plus `uv python install`, which

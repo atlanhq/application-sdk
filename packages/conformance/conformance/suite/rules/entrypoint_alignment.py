@@ -34,10 +34,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P016",
         canonical_reference=(
-            "atlan-openapi-app app/connector.py — the @entrypoint set matches the "
-            "contract's entrypoints exactly; none carries a bespoke one-off entrypoint. "
-            "atlan-metabase-app app/connector.py shows the two-entrypoint form, with a "
-            "comment naming the DAG nodes in contract/app.pkl they correspond to."
+            "atlan-metabase-app app/connector.py — its two @entrypoints, "
+            "`extract_metadata` and `extract_lineage`, are exactly the routes the "
+            "manifest DAG declares, and the comment above them names the DAG nodes in "
+            "contract/app.pkl they correspond to; a third, bespoke @entrypoint would be a "
+            "route the DAG never dispatches. atlan-openapi-app app/connector.py is the "
+            "single-entrypoint form: no @entrypoint at all, just the implicit `run()`."
         ),
         terminal_state=(
             "A temporary migration entrypoint is not a reason to widen the contract. "

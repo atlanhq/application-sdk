@@ -245,9 +245,10 @@ outcome mirroring the error-handling shape in the reference app named by
     is not provably returned.  Move one probe into a helper that returns its
     own `PreflightCheck`, and have the loop append the helper's result.
 
-  `atlan-mysql-app app/handler.py`'s `preflight_check` is the reference: its
-  probes convert the caught exception into a typed `PreflightCheck` row and
-  return it, with no suppression and no log above DEBUG.
+  `atlan-mysql-app app/handler.py`'s `_check_connectivity` (one of
+  `preflight_check`'s probes) is the reference: it converts the caught
+  exception into a typed `PreflightCheck` row and returns it, with no
+  suppression and no log above DEBUG.
 
   **Best-effort cleanup reached from `preflight_check` is the other trap.**  A
   helper such as `try: await client.aclose() except Exception:
@@ -264,11 +265,11 @@ outcome mirroring the error-handling shape in the reference app named by
   caller sees a wrong result and no trace.  Add a
   `logger.warning(..., exc_info=True)` **before** the return — the checker
   clears on any logging call preceding it — or raise a domain error when the
-  caller cannot act on an empty value.  `atlan-metabase-app
-  app/extracts/databases.py`'s `fetch_databases_summaries` logs the HTTP
-  status and records a residual before returning `[]`.  Where the sentinel
-  really is the contract, `atlan-openapi-app app/api_client.py`'s `redact_url`
-  carries an inline `ignore[E007]` saying so.  The log call you add is subject
+  caller cannot act on an empty value.  `atlan-openapi-app
+  app/api_client.py`'s `redact_url` is the shape: it catches the `ValueError`
+  from `urlsplit`, logs it through `sanitize_cause_repr`, and only then returns
+  its sentinel — so the sentinel stays the function's contract and the failure
+  still leaves a trace.  The log call you add is subject
   to the credential-boundary contraindication above — at an auth or connect
   site, format the exception through `sanitize_cause_repr` and omit
   `exc_info=True`.
@@ -294,10 +295,9 @@ outcome mirroring the error-handling shape in the reference app named by
 - **E008 ImportErrorWithoutLogging** — `except ImportError` with no logging,
   so a missing or broken dependency reads as a normal skip.  Bind the
   exception and carry its text into whatever the block does next: a log line
-  for a runtime guard, or the skip reason for a test guard, as in
-  `atlan-openapi-app tests/e2e/test_connection_create.py`, which binds
-  `except ImportError as _exc` and puts the text in the `pytest.skip` reason.
-  Legitimate optional-dependency guards still need the trace — the fallback
+  for a runtime guard, as `application_sdk/clients/ssl_utils.py`'s
+  `_get_default_ca_bundle_path` logs its certifi fallback (no reference app has
+  a scanned `except ImportError`; E008 skips `tests/`).  Legitimate optional-dependency guards still need the trace — the fallback
   being correct is not the same as the failure being invisible.
 
 - **E009 ExceptBlockOnlyAssigns** — the `except` block only assigns a variable
@@ -319,7 +319,10 @@ outcome mirroring the error-handling shape in the reference app named by
   (`for r in results: if isinstance(r, Exception): logger.error(..., exc_info=r)`),
   raising or recording per item as the call site requires.  No reference app
   calls `gather(return_exceptions=True)`; per-item failure is decided at the
-  item, as in `atlan-metabase-app app/extracts/collections.py`.  Where the app
+  item, as in `atlan-metabase-app app/extracts/dashboards.py`, where
+  `fetch_dashboards_details` fetches one dashboard at a time and
+  `fetch_dashboard_details` logs each failed fetch and records it as a
+  residual.  Where the app
   genuinely needs concurrency the app-facing seam is
   `application_sdk/execution/heartbeat.py` — `run_in_thread` /
   `run_fault_isolated` / `run_best_effort`, which surface per-unit failures.
@@ -332,9 +335,11 @@ outcome mirroring the error-handling shape in the reference app named by
   `handleError()` — so a raise here propagates into the caller that was merely
   logging.  Wrap the whole body and fail open (return `True` on error, so a
   broken filter never silently drops records).  Better, where the filter is an
-  app's own: delete it and use `get_logger`, since filtering, redaction and
+  app's own: delete it and use `get_logger`, since filtering and
   Temporal-context enrichment belong to
-  `application_sdk/observability/logger_adaptor.py`.  `atlan-mysql-app
+  `application_sdk/observability/logger_adaptor.py` and redaction to
+  `application_sdk/errors/base.py` (`sanitize_cause_repr` /
+  `safe_traceback`).  `atlan-mysql-app
   app/client.py` shows an app's entire logging setup — one import, one
   module-level logger.
 
@@ -345,7 +350,7 @@ outcome mirroring the error-handling shape in the reference app named by
   `InvalidInputError` for bad caller input, `AuthError` for credentials,
   `PreconditionError` for an unmet precondition, `InternalError` otherwise —
   and use the app's own subclass of it, creating one in the app's errors
-  module when none fits.  Mirror `atlan-mysql-app app/failures.py`: six
+  module when none fits.  Mirror `atlan-mysql-app app/failures.py`: eleven
   leaves, each subclassing an SDK category and owning a `code`.  Preserve the
   cause with `from exc` when raising inside an `except` (E016).  The
   subclass-with-a-`code` shape matters: raising the bare category leaf trips
@@ -384,8 +389,10 @@ outcome mirroring the error-handling shape in the reference app named by
   distinct failure in that category collapses into one bucket on the
   dashboard.  Raise a connector-specific subclass that overrides `code`,
   adding it to the app's errors module when it does not exist.  Mirror
-  `atlan-openapi-app app/errors.py`, where every raise site uses a subclass
-  with its own `code`.  Interacts with P003: the subclass's `code` must start
+  `atlan-openapi-app app/errors.py`, where each connector-specific subclass
+  has its own `code` and every raise site in `app/connector.py` uses one,
+  apart from the sanctioned `InternalError(classification_pending=True)`
+  placeholder in `run`.  Interacts with P003: the subclass's `code` must start
   with the parent leaf's category prefix, so read that rule before choosing
   the string.
 
@@ -409,7 +416,7 @@ outcome mirroring the error-handling shape in the reference app named by
   empty return is deliberate, it needs an evidence trail *and* an inline
   `ignore[E020]` naming it — `atlan-metabase-app app/extracts/databases.py`
   has exactly that, pointing at the residual file that records the failure,
-  and seven such justified sites exist across `app/extracts/`.  Without that
+  and the same justified shape recurs across `app/extracts/`.  Without that
   trail the empty return has to raise.
 
 - **E013 LegacyAtlanErrorRaise** — the code raises a deprecated `AtlanError`

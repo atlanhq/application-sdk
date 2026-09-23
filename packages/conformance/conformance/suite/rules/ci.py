@@ -14,9 +14,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="C001",
         canonical_reference=(
-            "atlan-metabase-app .github/workflows/checks.yml — third-party actions are "
-            "pinned to a full 40-character commit SHA with the human-readable version in a "
-            "trailing comment. Only atlanhq/application-sdk's own reusable refs use @main."
+            "atlan-metabase-app .github/workflows/checks.yml — a thin caller whose one "
+            "`uses:` is `atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main`; "
+            "its header says the third-party action pins live in that SDK reusable, not in "
+            "the app. Every `uses:` in the three reference apps is an atlanhq/ ref (exempt) "
+            "or a local ./ action, so no mutable third-party pin is left to drift."
         ),
         fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,
@@ -181,9 +183,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="C004",
         canonical_reference=(
-            "atlan-openapi-app .github/workflows/checks.yml — tooling arrives through "
-            "`atlanhq/application-sdk/.github/actions/setup-deps`, which owns the retry, "
-            "instead of each workflow curling a binary of its own. No reference app "
+            "atlan-openapi-app .github/workflows/checks.yml — a thin caller of "
+            "`atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main`, whose "
+            "`setup-deps` step owns the retry, instead of the workflow curling a binary "
+            "of its own. No workflow or composite action in the three reference apps "
             "downloads a tool inline."
         ),
         fix_locus=FixLocus.CI,

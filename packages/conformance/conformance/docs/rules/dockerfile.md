@@ -109,8 +109,9 @@ the customer sees first, on a release every pre-deploy gate passed.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app — ENV ATLAN_APP_MODULE is declared in the Dockerfile as well as
-  atlan.yaml, so the image runs on its own.
+- **Compliant example:** atlan-metabase-app Dockerfile — `ENV ATLAN_APP_MODULE=app.connector:MetabaseApp`, the
+  same value atlan.yaml declares under deploy.env and pools.default.env, so the image
+  starts the right class on its own and agrees with its manifest.
 - **Interacts with:** The value must match atlan.yaml's deploy.env exactly; read it from there rather than
   inferring it from the App subclass, or the two drift and the container starts the
   wrong class.
@@ -142,8 +143,9 @@ pod as running and healthy.
 ### What correct looks like
 
 - **Compliant example:** atlan-openapi-app Dockerfile — ATLAN_APP_MODULE and ATLAN_CONTRACT_GENERATED_DIR are
-  baked because they describe the image; ATLAN_APP_MODE is not, because it describes the
-  deployment and arrives from atlan.yaml at schedule time.
+  baked because they describe the image; ATLAN_APP_MODE is absent, because it describes
+  the deployment, and the SDK reads it from the process environment the deployment
+  supplies at runtime.
 
 `ENV ATLAN_APP_MODE` must not appear in the Dockerfile.  Runtime mode (`worker` /
 `server`) is deployment-specific: the same image may be deployed in different modes in

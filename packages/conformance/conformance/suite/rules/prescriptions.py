@@ -33,9 +33,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P001",
         canonical_reference=(
-            "atlan-mysql-app — its generated contract/_input.py subclasses "
-            "ExtractionInput with no allow_unbounded_fields at all, because every "
-            "filter is a bounded concrete type."
+            "atlan-mysql-app app/generated/_input.py — the generated "
+            "`AppInputContract(ExtractionInput)` declares no allow_unbounded_fields at "
+            "all: every field it adds is a concrete str or bool, and the include/exclude "
+            "filters it inherits from ExtractionInput are already the bounded "
+            "`FilterMap | str`."
         ),
         rule_interactions=(
             "B005 + ledger-guard bound the fix, but less tightly than they look, and "
@@ -179,7 +181,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "``FailureCategory`` is the closed, single-axis taxonomy the SDK owns —\n"
             "every value is the canonical answer to *what happened* and is consumed as\n"
             "an immutable reporting metric (dashboards, SLA gates, on-call routing).\n"
-            "The 15 categorical leaves in ``application_sdk.errors.leaves`` (and\n"
+            "The categorical leaves in ``application_sdk.errors.leaves`` (and\n"
             "``AppError`` itself) are the sole defining sites: each leaf binds exactly\n"
             "one ``FailureCategory`` to its ``category`` ``ClassVar``.\n"
             "\n"
@@ -202,8 +204,13 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P003",
         canonical_reference=(
-            "application_sdk/errors/leaves.py — the 15 categorical leaves and the "
-            "prefix each one owns."
+            "atlan-openapi-app app/errors.py — every subclass extends an SDK leaf and "
+            "declares a code carrying that leaf's prefix (`ZipNoSpecFoundError"
+            "(InvalidInputError)` → `INVALID_INPUT_OPENAPI_ZIP_NO_SPEC`, "
+            "`SpecFetchAuthError(AuthError)` → `AUTH_OPENAPI_SPEC_FETCH`), and none "
+            "overrides to_failure_details, so that code is what dashboards read. The "
+            "prefix table itself is application_sdk/errors/leaves.py: the categorical "
+            "leaves and the prefix each one owns."
         ),
         terminal_state=(
             "A class whose MRO overrides to_failure_details() builds the wire "
@@ -388,9 +395,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P015",
         canonical_reference=(
-            "atlan-metabase-app app/contracts.py — collection fields are bounded with "
-            "`MaxItems` rather than left as an open list of primitives, which is what "
-            "keeps the payload inside Temporal's limit as the source grows."
+            "atlan-metabase-app app/contracts.py — the collection filters are "
+            "containers of a typed model, `CollectionFilter = Annotated[dict[str, "
+            "CollectionSelection], MaxItems(1000)]`, and `CollectResidualsInput.residual_files` "
+            "is `Annotated[dict[str, FileReference], MaxItems(16)]`. The value type is what "
+            "this rule grades: a bounded dict of str would still fire, because MaxItems "
+            "keeps the payload small but gives the keys and values no schema."
         ),
         scope=RuleScope.APP,
         name="UnmodeledBoundedContractField",
