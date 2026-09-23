@@ -26,6 +26,7 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.checks._entrypoint_contract_fields import (
     collect_entrypoint_contract_names,
+    collect_type_aliases,
     resolve_contract_fields,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
@@ -340,7 +341,15 @@ def scan_contract_compat(
                 continue
 
             aliases = file_aliases.get(path, {})
-            live_fields = resolve_contract_fields(class_node, aliases, by_name)
+            # Module-level type aliases are resolved for THIS module's own
+            # field declarations only. An inherited field is declared in
+            # another module, whose aliases are not these (FND-2547).
+            type_aliases = (
+                collect_type_aliases(tree) if isinstance(tree, ast.Module) else {}
+            )
+            live_fields = resolve_contract_fields(
+                class_node, aliases, by_name, type_aliases=type_aliases
+            )
             live_by_name = {f.name: f for f in live_fields}
 
             # A ledger entry is keyed by BARE class name. When that name is

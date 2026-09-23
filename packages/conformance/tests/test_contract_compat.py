@@ -1312,3 +1312,97 @@ def test_b006_on_an_inherited_field_says_not_to_redeclare_it(tmp_path: Path) -> 
     ]
     assert inherited
     assert all("do not redeclare it" in f.message for f in inherited)
+
+
+# ── Module-level type aliases (FND-2547) ──────────────────────────────────────
+#
+# B005 compares the WRITTEN annotation against the ledger string. Before
+# aliases were resolved, a field written through a named alias canonicalized to
+# that bare name, so the checker could not see the outer shape and reported a
+# BLOCK-tier break on the very retype P001 prescribes. The app-side workaround
+# was to spell the type out inline and warn readers off the aliases.
+
+_EP_ALIASED_ANY_REPLACEMENT = """\
+from application_sdk.app import App
+from typing import Annotated
+
+CredentialValue = str | int | bool | None
+BoundedCredentialDict = Annotated[dict[str, CredentialValue], MaxItems(500)]
+BoundedCredentialList = Annotated[list[BoundedCredentialDict], MaxItems(50)]
+
+class MyInput:
+    credentials: BoundedCredentialList | BoundedCredentialDict
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+_EP_ALIASED_SHAPE_CHANGE = """\
+from application_sdk.app import App
+
+Swapped = list[str]
+
+class MyInput:
+    credentials: Swapped
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+_EP_ALIAS_CYCLE = """\
+from application_sdk.app import App
+
+A = B
+B = A
+
+class MyInput:
+    credentials: A
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def test_b005_resolves_module_type_aliases(tmp_path: Path) -> None:
+    """An alias-written retype off ``Any`` is the same retype written inline.
+
+    ``BoundedCredentialList | BoundedCredentialDict`` expands to
+    ``list[dict[str, CredentialValue]] | dict[str, CredentialValue]`` — ``Any``
+    replaced in place, same outer shape, which ``_retype_is_compatible``
+    already accepts. Without alias resolution the checker saw two bare names
+    and fired at BLOCK tier (FND-2547).
+    """
+    ledger = _make_ledger(
+        ContractField(
+            "MyInput", "credentials", "list[dict[str, Any]] | dict[str, Any]", "active"
+        )
+    )
+    findings = _scan(tmp_path, {"app.py": _EP_ALIASED_ANY_REPLACEMENT}, ledger)
+    assert "B005" not in _ids(findings), (
+        "alias-written Any-replacement must be recognised as the same retype "
+        "as the inline form"
+    )
+
+
+def test_b005_alias_that_changes_outer_shape_still_fires(tmp_path: Path) -> None:
+    """Resolving aliases must not become a blanket exemption.
+
+    ``list[dict[str, Any]] | dict[str, Any]`` → ``list[str]`` is a genuine
+    payload break; it is still one when the new type arrives via an alias.
+    """
+    ledger = _make_ledger(
+        ContractField(
+            "MyInput", "credentials", "list[dict[str, Any]] | dict[str, Any]", "active"
+        )
+    )
+    findings = _scan(tmp_path, {"app.py": _EP_ALIASED_SHAPE_CHANGE}, ledger)
+    assert "B005" in _ids(findings), "an alias hiding a real shape change must fire"
+
+
+def test_b005_alias_cycle_terminates(tmp_path: Path) -> None:
+    """A self-referential alias pair must not hang the expansion loop."""
+    ledger = _make_ledger(ContractField("MyInput", "credentials", "A", "active"))
+    _scan(tmp_path, {"app.py": _EP_ALIAS_CYCLE}, ledger)

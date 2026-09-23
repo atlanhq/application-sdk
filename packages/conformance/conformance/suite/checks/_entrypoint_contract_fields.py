@@ -33,6 +33,7 @@ producers and readers of this data so small syntactic variations
 from __future__ import annotations
 
 import ast
+import copy
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -162,8 +163,91 @@ def _flatten_union(node: ast.expr) -> list[ast.expr]:
     return [node]
 
 
-def _canonical_type(node: ast.expr) -> str:
-    """Return a normalized type string for stable ledger comparison."""
+#: Node kinds a module-level assignment may have and still be a type alias.
+#: A call, literal collection or number is a value, not a type — substituting
+#: one into an annotation would corrupt it rather than merely fail to resolve.
+_ALIAS_VALUE_NODES = (ast.Subscript, ast.Name, ast.Attribute, ast.BinOp)
+
+#: Cap on alias-substitution passes. An alias may legitimately reference
+#: another (``BoundedCredentialList = Annotated[list[BoundedCredentialDict],
+#: …]``), so one pass is not enough; a cycle must not loop forever.
+_ALIAS_MAX_DEPTH = 10
+
+
+def _leaf_id(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def collect_type_aliases(module: ast.Module) -> dict[str, ast.expr]:
+    """Map module-level type-alias names to the expression they stand for.
+
+    Recognises the three spellings a contract module may use::
+
+        CredentialValue = str | int | bool | None            # bare assignment
+        BoundedDict: TypeAlias = Annotated[dict[...], ...]   # PEP 613
+        type BoundedList = Annotated[list[...], ...]         # PEP 695
+
+    Only module-level names are collected, and only when the right-hand side
+    looks like a type expression. A name bound to a call or a literal is
+    skipped — those are values, and substituting one would corrupt the
+    annotation instead of leaving it merely unresolved.
+    """
+    aliases: dict[str, ast.expr] = {}
+    for stmt in module.body:
+        # PEP 695 ``type X = ...`` — only present on Python >= 3.12.
+        type_alias = getattr(ast, "TypeAlias", None)
+        if type_alias is not None and isinstance(stmt, type_alias):
+            if isinstance(stmt.name, ast.Name):
+                aliases[stmt.name.id] = stmt.value
+            continue
+        if isinstance(stmt, ast.AnnAssign):
+            if (
+                isinstance(stmt.target, ast.Name)
+                and stmt.value is not None
+                and _leaf_id(stmt.annotation) == "TypeAlias"
+            ):
+                aliases[stmt.target.id] = stmt.value
+            continue
+        if isinstance(stmt, ast.Assign) and isinstance(stmt.value, _ALIAS_VALUE_NODES):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    aliases[target.id] = stmt.value
+    return aliases
+
+
+def _substitute_aliases(node: ast.expr, aliases: dict[str, ast.expr]) -> ast.expr:
+    """Replace alias ``Name`` nodes in *node* with the types they stand for."""
+
+    class _Expander(ast.NodeTransformer):
+        def visit_Name(self, name: ast.Name) -> ast.expr:  # noqa: N802
+            replacement = aliases.get(name.id)
+            return name if replacement is None else copy.deepcopy(replacement)
+
+    current = node
+    for _ in range(_ALIAS_MAX_DEPTH):
+        expanded = _Expander().visit(copy.deepcopy(current))
+        if ast.dump(expanded) == ast.dump(current):
+            return current  # fixpoint — nothing left to expand
+        current = expanded
+    return current  # depth cap hit (cycle); compare what we have
+
+
+def _canonical_type(node: ast.expr, aliases: dict[str, ast.expr] | None = None) -> str:
+    """Return a normalized type string for stable ledger comparison.
+
+    *aliases* resolves module-level type aliases before normalization. Without
+    it a field written as ``BoundedCredentialList | BoundedCredentialDict``
+    canonicalizes to those two bare names, so B005 compares them against a
+    ledger entry recorded as ``list[dict[str, Any]] | dict[str, Any]``, cannot
+    see that the outer shape is unchanged, and reports a BLOCK-tier break on
+    the very retype P001 prescribes (FND-2547).
+    """
+    if aliases:
+        node = _substitute_aliases(node, aliases)
     normalized = _normalize_type_node(node)
     # Dedupe duplicate None arms (e.g. Optional[Optional[X]] → X | None not X | None | None)
     arms = _flatten_union(normalized)
@@ -280,7 +364,9 @@ def _field_status(ann_node: ast.AnnAssign) -> str:
     return "active"
 
 
-def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
+def _iter_fields(
+    classdef: ast.ClassDef, type_aliases: dict[str, ast.expr] | None = None
+) -> list[_FieldInfo]:
     """Return annotated field info declared directly on *classdef*'s own body.
 
     Does not resolve fields inherited from a base class or mixin — use
@@ -300,7 +386,7 @@ def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
         result.append(
             _FieldInfo(
                 name=name,
-                canonical_type=_canonical_type(stmt.annotation),
+                canonical_type=_canonical_type(stmt.annotation, type_aliases),
                 status=_field_status(stmt),
                 node=stmt,
                 model_declared=_annotation_declares_model(stmt.annotation),
@@ -346,6 +432,7 @@ def resolve_contract_fields(
     by_name: dict[str, ClassRecord],
     *,
     by_name_all: dict[str, list[ClassRecord]] | None = None,
+    type_aliases: dict[str, ast.expr] | None = None,
 ) -> list[_FieldInfo]:
     """Return field info for *classdef*, resolved across its full base-class chain.
 
@@ -444,7 +531,7 @@ def resolve_contract_fields(
 
     # Fields declared directly on classdef always win over inherited ones —
     # except for the marker, which is sticky (see `_keep_model_declared`).
-    for fi in _iter_fields(classdef):
+    for fi in _iter_fields(classdef, type_aliases):
         fields_by_name[fi.name] = _keep_model_declared(fi, fields_by_name.get(fi.name))
 
     return list(fields_by_name.values())
