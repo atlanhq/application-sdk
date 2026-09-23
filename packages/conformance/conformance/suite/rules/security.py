@@ -64,8 +64,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "The check is deliberately conservative: empty strings, ``Field(default=…)``\n"
             'declarations, format/URL templates (``"...{password}..."``), values that are\n'
-            "themselves SCREAMING_SNAKE env-var-name references, and ``Enum`` members are\n"
-            "not flagged.  A reviewed exception is suppressed inline with a justification:\n"
+            "themselves SCREAMING_SNAKE env-var-name references, message tables (a dict of\n"
+            "two or more SCREAMING_SNAKE code keys whose every value is a help-text sentence:\n"
+            "six or more words ending in ``.``/``!``/``?`` with at least two common English\n"
+            "stopwords, and no PEM block, auth-scheme value or token-shaped word such as\n"
+            "``ghp_…``/``sk_…``/``AKIA…``), field-name alias maps (a dict\n"
+            "or ``dict(...)`` whose every value is a known provider credential field name,\n"
+            'such as ``{"password": "aws_secret_access_key", "username": "aws_access_key_id"}``),\n'
+            "and ``Enum`` members are not flagged.  Outside those two dict shapes, a sentence\n"
+            "or a field-name-shaped value is still flagged.  A reviewed exception is\n"
+            "suppressed inline with a justification:\n"
             "``# conformance: ignore[S001] <reason>`` (BLDX-1419).\n"
         ),
         help_uri=(
