@@ -205,12 +205,13 @@ rule was skipped, the sanitized form records that the credential was handled.
   already selects `"G"` on its own, leave it and route the conflict to
   residue for the owner.
 
-  **Land it with or after the L001/L011/L020 fixes, not before.** Enabling
-  `G004`/`G003`/`G001` while those findings are still open turns every one of
+  **Land it with or after the L001/L011 fixes, not before.** Enabling
+  `G004`/`G003` while those findings are still open turns every one of
   them into a pre-commit `ruff` failure, so the L021 edit goes red on its own.
-  Run `ruff check --select G001,G003,G004,LOG009 .` first; if it reports
+  Run `ruff check --select G003,G004 .` first; if it reports
   anything, fix those call sites in the same change (or order L021 after the
-  L-series cleanup).
+  L-series cleanup). L020 (`logger.warn()`) is ruff G010, which L021 does
+  not require, so it does not belong in this pre-scan.
 
   **Scope `T201` away from tests and CLI scripts.** `print()` in `tests/`
   (pytest diagnostics, a manual `__main__` runner) and in `.github/**/*.py`
