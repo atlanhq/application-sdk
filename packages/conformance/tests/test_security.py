@@ -102,6 +102,128 @@ def test_s001_silent_on_env_var_name_reference() -> None:
     assert _ids('cfg = {"client_secret": "ATLAN_OAUTH2_CLIENT_SECRET"}\n') == []
 
 
+def test_s001_silent_on_prose_value() -> None:
+    src = (
+        "_SUGGESTED_ACTIONS = {\n"
+        '    "AUTH_NO_CREDENTIALS": ("Select a credential on the workflow\'s Credential step."),\n'
+        '    "AUTH_INVALID_CREDENTIALS": (\n'
+        '        "Check the access key, secret key and region on the configured credential."\n'
+        "    ),\n"
+        "}\n"
+    )
+    assert _ids(src) == []
+
+
+def test_s001_silent_on_credential_name_alias_map() -> None:
+    src = (
+        "_LEGACY_ALIASES = {\n"
+        '    "username": "aws_access_key_id",\n'
+        '    "password": "aws_secret_access_key",\n'
+        '    "accountid": "aws_account_id",\n'
+        "}\n"
+    )
+    assert _ids(src) == []
+    assert (
+        _ids(
+            'aliases = dict(username="aws_access_key_id", '
+            'password="aws_secret_access_key")\n'
+        )
+        == []
+    )
+
+
+def test_s001_still_fires_on_real_secret_literals() -> None:
+    assert _ids('cfg = {"password": "hunter2"}\n') == ["S001"]
+    assert _ids('password = "s3cr3t_Value"\n') == ["S001"]
+
+
+def test_s001_still_fires_on_whitespace_bearing_secrets() -> None:
+    assert _ids('private_key = "-----BEGIN RSA PRIVATE KEY-----\\nMIIEow..."\n') == [
+        "S001"
+    ]
+    assert _ids('private_key = "-----BEGIN PRIVATE KEY----- MIIEvQ. Ends here."\n') == [
+        "S001"
+    ]
+    assert _ids('cfg = {"token": "Bearer eyJhbGciOiJIUzI1NiJ9.e30.abc"}\n') == ["S001"]
+    assert _ids('api_key = "Basic dXNlcjpwYXNz"\n') == ["S001"]
+    assert _ids('password = "correct horse battery staple"\n') == ["S001"]
+    assert _ids('password = "Let me in now!"\n') == ["S001"]
+    assert _ids('connect(password="Summer is here 2024!")\n') == ["S001"]
+    assert _ids('cfg = {"password": "correct horse battery staple"}\n') == ["S001"]
+    assert _ids('password = "Let me in right now please!"\n') == ["S001"]
+    assert _ids('password = "correct horse battery staple glue lamp."\n') == ["S001"]
+    assert _ids('cfg = {"password": "this is my very secret password."}\n') == ["S001"]
+    assert _ids('connect(password="Summer is here and it is 2024!")\n') == ["S001"]
+    assert _ids('password = "Enter the password for the service account."\n') == [
+        "S001"
+    ]
+    src = (
+        "DATABASE = {\n"
+        '    "USER": "admin",\n'
+        '    "PASSWORD": "correct horse battery staple glue lamp.",\n'
+        "}\n"
+    )
+    assert _ids(src) == ["S001"]
+
+
+def test_s001_message_table_does_not_hide_secrets() -> None:
+    help_text = "Check the access key and region on the configured credential."
+    for value in (
+        "Use ghp_AbC123dEf456GhI789 to call the API on the server.",
+        "The key sk_live_abcdef123456 is the one to use for the API.",
+        " Bearer eyJhbGciOiJIUzI1NiJ9.e30.abc is the token for the API.",
+        "correct horse battery staple glue lamp.",
+        "Let me in right now please!",
+        "Use `ghp_abcdefghijklmnopqrst` to call the API on the server.",
+        "Set the header to key:ghp_abcdefghijklmnopqrst for the API.",
+    ):
+        src = (
+            "_SUGGESTED_ACTIONS = {\n"
+            f'    "AUTH_INVALID_CREDENTIALS": "{help_text}",\n'
+            f'    "AUTH_TOKEN": "{value}",\n'
+            "}\n"
+        )
+        assert _ids(src) == ["S001", "S001"], value
+    src = (
+        "SETTINGS = {\n"
+        '    "DB_PASSWORD": "correct horse battery staple glue lamp.",\n'
+        '    "ADMIN_PASSWORD": "Let me in right now please!",\n'
+        "}\n"
+    )
+    assert _ids(src) == ["S001", "S001"]
+
+
+def test_s001_still_fires_on_credential_name_shaped_weak_defaults() -> None:
+    assert _ids('db_password = "secret"\n') == ["S001"]
+    assert _ids('cfg = {"password": "secret"}\n') == ["S001"]
+    assert _ids('cfg = {"password": "api_key"}\n') == ["S001"]
+    assert _ids('password = "aws_secret_access_key"\n') == ["S001"]
+    src = (
+        "cfg = {\n"
+        '    "username": "aws_access_key_id",\n'
+        '    "password": "hunter2",\n'
+        "}\n"
+    )
+    assert _ids(src) == ["S001"]
+    assert _ids('cfg = {"username": "svc_user", "password": "admin_password"}\n') == [
+        "S001"
+    ]
+    assert _ids(
+        'cfg = {"client_id": "my_app", "client_secret": "abc123_def456"}\n'
+    ) == ["S001"]
+    assert _ids('cfg = {"password": "my_secret", "api_key": "test_token"}\n') == [
+        "S001",
+        "S001",
+    ]
+    assert _ids('cfg = {"password": "default_password", "token": "dev_token"}\n') == [
+        "S001",
+        "S001",
+    ]
+    assert _ids('cfg = {"user": "svc_id", "password": "admin_db_password"}\n') == [
+        "S001"
+    ]
+
+
 def test_s001_silent_on_enum_member() -> None:
     src = (
         "from enum import Enum\n"

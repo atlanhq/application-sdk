@@ -191,6 +191,235 @@ def test_p021_silent_in_task_activity() -> None:
     assert _rule(body, "P021") == []
 
 
+def test_p021_flags_whole_file_pathlib_read_in_run() -> None:
+    src = "from pathlib import Path\n" + _wrap_run(
+        "p = Path('raw/table/records.json')\nfor line in p.read_bytes().splitlines():\n    pass"
+    )
+    assert len(_rule(src, "P021")) == 1
+    assert _rule(src, "P023") == []
+
+
+def test_p021_flags_file_handle_serialization_in_run() -> None:
+    src = "import json\n" + _wrap_run("with fh:\n    data = json.load(fh)")
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_flags_pandas_reader_in_run() -> None:
+    src = "import pandas as pd\n" + _wrap_run("df = pd.read_parquet('x.parquet')")
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_flags_awaited_sdk_storage_download_in_run() -> None:
+    src = "from application_sdk.storage import download_file\n" + _wrap_run(
+        "await download_file('key', '/tmp/x')"
+    )
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_flags_sdk_storage_call_imported_from_submodule() -> None:
+    src = "from application_sdk.storage.ops import upload_file\n" + _wrap_run(
+        "await upload_file('/tmp/x', 'key')"
+    )
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_flags_directory_walk_in_run() -> None:
+    src = "import os\n" + _wrap_run(
+        "for root, dirs, files in os.walk('/tmp'):\n    pass"
+    )
+    assert len(_rule(src, "P021")) == 1
+    assert _rule(src, "P023") == []
+
+
+def test_p021_flags_storage_call_from_a_submodule_not_reexported() -> None:
+    src = "from application_sdk.storage.transfer import download\n" + _wrap_run(
+        "await download('key', '/tmp/x')"
+    )
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_silent_on_awaited_task_named_like_a_writer() -> None:
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def to_parquet(self, input):\n"
+        "        return None\n"
+        "    async def run(self, input):\n"
+        "        await self.to_parquet(input)\n"
+    )
+    assert _rule(body, "P021") == []
+
+
+def test_p021_flags_awaited_async_file_read_in_run() -> None:
+    src = "import anyio\n" + _wrap_run(
+        "p = anyio.Path('x')\ndata = await p.read_text()"
+    )
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_silent_on_self_writer_tasks_run_concurrently() -> None:
+    body = (
+        "import asyncio\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def to_parquet(self, input):\n"
+        "        return None\n"
+        "    @task\n"
+        "    async def to_csv(self, input):\n"
+        "        return None\n"
+        "    async def run(self, input):\n"
+        "        await asyncio.gather(self.to_parquet(input), self.to_csv(input))\n"
+        "        asyncio.create_task(self.to_parquet(input))\n"
+    )
+    assert _rule(body, "P021") == []
+
+
+def test_p021_flags_directory_listing_in_run() -> None:
+    src = "import os\nfrom pathlib import Path\n" + _wrap_run(
+        "names = os.listdir('/tmp')\nroot = Path('/tmp')\nentries = list(root.iterdir())"
+    )
+    assert len(_rule(src, "P021")) == 2
+
+
+def test_p021_flags_file_io_on_an_inline_constructor_in_run() -> None:
+    stmts = (
+        "data = await anyio.Path('p').read_text()\n"
+        "entries = list(Path('/tmp').iterdir())\n"
+        "raw = Path('/a').read_bytes()"
+    )
+    header = "import anyio\nfrom pathlib import Path\n"
+    assert len(_rule(header + _wrap_run(stmts), "P021")) == 3
+    assert (
+        len(_rule(header + _wrap_sqlapp_run(stmts), "P021", header=_SQLAPP_HEADER)) == 3
+    )
+
+
+def test_p021_flags_file_io_on_a_self_attribute_in_run() -> None:
+    src = _wrap_run(
+        "self.df.to_parquet('x')\ntext = self.out_path.read_text()\n"
+        "entries = list(self.root.iterdir())"
+    )
+    assert len(_rule(src, "P021")) == 3
+    sql_src = _wrap_sqlapp_run(
+        "self.df.to_parquet('x')\ntext = self.out_path.read_text()\n"
+        "entries = list(self.root.iterdir())"
+    )
+    assert len(_rule(sql_src, "P021", header=_SQLAPP_HEADER)) == 3
+
+
+def test_p021_reports_a_call_on_an_inline_constructor_once() -> None:
+    header = "import requests\nimport subprocess\nimport threading\n"
+    for stmt in (
+        "threading.Thread(target=print).start()",
+        "subprocess.Popen(['ls']).wait()",
+        "requests.Session().get('u')",
+    ):
+        assert len(_rule(header + _wrap_run(stmt), "P021")) == 1, stmt
+        assert (
+            len(_rule(header + _wrap_sqlapp_run(stmt), "P021", header=_SQLAPP_HEADER))
+            == 1
+        ), stmt
+
+
+def test_p021_storage_names_cover_every_public_async_storage_function() -> None:
+    import ast
+    import pathlib
+
+    from conformance.suite.checks.determinism._p021_io import _SDK_STORAGE_IO
+
+    import application_sdk.storage as storage
+
+    module_level = {
+        node.name
+        for path in pathlib.Path(storage.__file__).parent.rglob("*.py")
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.AsyncFunctionDef) and not node.name.startswith("_")
+    }
+    assert module_level <= _SDK_STORAGE_IO, sorted(module_level - _SDK_STORAGE_IO)
+
+
+def test_p021_silent_on_sdk_storage_error_and_pure_helper() -> None:
+    src = (
+        "from application_sdk.storage import StorageNotFoundError, normalize_key\n"
+        + _wrap_run("k = normalize_key('a/b')\nraise StorageNotFoundError(k)")
+    )
+    assert _rule(src, "P021") == []
+
+
+def test_p021_silent_on_data_scale_io_in_task() -> None:
+    body = (
+        "from pathlib import Path\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        p = Path('x')\n"
+        "        return p.read_bytes()\n"
+    )
+    assert _rule(body, "P021") == []
+    assert len(_rule(body, "P023")) == 1
+
+
+# ── App-family discovery ─────────────────────────────────────────────────────
+#
+# ``run`` on a ``SqlApp`` (or any other ``application_sdk.templates`` base) is
+# the same ``@workflow.run`` as on ``App``. Discovery that anchors only on the
+# literal name ``App`` leaves every SQL connector's workflow body unchecked by
+# P020-P022 and misroutes P023 into it with a fix (``run_in_thread``) that
+# raises ``AppContextError`` in workflow context.
+
+_SQLAPP_HEADER = "from application_sdk.templates import SqlApp, task\n"
+
+
+def _wrap_sqlapp_run(stmts: str, *, base: str = "SqlApp") -> str:
+    indented = "\n".join("        " + line for line in stmts.strip("\n").splitlines())
+    return f"class MyApp({base}):\n    async def run(self, input):\n{indented}\n"
+
+
+def test_p021_flags_io_in_sqlapp_run() -> None:
+    src = "import requests\n" + _wrap_sqlapp_run("r = requests.get('http://x')")
+    assert len(_rule(src, "P021", header=_SQLAPP_HEADER)) == 1
+
+
+def test_p020_flags_primitive_in_aliased_template_base_run() -> None:
+    header = "from application_sdk.templates import IncrementalSqlMetadataExtractor as Base\n"
+    src = "import datetime\n" + _wrap_sqlapp_run(
+        "return datetime.datetime.now()", base="Base"
+    )
+    assert len(_rule(src, "P020", header=header)) == 1
+
+
+def test_p021_flags_io_through_module_local_intermediate_base() -> None:
+    src = (
+        "import requests\n"
+        "class ConnectorBase(SqlApp):\n"
+        "    pass\n"
+        + _wrap_sqlapp_run("r = requests.get('http://x')", base="ConnectorBase")
+    )
+    assert len(_rule(src, "P021", header=_SQLAPP_HEADER)) == 1
+
+
+def test_p023_defers_to_workflow_rules_in_sqlapp_run() -> None:
+    src = "import requests\n" + _wrap_sqlapp_run("r = requests.get('http://x')")
+    assert _rule(src, "P023", header=_SQLAPP_HEADER) == []
+
+
+def test_p023_still_flags_sqlapp_task() -> None:
+    src = (
+        "import requests\n"
+        "class MyApp(SqlApp):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return requests.get('http://x')\n"
+    )
+    assert len(_rule(src, "P023", header=_SQLAPP_HEADER)) == 1
+    assert _rule(src, "P021", header=_SQLAPP_HEADER) == []
+
+
+def test_non_sdk_base_named_like_a_template_is_not_anchored() -> None:
+    src = "import requests\n" + _wrap_sqlapp_run("r = requests.get('http://x')")
+    assert _rule(src, "P021", header="from mylib import SqlApp\n") == []
+
+
 # ── P022 UnawaitedCoroutine ──────────────────────────────────────────────────
 
 

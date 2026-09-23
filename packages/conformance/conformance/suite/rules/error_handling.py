@@ -700,9 +700,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E019",
         canonical_reference=(
-            "atlan-mysql-app app/handler.py — `test_auth` returns the fixed message "
-            '"Authentication failed"; the exception text goes to the log with '
-            "exc_info=True, not into the contract field a caller renders."
+            "atlan-mysql-app app/handler.py — `preflight_check`'s probes classify the "
+            "caught exception into a typed error and return it on the check's `error=`, "
+            "so the rendered message is the error's authored text, never the exception's. "
+            "For `test_auth`, return the same typed error on `AuthOutput.error`; mysql's "
+            "own `test_auth` adopts it in atlan-mysql-app#729."
         ),
         scope=RuleScope.BOTH,
         name="ExceptionTextInContractField",
@@ -732,10 +734,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "This is the non-``raise`` counterpart of E015: the\n"
             "unsanitised upstream text still crosses the typed boundary into a field\n"
             "shown to operators and indexed in dashboards, and still collapses distinct\n"
-            "failure modes into one variable-text bucket.  Keep ``message=`` a stable\n"
-            "human summary and carry the exception detail in a typed field (e.g. raise a\n"
-            "typed ``AppError`` with ``cause=exc`` upstream, or record it in a dedicated\n"
-            "evidence field) rather than the user-facing contract message.\n"
+            "failure modes into one variable-text bucket.  Classify the exception into\n"
+            "the app's typed ``AppError`` and return it on the contract's ``error=``\n"
+            "field (``AuthOutput.error`` / ``PreflightCheck.error``) with\n"
+            "``message=err.message``: the reason stays visible as authored text, one\n"
+            "bucket per failure mode.  A fixed string also clears the rule but throws\n"
+            "away the reason the caller needs, so it is not the default fix.\n"
             "\n"
             "Detection scope mirrors E015 exactly (they share one matcher): it covers\n"
             "f-string, ``str(exc)``, ``repr(exc)`` and string-concatenation\n"

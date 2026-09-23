@@ -47,13 +47,16 @@ class AuthInput(BaseModel):
 
 class AuthOutput(BaseModel):
     status: AuthStatus       # SUCCESS, FAILED, EXPIRED, or INVALID_CREDENTIALS
-    message: str = ""        # optional detail message
+    message: str = ""        # optional detail; overwritten from error.message on a failed result
     identities: list[str] = []  # verified identities (usernames, roles)
     scopes: list[str] = []     # authorized scopes or permissions
     expires_at: str = ""       # ISO-8601 expiry timestamp
+    error: FailureDetails | None = None  # typed failure; omitted on success
 ```
 
 Each `HandlerCredential` has a `key: str` and `value: str`.
+
+`AuthOutput.error` is additive (`None` by default). Success paths that omit it are unchanged. On a failed result, `error.message` overwrites `message`, so HTTP and SDR callers read the same text. Pass a `FailureDetails` (or a bare `AppError`, which is coerced). For a failed `test_auth`, return `error=err` and `message=err.message` rather than a fixed string.
 
 ### PreflightInput / PreflightOutput
 
@@ -253,6 +256,7 @@ class MyHandler(Handler):
 For SQL-based connectors, your handler typically delegates to a SQL client:
 
 ```python
+from application_sdk.errors.leaves import AuthError
 from application_sdk.handler.contracts import (
     AuthInput, AuthOutput, AuthStatus,
     MetadataInput, SqlMetadataOutput, SqlMetadataObject,
@@ -267,9 +271,10 @@ class MySQLHandler(Handler):
             async with create_connection(host, username, password) as conn:
                 await conn.execute("SELECT 1")
             return AuthOutput(status=AuthStatus.SUCCESS)
-        except Exception:
+        except Exception as exc:
+            err = AuthError(message="Could not connect to the database.", cause=exc)
             return AuthOutput(
-                status=AuthStatus.FAILED, message="Connection failed"
+                status=AuthStatus.FAILED, error=err, message=err.message
             )
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:

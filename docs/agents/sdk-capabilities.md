@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.37.0
-source-sha:    9d000093c680f28d5f70759c4ebade6ffb1f7037
-source-date:   2026-09-22T15:14:11+05:30
+sdk-version:   3.38.0
+source-sha:    d93627a10191966c3f534bef688cbe60f4347e26
+source-date:   2026-09-23T12:48:45+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -7287,6 +7287,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `identities: list[str]` `= []` — Verified identities (e.g., usernames, roles).
   - `scopes: list[str]` `= []` — Authorized scopes or permissions.
   - `expires_at: str` `= ''` — ISO-8601 expiry timestamp (empty if no expiry).
+  - `error: FailureDetails | None` — Typed failure for a failed result, e.g. ``AuthError(...).to_failure_details()``.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `CloudEventEnvelope`
