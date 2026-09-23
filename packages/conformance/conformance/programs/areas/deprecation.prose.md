@@ -211,14 +211,14 @@ human audit):
             return asset
         ```
       - **Transform task** — read typed records from the input JSONL, map each, and
-        write `asset.to_nested_bytes()` to a typed file output passed downstream as a
+        write `entity_bytes(asset)` to a typed file output passed downstream as a
         `FileReference` (no shared `output_path` scan, no `upload_to_atlan()`):
         ```python
         @task(timeout_seconds=1800)
         async def transform(self, input: TransformInput) -> TransformOutput:
             for record in read_jsonl(input.raw_file, RecordType):
                 asset = map_entity(record, connection_qn, workflow_id)
-                out_f.write(asset.to_nested_bytes() + b"\n")
+                out_f.write(entity_bytes(asset) + b"\n")
             return TransformOutput(output_file=FileReference(local_path=str(output_file)))
         ```
       - Drop the YAML query templates, the `TransformerInterface` subclass, and any

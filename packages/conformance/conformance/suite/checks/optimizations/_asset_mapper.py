@@ -4,7 +4,8 @@ Asset-mapper hygiene recommendations (BLDX-1492).  Both are gated on the module
 importing pyatlan asset models, so they never fire on non-connector code:
 
 * **O002** — a ``.dict()`` call in such a module; the v3 pipeline serialises
-  assets with ``asset.to_nested_bytes()``, not the pydantic ``.dict()`` form.
+  assets through the SDK's ``entity_bytes`` seam, not the pydantic ``.dict()``
+  form.
 * **O003** — a function that constructs a pyatlan asset and returns *that asset*
   but declares no return annotation; the asset-mapper pattern is typed end-to-end.
 """
@@ -19,9 +20,9 @@ from conformance.suite.schema.findings import Finding
 _ASSET_MODULES = ("pyatlan_v9.model.assets", "pyatlan.model.assets")
 
 _O002_MESSAGE = (
-    "Asset serialised with .dict() — use the v9 asset.to_nested_bytes() API "
-    "instead (emits the nested-entity wire shape the asset-mapper pipeline "
-    "expects). If this .dict() is on a non-asset model, suppress with "
+    "Asset serialised with .dict() — serialize through "
+    "application_sdk.common.asset_serialization.entity_bytes instead (emits the "
+    "nested-entity wire shape the asset-mapper pipeline expects). If this .dict() is on a non-asset model, suppress with "
     "# conformance: ignore[O002] <reason>."
 )
 _O003_MESSAGE = (

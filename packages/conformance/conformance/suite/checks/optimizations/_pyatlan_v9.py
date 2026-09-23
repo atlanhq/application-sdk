@@ -28,7 +28,7 @@ _MESSAGE = (
     "Imports legacy 'pyatlan.model.assets' — prefer 'pyatlan_v9.model.assets' "
     "(the optimized v9 surface the asset-mapper pattern uses; ships inside the "
     "existing pyatlan>=9 dependency). Not a drop-in rename: v9 attribute names and "
-    "serialization (asset.to_nested_bytes()) differ."
+    "serialization (through entity_bytes) differ."
 )
 
 

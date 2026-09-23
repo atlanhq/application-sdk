@@ -613,4 +613,66 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p028",
     ),
+    RuleDefinition(
+        id="P052",
+        canonical_reference=(
+            "atlan-mysql-app app/mysql.py — `map_table` needs a view line the "
+            "pyatlan_v9 model cannot carry (`defaultCatalogName` / "
+            "`defaultSchemaName`), and still gets the wire shape from "
+            "`entity_bytes(asset)` and decorates the result, rather than calling "
+            "`asset.to_nested_bytes()` itself. Every other mapper returns the asset "
+            "and lets `SqlApp._transform_entity` reach `entity_bytes`."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[P052] <reason>` is the "
+            "correct end state only where the value serialized is not an entity "
+            "line at all — e.g. a `ConnectionRef` built from `to_atlas_format`, as "
+            "the SDK's own `application_sdk/contracts/types.py` does. The reason "
+            "must name what the output is used for. A directive on a site that "
+            "writes an asset to transformed output is unremediated."
+        ),
+        scope=RuleScope.APP,
+        name="EntitySerializationBypass",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.38.0",
+        rationale=(
+            "entity_bytes is the SDK's single serialization seam for a mapper "
+            "result: it owns connectionName injection, the declared entity "
+            "envelope and placeholder-guid stripping. A central fix there reaches "
+            "only the apps that go through it; an app that calls "
+            "asset.to_nested_bytes() itself silently misses every one, and because "
+            "reference apps are copied, the bypass spreads."
+        ),
+        short_description=(
+            "Pyatlan asset serialized in app code without going through " "entity_bytes"
+        ),
+        full_description=(
+            "App code under ``app/`` (``app/generated/`` excluded) turns a pyatlan\n"
+            "asset into wire output itself instead of through\n"
+            "``application_sdk.common.asset_serialization.entity_bytes``:\n"
+            "\n"
+            "* ``<x>.to_nested_bytes()`` or ``<x>.to_nested_dict()``;\n"
+            "* ``to_atlas_format(...)`` resolved to ``pyatlan_v9`` (a bare imported\n"
+            "  name, aliased or not, or an attribute call through a module bound to\n"
+            "  it).  A same-named local helper is not flagged.\n"
+            "\n"
+            "``entity_bytes`` owns the dispatch, the ``connectionName`` injection,\n"
+            "the connector's declared entity envelope and the placeholder-guid\n"
+            "strip.  Bypassing it means none of those apply, and no SDK-side fix\n"
+            "can reach the app.\n"
+            "\n"
+            "Fix: serialize through\n"
+            "``entity_bytes(asset, envelope=...)``; when the line needs a key the\n"
+            "model cannot hold, decode what ``entity_bytes`` produced and decorate\n"
+            "it.  WARN tier — suppress with\n"
+            "``# conformance: ignore[P052] <reason>`` only for a genuine non-entity\n"
+            "use, such as a ``ConnectionRef`` built from ``to_atlas_format``.\n"
+            "Promotion to BLOCK is expected once the reference apps are migrated.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p052",
+    ),
 )

@@ -164,12 +164,14 @@ two auto-fixable rules:
 
 - **O002 LegacyAssetSerialization** (asset-mapper, BLDX-1492) — an asset is
   serialized with the pydantic `.dict()` method in a module that imports pyatlan
-  asset models.  The asset-mapper transform task writes assets with the v9
-  serialization API — `out_f.write(asset.to_nested_bytes() + b"\n")` — which emits
-  the nested-entity wire shape the platform ingests; `.dict()` produces a flat
-  dict that still needs hand-conversion.  Draft the switch to
-  `asset.to_nested_bytes()` (note it returns `bytes`, so the sink must be a
-  bytes/JSONL writer).  If the flagged `.dict()` is on a **non-asset** pydantic
+  asset models.  The asset-mapper transform task writes assets through the SDK's
+  serialization seam — `out_f.write(entity_bytes(asset, envelope=...) + b"\n")`
+  (`from application_sdk.common.asset_serialization import entity_bytes`) — which
+  emits the nested-entity wire shape the platform ingests; `.dict()` produces a
+  flat dict that still needs hand-conversion.  Draft the switch to
+  `entity_bytes(asset, ...)` (note it returns `bytes`, so the sink must be a
+  bytes/JSONL writer).  Never draft `asset.to_nested_bytes()`: it bypasses the
+  seam and trips P052.  If the flagged `.dict()` is on a **non-asset** pydantic
   model, propose an inline `# conformance: ignore[O002] <reason>` instead.
 
 - **O003 UntypedAssetMapperReturn** (asset-mapper, BLDX-1492) — a function builds
@@ -193,9 +195,9 @@ two auto-fixable rules:
 
   2. **Adapt every construction site** — the v9 models are not a drop-in rename:
      attribute names and the serialization API differ.  In particular, switch
-     asset serialization from the pydantic `asset.dict()` form to the v9
-     `asset.to_nested_bytes()` API used by the transform task (this also clears
-     any O002 finding).  Read each `Table(...)`/`Column(...)` call and confirm the
+     asset serialization from the pydantic `asset.dict()` form to the SDK's
+     `entity_bytes(asset, ...)` seam used by the transform task (this also clears
+     any O002 finding without tripping P052).  Read each `Table(...)`/`Column(...)` call and confirm the
      kwargs exist on the v9 model; note any that don't in residue rather than
      dropping them.
 

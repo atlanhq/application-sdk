@@ -107,6 +107,19 @@ gated on the SDK exposing a qualifiedName seam.  All three draft a proposal for
 human review and never auto-apply.  (These rules are backed by
 `suite.checks.prescriptions` alongside P001–P003.)
 
+P052 (pyatlan asset serialized in app code — `to_nested_bytes()`,
+`to_nested_dict()` or `pyatlan_v9` `to_atlas_format()` — instead of through
+`entity_bytes`) is suggest-only too.  The proposal replaces the call with
+`entity_bytes(asset, envelope=...)` from
+`application_sdk.common.asset_serialization`, passing the app's declared
+envelope; where the line needs a key the model cannot hold, decode what
+`entity_bytes` produced and decorate that (the `atlan-mysql-app` `map_table`
+shape).  The output can change — `connectionName`, the envelope and the
+placeholder-guid strip now apply — so it is always `"judgment"`.  A site whose
+output is not an entity line at all (a `ConnectionRef` built from
+`to_atlas_format`) gets an inline `# conformance: ignore[P052] <reason>`
+instead.
+
 ### Requires
 
 - `scope` — repository root path.

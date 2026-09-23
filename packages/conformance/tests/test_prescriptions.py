@@ -2628,6 +2628,143 @@ def test_p028_no_finding_on_dynamic_prefix_embedded_qn() -> None:
     assert "P028" not in _ids(src)
 
 
+# ── P052 EntitySerializationBypass ─────────────────────────────────────────────
+
+
+def _p052(src: str, file: str = "app/connector.py") -> list:
+    return [f for f in scan_text(src, file) if f.rule_id == "P052"]
+
+
+def test_p052_fires_on_to_nested_bytes() -> None:
+    # The atlan-openapi-app shape: the asset writes its own wire line.
+    src = 'out_f.write(asset.to_nested_bytes() + b"\\n")\n'
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_to_nested_dict() -> None:
+    src = "entity = map_connection(conn).to_nested_dict()\n"
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_to_atlas_format_imported_from_pyatlan_v9() -> None:
+    src = (
+        "from pyatlan_v9.model.transform import to_atlas_format\n"
+        "def f(asset):\n"
+        "    return to_atlas_format(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_aliased_to_atlas_format() -> None:
+    src = (
+        "from pyatlan_v9.model.transform import to_atlas_format as encode\n"
+        "encode(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from pyatlan_v9.model import transform\ntransform.to_atlas_format(a)\n",
+        "import pyatlan_v9.model.transform as t\nt.to_atlas_format(a)\n",
+        "import pyatlan_v9.model.transform\npyatlan_v9.model.transform.to_atlas_format(a)\n",
+    ],
+    ids=["from-module", "import-as", "dotted"],
+)
+def test_p052_fires_on_to_atlas_format_via_module(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_function_local_import() -> None:
+    src = (
+        "def f(asset):\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format\n"
+        "    return to_atlas_format(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+def test_p052_no_finding_on_entity_bytes() -> None:
+    # The atlan-mysql-app shape: entity_bytes owns the wire line, the app
+    # decorates what it produced.
+    src = (
+        "import orjson\n"
+        "from application_sdk.common.asset_serialization import entity_bytes\n"
+        "def map_view(asset, envelope):\n"
+        "    entity = orjson.loads(entity_bytes(asset, envelope=envelope))\n"
+        '    entity["defaultSchemaName"] = "s"\n'
+        "    return entity\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_no_finding_on_unrelated_to_atlas_format() -> None:
+    # A same-named local helper is not pyatlan's encoder.
+    src = "def to_atlas_format(x):\n" "    return x\n" "to_atlas_format(1)\n"
+    assert _p052(src) == []
+
+
+def test_p052_no_finding_on_to_atlas_format_from_other_package() -> None:
+    src = "from mylib.encoders import to_atlas_format\nto_atlas_format(a)\n"
+    assert _p052(src) == []
+
+
+@pytest.mark.parametrize(
+    "file",
+    ["app/generated/_models.py", "main.py", "scripts/seed.py", "x.py"],
+)
+def test_p052_scoped_to_hand_written_app_source(file: str) -> None:
+    src = "asset.to_nested_bytes()\n"
+    assert _p052(src, file) == []
+
+
+def test_p052_fires_in_nested_app_package() -> None:
+    assert len(_p052("asset.to_nested_bytes()\n", "app/mappers/tables.py")) == 1
+
+
+def test_p052_justified_suppression_is_honoured() -> None:
+    # The sanctioned carve-out: a ConnectionRef, not an entity line.
+    src = (
+        "from pyatlan_v9.model.transform import to_atlas_format\n"
+        "# conformance: ignore[P052] ConnectionRef payload, not an entity line\n"
+        "ref = ConnectionRef.model_validate(to_atlas_format(conn))\n"
+    )
+    fs = _p052(src)
+    assert len(fs) == 1
+    assert fs[0].suppressed
+
+
+def test_p052_unrelated_suppression_does_not_hide_finding() -> None:
+    src = "asset.to_nested_bytes()  # conformance: ignore[P028] wrong rule\n"
+    fs = _p052(src)
+    assert len(fs) == 1
+    assert not fs[0].suppressed
+
+
+def test_p052_scan_all_uses_repo_relative_path(tmp_path: Path) -> None:
+    # scan_all passes the path relative to the repo root, so the app/ scope
+    # gate must hold on the full-suite path too, not just scan_text.
+    app = tmp_path / "app"
+    (app / "generated").mkdir(parents=True)
+    (app / "connector.py").write_text("asset.to_nested_bytes()\n", encoding="utf-8")
+    (app / "generated" / "_m.py").write_text(
+        "asset.to_nested_bytes()\n", encoding="utf-8"
+    )
+    findings = [
+        f
+        for f in scan_all(sorted(tmp_path.rglob("*.py")), tmp_path)
+        if f.rule_id == "P052"
+    ]
+    assert [f.file for f in findings] == [str(Path("app") / "connector.py")]
+
+
+def test_p052_rule_is_app_scoped_warn() -> None:
+    rule = get_rule("P052")
+    assert rule.tier is EnforcementTier.WARN
+    assert rule.scope.value == "app"
+
+
 # ── P013/P014 same-bare-name resolution ───────────────────────────────────────
 
 

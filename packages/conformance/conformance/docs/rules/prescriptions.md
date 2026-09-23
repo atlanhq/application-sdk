@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**45 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
+**46 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -68,6 +68,7 @@ reassigned.
 | [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
+| [P052](#p052) | `EntitySerializationBypass` | `warn` | `app` | `asset-modeling` | — | 0.38.0 |
 
 ---
 
@@ -2503,5 +2504,49 @@ the agent clears the floor   these render the interactive metadata picker; below
 when the   version can't be read) the picker falls back to a plain text box. This
 follows the same floor gate automatically — no per-connector change   beyond declaring
 the filter widget.
+
+---
+
+## P052 — `EntitySerializationBypass` {#p052}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-modeling` · **Autofixable:** — · **Since:** 0.38.0
+
+> Pyatlan asset serialized in app code without going through entity_bytes
+
+**Rationale:** entity_bytes is the SDK's single serialization seam for a mapper result: it owns
+connectionName injection, the declared entity envelope and placeholder-guid stripping. A
+central fix there reaches only the apps that go through it; an app that calls
+asset.to_nested_bytes() itself silently misses every one, and because reference apps are
+copied, the bypass spreads.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/mysql.py — `map_table` needs a view line the pyatlan_v9 model cannot
+  carry (`defaultCatalogName` / `defaultSchemaName`), and still gets the wire shape from
+  `entity_bytes(asset)` and decorates the result, rather than calling
+  `asset.to_nested_bytes()` itself. Every other mapper returns the asset and lets
+  `SqlApp._transform_entity` reach `entity_bytes`.
+- **Already correct when:** A justified inline `# conformance: ignore[P052] <reason>` is the correct end state only
+  where the value serialized is not an entity line at all — e.g. a `ConnectionRef` built
+  from `to_atlas_format`, as the SDK's own `application_sdk/contracts/types.py` does.
+  The reason must name what the output is used for. A directive on a site that writes an
+  asset to transformed output is unremediated.
+
+App code under `app/` (`app/generated/` excluded) turns a pyatlan asset into wire output
+itself instead of through `application_sdk.common.asset_serialization.entity_bytes`:
+
+* `<x>.to_nested_bytes()` or `<x>.to_nested_dict()`; * `to_atlas_format(...)` resolved
+to `pyatlan_v9` (a bare imported   name, aliased or not, or an attribute call through a
+module bound to   it).  A same-named local helper is not flagged.
+
+`entity_bytes` owns the dispatch, the `connectionName` injection, the connector's
+declared entity envelope and the placeholder-guid strip.  Bypassing it means none of
+those apply, and no SDK-side fix can reach the app.
+
+Fix: serialize through `entity_bytes(asset, envelope=...)`; when the line needs a key
+the model cannot hold, decode what `entity_bytes` produced and decorate it.  WARN tier —
+suppress with `# conformance: ignore[P052] <reason>` only for a genuine non-entity use,
+such as a `ConnectionRef` built from `to_atlas_format`. Promotion to BLOCK is expected
+once the reference apps are migrated.
 
 ---
