@@ -65,7 +65,7 @@ a name collision no test exercises and no build gate sees.
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app app/handler.py — the preflight logic is the Handler's own
-  `preflight_check` method. No @task in the four reference apps registers the activity
+  `preflight_check` method. No @task in the three reference apps registers the activity
   name 'preflight'; that name belongs to the SDK gate, and registering it shadows the
   gate itself.
 

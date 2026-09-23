@@ -92,7 +92,9 @@ class RuleDefinition(BaseModel):
 
     Only the three remediation reference apps count — ``atlan-openapi-app``,
     ``atlan-mysql-app``, ``atlan-metabase-app`` — plus ``application_sdk``
-    itself for rules about SDK-owned surfaces.  ``atlan-hello-world-app`` is a
+    itself for rules about SDK-owned surfaces.  An ``autofixable`` rule must
+    name one of the three apps: the lane applies it by mirroring an app, so an
+    SDK-only reference leaves it nothing to mirror.  ``atlan-hello-world-app`` is a
     scaffold, not a reference: too minimal to be what a fix is mirrored from
     (owner decision, FND-2477).  An arbitrary connector may be mid-migration
     and is not a model of anything (see ``docs/agents/canonical-apps.md``).

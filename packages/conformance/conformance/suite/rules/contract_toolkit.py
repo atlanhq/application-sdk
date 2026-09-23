@@ -113,9 +113,9 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-metabase-app contract/app.pkl — `amends "
             '"@app-contract-toolkit/App.pkl"`, with a header comment recording that '
-            "toolkit 0.10.0 consolidated NativeApp.pkl into App.pkl. All four reference "
-            "apps amend App.pkl; NativeApp.pkl and NativeAppBundle.pkl appear in none of "
-            "them."
+            "toolkit 0.10.0 consolidated NativeApp.pkl into App.pkl. All three reference "
+            "apps amend App.pkl; none of their contracts amends NativeApp.pkl or "
+            "NativeAppBundle.pkl."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
@@ -395,9 +395,9 @@ RULES: tuple[RuleDefinition, ...] = (
         id="K004",
         canonical_reference=(
             "atlan-metabase-app app/generated/ — atlan.yaml at the repo root plus "
-            "_input.py, manifest.json and artifact_schemas.json in the generated tree. A "
-            "contract/app.pkl with any of those missing means the repo's own generate task "
-            "has not run since the contract last changed."
+            "_input.py and manifest.json in app/generated/, the three outputs K004 "
+            "checks. A contract/app.pkl with any of those missing means the repo's own "
+            "generate task has not run since the contract last changed."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
@@ -542,9 +542,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K006",
         canonical_reference=(
-            "atlan-metabase-app app/generated/manifest.json — the $.extract.outputs fields "
-            "correspond to what the entrypoint's Output contract in app/contracts.py "
-            "declares. The manifest is what the platform reads to wire the DAG, so a field "
+            "atlan-openapi-app app/generated/manifest.json — the publish node's "
+            "$.extract.outputs refs (connection_qualified_name, transformed_data_prefix, "
+            "publish_state_prefix, current_state_prefix, assertion_only_enabled) each "
+            "resolve to a field on `OpenAPIConnectorOutput(PublishInputMixin, Output)` in "
+            "app/contracts.py, the Output of `run()` in app/connector.py. The manifest is what the platform reads to wire the DAG, so a field "
             "only one side knows about is a hand-off that never happens."
         ),
         fix_locus=FixLocus.CONTRACT,
@@ -621,7 +623,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K007",
         canonical_reference=(
-            "atlan-metabase-app contract/PklProject — `app-contract-toolkit@0.24.0`. "
+            "atlan-metabase-app contract/PklProject.deps.json — resolves the "
+            "`app-contract-toolkit` pin in contract/PklProject to the latest version "
+            "data/toolkit_baseline.json records, which is the comparison K007 makes. "
             "Renovate opens the bump; the fix is to take it and re-run the repo's generate "
             "task, not to edit the pin alone."
         ),

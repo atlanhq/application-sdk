@@ -57,8 +57,8 @@ and aligns every app with the one supported workflow for contract evolution (BLD
 
 - **Compliant example:** atlan-metabase-app contract/app.pkl — `amends "@app-contract-toolkit/App.pkl"`, with a
   header comment recording that toolkit 0.10.0 consolidated NativeApp.pkl into App.pkl.
-  All four reference apps amend App.pkl; NativeApp.pkl and NativeAppBundle.pkl appear in
-  none of them.
+  All three reference apps amend App.pkl; none of their contracts amends NativeApp.pkl
+  or NativeAppBundle.pkl.
 
 The `contract/app.pkl` file (or any `contract/**/*.pkl` file) contains an `amends` line
 pointing at `NativeApp.pkl` or `NativeAppBundle.pkl` instead of the canonical `App.pkl`.
@@ -261,10 +261,10 @@ it.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/generated/ — atlan.yaml at the repo root plus _input.py,
-  manifest.json and artifact_schemas.json in the generated tree. A contract/app.pkl with
-  any of those missing means the repo's own generate task has not run since the contract
-  last changed.
+- **Compliant example:** atlan-metabase-app app/generated/ — atlan.yaml at the repo root plus _input.py and
+  manifest.json in app/generated/, the three outputs K004 checks. A contract/app.pkl
+  with any of those missing means the repo's own generate task has not run since the
+  contract last changed.
 
 The app defines `contract/app.pkl` but one or more of the artifacts `pkl eval` is
 expected to produce is absent:
@@ -367,10 +367,12 @@ artifacts exist, without either layer needing visibility into the other's langua
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/generated/manifest.json — the $.extract.outputs fields correspond
-  to what the entrypoint's Output contract in app/contracts.py declares. The manifest is
-  what the platform reads to wire the DAG, so a field only one side knows about is a
-  hand-off that never happens.
+- **Compliant example:** atlan-openapi-app app/generated/manifest.json — the publish node's $.extract.outputs
+  refs (connection_qualified_name, transformed_data_prefix, publish_state_prefix,
+  current_state_prefix, assertion_only_enabled) each resolve to a field on
+  `OpenAPIConnectorOutput(PublishInputMixin, Output)` in app/contracts.py, the Output of
+  `run()` in app/connector.py. The manifest is what the platform reads to wire the DAG,
+  so a field only one side knows about is a hand-off that never happens.
 
 A `$.extract.outputs.<field>` JSONPath reference in a committed
 `app/generated/**/manifest.json` DAG node's `inputs.args` names a field that the
@@ -417,9 +419,10 @@ against drift in CI, so the check stays correct offline inside any consumer repo
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app contract/PklProject — `app-contract-toolkit@0.24.0`. Renovate opens
-  the bump; the fix is to take it and re-run the repo's generate task, not to edit the
-  pin alone.
+- **Compliant example:** atlan-metabase-app contract/PklProject.deps.json — resolves the `app-contract-toolkit`
+  pin in contract/PklProject to the latest version data/toolkit_baseline.json records,
+  which is the comparison K007 makes. Renovate opens the bump; the fix is to take it and
+  re-run the repo's generate task, not to edit the pin alone.
 
 The `app-contract-toolkit` dependency in `contract/PklProject` resolves (per
 `contract/PklProject.deps.json`) to a version older than the latest the SDK publishes.

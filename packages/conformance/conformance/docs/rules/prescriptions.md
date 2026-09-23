@@ -87,8 +87,10 @@ mid-run with a serialization error nothing in their configuration explains.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app — its generated contract/_input.py subclasses ExtractionInput with no
-  allow_unbounded_fields at all, because every filter is a bounded concrete type.
+- **Compliant example:** atlan-mysql-app app/generated/_input.py — the generated
+  `AppInputContract(ExtractionInput)` declares no allow_unbounded_fields at all: every
+  field it adds is a concrete str or bool, and the include/exclude filters it inherits
+  from ExtractionInput are already the bounded `FilterMap | str`.
 - **Interacts with:** B005 + ledger-guard bound the fix, but less tightly than they look, and reading them as
   a wall is how a fixable site gets suppressed. ledger-guard refuses a change to a
   RECORDED type; gen-contract-ledger never deletes an entry and never rewrites a
@@ -219,8 +221,12 @@ gets a slower, less accurate answer to 'why did my crawl fail'.
 
 ### What correct looks like
 
-- **Compliant example:** application_sdk/errors/leaves.py — the 15 categorical leaves and the prefix each one
-  owns.
+- **Compliant example:** atlan-openapi-app app/errors.py — every subclass extends an SDK leaf and declares a code
+  carrying that leaf's prefix (`ZipNoSpecFoundError(InvalidInputError)` →
+  `INVALID_INPUT_OPENAPI_ZIP_NO_SPEC`, `SpecFetchAuthError(AuthError)` →
+  `AUTH_OPENAPI_SPEC_FETCH`), and none overrides to_failure_details, so that code is
+  what dashboards read. The prefix table itself is application_sdk/errors/leaves.py: the
+  15 categorical leaves and the prefix each one owns.
 - **Already correct when:** A class whose MRO overrides to_failure_details() builds the wire envelope itself, so
   `code` is not what a dashboard reads and adding a prefixed one would be dead code
   beside the real one. Those are exempt. Overriding qualified_code alone is NOT exempt —
@@ -882,9 +888,12 @@ pyatlan already provides, and drifts from the contract every other app follows
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/asset_mapper.py — Atlan is reached through pyatlan model types and
-  `ConnectionRef`, never by requesting /api/meta directly. Raw HTTP skips auth refresh,
-  retry and the client's own request shaping.
+- **Compliant example:** atlan-openapi-app app/api_client.py — the only app/ module that imports httpx, and every
+  request it makes (`self._client.stream("GET", spec_url)`,
+  `self._client.get(spec_url)`) targets the customer's spec URL with no /api/meta or
+  /api/service marker. Atlan itself is reached through the SDK — app/connector.py's
+  `self.upload(...)` and the publish DAG node — never by raw HTTP, which would skip auth
+  refresh, retry and the client's own request shaping.
 
 A raw HTTP call — `httpx`/`requests`/`aiohttp` request method or
 `urllib.request.urlopen`/`Request` — targets an Atlan service: its URL statically
@@ -1018,9 +1027,10 @@ that explains the gap.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/connector.py — every same-class async call in `run()` is awaited.
-  A dropped coroutine does not run and does not raise; the workflow simply proceeds as
-  if the step had succeeded.
+- **Compliant example:** atlan-openapi-app app/connector.py — every same-class async call in
+  `OpenAPIConnector.run` is awaited: `self.download_cloud_spec`, `self.extract_spec` and
+  `self.transform`. A dropped coroutine does not run and does not raise; the workflow
+  simply proceeds as if the step had succeeded.
 
 A bare expression statement calls a same-class `async def` method via `self.<name>(...)`
 without `await` and without wrapping it in `asyncio.create_task` / `asyncio.gather`.
@@ -1060,9 +1070,12 @@ await an async equivalent, or offload blocking work via App.run_in_thread() insi
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/connector.py — the blocking JSONL writes go through
-  `self.run_in_thread(write_jsonl, ...)` rather than being called inline in an async
-  def. The comment there records why the generator has to be materialised first.
+- **Compliant example:** atlan-metabase-app app/connector.py — the `extract_collections` @task hands its blocking
+  JSONL write to `await self.run_in_thread(write_jsonl, out, records)`, passing the
+  callable rather than writing the file inline in the async def, as its sibling extract
+  tasks do. Where the blocking work is a sync generator, `build_lineage_records`
+  offloads `_build_process_records` in one call, and that helper's docstring records why
+  the loop has to be materialised first.
 
 Inside an `async def`, code either re-enters the event loop (`asyncio.run(...)` or
 `*.run_until_complete(...)`, including `loop.run_until_complete` /
@@ -1120,9 +1133,15 @@ HTTP) by requiring the async variant of that client.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/connector.py — connector code uses the async client surface; the
-  only synchronous pyatlan AtlanClient in the repo is in
-  tests/e2e/test_connection_reuse.py, where there is no event loop to block.
+- **Compliant example:** atlan-openapi-app app/connector.py — constructs no pyatlan client at all:
+  `OpenAPIConnector.run` reaches Atlan through the SDK's `self.upload(...)` and the
+  publish DAG node, so no sync AtlanClient sits on the event loop. No app/ module in any
+  of the three reference apps constructs AtlanClient or AsyncAtlanClient; the only
+  AtlanClient among them is a sync test helper in atlan-openapi-app
+  tests/e2e/test_connection_reuse.py, outside P-series discovery. Where app code does
+  need a client, the shape is the SDK seam in
+  application_sdk/credentials/atlan_client.py — `create_async_atlan_client` /
+  `AtlanClientMixin.get_or_create_async_atlan_client`.
 
 App code constructs or invokes pyatlan's synchronous `AtlanClient` (or the vendored
 `pyatlan_v9` equivalent) — its constructor or a factory like

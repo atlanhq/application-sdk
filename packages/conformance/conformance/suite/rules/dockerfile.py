@@ -158,8 +158,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="I003",
         canonical_reference=(
-            "atlan-mysql-app — ENV ATLAN_APP_MODULE is declared in the Dockerfile as "
-            "well as atlan.yaml, so the image runs on its own."
+            "atlan-metabase-app Dockerfile — `ENV ATLAN_APP_MODULE=app.connector:MetabaseApp`, "
+            "the same value atlan.yaml declares under deploy.env and pools.default.env, so "
+            "the image starts the right class on its own and agrees with its manifest."
         ),
         rule_interactions=(
             "The value must match atlan.yaml's deploy.env exactly; read it from there "
@@ -211,8 +212,8 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-openapi-app Dockerfile — ATLAN_APP_MODULE and "
             "ATLAN_CONTRACT_GENERATED_DIR are baked because they describe the image; "
-            "ATLAN_APP_MODE is not, because it describes the deployment and arrives from "
-            "atlan.yaml at schedule time."
+            "ATLAN_APP_MODE is absent, because it describes the deployment, and the SDK "
+            "reads it from the process environment the deployment supplies at runtime."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,

@@ -396,7 +396,7 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-mysql-app app/mysql.py — transformation runs through the SDK's "
             "DuckDB/pyarrow path. The daft-only DataFrame calls this rule looks for "
-            "(count_rows, to_pylist, .names) appear in none of the four reference apps; "
+            "(count_rows, to_pylist, .names) appear in none of the three reference apps; "
             "daft was removed from the SDK in 3.20.0, so they are dead on any current "
             "runtime."
         ),
@@ -471,7 +471,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "atlan-openapi-app app/connector.py — every third-party import names a "
             "public module (application_sdk.app, application_sdk.contracts, "
             "application_sdk.errors, httpx, pyatlan_v9.model.assets). None of the "
-            "four reference apps imports an underscore-prefixed module or name it "
+            "three reference apps imports an underscore-prefixed module or name it "
             "does not own, in app code or in tests."
         ),
         scope=RuleScope.APP,

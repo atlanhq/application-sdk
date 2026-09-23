@@ -153,7 +153,7 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-mysql-app app/mysql.py — `from pyatlan_v9.model.assets import Column, "
             "Database, Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets "
-            "path appears in none of the four reference apps."
+            "path appears in none of the three reference apps."
         ),
         scope=RuleScope.APP,
         name="LegacyPyatlanAssetImport",

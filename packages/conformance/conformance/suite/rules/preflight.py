@@ -43,7 +43,7 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
         id="F001",
         canonical_reference=(
             "atlan-mysql-app app/handler.py — the preflight logic is the Handler's own "
-            "`preflight_check` method. No @task in the four reference apps registers the "
+            "`preflight_check` method. No @task in the three reference apps registers the "
             "activity name 'preflight'; that name belongs to the SDK gate, and registering it "
             "shadows the gate itself."
         ),

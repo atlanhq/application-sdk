@@ -214,8 +214,9 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-mysql-app tests/integration/test_mysql_workflow.py — a module-level "
             "`pytestmark = pytest.mark.integration`, which marks every test in the file in "
-            "one line. atlan-openapi-app tests/integration/test_openapi.py marks per-test "
-            "with the same marker; either satisfies the unit job's deselection."
+            "one line. atlan-openapi-app tests/integration/test_openapi.py shows the "
+            "other accepted form: `@pytest.mark.integration` on the enclosing "
+            "`TestOpenAPIConnectorExtraction` class, which marks every method in it."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
@@ -592,8 +593,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T006",
         canonical_reference=(
-            "atlan-metabase-app tests/unit/test_utils.py — the smallest tests in the four "
-            "reference apps still assert; none is a `pass` or an ellipsis awaiting a body."
+            "atlan-metabase-app tests/unit/test_utils.py — the smallest tests in the three "
+            "reference apps still assert (`test_none_returns_none`: "
+            "`assert to_epoch_ms(None) is None`); none is a `pass` or an ellipsis "
+            "awaiting a body."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
@@ -750,10 +753,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T009",
         canonical_reference=(
-            "atlan-openapi-app tests/e2e/test_connection_create.py — the module-level skip "
-            "is conditional: it fires only from the ImportError raised when the installed "
-            "SDK predates the agnostic e2e harness. An unconditional module skip disables "
-            "the file forever and nothing tells you."
+            "atlan-openapi-app tests/e2e/test_connection_create.py — both module-level "
+            "skips are conditional: an `if` guard skips when ATLAN_BASE_URL / "
+            "ATLAN_API_KEY are unset, and a try/except ImportError skips when the "
+            "installed SDK predates the agnostic e2e harness. An unconditional module "
+            "skip disables the file forever and nothing tells you."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
@@ -812,10 +816,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T010",
         canonical_reference=(
-            "atlan-mysql-app tests/unit/ — four modules: test_client.py, "
-            "test_handler.py, test_mysql_app.py and test_parity.py, covering the SQL "
-            "client, the handler, the app's mappers and the wire-shape parity spec. "
-            "This tier is the floor and is not exemptable."
+            "atlan-mysql-app tests/unit/ — five modules: test_client.py, "
+            "test_handler.py, test_mysql_app.py, test_parity.py and "
+            "test_preflight_conformance.py, covering the SQL client, the handler, the "
+            "app's mappers, the wire-shape parity spec and the preflight behaviour "
+            "scenarios. This tier is the floor and is not exemptable."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -828,8 +833,8 @@ RULES: tuple[RuleDefinition, ...] = (
         rationale=(
             "Unit tests — method-by-method coverage of helper functions and "
             "activities — are the universal floor of the agreed testing-tier "
-            "architecture: every canonical app, including the minimal hello-world "
-            "scaffold, has one. An app with no tests/unit/ directory (or one with no "
+            "architecture: each of the three reference apps (openapi, mysql, "
+            "metabase) has one. An app with no tests/unit/ directory (or one with no "
             "collectable tests in it) has no fast, hermetic verification of its own "
             "logic at all — every other tier (integration, e2e) is slower, "
             "network-bound, and exercises the app only end-to-end, so a defect in a "
@@ -843,15 +848,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "``test_*.py`` / ``*_test.py`` file) exist under ``tests/unit/``. This is\n"
             "the universal floor of the tiering architecture — unlike\n"
             "``tests/integration/`` and ``tests/e2e/`` (T011/T012), this tier has no\n"
-            "``exempt_test_tiers`` opt-out: every canonical app, including the minimal\n"
-            "``hello-world`` scaffold, ships a real unit suite.\n"
+            "``exempt_test_tiers`` opt-out: each of the three reference apps ships a\n"
+            "real unit suite.\n"
             "\n"
             "**Remediation:** add ``tests/unit/test_<module>.py`` files exercising the\n"
             "app's helper functions and ``@task``-decorated activities directly (call\n"
             "them as coroutines — the decorator only attaches metadata outside the\n"
-            "workflow runtime). See ``atlan-hello-world-app/tests/unit/`` for the\n"
-            "minimal reference shape: typed ``Input``/``Output`` contracts, a\n"
-            "``pytest.fixture`` for the app instance, and real outcome assertions\n"
+            "workflow runtime). See the three reference apps' ``tests/unit/``\n"
+            "(``atlan-openapi-app``, ``atlan-mysql-app``, ``atlan-metabase-app``) for\n"
+            "the reference shape: typed ``Input``/``Output`` contracts, a\n"
+            "``pytest.fixture`` for the app instance (e.g. ``atlan-metabase-app``\n"
+            "``tests/unit/test_connector.py``), and real outcome assertions\n"
             "(record counts, on-disk side effects, error paths via\n"
             "``pytest.raises``).\n"
         ),
@@ -987,7 +994,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="T013",
         canonical_reference=(
             "atlan-metabase-app tests/ — everything collectable sits under unit/, "
-            "integration/ or e2e/. None of the four reference apps has a tests/sdr/ or a "
+            "integration/ or e2e/. None of the three reference apps has a tests/sdr/ or a "
             "tests/full_dag/; the tier a test belongs to is a directory, not a naming "
             "convention."
         ),
@@ -1253,9 +1260,10 @@ RULES: tuple[RuleDefinition, ...] = (
         id="T017",
         canonical_reference=(
             "atlan-openapi-app tests/e2e/test_connection_create.py — `agent_spec()` is "
-            "inherited, not overridden: the generated base derives the worker queue from "
-            "ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME, so each leg lands on the "
-            "queue its own CI action provisioned."
+            "inherited, not overridden: the SDK's `BaseE2ETest.agent_spec` (reached "
+            "through the generated `OpenapiGeneratedE2EBase`) derives the worker queue "
+            "from ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME, so each leg lands on "
+            "the queue its own CI action provisioned."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -1556,9 +1564,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T020",
         canonical_reference=(
-            "atlan-mysql-app .github/workflows/tests.yaml — the e2e job calls "
+            "atlan-mysql-app .github/workflows/tests.yaml — the one `tests:` job calls "
             "`atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main` and "
-            "passes inputs. Calling the SDK's sdr-e2e action directly re-implements what "
+            "passes inputs; the reusable owns the e2e leg. Calling the SDK's sdr-e2e action directly re-implements what "
             "the reusable workflow already owns, and then has to track its changes by "
             "hand."
         ),
@@ -1800,10 +1808,13 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T023",
         canonical_reference=(
-            "atlan-metabase-app tests/e2e/test_metabase_e2e.py — identity attributes, the "
-            "credential body and the Mustache substitutions all come from the generated "
-            "`MetabaseGeneratedE2EBase` and MetabaseMustacheSubstitutions. Hand-declaring "
-            "them in the test freezes a copy of what the contract will regenerate."
+            "atlan-metabase-app tests/e2e/test_metabase_e2e.py — identity attributes come "
+            "from the generated `MetabaseGeneratedE2EBase` (_e2e_base.py), the credential "
+            "body from `MetabaseAgentCredentialBody` (_e2e_credential.py) and the Mustache "
+            "substitutions from `MetabaseMustacheSubstitutions` (_e2e_substitutions.py); "
+            "the test imports them instead of subclassing CredentialBody or "
+            "MustacheSubstitutions. Hand-declaring them in the test freezes a copy of "
+            "what the contract will regenerate."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -1855,12 +1866,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "**Fix:** import the generated modules and keep only what the contract\n"
             "cannot know — the source under test, the asset floors, and the run mode.\n"
-            "``atlan-mysql-app/tests/e2e/test_mysql_full_dag.py`` is the reference::\n"
+            "``atlan-mysql-app/tests/e2e/test_mysql_e2e.py`` is the reference::\n"
             "\n"
             "    from app.generated._e2e_base import MysqlGeneratedE2EBase\n"
             "    from app.generated._e2e_credential import MysqlAgentCredentialBody\n"
             "\n"
-            "    class TestMySQLFullDAG(MysqlGeneratedE2EBase):\n"
+            "    class TestMySQLE2E(MysqlGeneratedE2EBase):\n"
             "        mode = RunMode.AGENT\n"
             '        include_filter = r"^def\\.e2e_main$"\n'
             '        expected_min_asset_counts = {"Database": 1, "Table": 2}\n'
@@ -1960,10 +1971,16 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T025",
         canonical_reference=(
-            "atlan-openapi-app tests/e2e/ — two suites, test_connection_create.py and "
-            "test_connection_reuse.py, so each contract entrypoint of the bundle has one. "
-            "A multi-entrypoint contract with a single e2e suite leaves the other "
-            "entrypoints unproven end to end."
+            "No reference app is in bundle mode: atlan-openapi-app, atlan-mysql-app and "
+            "atlan-metabase-app each emit a single app/generated/manifest.json, so T025 "
+            "inspects none of them. The coverage it asks for is the SDK harness surface "
+            "in application_sdk/testing/e2e/base.py — one collectable class per "
+            "entrypoint, resolved through `BaseE2ETest.entrypoint` / `manifest_path` "
+            "(`_derive_entrypoint` maps `.../generated/<ep>/manifest.json` to `<ep>`). "
+            "atlan-metabase-app contract/app.pkl is the multi-entrypoint shape T025 "
+            "deliberately does not flag: two @entrypoint methods on one marketplace card "
+            "(the BLDX-1342 route/card split), with extract-lineage run as a DAG node "
+            "inside the single full-DAG e2e."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,

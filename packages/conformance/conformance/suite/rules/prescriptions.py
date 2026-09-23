@@ -33,9 +33,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P001",
         canonical_reference=(
-            "atlan-mysql-app — its generated contract/_input.py subclasses "
-            "ExtractionInput with no allow_unbounded_fields at all, because every "
-            "filter is a bounded concrete type."
+            "atlan-mysql-app app/generated/_input.py — the generated "
+            "`AppInputContract(ExtractionInput)` declares no allow_unbounded_fields at "
+            "all: every field it adds is a concrete str or bool, and the include/exclude "
+            "filters it inherits from ExtractionInput are already the bounded "
+            "`FilterMap | str`."
         ),
         rule_interactions=(
             "B005 + ledger-guard bound the fix, but less tightly than they look, and "
@@ -202,8 +204,13 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P003",
         canonical_reference=(
-            "application_sdk/errors/leaves.py — the 15 categorical leaves and the "
-            "prefix each one owns."
+            "atlan-openapi-app app/errors.py — every subclass extends an SDK leaf and "
+            "declares a code carrying that leaf's prefix (`ZipNoSpecFoundError"
+            "(InvalidInputError)` → `INVALID_INPUT_OPENAPI_ZIP_NO_SPEC`, "
+            "`SpecFetchAuthError(AuthError)` → `AUTH_OPENAPI_SPEC_FETCH`), and none "
+            "overrides to_failure_details, so that code is what dashboards read. The "
+            "prefix table itself is application_sdk/errors/leaves.py: the 15 categorical "
+            "leaves and the prefix each one owns."
         ),
         terminal_state=(
             "A class whose MRO overrides to_failure_details() builds the wire "

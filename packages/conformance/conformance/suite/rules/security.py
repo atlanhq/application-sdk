@@ -31,9 +31,10 @@ RULES: tuple[RuleDefinition, ...] = (
         id="S001",
         canonical_reference=(
             "atlan-metabase-app app/credentials.py — credentials arrive as a "
-            "`CredentialRef` resolved by the SDK, or as an inline dict from the secret "
-            "store. No string literal is ever assigned to a credential-named variable in "
-            "the four reference apps."
+            "`CredentialRef` built by `build_credential_ref`, or as an inline dict, and "
+            'the typed `MetabaseCredential` defaults `password` to "". No string literal '
+            "is assigned to a credential-named variable in any shipped app/ module of "
+            "the three reference apps."
         ),
         scope=RuleScope.BOTH,
         name="HardcodedCredential",
@@ -84,13 +85,13 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="S002",
         canonical_reference=(
-            "atlan-metabase-app app/credentials.py — `build_credential_ref` resolves "
-            "the secret through the SDK's `CredentialRef.resolve` (handling both "
-            "`credential_guid` and agent `agent_json` routing), and the typed "
-            "MetabaseCredential the API client consumes is populated from that resolved "
-            "payload. No credential-named environment variable is read anywhere in the "
-            "module — resolution through the seam is what correct looks like, not a "
-            "justified read."
+            "atlan-metabase-app app/credentials.py — `build_credential_ref` routes the "
+            "input to a `CredentialRef` through the SDK's `CredentialRef.resolve` "
+            "(`credential_guid` or agent `agent_json`), and app/connector.py "
+            "`_build_client` fetches the secret with `self.context.resolve_credential_raw` "
+            "and parses it into the typed MetabaseCredential the API client consumes. No "
+            "credential-named environment variable is read in either module — resolution "
+            "through the seam is what correct looks like, not a justified read."
         ),
         terminal_state=(
             "Zero findings, reached by resolving the secret through CredentialRef / the "

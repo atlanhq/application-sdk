@@ -302,9 +302,9 @@ residue for a human to apply, not an applied edit:
   Draft an initial unit suite covering the app's helper functions and
   `@task`-decorated activities directly (call them as coroutines — the
   decorator only attaches metadata outside the workflow runtime), following
-  the minimal shape in `atlan-hello-world-app/tests/unit/`: typed
-  `Input`/`Output` contracts, a `pytest.fixture` for the app instance, and
-  real outcome assertions. This is not exemptable — do not propose a
+  the shape in the three reference apps' `tests/unit/` (`atlan-openapi-app`,
+  `atlan-mysql-app`, `atlan-metabase-app`): typed `Input`/`Output` contracts,
+  a `pytest.fixture` for the app instance, and real outcome assertions. This is not exemptable — do not propose a
   suppression or an `exempt_test_tiers` entry for T010.
 
   `classification` is always `"judgment"` — route to residue; a from-scratch
@@ -709,14 +709,14 @@ residue for a human to apply, not an applied edit:
 
   Fix: import the generated modules and keep only what the contract cannot know —
   the source under test, the asset floors, and the run mode.
-  `atlan-mysql-app/tests/e2e/test_mysql_full_dag.py` is the reference:
+  `atlan-mysql-app/tests/e2e/test_mysql_e2e.py` is the reference:
 
   ```python
   from application_sdk.testing.e2e import RunMode
   from app.generated._e2e_base import MysqlGeneratedE2EBase
   from app.generated._e2e_credential import MysqlAgentCredentialBody
 
-  class TestMySQLFullDAG(MysqlGeneratedE2EBase):
+  class TestMySQLE2E(MysqlGeneratedE2EBase):
       mode = RunMode.AGENT
       include_filter = r"^def\.e2e_main$"
       expected_min_asset_counts = {"Database": 1, "Table": 2}
@@ -787,10 +787,16 @@ residue for a human to apply, not an applied edit:
   Fix: add one suite per uncovered entrypoint under `tests/e2e/`, subclassing
   that entrypoint's **generated** base — `app/generated/<name>/_e2e_base.py`
   exposes `<Name>GeneratedE2EBase`, which is why K010 insists the scaffolding
-  exists.  Mirror `atlan-openapi-app tests/e2e/`, which carries
-  `test_connection_create.py` and `test_connection_reuse.py` so each contract
-  entrypoint of the bundle has one.  Set `mode` explicitly on the new class
-  (T024) — `RunMode.AGENT` for the normal CI-worker run.
+  exists.  No reference app is in bundle mode, so there is no cross-repo suite
+  to mirror: copy the shape from this repo's already-covered entrypoints (or,
+  if none is covered yet, the `<Ep>GeneratedE2EBase` subclass shown in the
+  rule's full description).  The
+  new class counts as covering its entrypoint by the same resolution the SDK
+  harness uses — the generated base, a class-level `entrypoint`, or a
+  `manifest_path` under `/generated/<ep>/` (`BaseE2ETest.entrypoint` /
+  `manifest_path` and `_derive_entrypoint` in
+  `application_sdk/testing/e2e/base.py`).  Set `mode` explicitly on the new
+  class (T024) — `RunMode.AGENT` for the normal CI-worker run.
 
   Two things to establish before drafting, because both change the answer:
   whether the generated base for that entrypoint actually exists (if it does

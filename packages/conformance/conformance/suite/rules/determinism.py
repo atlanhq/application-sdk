@@ -158,9 +158,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P022",
         canonical_reference=(
-            "atlan-metabase-app app/connector.py — every same-class async call in `run()` "
-            "is awaited. A dropped coroutine does not run and does not raise; the workflow "
-            "simply proceeds as if the step had succeeded."
+            "atlan-openapi-app app/connector.py — every same-class async call in "
+            "`OpenAPIConnector.run` is awaited: `self.download_cloud_spec`, "
+            "`self.extract_spec` and `self.transform`. A dropped coroutine does not run and "
+            "does not raise; the workflow simply proceeds as if the step had succeeded."
         ),
         scope=RuleScope.BOTH,
         name="UnawaitedCoroutine",
@@ -205,9 +206,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P023",
         canonical_reference=(
-            "atlan-openapi-app app/connector.py — the blocking JSONL writes go through "
-            "`self.run_in_thread(write_jsonl, ...)` rather than being called inline in an "
-            "async def. The comment there records why the generator has to be materialised "
+            "atlan-metabase-app app/connector.py — the `extract_collections` @task hands "
+            "its blocking JSONL write to `await self.run_in_thread(write_jsonl, out, "
+            "records)`, passing the callable rather than writing the file inline in the "
+            "async def, as its sibling extract tasks do. Where the blocking work is a sync "
+            "generator, `build_lineage_records` offloads `_build_process_records` in one "
+            "call, and that helper's docstring records why the loop has to be materialised "
             "first."
         ),
         scope=RuleScope.BOTH,
@@ -290,9 +294,15 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P024",
         canonical_reference=(
-            "atlan-openapi-app app/connector.py — connector code uses the async client "
-            "surface; the only synchronous pyatlan AtlanClient in the repo is in "
-            "tests/e2e/test_connection_reuse.py, where there is no event loop to block."
+            "atlan-openapi-app app/connector.py — constructs no pyatlan client at all: "
+            "`OpenAPIConnector.run` reaches Atlan through the SDK's `self.upload(...)` and "
+            "the publish DAG node, so no sync AtlanClient sits on the event loop. No app/ "
+            "module in any of the three reference apps constructs AtlanClient or "
+            "AsyncAtlanClient; the only AtlanClient among them is a sync test helper in "
+            "atlan-openapi-app tests/e2e/test_connection_reuse.py, outside P-series "
+            "discovery. Where app code does need a client, the shape is the SDK seam in "
+            "application_sdk/credentials/atlan_client.py — `create_async_atlan_client` / "
+            "`AtlanClientMixin.get_or_create_async_atlan_client`."
         ),
         scope=RuleScope.BOTH,
         name="SyncAtlanClientInApp",

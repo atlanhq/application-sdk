@@ -63,8 +63,9 @@ the repo's own addopts so it is correct for any app, not just the SDK.
 
 - **Compliant example:** atlan-mysql-app tests/integration/test_mysql_workflow.py — a module-level `pytestmark =
   pytest.mark.integration`, which marks every test in the file in one line.
-  atlan-openapi-app tests/integration/test_openapi.py marks per-test with the same
-  marker; either satisfies the unit job's deselection.
+  atlan-openapi-app tests/integration/test_openapi.py shows the other accepted form:
+  `@pytest.mark.integration` on the enclosing `TestOpenAPIConnectorExtraction` class,
+  which marks every method in it.
 
 Every test collected under `tests/integration/` must carry a marker that the unit job
 deselects (e.g. `integration`, `s3_integration`, `storage_emulator`) so the unit job
@@ -348,8 +349,9 @@ tested' to anyone scanning the test file, which is actively misleading.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app tests/unit/test_utils.py — the smallest tests in the four reference
-  apps still assert; none is a `pass` or an ellipsis awaiting a body.
+- **Compliant example:** atlan-metabase-app tests/unit/test_utils.py — the smallest tests in the three reference
+  apps still assert (`test_none_returns_none`: `assert to_epoch_ms(None) is None`); none
+  is a `pass` or an ellipsis awaiting a body.
 
 A collected test function's body consists solely of `pass`, an `Ellipsis` (`...`), a
 docstring, or some combination of those — no other statement is present.
@@ -475,10 +477,10 @@ contribution to coverage from that point on.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app tests/e2e/test_connection_create.py — the module-level skip is
-  conditional: it fires only from the ImportError raised when the installed SDK predates
-  the agnostic e2e harness. An unconditional module skip disables the file forever and
-  nothing tells you.
+- **Compliant example:** atlan-openapi-app tests/e2e/test_connection_create.py — both module-level skips are
+  conditional: an `if` guard skips when ATLAN_BASE_URL / ATLAN_API_KEY are unset, and a
+  try/except ImportError skips when the installed SDK predates the agnostic e2e harness.
+  An unconditional module skip disables the file forever and nothing tells you.
 
 A module-level call to `pytest.skip(..., allow_module_level=True)` appears directly in
 the module body (not nested inside an `if` or `try` statement), so it executes — and
@@ -513,8 +515,8 @@ the file is intentionally, permanently disabled pending removal in a tracked fol
 > No collectable unit tests under tests/unit/
 
 **Rationale:** Unit tests — method-by-method coverage of helper functions and activities — are the
-universal floor of the agreed testing-tier architecture: every canonical app, including
-the minimal hello-world scaffold, has one. An app with no tests/unit/ directory (or one
+universal floor of the agreed testing-tier architecture: each of the three reference
+apps (openapi, mysql, metabase) has one. An app with no tests/unit/ directory (or one
 with no collectable tests in it) has no fast, hermetic verification of its own logic at
 all — every other tier (integration, e2e) is slower, network-bound, and exercises the
 app only end-to-end, so a defect in a helper function has no tier positioned to catch it
@@ -523,21 +525,22 @@ has some logic worth a fast unit test.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app tests/unit/ — four modules: test_client.py, test_handler.py,
-  test_mysql_app.py and test_parity.py, covering the SQL client, the handler, the app's
-  mappers and the wire-shape parity spec. This tier is the floor and is not exemptable.
+- **Compliant example:** atlan-mysql-app tests/unit/ — five modules: test_client.py, test_handler.py,
+  test_mysql_app.py, test_parity.py and test_preflight_conformance.py, covering the SQL
+  client, the handler, the app's mappers, the wire-shape parity spec and the preflight
+  behaviour scenarios. This tier is the floor and is not exemptable.
 
 No collectable pytest tests (`def test*` / `class Test*` in a `test_*.py` / `*_test.py`
 file) exist under `tests/unit/`. This is the universal floor of the tiering architecture
 — unlike `tests/integration/` and `tests/e2e/` (T011/T012), this tier has no
-`exempt_test_tiers` opt-out: every canonical app, including the minimal `hello-world`
-scaffold, ships a real unit suite.
+`exempt_test_tiers` opt-out: each of the three reference apps ships a real unit suite.
 
 **Remediation:** add `tests/unit/test_<module>.py` files exercising the app's helper
 functions and `@task`-decorated activities directly (call them as coroutines — the
-decorator only attaches metadata outside the workflow runtime). See
-`atlan-hello-world-app/tests/unit/` for the minimal reference shape: typed
-`Input`/`Output` contracts, a `pytest.fixture` for the app instance, and real outcome
+decorator only attaches metadata outside the workflow runtime). See the three reference
+apps' `tests/unit/` (`atlan-openapi-app`, `atlan-mysql-app`, `atlan-metabase-app`) for
+the reference shape: typed `Input`/`Output` contracts, a `pytest.fixture` for the app
+instance (e.g. `atlan-metabase-app` `tests/unit/test_connector.py`), and real outcome
 assertions (record counts, on-disk side effects, error paths via `pytest.raises`).
 
 ---
@@ -655,7 +658,7 @@ the file layout alone. Enforcing the placement convention removes that ambiguity
 ### What correct looks like
 
 - **Compliant example:** atlan-metabase-app tests/ — everything collectable sits under unit/, integration/ or
-  e2e/. None of the four reference apps has a tests/sdr/ or a tests/full_dag/; the tier
+  e2e/. None of the three reference apps has a tests/sdr/ or a tests/full_dag/; the tier
   a test belongs to is a directory, not a naming convention.
 
 A file matching pytest's collection glob (`test_*.py` / `*_test.py`) and defining at
@@ -857,7 +860,8 @@ matched pair: applying one without the other breaks a previously-passing e2e.
 ### What correct looks like
 
 - **Compliant example:** atlan-openapi-app tests/e2e/test_connection_create.py — `agent_spec()` is inherited, not
-  overridden: the generated base derives the worker queue from ATLAN_APPLICATION_NAME +
+  overridden: the SDK's `BaseE2ETest.agent_spec` (reached through the generated
+  `OpenapiGeneratedE2EBase`) derives the worker queue from ATLAN_APPLICATION_NAME +
   ATLAN_DEPLOYMENT_NAME, so each leg lands on the queue its own CI action provisioned.
 
 An `agent_spec` override under `tests/` returns a hard-coded `AgentSpec(agent_name=...)`
@@ -1093,10 +1097,11 @@ converges on the caller instead.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app .github/workflows/tests.yaml — the e2e job calls
+- **Compliant example:** atlan-mysql-app .github/workflows/tests.yaml — the one `tests:` job calls
   `atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main` and passes
-  inputs. Calling the SDK's sdr-e2e action directly re-implements what the reusable
-  workflow already owns, and then has to track its changes by hand.
+  inputs; the reusable owns the e2e leg. Calling the SDK's sdr-e2e action directly
+  re-implements what the reusable workflow already owns, and then has to track its
+  changes by hand.
 
 A workflow under `.github/workflows/` invokes
 `atlanhq/application-sdk/.github/actions/sdr-e2e` directly, and that same file does not
@@ -1282,10 +1287,12 @@ it touched, which is what this rule exists to stop recurring.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app tests/e2e/test_metabase_e2e.py — identity attributes, the credential
-  body and the Mustache substitutions all come from the generated
-  `MetabaseGeneratedE2EBase` and MetabaseMustacheSubstitutions. Hand-declaring them in
-  the test freezes a copy of what the contract will regenerate.
+- **Compliant example:** atlan-metabase-app tests/e2e/test_metabase_e2e.py — identity attributes come from the
+  generated `MetabaseGeneratedE2EBase` (_e2e_base.py), the credential body from
+  `MetabaseAgentCredentialBody` (_e2e_credential.py) and the Mustache substitutions from
+  `MetabaseMustacheSubstitutions` (_e2e_substitutions.py); the test imports them instead
+  of subclassing CredentialBody or MustacheSubstitutions. Hand-declaring them in the
+  test freezes a copy of what the contract will regenerate.
 
 A module under `tests/` declares scaffolding the contract toolkit generates. Three
 shapes are flagged:
@@ -1301,13 +1308,13 @@ set `app/generated/_e2e_base.py` emits. 2. A `CredentialBody` subclass — gener
 
 **Fix:** import the generated modules and keep only what the contract cannot know — the
 source under test, the asset floors, and the run mode.
-`atlan-mysql-app/tests/e2e/test_mysql_full_dag.py` is the reference:
+`atlan-mysql-app/tests/e2e/test_mysql_e2e.py` is the reference:
 
 ```python
 from app.generated._e2e_base import MysqlGeneratedE2EBase
 from app.generated._e2e_credential import MysqlAgentCredentialBody
 
-class TestMySQLFullDAG(MysqlGeneratedE2EBase):
+class TestMySQLE2E(MysqlGeneratedE2EBase):
     mode = RunMode.AGENT
     include_filter = r"^def\.e2e_main$"
     expected_min_asset_counts = {"Database": 1, "Table": 2}
@@ -1405,10 +1412,15 @@ would have run it in CI does not exist.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app tests/e2e/ — two suites, test_connection_create.py and
-  test_connection_reuse.py, so each contract entrypoint of the bundle has one. A
-  multi-entrypoint contract with a single e2e suite leaves the other entrypoints
-  unproven end to end.
+- **Compliant example:** No reference app is in bundle mode: atlan-openapi-app, atlan-mysql-app and
+  atlan-metabase-app each emit a single app/generated/manifest.json, so T025 inspects
+  none of them. The coverage it asks for is the SDK harness surface in
+  application_sdk/testing/e2e/base.py — one collectable class per entrypoint, resolved
+  through `BaseE2ETest.entrypoint` / `manifest_path` (`_derive_entrypoint` maps
+  `.../generated/<ep>/manifest.json` to `<ep>`). atlan-metabase-app contract/app.pkl is
+  the multi-entrypoint shape T025 deliberately does not flag: two @entrypoint methods on
+  one marketplace card (the BLDX-1342 route/card split), with extract-lineage run as a
+  DAG node inside the single full-DAG e2e.
 
 The app is in **bundle mode** — `app/generated/` holds one `<name>/manifest.json` subdir
 per entrypoint — and at least one of those entrypoints is not exercised by any

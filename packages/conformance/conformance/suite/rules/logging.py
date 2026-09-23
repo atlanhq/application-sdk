@@ -58,8 +58,10 @@ RULES: tuple[RuleDefinition, ...] = (
         id="L002",
         canonical_reference=(
             "atlan-mysql-app app/handler.py — `get_logger(__name__)` at module scope, "
-            "imported from application_sdk.observability.logger_adaptor. No reference app "
-            "calls logging.getLogger, structlog.get_logger, or loguru's logger."
+            "imported from application_sdk.observability.logger_adaptor. No shipped app/ "
+            "module in the three reference apps calls logging.getLogger, "
+            "structlog.get_logger, or loguru's logger; the test files that do sit outside "
+            "what this rule scans."
         ),
         scope=RuleScope.BOTH,
         name="NonCanonicalLoggerFactory",
@@ -147,9 +149,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L004",
         canonical_reference=(
-            "atlan-metabase-app app/handler.py — every log call inside an except block "
-            "carries exc_info=True, in `test_auth` and in each of the preflight check "
-            "helpers. The rule is about the except block, not about the level."
+            "atlan-metabase-app app/handler.py — `test_auth` and `_read_filters` log "
+            "warning(..., exc_info=True) inside their except blocks, so the trace rides "
+            "with the message. The rule inspects warning and error calls only; "
+            "`_authentication_check` logs at DEBUG through sanitize_cause_repr() with no "
+            "exc_info, a deliberate no-traceback boundary."
         ),
         scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfoLog",
@@ -316,9 +320,9 @@ RULES: tuple[RuleDefinition, ...] = (
         id="L009",
         canonical_reference=(
             "atlan-metabase-app app/connector.py — `transform_data` raises "
-            "MissingTypenameInputError and MissingOutputPathInputError with no log "
-            "line before either. The raise is the record; whichever handler catches it "
-            "logs it once."
+            "MissingTypenameInputError and `_build_client` raises "
+            "MetabaseCredentialInputError, with no log line before either. The raise is "
+            "the record; whichever handler catches it logs it once."
         ),
         scope=RuleScope.BOTH,
         name="WarnThenRaiseDuplication",
@@ -343,9 +347,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L010",
         canonical_reference=(
-            "atlan-mysql-app app/client.py — `get_iam_role_token` logs that AWS "
-            "credentials were staged into the environment and names none of them. Log that "
-            "a credential was used, never the credential."
+            "atlan-mysql-app app/client.py — `get_iam_role_token` logs the role ARN, host "
+            "and user, reports the external ID only as `bool(external_id)`, and never "
+            "logs the value of the token it returns. Log that a credential was used, "
+            "never the credential."
         ),
         scope=RuleScope.BOTH,
         name="CredentialInLogOutput",
@@ -409,10 +414,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L012",
         canonical_reference=(
-            "No app builds an `extra={}` dict at all — "
-            "application_sdk/observability/logger_adaptor.py takes %-style arguments "
-            "positionally and injects the Temporal context itself, so there is no "
-            "caller-supplied key that can collide with a stdlib LogRecord attribute."
+            "atlan-openapi-app app/api_client.py — `_parse_zip` logs "
+            '"extracted spec from ZIP file=%s", name: the ZIP member\'s name travels '
+            "positionally in the %-style body, where a stdlib caller would reach for "
+            'extra={"name": ...}, a reserved LogRecord attribute. The SDK adaptor '
+            "(application_sdk/observability/logger_adaptor.py) injects the Temporal "
+            "context itself, so no caller-supplied key is needed."
         ),
         scope=RuleScope.BOTH,
         name="StdlibExtraReservedKeyCollision",
@@ -444,10 +451,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L013",
         canonical_reference=(
-            "atlan-openapi-app app/api_client.py — the logger comes from `get_logger`, "
-            "which accepts the SDK adaptor's kwargs. A stdlib logging.Logger appears "
-            "nowhere in the four reference apps, and it is the stdlib one that raises "
-            "TypeError on arbitrary kwargs."
+            "atlan-openapi-app app/api_client.py — the module-level logger comes from "
+            "`get_logger`, which accepts the SDK adaptor's kwargs. No shipped app/ module "
+            "in the three reference apps creates a stdlib logging.Logger, and it is the "
+            "stdlib one that raises TypeError on arbitrary kwargs."
         ),
         scope=RuleScope.BOTH,
         name="StdlibArbitraryKwargs",
@@ -505,8 +512,9 @@ RULES: tuple[RuleDefinition, ...] = (
         id="L015",
         canonical_reference=(
             "atlan-metabase-app app/run_dev.py — `main()` awaits "
-            "`run_dev_combined(MetabaseApp, example_input=...)` and the module imports "
-            "only asyncio and the SDK launcher: no `logging`, no dictConfig. Handler "
+            "`run_dev_combined(MetabaseApp, example_input=...)`; the module imports "
+            "asyncio, the SDK launcher and the app's own connector and handler: no "
+            "`logging`, no dictConfig. Handler "
             "configuration belongs to the SDK runtime; an app calling dictConfig is "
             "reaching past it."
         ),
@@ -660,9 +668,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L020",
         canonical_reference=(
-            "atlan-metabase-app pyproject.toml — LOG009 sits in the lint select list with "
-            "the comment that names the replacement, so logger.warn() cannot reach main in "
-            "that repo."
+            "atlan-metabase-app app/connector.py — `process_metabaseprocess` spells its "
+            "empty-host warning logger.warning(...), and no shipped app/ module in the "
+            "three reference apps calls .warn(). The repo's pyproject.toml also selects "
+            "LOG009, so ruff rejects a regression at edit time."
         ),
         scope=RuleScope.BOTH,
         name="DeprecatedLoggingWarn",

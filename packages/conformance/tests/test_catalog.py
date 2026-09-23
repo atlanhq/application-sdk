@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 from conformance.suite.rules import CATALOG, _combine_rules, get_rule
@@ -16,6 +17,8 @@ from conformance.suite.schema.disposition import (
 )
 from conformance.suite.schema.extensions import AtlanRuleProperties
 from pydantic import ValidationError
+
+import conformance
 
 
 def test_catalog_loads_without_error() -> None:
@@ -1512,6 +1515,70 @@ def test_canonical_references_name_something_checkable() -> None:
     assert not vague, (
         "canonical_reference must name a reference repo AND a concrete path: "
         f"{vague}"
+    )
+
+
+#: The maintained reference apps alone — ``_REFERENCE_REPOS`` minus the SDK.
+_REFERENCE_APPS = tuple(repo for repo in _REFERENCE_REPOS if repo != "application_sdk")
+
+
+def test_autofixable_app_facing_rules_cite_a_reference_app() -> None:
+    """An auto-fixable rule's fix is mirrored from an app, so it must name one.
+
+    ``test_canonical_references_name_something_checkable`` accepts
+    ``application_sdk`` as a reference repo, which is right for a rule whose fix
+    is an SDK seam — but an auto-fixable rule is applied by the remediation lane
+    by mirroring how a reference app already does it, and an SDK-only reference
+    gives the lane nothing to mirror. L012 and P003 both passed the substring
+    check this way while citing no app at all (FND-2702).
+    """
+    sdk_only = [
+        r.id
+        for r in load_catalog()
+        if r.autofixable
+        and r.scope in (RuleScope.APP, RuleScope.BOTH)
+        and r.canonical_reference
+        and not any(app in r.canonical_reference for app in _REFERENCE_APPS)
+    ]
+    assert not sdk_only, (
+        "auto-fixable app-facing rules whose canonical_reference names no "
+        f"reference app — cite a file in one of {list(_REFERENCE_APPS)}: {sdk_only}"
+    )
+
+
+def test_canonical_references_never_name_the_scaffold() -> None:
+    """``atlan-hello-world-app`` is not a reference app (FND-2477).
+
+    The path check above cannot catch it: a reference naming hello-world *and*
+    one of the three apps passes the substring match. Guidance that sends the
+    lane to the scaffold is the same defect wherever the lane reads it — every
+    prose field of the rule, and the remediation programs (T010's pointer lived
+    in ``areas/tests.prose.md`` as well as in the rule).
+    """
+    scaffold = "atlan-hello-world-app"
+    offenders = [
+        r.id
+        for r in load_catalog()
+        if any(
+            scaffold in (text or "")
+            for text in (
+                r.canonical_reference,
+                r.full_description,
+                r.rationale,
+                r.rule_interactions,
+                r.terminal_state,
+            )
+        )
+    ]
+    programs = Path(conformance.__file__).parent / "programs"
+    offenders += [
+        str(path.relative_to(programs))
+        for path in sorted(programs.rglob("*.prose.md"))
+        if scaffold in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        f"rules / programs that point at {scaffold}, which is not a reference "
+        f"app: {offenders}"
     )
 
 

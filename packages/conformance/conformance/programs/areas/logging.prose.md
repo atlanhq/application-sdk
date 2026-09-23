@@ -278,8 +278,8 @@ rule was skipped, the sanitized form records that the credential was handled.
   So establish the caller first.  **If you can show the exception is logged
   upstream** — the handler that catches this type logs it with `exc_info=True`
   — delete the call; that is the shape `atlan-metabase-app app/connector.py`'s
-  `transform_data` has, raising `MissingTypenameInputError` and
-  `MissingOutputPathInputError` with no log line before either.  **If you
+  `transform_data` has, raising `MissingTypenameInputError` with no log line
+  before it (as does `_build_client` for `MetabaseCredentialInputError`).  **If you
   cannot** (no handler in the repo, or the handler swallows), do not delete:
   **downgrade the level** to `logger.debug(...)`.  The rule matches only
   `warning` and `error`, so a DEBUG line clears the finding, stops inflating
@@ -295,8 +295,8 @@ rule was skipped, the sanitized form records that the credential was handled.
   or replace it with a non-secret descriptor
   (`logger.info("using credential %s", cred_name)`), and never a length, a
   prefix or a mask of the value itself.  `atlan-mysql-app app/client.py`'s
-  `get_iam_role_token` records that AWS credentials were staged and names
-  none of them.  **Always route to residue and never auto-apply**, whatever
+  `get_iam_role_token` logs the role ARN, host and user, reports the external
+  ID only as `bool(external_id)`, and never logs the token's value.  **Always route to residue and never auto-apply**, whatever
   the mode: a human confirms every credential-shaped change.
 
 - **L012 StdlibExtraReservedKeyCollision** — BLOCK.  A key in `extra={}`
@@ -304,9 +304,12 @@ rule was skipped, the sanitized form records that the credential was handled.
   `args`, …), which raises `KeyError` inside `Logger.makeRecord()` and crashes
   the caller — this is a live runtime break, not a style point.  Rename the
   key (`module` → `source_module`), or better, move the context into the
-  `%`-style body as L003 prescribes and drop `extra=` entirely.  No reference
-  app builds an `extra={}` dict; `application_sdk/observability/logger_adaptor.py`
-  takes arguments positionally and injects the Temporal context itself.
+  `%`-style body as L003 prescribes and drop `extra=` entirely.
+  `atlan-openapi-app app/api_client.py`'s `_parse_zip` passes the ZIP member's
+  `name` positionally (`"extracted spec from ZIP file=%s", name`) rather than as
+  `extra={"name": ...}`; the SDK adaptor
+  (`application_sdk/observability/logger_adaptor.py`) injects the Temporal
+  context itself.
 
 - **L014 StructlogEventKwargOverwrite** — a structlog call passes `event=`,
   which *is* structlog's message key, so the domain value silently replaces
