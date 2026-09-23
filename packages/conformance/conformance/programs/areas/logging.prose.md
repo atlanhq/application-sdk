@@ -205,6 +205,34 @@ rule was skipped, the sanitized form records that the credential was handled.
   already selects `"G"` on its own, leave it and route the conflict to
   residue for the owner.
 
+  **Land it with or after the L001/L011 fixes, not before.** Enabling
+  `G004`/`G003` while those findings are still open turns every one of
+  them into a pre-commit `ruff` failure, so the L021 edit goes red on its own.
+  Run `ruff check --select G003,G004 .` first; if it reports
+  anything, fix those call sites in the same change (or order L021 after the
+  L-series cleanup). L020 (`logger.warn()`) is ruff G010, which L021 does
+  not require, so it does not belong in this pre-scan.
+
+  **Scope `T201` away from tests and CLI scripts.** `print()` in `tests/`
+  (pytest diagnostics, a manual `__main__` runner) and in `.github/**/*.py`
+  scripts whose stdout is their output is intentional. Do not delete those
+  prints; add a per-file ignore (the checker does not read
+  `per-file-ignores`, so this still clears L021):
+  ```toml
+  [tool.ruff.lint.per-file-ignores]
+  "tests/**/*.py" = ["T201"]
+  ".github/**/*.py" = ["T201"]  # CLI scripts — print() is intentional stdout
+  ```
+  Run `ruff check --select T201 .` and cover only the directories it actually
+  flags outside `app/`.
+
+  **Expect formatter churn when the repo had no `[tool.ruff]` table.**
+  Adding the first `[tool.ruff.*]` table makes ruff infer its target version
+  from `requires-python`, and `ruff format` may then rewrite unrelated code
+  (e.g. multi-context `with a, b:` into parenthesised form). That diff is a
+  side effect of the config, not scope creep: keep it, and call it out in the
+  PR description as formatting-only.
+
 - **L003 ExtraKwargsWrongFramework** — the call passes `extra={...}`, so the
   context lands in an unindexed nested dict that aggregation queries cannot
   see.  Move every key into the `%`-style message body as a positional
