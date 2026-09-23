@@ -188,6 +188,58 @@ class TestFlushRecordsWorkflowGuard:
 
         assert len(uploads) == 1, uploads
 
+    @pytest.mark.asyncio
+    async def test_returns_records_to_the_buffer_in_workflow(self, obs_instance):
+        """Skipping the write must not drop the batch the caller swapped out.
+
+        Every caller has already taken the records out of the buffer, so a bare
+        ``return`` here discarded them — including other runs' lines logged on
+        the same worker since the last flush.
+        """
+        later = _record(_BASE_TS + 1)
+        obs_instance._buffer = [later]
+        await self._flush_collecting_uploads(obs_instance, in_workflow=True)
+
+        assert [r["timestamp"] for r in obs_instance._buffer] == [
+            _BASE_TS,
+            _BASE_TS + 1,
+        ], "the refused batch must go back ahead of newer records, in order"
+
+
+# ---------------------------------------------------------------------------
+# AtlanObservability.add_record
+# ---------------------------------------------------------------------------
+
+
+class TestAddRecordWorkflowGuard:
+    """``add_record`` starts no flush on the workflow loop."""
+
+    @staticmethod
+    def _add_with_flush_due(obs_instance, *, in_workflow: bool) -> mock.MagicMock:
+        """Add one record with the batch full; return the task-spawn mock."""
+        obs_instance._batch_size = 1
+        with (
+            mock.patch(f"{_OBS_MODULE}.in_temporal_workflow", return_value=in_workflow),
+            mock.patch(f"{_OBS_MODULE}.asyncio.create_task") as create_task,
+        ):
+            obs_instance.add_record(_record(_BASE_TS))
+        for call in create_task.call_args_list:
+            call.args[0].close()  # silence "never awaited"
+        return create_task
+
+    def test_keeps_record_buffered_in_workflow(self, obs_instance):
+        create_task = self._add_with_flush_due(obs_instance, in_workflow=True)
+
+        create_task.assert_not_called()
+        assert len(obs_instance._buffer) == 1
+
+    def test_starts_flush_outside_workflow(self, obs_instance):
+        """Positive control: the same full batch flushes off the workflow loop."""
+        create_task = self._add_with_flush_due(obs_instance, in_workflow=False)
+
+        create_task.assert_called_once()
+        assert obs_instance._buffer == []
+
 
 # ---------------------------------------------------------------------------
 # AtlanLoggerAdapter._sync_flush

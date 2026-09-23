@@ -138,6 +138,10 @@ def test_parse_bootstrap_args_defaults() -> None:
         # Same round trip on the RELEASE image build: autodetected from an
         # existing build-and-publish.yaml so a bootstrap run cannot drop it.
         "build_publish_lfs": "",
+        "conformance_private_git_deps": "",
+        "release_private_git_auth": "",
+        "build_publish_private_git_auth": "",
+        "checks_private_git_deps": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",

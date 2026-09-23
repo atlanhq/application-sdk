@@ -94,7 +94,9 @@ logger.warning("token refresh failed: %s", redact_secrets(str(exc)))
 the logging area) all accept a log call whose arguments flow through a
 sanitizer as a deliberate no-traceback boundary — see
 `suite/checks/_ast_common/_sanitizers.py`.  The redacted form is a
-first-class fix, not a carve-out.
+first-class fix, not a carve-out.  For E004 the call must also be at
+`warning`, `error` or `critical`: a sanitized `debug`/`info` line still
+fires it.
 
 Three things to get right, because all three fail silently:
 
@@ -207,7 +209,9 @@ outcome mirroring the error-handling shape in the reference app named by
   - a `raise X(...) from None` whose raised error carries the caught exception
     through a redaction helper;
   - a `warning`/`error`/`critical` log call whose arguments already flow
-    through a redaction helper (not `debug` — see *The level counts* above);
+    through a redaction helper — a sanitized `debug`/`info` call does **not**
+    clear E004, so raising it is a real edit, not a no-op (see *The level
+    counts* above);
   - a body whose every exit path hands the caught exception back as **typed
     data** — `return PreflightCheck(passed=False,
     error=SourceUnavailableError(cause=exc).to_failure_details())`, or a row
@@ -245,6 +249,16 @@ outcome mirroring the error-handling shape in the reference app named by
   probes convert the caught exception into a typed `PreflightCheck` row and
   return it, with no suppression and no log above DEBUG.
 
+  **Best-effort cleanup reached from `preflight_check` is the other trap.**  A
+  helper such as `try: await client.aclose() except Exception:
+  logger.debug(...)` that the gate calls has no verdict to return, and the
+  levels close in on it: DEBUG (even through a redaction helper) does not
+  clear E004, and WARNING trips F005 because the helper runs inside the gate.
+  The recommended log that satisfies both is
+  `logger.error("<what failed>: %s", safe_traceback(exc))` — or
+  `sanitize_cause_repr(exc)`; `logger.critical` also clears both — or return the failure as typed data if the
+  caller can carry it.  Do not narrow the clause automatically; see above.
+
 - **E007 ErrorToReturnValue** — the `except` block returns a sentinel
   (`None`, `{}`, `[]`, `False`) with no logging before the `return`, so the
   caller sees a wrong result and no trace.  Add a
@@ -258,6 +272,24 @@ outcome mirroring the error-handling shape in the reference app named by
   to the credential-boundary contraindication above — at an auth or connect
   site, format the exception through `sanitize_cause_repr` and omit
   `exc_info=True`.
+
+  **Already-clearing shape — do not "fix" it:** a `return` that hands the
+  caught exception back as **typed data** is not flagged.  E007 uses the same
+  typed-failure predicate as E004's already-clearing list above, so the two
+  rules agree:
+  `return self._failed("authentication", started, AuthRejectedError(cause=exc))`,
+  `return None, self._failed("credentials", started, CredentialsUnusableError(cause=exc))`,
+  or, under a narrow catch (`except AuthRejectedError as exc:`), a helper
+  that receives the binding directly: `return self._failed(name, started, exc)`.
+  These are the arms of a preflight probe.  **Never add a log to them**:
+  inside a `preflight_check` override a `warning`/`error` trades the E007 for
+  an F005, as described under E004.  If such an arm still reports E007, the
+  exception is not leaving the frame typed.  Usually it is handed raw to a
+  helper under a broad catch, or the return stringifies it.  Wrap it in the
+  domain error (`XError(cause=exc)`) rather than logging.  A bare sentinel
+  and a stringified exception (`str(exc)`, `repr(exc)`, an f-string or
+  `.format(exc)`) still fire.  A string is the failure laundered into a plain
+  value.
 
 - **E008 ImportErrorWithoutLogging** — `except ImportError` with no logging,
   so a missing or broken dependency reads as a normal skip.  Bind the

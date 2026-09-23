@@ -24,9 +24,18 @@ permissions:
 jobs:
   suite:
     uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
-    with:
+<% if conformance_private_git_deps %>    # private-git-deps needs ORG_PAT_GITHUB from the reusable's declared secrets.
+    secrets: inherit
+<% endif %>    with:
       event_name: ${{ github.event_name }}
-      # Scheduled/manual force-refresh runs have no PR base to diff against
+<% if conformance_private_git_deps %>      # This repo pins a private atlanhq dep via ssh:// in pyproject.toml. The
+      # D-series leg materialises the env with `uv sync`, and an
+      # unauthenticated runner can only clone that dep off a warm uv cache —
+      # on a cache miss the leg dies with `Permission denied (publickey)` and
+      # takes the Conformance Gate down with it. `exit-zero` does not help:
+      # it suppresses rule violations, and this is a crash before detect runs.
+      private-git-deps: << conformance_private_git_deps >>
+<% endif %>      # Scheduled/manual force-refresh runs have no PR base to diff against
       # and nothing to block — always run every series, and never fail the
       # run itself. The SARIF still records the real result, so the
       # dashboard/Security tab reflect the true drift.

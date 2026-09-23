@@ -9,4 +9,11 @@ jobs:
   bump:
     if: github.event.pull_request.merged == true && !startsWith(github.event.pull_request.head.ref, 'bump-version')
     uses: atlanhq/application-sdk/.github/workflows/release-version-bump.yaml@main
-    secrets: inherit
+<% if release_private_git_auth %>    with:
+      # The bump step runs `uv lock`, which re-resolves this repo's private
+      # atlanhq dep pinned via ssh:// in pyproject.toml. Without auth it dies
+      # on `Permission denied (publickey)`: no bump PR opens, no release label
+      # lands, and no tag/GitHub Release/marketplace publish can follow. Every
+      # PR check stays green while this is broken.
+      private_git_auth: << release_private_git_auth >>
+<% endif %>    secrets: inherit

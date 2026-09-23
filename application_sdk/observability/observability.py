@@ -412,12 +412,18 @@ class AtlanObservability(Generic[T], ABC):
 
         # Blocking file I/O, the object-store upload and the retention sweep's
         # thread offload below are all illegal on Temporal's deterministic
-        # workflow loop — skip the store sink there; records are still exported
-        # via OTLP/console. Shares one predicate with SegmentClient.flush() so
-        # both guards answer "am I in a workflow" the same way; the previous
-        # ``workflow.unsafe.in_sandbox()`` check missed passed-through modules
-        # and unsandboxed workers. See utils.in_temporal_workflow.
+        # workflow loop — so don't write here. Every caller has already taken
+        # *records* out of the buffer, so put them back at the front rather
+        # than dropping them: the batch holds whatever any workflow or activity
+        # on this worker logged since the last flush, and the periodic flush on
+        # the worker loop writes it in order. Shares one predicate with
+        # SegmentClient.flush() so both guards answer "am I in a workflow" the
+        # same way; the previous ``workflow.unsafe.in_sandbox()`` check missed
+        # passed-through modules and unsandboxed workers. See
+        # utils.in_temporal_workflow.
         if in_temporal_workflow():
+            with self._buffer_lock:
+                self._buffer[:0] = records
             return
 
         # ``current_writer`` is non-None iff a gzip partition file is currently open.
@@ -645,11 +651,15 @@ class AtlanObservability(Generic[T], ABC):
             # Process the record
             processed_record = self.process_record(record)
 
-            # Add to buffer
+            # Add to buffer. Inside a workflow, only append: a flush started
+            # here would run on Temporal's workflow loop, where
+            # ``_flush_records`` cannot write, so leave it to the periodic
+            # flush on the worker loop.
+            in_workflow = in_temporal_workflow()
             with self._buffer_lock:
                 self._buffer.append(processed_record)
                 now = time()
-                if (
+                if not in_workflow and (
                     len(self._buffer) >= self._batch_size
                     or (now - self._last_flush_time) >= self._flush_interval
                 ):

@@ -147,9 +147,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "or ``raise X(...) from e`` — because nothing is swallowed; a ``raise\n"
             "X(...) from None`` that drops the cause, and a conditional re-raise that\n"
             "can fall through, still fire.\n"
-            "\n\nExempt: handlers whose log call formats the exception through a\n"
-            "recognised redaction helper (redact*/sanitiz*/safe_traceback/…) —\n"
-            "the failure is logged at a deliberate no-traceback boundary.\n"
+            "\n\nExempt: handlers whose warning/error/critical log call formats the\n"
+            "exception through a recognised redaction helper\n"
+            "(redact*/sanitiz*/safe_traceback/…) — the failure is logged at a\n"
+            "deliberate no-traceback boundary.  A sanitized debug/info call does not\n"
+            "qualify.\n"
             "\n\nAlso exempt: ``raise X(...) from None`` whose raised error carries the\n"
             "caught exception through such a helper (directly, or via a local assigned\n"
             "from one).  Severing the chain is how a frame holding a resolved\n"
@@ -188,7 +190,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "way through, which is a real decision on a cleanup path that runs "
             "inside a finally: the WARNING lands beside the error actually being "
             "reported. Reported from a consumer app in FND-2542; whether DEBUG "
-            "should join the accepted set is an owner call, not a mechanical fix."
+            "should join the accepted set is an owner call, not a mechanical fix. "
+            "The same gap meets F005 inside a preflight_check override, including "
+            "helpers it calls: a best-effort cleanup handler (close a client, "
+            "release a session) has no verdict to return, DEBUG does not clear "
+            "E004 even through a redaction helper, and WARNING is what F005 "
+            "forbids there. The recommended log that satisfies both is logger.error "
+            "(logger.critical also clears both) with the exception routed through a redaction helper (safe_traceback, "
+            "sanitize_cause_repr); the alternative is to return the failure as "
+            "typed data. Found in a consumer app in FND-2569."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e004",
     ),
@@ -272,6 +282,22 @@ RULES: tuple[RuleDefinition, ...] = (
             "is unremediated: either raise, or record the failure to a durable "
             "evidence trail and declare the gap (see E020)."
         ),
+        rule_interactions=(
+            "E007 and E004 judge the same handler shape with one shared predicate "
+            "(typed_failure_scope in checks/error_handling/_helpers.py). A return "
+            "that hands the caught exception back as typed data already clears "
+            "both rules: a call that receives the binding wrapped in a typed "
+            "error (`AuthRejectedError(cause=exc)`), including inside a tuple, "
+            "or, under a narrow catch, a call that receives the binding "
+            "directly (`self._failed(name, started, exc)`). Adding a log there "
+            "is a wrong edit, and inside a preflight_check override a "
+            "warning/error log trades the E007 for an F005. E007 applies the "
+            "predicate per return and E004 applies it to every exit. Bare "
+            "sentinels and stringified exceptions (`str(exc)`, `repr(exc)`, an "
+            "f-string or `.format(exc)`) still fire, because a string is the "
+            "failure laundered into a plain value. Found by a consumer app's "
+            "preflight probe arms in FND-2493."
+        ),
         scope=RuleScope.BOTH,
         name="ErrorToReturnValue",
         tier=EnforcementTier.WARN,
@@ -290,6 +316,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Exception is converted to a return value (None, {}, [], False) with no\n"
             "trace.  Callers see a wrong result with no idea why.  At minimum log\n"
             "before returning; prefer raising a domain-specific exception instead.\n"
+            "\n"
+            "A return that hands the caught exception back as typed data is not\n"
+            "flagged: the failure leaves the frame for the caller to report. This\n"
+            "is the same typed-failure predicate E004 uses.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e007",
     ),

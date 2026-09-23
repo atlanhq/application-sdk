@@ -44,7 +44,7 @@ Retryability alone does not justify returning `READY` after a failed probe. Demo
 
 **Contract:** returned typed results must carry the failure; a warning log cannot substitute for gate evidence.
 
-**Investigate:** determine whether the warning describes failure, progress or recovery, and whether the SDK emits the final outcome. **Fix:** return typed failure evidence and remove redundant failure logging; preserve useful progress at the appropriate level. **Verify:** capture blocked and advisory outcomes and inspect their severity and fields. A warning call by itself does not prove the workflow lost its failure.
+**Investigate:** determine whether the warning describes failure, progress or recovery, and whether the SDK emits the final outcome. **Fix:** return typed failure evidence and remove redundant failure logging; preserve useful progress at the appropriate level. A best-effort cleanup helper called from `preflight_check` (close a client, release a session) has no `PreflightCheck` to return: WARNING is forbidden, DEBUG/INFO do not clear E004 even through a redaction helper, and the jointly valid log is sanitized `logger.error` or `logger.critical`; typed failure remains preferred when the caller can carry it. **Verify:** capture blocked and advisory outcomes and inspect their severity and fields. A warning call by itself does not prove the workflow lost its failure.
 
 ## F006
 

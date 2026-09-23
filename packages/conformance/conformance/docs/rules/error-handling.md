@@ -155,7 +155,14 @@ root-cause analysis impossible.
   cannot satisfy E004. Raising the level is the only way through, which is a real
   decision on a cleanup path that runs inside a finally: the WARNING lands beside the
   error actually being reported. Reported from a consumer app in FND-2542; whether DEBUG
-  should join the accepted set is an owner call, not a mechanical fix.
+  should join the accepted set is an owner call, not a mechanical fix. The same gap
+  meets F005 inside a preflight_check override, including helpers it calls: a
+  best-effort cleanup handler (close a client, release a session) has no verdict to
+  return, DEBUG does not clear E004 even through a redaction helper, and WARNING is what
+  F005 forbids there. The recommended log that satisfies both is logger.error
+  (logger.critical also clears both) with the exception routed through a redaction
+  helper (safe_traceback, sanitize_cause_repr); the alternative is to return the failure
+  as typed data. Found in a consumer app in FND-2569.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
@@ -165,9 +172,9 @@ X(...)`, or `raise X(...) from e` — because nothing is swallowed; a `raise X(.
 None` that drops the cause, and a conditional re-raise that can fall through, still
 fire.
 
-Exempt: handlers whose log call formats the exception through a recognised redaction
-helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged at a deliberate
-no-traceback boundary.
+Exempt: handlers whose warning/error/critical log call formats the exception through a
+recognised redaction helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged
+at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify.
 
 Also exempt: `raise X(...) from None` whose raised error carries the caught exception
 through such a helper (directly, or via a local assigned from one).  Severing the chain
@@ -257,6 +264,17 @@ unrelated, making the original failure invisible.
   status and records a residual before returning []. Where the sentinel really is the
   contract, atlan-openapi-app app/api_client.py `redact_url` carries an inline
   ignore[E007] saying so.
+- **Interacts with:** E007 and E004 judge the same handler shape with one shared predicate
+  (typed_failure_scope in checks/error_handling/_helpers.py). A return that hands the
+  caught exception back as typed data already clears both rules: a call that receives
+  the binding wrapped in a typed error (`AuthRejectedError(cause=exc)`), including
+  inside a tuple, or, under a narrow catch, a call that receives the binding directly
+  (`self._failed(name, started, exc)`). Adding a log there is a wrong edit, and inside a
+  preflight_check override a warning/error log trades the E007 for an F005. E007 applies
+  the predicate per return and E004 applies it to every exit. Bare sentinels and
+  stringified exceptions (`str(exc)`, `repr(exc)`, an f-string or `.format(exc)`) still
+  fire, because a string is the failure laundered into a plain value. Found by a
+  consumer app's preflight probe arms in FND-2493.
 - **Already correct when:** A justified inline `# conformance: ignore[E007] <reason>` IS the correct end state where
   the sentinel genuinely IS the function's contract — the caller is documented to treat
   the empty/None return as a normal outcome rather than as success. The reason must say
@@ -268,6 +286,10 @@ unrelated, making the original failure invisible.
 Exception is converted to a return value (None, {}, [], False) with no trace.  Callers
 see a wrong result with no idea why.  At minimum log before returning; prefer raising a
 domain-specific exception instead.
+
+A return that hands the caught exception back as typed data is not flagged: the failure
+leaves the frame for the caller to report. This is the same typed-failure predicate E004
+uses.
 
 ---
 

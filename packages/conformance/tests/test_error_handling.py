@@ -1334,6 +1334,150 @@ def do_it():
     )
 
 
+# E007 and E004 share one typed-failure predicate (typed_failure_scope): a
+# return that hands the caught exception back as typed data hides nothing.
+
+
+def test_p007_no_finding_narrow_catch_hands_exception_to_helper() -> None:
+    # Narrow catch: the binding is already a typed error, so passing it to a
+    # helper that builds the failed row carries it out.
+    _none(
+        """\
+async def probe(self):
+    try:
+        await client.verify_authentication()
+    except AuthRejectedError as exc:
+        return self._failed("authentication", started, exc)
+"""
+    )
+
+
+def test_p007_no_finding_broad_catch_wraps_exception_in_typed_error() -> None:
+    _none(
+        """\
+async def probe(self):
+    try:
+        await client.verify_authentication()
+    except Exception as exc:
+        return self._failed("authentication", started, AuthRejectedError(cause=exc))
+"""
+    )
+
+
+def test_p007_no_finding_tuple_return_carrying_typed_error() -> None:
+    _none(
+        """\
+def resolve(self):
+    try:
+        return load_credentials(), None
+    except ValueError as exc:
+        return None, self._failed("credentials", started, CredentialsUnusableError(cause=exc))
+"""
+    )
+
+
+def test_p007_no_finding_typed_row_staged_in_local() -> None:
+    _none(
+        """\
+def probe(self):
+    try:
+        return run()
+    except KeyError as exc:
+        row = self._failed("lookup", started, exc)
+        return row
+"""
+    )
+
+
+@pytest.mark.parametrize("sentinel", ["None", "0", "[]", "{}", "False"])
+@pytest.mark.parametrize("caught", ["KeyError as exc", "(KeyError, ValueError) as exc"])
+def test_p007_bare_sentinel_still_flagged_under_narrow_catch(
+    sentinel: str, caught: str
+) -> None:
+    _single(
+        f"""\
+def get_value():
+    try:
+        return fetch()
+    except {caught}:
+        return {sentinel}
+""",
+        "E007",
+    )
+
+
+def test_p007_bare_sentinel_still_flagged_under_broad_catch() -> None:
+    findings = _findings(
+        """\
+def get_value():
+    try:
+        return fetch()
+    except Exception as exc:
+        return None
+"""
+    )
+    assert "E007" in findings
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "str(exc)",
+        "repr(exc)",
+        'f"lookup failed: {exc}"',
+        '"lookup failed: {}".format(exc)',
+        "wrap(str(exc))",
+    ],
+)
+def test_p007_stringified_exception_still_flagged_under_narrow_catch(
+    value: str,
+) -> None:
+    # A narrow catch, so only the stringifier exclusion keeps these flagged:
+    # a string is the failure laundered into a plain value, not typed data.
+    _single(
+        f"""\
+def get_value():
+    try:
+        return fetch()
+    except KeyError as exc:
+        return {value}
+""",
+        "E007",
+    )
+
+
+def test_p007_broad_catch_bare_hand_off_to_helper_still_flagged() -> None:
+    # Under a broad catch nothing about exc is known, so a bare hand-off
+    # proves nothing — the same line E004 draws.
+    findings = _findings(
+        """\
+def probe(self):
+    try:
+        return run()
+    except Exception as exc:
+        return self._failed("lookup", started, exc)
+"""
+    )
+    assert "E007" in findings
+    assert "E004" in findings
+
+
+def test_p007_only_the_untyped_return_is_flagged() -> None:
+    # E007 is judged per return: the typed arm clears, the sentinel arm does not.
+    _single(
+        """\
+def probe(self):
+    try:
+        return run()
+    except KeyError as exc:
+        return self._failed("lookup", started, exc)
+    except ValueError as exc:
+        return None
+""",
+        "E007",
+    )
+
+
 # ── P008 — ImportErrorWithoutLogging ─────────────────────────────────────────
 
 
@@ -3077,3 +3221,45 @@ def test_e004_silent_when_handler_logs_via_sanitizer() -> None:
 def test_e004_still_fires_when_handler_logs_bare() -> None:
     src = "try:\n    x()\nexcept Exception as e:\n    logger.warning('failed')\n"
     assert "E004" in _findings(src)
+
+
+@pytest.mark.parametrize("level", ["debug", "info"])
+def test_e004_still_fires_when_sanitized_log_is_below_warning(level: str) -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        f"    logger.{level}('close failed: %s', safe_traceback(e))\n"
+    )
+    assert "E004" in _findings(src)
+
+
+def _cleanup_helper_in_gate(level: str) -> str:
+    return (
+        _PREFLIGHT_IMPORTS + "class H(Handler):\n"
+        "    async def _close(self, client):\n"
+        "        try:\n"
+        "            await client.aclose()\n"
+        "        except Exception as exc:\n"
+        f"            logger.{level}('close failed: %s', safe_traceback(exc))\n"
+        "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        "        await self._close(object())\n"
+        "        return PreflightOutput(checks=[])\n"
+    )
+
+
+def test_e004_f005_cleanup_helper_in_preflight_clears_only_at_error(
+    tmp_path: Path,
+) -> None:
+    """FND-2569: a best-effort cleanup helper reached from preflight_check.
+
+    It has no verdict to return, so only a log can clear E004. DEBUG does not
+    (even sanitized) and WARNING trips F005; a sanitized ERROR clears both.
+    """
+    debug = _cleanup_helper_in_gate("debug")
+    assert "E004" in _findings(debug)
+    assert "F005" not in _preflight_ids(tmp_path / "debug", debug)
+    warning = _cleanup_helper_in_gate("warning")
+    assert "E004" not in _findings(warning)
+    assert "F005" in _preflight_ids(tmp_path / "warning", warning)
+    error = _cleanup_helper_in_gate("error")
+    assert "E004" not in _findings(error)
+    assert "F005" not in _preflight_ids(tmp_path / "error", error)

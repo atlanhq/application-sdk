@@ -127,6 +127,14 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "vuln_scan_lfs": "",
         # Same, read off an existing build-and-publish.yaml.
         "build_publish_lfs": "",
+        # Same again, for the two private-atlanhq-dep opt-ins: read off an
+        # existing conformance.yaml and release.yaml. No flag, because the
+        # value already lives in the repo that needs it — and unlike the two
+        # above, losing these breaks CI outright rather than degrading it.
+        "conformance_private_git_deps": "",
+        "release_private_git_auth": "",
+        "build_publish_private_git_auth": "",
+        "checks_private_git_deps": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",

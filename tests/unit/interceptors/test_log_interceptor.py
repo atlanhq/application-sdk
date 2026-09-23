@@ -15,7 +15,6 @@ from application_sdk.execution._temporal.interceptors.log import (
     _APP_NAME_MAX_CHARS,
     _HEADER_APP_NAME,
     LogInterceptor,
-    _build_identity_attrs,
     _correlation_id_or_empty,
     _extract_failure_attrs,
     _LogActivityInboundInterceptor,
@@ -34,7 +33,6 @@ from application_sdk.observability.correlation import (
     get_correlation_context,
     set_correlation_context,
 )
-from application_sdk.observability.logger_adaptor import _build_extra_dict
 
 # ---------------------------------------------------------------------------
 # Shared mock dataclasses
@@ -1927,161 +1925,50 @@ class TestLifecycleMessageBodies:
         assert "FAILED (blank):" not in suffix  # no empty ": " tail
 
 
-# ---------------------------------------------------------------------------
-# Build identity on lifecycle lines (FND-1936)
-# ---------------------------------------------------------------------------
+class TestDeprecatedConstantReexports:
+    """#3872 made these importable from this module; removing them is a break.
 
-_LOG_MOD = "application_sdk.execution._temporal.interceptors.log"
+    They were never meant as surface here — their home is
+    ``application_sdk.constants`` — but v3.37.0 and v3.38.0 shipped them
+    importable from the interceptor, and the surface gate treats a public name
+    in a private module as binding because the fleet has imported SDK privates
+    before (FND-2388).
+    """
 
-_BUILD_IDENTITY_KEYS = (
-    "sdk.version",
-    "app.version",
-    "commit_sha",
-)
+    def test_the_names_still_resolve_to_the_real_constants(self) -> None:
+        from application_sdk import constants
+        from application_sdk.execution._temporal.interceptors import log as log_mod
 
-_FULL_IDENTITY = {
-    "APPLICATION_VERSION": "0.2.3",
-    "COMMIT_SHA": "abc1234def",
-    "_SDK_VERSION": "9.9.9",
-}
+        with pytest.warns(DeprecationWarning):
+            assert log_mod.APPLICATION_VERSION == constants.APPLICATION_VERSION
+        with pytest.warns(DeprecationWarning):
+            assert log_mod.COMMIT_SHA == constants.COMMIT_SHA
 
-_NO_IDENTITY = {
-    "APPLICATION_VERSION": "",
-    "COMMIT_SHA": "",
-}
+    def test_each_access_names_its_replacement_and_a_removal_version(self) -> None:
+        # B002 flags a notice missing either; B003 flags one whose stated
+        # version has already passed. Both are enforced, so both are asserted.
+        from application_sdk.execution._temporal.interceptors import log as log_mod
 
+        for name in ("APPLICATION_VERSION", "COMMIT_SHA"):
+            with pytest.warns(DeprecationWarning) as caught:
+                getattr(log_mod, name)
+            notice = str(caught[0].message)
+            assert f"application_sdk.constants.{name}" in notice, name
+            assert "removed in v3.41.0" in notice, name
 
-class TestBuildIdentityAttrs:
-    def test_reports_sdk_version_app_version_and_commit_sha(self):
-        with patch.multiple(_LOG_MOD, **_FULL_IDENTITY):
-            attrs = _build_identity_attrs()
-        assert attrs == {
-            "sdk.version": "9.9.9",
-            "app.version": "0.2.3",
-            "commit_sha": "abc1234def",
-        }
+    def test_the_alias_is_not_a_module_level_rebinding(self) -> None:
+        # A real module global would resolve before __getattr__ ever ran,
+        # handing the name back silently and leaving the caller with no
+        # migration signal — which is the whole point of the shim.
+        from application_sdk.execution._temporal.interceptors import log as log_mod
 
-    def test_unset_carriers_yield_empty_strings_not_missing_keys(self):
-        # An image with no baked build file and no deployer stamp must log
-        # "" for app.version and commit_sha: the schema stays stable and
-        # nothing raises.
-        with patch.multiple(_LOG_MOD, **_NO_IDENTITY):
-            attrs = _build_identity_attrs()
-        assert set(attrs) == set(_BUILD_IDENTITY_KEYS)
-        assert attrs["sdk.version"], "the running SDK is always known"
-        assert attrs["app.version"] == ""
-        assert attrs["commit_sha"] == ""
+        assert "APPLICATION_VERSION" not in vars(log_mod)
+        assert "COMMIT_SHA" not in vars(log_mod)
 
-    def test_app_version_never_falls_back_to_commit_sha(self):
-        # The regression this pins: ``app.version`` is contracted to be the
-        # Global Marketplace version string by construction (the OTel
-        # target_info gauge and the preflight store publish it under that
-        # contract). Substituting a SHA when no version is baked would make
-        # one key mean three shapes and make the log attribute disagree with
-        # the Resource attribute of the same name, which is simply omitted
-        # when empty. The commit rides in its own key instead.
-        with patch.multiple(_LOG_MOD, APPLICATION_VERSION="", COMMIT_SHA="abc1234def"):
-            attrs = _build_identity_attrs()
-        assert attrs["app.version"] == ""
-        assert attrs["commit_sha"] == "abc1234def"
+    def test_an_unknown_name_still_raises_attribute_error(self) -> None:
+        # __getattr__ must not turn every typo on this module into a warning
+        # and a None.
+        from application_sdk.execution._temporal.interceptors import log as log_mod
 
-    def test_app_version_and_commit_sha_are_independent(self):
-        with patch.multiple(
-            _LOG_MOD, APPLICATION_VERSION="0.2.3", COMMIT_SHA="abc1234def"
-        ):
-            attrs = _build_identity_attrs()
-        assert attrs["app.version"] == "0.2.3"
-        assert attrs["commit_sha"] == "abc1234def"
-
-
-class TestLifecycleLinesCarryBuildIdentity:
-    @pytest.fixture
-    def wf_next(self):
-        n = AsyncMock()
-        n.execute_workflow = AsyncMock(return_value="wf-result")
-        return n
-
-    @pytest.fixture
-    def act_next(self):
-        n = AsyncMock()
-        n.execute_activity = AsyncMock(return_value="act-result")
-        return n
-
-    @staticmethod
-    def _info_calls(mock_logger, token: str):
-        return [
-            c
-            for c in mock_logger.info.call_args_list
-            if c.args and c.args[0].startswith(token)
-        ]
-
-    @staticmethod
-    def _assert_full_identity(kwargs):
-        assert kwargs["sdk.version"] == "9.9.9"
-        assert kwargs["app.version"] == "0.2.3"
-        assert kwargs["commit_sha"] == "abc1234def"
-
-    async def test_workflow_started_and_ended_carry_build_identity(self, wf_next):
-        interceptor = _LogWorkflowInboundInterceptor(wf_next)
-        with patch.multiple(_LOG_MOD, **_FULL_IDENTITY):
-            with patch(f"{_LOG_MOD}.workflow") as mock_wf:
-                mock_wf.unsafe.is_replaying.return_value = False
-                mock_wf.info.return_value = MockWorkflowInfo()
-                mock_wf.memo.return_value = {}
-                with patch(f"{_LOG_MOD}.logger") as mock_logger:
-                    await interceptor.execute_workflow(MockExecuteWorkflowInput())
-
-        for token in ("workflow.started", "workflow.ended"):
-            calls = self._info_calls(mock_logger, token)
-            assert len(calls) == 1, token
-            self._assert_full_identity(calls[0].kwargs)
-
-    async def test_activity_started_and_ended_carry_build_identity(self, act_next):
-        interceptor = _LogActivityInboundInterceptor(act_next)
-        with patch.multiple(_LOG_MOD, **_FULL_IDENTITY):
-            with patch(f"{_LOG_MOD}.activity") as mock_act:
-                mock_act.info.return_value = MockActivityInfo()
-                with patch(f"{_LOG_MOD}.logger") as mock_logger:
-                    await interceptor.execute_activity(MockExecuteActivityInput())
-
-        for token in ("activity.started", "activity.ended"):
-            calls = self._info_calls(mock_logger, token)
-            assert len(calls) == 1, token
-            self._assert_full_identity(calls[0].kwargs)
-
-    async def test_unset_env_logs_empty_strings_and_does_not_raise(self, act_next):
-        # No baked build file, no deployer stamp: the run still executes and
-        # every identity key is present, app.version and commit_sha as ""
-        # (never dropped).
-        interceptor = _LogActivityInboundInterceptor(act_next)
-        with patch.multiple(_LOG_MOD, **_NO_IDENTITY):
-            with patch(f"{_LOG_MOD}.activity") as mock_act:
-                mock_act.info.return_value = MockActivityInfo()
-                with patch(f"{_LOG_MOD}.logger") as mock_logger:
-                    await interceptor.execute_activity(MockExecuteActivityInput())
-
-        act_next.execute_activity.assert_awaited_once()
-        kwargs = self._info_calls(mock_logger, "activity.started")[0].kwargs
-        for key in _BUILD_IDENTITY_KEYS:
-            assert key in kwargs, key
-            if key != "sdk.version":
-                assert kwargs[key] == "", key
-        assert kwargs["sdk.version"]
-
-    async def test_build_identity_survives_the_otlp_allowlist(self, act_next):
-        # The call-site kwargs are filtered through the logger's allowlist
-        # before they become the object-store NDJSON / OTLP record. A key the
-        # allowlist drops is invisible to every export however it was logged,
-        # so assert on what the sink keeps, not only on what the call passed.
-        interceptor = _LogActivityInboundInterceptor(act_next)
-        with patch.multiple(_LOG_MOD, **_FULL_IDENTITY):
-            with patch(f"{_LOG_MOD}.activity") as mock_act:
-                mock_act.info.return_value = MockActivityInfo()
-                with patch(f"{_LOG_MOD}.logger") as mock_logger:
-                    await interceptor.execute_activity(MockExecuteActivityInput())
-
-        for token in ("activity.started", "activity.ended"):
-            kwargs = self._info_calls(mock_logger, token)[0].kwargs
-            exported = _build_extra_dict(dict(kwargs))
-            for key in _BUILD_IDENTITY_KEYS:
-                assert exported.get(key) == kwargs[key], f"{token} dropped {key}"
+        with pytest.raises(AttributeError):
+            log_mod.NO_SUCH_CONSTANT
