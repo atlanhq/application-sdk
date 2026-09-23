@@ -242,7 +242,18 @@ def test_gate_reruns_when_the_review_lands() -> None:
     # PyYAML parses a bare `on:` key as the boolean True.
     triggers = yaml.safe_load(render("connector-review-gate.yaml"))[True]
     assert set(triggers) == {"pull_request", "pull_request_review", "merge_group"}
-    assert triggers["pull_request_review"]["types"] == ["submitted"]
+    # `dismissed`: otherwise a dismissed approval leaves the check green.
+    assert triggers["pull_request_review"]["types"] == ["submitted", "dismissed"]
+
+
+def test_a_dismissed_approval_does_not_pass(
+    gate: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GitHub rewrites a dismissed review's state to DISMISSED."""
+    dismissed = json.dumps([[_review(_TRAILER, state="DISMISSED")]])
+    monkeypatch.setattr("sys.stdin", _stdin(dismissed))
+    assert gate.main(["--enforce"]) == 1
 
 
 def test_output_is_ascii_only(gate: types.ModuleType) -> None:
