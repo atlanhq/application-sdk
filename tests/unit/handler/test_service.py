@@ -135,6 +135,27 @@ class _AuthTypedFailureHandler(Handler):
         return SqlMetadataOutput(objects=[])
 
 
+class _AuthCausedFailureHandler(Handler):
+    """Handler that builds its typed error from the caught exception (E019 advice)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        try:
+            raise RuntimeError("could not connect to host db.internal user=svc_x")
+        except RuntimeError as exc:
+            return AuthOutput(
+                status=AuthStatus.FAILED,
+                error=AuthError(
+                    message="The source rejected the credentials.", cause=exc
+                ),
+            )
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
 class _AuthExpiredHandler(Handler):
     """Handler that returns AuthStatus.EXPIRED."""
 
@@ -322,6 +343,18 @@ class TestAuthEndpoint:
         assert body["data"]["error"]["suggested_action"] == (
             "Check the username and password."
         )
+
+    def test_auth_typed_failure_never_returns_the_exception_text(self) -> None:
+        client = _make_client(_AuthCausedFailureHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": [], "connection_id": "test-conn"},
+        )
+        body = response.json()
+        assert body["message"] == "The source rejected the credentials."
+        assert "cause_repr" not in body["data"]["error"]
+        assert "db.internal" not in response.text
+        assert "svc_x" not in response.text
 
     def test_auth_success_envelope_has_all_fields(self) -> None:
         client = _make_client()

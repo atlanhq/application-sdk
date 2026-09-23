@@ -203,7 +203,7 @@ class TestAuthOutput:
             message="Authentication failed",
             error=AuthError(message="The source rejected the credentials."),
         )
-        assert out.resolved_message == "The source rejected the credentials."
+        assert out.message == "The source rejected the credentials."
 
     def test_successful_result_keeps_its_message(self):
         out = AuthOutput(
@@ -211,7 +211,7 @@ class TestAuthOutput:
             message="Authentication successful",
             error=AuthError(message="stale"),
         )
-        assert out.resolved_message == "Authentication successful"
+        assert out.message == "Authentication successful"
 
 
 class TestPreflightStatus:
