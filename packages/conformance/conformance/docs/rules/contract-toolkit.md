@@ -1022,10 +1022,10 @@ app either way.
 ### What correct looks like
 
 - **Compliant example:** atlan-openapi-app app/generated/artifact_schemas.json — `output_file` is declared
-  ndjson, and app/connector.py's transform writes exactly that: one `to_nested_bytes()`
-  entity per line into openapi_metadata.json, returned as
-  `FileReference(local_path=str(output_file))`. The Python and the schema are two
-  statements about one file, and only one of them is checked at runtime.
+  ndjson, and app/connector.py's transform writes exactly that: one entity per line into
+  openapi_metadata.json, returned as `FileReference(local_path=str(output_file))`. The
+  Python and the schema are two statements about one file, and only one of them is
+  checked at runtime.
 
 An `artifactSchemas` entry in the committed `artifact_schemas.json` contradicts the
 app's own writer for the same `FileReference` contract field.

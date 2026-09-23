@@ -1471,7 +1471,7 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-openapi-app app/generated/artifact_schemas.json — `output_file` is "
             "declared ndjson, and app/connector.py's transform writes exactly that: one "
-            "`to_nested_bytes()` entity per line into openapi_metadata.json, returned as "
+            "entity per line into openapi_metadata.json, returned as "
             "`FileReference(local_path=str(output_file))`. The Python and the schema are two "
             "statements about one file, "
             "and only one of them is checked at runtime."
