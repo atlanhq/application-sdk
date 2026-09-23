@@ -242,6 +242,12 @@ fix.  The re-detection gate is authoritative for this area — see
   Preserve the task's existing name; only its body changes. This is BLOCK-tier
   and has no suppress path in default mode, same as D001.
 
+  Verify the new body by running it directly — `uv run --frozen python -c`
+  with the same three lines — not through `uv run poe download-components`:
+  poe re-launches the task through its own `uv run` without `--frozen`, and
+  on a laptop with a machine-wide default index that re-resolves `uv.lock`
+  onto the package firewall (D013) in a repo D012 has not fixed yet.
+
 - **D012 UnpinnedPackageIndex** (`classification = "mechanical"`) — the root
   `pyproject.toml` does not pin PyPI as uv's default index, so the repo
   inherits whatever default index the machine supplies.  Two branches; read the

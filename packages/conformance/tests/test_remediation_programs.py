@@ -310,6 +310,32 @@ def test_exc_info_prescriptions_carry_the_credential_contraindication(
     assert "no suppression" in text
 
 
+def test_e004_prose_states_the_sanitizer_level_and_the_inline_row() -> None:
+    """The prose must not promise more than `_check_p004` accepts.
+
+    The sanitizer exemption counts only at warning/error/critical. F005 forbids
+    warning/warn inside preflight_check; error/critical are E004-clearing but
+    duplicate the gate's outcome row, so a prescription that offers a sanitized
+    log as clearing E004 at any level sends preflight arms to a fix that does
+    not clear (found remediating atlan-cassandra-dse-app, FND-2499).  The prose
+    has to name the level and the provable typed shape: the failed
+    ``PreflightCheck(`` built inline and returned.  Pinned against the checker
+    by ``test_p004_sanitizer_exemption_does_not_apply_at_debug`` and
+    ``test_p004_still_flags_row_built_by_a_lowercase_helper``.
+    """
+    # Prose is re-wrapped freely, so compare on collapsed whitespace.
+    text = " ".join(_read("areas/error-handling.prose.md").split())
+    assert "a `debug` call through a sanitizer does not clear E004" in text
+    assert "return PreflightCheck(" in text
+    assert "loop body" in text
+
+
+def test_d009_prose_verifies_without_poe() -> None:
+    """`uv run poe` re-resolves the lock without --frozen (D013 on a laptop)."""
+    text = " ".join(_read("areas/dependency.prose.md").split())
+    assert "uv run --frozen python -c" in text
+
+
 def test_b006_may_write_the_contract_ledger() -> None:
     """B006's only remedy writes `contract_schema.lock.json` at the repo root,
     which is neither Python source nor the Dockerfile.

@@ -98,7 +98,7 @@ first-class fix, not a carve-out.  For E004 the call must also be at
 `warning`, `error` or `critical`: a sanitized `debug`/`info` line still
 fires it.
 
-Two things to get right, because both fail silently:
+Three things to get right, because all three fail silently:
 
 - **Recognition is by name.**  The callable must contain `redact`,
   `sanitiz`, `scrub_secret`, `mask_secret` or `safe_traceback`, or the
@@ -110,6 +110,13 @@ Two things to get right, because both fail silently:
   redacts correctly and still leaves the finding standing.
 - **Only the log call's own arguments are inspected.**  A sanitizer used
   elsewhere in the handler does not exempt an unrelated log call.
+- **The level counts.**  For E004 the sanitizer exemption, like the
+  `exc_info` one, applies only to `warning`, `error` and `critical`: a
+  `debug` call through a sanitizer does not clear E004 on its own.  F005
+  forbids `warning`/`warn` inside `preflight_check`; `error`/`critical` are
+  E004-clearing but duplicate the gate's outcome row, so preflight still
+  uses the typed-return shape below, not its log line — keep that line at
+  `debug` with the sanitizer, as `atlan-mysql-app app/handler.py` does.
 
 Never propose an inline `ignore[...]` here.  A suppression records that the
 rule was skipped; the sanitized form records that the credential was handled.
@@ -203,7 +210,8 @@ outcome mirroring the error-handling shape in the reference app named by
     through a redaction helper;
   - a `warning`/`error`/`critical` log call whose arguments already flow
     through a redaction helper — a sanitized `debug`/`info` call does **not**
-    clear E004, so raising it is a real edit, not a no-op (see below);
+    clear E004, so raising it is a real edit, not a no-op (see *The level
+    counts* above);
   - a body whose every exit path hands the caught exception back as **typed
     data** — `return PreflightCheck(passed=False,
     error=SourceUnavailableError(cause=exc).to_failure_details())`, or a row
@@ -222,6 +230,20 @@ outcome mirroring the error-handling shape in the reference app named by
   leaving the frame typed — most often it is handed off raw
   (`failed_check(name, exc, start)` proves nothing about its type under a
   broad catch) or one arm returns `None`.  Fix that, not the log.
+
+  Recognition of the typed row is by naming convention: a call to a
+  *capitalised* type that receives the caught binding.  Two shapes that do
+  carry the failure still read as untyped, so restructure rather than
+  suppress:
+
+  - **A lowercase helper builds the row** —
+    `return [_check(name, error=classify_driver_error(exc))]`.  Build it
+    inline instead:
+    `return PreflightCheck(name=..., passed=False, error=classify_driver_error(exc).to_failure_details())`.
+  - **The arm sits in a loop body** and `append`s its row to a list returned
+    after the loop — the arm falls through to the next iteration, so the row
+    is not provably returned.  Move one probe into a helper that returns its
+    own `PreflightCheck`, and have the loop append the helper's result.
 
   `atlan-mysql-app app/handler.py`'s `preflight_check` is the reference: its
   probes convert the caught exception into a typed `PreflightCheck` row and
