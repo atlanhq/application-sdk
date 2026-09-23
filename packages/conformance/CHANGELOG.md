@@ -2,6 +2,33 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.38.0] - 2026-09-23
+
+### Features
+
+- connector-review merge gate, warn-only (#3919) ([2544502](https://github.com/atlanhq/application-sdk/commit/2544502))
+- name the build in the App lifecycle messages, drop the log attributes (#3928) ([db5da5f](https://github.com/atlanhq/application-sdk/commit/db5da5f))
+
+### Bug fixes
+
+- repoint E020 at the typed-catch shape and F020 at a live directive (#3958) ([f9be355](https://github.com/atlanhq/application-sdk/commit/f9be355))
+- L010 exempts resource-id tokens used as URL path segments (#3954) ([0b1b7ef](https://github.com/atlanhq/application-sdk/commit/0b1b7ef))
+- D003 flags app constraint floors; O001 and P001 prescription gaps (#3956) ([6931047](https://github.com/atlanhq/application-sdk/commit/6931047))
+- name O001's byte-changing orjson defaults in the prescription (#3945) ([486c78f](https://github.com/atlanhq/application-sdk/commit/486c78f))
+- keep the redacted stack in L004's credential-safe form (#3947) ([ec22928](https://github.com/atlanhq/application-sdk/commit/ec22928))
+- re-verify canonical references against the three reference apps (FND-2702) (#3949) ([bfef916](https://github.com/atlanhq/application-sdk/commit/bfef916))
+- E004 sanitizer exemption is warning+; preflight builds typed rows inline (#3941) ([aa71d7f](https://github.com/atlanhq/application-sdk/commit/aa71d7f))
+- FND-2569 S001 skips prose values and credential-name alias maps (#3934) ([a9c02ce](https://github.com/atlanhq/application-sdk/commit/a9c02ce))
+- FND-2501 treat SDK App-family run() as workflow context and report its I/O as P021 (#3932) ([34041df](https://github.com/atlanhq/application-sdk/commit/34041df))
+- FND-2501 carry a typed error on AuthOutput and surface it from test_auth (#3939) ([6105ad1](https://github.com/atlanhq/application-sdk/commit/6105ad1))
+- FND-2569 E004 sanitized-log exemption needs warning+, record E004/F005 deadlock (#3933) ([85308e5](https://github.com/atlanhq/application-sdk/commit/85308e5))
+- expand same-module type aliases before B005 retype check (FND-2569) (#3935) ([8f34735](https://github.com/atlanhq/application-sdk/commit/8f34735))
+- preserve private-atlanhq-dep opt-ins on always-overwrite shims (#3936) ([3da9f16](https://github.com/atlanhq/application-sdk/commit/3da9f16))
+- L021 prescription: order after L001, scope T201, flag formatter churn (#3940) ([4d978a9](https://github.com/atlanhq/application-sdk/commit/4d978a9))
+- O001 must warn that orjson bypasses `default=` for native types (#3913) ([3d8c31b](https://github.com/atlanhq/application-sdk/commit/3d8c31b))
+- E007 treats a typed-data return of the caught exception as compliant (#3938) ([d925da5](https://github.com/atlanhq/application-sdk/commit/d925da5))
+- honour --exclude in F016 entrypoint discovery (FND-2682) (#3925) ([dc79551](https://github.com/atlanhq/application-sdk/commit/dc79551))
+
 ## [0.37.0] - 2026-09-22
 
 ### Features
