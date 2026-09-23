@@ -306,18 +306,26 @@ def collect_type_aliases(tree: ast.AST) -> dict[str, ast.expr]:
 
 
 class _AliasExpander(ast.NodeTransformer):
-    def __init__(self, aliases: dict[str, ast.expr]) -> None:
+    def __init__(
+        self, aliases: dict[str, ast.expr], expanding: frozenset[str] = frozenset()
+    ) -> None:
         self._aliases = aliases
+        self._expanding = expanding
 
     def visit_Name(self, node: ast.Name) -> ast.expr:
-        return self._aliases.get(node.id, node)
+        target = self._aliases.get(node.id)
+        if target is None or node.id in self._expanding:
+            return node
+        return _AliasExpander(self._aliases, self._expanding | {node.id}).visit(
+            copy.deepcopy(target)
+        )
 
 
 def _expand_aliases(annotation: ast.expr, aliases: dict[str, ast.expr]) -> str | None:
-    """Canonical type of *annotation* with same-module aliases expanded one level.
+    """Canonical type of *annotation* with same-module aliases expanded.
 
-    Substituted targets are not revisited, so a self-referential alias
-    (``X = TypeAliasType("X", dict[str, "X"])``) terminates.
+    Alias chains are followed; an alias already being expanded is left as its
+    name, so self- and mutually-referential aliases terminate.
     """
     if not aliases:
         return None
