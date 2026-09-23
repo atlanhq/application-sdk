@@ -1026,6 +1026,104 @@ def test_b005_moving_onto_any_still_fires(tmp_path: Path) -> None:
     assert "B005" in _ids(findings)
 
 
+_EP_ALIASED = """\
+from typing import Annotated, TypeAlias
+
+from application_sdk.app import App
+from typing_extensions import TypeAliasType
+
+{alias}
+
+class MyInput:
+    field: {ann}
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def _scan_aliased(tmp_path: Path, alias: str, ann: str, ledger_type: str):
+    ledger = _make_ledger(ContractField("MyInput", "field", ledger_type, "active"))
+    src = _EP_ALIASED.format(alias=alias, ann=ann)
+    return _scan(tmp_path, {"app.py": src}, ledger)
+
+
+def test_b005_self_referential_type_alias_off_any_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    """A TypeAliasType spelling of an in-place Any replacement is not a break.
+
+    The alias name must be expanded before the outer-shape comparison; the
+    inline spelling of the same type already passes.
+    """
+    alias = (
+        'Filter = TypeAliasType("Filter", '
+        'Annotated[dict[str, "Filter"], MaxItems(1000)])'
+    )
+    findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, Any]")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_type_alias_forms_off_any_are_not_a_break(tmp_path: Path) -> None:
+    for alias in (
+        "Filter = dict[str, str]",
+        "Filter: TypeAlias = dict[str, str]",
+        'Filter = TypeAliasType("Filter", value=dict[str, str])',
+    ):
+        findings = _scan_aliased(
+            tmp_path, alias, "Filter | None", "dict[str, Any] | None"
+        )
+        assert "B005" not in _ids(findings), alias
+
+
+def test_b005_type_alias_with_a_different_outer_shape_still_fires(
+    tmp_path: Path,
+) -> None:
+    """Expanding the alias must not wave through a real constructor change."""
+    alias = 'Filter = TypeAliasType("Filter", list[str])'
+    findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, Any]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_chained_type_alias_off_any_is_not_a_break(tmp_path: Path) -> None:
+    alias = "Inner = dict[str, str]\nFilter = Inner | None"
+    findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, Any] | None")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_plain_name_alias_is_not_expanded(tmp_path: Path) -> None:
+    findings = _scan_aliased(tmp_path, "Ident = str", "Ident", "str")
+    assert "B005" in _ids(findings)
+    terminal_state = get_rule("B005").terminal_state or ""
+    assert "`X = <name>`" in terminal_state
+
+
+def test_b005_dense_alias_chain_stays_bounded(tmp_path: Path) -> None:
+    import time
+
+    lines = ["A0 = dict[str, str]"]
+    lines += [f"A{i} = dict[A{i - 1}, A{i - 1}]" for i in range(1, 17)]
+    start = time.monotonic()
+    findings = _scan_aliased(tmp_path, "\n".join(lines), "A16", "dict[str, Any]")
+    assert time.monotonic() - start < 2.0
+    assert "B005" in _ids(findings)
+
+
+def test_b005_chained_type_alias_with_a_different_outer_shape_still_fires(
+    tmp_path: Path,
+) -> None:
+    alias = "Inner = list[str]\nFilter = Inner | None"
+    findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, Any] | None")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_mutually_recursive_type_aliases_terminate(tmp_path: Path) -> None:
+    alias = "A = list[B]\nB = list[A]"
+    findings = _scan_aliased(tmp_path, alias, "A", "dict[str, Any]")
+    assert "B005" in _ids(findings)
+
+
 def test_split_union_does_not_tear_nested_brackets() -> None:
     """A naive split on '|' would break dict[str, int | None] apart."""
     from conformance.suite.checks.deprecation._contract_compat import _split_union
