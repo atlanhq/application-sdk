@@ -58,7 +58,9 @@ from application_sdk.app.entrypoint import (
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.constants import (
+    APPLICATION_VERSION,
     ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+    COMMIT_SHA,
     LOCAL_WORKFLOW_ID,
 )
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
@@ -101,6 +103,7 @@ from application_sdk.errors.leaves import InvalidInputError as _InvalidInputErro
 from application_sdk.observability.events import ASSET_VALIDATION_EVENT
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.version import __version__ as _SDK_VERSION
 
 if TYPE_CHECKING:
     from application_sdk.execution.progress import ProgressWatchdogMode
@@ -379,6 +382,44 @@ def _run_started_at_epoch() -> float:
     except Exception:
         return 0.0  # conformance: ignore[E007] workflow-context probe; "no run to measure" is the answer, and a log line here would fire per dispatch on every local run
     return start_time.timestamp() if start_time is not None else 0.0
+
+
+def _format_build_identity() -> str:
+    """``sdk=<v> app=<v> commit=<sha>`` for the App lifecycle messages (FND-1936).
+
+    This rides in the *message* rather than in structured attributes, because
+    the message is the only field that survives every hop of the run-logs path.
+    The Iceberg table behind it (``observability.app_logs``) has a fixed schema
+    and the ingest pipe's Jolt shift maps a known field list onto those columns,
+    so a new attribute is never carried; heracles then re-projects each record
+    through two closed structs that declare no attributes bag. A marker in the
+    message needs none of that to change, and reaches the run-log panel, the
+    ``.log`` and ``.ndjson`` exports and any future consumer at once.
+
+    The remaining structured carriers are the OTel Resource ``sdk.version``
+    (on every OTLP log record) and the ``app_version`` / ``commit_sha`` fields
+    on ``worker_start`` and ``token_refresh`` events. Those still answer fleet
+    questions this string cannot. The four interceptor lifecycle lines
+    (``workflow.*`` / ``activity.*``) no longer carry ``sdk.version`` /
+    ``app.version`` attributes.
+
+    Keys are ``k=v`` and ASCII so that the grep that motivated this — an
+    engineer searching an exported run log for a version — actually hits.
+    An empty carrier drops its key rather than emitting a bare ``app=``, which
+    would read as a value of its own. ``sdk`` is always known.
+    """
+    parts = [f"sdk={_SDK_VERSION}"]
+    if APPLICATION_VERSION:
+        parts.append(f"app={APPLICATION_VERSION}")
+    if COMMIT_SHA:
+        parts.append(f"commit={COMMIT_SHA}")
+    return " ".join(parts)
+
+
+#: Computed once at import: every carrier is an import-time constant and none
+#: can change for the life of the container, so the workflow-side call sites
+#: below do no work and stay sandbox-safe.
+_BUILD_IDENTITY = _format_build_identity()
 
 
 def _safe_log(level: str, message: str, **attrs: Any) -> None:
@@ -2247,10 +2288,11 @@ class App(ABC):
         # Inert when this runs inside the generated Temporal workflow (the
         # normal case — on_complete() is called from _run()'s finally). Both
         # legs self-guard on ``utils.in_temporal_workflow``: the object-store
-        # sink in ``AtlanObservability._flush_records`` and the Segment drain in
-        # ``SegmentClient.flush()``. Neither is a loss — OTLP export is per-call,
-        # and queued Segment events go out on the worker's batch timer, with
-        # ``close()`` draining the remainder at process exit. The call is kept
+        # sink in ``AtlanObservability._flush_records`` (which returns the
+        # records to the buffer for the worker's periodic flush) and the
+        # Segment drain in ``SegmentClient.flush()``. Neither is a loss — OTLP
+        # export is per-call, and queued Segment events go out on the worker's
+        # batch timer, with ``close()`` draining the remainder at process exit. The call is kept
         # for the non-workflow callers of on_complete() (direct invocation,
         # tests, and any subclass that calls super() outside a workflow).
         try:
@@ -2905,7 +2947,7 @@ def generate_workflow_class(
 
         _safe_log(
             "info",
-            "App started",
+            f"App started {_BUILD_IDENTITY}",
             app_name=app_name,
             run_id=str(run_id),
             correlation_id=context.correlation_id,
@@ -3018,7 +3060,7 @@ def generate_workflow_class(
             duration_ms = round((end_time - start_time).total_seconds() * 1000, 2)
             _safe_log(
                 "info",
-                "App completed",
+                f"App completed {_BUILD_IDENTITY}",
                 app_name=app_name,
                 run_id=str(run_id),
                 correlation_id=context.correlation_id,

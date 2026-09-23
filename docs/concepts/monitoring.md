@@ -404,38 +404,41 @@ the structured attributes, never on the body text.
     human-readable summaries and may change; match on the token prefix and the structured
     attributes, not the body text.
 
-#### Build identity on lifecycle lines
+#### Build identity in the App lifecycle messages
 
-Every lifecycle line also carries the SDK and app release that produced it, so a run's exported
-logs answer "what was running when this broke?" on their own, with no Temporal access. Before this
-the build was named once per worker at startup, which a run-scoped export never contains.
+The `App started` and `App completed` lines name the build that produced the run, so a run's
+exported logs answer "what was running when this broke?" on their own, with no Temporal access:
 
-| Attribute | Source | Meaning |
-|-----------|--------|---------|
-| `sdk.version` | `application_sdk.__version__` | The application-sdk actually running; always populated. |
-| `app.version` | baked `app/atlan_build.json`, then `ATLAN_APPLICATION_VERSION` | The app release exactly as Global Marketplace stores it — a release tag for semver apps, a sha7 for CD apps. |
-| `commit_sha` | baked `app/atlan_build.json`, then `ATLAN_COMMIT_SHA` | The git commit the image was built from. |
+```
+App started sdk=3.37.0 app=0.2.3 commit=184ae7b
+App completed sdk=3.37.0 app=0.2.3 commit=184ae7b
+```
 
-`app.version` never falls back to the commit SHA. The name is contracted across signals to be the
-Global Marketplace `version` string *by construction* — the OTel `target_info` gauge and the
-preflight results store publish it under that contract, and an operator reconciles a run against a
-catalog card by matching it exactly. A fallback would make one key mean three shapes (a semver, a
-GM sha7, a full git SHA) with nothing to tell them apart, and would make the log attribute disagree
-with the Resource attribute of the same name, which is omitted rather than substituted when empty.
-The commit therefore rides in its own key, matching the `app_version` + `commit_sha` pair the
-`worker_start` event already emits.
+| Key | Source | Meaning |
+|-----|--------|---------|
+| `sdk` | `application_sdk.__version__` | The application-sdk actually running. Always present. |
+| `app` | baked `app/atlan_build.json`, then `ATLAN_APPLICATION_VERSION` | The app release exactly as Global Marketplace stores it — a release tag for semver apps, a sha7 for CD apps. |
+| `commit` | baked `app/atlan_build.json`, then `ATLAN_COMMIT_SHA` | The git commit the image was built from. |
 
-An image with no baked build file and no deployer stamp logs `""` for both `app.version` and
-`commit_sha`. The keys are always present so the schema stays stable, and an empty value means
-"this image carries no build identity", never a mismatch. All three keys are on the
-[OTLP allowlist](#structured-attributes-and-the-otlp-allowlist), so they survive the filter that
-drops unlisted kwargs. The attributes are stamped on the lifecycle lines only, not on every record:
-the equivalent per-pod OTel Resource attributes ride only on the OTLP export, which
-the object-store NDJSON and the per-run export do not carry. Note that the object-store sink skips
-records emitted inside the workflow sandbox, so on that path the `activity.*` lines are the ones
-that carry the identity. See
-[Release flow → Image identity](../standards/release-flow.md#image-identity) for where the values
-come from.
+**Why the message and not a structured attribute.** The message is the only field that survives
+every hop of the run-logs path. `observability.app_logs` has a fixed Iceberg schema whose ingest
+pipe maps a known field list onto columns, and the tenant edge then re-projects each record through
+closed structs that declare no attributes bag — so a new attribute reaches neither the run-log panel
+nor the downloaded export without a schema change in two services. A marker in the message needs
+none of that.
+
+A carrier with no value drops its key rather than emitting a bare `app=`, which would read as a
+value of its own. `sdk` is always known, so the marker is never empty and a reader never has to
+tell "no marker" from "no version". Keys are `k=v` and ASCII so an engineer grepping an exported
+run log for a version actually hits.
+
+Both boundaries carry it: a run whose logs are truncated from the top still has to answer which
+build produced it, and a failed run may never reach the end. The value is resolved once at import —
+no carrier can change for the life of the container, and both call sites run inside Temporal's
+workflow sandbox where per-call work is a determinism risk.
+
+See [Release flow → Image identity](../standards/release-flow.md#image-identity) for where the
+values come from.
 
 ### Asset-validation outcome event
 

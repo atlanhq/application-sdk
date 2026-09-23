@@ -23,6 +23,7 @@ import dataclasses
 import posixpath
 import time
 import traceback as tb_module
+import warnings
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -41,7 +42,6 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-from application_sdk.constants import APPLICATION_VERSION, COMMIT_SHA
 from application_sdk.errors.base import AppError, redact_secrets
 from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution._temporal.preflight_gate import (
@@ -59,7 +59,6 @@ from application_sdk.observability.correlation import (
     set_correlation_context,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.version import __version__ as _SDK_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -102,61 +101,6 @@ def _lifecycle_message(event: str, subject: str) -> str:
     see ``docs/concepts/monitoring.md`` (Lifecycle log lines).
     """
     return f"{event} {subject}".rstrip() if subject else event
-
-
-def _build_identity_attrs() -> dict[str, str]:
-    """Build-identity attributes stamped on every lifecycle line (FND-1936).
-
-    A run's exported logs are scoped to the workflow, not to the worker
-    process that served it, so the once-per-worker startup lines naming the
-    build never reach a run's own export. Carrying the identity on the four
-    lifecycle lines lets a run's logs alone answer "which SDK and which app
-    release produced this?". Both interceptors stamp it: the object-store
-    sink skips workflow-sandbox records, so for that export path only the
-    ``activity.*`` lines land.
-
-    * ``sdk.version`` — the application-sdk actually running in the process;
-      always populated.
-    * ``app.version`` — the app release exactly as Global Marketplace stores
-      it (release tag for semver apps, sha7 for CD apps): the value CI baked
-      into ``app/atlan_build.json`` at image build, then the deployer-stamped
-      ``ATLAN_APPLICATION_VERSION``.
-    * ``commit_sha`` — the git commit the image was built from.
-
-    ``app.version`` deliberately does not fall back to the commit SHA. The
-    name is contracted elsewhere to be the GM ``version`` string *by
-    construction* — the OTel ``target_info`` gauge
-    (``observability/utils.py``) and the preflight results store both publish
-    it under that contract (see
-    ``docs/standards/release-flow.md#what-existing-consumers-see-change``),
-    and an operator reconciles a run against a catalog card by matching it
-    exactly. A fallback would make one string mean three shapes (a semver, a
-    GM sha7, a full git SHA) with nothing to tell them apart, and would make
-    the log attribute disagree with the Resource attribute of the same name
-    on an image that carries no version — the Resource omits ``app.version``
-    when it is empty rather than substituting something else. The two
-    carriers therefore stay two keys, which is what the ``worker_start`` /
-    ``token_refresh`` events already emit (``app_version`` plus
-    ``commit_sha``).
-
-    Every value is an import-time constant; nothing here does I/O, which
-    matters because the workflow-side call runs under Temporal's sandbox
-    (``build_identity()`` re-reads env plus a file per call and is not used
-    for that reason). Empty values are emitted as ``""`` rather than dropped
-    so the log schema stays stable — a reader treats empty as "this image
-    carries no build identity", never as a mismatch (the convention
-    ``build_identity.py`` established).
-
-    These duplicate the per-pod OTel Resource attributes on purpose: the
-    Resource rides only on the OTLP export, while the object-store NDJSON and
-    the per-run export carry record attributes alone. They are stamped on the
-    lifecycle lines only, not on every record, to bound the cost.
-    """
-    return {
-        "sdk.version": _SDK_VERSION,
-        "app.version": APPLICATION_VERSION,
-        "commit_sha": COMMIT_SHA,
-    }
 
 
 def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
@@ -603,7 +547,6 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             "temporal.task_queue": info.task_queue or "",
             "temporal.namespace": info.namespace or "",
             "atlan.correlation_id": correlation_id,
-            **_build_identity_attrs(),
         }
 
         try:
@@ -759,7 +702,6 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
             "temporal.workflow.run_id": info.workflow_run_id or "",
             "temporal.workflow.type": info.workflow_type or "",
             "atlan.correlation_id": correlation_id,
-            **_build_identity_attrs(),
         }
 
         try:
@@ -843,3 +785,74 @@ class LogInterceptor(Interceptor):
         self, next: ActivityInboundInterceptor
     ) -> ActivityInboundInterceptor:
         return _LogActivityInboundInterceptor(next)
+
+
+# ── Deprecated re-exports (FND-1936) ─────────────────────────────────────────
+#
+# #3872 imported these two from ``application_sdk.constants`` so the lifecycle
+# lines could stamp them as structured attributes. That import also made them
+# importable *from this module*, and v3.37.0/v3.38.0 shipped them that way.
+# The attributes are gone — the build identity now rides in the ``App started``
+# / ``App completed`` message, which is the only field the run-logs path
+# preserves end to end — but the names were part of the released importable
+# surface, so they cannot simply vanish.
+#
+# The gate that enforces this treats a public name in a private module as
+# binding precisely because the fleet has imported SDK privates before
+# (FND-2388), so ``_temporal`` in the path does not exempt them. Their real
+# home is and always was ``application_sdk.constants``; nothing should have
+# been reaching them through an interceptor.
+#
+# Module-level constants cannot carry ``@deprecated``, so PEP 562 module
+# ``__getattr__`` is the vehicle: it fires on *access*, so nothing is paid by
+# a caller who never touches one, and the warning names the caller's own line.
+#: name -> (replacement, why)
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "APPLICATION_VERSION": (
+        "application_sdk.constants.APPLICATION_VERSION",
+        "the same constant, at the module that owns it",
+    ),
+    "COMMIT_SHA": (
+        "application_sdk.constants.COMMIT_SHA",
+        "the same constant, at the module that owns it",
+    ),
+}
+
+
+def _deprecated_constant_value(name: str) -> object:
+    """The live value behind a deprecated constant alias.
+
+    Imported here rather than at module scope: a module-level re-export would
+    resolve before ``__getattr__`` ever ran, handing the name back silently and
+    leaving the caller with no migration signal at all. Keeping it lazy also
+    means this module no longer depends on ``constants`` for its own work,
+    which is the point of the change that removed the attributes.
+    """
+    from application_sdk import constants  # noqa: PLC0415 — see docstring
+
+    return getattr(constants, name)
+
+
+if TYPE_CHECKING:
+    # PEP 562's ``__getattr__`` can only be typed ``-> object``, which is all a
+    # type checker infers for every name it serves. Declaring the names here
+    # restores their real types for static analysis only — these statements
+    # never execute, so every runtime access still misses the module globals,
+    # still reaches ``__getattr__``, and still warns.
+    APPLICATION_VERSION: str
+    COMMIT_SHA: str
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-exports once more, with a warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v3.41.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _deprecated_constant_value(name)
