@@ -917,6 +917,88 @@ def probe():
     )
 
 
+def test_p004_sanitizer_exemption_does_not_apply_at_debug() -> None:
+    # The sanitizer exemption is a warning/error/critical exemption, like the
+    # exc_info one.  A debug line through a redaction helper is invisible under
+    # the customer's ERROR filter, so on its own it still swallows — which is
+    # why error-handling.prose.md routes preflight arms to the typed return
+    # rather than to a sanitized debug log (FND-2499).
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        logger.debug("probe failed: %s", sanitize_cause_repr(exc))
+        return None
+"""
+    )
+    assert "E004" not in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        logger.warning("probe failed: %s", sanitize_cause_repr(exc))
+        return None
+"""
+    )
+
+
+def test_p004_still_flags_row_built_by_a_lowercase_helper() -> None:
+    # The classifier returns an AppError, but recognition is by construction
+    # of a capitalised type: a lowercase helper wrapping a lowercase classifier
+    # proves nothing.  Building the PreflightCheck inline is what clears it.
+    helper = """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        return [_check("probe", started, error=classify_driver_error(exc))]
+"""
+    inline = """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        return [
+            PreflightCheck(
+                name="probe",
+                passed=False,
+                error=classify_driver_error(exc).to_failure_details(),
+            )
+        ]
+"""
+    assert "E004" in _findings(helper)
+    assert "E004" not in _findings(inline)
+
+
+def test_p004_still_flags_typed_row_appended_inside_a_loop() -> None:
+    # A loop-body arm falls off its end into the next iteration, so the row
+    # staged in `checks` is never provably returned from the handler; moving
+    # the probe into a helper that returns its row is the provable shape.
+    loop = """\
+def probe(subchecks):
+    checks = []
+    for sub in subchecks:
+        try:
+            run(sub)
+        except Exception as exc:
+            checks.append(PreflightCheck(name=sub, passed=False, error=Err(cause=exc)))
+    return checks
+"""
+    helper = """\
+def run_subcheck(sub):
+    try:
+        run(sub)
+    except Exception as exc:
+        return PreflightCheck(name=sub, passed=False, error=Err(cause=exc))
+    return PreflightCheck(name=sub, passed=True)
+"""
+    assert "E004" in _findings(loop)
+    assert "E004" not in _findings(helper)
+
+
 def test_p004_still_flags_swallowing_path_before_the_typed_return() -> None:
     # One branch returns the row, the other swallows — not every exit carries it.
     assert "E004" in _findings(
