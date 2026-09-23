@@ -93,6 +93,17 @@ two auto-fixable rules:
   - Translate keyword arguments: `indent=2` → `option=orjson.OPT_INDENT_2`;
     `sort_keys=True` → `option=orjson.OPT_SORT_KEYS` (OR-combine multiple
     options).  Drop kwargs orjson cannot express and note them in residue.
+  - **The output bytes change even with no kwargs to translate.** Two stdlib
+    defaults have no orjson equivalent: `json.dumps` separates with `", "` and
+    `": "` while orjson is always compact, and `ensure_ascii=True` escapes
+    non-ASCII as `\uXXXX` while orjson always writes UTF-8.  So only a call
+    already passing `separators=(",", ":")` **and** `ensure_ascii=False`
+    round-trips byte-identically.  For every other `dumps`, find what consumes
+    the string.  If anything hashes it, commits it, diffs it, signs it or
+    compares it byte-for-byte, prove the change on real input (for a
+    committed file, dump its current content both ways and compare) and say
+    in residue what will change.  Do not rewrite a committed file to match;
+    the edit touches the call site only.
   - **A `default=` callable survives the swap but STOPS BEING CALLED for the
     types orjson serializes natively** — `datetime`, `date`, `time`, `uuid.UUID`,
     and dataclasses.  NumPy is **not** native unless `orjson.OPT_SERIALIZE_NUMPY`
@@ -119,10 +130,35 @@ two auto-fixable rules:
     pre-existing unit test caught it.
   - Ensure `import orjson` is present at module top (it is a core SDK
     dependency); add it if missing.
+  - **Three stdlib tolerances orjson drops — check each before swapping a
+    `dumps`:**
+    - *Non-`str` dict keys.*  `json.dumps({1: "a"})` coerces the key to `"1"`;
+      `orjson.dumps` raises `TypeError`.  Add `orjson.OPT_NON_STR_KEYS` unless
+      every dict the call sees is provably string-keyed.  A `default=` callable
+      does not help: it is never consulted for keys.
+    - *NaN / Infinity.*  `json.dumps(float("nan"))` writes the non-standard
+      `NaN` token; `orjson.dumps` writes `null`, and `orjson.loads` rejects the
+      `NaN` token.  Usually an improvement (downstream JSON parsers reject
+      `NaN` too), but data written by the old code and read back by the new
+      one will now fail to parse where it holds that token — say so, and make
+      sure the reader's fallback covers it.
+    - *Integers beyond 64 bits.*  stdlib encodes any `int`; `orjson.dumps`
+      raises `JSONEncodeError` above 2**64 (`OPT_STRICT_INTEGER` lowers the
+      limit to 2**53).  Confirm the field's range before swapping.
+  - The swap also changes whitespace (`{"x":2}`, not `{"x": 2}`).  A test that
+    pins the exact encoded string must be updated to the new output — that is
+    the output genuinely changing, not gaming the gate — and a round-trip test
+    is the stronger assertion to add beside it.
+  - `orjson.JSONDecodeError` subclasses `json.JSONDecodeError` and
+    `ValueError`, so an existing `except json.JSONDecodeError` still catches;
+    switch the name to `orjson.JSONDecodeError` when `import json` goes away.
 
-  The orthogonal gate **bites** here: a `bytes`/`str` regression on any
-  covered path fails the behavioural tests, so a careless swap is caught by
-  `orthogonal-gate` before the edit survives.  Classification is always
+  The orthogonal gate **bites** here for type errors: a `bytes`/`str`
+  regression on any covered path fails the behavioural tests, so a careless
+  swap is caught by `orthogonal-gate` before the edit survives.  It does
+  **not** bite on byte-level output changes, which parse to the same value
+  and pass any test that compares parsed JSON; the separators/`ensure_ascii`
+  bullet above is the only check for those.  Classification is always
   `"judgment"` (the decode/kwargs call requires reading the call site), so the
   edit is also routed to residue for human confirmation.
 

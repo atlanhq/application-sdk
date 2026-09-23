@@ -118,11 +118,12 @@ RULES: tuple[RuleDefinition, ...] = (
         id="E004",
         canonical_reference=(
             "atlan-openapi-app app/api_client.py — `_parse_zip` catches Exception per "
-            "archive member and logs with exc_info=True. Where breadth really is the "
-            "point, atlan-mysql-app app/handler.py `preflight_check` converts the "
-            "caught exception into a typed PreflightCheck row and returns it, which "
-            "the rule detects — no suppression needed; all three shapes are accepted, "
-            "an unexplained bare breadth is not."
+            "archive member and logs with exc_info=True. atlan-mysql-app "
+            "app/handler.py shows the other two accepted shapes: `_check_connectivity` "
+            "converts the caught exception into a typed PreflightCheck row and returns "
+            "it, and `fetch_metadata` re-raises it chained as MetadataFetchError — no "
+            "suppression needed at any of the three; an unexplained bare breadth is "
+            "not accepted."
         ),
         scope=RuleScope.BOTH,
         name="BroadExceptClause",
@@ -182,9 +183,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "exc_info=True, or warning/error/critical routed through a redaction "
             "helper. logger.exception() is not available: L017 forbids it under "
             "ADR-0011. And DEBUG is accepted by none of the three, even with "
-            "exc_info=True — while E005's own canonical_reference endorses exactly "
-            "that shape (atlan-mysql-app _epoch_ms, 'the level is a volume "
-            "decision; keeping the traceback is not'). So a handler that "
+            "exc_info=True — while E005 never inspects a DEBUG line at all. So a "
+            "handler that "
             "deliberately logs a broad catch at DEBUG with a full traceback "
             "satisfies E005 and cannot satisfy E004. Raising the level is the only "
             "way through, which is a real decision on a cleanup path that runs "
@@ -205,8 +205,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E005",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — `_epoch_ms` carries exc_info=True even on its "
-            "DEBUG line. The level is a volume decision; keeping the traceback is not."
+            "atlan-metabase-app app/api_types.py — `_to_millis` logs an unparseable "
+            "timestamp at WARNING with exc_info=True before returning None. The message "
+            "says what failed; the traceback says where."
         ),
         scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfo",
@@ -238,7 +239,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="E006",
         canonical_reference=(
             "atlan-openapi-app app/api_client.py — every handler in `validate_spec_url` "
-            "and `_parse_zip` names a type. A bare `except:` appears nowhere in the four "
+            "and `_parse_zip` names a type. A bare `except:` appears nowhere in the three "
             "reference apps, so SystemExit and KeyboardInterrupt still unwind the worker."
         ),
         scope=RuleScope.BOTH,
@@ -267,10 +268,13 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E007",
         canonical_reference=(
-            "atlan-metabase-app app/extracts/databases.py — `fetch_databases_summaries` "
-            "logs the HTTP status and records a residual before returning []. Where the "
-            "sentinel really is the contract, atlan-openapi-app app/api_client.py "
-            "`redact_url` carries an inline ignore[E007] saying so."
+            "atlan-openapi-app app/api_client.py — `redact_url` catches the ValueError "
+            "from urlsplit, logs it, and only then returns its '<unparseable url>' "
+            "sentinel; the sentinel is the function's contract, and because the event "
+            "is logged first it needs no suppression. It is the credential-boundary "
+            "form of the fix: the log is `logger.debug` through sanitize_cause_repr with "
+            "no exc_info, because the url it guards may be a pre-signed secret held in "
+            "that frame. Outside such a boundary, log with exc_info=True."
         ),
         terminal_state=(
             "A justified inline `# conformance: ignore[E007] <reason>` IS the correct "
@@ -326,10 +330,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E008",
         canonical_reference=(
-            "atlan-openapi-app tests/e2e/test_connection_create.py — the module guard "
-            "binds `except ImportError as _exc` and carries the text into the pytest.skip "
-            "reason, so a missing SDK export is readable from the run instead of appearing "
-            "as an empty skip."
+            "application_sdk/clients/ssl_utils.py — `_get_default_ca_bundle_path` catches the "
+            "ImportError for the optional certifi dependency and logs that it is falling "
+            "back to the system CA paths before continuing, so the degraded path leaves a "
+            "trace. None of the three reference apps has an `except ImportError` in the "
+            "code E008 scans (app/ and main.py; tests/ is excluded), so the SDK is the "
+            "only real compliant site."
         ),
         scope=RuleScope.BOTH,
         name="ImportErrorWithoutLogging",
@@ -387,7 +393,9 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "No reference app calls asyncio.gather(return_exceptions=True); per-item "
             "failure is decided at the item, as in atlan-metabase-app "
-            "app/extracts/collections.py. Where an app genuinely needs concurrency, the "
+            "app/extracts/dashboards.py, where `fetch_dashboards_details` fetches one "
+            "dashboard at a time and `fetch_dashboard_details` logs each failed fetch "
+            "and records it as a residual. Where an app genuinely needs concurrency, the "
             "app-facing seam is application_sdk/execution/heartbeat.py — run_in_thread / "
             "run_fault_isolated / run_best_effort, which surface per-unit failures for you "
             "(`_runtime.offload` is the SDK-internal path; importing it from an app is "
@@ -419,10 +427,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E011",
         canonical_reference=(
-            "No app writes a logging.Filter. Filtering, redaction and Temporal-context "
+            "No reference app writes a logging.Filter. Filtering and Temporal-context "
             "enrichment belong to application_sdk/observability/logger_adaptor.py, reached "
-            "through `get_logger`; atlan-mysql-app app/client.py shows the whole of an "
-            "app's logging setup — one import and one module-level logger."
+            "through `get_logger`, and redaction to application_sdk/errors/base.py "
+            "(`sanitize_cause_repr` / `safe_traceback`); atlan-mysql-app app/client.py "
+            "shows the whole of an app's logging setup — one import and one module-level "
+            "logger."
         ),
         scope=RuleScope.BOTH,
         name="LoggingFilterUnsafeBody",
@@ -454,10 +464,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E012",
         canonical_reference=(
-            "atlan-mysql-app app/failures.py — six leaves, each subclassing an SDK "
-            "category (`InvalidInputError`, `AuthError`, `InternalError`, "
-            "`PreconditionError`) and owning a `code`. Raise one of these, never a bare "
-            "ValueError or RuntimeError."
+            "atlan-mysql-app app/failures.py — every leaf subclasses an SDK category "
+            "(e.g. `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns "
+            "a `code`. Raise one of these, never a bare ValueError or RuntimeError."
         ),
         scope=RuleScope.BOTH,
         name="UntypedBuiltinRaise",
@@ -488,8 +497,8 @@ RULES: tuple[RuleDefinition, ...] = (
         id="E013",
         canonical_reference=(
             "atlan-metabase-app app/errors.py — every error is imported from "
-            "`application_sdk.errors`. The deprecated AtlanError stack (ClientError, "
-            "ApiError, …) appears nowhere in the four reference apps."
+            "`application_sdk.errors`. No app/ module in the three reference apps raises "
+            "or imports the deprecated AtlanError stack (ClientError, ApiError, …)."
         ),
         scope=RuleScope.BOTH,
         name="LegacyAtlanErrorRaise",
@@ -662,9 +671,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E018",
         canonical_reference=(
-            "atlan-openapi-app app/errors.py — every raise site uses a connector-specific "
-            "subclass with its own `code`, so failures bucket per connector on the "
-            "dashboard instead of collapsing into the bare category leaf."
+            "atlan-openapi-app app/errors.py — nineteen connector-specific subclasses, "
+            "each with its own `code`; app/connector.py `download_cloud_spec` raises "
+            "`TenantObjectStoreUnavailableError` rather than the bare "
+            "DependencyUnavailableError leaf, so failures bucket per connector on the "
+            "dashboard. The one bare-leaf raise, in `run`, is the sanctioned "
+            "InternalError(classification_pending=True) placeholder."
         ),
         scope=RuleScope.BOTH,
         name="BareParentLeafRaise",
@@ -753,9 +765,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E020",
         canonical_reference=(
-            "atlan-metabase-app app/extracts/databases.py — the one place an HTTP failure "
-            "returns an empty sentinel carries an inline ignore[E020] naming the residual "
-            "file that records it. Seven such sites exist across app/extracts/, each "
+            "atlan-metabase-app app/extracts/databases.py — each place an HTTP failure "
+            "returns an empty sentinel (`fetch_databases_summaries` and "
+            "`fetch_database_metadata`) carries an inline ignore[E020] naming the residual "
+            "file that records it; the same shape recurs across app/extracts/, each site "
             "justified. Without that evidence trail the empty return has to raise."
         ),
         terminal_state=(

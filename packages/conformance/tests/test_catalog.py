@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 from conformance.suite.rules import CATALOG, _combine_rules, get_rule
@@ -16,6 +17,8 @@ from conformance.suite.schema.disposition import (
 )
 from conformance.suite.schema.extensions import AtlanRuleProperties
 from pydantic import ValidationError
+
+import conformance
 
 
 def test_catalog_loads_without_error() -> None:
@@ -1429,12 +1432,17 @@ def test_rules_citing_a_suppression_as_compliant_license_it() -> None:
     ``atlan-metabase-app`` as the compliant example while declaring no
     ``terminal_state`` (FND-2547).
     """
-    cites_suppression = re.compile(r"ignore\[[A-Z]\d+\]")
+    # Only a suppression of the rule's OWN id is a carve-out that needs a
+    # licence. A directive for a different rule is just a site the reference
+    # happens to show — F020 (directive hygiene) cites a well-formed
+    # ``ignore[E020]`` precisely as its compliant shape, and that says nothing
+    # about when F020 itself may be suppressed.
+    cites_suppression = re.compile(r"ignore\[([A-Z]\d+)\]")
     unlicensed = [
         r.id
         for r in load_catalog()
         if r.canonical_reference
-        and cites_suppression.search(r.canonical_reference)
+        and r.id in cites_suppression.findall(r.canonical_reference)
         and not r.terminal_state
     ]
     assert not unlicensed, (
@@ -1512,6 +1520,158 @@ def test_canonical_references_name_something_checkable() -> None:
     assert not vague, (
         "canonical_reference must name a reference repo AND a concrete path: "
         f"{vague}"
+    )
+
+
+#: The maintained reference apps alone — ``_REFERENCE_REPOS`` minus the SDK.
+_REFERENCE_APPS = tuple(repo for repo in _REFERENCE_REPOS if repo != "application_sdk")
+
+#: Auto-fixable rules allowed an SDK-only reference, each with the reason no
+#: reference app can supply one. An entry is a claim about all three apps, so
+#: it must be re-checked (and removed) the moment an app gains a real site.
+_SDK_ONLY_REFERENCE_EXEMPT = {
+    "E008": (
+        "no reference app has an `except ImportError` in the code E008 scans "
+        "(app/, main.py — tests/ is excluded); verified FND-2702"
+    ),
+    "T025": (
+        "no reference app is in bundle mode (each emits a single generated "
+        "manifest), so T025 inspects none of them; the positive shape is the "
+        "SDK e2e harness until a multi-mode reference app exists (FND-2702)"
+    ),
+}
+
+#: A positive citation: a reference-app name immediately followed by a path in
+#: it (``atlan-mysql-app app/handler.py``, ``atlan-openapi-app pyproject.toml``).
+#: A bare mention does not count — T025 once named all three apps only to say
+#: none of them has the shape, and a substring check accepted that.
+_POSITIVE_APP_CITATION = re.compile(
+    r"(?:" + "|".join(re.escape(app) for app in _REFERENCE_APPS) + r")\s+"
+    r"(?:[\w.\-]+/[\w.\-/]*"
+    r"|[\w.\-]+\.(?:py|pkl|ya?ml|json|toml|sql|lock|cfg|txt|md)\b"
+    r"|Dockerfile\b|\.gitignore\b)"
+)
+
+
+def test_autofixable_app_facing_rules_cite_a_reference_app() -> None:
+    """An auto-fixable rule's fix is mirrored from an app, so it must cite one.
+
+    ``test_canonical_references_name_something_checkable`` accepts
+    ``application_sdk`` as a reference repo, which is right for a rule whose fix
+    is an SDK seam — but an auto-fixable rule is applied by the remediation lane
+    by mirroring how a reference app already does it, and an SDK-only reference
+    gives the lane nothing to mirror. L012 and P003 both passed the substring
+    check this way while citing no app at all (FND-2702). The citation must be
+    positive — an app name followed by a path in it — so naming the apps as
+    counter-examples does not satisfy it.
+    """
+    uncited = [
+        r.id
+        for r in load_catalog()
+        if r.autofixable
+        and r.scope in (RuleScope.APP, RuleScope.BOTH)
+        and r.canonical_reference
+        and not _POSITIVE_APP_CITATION.search(r.canonical_reference)
+        and r.id not in _SDK_ONLY_REFERENCE_EXEMPT
+    ]
+    assert not uncited, (
+        "auto-fixable app-facing rules whose canonical_reference cites no file "
+        f"in a reference app — cite one in {list(_REFERENCE_APPS)}: {uncited}"
+    )
+    catalog = {r.id: r for r in load_catalog()}
+    stale = [
+        rule_id
+        for rule_id in _SDK_ONLY_REFERENCE_EXEMPT
+        if rule_id not in catalog
+        or not catalog[rule_id].autofixable
+        or _POSITIVE_APP_CITATION.search(catalog[rule_id].canonical_reference)
+    ]
+    assert (
+        not stale
+    ), f"_SDK_ONLY_REFERENCE_EXEMPT entries no longer needed — remove them: {stale}"
+
+
+#: A count of things inside a reference app ("eleven leaves", "seven such
+#: sites", "five modules"). The apps change weekly and nothing re-counts, so a
+#: number in a reference is a claim that silently goes false — E012's said
+#: "six leaves" while the app had eleven. Describe the shape, not the tally.
+_HARD_CODED_COUNT = re.compile(
+    r"\b(?:two|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+    r"fourteen|fifteen|sixteen|twenty|\d{1,3})\b(?:\s+\w+){0,2}\s+"
+    r"(?:leaves|sites|modules|templates|tests|scenarios|checks|classes|"
+    r"subclasses|entries|widgets|files|shims|keys|fields|categories|steps|"
+    r"nodes|types|directives|calls|records|findings|entrypoints|suites|jobs)\b",
+    re.IGNORECASE,
+)
+
+
+def test_canonical_references_do_not_hard_code_counts() -> None:
+    """A reference describes a shape; it must not assert how many of it exist."""
+    counted = {
+        r.id: m.group(0)
+        for r in load_catalog()
+        if r.canonical_reference
+        and (m := _HARD_CODED_COUNT.search(r.canonical_reference))
+    }
+    assert not counted, (
+        "canonical_reference hard-codes a count that will drift as the app "
+        f"changes — describe the shape instead: {counted}"
+    )
+
+
+def test_positive_app_citation_pattern() -> None:
+    """A citation needs a path after the app name; a bare mention is not one."""
+    assert _POSITIVE_APP_CITATION.search("atlan-mysql-app app/handler.py — …")
+    assert _POSITIVE_APP_CITATION.search("atlan-openapi-app pyproject.toml — …")
+    assert _POSITIVE_APP_CITATION.search("atlan-metabase-app Dockerfile — …")
+    assert not _POSITIVE_APP_CITATION.search(
+        "atlan-openapi-app, atlan-mysql-app and atlan-metabase-app each emit …"
+    )
+    assert not _POSITIVE_APP_CITATION.search("none of the three reference apps")
+
+
+def test_hard_coded_count_pattern() -> None:
+    """The guard fires on real tallies and ignores the reference-app count."""
+    assert _HARD_CODED_COUNT.search("app/failures.py — eleven leaves, each …")
+    assert _HARD_CODED_COUNT.search("Seven such sites exist across app/extracts/")
+    assert _HARD_CODED_COUNT.search("the 15 categorical leaves")
+    assert not _HARD_CODED_COUNT.search("none of the three reference apps")
+    assert not _HARD_CODED_COUNT.search("every leaf subclasses an SDK category")
+
+
+def test_canonical_references_never_name_the_scaffold() -> None:
+    """``atlan-hello-world-app`` is not a reference app (FND-2477).
+
+    The path check above cannot catch it: a reference naming hello-world *and*
+    one of the three apps passes the substring match. Guidance that sends the
+    lane to the scaffold is the same defect wherever the lane reads it — every
+    prose field of the rule, and the remediation programs (T010's pointer lived
+    in ``areas/tests.prose.md`` as well as in the rule).
+    """
+    scaffold = "atlan-hello-world-app"
+    offenders = [
+        r.id
+        for r in load_catalog()
+        if any(
+            scaffold in (text or "")
+            for text in (
+                r.canonical_reference,
+                r.full_description,
+                r.rationale,
+                r.rule_interactions,
+                r.terminal_state,
+            )
+        )
+    ]
+    programs = Path(conformance.__file__).parent / "programs"
+    offenders += [
+        str(path.relative_to(programs))
+        for path in sorted(programs.rglob("*.prose.md"))
+        if scaffold in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        f"rules / programs that point at {scaffold}, which is not a reference "
+        f"app: {offenders}"
     )
 
 

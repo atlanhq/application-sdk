@@ -65,7 +65,11 @@ Autofixable per-site, not mechanically: `orjson` is not a drop-in replacement.
 keyword surface (use `option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS` and the
 `default` positional), and rejects some inputs stdlib accepts.  A blind
 `json.`→`orjson.` swap silently changes `str`→`bytes` and breaks callers — each site
-needs human judgement.
+needs human judgement. The encoded bytes also change on any call that does not already
+pass `separators=(",", ":")` and `ensure_ascii=False`: orjson is always compact and
+always writes non-ASCII as UTF-8, with no option for either.  The parsed value is
+identical, so tests that compare parsed JSON pass; a consumer that hashes, commits or
+byte-compares the output sees the difference.
 
 ---
 
@@ -84,8 +88,9 @@ also belong to a non-asset pydantic model — so the call needs a human glance.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/mysql.py — assets are serialised through `asset.to_nested_bytes()`,
-  the v9 wire shape, rather than through `.dict()`.
+- **Compliant example:** atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each asset through
+  `asset.to_nested_bytes()`, the v9 wire shape, rather than through `.dict()`, then
+  decodes that output to build the publish-layer shape and merge in extra attributes.
 
 Flags a `.dict()` method call in a module that imports pyatlan asset models.  The
 asset-mapper pattern writes assets with the v9 serialisation API —
@@ -108,20 +113,21 @@ a known false-positive — suppress with `# conformance: ignore[O002] <reason>`.
 **Rationale:** The asset-mapper pattern's value is end-to-end typing: a mapper function constructs a
 pyatlan asset and returns it, so the return annotation documents which asset it produces
 and lets pyright check the call site. A mapper that builds an asset but declares no
-return type loses that guarantee (BLDX-1492; reference app atlan-openapi-app).
+return type loses that guarantee (BLDX-1492; reference app atlan-metabase-app).
 WARN/recommendation because adding the annotation is a safe, mechanical nudge.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/asset_mapper.py — `map_connection` is annotated `-> Connection`,
-  the pyatlan type it actually builds, so a wrong asset type is a type error rather than
-  a runtime surprise in the payload.
+- **Compliant example:** atlan-metabase-app app/asset_mapper.py — `map_collection` is annotated `->
+  MetabaseCollection`, the pyatlan_v9 type it constructs and returns (`map_dashboard`
+  and `map_bi_process` likewise), so a wrong asset type is a type error rather than a
+  runtime surprise in the payload.
 
 Flags a function that constructs a pyatlan asset (instantiates a class imported from
 `pyatlan_v9.model.assets` / `pyatlan.model.assets`) and **returns that asset**, but
 carries no `-> <Asset>` return annotation. The asset-mapper pattern is typed end-to-end
 — each `map_<entity>` function declares the pyatlan asset it produces (see
-`atlan-openapi-app`).
+`atlan-metabase-app`).
 
 Keyed on actually returning the constructed asset (`return Table(...)` or `asset =
 Table(...); ... return asset`), not just a `map_` name — so a helper that builds an
@@ -148,8 +154,8 @@ site needs human judgement — never a blind name swap.
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app app/mysql.py — `from pyatlan_v9.model.assets import Column, Database,
-  Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets path appears in none
-  of the four reference apps.
+  Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets path appears nowhere
+  under the three reference apps' app/ directories.
 
 Flags app code that imports asset model classes from the legacy `pyatlan.model.assets`
 package, in any of the three import forms: `from pyatlan.model.assets import X`, `import

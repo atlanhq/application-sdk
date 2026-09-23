@@ -47,8 +47,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P043",
         canonical_reference=(
-            "atlan-mysql-app app/handler.py — control flow branches on `AppError` and "
-            "`AuthError`, both from `application_sdk.errors`. Branching on a class the "
+            "atlan-mysql-app app/handler.py — control flow branches on "
+            "`isinstance(e, AppError)`, and app/failures.py subclasses `AuthError`; both "
+            "come from `application_sdk.errors`. Branching on a class the "
             "package does not export binds the app to a name the SDK can move without a "
             "deprecation cycle."
         ),
@@ -109,10 +110,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P045",
         canonical_reference=(
-            "atlan-metabase-app app/errors.py — the one SDK import is `from "
-            "application_sdk.errors import (AppPermissionDeniedError, AuthError, "
-            "InvalidInputError, SourceUnavailableError)`: four leaves from the package "
-            "root, nothing from application_sdk.errors.base or "
+            "atlan-metabase-app app/errors.py — its SDK error classes all come from "
+            "`from application_sdk.errors import (...)`: leaves from the package root, "
+            "nothing from application_sdk.errors.base or "
             "application_sdk.storage.formats. Reaching into a submodule for the same "
             "class forfeits the stability promise."
         ),

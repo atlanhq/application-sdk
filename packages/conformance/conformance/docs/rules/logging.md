@@ -95,8 +95,9 @@ under the run.
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app app/handler.py — `get_logger(__name__)` at module scope, imported from
-  application_sdk.observability.logger_adaptor. No reference app calls
-  logging.getLogger, structlog.get_logger, or loguru's logger.
+  application_sdk.observability.logger_adaptor. No shipped app/ module in the three
+  reference apps calls logging.getLogger, structlog.get_logger, or loguru's logger; the
+  test files that do sit outside what this rule scans.
 
 Every module must obtain its logger via the SDK adapter:
 
@@ -159,9 +160,10 @@ data — so the incident stays open for days instead of being read off the trace
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/handler.py — every log call inside an except block carries
-  exc_info=True, in `test_auth` and in each of the preflight check helpers. The rule is
-  about the except block, not about the level.
+- **Compliant example:** atlan-metabase-app app/handler.py — `test_auth` and `_read_filters` log warning(...,
+  exc_info=True) inside their except blocks, so the trace rides with the message. The
+  rule inspects warning and error calls only; `_authentication_check` logs at DEBUG
+  through sanitize_cause_repr() with no exc_info, a deliberate no-traceback boundary.
 
 Logging an exception without `exc_info=True` produces a message with no stack trace —
 the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
@@ -186,9 +188,10 @@ sink or interleave with structured lines, invisible to observability.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app pyproject.toml — T201 sits in the repo-wide lint select and is ignored
-  only for `.github/**/*.py`, where a CI script's stdout is the point. No print() exists
-  under app/.
+- **Compliant example:** atlan-mysql-app app/client.py — `provide_token` reports through `logger.debug`, never
+  print(); no print() exists under app/ in any of the three reference apps. The repo's
+  pyproject.toml backs this with T201 in the lint select, ignored only for
+  `.github/**/*.py`, where a CI script's stdout is the point.
 
 `print()` produces no level, no structured fields, no correlation IDs. In production
 services, output may go to stdout unformatted, be lost, or interleave with structured
@@ -296,8 +299,8 @@ without dedup logic.
 ### What correct looks like
 
 - **Compliant example:** atlan-metabase-app app/connector.py — `transform_data` raises MissingTypenameInputError
-  and MissingOutputPathInputError with no log line before either. The raise is the
-  record; whichever handler catches it logs it once.
+  and `_build_client` raises MetabaseCredentialInputError, with no log line before
+  either. The raise is the record; whichever handler catches it logs it once.
 
 Logging an error immediately before re-raising creates duplicate records in the log
 stream, inflating error counts in dashboards.  Acceptable only when adding context not
@@ -320,9 +323,9 @@ of whether it was ever exploited.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/client.py — `get_iam_role_token` logs that AWS credentials were
-  staged into the environment and names none of them. Log that a credential was used,
-  never the credential.
+- **Compliant example:** atlan-mysql-app app/client.py — `get_iam_role_token` logs the role ARN, host and user,
+  reports the external ID only as `bool(external_id)`, and never logs the value of the
+  token it returns. Log that a credential was used, never the credential.
 
 Credentials in log output are a security vulnerability — logs are often stored in
 plaintext in log aggregation systems, accessible to more people than the credential
@@ -374,10 +377,11 @@ a KeyError raised by its own logging call instead of reporting the original prob
 
 ### What correct looks like
 
-- **Compliant example:** No app builds an `extra={}` dict at all —
-  application_sdk/observability/logger_adaptor.py takes %-style arguments positionally
-  and injects the Temporal context itself, so there is no caller-supplied key that can
-  collide with a stdlib LogRecord attribute.
+- **Compliant example:** atlan-openapi-app app/api_client.py — `_parse_zip` logs "extracted spec from ZIP
+  file=%s", name: the ZIP member's name travels positionally in the %-style body, where
+  a stdlib caller would reach for extra={"name": ...}, a reserved LogRecord attribute.
+  The SDK adaptor (application_sdk/observability/logger_adaptor.py) injects the Temporal
+  context itself, so no caller-supplied key is needed.
 
 stdlib's `Logger.makeRecord()` raises `KeyError` if any key in `extra={}` matches a
 `LogRecord` attribute.  This crash propagates directly to the caller — NOT caught by
@@ -401,9 +405,10 @@ first in the tenant.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/api_client.py — the logger comes from `get_logger`, which accepts
-  the SDK adaptor's kwargs. A stdlib logging.Logger appears nowhere in the four
-  reference apps, and it is the stdlib one that raises TypeError on arbitrary kwargs.
+- **Compliant example:** atlan-openapi-app app/api_client.py — the module-level logger comes from `get_logger`,
+  which accepts the SDK adaptor's kwargs. No shipped app/ module in the three reference
+  apps creates a stdlib logging.Logger, and it is the stdlib one that raises TypeError
+  on arbitrary kwargs.
 
 stdlib `logger.info()` only accepts `exc_info`, `extra`, `stack_info`, and `stacklevel`.
 Any other kwarg raises `TypeError` and crashes the caller.  Very common when migrating
@@ -447,9 +452,9 @@ dictConfig() — so a misconfigured call makes all library logging vanish with n
 ### What correct looks like
 
 - **Compliant example:** atlan-metabase-app app/run_dev.py — `main()` awaits `run_dev_combined(MetabaseApp,
-  example_input=...)` and the module imports only asyncio and the SDK launcher: no
-  `logging`, no dictConfig. Handler configuration belongs to the SDK runtime; an app
-  calling dictConfig is reaching past it.
+  example_input=...)`; the module imports asyncio, the SDK launcher and the app's own
+  connector and handler: no `logging`, no dictConfig. Handler configuration belongs to
+  the SDK runtime; an app calling dictConfig is reaching past it.
 
 `logging.config.dictConfig()`'s `disable_existing_loggers` defaults to `True`, which
 silently disables all loggers created before the call.  This is the most common source
@@ -570,8 +575,10 @@ is a trivial rename.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app pyproject.toml — LOG009 sits in the lint select list with the comment
-  that names the replacement, so logger.warn() cannot reach main in that repo.
+- **Compliant example:** atlan-metabase-app app/connector.py — `process_metabaseprocess` spells its empty-host
+  warning logger.warning(...), and no shipped app/ module in the three reference apps
+  calls .warn(). The repo's pyproject.toml also selects LOG009, so ruff rejects a
+  regression at edit time.
 
 `logger.warn()` / `logging.warn()` is a deprecated alias for `logger.warning()` that
 will be removed in a future Python version. Rename every call site to

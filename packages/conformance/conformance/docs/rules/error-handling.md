@@ -140,29 +140,29 @@ root-cause analysis impossible.
 ### What correct looks like
 
 - **Compliant example:** atlan-openapi-app app/api_client.py — `_parse_zip` catches Exception per archive member
-  and logs with exc_info=True. Where breadth really is the point, atlan-mysql-app
-  app/handler.py `preflight_check` converts the caught exception into a typed
-  PreflightCheck row and returns it, which the rule detects — no suppression needed; all
-  three shapes are accepted, an unexplained bare breadth is not.
+  and logs with exc_info=True. atlan-mysql-app app/handler.py shows the other two
+  accepted shapes: `_check_connectivity` converts the caught exception into a typed
+  PreflightCheck row and returns it, and `fetch_metadata` re-raises it chained as
+  MetadataFetchError — no suppression needed at any of the three; an unexplained bare
+  breadth is not accepted.
 - **Interacts with:** The set of forms that actually clear this rule is narrower than it looks, and two of the
   exits are closed by other rules. The checker accepts logger.exception(), or
   warning/error/critical carrying exc_info=True, or warning/error/critical routed
   through a redaction helper. logger.exception() is not available: L017 forbids it under
   ADR-0011. And DEBUG is accepted by none of the three, even with exc_info=True — while
-  E005's own canonical_reference endorses exactly that shape (atlan-mysql-app _epoch_ms,
-  'the level is a volume decision; keeping the traceback is not'). So a handler that
-  deliberately logs a broad catch at DEBUG with a full traceback satisfies E005 and
-  cannot satisfy E004. Raising the level is the only way through, which is a real
-  decision on a cleanup path that runs inside a finally: the WARNING lands beside the
-  error actually being reported. Reported from a consumer app in FND-2542; whether DEBUG
-  should join the accepted set is an owner call, not a mechanical fix. The same gap
-  meets F005 inside a preflight_check override, including helpers it calls: a
-  best-effort cleanup handler (close a client, release a session) has no verdict to
-  return, DEBUG does not clear E004 even through a redaction helper, and WARNING is what
-  F005 forbids there. The recommended log that satisfies both is logger.error
-  (logger.critical also clears both) with the exception routed through a redaction
-  helper (safe_traceback, sanitize_cause_repr); the alternative is to return the failure
-  as typed data. Found in a consumer app in FND-2569.
+  E005 never inspects a DEBUG line at all. So a handler that deliberately logs a broad
+  catch at DEBUG with a full traceback satisfies E005 and cannot satisfy E004. Raising
+  the level is the only way through, which is a real decision on a cleanup path that
+  runs inside a finally: the WARNING lands beside the error actually being reported.
+  Reported from a consumer app in FND-2542; whether DEBUG should join the accepted set
+  is an owner call, not a mechanical fix. The same gap meets F005 inside a
+  preflight_check override, including helpers it calls: a best-effort cleanup handler
+  (close a client, release a session) has no verdict to return, DEBUG does not clear
+  E004 even through a redaction helper, and WARNING is what F005 forbids there. The
+  recommended log that satisfies both is logger.error (logger.critical also clears both)
+  with the exception routed through a redaction helper (safe_traceback,
+  sanitize_cause_repr); the alternative is to return the failure as typed data. Found in
+  a consumer app in FND-2569.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
@@ -211,8 +211,9 @@ often impossible under production data volumes.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/mysql.py — `_epoch_ms` carries exc_info=True even on its DEBUG line.
-  The level is a volume decision; keeping the traceback is not.
+- **Compliant example:** atlan-metabase-app app/api_types.py — `_to_millis` logs an unparseable timestamp at
+  WARNING with exc_info=True before returning None. The message says what failed; the
+  traceback says where.
 
 The message is logged but the stack trace is lost.  Add `exc_info=True` to every
 `logger.warning()` / `logger.error()` call inside an except block.  `logger.exception()`
@@ -240,7 +241,7 @@ in-flight customer workflows mid-run instead of handing them off.
 ### What correct looks like
 
 - **Compliant example:** atlan-openapi-app app/api_client.py — every handler in `validate_spec_url` and
-  `_parse_zip` names a type. A bare `except:` appears nowhere in the four reference
+  `_parse_zip` names a type. A bare `except:` appears nowhere in the three reference
   apps, so SystemExit and KeyboardInterrupt still unwind the worker.
 
 Like P001 but the block may have a body.  Still catches KeyboardInterrupt and
@@ -260,10 +261,12 @@ unrelated, making the original failure invisible.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/extracts/databases.py — `fetch_databases_summaries` logs the HTTP
-  status and records a residual before returning []. Where the sentinel really is the
-  contract, atlan-openapi-app app/api_client.py `redact_url` carries an inline
-  ignore[E007] saying so.
+- **Compliant example:** atlan-openapi-app app/api_client.py — `redact_url` catches the ValueError from urlsplit,
+  logs it, and only then returns its '<unparseable url>' sentinel; the sentinel is the
+  function's contract, and because the event is logged first it needs no suppression. It
+  is the credential-boundary form of the fix: the log is `logger.debug` through
+  sanitize_cause_repr with no exc_info, because the url it guards may be a pre-signed
+  secret held in that frame. Outside such a boundary, log with exc_info=True.
 - **Interacts with:** E007 and E004 judge the same handler shape with one shared predicate
   (typed_failure_scope in checks/error_handling/_helpers.py). A return that hands the
   caught exception back as typed data already clears both rules: a call that receives
@@ -305,9 +308,11 @@ signal in the observability stack.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app tests/e2e/test_connection_create.py — the module guard binds `except
-  ImportError as _exc` and carries the text into the pytest.skip reason, so a missing
-  SDK export is readable from the run instead of appearing as an empty skip.
+- **Compliant example:** application_sdk/clients/ssl_utils.py — `_get_default_ca_bundle_path` catches the
+  ImportError for the optional certifi dependency and logs that it is falling back to
+  the system CA paths before continuing, so the degraded path leaves a trace. None of
+  the three reference apps has an `except ImportError` in the code E008 scans (app/ and
+  main.py; tests/ is excluded), so the SDK is the only real compliant site.
 
 Optional-dependency guard.  Acceptable when the import is genuinely optional AND the
 fallback path is correct AND there is a comment.  Log at DEBUG if the module is
@@ -350,8 +355,10 @@ the caller checks each result for Exception.
 ### What correct looks like
 
 - **Compliant example:** No reference app calls asyncio.gather(return_exceptions=True); per-item failure is
-  decided at the item, as in atlan-metabase-app app/extracts/collections.py. Where an
-  app genuinely needs concurrency, the app-facing seam is
+  decided at the item, as in atlan-metabase-app app/extracts/dashboards.py, where
+  `fetch_dashboards_details` fetches one dashboard at a time and
+  `fetch_dashboard_details` logs each failed fetch and records it as a residual. Where
+  an app genuinely needs concurrency, the app-facing seam is
   application_sdk/execution/heartbeat.py — run_in_thread / run_fault_isolated /
   run_best_effort, which surface per-unit failures for you (`_runtime.offload` is the
   SDK-internal path; importing it from an app is what P005 exists to catch).
@@ -375,10 +382,11 @@ vector hidden inside observability infra.
 
 ### What correct looks like
 
-- **Compliant example:** No app writes a logging.Filter. Filtering, redaction and Temporal-context enrichment
+- **Compliant example:** No reference app writes a logging.Filter. Filtering and Temporal-context enrichment
   belong to application_sdk/observability/logger_adaptor.py, reached through
-  `get_logger`; atlan-mysql-app app/client.py shows the whole of an app's logging setup
-  — one import and one module-level logger.
+  `get_logger`, and redaction to application_sdk/errors/base.py (`sanitize_cause_repr` /
+  `safe_traceback`); atlan-mysql-app app/client.py shows the whole of an app's logging
+  setup — one import and one module-level logger.
 
 `Logger.handle()` calls `self.filter(record)` with no surrounding try/except — unlike
 handler errors, filter exceptions are NOT caught by `handleError()`.  An unguarded
@@ -403,9 +411,9 @@ blind, on-call routing can't branch on it, SLA gates can't classify it. (per ADR
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/failures.py — six leaves, each subclassing an SDK category
-  (`InvalidInputError`, `AuthError`, `InternalError`, `PreconditionError`) and owning a
-  `code`. Raise one of these, never a bare ValueError or RuntimeError.
+- **Compliant example:** atlan-mysql-app app/failures.py — every leaf subclasses an SDK category (e.g.
+  `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns a `code`. Raise
+  one of these, never a bare ValueError or RuntimeError.
 
 SDK code raises a bare Python builtin.  The Automation Engine receives an opaque string
 — no category, code, audience, or retryable field. Dashboards are blind; on-call routing
@@ -431,8 +439,8 @@ read the raw string.
 ### What correct looks like
 
 - **Compliant example:** atlan-metabase-app app/errors.py — every error is imported from
-  `application_sdk.errors`. The deprecated AtlanError stack (ClientError, ApiError, …)
-  appears nowhere in the four reference apps.
+  `application_sdk.errors`. No app/ module in the three reference apps raises or imports
+  the deprecated AtlanError stack (ClientError, ApiError, …).
 
 `AtlanError` and its subclasses emit a `DeprecationWarning` at construction time and
 reach AE as opaque strings.  They produce no typed wire envelope.  Scheduled for removal
@@ -563,9 +571,11 @@ right rotation, or alert on per failure mode.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/errors.py — every raise site uses a connector-specific subclass
-  with its own `code`, so failures bucket per connector on the dashboard instead of
-  collapsing into the bare category leaf.
+- **Compliant example:** atlan-openapi-app app/errors.py — nineteen connector-specific subclasses, each with its
+  own `code`; app/connector.py `download_cloud_spec` raises
+  `TenantObjectStoreUnavailableError` rather than the bare DependencyUnavailableError
+  leaf, so failures bucket per connector on the dashboard. The one bare-leaf raise, in
+  `run`, is the sanctioned InternalError(classification_pending=True) placeholder.
 
 Raising a parent leaf directly (`InternalError(...)`, `InvalidInputError(...)`) without
 a domain-specific subclass that overrides `code` collapses all failure modes for a given
@@ -636,10 +646,11 @@ there is no except/raise to key on; the failure is swallowed by a plain if-guard
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/extracts/databases.py — the one place an HTTP failure returns an
-  empty sentinel carries an inline ignore[E020] naming the residual file that records
-  it. Seven such sites exist across app/extracts/, each justified. Without that evidence
-  trail the empty return has to raise.
+- **Compliant example:** atlan-metabase-app app/extracts/databases.py — each place an HTTP failure returns an
+  empty sentinel (`fetch_databases_summaries` and `fetch_database_metadata`) carries an
+  inline ignore[E020] naming the residual file that records it; the same shape recurs
+  across app/extracts/, each site justified. Without that evidence trail the empty
+  return has to raise.
 - **Already correct when:** A justified inline `# conformance: ignore[E020] <reason>` IS the correct end state where
   three things hold together: the empty return is deliberate, the failure is recorded to
   a durable evidence trail that the reason NAMES, and the run declares the resulting gap

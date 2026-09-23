@@ -45,9 +45,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D001",
         canonical_reference=(
-            "atlan-openapi-app pyproject.toml — `atlan-application-sdk>=3.24.1,<4.0.0`. "
-            "Bounded at both ends: a floor for the features the app uses, a ceiling at the "
-            "next major so a breaking release cannot arrive through a lockfile refresh."
+            "atlan-openapi-app pyproject.toml — the `atlan-application-sdk` entry in "
+            "[project.dependencies] carries a `>=` floor and a `<4.0.0` ceiling, with a "
+            "comment naming the SDK behaviour each floor constraint buys. Bounded at both "
+            "ends: a floor for the features the app uses, a ceiling at the next major so a "
+            "breaking release cannot arrive through a lockfile refresh."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -132,10 +134,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D004",
         canonical_reference=(
-            "atlan-metabase-app pyproject.toml — the dev and test groups hold only what "
-            "the SDK does not ship (pre-commit, pyright, ruff, poethepoet, testcontainers, "
-            "httpx, docker), several with a comment on why. Nothing the SDK already pins "
-            "is repeated there."
+            "atlan-openapi-app pyproject.toml — [dependency-groups].dev pulls the SDK's "
+            "own test tooling in through `atlan-application-sdk[tests]` and adds only "
+            "packages the SDK does not pin as core (pytest-asyncio, pytest-timeout, respx, "
+            "pre-commit, coverage, scalene, poethepoet, the conformance suite). Nothing the "
+            "SDK already pins is repeated there, so an SDK bump never has to touch the group."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -175,7 +178,8 @@ RULES: tuple[RuleDefinition, ...] = (
         id="D005",
         canonical_reference=(
             "atlan-mysql-app pyproject.toml — "
-            "`atlan-application-sdk[iam-auth,sql,workflows,pandas]`. All four are extras "
+            "`atlan-application-sdk[iam-auth,pandas,sql,workflows]` in "
+            "[project.dependencies]. All four are extras "
             "the SDK publishes; a typo here resolves to nothing and fails at import, not "
             "at install."
         ),
@@ -390,7 +394,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "is installed, so every one is skipped to stderr and the rule reports "
             "nothing; that is an unresolved environment, not a clean repo.  The "
             "conformance CI runs the D-series leg in a synced environment for this "
-            "reason.  See BLDX-1462."
+            "reason.  See BLDX-1462.  "
+            "**Constraint floors:** in an app repo, every ``[tool.uv] "
+            "constraint-dependencies`` entry is also a D003 finding — a security "
+            "floor on a transitive package is the SDK's to set, not the app's, and "
+            "an app-local copy goes stale when the SDK's range moves.  Remove it; "
+            "a needed CVE fix reaches the app by upgrading the SDK.  The SDK's own "
+            "pyproject is exempt."
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
@@ -401,11 +411,11 @@ RULES: tuple[RuleDefinition, ...] = (
         id="D009",
         canonical_reference=(
             "atlan-metabase-app pyproject.toml — [tool.poe.tasks.download-components] "
-            "runs `shutil.copytree(pathlib.Path(application_sdk.__file__).parent / "
-            '"components", "components", dirs_exist_ok=True)` under `interpreter = '
-            '"python"`, with a comment saying components/ is gitignored so each '
-            "environment copies the set matching the SDK in uv.lock. No poe task names "
-            "raw.githubusercontent.com."
+            'runs under `interpreter = "python"`, binds `src = '
+            'pathlib.Path(application_sdk.__file__).parent / "components"` and calls '
+            '`shutil.copytree(src, "components", dirs_exist_ok=True)`, with a comment '
+            "saying components/ is gitignored so each environment copies the set matching "
+            "the SDK in uv.lock. No poe task names raw.githubusercontent.com."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -567,10 +577,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D011",
         canonical_reference=(
-            "atlan-mysql-app pyproject.toml — "
-            "`atlan-application-sdk-conformance>=0.17.0,<1.0.0` in a dependency group, "
-            "with a comment recording that the D-series CI leg resolves the suite from "
-            "this repo's own environment. A hard pin freezes that one leg while every "
+            "atlan-openapi-app pyproject.toml — "
+            '`"atlan-application-sdk-conformance<=1.0.0"` in [dependency-groups].dev, '
+            "the rule's canonical form, and resolved in uv.lock, so the D-series CI leg "
+            "that reads the suite from this repo's lock grades it with a current "
+            "ruleset. A hard pin freezes that one leg while every "
             "other leg runs the latest; a declaration in [project.dependencies] ships the "
             "linter to production."
         ),
@@ -688,9 +699,10 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-mysql-app pyproject.toml — `[[tool.uv.index]]` names pypi at "
             "https://pypi.org/simple with `default = true`. Declared in "
-            "pyproject.toml rather than a project-level uv.toml, so the repo's "
-            "[tool.uv] constraint-dependencies keep being read, and a machine-wide "
-            "index cannot rewrite uv.lock on whoever resolves next."
+            "pyproject.toml rather than a project-level uv.toml, because a uv.toml "
+            "suppresses [tool.uv] in pyproject.toml entirely and would silently drop "
+            "any constraint-dependencies added later — and pinned as the default, a "
+            "machine-wide index cannot rewrite uv.lock on whoever resolves next."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
@@ -940,10 +952,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "atlan-openapi-app pyproject.toml — `[tool.pyright]` sets venvPath, venv, "
             "typeCheckingMode and two report levels, and declares no `exclude` at all, "
             "so pyright's built-in defaults stay in force and `**/.*` keeps .venv out "
-            "of the walk. A repo that does need an exclude restates `**/.*` beside its "
-            "own entries; atlan-mysql-app and atlan-metabase-app both exclude "
-            "`.github/**` without it and are open findings, which is why neither is "
-            "cited here."
+            "of the walk. A repo that does need an exclude restates the defaults beside "
+            "its own entries, as atlan-mysql-app pyproject.toml does: `.github/**` "
+            'followed by `"**/.*"`, `"**/node_modules"` and `"**/__pycache__"`, with a '
+            "comment saying why they are there."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,

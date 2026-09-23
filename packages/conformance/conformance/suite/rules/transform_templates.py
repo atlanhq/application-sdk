@@ -38,10 +38,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P040",
         canonical_reference=(
-            "atlan-mysql-app app/sql/ — ten extraction templates, none of which references "
-            "a bare DuckDB reserved keyword as an identifier. Where the source's own "
-            "column name collides, quote it in the template; the failure otherwise appears "
-            "only at transform time, on the customer's data."
+            "No reference app ships a YAML transform template: none of the three carries "
+            "a `source_query:` key, because all three build assets in Python with "
+            "pyatlan_v9. The seam is application_sdk/transformers/query/__init__.py — from "
+            "3.28.0 `QueryBasedTransformer` quotes a plain-column source_query "
+            "(`_quote_bare_identifier` / `_is_quoted_identifier`), so a reserved keyword "
+            "renders as valid SQL with no template change. Raising the SDK is the fix."
         ),
         scope=RuleScope.APP,
         name="TransformTemplateReservedKeyword",

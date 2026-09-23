@@ -45,9 +45,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P008",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — `App.upload()` is called from `run()`, after "
-            "the tasks return. A @task hands its output back as a FileReference and lets "
-            "the framework move it; the transfer is the App's business, not the task's."
+            "atlan-mysql-app app/mysql.py — `run()` itself calls "
+            "`self.upload_refs(UploadRefsInput(...))`, after the extract and transform "
+            "tasks return, to deliver the FileReferences they declared. A @task hands its "
+            "output back as a FileReference and lets the framework move it; the transfer "
+            "is the App's business, not the task's."
         ),
         scope=RuleScope.APP,
         name="FrameworkTransferInsideTask",
@@ -250,9 +252,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "atlan-openapi-app app/contracts.py — `ExtractSpecOutput.api_spec_file` / "
             "`api_path_file` and the matching `TransformInput` fields are typed "
             "`FileReference | None`, so the hand-off from extract_spec to transform "
-            "survives being scheduled on another pod. The only `str` fields in the "
-            "file are URLs, prefixes and qualified names, none of which is a path on a "
-            "worker's disk."
+            "survives being scheduled on another pod. The remaining `str` fields are "
+            "URLs, object-store keys and prefixes, identifiers (a legacy credential GUID, "
+            "the workflow id and type) and qualified names; none is a path on a worker's "
+            "disk."
         ),
         scope=RuleScope.APP,
         name="FilePathStringInContract",
@@ -293,10 +296,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P044",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — the whole-directory hand-off is one "
-            "`App.upload()` with an UploadInput naming local_path and storage_path. "
-            "storage.upload_prefix / download_prefix move bytes without producing a "
-            "FileReference the next task can resolve."
+            "atlan-mysql-app app/mysql.py — the final hand-off is one "
+            "`self.upload_refs(UploadRefsInput(files=[DeclaredFile(ref=ref) ...], "
+            "source_prefix=..., prefix=...))` over the transformed FileReferences the "
+            "tasks declared, not a directory scan. storage.upload_prefix / "
+            "download_prefix move bytes without producing a FileReference the next task "
+            "can resolve."
         ),
         scope=RuleScope.APP,
         name="DirectStoragePrefixTransfer",

@@ -197,6 +197,15 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   class-definition time and the app will not import.  That is the edit that
   broke nine apps; do not draft it.
 
+  **The opt-out does not govern unknown keys.**  `Input` drops keys the
+  contract does not declare (logging which ones, once) whether or not
+  `allow_unbounded_fields` is set — the flag only skips the payload-safety
+  type check.  A contract that receives more args than it reads (an AE DAG
+  node's `credential` / `credential_guid`) does **not** need the opt-out to
+  tolerate them.  A justification that says it does is wrong; once every
+  declared field is concretely typed, the opt-out comes off with nothing
+  else changed.  Do not draft "keep the opt-out" for extra AE node args.
+
   **Narrowing a value type is a DATA change — diff the payloads, not just the
   types.**  `ledger-guard`, `validate_payload_safety` and an import check are
   all *structural*: they prove the retype is permitted, that the annotation is
@@ -341,7 +350,7 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   a finding to report in the proposal, not a mismatch to reconcile.
 
 - **P002 CategoryFieldOverride** — a non-canonical subclass of `AppError` (or
-  any of its 15 categorical leaves) redeclares the `category` ClassVar in its
+  any of its categorical leaves) redeclares the `category` ClassVar in its
   own body.  Read the class definition around `finding.line`, then:
 
   1. Verify that the class inherits from a canonical leaf and that the parent's
@@ -636,8 +645,9 @@ the blind gate cannot tell a correct hop from a plausible one.
 - **P031 SharedDefaultExecutorOffload** — blocking work is offloaded onto
   asyncio's **shared default** executor: `asyncio.to_thread(fn, ...)`, or
   `loop.run_in_executor(None, fn, ...)` (the `None` is what makes it shared).
-  That pool is process-wide, so one app's blocking work starves every other
-  coroutine on the worker.  Draft a swap to the App's own bounded pool —
+  Temporal's Python SDK uses that same executor internally, so long blocking
+  calls there can exhaust it and deadlock the worker.  Draft a swap to the
+  SDK's dedicated sdk-blocking pool —
   `await self.run_in_thread(fn, arg)` inside an `App`, otherwise
   `from application_sdk.execution.heartbeat import run_in_thread`.  Keep the
   callable **passed, not called** (`run_in_thread(fn, arg)`, never

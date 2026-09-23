@@ -308,6 +308,11 @@ def test_exc_info_prescriptions_carry_the_credential_contraindication(
     assert "application_sdk.errors" in text
     # And it must say the sanitized form is a fix, not a carve-out.
     assert "no suppression" in text
+    # The redacted form must not cost the stack trace the rule exists for:
+    # the prescription has to offer safe_traceback alongside the cause.
+    assert (
+        "safe_traceback(exc)" in text
+    ), f"{area}'s credential-safe form drops the traceback; name safe_traceback"
 
 
 def test_e004_prose_states_the_sanitizer_level_and_the_inline_row() -> None:
@@ -328,6 +333,38 @@ def test_e004_prose_states_the_sanitizer_level_and_the_inline_row() -> None:
     assert "a `debug` call through a sanitizer does not clear E004" in text
     assert "return PreflightCheck(" in text
     assert "loop body" in text
+
+
+def test_o001_prose_names_the_three_dropped_tolerances() -> None:
+    """orjson raises on non-str keys and >64-bit ints and writes NaN as null.
+
+    A straight swap that ignores these breaks at runtime on data the tests may
+    not carry (found remediating atlan-mode-app, FND-2549).
+    """
+    text = " ".join(_read("areas/optimizations.prose.md").split())
+    assert "OPT_NON_STR_KEYS" in text
+    assert "NaN" in text
+    assert "64 bits" in text
+
+
+def test_d003_prose_removes_constraint_floors_rather_than_relocating() -> None:
+    """Moving a floor into constraint-dependencies only relocates D003."""
+    text = " ".join(_read("areas/dependency.prose.md").split())
+    assert "constraint-dependencies` entry in an app is also D003" in text
+    assert "do not move a floor" in text
+
+
+def test_p001_prose_says_the_opt_out_does_not_govern_unknown_keys() -> None:
+    """Extra AE node args do not justify keep-the-opt-out (FND-2549).
+
+    The catalog already says Input drops undeclared keys regardless of
+    allow_unbounded_fields; the remediator reads prescriptions.prose.md,
+    not the catalog, so the same paragraph has to live here.
+    """
+    text = " ".join(_read("areas/prescriptions.prose.md").split())
+    assert "does not govern unknown keys" in text
+    assert "credential_guid" in text
+    assert 'Do not draft "keep the opt-out" for extra AE node args' in text
 
 
 def test_d009_prose_verifies_without_poe() -> None:
@@ -723,3 +760,26 @@ def test_dependency_area_has_a_prescription_for_every_d_rule() -> None:
         "area. Every rule the loop can reach needs one, even if it is "
         "`not_remediable = true` and routes straight to residue."
     )
+
+
+def _rule_bullet(area: str, rule_id: str) -> str:
+    """The `**<ID> Name**` bullet for one rule, up to the next top-level bullet."""
+    text = _read(f"areas/{area}.prose.md")
+    match = re.search(r"^- \*\*" + rule_id + r"\b.*?(?=^- \*\*|\Z)", text, re.M | re.S)
+    assert match, f"no `**{rule_id}` bullet in areas/{area}.prose.md"
+    return match.group(0)
+
+
+def test_o001_prescription_names_the_byte_changing_defaults() -> None:
+    """A stdlib `json.dumps` with default arguments does not round-trip through
+    orjson byte-for-byte: orjson is always compact and never escapes non-ASCII.
+
+    The parsed value is unchanged, so the orthogonal gate passes, and the only
+    place the difference shows is whatever hashes, commits or byte-compares the
+    output. Found on an app whose vendor-contract refresh script rewrites a
+    committed, `\\u`-escaped JSON file: the prescribed `indent=2 → OPT_INDENT_2`
+    swap would have un-escaped 30 lines of it the next time it ran.
+    """
+    bullet = _rule_bullet("optimizations", "O001")
+    assert "ensure_ascii" in bullet
+    assert "separators" in bullet

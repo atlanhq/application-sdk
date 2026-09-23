@@ -85,6 +85,23 @@ from application_sdk.errors import redact_secrets, sanitize_cause_repr
 logger.error("connect failed: %s", sanitize_cause_repr(exc))
 ```
 
+**Keep the stack, redacted.** The one-line form above drops the traceback,
+which is the defect L004/E005 exist to fix — a postmortem is back to
+reproducing the failure against the customer's source. When the stack is
+worth having (anything past a single, well-understood connect call), log
+the redacted traceback alongside the redacted cause:
+
+```python
+from application_sdk.errors import safe_traceback, sanitize_cause_repr
+
+logger.error("connect failed: %s\n%s", sanitize_cause_repr(exc), safe_traceback(exc))
+```
+
+`safe_traceback` formats the full chain (frames, `__cause__`, `__context__`)
+and runs it through the same redaction as `redact_secrets`, so the frames
+survive and the URL userinfo and secret query params do not. It is a
+recognised sanitizer name, so the call clears the rule the same way.
+
 **This clears the rule, and needs no suppression** — L004 accepts a log call
 whose arguments flow through a sanitizer as a deliberate no-traceback
 boundary (`suite/checks/_ast_common/_sanitizers.py`).  Recognition is **by
@@ -278,8 +295,8 @@ rule was skipped, the sanitized form records that the credential was handled.
   So establish the caller first.  **If you can show the exception is logged
   upstream** — the handler that catches this type logs it with `exc_info=True`
   — delete the call; that is the shape `atlan-metabase-app app/connector.py`'s
-  `transform_data` has, raising `MissingTypenameInputError` and
-  `MissingOutputPathInputError` with no log line before either.  **If you
+  `transform_data` has, raising `MissingTypenameInputError` with no log line
+  before it (as does `_build_client` for `MetabaseCredentialInputError`).  **If you
   cannot** (no handler in the repo, or the handler swallows), do not delete:
   **downgrade the level** to `logger.debug(...)`.  The rule matches only
   `warning` and `error`, so a DEBUG line clears the finding, stops inflating
@@ -295,8 +312,8 @@ rule was skipped, the sanitized form records that the credential was handled.
   or replace it with a non-secret descriptor
   (`logger.info("using credential %s", cred_name)`), and never a length, a
   prefix or a mask of the value itself.  `atlan-mysql-app app/client.py`'s
-  `get_iam_role_token` records that AWS credentials were staged and names
-  none of them.  **Always route to residue and never auto-apply**, whatever
+  `get_iam_role_token` logs the role ARN, host and user, reports the external
+  ID only as `bool(external_id)`, and never logs the token's value.  **Always route to residue and never auto-apply**, whatever
   the mode: a human confirms every credential-shaped change.
 
 - **L012 StdlibExtraReservedKeyCollision** — BLOCK.  A key in `extra={}`
@@ -304,9 +321,12 @@ rule was skipped, the sanitized form records that the credential was handled.
   `args`, …), which raises `KeyError` inside `Logger.makeRecord()` and crashes
   the caller — this is a live runtime break, not a style point.  Rename the
   key (`module` → `source_module`), or better, move the context into the
-  `%`-style body as L003 prescribes and drop `extra=` entirely.  No reference
-  app builds an `extra={}` dict; `application_sdk/observability/logger_adaptor.py`
-  takes arguments positionally and injects the Temporal context itself.
+  `%`-style body as L003 prescribes and drop `extra=` entirely.
+  `atlan-openapi-app app/api_client.py`'s `_parse_zip` passes the ZIP member's
+  `name` positionally (`"extracted spec from ZIP file=%s", name`) rather than as
+  `extra={"name": ...}`; the SDK adaptor
+  (`application_sdk/observability/logger_adaptor.py`) injects the Temporal
+  context itself.
 
 - **L014 StructlogEventKwargOverwrite** — a structlog call passes `event=`,
   which *is* structlog's message key, so the domain value silently replaces

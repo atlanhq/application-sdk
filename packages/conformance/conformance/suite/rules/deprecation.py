@@ -394,9 +394,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="B007",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — transformation runs through the SDK's "
-            "DuckDB/pyarrow path. The daft-only DataFrame calls this rule looks for "
-            "(count_rows, to_pylist, .names) appear in none of the four reference apps; "
+            "atlan-mysql-app app/mysql.py — `MySQLApp` transforms through SqlApp's "
+            "transform tasks: raw records mapped by its `map_*` methods and serialised with "
+            "the SDK's `entity_bytes`, with no DataFrame method called on them. The "
+            "daft-only DataFrame calls this rule looks for (count_rows, to_pylist, .names) "
+            "appear in no SDK-importing module of the three reference apps; "
             "daft was removed from the SDK in 3.20.0, so they are dead on any current "
             "runtime."
         ),
@@ -469,10 +471,10 @@ RULES: tuple[RuleDefinition, ...] = (
         id="B008",
         canonical_reference=(
             "atlan-openapi-app app/connector.py — every third-party import names a "
-            "public module (application_sdk.app, application_sdk.contracts, "
-            "application_sdk.errors, httpx, pyatlan_v9.model.assets). None of the "
-            "four reference apps imports an underscore-prefixed module or name it "
-            "does not own, in app code or in tests."
+            "public module: application_sdk.app, .contracts, .credentials, .errors, "
+            ".observability and .outputs, plus msgspec and orjson. No module under the "
+            "three reference apps' app/ directories imports an underscore-prefixed module "
+            "or name it does not own."
         ),
         scope=RuleScope.APP,
         name="PrivateModuleImport",
