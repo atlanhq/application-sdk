@@ -2935,12 +2935,14 @@ def create_app_handler_service(
                     context.request_id_str,
                     result.status.value,
                 )
-                message = result.resolved_message
                 return JSONResponse(
                     status_code=result.status.http_status,
                     content=_wrap_response(
-                        {**result.model_dump(mode="json"), "message": message},
-                        message=message or f"Authentication {result.status.value}",
+                        result.model_dump(
+                            mode="json", exclude={"error": {"cause_repr"}}
+                        ),
+                        message=result.message
+                        or f"Authentication {result.status.value}",
                         success=result.status.is_success,
                     ),
                 )

@@ -18,7 +18,14 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
@@ -336,8 +343,8 @@ class AuthOutput(BaseModel):
     error: FailureDetails | None = None
     """Typed failure for a failed result, e.g. ``AuthError(...).to_failure_details()``.
 
-    A bare ``AppError`` is coerced. On a failed result its ``message`` wins over
-    :attr:`message` (see :attr:`resolved_message`)."""
+    A bare ``AppError`` is coerced. On a failed result its ``message`` replaces
+    :attr:`message`, so every caller (HTTP and SDR) reads the same text."""
 
     @field_validator("error", mode="before")
     @classmethod
@@ -346,12 +353,11 @@ class AuthOutput(BaseModel):
             return value.to_failure_details()
         return value
 
-    @property
-    def resolved_message(self) -> str:
-        """Message under the precedence rule: a failed result's ``error`` wins."""
+    @model_validator(mode="after")
+    def _error_message_wins(self) -> "AuthOutput":
         if self.error is not None and not self.status.is_success:
-            return self.error.message
-        return self.message
+            self.message = self.error.message
+        return self
 
 
 class PreflightStatus(SerializableEnum):

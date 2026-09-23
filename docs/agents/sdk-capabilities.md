@@ -7288,7 +7288,6 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `scopes: list[str]` `= []` — Authorized scopes or permissions.
   - `expires_at: str` `= ''` — ISO-8601 expiry timestamp (empty if no expiry).
   - `error: FailureDetails | None` — Typed failure for a failed result, e.g. ``AuthError(...).to_failure_details()``.
-  - `resolved_message: str` — Message under the precedence rule: a failed result's ``error`` wins.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `CloudEventEnvelope`

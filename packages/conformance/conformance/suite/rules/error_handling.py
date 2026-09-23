@@ -673,7 +673,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "atlan-mysql-app app/handler.py — `preflight_check`'s probes classify the "
             "caught exception into a typed error and return it on the check's `error=`, "
             "so the rendered message is the error's authored text, never the exception's. "
-            "`test_auth` takes the same shape through `AuthOutput.error`."
+            "For `test_auth`, return the same typed error on `AuthOutput.error`; mysql's "
+            "own `test_auth` adopts it in atlan-mysql-app#729."
         ),
         scope=RuleScope.BOTH,
         name="ExceptionTextInContractField",
