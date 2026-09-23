@@ -95,17 +95,23 @@ two auto-fixable rules:
     options).  Drop kwargs orjson cannot express and note them in residue.
   - **A `default=` callable survives the swap but STOPS BEING CALLED for the
     types orjson serializes natively** — `datetime`, `date`, `time`, `uuid.UUID`,
-    dataclasses and numpy.  `json.dumps` has no native support for any of them,
-    so a `default=` on a stdlib call is very often there precisely to encode
-    one, and orjson silently takes its own path instead.  This is the single
-    highest-risk edit in this rule: the finding clears, the tests that do not
-    assert on the encoded value pass, and the output shape changes.
+    and dataclasses.  NumPy is **not** native unless `orjson.OPT_SERIALIZE_NUMPY`
+    is set; without that option, `default=` still runs for ndarray values.
+    `json.dumps` has no native support for any of them, so a `default=` on a
+    stdlib call is very often there precisely to encode one, and orjson silently
+    takes its own path instead.  This is the single highest-risk edit in this
+    rule: the finding clears, the tests that do not assert on the encoded value
+    pass, and the output shape changes.
     Before swapping any `dumps` that passes `default=`, read the callable.  If
     it handles a natively-serialized type, add the matching passthrough option
     so orjson routes that type back to it — `orjson.OPT_PASSTHROUGH_DATETIME`
-    for `datetime`/`date`/`time` — and OR it with any other option.  Where no
-    passthrough exists for the type, the swap is NOT mechanical: leave the site
-    on stdlib `json` and residue it.
+    for `datetime`/`date`/`time`, `orjson.OPT_PASSTHROUGH_DATACLASS` for
+    dataclasses — and OR it with any other option.  UUID is native and has **no**
+    passthrough: if the callable handles UUID, the swap is NOT mechanical —
+    leave the site on stdlib `json` and residue it.  The same residue path
+    applies to any other natively-serialized type with no passthrough.
+    Do not add `OPT_SERIALIZE_NUMPY` as part of this swap: that would start
+    natively encoding arrays the callable currently handles.
     Seen in the field on a connector whose `default=` mapped `datetime` to
     epoch-milliseconds because the publish app rejects ISO strings with
     `ATLAS-404-00-007 invalid value for type date`.  The straight swap reverted
