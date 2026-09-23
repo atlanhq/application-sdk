@@ -2995,3 +2995,45 @@ def test_e004_silent_when_handler_logs_via_sanitizer() -> None:
 def test_e004_still_fires_when_handler_logs_bare() -> None:
     src = "try:\n    x()\nexcept Exception as e:\n    logger.warning('failed')\n"
     assert "E004" in _findings(src)
+
+
+@pytest.mark.parametrize("level", ["debug", "info"])
+def test_e004_still_fires_when_sanitized_log_is_below_warning(level: str) -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        f"    logger.{level}('close failed: %s', safe_traceback(e))\n"
+    )
+    assert "E004" in _findings(src)
+
+
+def _cleanup_helper_in_gate(level: str) -> str:
+    return (
+        _PREFLIGHT_IMPORTS + "class H(Handler):\n"
+        "    async def _close(self, client):\n"
+        "        try:\n"
+        "            await client.aclose()\n"
+        "        except Exception as exc:\n"
+        f"            logger.{level}('close failed: %s', safe_traceback(exc))\n"
+        "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        "        await self._close(object())\n"
+        "        return PreflightOutput(checks=[])\n"
+    )
+
+
+def test_e004_f005_cleanup_helper_in_preflight_clears_only_at_error(
+    tmp_path: Path,
+) -> None:
+    """FND-2569: a best-effort cleanup helper reached from preflight_check.
+
+    It has no verdict to return, so only a log can clear E004. DEBUG does not
+    (even sanitized) and WARNING trips F005; a sanitized ERROR clears both.
+    """
+    debug = _cleanup_helper_in_gate("debug")
+    assert "E004" in _findings(debug)
+    assert "F005" not in _preflight_ids(tmp_path / "debug", debug)
+    warning = _cleanup_helper_in_gate("warning")
+    assert "E004" not in _findings(warning)
+    assert "F005" in _preflight_ids(tmp_path / "warning", warning)
+    error = _cleanup_helper_in_gate("error")
+    assert "E004" not in _findings(error)
+    assert "F005" not in _preflight_ids(tmp_path / "error", error)

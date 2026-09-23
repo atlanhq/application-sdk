@@ -94,7 +94,9 @@ logger.warning("token refresh failed: %s", redact_secrets(str(exc)))
 the logging area) all accept a log call whose arguments flow through a
 sanitizer as a deliberate no-traceback boundary — see
 `suite/checks/_ast_common/_sanitizers.py`.  The redacted form is a
-first-class fix, not a carve-out.
+first-class fix, not a carve-out.  For E004 the call must also be at
+`warning`, `error` or `critical`: a sanitized `debug`/`info` line still
+fires it.
 
 Two things to get right, because both fail silently:
 
@@ -199,7 +201,9 @@ outcome mirroring the error-handling shape in the reference app named by
     `raise`, or `raise X(...) from e`);
   - a `raise X(...) from None` whose raised error carries the caught exception
     through a redaction helper;
-  - a log call whose arguments already flow through a redaction helper;
+  - a `warning`/`error`/`critical` log call whose arguments already flow
+    through a redaction helper — a sanitized `debug`/`info` call does **not**
+    clear E004, so raising it is a real edit, not a no-op (see below);
   - a body whose every exit path hands the caught exception back as **typed
     data** — `return PreflightCheck(passed=False,
     error=SourceUnavailableError(cause=exc).to_failure_details())`, or a row
@@ -222,6 +226,16 @@ outcome mirroring the error-handling shape in the reference app named by
   `atlan-mysql-app app/handler.py`'s `preflight_check` is the reference: its
   probes convert the caught exception into a typed `PreflightCheck` row and
   return it, with no suppression and no log above DEBUG.
+
+  **Best-effort cleanup reached from `preflight_check` is the other trap.**  A
+  helper such as `try: await client.aclose() except Exception:
+  logger.debug(...)` that the gate calls has no verdict to return, and the
+  levels close in on it: DEBUG (even through a redaction helper) does not
+  clear E004, and WARNING trips F005 because the helper runs inside the gate.
+  The only log that satisfies both is
+  `logger.error("<what failed>: %s", safe_traceback(exc))` — or
+  `sanitize_cause_repr(exc)` — or return the failure as typed data if the
+  caller can carry it.  Do not narrow the clause automatically; see above.
 
 - **E007 ErrorToReturnValue** — the `except` block returns a sentinel
   (`None`, `{}`, `[]`, `False`) with no logging before the `return`, so the
