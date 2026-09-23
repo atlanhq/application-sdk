@@ -242,8 +242,22 @@ def test_gate_reruns_when_the_review_lands() -> None:
     # PyYAML parses a bare `on:` key as the boolean True.
     triggers = yaml.safe_load(render("connector-review-gate.yaml"))[True]
     assert set(triggers) == {"pull_request", "pull_request_review", "merge_group"}
-    # `dismissed`: otherwise a dismissed approval leaves the check green.
-    assert triggers["pull_request_review"]["types"] == ["submitted", "dismissed"]
+    # `edited` / `dismissed`: otherwise a changed approval keeps a stale green.
+    assert triggers["pull_request_review"]["types"] == [
+        "submitted",
+        "edited",
+        "dismissed",
+    ]
+
+
+def test_enforcement_accepts_only_the_documented_values() -> None:
+    """A prefix match would let a typo'd value arm the gate unannounced."""
+    workflow = yaml.safe_load(render("connector-review-gate.yaml"))
+    steps = workflow["jobs"]["connector-review"]["steps"]
+    enforce = next(s for s in steps if "ENFORCE" in s.get("env", {}))["env"]["ENFORCE"]
+    assert "startsWith" not in enforce
+    assert "== 'enforce'" in enforce
+    assert "== 'enforce-head'" in enforce
 
 
 def test_a_dismissed_approval_does_not_pass(

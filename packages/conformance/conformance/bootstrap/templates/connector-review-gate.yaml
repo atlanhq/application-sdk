@@ -40,8 +40,10 @@ on:
   # red until the author happened to push again. `dismissed` matters just as
   # much: a dismissed approval comes back from the API as DISMISSED, which the
   # script already rejects, but without the trigger nothing re-runs to notice.
+  # `edited` likewise: a write-access user can edit the bot's review body, and
+  # an edit that breaks the trailer must re-evaluate, not keep a stale green.
   pull_request_review:
-    types: [submitted, dismissed]
+    types: [submitted, edited, dismissed]
   # A merge queue evaluates required contexts against the `merge_group` event
   # on the gh-readonly-queue/<base>/pr-N-<sha> ref, not against the pull
   # request. Without this trigger no "Connector Review" check-run is ever
@@ -103,7 +105,9 @@ jobs:
           # per PR rather than one per push. Its gap is real and known: a PR
           # reviewed at commit 1 can merge carrying commit 12. Repos that want
           # that closed set `enforce-head` and pay for it.
-          ENFORCE: ${{ startsWith(vars.CONNECTOR_REVIEW_GATE, 'enforce') && '--enforce' || '' }}
+          # Exact matches only: a typo such as `enforce-haed` stays warn-only
+          # rather than silently arming the sticky policy.
+          ENFORCE: ${{ (vars.CONNECTOR_REVIEW_GATE == 'enforce' || vars.CONNECTOR_REVIEW_GATE == 'enforce-head') && '--enforce' || '' }}
           POLICY: ${{ vars.CONNECTOR_REVIEW_GATE == 'enforce-head' && 'head' || 'sticky' }}
         run: |
           set -euo pipefail
