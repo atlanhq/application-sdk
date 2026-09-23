@@ -239,6 +239,7 @@ def test_the_baked_key_matches_what_ci_writes() -> None:
 # Build identity in the App lifecycle messages (FND-1936)
 # ---------------------------------------------------------------------------
 
+
 class TestBuildIdentityInLifecycleMessage:
     """The marker rides in the log *message*, not in a structured attribute.
 
