@@ -128,22 +128,8 @@ human audit):
      entry gives its type — re-declare it on the contract class with that type.
      Report `classification = "mechanical"` only when the finding names the
      field and the ledger type round-trips; the recheck gate confirms.
-  3. **Retire it as sunset** when the removal was deliberate (the commit,
-     a comment, or a design doc says the quantity no longer exists) and the
-     grep below finds no reader.  Re-declare the field with its ledger type
-     and a default, marked
-     `Field(default=<zero value>, deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`,
-     then run `gen-contract-ledger`.  The ledger diff must be status-only
-     (`active` → `sunset` on those entries); any type or entry change means
-     the edit is wrong.  The field must be declared when the generator runs,
-     since it refreshes status only for declared fields; a field deleted
-     before that stays `active` and B005 keeps firing.  Keep it declared
-     afterwards too: that is what lets a payload in the old shape still
-     validate.  Remove any `# conformance: ignore[B005]` directive in
-     the same edit.  Verify with `ledger-guard --base-ref <base>` and an import
-     of the contract module.
-  4. **Otherwise route to residue** proposing the owner's choice: restore the
-     field, or retire it as in step 3.
+  3. **Otherwise route to residue** proposing the owner's choice: restore the
+     field, or deprecate and sunset it.
   **Never propose a sunset for a field still referenced anywhere in the repo.**
   Grep the whole tree first, including `scripts/` and `*.sh` JSONPath arguments
   such as `$.extract.outputs.<field>`: a field removed from the contract while a

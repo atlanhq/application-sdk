@@ -238,10 +238,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "plain `X = <name>` such as `Ident = str` is not recognised, and a "
             "chain that expands past a size budget is compared unexpanded). To "
             "retire a field "
-            "deliberately, keep it declared with its recorded type and a default, "
-            'mark it `Field(..., deprecated=True, json_schema_extra={"x-lifecycle": '
-            '"sunset"})`, and run `gen-contract-ledger`: the generator reads that '
-            "marker back into the ledger as `status: sunset`. Before "
+            "deliberately, mark it `sunset` in contract_schema.lock.json. Before "
             "treating a removal as dead code, grep the whole repo — including "
             "scripts/ and *.sh JSONPath args like $.extract.outputs.<field> — for "
             "readers the contract does not know about."
@@ -298,14 +295,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "evolve with breaking changes.\n"
             "\n"
             "The ledger is append-only and machine-generated, so regeneration can\n"
-            "only *add* — it can never launder a removal.  To retire a field: keep\n"
-            "it declared on the contract with its recorded type and a default, mark\n"
-            'it ``Field(..., deprecated=True, json_schema_extra={"x-lifecycle":\n'
-            '"sunset"})`` (``deprecated=True`` alone records ``deprecated``), run\n'
-            "``gen-contract-ledger`` to record the new status, and commit the updated\n"
-            "ledger in the same PR.  The generator refreshes status only for a field\n"
-            "that is still declared, so deleting the field first leaves its entry\n"
-            "``active`` and B005 firing.\n"
+            "only *add* — it can never launder a removal.  To retire a field: mark\n"
+            "it ``deprecated`` or ``sunset`` in the Pkl widget definition, regenerate\n"
+            "the contract, run ``gen-contract-ledger`` to record the new status, and\n"
+            "commit the updated ledger in the same PR.\n"
         ),
         help_uri=f"{_HELP_BASE}#b005",
     ),

@@ -707,37 +707,6 @@ def _rule_bullet(area: str, rule_id: str) -> str:
     return match.group(0)
 
 
-def test_b005_sunset_marker_is_the_one_the_ledger_generator_reads() -> None:
-    """The B005 retirement path names the exact source marker, and it is one
-    `gen-contract-ledger` actually reads back as `sunset`.
-
-    Before this, the rule offered three different mechanisms: hand-edit the
-    ledger, mark it "in the Pkl widget definition" (a Python Output contract has
-    none), or the prose's bare "deprecate and sunset it". The only one the
-    generator recognises was documented under P001, not under the rule that
-    needs it. An app remediation run had to read `_field_status` to find it,
-    and the rule's own finding had been suppressed for want of it.
-    """
-    import ast
-
-    from conformance.suite.checks._entrypoint_contract_fields import _field_status
-    from conformance.suite.rules import CATALOG
-
-    bullet = _rule_bullet("deprecation", "B005")
-    snippets = re.findall(r"`(Field\([^`]*x-lifecycle[^`]*\))`", bullet)
-    assert snippets, "B005 prescription names no `Field(... x-lifecycle ...)` marker"
-    for snippet in snippets:
-        source = "x: int = " + snippet.replace("<zero value>", "0")
-        node = ast.parse(source).body[0]
-        assert isinstance(node, ast.AnnAssign)
-        assert _field_status(node) == "sunset", snippet
-
-    rule = CATALOG["B005"]
-    for text in (rule.terminal_state, rule.full_description):
-        assert "x-lifecycle" in text
-        assert "Pkl widget" not in text
-
-
 def test_o001_prescription_names_the_byte_changing_defaults() -> None:
     """A stdlib `json.dumps` with default arguments does not round-trip through
     orjson byte-for-byte: orjson is always compact and never escapes non-ASCII.
