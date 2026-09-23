@@ -474,9 +474,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K005",
         canonical_reference=(
-            "atlan-metabase-app app/generated/_input.py — the first two lines are the "
-            "AUTO-GENERATED banner naming contract/app.pkl and the command that rebuilds "
-            "it. The repo-root atlan.yaml carries the same banner. A stripped banner is "
+            "atlan-metabase-app app/generated/_input.py — the file opens with the "
+            "`# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.` banner. The "
+            "repo-root atlan.yaml carries the same banner. A stripped banner is "
             "the fingerprint of a hand edit that the next regeneration will erase."
         ),
         fix_locus=FixLocus.CONTRACT,
@@ -734,9 +734,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K009",
         canonical_reference=(
-            "atlan-metabase-app app/generated/manifest.json — the only brace token that "
-            "survives generation is `{deployment_name}` in the task queue, which the "
-            "platform substitutes at deploy time. Anything else ({app_name}, {name}) is a "
+            "atlan-metabase-app app/generated/manifest.json — the only single-brace token "
+            "that survives generation is `{deployment_name}` in the task queues "
+            "(e.g. atlan-metabase-{deployment_name}), which the platform substitutes at deploy "
+            "time; the `{{credential}}`-style tokens in args are Automation Engine runtime "
+            "substitutions and are legitimate too. Anything else ({app_name}, {name}) is a "
             "placeholder the toolkit was meant to fill and did not, usually because the "
             "pin predates the template."
         ),
@@ -1031,11 +1033,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K013",
         canonical_reference=(
-            "atlan-metabase-app app/generated/manifest.json — the extract node declares "
-            "`app_name: metabase`, matching its own workflow type and task queue "
-            "(atlan-metabase-{deployment_name}). The publish node declares `app_name: "
-            "publish`, because that node runs in the publish app. app_name names the app "
-            "that owns the queue, never the app doing the routing."
+            "atlan-metabase-app app/generated/manifest.json — the `publish` node declares "
+            "`app_name: publish` on atlan-publish-{deployment_name}, and the `qi` node "
+            "declares `app_name: query-intelligence` on "
+            "atlan-query-intelligence-{deployment_name}. Each system-app node names the app "
+            "that owns its queue, never the connector doing the routing; K013 grades only "
+            "such system-app and toolkit-owned nodes, not the connector's own extract node."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
@@ -1466,9 +1469,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K017",
         canonical_reference=(
-            "atlan-metabase-app app/generated/artifact_schemas.json — the declared schemas "
-            "describe what app/extracts/ actually writes under raw/, processed/ and "
-            "transformed/. The Python and the schema are two statements about one file, "
+            "atlan-openapi-app app/generated/artifact_schemas.json — `output_file` is "
+            "declared ndjson, and app/connector.py's transform writes exactly that: one "
+            "`to_nested_bytes()` entity per line into openapi_metadata.json, returned as "
+            "`FileReference(local_path=str(output_file))`. The Python and the schema are two "
+            "statements about one file, "
             "and only one of them is checked at runtime."
         ),
         fix_locus=FixLocus.CONTRACT,

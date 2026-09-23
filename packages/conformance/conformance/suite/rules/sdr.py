@@ -193,9 +193,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P030",
         canonical_reference=(
-            "atlan-metabase-app app/connector.py — `run()` uploads each transformed "
-            "typename with `raise_on_empty=True`, and uploads residual/ separately. An SDR "
-            "app with no self.upload() call leaves the ENABLE_ATLAN_UPLOAD path "
+            "atlan-metabase-app app/connector.py — the `extract_metadata` @entrypoint "
+            "delivers every transformed typename with one "
+            "`self.upload_refs(UploadRefsInput(...))` and uploads residual/ separately "
+            "with `self.upload(UploadInput(..., raise_on_empty=True))`. An SDR app with no "
+            "self.upload() or self.upload_refs() call leaves the ENABLE_ATLAN_UPLOAD path "
             "unreachable, so the e2e leg greens without moving a byte to the tenant "
             "bucket."
         ),
@@ -425,9 +427,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P038",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — the upload's storage_path comes from "
-            "`base_result.transformed_data_prefix`, which the SDK roots from "
-            "APPLICATION_NAME. An input field named application_name defaults to empty, so "
+            "atlan-mysql-app app/mysql.py — `run()` passes "
+            "`base_result.transformed_data_prefix` as both `source_prefix` and `prefix` of "
+            "its `self.upload_refs(UploadRefsInput(...))`, a prefix the SDK roots from the "
+            "running app's registered name (APPLICATION_NAME is only the fallback). An "
+            "input field named application_name defaults to empty, so "
             "rooting the prefix from it silently writes to the bucket root."
         ),
         scope=RuleScope.APP,
@@ -514,11 +518,13 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P039",
         canonical_reference=(
-            "atlan-metabase-app app/contracts.py — `MetabaseInput` declares `agent_json` "
-            "as a typed field, and atlan-metabase-app app/generated/_input.py extends the "
-            "SDK's `ExtractionInput` rather than a bare `Input`. Either route keeps the "
-            "forwarded value; a bare Input subclass with no agent_json field drops it "
-            "before the credential resolver sees it."
+            "atlan-metabase-app app/generated/_input.py — the generated "
+            "`class AppInputContract(ExtractionInput)` extends the SDK's ExtractionInput "
+            "family, which declares agent_json, rather than a bare `Input`; that "
+            "generated contract is what this rule reads. (The hand-written MetabaseInput "
+            "in app/contracts.py also types agent_json, but it is runtime context, not "
+            "the checked site.) A bare Input subclass with no agent_json field drops the "
+            "forwarded value before the credential resolver sees it."
         ),
         rule_interactions=(
             "The finding may anchor on generated output (app/generated/**), which is "
@@ -614,8 +620,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P042",
         canonical_reference=(
-            "atlan-metabase-app app/connector.py — the tenant-bucket hand-off is `await "
-            "self.upload(UploadInput(...))`. A hand-rolled upload_to_atlan bridge "
+            "atlan-metabase-app app/connector.py — the tenant-bucket hand-off is "
+            "`self.upload_refs(UploadRefsInput(...))` for the transformed tree plus "
+            "`self.upload(UploadInput(...))` for residual/ and the lineage stage; there is "
+            "no upload_to_atlan bridge. A hand-rolled bridge "
             "re-implements the routing to upstream_storage and then has to track it as the "
             "SDK changes."
         ),
@@ -719,9 +727,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P051",
         canonical_reference=(
-            "atlan-mysql-app uv.lock — the SDK resolves to 3.32.0, above the 3.30.0 floor "
-            "that carries interactive setup (test auth, preflight, metadata browsing). The "
-            "declared range in pyproject.toml is what lets the lock reach it."
+            "atlan-mysql-app uv.lock — the locked atlan-application-sdk version sits "
+            "above the 3.30.0 floor that carries interactive setup (test auth, preflight, "
+            "metadata browsing), because the lower bound declared in pyproject.toml is "
+            "itself above that floor. The rule reads the lock, not the specifier: a floor "
+            "at or above 3.30.0 keeps every re-lock compliant."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,

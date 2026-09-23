@@ -47,8 +47,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P043",
         canonical_reference=(
-            "atlan-mysql-app app/handler.py — control flow branches on `AppError` and "
-            "`AuthError`, both from `application_sdk.errors`. Branching on a class the "
+            "atlan-mysql-app app/handler.py — control flow branches on "
+            "`isinstance(e, AppError)`, and app/failures.py subclasses `AuthError`; both "
+            "come from `application_sdk.errors`. Branching on a class the "
             "package does not export binds the app to a name the SDK can move without a "
             "deprecation cycle."
         ),

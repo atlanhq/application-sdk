@@ -395,9 +395,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P015",
         canonical_reference=(
-            "atlan-metabase-app app/contracts.py — collection fields are bounded with "
-            "`MaxItems` rather than left as an open list of primitives, which is what "
-            "keeps the payload inside Temporal's limit as the source grows."
+            "atlan-metabase-app app/contracts.py — the collection filters are "
+            "containers of a typed model, `CollectionFilter = Annotated[dict[str, "
+            "CollectionSelection], MaxItems(1000)]`, and `CollectResidualsInput.residual_files` "
+            "is `Annotated[dict[str, FileReference], MaxItems(16)]`. The value type is what "
+            "this rule grades: a bounded dict of str would still fire, because MaxItems "
+            "keeps the payload small but gives the keys and values no schema."
         ),
         scope=RuleScope.APP,
         name="UnmodeledBoundedContractField",

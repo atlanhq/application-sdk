@@ -1432,12 +1432,17 @@ def test_rules_citing_a_suppression_as_compliant_license_it() -> None:
     ``atlan-metabase-app`` as the compliant example while declaring no
     ``terminal_state`` (FND-2547).
     """
-    cites_suppression = re.compile(r"ignore\[[A-Z]\d+\]")
+    # Only a suppression of the rule's OWN id is a carve-out that needs a
+    # licence. A directive for a different rule is just a site the reference
+    # happens to show — F020 (directive hygiene) cites a well-formed
+    # ``ignore[E020]`` precisely as its compliant shape, and that says nothing
+    # about when F020 itself may be suppressed.
+    cites_suppression = re.compile(r"ignore\[([A-Z]\d+)\]")
     unlicensed = [
         r.id
         for r in load_catalog()
         if r.canonical_reference
-        and cites_suppression.search(r.canonical_reference)
+        and r.id in cites_suppression.findall(r.canonical_reference)
         and not r.terminal_state
     ]
     assert not unlicensed, (

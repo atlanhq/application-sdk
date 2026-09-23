@@ -127,9 +127,12 @@ impact: failed workflows lose actionable typed failure details.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/handler.py — a failing check is `PreflightCheck(passed=False,
-  error=AuthError(message=..., suggested_action=..., cause=e))`. A `passed=False` with
-  no typed error gives the customer a red row and no reason for it.
+- **Compliant example:** atlan-mysql-app app/handler.py — the failed auth probe in `_run_preflight_probes` is
+  `PreflightCheck(name="auth", passed=False,
+  error=PreflightAuthError(cause=e).to_failure_details())`, where PreflightAuthError
+  (app/failures.py) is an AuthError subclass that declares message and suggested_action
+  as class defaults. A `passed=False` with no typed error gives the customer a red row
+  and no reason for it.
 
 A `PreflightCheck` with proven or default `passed=False` and no typed `error=` (absent,
 or the literal `None`) is an untyped failure: the gate falls back to the generic
@@ -162,9 +165,11 @@ only guard.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/handler.py — `preflight_check` reads only fields the entrypoint's
-  Input contract declares. A metadata key the contract does not carry is one the
-  orchestrator has no way to send, so the check silently evaluates an absent value.
+- **Compliant example:** atlan-openapi-app app/handler.py — `preflight_check` reads no `input.metadata` key at
+  all: its configuration comes from `input.connection_config` (`cfg.get("import_type")`,
+  `cfg.get("spec_url")`), so there is no metadata read for the gate path to drop. A
+  metadata key the entrypoint's Input contract does not carry is one the orchestrator
+  has no way to send, so the check silently evaluates an absent value.
 
 The preflight gate does not forward the live UI form: it rebuilds
 `PreflightInput.metadata` from the extraction input's `model_dump()`
@@ -315,10 +320,11 @@ failed checks.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/handler.py — the verdict is derived from the same check list that
-  is returned: any failed name in `_MANDATORY_CHECKS` gives NOT_READY, otherwise the
-  advisory rows stay visible without flipping the status, so status and rows cannot
-  contradict each other.
+- **Compliant example:** atlan-mysql-app app/handler.py — `_run_preflight_probes` writes each verdict next to the
+  rows that justify it: NOT_READY carries the failed mandatory `auth` row
+  (`checks=[auth_check]`), and READY carries the passed `auth` row plus the advisory
+  connectivity row, which may fail without flipping the status. Status and rows are
+  spelled together, so they cannot contradict each other.
 
 Keep READY, PARTIAL and NOT_READY consistent with check outcomes.
 
@@ -338,10 +344,11 @@ while the gate sees different inputs.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app tests/unit/test_handler.py —
-  `test_gate_path_input_gives_the_same_verdict` builds the PreflightInput the gate
-  builds (credentials, credentials_by_name, entrypoint, timeout_seconds) and asserts the
-  handler reaches the same verdict as the setup-form path.
+- **Compliant example:** atlan-metabase-app app/connector.py — the `extract_metadata` @entrypoint constructs no
+  PreflightInput of its own and leaves preflight to the SDK gate, so on the workflow
+  path the gate's input (the selected entrypoint plus resolved credentials) is the only
+  PreflightInput the handler receives. None of the three reference apps builds a
+  PreflightInput inside an @entrypoint.
 
 Preserve the selected entrypoint and supply routable credentials before the gate.
 
@@ -384,9 +391,12 @@ timeout races.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/handler.py — `_probe_timeout` returns `max(1.0, min(30.0, budget *
-  0.8))`, so the probe's own timeout stays strictly inside the enforced gate budget; the
-  module comment explains that a floor above the budget makes the deadline decorative.
+- **Compliant example:** atlan-mysql-app app/handler.py — `preflight_check` bounds the probes with
+  `asyncio.wait_for(self._run_preflight_probes(input, deadline), timeout=deadline)`,
+  where `deadline = _probe_deadline(input.timeout_seconds)` is 80% of the budget the
+  gate hands in (no deadline when the gate supplies none). No floor or margin is added
+  on top of `input.timeout_seconds`, so the probe gives up before the gate cancels it;
+  that timeout argument is the site F012 grades.
 
 Keep probe and retry deadlines inside the remaining gate budget.
 
@@ -405,9 +415,10 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/handler.py — `preflight_check` closes its SQLClient in a `finally:
-  await client.close()`, so cleanup is awaited, bounded and runs on every exit path,
-  including the typed-failure early return.
+- **Compliant example:** atlan-mysql-app app/handler.py — `_run_preflight_probes` (which `preflight_check` runs
+  under `asyncio.wait_for`) closes its SQLClient in a `finally: await client.close()`,
+  so cleanup is awaited and runs on every exit path, including the typed-failure early
+  return.
 
 Release owned preflight resources without blocking the event loop.
 
@@ -478,11 +489,12 @@ recovery, or resource lifetime. Missing and skipped scenarios are incomplete evi
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app tests/unit/test_handler.py — drives the real
-  `OpenAPIConnectorHandler.preflight_check` per verdict: READY on a reachable URL,
-  NOT_READY with typed rows on 403, connect error, redirect and missing spec_url, and no
-  signature leak on a presigned URL. Registering those under
-  `pytest.mark.preflight_conformance` is what turns them into F016 coverage.
+- **Compliant example:** atlan-openapi-app tests/unit/test_preflight_conformance.py — each required scenario
+  (healthy, mandatory_failure, recoverable_transient, hung_probe, cancellation_cleanup
+  and the rest) is a test that drives the real `OpenAPIConnectorHandler.preflight_check`
+  and is registered with `@pytest.mark.preflight_conformance(rule="F016",
+  scenario=...)`. The marker, not the file's presence, is what a `--with-tests` run
+  counts as coverage.
 
 Execute registered real-handler scenarios for each applicable entrypoint.
 
@@ -533,10 +545,11 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/handler.py — `preflight_check` is an async method on the Handler
-  subclass, calls helpers defined in the same module, and builds PreflightCheck rows
-  with literal names: the shape static analysis resolves fully, so nothing on it is
-  reported as unresolved.
+- **Compliant example:** atlan-mysql-app app/handler.py — every PreflightOutput in `_run_preflight_probes` spells
+  its checks list inline, from PreflightCheck constructions or a same-class helper
+  (`_check_connectivity`), never an accumulator, so static analysis resolves every row
+  and its mandatory/advisory role. The comment above the NOT_READY return cites F019 as
+  the reason.
 
 Report unresolved preflight dispatch and contracts instead of a clean result. Two kinds
 of gap are reported, and only one of them is clearable by executing tests. A
@@ -566,9 +579,9 @@ directive is the cause.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/handler.py — its inline directives cite live ids (E004) with a named
-  owner and a review date. A directive that cited P034 now cites F003 the same way; the
-  id is the only part that changes.
+- **Compliant example:** atlan-metabase-app app/extracts/collections.py — its inline conformance directive names
+  a live rule id (E020) and carries a written justification. A directive that cited P034
+  now cites F003 the same way, justification kept; the id is the only part that changes.
 
 The preflight rules moved from the P-series to the F-series: P032-P035 became F001-F004
 and P047 became F005. The suppression parser matches ids as plain strings, so a `#

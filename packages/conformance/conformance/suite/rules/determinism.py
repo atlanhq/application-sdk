@@ -93,9 +93,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P021",
         canonical_reference=(
-            "atlan-openapi-app app/connector.py — `run()` only validates the input, "
-            "builds task inputs and awaits `download_cloud_spec`, `extract_spec` and "
-            "`transform`; the tempfile, the HTTP fetch and the object-store download "
+            "atlan-openapi-app app/connector.py — `run()` validates the input, resolves "
+            "the credential ref, builds task inputs and awaits `download_cloud_spec`, "
+            "`extract_spec`, `transform` and the framework's `self.upload(...)`; the "
+            "tempfile, the HTTP fetch and the object-store download "
             "live inside those tasks. The comment above the download call states the "
             "rule in the app's own words: cloud I/O must run in an activity, not "
             "workflow code."

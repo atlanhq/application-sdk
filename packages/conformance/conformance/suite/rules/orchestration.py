@@ -78,9 +78,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P005",
         canonical_reference=(
-            "atlan-metabase-app app/connector.py — imports come from `application_sdk.app` "
-            "and `application_sdk.contracts`, both public. A private orchestration module "
-            "is one the SDK may move without a deprecation cycle."
+            "atlan-metabase-app app/connector.py — every SDK import is from a public "
+            "module: `application_sdk.app` (App, entrypoint, task), "
+            "`application_sdk.contracts.*` and `application_sdk.observability."
+            "logger_adaptor`. None reaches an underscore-prefixed path such as "
+            "application_sdk.execution._temporal, which the SDK may move without a "
+            "deprecation cycle."
         ),
         scope=RuleScope.APP,
         name="PrivateOrchestrationInternalImport",
