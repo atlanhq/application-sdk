@@ -396,9 +396,12 @@ def _format_build_identity() -> str:
     message needs none of that to change, and reaches the run-log panel, the
     ``.log`` and ``.ndjson`` exports and any future consumer at once.
 
-    The structured ``sdk.version`` / ``app.version`` attributes on the four
-    lifecycle lines stay: they reach ClickHouse via OTLP, where they are real
-    queryable columns and answer fleet questions this string cannot.
+    The remaining structured carriers are the OTel Resource ``sdk.version``
+    (on every OTLP log record) and the ``app_version`` / ``commit_sha`` fields
+    on ``worker_start`` and ``token_refresh`` events. Those still answer fleet
+    questions this string cannot. The four interceptor lifecycle lines
+    (``workflow.*`` / ``activity.*``) no longer carry ``sdk.version`` /
+    ``app.version`` attributes.
 
     Keys are ``k=v`` and ASCII so that the grep that motivated this — an
     engineer searching an exported run log for a version — actually hits.
