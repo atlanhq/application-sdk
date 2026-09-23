@@ -237,6 +237,24 @@ outcome mirroring the error-handling shape in the reference app named by
   site, format the exception through `sanitize_cause_repr` and omit
   `exc_info=True`.
 
+  **Already-clearing shape — do not "fix" it:** a `return` that hands the
+  caught exception back as **typed data** is not flagged.  E007 uses the same
+  typed-failure predicate as E004's already-clearing list above, so the two
+  rules agree:
+  `return self._failed("authentication", started, AuthRejectedError(cause=exc))`,
+  `return None, self._failed("credentials", started, CredentialsUnusableError(cause=exc))`,
+  or, under a narrow catch (`except AuthRejectedError as exc:`), a helper
+  that receives the binding directly: `return self._failed(name, started, exc)`.
+  These are the arms of a preflight probe.  **Never add a log to them**:
+  inside a `preflight_check` override a `warning`/`error` trades the E007 for
+  an F005, as described under E004.  If such an arm still reports E007, the
+  exception is not leaving the frame typed.  Usually it is handed raw to a
+  helper under a broad catch, or the return stringifies it.  Wrap it in the
+  domain error (`XError(cause=exc)`) rather than logging.  A bare sentinel
+  and a stringified exception (`str(exc)`, `repr(exc)`, an f-string or
+  `.format(exc)`) still fire.  A string is the failure laundered into a plain
+  value.
+
 - **E008 ImportErrorWithoutLogging** — `except ImportError` with no logging,
   so a missing or broken dependency reads as a normal skip.  Bind the
   exception and carry its text into whatever the block does next: a log line

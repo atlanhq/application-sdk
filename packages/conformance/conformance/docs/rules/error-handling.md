@@ -257,6 +257,17 @@ unrelated, making the original failure invisible.
   status and records a residual before returning []. Where the sentinel really is the
   contract, atlan-openapi-app app/api_client.py `redact_url` carries an inline
   ignore[E007] saying so.
+- **Interacts with:** E007 and E004 judge the same handler shape with one shared predicate
+  (typed_failure_scope in checks/error_handling/_helpers.py). A return that hands the
+  caught exception back as typed data already clears both rules: a call that receives
+  the binding wrapped in a typed error (`AuthRejectedError(cause=exc)`), including
+  inside a tuple, or, under a narrow catch, a call that receives the binding directly
+  (`self._failed(name, started, exc)`). Adding a log there is a wrong edit, and inside a
+  preflight_check override a warning/error log trades the E007 for an F005. E007 applies
+  the predicate per return and E004 applies it to every exit. Bare sentinels and
+  stringified exceptions (`str(exc)`, `repr(exc)`, an f-string or `.format(exc)`) still
+  fire, because a string is the failure laundered into a plain value. Found by a
+  consumer app's preflight probe arms in FND-2493.
 - **Already correct when:** A justified inline `# conformance: ignore[E007] <reason>` IS the correct end state where
   the sentinel genuinely IS the function's contract — the caller is documented to treat
   the empty/None return as a normal outcome rather than as success. The reason must say
@@ -268,6 +279,10 @@ unrelated, making the original failure invisible.
 Exception is converted to a return value (None, {}, [], False) with no trace.  Callers
 see a wrong result with no idea why.  At minimum log before returning; prefer raising a
 domain-specific exception instead.
+
+A return that hands the caught exception back as typed data is not flagged: the failure
+leaves the frame for the caller to report. This is the same typed-failure predicate E004
+uses.
 
 ---
 

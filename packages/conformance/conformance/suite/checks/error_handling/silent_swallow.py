@@ -20,7 +20,9 @@ from ._helpers import (
     _inherits_logging_filter,
     _is_gather_call,
     _iter_shallow,
+    _return_carries_typed_failure,
     redaction_scope,
+    typed_failure_scope,
 )
 
 
@@ -185,10 +187,18 @@ class SilentSwallowMixin:
     # ── E007 ─────────────────────────────────────────────────────────────────
 
     def _check_p007(self, node: ast.ExceptHandler) -> None:
+        # A return that hands the caught exception back as typed data hides
+        # nothing: the failure leaves the frame for the caller to report. This
+        # is the same predicate E004 uses for its typed-failure exemption, so
+        # the two rules never disagree about one shape. It is applied per
+        # return, because E007 judges each return on its own.
+        scope = typed_failure_scope(node)
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
             if _any_logging_in(node.body[:i]):
+                continue
+            if scope is not None and _return_carries_typed_failure(stmt, scope):
                 continue
             self._add(
                 "E007",
