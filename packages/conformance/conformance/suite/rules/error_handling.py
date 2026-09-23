@@ -327,10 +327,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E008",
         canonical_reference=(
-            "atlan-openapi-app tests/e2e/test_connection_create.py — the module guard "
-            "binds `except ImportError as _exc` and carries the text into the pytest.skip "
-            "reason, so a missing SDK export is readable from the run instead of appearing "
-            "as an empty skip."
+            "application_sdk/clients/ssl_utils.py — `_get_default_ca_bundle_path` catches the "
+            "ImportError for the optional certifi dependency and logs that it is falling "
+            "back to the system CA paths before continuing, so the degraded path leaves a "
+            "trace. None of the three reference apps has an `except ImportError` in the "
+            "code E008 scans (app/ and main.py; tests/ is excluded), so the SDK is the "
+            "only real compliant site."
         ),
         scope=RuleScope.BOTH,
         name="ImportErrorWithoutLogging",

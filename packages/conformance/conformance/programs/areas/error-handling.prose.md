@@ -295,10 +295,9 @@ outcome mirroring the error-handling shape in the reference app named by
 - **E008 ImportErrorWithoutLogging** — `except ImportError` with no logging,
   so a missing or broken dependency reads as a normal skip.  Bind the
   exception and carry its text into whatever the block does next: a log line
-  for a runtime guard, or the skip reason for a test guard, as in
-  `atlan-openapi-app tests/e2e/test_connection_create.py`, which binds
-  `except ImportError as _exc` and puts the text in the `pytest.skip` reason.
-  Legitimate optional-dependency guards still need the trace — the fallback
+  for a runtime guard, as `application_sdk/clients/ssl_utils.py`'s
+  `_get_default_ca_bundle_path` logs its certifi fallback (no reference app has
+  a scanned `except ImportError`; E008 skips `tests/`).  Legitimate optional-dependency guards still need the trace — the fallback
   being correct is not the same as the failure being invisible.
 
 - **E009 ExceptBlockOnlyAssigns** — the `except` block only assigns a variable

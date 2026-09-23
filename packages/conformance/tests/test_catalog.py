@@ -1521,6 +1521,16 @@ def test_canonical_references_name_something_checkable() -> None:
 #: The maintained reference apps alone — ``_REFERENCE_REPOS`` minus the SDK.
 _REFERENCE_APPS = tuple(repo for repo in _REFERENCE_REPOS if repo != "application_sdk")
 
+#: Auto-fixable rules allowed an SDK-only reference, each with the reason no
+#: reference app can supply one. An entry is a claim about all three apps, so
+#: it must be re-checked (and removed) the moment an app gains a real site.
+_SDK_ONLY_REFERENCE_EXEMPT = {
+    "E008": (
+        "no reference app has an `except ImportError` in the code E008 scans "
+        "(app/, main.py — tests/ is excluded); verified FND-2702"
+    ),
+}
+
 
 def test_autofixable_app_facing_rules_cite_a_reference_app() -> None:
     """An auto-fixable rule's fix is mirrored from an app, so it must name one.
@@ -1539,11 +1549,23 @@ def test_autofixable_app_facing_rules_cite_a_reference_app() -> None:
         and r.scope in (RuleScope.APP, RuleScope.BOTH)
         and r.canonical_reference
         and not any(app in r.canonical_reference for app in _REFERENCE_APPS)
+        and r.id not in _SDK_ONLY_REFERENCE_EXEMPT
     ]
     assert not sdk_only, (
         "auto-fixable app-facing rules whose canonical_reference names no "
         f"reference app — cite a file in one of {list(_REFERENCE_APPS)}: {sdk_only}"
     )
+    catalog = {r.id: r for r in load_catalog()}
+    stale = [
+        rule_id
+        for rule_id in _SDK_ONLY_REFERENCE_EXEMPT
+        if rule_id not in catalog
+        or not catalog[rule_id].autofixable
+        or any(app in catalog[rule_id].canonical_reference for app in _REFERENCE_APPS)
+    ]
+    assert (
+        not stale
+    ), f"_SDK_ONLY_REFERENCE_EXEMPT entries no longer needed — remove them: {stale}"
 
 
 def test_canonical_references_never_name_the_scaffold() -> None:
