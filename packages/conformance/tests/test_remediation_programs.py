@@ -308,6 +308,11 @@ def test_exc_info_prescriptions_carry_the_credential_contraindication(
     assert "application_sdk.errors" in text
     # And it must say the sanitized form is a fix, not a carve-out.
     assert "no suppression" in text
+    # The redacted form must not cost the stack trace the rule exists for:
+    # the prescription has to offer safe_traceback alongside the cause.
+    assert (
+        "safe_traceback(exc)" in text
+    ), f"{area}'s credential-safe form drops the traceback; name safe_traceback"
 
 
 def test_b006_may_write_the_contract_ledger() -> None:

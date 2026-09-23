@@ -85,6 +85,23 @@ from application_sdk.errors import redact_secrets, sanitize_cause_repr
 logger.error("connect failed: %s", sanitize_cause_repr(exc))
 ```
 
+**Keep the stack, redacted.** The one-line form above drops the traceback,
+which is the defect L004/E005 exist to fix — a postmortem is back to
+reproducing the failure against the customer's source. When the stack is
+worth having (anything past a single, well-understood connect call), log
+the redacted traceback alongside the redacted cause:
+
+```python
+from application_sdk.errors import safe_traceback, sanitize_cause_repr
+
+logger.error("connect failed: %s\n%s", sanitize_cause_repr(exc), safe_traceback(exc))
+```
+
+`safe_traceback` formats the full chain (frames, `__cause__`, `__context__`)
+and runs it through the same redaction as `redact_secrets`, so the frames
+survive and the URL userinfo and secret query params do not. It is a
+recognised sanitizer name, so the call clears the rule the same way.
+
 **This clears the rule, and needs no suppression** — L004 accepts a log call
 whose arguments flow through a sanitizer as a deliberate no-traceback
 boundary (`suite/checks/_ast_common/_sanitizers.py`).  Recognition is **by
