@@ -93,9 +93,10 @@ class SecurityMixin(_MixinBase):
         that is not an auth word (``is_resource_token_name``), AND the enclosing
         function must interpolate it as a URL path segment
         (``collect_path_segment_names``) — ``f"/reports/{report_token}/queries"``.
-        A secret travels in a header or query parameter, not as a path segment
-        of the request it authenticates.  Neither half alone exempts anything:
-        ``access_token`` in a path still fires, and ``report_token`` that is
-        only ever logged still fires.
+        A secret usually travels in a header or query parameter; the ones that
+        ride in a path (webhook, bot, service URLs) carry an auth word, which
+        ``RESOURCE_TOKEN_AUTH_QUALIFIERS`` keeps outside the exemption.
+        Neither half alone exempts anything: ``access_token`` in a path still
+        fires, and ``report_token`` that is only ever logged still fires.
         """
         return is_resource_token_name(name) and name in self._path_segment_names

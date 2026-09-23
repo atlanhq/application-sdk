@@ -378,12 +378,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "Also exempt: a resource identifier some source APIs call a token\n"
             "(Mode's report_token / collection_token).  A `<noun>_token` argument is\n"
             "silent only when BOTH hold: the noun is not an auth word (access, auth,\n"
-            "bearer, refresh, id, session, reset, github, …; bare `token` never\n"
-            "qualifies), AND the same function interpolates that name as a URL path\n"
-            'segment (f"/reports/{report_token}/queries").  A secret travels in a\n'
-            "header or query parameter, not as a path segment of the request it\n"
-            "authenticates.  A resource token that is only logged — never part of a\n"
-            "path — still fires; log a name beside it, or drop it."
+            "bearer, refresh, id, session, reset, secret, bot, hook, webhook, service,\n"
+            "user, personal, password, sso, …; bare `token` never qualifies), AND the\n"
+            "same function interpolates that name as a URL path segment\n"
+            '(f"/reports/{report_token}/queries").  A secret usually travels in a\n'
+            "header or query parameter; the ones that ride in a path (webhook, bot\n"
+            "and service URLs) carry an auth word, so the guard errs toward firing.\n"
+            "A resource token that is only logged — never part of a path — still\n"
+            "fires; log a name beside it, or drop it."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l010",
     ),

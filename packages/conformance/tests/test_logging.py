@@ -1660,6 +1660,44 @@ def test_l010_silent_for_resource_token_used_as_path_segment(body: str) -> None:
             "    get(f'/api/reports/{report_token}/queries')\n"
             "    logger.info('report', token=report_token)\n"
         ),
+        # Secrets that ride in a URL path carry an auth word: still fire.
+        (
+            "def post(secret_token):\n"
+            "    send(f'/services/T1/B2/{secret_token}')\n"
+            "    logger.info('posting with %s', secret_token)\n"
+        ),
+        (
+            "def post(bot_token):\n"
+            "    send(f'/bot/{bot_token}/sendMessage')\n"
+            "    logger.info('posting with %s', bot_token)\n"
+        ),
+        (
+            "def post(hook_id, webhook_token):\n"
+            "    send(f'/webhooks/{hook_id}/{webhook_token}')\n"
+            "    logger.info('posting with %s', webhook_token)\n"
+        ),
+        (
+            "def resume(session_token):\n"
+            "    get(f'/sessions/{session_token}')\n"
+            "    logger.info('resuming %s', session_token)\n"
+        ),
+        # Query-parameter use of a resource-shaped name is not a path segment.
+        (
+            "def f(report_token):\n"
+            "    get(f'/api/reports?report_token={report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # Header and body uses are not path segments either.
+        (
+            "def f(report_token):\n"
+            "    get('/api/reports', headers={'X-Report-Token': report_token})\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        (
+            "def f(report_token):\n"
+            "    post('/api/reports', json={'report_token': report_token})\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
     ],
 )
 def test_l010_still_fires_outside_the_resource_token_exemption(body: str) -> None:

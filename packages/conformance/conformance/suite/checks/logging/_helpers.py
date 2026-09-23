@@ -310,9 +310,11 @@ def collect_path_segment_names(func: ast.AST) -> frozenset[str]:
     (``f"https://{token}@host"``: preceded by ``//`` or followed by ``@``/``:``)
     or sits in a query string (``?`` earlier in the literal) is not a segment.
 
-    A secret is sent in a header or a query parameter, not as a path segment of
-    the request it authenticates, so a ``<noun>_token`` used this way within the
-    same function is a resource identifier.  Nested functions are scanned
+    A secret is usually sent in a header or a query parameter, so a
+    ``<noun>_token`` used this way within the same function is treated as a
+    resource identifier — unless its noun is an auth word
+    (``RESOURCE_TOKEN_AUTH_QUALIFIERS``), which covers the secrets that do ride
+    in a path (webhook, bot, service URLs).  Nested functions are scanned
     separately by the caller, so their f-strings are not collected here.
     """
     names: set[str] = set()
