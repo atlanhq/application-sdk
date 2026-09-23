@@ -30,6 +30,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 from urllib.parse import urlparse
 
+# Kept only so ``application_sdk.storage.binding.logger`` stays importable
+# (removing a shipped module-level name needs a deprecation cycle, see
+# docs/standards/symbols.md). Nothing in this module logs through it: every
+# record goes through the SDK adapter via ``_get_logger()`` below.
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -805,7 +809,7 @@ def _create_store_core(
     # Never log the resolved endpoint/accountName: on the secure k8s path that
     # value comes from the secret store and would leak to INFO logs.
     endpoint = meta.get("endpoint", meta.get("accountName", ""))
-    logger.info(
+    _get_logger().info(
         "create_store_from_binding: name=%r type=%r store_kind=%r endpoint_configured=%s",
         name,
         binding_type,
