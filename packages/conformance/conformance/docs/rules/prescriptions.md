@@ -135,6 +135,13 @@ time, so the app does not import at all.  `Any` is refused unconditionally: wrap
 in `MaxItems` does not make it acceptable.  Removing the opt-out is a real fix only when
 every field is concretely typed.
 
+**The opt-out does not govern unknown keys.**  `Input` drops keys the contract does not
+declare (logging which ones, once) whether or not `allow_unbounded_fields` is set — the
+flag only skips the payload-safety type check.  So a contract that receives more args
+than it reads (an AE DAG node's `credential` / `credential_guid`) does NOT need the
+opt-out to tolerate them; a justification that says it does is wrong, and the opt-out
+comes off with nothing else changed once every declared field is concretely typed.
+
 **Deciding what to do.** Four outcomes, in order of preference.  A field being recorded
 in the ledger does NOT by itself close the first three — reading it that way is what
 turns fixable sites into suppressions.

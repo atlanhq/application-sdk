@@ -1690,6 +1690,70 @@ def _scan_unused_dependencies(
     return findings, unresolved
 
 
+def _constraint_entry_lines(text: str) -> Iterator[tuple[str, int, int]]:
+    """Yield ``(raw, line, column)`` for each ``[tool.uv] constraint-dependencies``
+    array entry, preserving source positions (tomllib discards them)."""
+    table_re = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
+    entry_re = re.compile(r"""(["'])([^"']+)\1""")
+    section: str | None = None
+    in_array = False
+    for ln, line in enumerate(text.splitlines(), start=1):
+        stripped = line.split("#", 1)[0]
+        table = table_re.match(line)
+        if table is not None:
+            section = table.group(1).strip()
+            in_array = False
+            continue
+        if section != "tool.uv":
+            continue
+        if not in_array:
+            key, sep, rest = stripped.partition("=")
+            if sep and key.strip() == "constraint-dependencies":
+                in_array = "[" in rest
+                stripped = rest.split("[", 1)[-1]
+            else:
+                continue
+        for match in entry_re.finditer(stripped):
+            yield match.group(2), ln, match.start(2) + 1
+        if "]" in stripped:
+            in_array = False
+
+
+def _scan_constraint_floors(text: str, rel_pyproject: str) -> list[Finding]:
+    """D003: an app's ``[tool.uv] constraint-dependencies`` floors.
+
+    A floor on a package the app does not declare is a second place for a
+    transitive version to be decided.  Transitive floors belong to the SDK,
+    whose dependency ranges the app resolves through; an app-local copy goes
+    stale the moment the SDK's own floor moves, and nothing reports it.  App
+    repos only — the SDK's own pyproject is where these floors live.
+    """
+    suppressions = parse_toml_suppressions(text)
+    findings: list[Finding] = []
+    for raw, line, column in _constraint_entry_lines(text):
+        parsed = _parse_requirement(raw)
+        name = parsed[0] if parsed else raw
+        findings.append(
+            _make_finding(
+                rule_id=RULE_D003,
+                file=rel_pyproject,
+                line=line,
+                column=column,
+                message=(
+                    f"'{name}' is floored in [tool.uv] constraint-dependencies "
+                    f"('{raw}'). An app does not carry transitive security floors: "
+                    f"remove the entry. If a CVE fix is needed, it belongs in "
+                    f"atlan-application-sdk's dependency ranges and reaches the app "
+                    f"by upgrading the SDK. Note uv does not propagate an SDK's own "
+                    f"[tool.uv] constraints to dependents, so the lock's resolved "
+                    f"version and CI's vulnerability scan are what guard it."
+                ),
+                suppressions=suppressions,
+            )
+        )
+    return findings
+
+
 def _scan_conformance_dependency(
     text: str, rel_pyproject: str, root: Path
 ) -> list[Finding]:
@@ -1980,8 +2044,8 @@ def _scan_default_index(text: str, rel_pyproject: str) -> list[Finding]:
                     "lock makes CI fail at dependency install with 401 "
                     f"Unauthorized. Add:\n{canonical}\nPut it in pyproject.toml, "
                     "not in a project-level uv.toml: a uv.toml suppresses "
-                    "[tool.uv] here entirely and would silently drop any "
-                    "constraint-dependencies CVE floors declared in it."
+                    "[tool.uv] here entirely and would silently drop every "
+                    "setting declared in it."
                 ),
                 suppressions=suppressions,
             )
@@ -2410,6 +2474,8 @@ def scan_all(
         findings.extend(
             _scan_query_transformer_duckdb(py_files, root, text, rel_pyproject)
         )
+        # ── D003 constraint floors (app-only: the SDK is where floors live) ──
+        findings.extend(_scan_constraint_floors(text, rel_pyproject))
 
     # ── D011 (repo-level: a property of the root pyproject, not of each) ────
     findings.extend(_scan_conformance_dependency(text, rel_pyproject, root))

@@ -335,6 +335,38 @@ def test_e004_prose_states_the_sanitizer_level_and_the_inline_row() -> None:
     assert "loop body" in text
 
 
+def test_o001_prose_names_the_three_dropped_tolerances() -> None:
+    """orjson raises on non-str keys and >64-bit ints and writes NaN as null.
+
+    A straight swap that ignores these breaks at runtime on data the tests may
+    not carry (found remediating atlan-mode-app, FND-2549).
+    """
+    text = " ".join(_read("areas/optimizations.prose.md").split())
+    assert "OPT_NON_STR_KEYS" in text
+    assert "NaN" in text
+    assert "64 bits" in text
+
+
+def test_d003_prose_removes_constraint_floors_rather_than_relocating() -> None:
+    """Moving a floor into constraint-dependencies only relocates D003."""
+    text = " ".join(_read("areas/dependency.prose.md").split())
+    assert "constraint-dependencies` entry in an app is also D003" in text
+    assert "do not move a floor" in text
+
+
+def test_p001_prose_says_the_opt_out_does_not_govern_unknown_keys() -> None:
+    """Extra AE node args do not justify keep-the-opt-out (FND-2549).
+
+    The catalog already says Input drops undeclared keys regardless of
+    allow_unbounded_fields; the remediator reads prescriptions.prose.md,
+    not the catalog, so the same paragraph has to live here.
+    """
+    text = " ".join(_read("areas/prescriptions.prose.md").split())
+    assert "does not govern unknown keys" in text
+    assert "credential_guid" in text
+    assert 'Do not draft "keep the opt-out" for extra AE node args' in text
+
+
 def test_d009_prose_verifies_without_poe() -> None:
     """`uv run poe` re-resolves the lock without --frozen (D013 on a laptop)."""
     text = " ".join(_read("areas/dependency.prose.md").split())

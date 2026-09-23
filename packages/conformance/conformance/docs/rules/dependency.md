@@ -135,7 +135,11 @@ must be importable in the running interpreter — run `uv sync` first.  In an is
 runner (e.g. `uvx atlan-application-sdk-conformance detect --series D`) no dependency is
 installed, so every one is skipped to stderr and the rule reports nothing; that is an
 unresolved environment, not a clean repo.  The conformance CI runs the D-series leg in a
-synced environment for this reason.  See BLDX-1462.
+synced environment for this reason.  See BLDX-1462.  **Constraint floors:** in an app
+repo, every `[tool.uv] constraint-dependencies` entry is also a D003 finding — a
+security floor on a transitive package is the SDK's to set, not the app's, and an
+app-local copy goes stale when the SDK's range moves.  Remove it; a needed CVE fix
+reaches the app by upgrading the SDK.  The SDK's own pyproject is exempt.
 
 ---
 

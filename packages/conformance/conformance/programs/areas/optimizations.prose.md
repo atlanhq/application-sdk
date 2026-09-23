@@ -130,6 +130,28 @@ two auto-fixable rules:
     pre-existing unit test caught it.
   - Ensure `import orjson` is present at module top (it is a core SDK
     dependency); add it if missing.
+  - **Three stdlib tolerances orjson drops — check each before swapping a
+    `dumps`:**
+    - *Non-`str` dict keys.*  `json.dumps({1: "a"})` coerces the key to `"1"`;
+      `orjson.dumps` raises `TypeError`.  Add `orjson.OPT_NON_STR_KEYS` unless
+      every dict the call sees is provably string-keyed.  A `default=` callable
+      does not help: it is never consulted for keys.
+    - *NaN / Infinity.*  `json.dumps(float("nan"))` writes the non-standard
+      `NaN` token; `orjson.dumps` writes `null`, and `orjson.loads` rejects the
+      `NaN` token.  Usually an improvement (downstream JSON parsers reject
+      `NaN` too), but data written by the old code and read back by the new
+      one will now fail to parse where it holds that token — say so, and make
+      sure the reader's fallback covers it.
+    - *Integers beyond 64 bits.*  stdlib encodes any `int`; `orjson.dumps`
+      raises `JSONEncodeError` above 2**64 (`OPT_STRICT_INTEGER` lowers the
+      limit to 2**53).  Confirm the field's range before swapping.
+  - The swap also changes whitespace (`{"x":2}`, not `{"x": 2}`).  A test that
+    pins the exact encoded string must be updated to the new output — that is
+    the output genuinely changing, not gaming the gate — and a round-trip test
+    is the stronger assertion to add beside it.
+  - `orjson.JSONDecodeError` subclasses `json.JSONDecodeError` and
+    `ValueError`, so an existing `except json.JSONDecodeError` still catches;
+    switch the name to `orjson.JSONDecodeError` when `import json` goes away.
 
   The orthogonal gate **bites** here for type errors: a `bytes`/`str`
   regression on any covered path fails the behavioural tests, so a careless

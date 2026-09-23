@@ -2914,3 +2914,87 @@ def test_d015_still_fires_on_the_sdks_own_pyproject(tmp_path: Path) -> None:
     findings = _pyright_scan(tmp_path, block, name="atlan-application-sdk")
     assert len(findings) == 1
     assert findings[0].rule_id == "D015"
+
+
+# ---------------------------------------------------------------------------
+# D003 — [tool.uv] constraint-dependencies floors in an app (FND-2549)
+# ---------------------------------------------------------------------------
+
+_APP_DEPS = 'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n]\n'
+_CONSTRAINTS = (
+    "[tool.uv]\n"
+    "# Security floors on transitive dependencies.\n"
+    "constraint-dependencies = [\n"
+    '    "python-multipart>=0.0.30",\n'
+    '    "temporalio>=1.30.0",  # bundled pyo3\n'
+    '    "urllib3>=2.6.0",\n'
+    "]\n"
+)
+
+
+def _floored(findings: list) -> list[str]:
+    return sorted(f.message.split("'")[1] for f in findings)
+
+
+def test_d003_flags_each_app_constraint_floor(tmp_path: Path) -> None:
+    findings = _d003_scan(
+        tmp_path,
+        _APP_DEPS + _CONSTRAINTS,
+        imported_modules={"os"},
+        dist_import_map={},
+    )
+    assert _floored(findings) == ["python-multipart", "temporalio", "urllib3"]
+    lines = (tmp_path / "pyproject.toml").read_text().splitlines()
+    for f in findings:
+        name = f.message.split("'")[1]
+        assert name in lines[f.line - 1]
+        assert "remove the entry" in f.message
+
+
+def test_d003_constraint_floor_single_line_array(tmp_path: Path) -> None:
+    findings = _d003_scan(
+        tmp_path,
+        _APP_DEPS + '[tool.uv]\nconstraint-dependencies = ["urllib3>=2.6.0"]\n',
+        imported_modules={"os"},
+        dist_import_map={},
+    )
+    assert _floored(findings) == ["urllib3"]
+
+
+def test_d003_constraint_floors_are_not_flagged_in_the_sdk(tmp_path: Path) -> None:
+    """The SDK's own pyproject is where transitive floors belong."""
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "requests>=2,<3",\n]\n' + _CONSTRAINTS,
+        imported_modules={"requests"},
+        dist_import_map={"requests": {"requests"}},
+        name="atlan-application-sdk",
+    )
+    assert findings == []
+
+
+def test_d003_constraint_floor_ignores_other_uv_keys(tmp_path: Path) -> None:
+    """Only [tool.uv] constraint-dependencies — not other keys or tables."""
+    findings = _d003_scan(
+        tmp_path,
+        _APP_DEPS
+        + '[tool.uv]\noverride-dependencies = ["urllib3>=2.6.0"]\n'
+        + '[tool.other]\nconstraint-dependencies = ["x>=1"]\n',
+        imported_modules={"os"},
+        dist_import_map={},
+    )
+    assert findings == []
+
+
+def test_d003_constraint_floor_suppression(tmp_path: Path) -> None:
+    findings = _d003_scan(
+        tmp_path,
+        _APP_DEPS
+        + "[tool.uv]\nconstraint-dependencies = [\n"
+        + '    "urllib3>=2.6.0",  # conformance: ignore[D003] pinned pending SDK bump\n'
+        + "]\n",
+        imported_modules={"os"},
+        dist_import_map={},
+    )
+    assert len(findings) == 1
+    assert findings[0].suppressed
