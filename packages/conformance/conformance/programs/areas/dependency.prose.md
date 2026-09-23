@@ -275,8 +275,8 @@ fix.  The re-detection gate is authoritative for this area — see
 
   - **Write it into `pyproject.toml`, never into a project-level `uv.toml`.**
     A `uv.toml` does override the user-level config, but it also suppresses
-    `[tool.uv]` in `pyproject.toml` entirely — silently dropping any
-    `constraint-dependencies` CVE floors declared there.  uv warns about this,
+    `[tool.uv]` in `pyproject.toml` entirely — silently dropping every setting
+    declared there (`sources`, `constraint-dependencies`, …).  uv warns about this,
     but names only `constraint-dependencies`, so the rest goes unremarked.
   - **Do not regenerate `uv.lock` as part of this fix.**  Adding the index does
     not change resolution — same versions, same hashes — so the lock must come
@@ -318,6 +318,20 @@ for human confirmation):
   3. **Suppress**: if the package is intentionally runtime-loaded (plugin,
      optional backend, server process), propose a `# conformance: ignore[D003]
      <reason>` comment on the entry line and explain the load mechanism.
+
+  **A `[tool.uv] constraint-dependencies` entry in an app is also D003.**  An
+  app does not carry security floors on transitive packages — neither as a
+  direct dependency nor as a constraint.  **Remove the entry**; do not move a
+  floor from `[project.dependencies]` into `constraint-dependencies` to clear
+  the first form of this finding, which only relocates it.  A needed CVE fix
+  belongs in `atlan-application-sdk`'s dependency ranges and reaches the app
+  through an SDK upgrade.  State in the edit description that the lock's
+  resolved version is at or above the removed floor (prove it: removing a
+  constraint must not change any resolved version), and note that uv does not
+  propagate the SDK's own `[tool.uv]` constraints to dependents, so the lock
+  and CI's vulnerability scan are what hold the line afterwards.  None of the
+  reference apps (`atlan-mysql-app`, `atlan-metabase-app`, `atlan-openapi-app`)
+  declares `constraint-dependencies`.  The SDK's own pyproject is exempt.
 
   Never auto-delete without reading the codebase context — dynamic imports,
   `__import__`, `importlib.import_module`, entry-point declarations in
