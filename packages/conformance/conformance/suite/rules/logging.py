@@ -692,6 +692,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "atlan-metabase-app spells the same list one rule per line, with a comment on "
             "why G002 is deliberately absent."
         ),
+        rule_interactions=(
+            "L001, L011 and L020 box in the order of this fix. G004, G003 and "
+            "G001/LOG009 are the ruff twins of those rules, so enabling them while "
+            "L001/L011/L020 findings are still open makes the repo's pre-commit "
+            "ruff hook fail on every open call site, and the L021 change goes red "
+            "on its own. Land L021 with or after the L-series fixes, and run "
+            "`ruff check --select G001,G003,G004,LOG009` first. T201 overlaps L005 "
+            "but is broader: it also flags intentional print() in tests/ and "
+            "in .github/**/*.py CLI scripts, which a per-file-ignores entry scopes "
+            "out (atlan-mysql-app pyproject.toml); the checker does not read "
+            "per-file-ignores, so that entry still satisfies L021. Found in a "
+            "consumer app during an auto-fixable remediation run (FND-2493)."
+        ),
         scope=RuleScope.BOTH,
         name="MissingLoggingLintRules",
         tier=EnforcementTier.WARN,
