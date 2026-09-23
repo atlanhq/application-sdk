@@ -75,7 +75,13 @@ from application_sdk.common.task_queue import (
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.credentials.ingress import lift_agent_json
-from application_sdk.errors import AppError, InternalError, PreconditionError
+from application_sdk.errors import (
+    AppError,
+    InternalError,
+    PreconditionError,
+    safe_traceback,
+    sanitize_cause_repr,
+)
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
@@ -2952,25 +2958,25 @@ def create_app_handler_service(
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Auth test failed for app %s (request %s): %s",
+                    "Auth test failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Auth test failed for app %s (request %s): %s",
+                    "Auth test failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
@@ -2981,13 +2987,13 @@ def create_app_handler_service(
                 # through rather than masking them as a generic 500.
                 raise
             except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Auth test failed unexpectedly for app %s (request %s): %s",
+                    "Auth test failed unexpectedly for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(
                     status_code=500, detail="Internal server error"
@@ -3060,21 +3066,21 @@ def create_app_handler_service(
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
                 logger.error(
-                    "Preflight check failed for app %s (request %s): %s",
+                    "Preflight check failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 _crash_row(e)
                 return _preflight_failure_response(e, app_name, e.http_status)
             except AppError as e:
                 logger.error(
-                    "Preflight check failed for app %s (request %s): %s",
+                    "Preflight check failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 _crash_row(e)
                 return _preflight_failure_response(
@@ -3095,11 +3101,11 @@ def create_app_handler_service(
             except Exception as e:
                 # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info); the response carries a fixed message, never the exception text.
                 logger.error(
-                    "Preflight check failed unexpectedly for app %s (request %s): %s",
+                    "Preflight check failed unexpectedly for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 _crash_row(e)
                 return _preflight_failure_response(
@@ -3182,25 +3188,25 @@ def create_app_handler_service(
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Metadata fetch failed for app %s (request %s): %s",
+                    "Metadata fetch failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Metadata fetch failed for app %s (request %s): %s",
+                    "Metadata fetch failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
@@ -3211,13 +3217,13 @@ def create_app_handler_service(
                 # through rather than masking them as a generic 500.
                 raise
             except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Metadata fetch failed unexpectedly for app %s (request %s): %s",
+                    "Metadata fetch failed unexpectedly for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(
                     status_code=500, detail="Internal server error"
