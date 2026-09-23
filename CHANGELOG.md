@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.38.0 (September 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.37.0...v3.38.0
+
+### Features
+
+- accept explicit credentials for the IAM-role RDS token path (#3905) (by @vaibhavatlan in [a649dc5](https://github.com/atlanhq/application-sdk/commit/a649dc5))
+- name the failing check and its reason on outcome rows (CONNECT-1821) (#3901) (by @rishab-atlan in [2dd8e53](https://github.com/atlanhq/application-sdk/commit/2dd8e53))
+
+
 ## v3.37.0 (September 21, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.3...v3.37.0

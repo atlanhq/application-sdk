@@ -79,14 +79,25 @@ maintained reference apps that already has the compliant shape. Before the
 first edit of a run, make the **full checkout** of all three available:
 
 ```
-mkdir -p remediation/refs
+REFS="${XDG_CACHE_HOME:-$HOME/.cache}/atlan-conformance/refs"
+mkdir -p "$REFS"
 for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app; do
-  [ -d "remediation/refs/$app" ] || git clone --depth 1 "https://github.com/atlanhq/$app.git" "remediation/refs/$app"
+  if [ -d "$REFS/$app/.git" ]; then
+    git -C "$REFS/$app" fetch --depth 1 origin HEAD && git -C "$REFS/$app" checkout --quiet --detach FETCH_HEAD
+  else
+    git clone --depth 1 "https://github.com/atlanhq/$app.git" "$REFS/$app"
+  fi
 done
+echo "$REFS"
 ```
 
-`remediation/refs/` is scratch — never edited, never committed, never in a
-fix's `touched_files`.
+The clones live **outside the repo** on purpose, and every later read uses the
+absolute path the snippet echoes (shell state does not carry between
+commands). Anything inside the repo is part of what `detect` scans: a
+reference app cloned under `remediation/` put its `@entrypoint`s into the F016
+matrix and produced dozens of false BLOCK failures. The reference checkouts
+are read-only — never edited, never committed, never in a fix's
+`touched_files`.
 
 For every finding, in this order (the full contract is
 `$PROGRAMS/functions/remediate-finding.prose.md`, section *Reference apps,

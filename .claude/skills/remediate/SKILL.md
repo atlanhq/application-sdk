@@ -332,9 +332,26 @@ Do not fix from memory. Every app-facing rule names a `canonical_reference`
 (SARIF `atlan/canonicalReference` on the finding): a file in one of the three
 maintained reference apps — `atlan-mysql-app`, `atlan-metabase-app`,
 `atlan-openapi-app` — that already has the compliant shape. Before the first
-edit of a run, make the **full checkout** of all three available under
-`remediation/refs/` (shallow clones of `origin/main`; scratch
-only — never edited, never committed, never in a fix's `touched_files`).
+edit of a run, make the **full checkout** of all three available **outside
+the repo** (shallow clones of `origin/main`; read-only — never edited, never
+committed, never in a fix's `touched_files`):
+
+```sh
+REFS="${XDG_CACHE_HOME:-$HOME/.cache}/atlan-conformance/refs"
+mkdir -p "$REFS"
+for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app; do
+  if [ -d "$REFS/$app/.git" ]; then
+    git -C "$REFS/$app" fetch --depth 1 origin HEAD && git -C "$REFS/$app" checkout --quiet --detach FETCH_HEAD
+  else
+    git clone --depth 1 "https://github.com/atlanhq/$app.git" "$REFS/$app"
+  fi
+done
+echo "$REFS"
+```
+
+Read them by the absolute path the snippet echoes. Never clone them into the
+repo: `detect` scans the whole tree, and a reference app's `@entrypoint`s
+under `remediation/` were added to the F016 matrix as false BLOCK failures.
 
 For every finding, in this order (contract:
 `$PROGRAMS/functions/remediate-finding.prose.md`, section *Reference apps,

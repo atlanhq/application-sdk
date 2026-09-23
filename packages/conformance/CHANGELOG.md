@@ -2,6 +2,22 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.37.0] - 2026-09-22
+
+### Features
+
+- grade preflight scenarios from the test job's report (#3908) ([bb4a27d](https://github.com/atlanhq/application-sdk/commit/bb4a27d))
+- let a caller run the preflight leg with --with-tests (#3904) ([d329643](https://github.com/atlanhq/application-sdk/commit/d329643))
+
+### Bug fixes
+
+- a reference that is a suppression must declare a terminal_state (#3906) ([bc715b0](https://github.com/atlanhq/application-sdk/commit/bc715b0))
+- license the suppressions six rules already call compliant (#3907) ([5d1270f](https://github.com/atlanhq/application-sdk/commit/5d1270f))
+
+### Other changes
+
+- ci(testing): wake the pinned dataforge e2e source before a run, pause it after (FND-1992) (#3909) ([d1c887a](https://github.com/atlanhq/application-sdk/commit/d1c887a))
+
 ## [0.36.1] - 2026-09-22
 
 ### Bug fixes

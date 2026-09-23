@@ -22,6 +22,7 @@ import pytest
 from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError
+from application_sdk.errors.wire import FailureDetails
 from application_sdk.storage.errors import (
     StorageBucketRelocationError,
     StorageEmptyUploadError,
@@ -190,3 +191,52 @@ class TestFailureEnvelopeWireContract:
         assert restored.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
         assert restored.retryable is True
         assert restored.evidence["http_status"] == 400
+
+
+class TestTheEnvelopeRedactsItsOwnFreeText:
+    """``message`` and ``suggested_action`` are redacted on the envelope itself.
+
+    Handler-authored text routinely carries a connection string, and this model
+    is what reaches Temporal history, the Automation Engine and every log row.
+    Redacting where the envelope is built fixes every consumer at once; doing it
+    at each emit site leaves the next surface unredacted until someone remembers.
+    """
+
+    def test_message_is_redacted_on_construction(self) -> None:
+        details = FailureDetails(
+            category=FailureCategory.AUTH,
+            code="AUTH",
+            retryable=False,
+            message="connect failed: postgres://u:pw@h/db?password=hunter2",
+        )
+        assert "hunter2" not in details.message
+        assert "u:pw@" not in details.message
+        assert details.message.startswith("connect failed: postgres://")
+
+    def test_suggested_action_is_redacted_on_construction(self) -> None:
+        details = FailureDetails(
+            category=FailureCategory.AUTH,
+            code="AUTH",
+            retryable=False,
+            message="auth failed",
+            suggested_action="retry with api_key=sk-live-123 rotated",
+        )
+        assert details.suggested_action is not None
+        assert "sk-live-123" not in details.suggested_action
+
+    def test_redaction_is_stable_across_a_wire_round_trip(self) -> None:
+        details = FailureDetails(
+            category=FailureCategory.AUTH,
+            code="AUTH",
+            retryable=False,
+            message="dsn=postgres://u:pw@h/db",
+        )
+        again = FailureDetails.model_validate(details.model_dump(mode="json"))
+        assert again == details
+
+    def test_to_failure_details_reaches_the_envelope_redacted(self) -> None:
+        # The path every handler takes: a typed AppError projected to the wire.
+        details = AuthError(
+            message="login failed for postgres://u:pw@h/db"
+        ).to_failure_details()
+        assert "pw@" not in details.message

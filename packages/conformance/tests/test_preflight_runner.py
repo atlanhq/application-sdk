@@ -110,3 +110,57 @@ def test_typed_failure_errors_preserve_soft_exit_mode(tmp_path):
     run = json.loads(output.read_text())["runs"][0]
     assert run["results"][0]["level"] == "error"
     assert run["invocations"][0]["exitCode"] == 1
+
+
+def _missing_f016_entrypoints(tmp_path: Path, *extra: str) -> set[str]:
+    """Run F016 with tests and return the entrypoints it expected scenarios for."""
+    output = tmp_path / "report.json"
+    main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--rule",
+            "F016",
+            "--with-tests",
+            "--output",
+            str(output),
+            *extra,
+        ]
+    )
+    report = json.loads(output.read_text())
+    missing = report["runs"][0]["properties"]["atlan/preflightTests"]["F016"]["missing"]
+    return {key.split(":", 1)[0] for key in missing}
+
+
+def test_behavior_entrypoints_honour_exclude(tmp_path: Path):
+    """An excluded subtree's @entrypoints must not join the expected matrix.
+
+    /remediate used to clone reference apps under ``remediation/refs/``; a
+    multi-entrypoint clone there used to make a single-entrypoint app owe
+    F016 scenarios for the clone's entrypoints even with
+    ``--exclude remediation/``.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="example-connector"\nversion="1.0.0"\n'
+    )
+    (tmp_path / "tests").mkdir()
+    ref = tmp_path / "remediation" / "refs" / "other-app" / "app"
+    ref.mkdir(parents=True)
+    (ref / "connector.py").write_text(
+        "from application_sdk.app import App, entrypoint\n"
+        "class Other(App):\n"
+        "    @entrypoint\n"
+        "    async def extract_metadata(self, input): pass\n"
+        "    @entrypoint\n"
+        "    async def extract_lineage(self, input): pass\n"
+    )
+
+    # Unexcluded, the clone's entrypoints are picked up — the precondition
+    # that makes the excluded assertion below meaningful.
+    assert _missing_f016_entrypoints(tmp_path) == {
+        "extract_metadata",
+        "extract_lineage",
+    }
+    assert _missing_f016_entrypoints(tmp_path, "--exclude", "remediation/") == {
+        "default"
+    }

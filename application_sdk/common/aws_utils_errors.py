@@ -60,6 +60,26 @@ class AwsCredentialSourceConflictError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
+class AwsPartialCredentialsError(InvalidInputError):
+    """Explicit AWS credentials were only partly supplied.
+
+    ``generate_aws_rds_token_with_iam_role`` accepts an optional key pair (and
+    optional session token) for the STS ``assume_role`` call. A half-supplied
+    pair must not fall through to boto3's default chain — that would assume the
+    role as whatever ambient identity is present, not the caller the caller
+    meant. Both of ``aws_access_key_id`` and ``aws_secret_access_key`` must be
+    given, or both omitted (``None``). ``aws_session_token`` requires the pair.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_AWS_PARTIAL_CREDENTIALS"
+    message: str = (
+        "aws_access_key_id and aws_secret_access_key must both be supplied "
+        "or both omitted; aws_session_token requires the pair"
+    )
+    field: str | None = "aws_access_key_id"
+
+
+@dataclass(kw_only=True)
 class AwsClientCreationError(DependencyUnavailableError):
     """Failed to create an AWS service client."""
 

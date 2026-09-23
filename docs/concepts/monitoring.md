@@ -387,7 +387,7 @@ for dashboards and alerts:
 | Token | Level | Message body |
 |-------|-------|--------------|
 | `workflow.started` | INFO | `workflow.started <WorkflowType>` |
-| `workflow.ended` | INFO / WARNING / ERROR | `workflow.ended <WorkflowType> OK (<ms>ms)`, `… BLOCKED (preflight gate)`, or `… FAILED (<code>): <message> — at <file>:<line> in <fn>` |
+| `workflow.ended` | INFO / WARNING / ERROR | `workflow.ended <WorkflowType> OK (<ms>ms)`, `… BLOCKED (preflight gate): <message>`, or `… FAILED (<code>): <message> — at <file>:<line> in <fn>` |
 | `activity.started` | INFO | `activity.started <ActivityType>` |
 | `activity.ended` | INFO / WARNING / ERROR | same three shapes as `workflow.ended` |
 
