@@ -232,9 +232,9 @@ outcome mirroring the error-handling shape in the reference app named by
   logger.debug(...)` that the gate calls has no verdict to return, and the
   levels close in on it: DEBUG (even through a redaction helper) does not
   clear E004, and WARNING trips F005 because the helper runs inside the gate.
-  The only log that satisfies both is
+  The recommended log that satisfies both is
   `logger.error("<what failed>: %s", safe_traceback(exc))` — or
-  `sanitize_cause_repr(exc)` — or return the failure as typed data if the
+  `sanitize_cause_repr(exc)`; `logger.critical` also clears both — or return the failure as typed data if the
   caller can carry it.  Do not narrow the clause automatically; see above.
 
 - **E007 ErrorToReturnValue** — the `except` block returns a sentinel

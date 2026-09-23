@@ -195,8 +195,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "helpers it calls: a best-effort cleanup handler (close a client, "
             "release a session) has no verdict to return, DEBUG does not clear "
             "E004 even through a redaction helper, and WARNING is what F005 "
-            "forbids there. The only log that satisfies both is logger.error with "
-            "the exception routed through a redaction helper (safe_traceback, "
+            "forbids there. The recommended log that satisfies both is logger.error "
+            "(logger.critical also clears both) with the exception routed through a redaction helper (safe_traceback, "
             "sanitize_cause_repr); the alternative is to return the failure as "
             "typed data. Found in a consumer app in FND-2569."
         ),
