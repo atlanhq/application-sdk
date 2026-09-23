@@ -188,9 +188,10 @@ sink or interleave with structured lines, invisible to observability.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app pyproject.toml — T201 sits in the repo-wide lint select and is ignored
-  only for `.github/**/*.py`, where a CI script's stdout is the point. No print() exists
-  under app/.
+- **Compliant example:** atlan-mysql-app app/client.py — `provide_token` reports through `logger.debug`, never
+  print(); no print() exists under app/ in any of the three reference apps. The repo's
+  pyproject.toml backs this with T201 in the lint select, ignored only for
+  `.github/**/*.py`, where a CI script's stdout is the point.
 
 `print()` produces no level, no structured fields, no correlation IDs. In production
 services, output may go to stdout unformatted, be lost, or interleave with structured

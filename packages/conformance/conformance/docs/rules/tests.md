@@ -236,10 +236,11 @@ with MissingAppModuleError / 'App server failed to start within 60s' (BLDX-1520)
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app main.py — the container entry point imports `main` from app.run_dev and
-  awaits it, so the same path serves the image and `uv run python main.py`. Calling
-  application_sdk.main.main() directly requires ATLAN_APP_MODULE to be set, which CI's
-  dev-mode boot does not set.
+- **Compliant example:** atlan-mysql-app main.py — the local/dev entry point imports `main` from app.run_dev and
+  runs it with asyncio.run(main()), so `uv run python main.py` goes through
+  run_dev_combined. The image never runs main.py (the Dockerfile boots via
+  ATLAN_APP_MODULE). Calling application_sdk.main.main() from main.py instead requires
+  ATLAN_APP_MODULE, which CI's dev-mode boot does not set.
 
 Root `main.py` must not call `application_sdk.main.main()` directly (whether via `from
 application_sdk.main import main`, an aliased module import, or a bare dotted call).
@@ -696,8 +697,10 @@ initial adoption PR.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app pyproject.toml — `fail_under = 84` under [tool.coverage.report].
-  atlan-metabase-app sets 85. A measured number with no fail_under is a report nobody's
+- **Compliant example:** atlan-mysql-app .github/workflows/tests.yaml — the tests-reusable caller sets
+  `unit-coverage-fail-under: "90"`, which T014 reads as the effective floor;
+  pyproject.toml keeps `fail_under = 84` under [tool.coverage.report] as the fallback
+  for local runs. A measured number with no floor in either place is a report nobody's
   build ever reads.
 
 `[tool.coverage.report]` exists in `pyproject.toml` — the repo has opted into coverage

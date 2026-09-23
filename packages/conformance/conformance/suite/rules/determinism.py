@@ -346,9 +346,10 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P031",
         canonical_reference=(
             "atlan-openapi-app app/connector.py — blocking work is offloaded with "
-            "`self.run_in_thread`, the App's own bounded pool. asyncio's shared default "
-            "executor is process-wide, so one app's blocking work starves every other "
-            "coroutine on the worker."
+            "`self.run_in_thread`, the SDK's dedicated sdk-blocking pool. "
+            "asyncio.to_thread and run_in_executor(None, ...) land on the shared default "
+            "executor, which Temporal's Python SDK also uses internally, so long "
+            "blocking calls there can exhaust it and deadlock the worker."
         ),
         scope=RuleScope.BOTH,
         name="SharedDefaultExecutorOffload",

@@ -636,8 +636,9 @@ the blind gate cannot tell a correct hop from a plausible one.
 - **P031 SharedDefaultExecutorOffload** — blocking work is offloaded onto
   asyncio's **shared default** executor: `asyncio.to_thread(fn, ...)`, or
   `loop.run_in_executor(None, fn, ...)` (the `None` is what makes it shared).
-  That pool is process-wide, so one app's blocking work starves every other
-  coroutine on the worker.  Draft a swap to the App's own bounded pool —
+  Temporal's Python SDK uses that same executor internally, so long blocking
+  calls there can exhaust it and deadlock the worker.  Draft a swap to the
+  SDK's dedicated sdk-blocking pool —
   `await self.run_in_thread(fn, arg)` inside an `App`, otherwise
   `from application_sdk.execution.heartbeat import run_in_thread`.  Keep the
   callable **passed, not called** (`run_in_thread(fn, arg)`, never

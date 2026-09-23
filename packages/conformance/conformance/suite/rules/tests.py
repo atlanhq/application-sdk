@@ -443,10 +443,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T004",
         canonical_reference=(
-            "atlan-mysql-app main.py — the container entry point imports `main` from "
-            "app.run_dev and awaits it, so the same path serves the image and `uv run "
-            "python main.py`. Calling application_sdk.main.main() directly requires "
-            "ATLAN_APP_MODULE to be set, which CI's dev-mode boot does not set."
+            "atlan-mysql-app main.py — the local/dev entry point imports `main` from "
+            "app.run_dev and runs it with asyncio.run(main()), so `uv run python "
+            "main.py` goes through run_dev_combined. The image never runs main.py (the "
+            "Dockerfile boots via ATLAN_APP_MODULE). Calling application_sdk.main.main() "
+            "from main.py instead requires ATLAN_APP_MODULE, which CI's dev-mode boot "
+            "does not set."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -1048,9 +1050,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="T014",
         canonical_reference=(
-            "atlan-mysql-app pyproject.toml — `fail_under = 84` under "
-            "[tool.coverage.report]. atlan-metabase-app sets 85. A measured number with no "
-            "fail_under is a report nobody's build ever reads."
+            "atlan-mysql-app .github/workflows/tests.yaml — the tests-reusable caller "
+            'sets `unit-coverage-fail-under: "90"`, which T014 reads as the effective '
+            "floor; pyproject.toml keeps `fail_under = 84` under [tool.coverage.report] "
+            "as the fallback for local runs. A measured number with no floor in either "
+            "place is a report nobody's build ever reads."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,

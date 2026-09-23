@@ -693,9 +693,10 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-mysql-app pyproject.toml — `[[tool.uv.index]]` names pypi at "
             "https://pypi.org/simple with `default = true`. Declared in "
-            "pyproject.toml rather than a project-level uv.toml, so the repo's "
-            "[tool.uv] constraint-dependencies keep being read, and a machine-wide "
-            "index cannot rewrite uv.lock on whoever resolves next."
+            "pyproject.toml rather than a project-level uv.toml, because a uv.toml "
+            "suppresses [tool.uv] in pyproject.toml entirely and would silently drop "
+            "any constraint-dependencies added later — and pinned as the default, a "
+            "machine-wide index cannot rewrite uv.lock on whoever resolves next."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,

@@ -188,9 +188,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L005",
         canonical_reference=(
-            "atlan-mysql-app pyproject.toml — T201 sits in the repo-wide lint select and "
-            "is ignored only for `.github/**/*.py`, where a CI script's stdout is the "
-            "point. No print() exists under app/."
+            "atlan-mysql-app app/client.py — `provide_token` reports through "
+            "`logger.debug`, never print(); no print() exists under app/ in any of the "
+            "three reference apps. The repo's pyproject.toml backs this with T201 in "
+            "the lint select, ignored only for `.github/**/*.py`, where a CI script's "
+            "stdout is the point."
         ),
         scope=RuleScope.BOTH,
         name="PrintInProductionCode",
