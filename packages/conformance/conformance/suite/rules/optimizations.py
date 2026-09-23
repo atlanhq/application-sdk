@@ -60,6 +60,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "orjson.OPT_SORT_KEYS`` and the ``default`` positional), and rejects some\n"
             "inputs stdlib accepts.  A blind ``json.``→``orjson.`` swap silently changes\n"
             "``str``→``bytes`` and breaks callers — each site needs human judgement.\n"
+            "The encoded bytes also change on any call that does not already pass\n"
+            '``separators=(",", ":")`` and ``ensure_ascii=False``: orjson is always\n'
+            "compact and always writes non-ASCII as UTF-8, with no option for\n"
+            "either.  The parsed value is identical, so tests that compare parsed\n"
+            "JSON pass; a consumer that hashes, commits or byte-compares the output\n"
+            "sees the difference.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
     ),

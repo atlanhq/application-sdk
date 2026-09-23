@@ -728,3 +728,26 @@ def test_dependency_area_has_a_prescription_for_every_d_rule() -> None:
         "area. Every rule the loop can reach needs one, even if it is "
         "`not_remediable = true` and routes straight to residue."
     )
+
+
+def _rule_bullet(area: str, rule_id: str) -> str:
+    """The `**<ID> Name**` bullet for one rule, up to the next top-level bullet."""
+    text = _read(f"areas/{area}.prose.md")
+    match = re.search(r"^- \*\*" + rule_id + r"\b.*?(?=^- \*\*|\Z)", text, re.M | re.S)
+    assert match, f"no `**{rule_id}` bullet in areas/{area}.prose.md"
+    return match.group(0)
+
+
+def test_o001_prescription_names_the_byte_changing_defaults() -> None:
+    """A stdlib `json.dumps` with default arguments does not round-trip through
+    orjson byte-for-byte: orjson is always compact and never escapes non-ASCII.
+
+    The parsed value is unchanged, so the orthogonal gate passes, and the only
+    place the difference shows is whatever hashes, commits or byte-compares the
+    output. Found on an app whose vendor-contract refresh script rewrites a
+    committed, `\\u`-escaped JSON file: the prescribed `indent=2 → OPT_INDENT_2`
+    swap would have un-escaped 30 lines of it the next time it ran.
+    """
+    bullet = _rule_bullet("optimizations", "O001")
+    assert "ensure_ascii" in bullet
+    assert "separators" in bullet
