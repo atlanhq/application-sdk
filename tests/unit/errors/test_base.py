@@ -636,3 +636,78 @@ def test_redact_secrets_leaves_a_port_and_query_email_alone() -> None:
         "GET https://adb-123.azuredatabricks.net/api/2.0/workspace/list?path=/Users/alice@corp.com/etl failed 403",
     ):
         assert redact_secrets(text) == text
+
+
+# Synthetic Azure connection strings: no real credential material.
+_SB_CONN = (
+    "Endpoint=sb://example-ns.servicebus.windows.net/;"
+    "SharedAccessKeyName=ExamplePolicy;"
+    "SharedAccessKey=FAKEsasKEY0123+/abc==;"
+    "EntityPath=example-hub"
+)
+_STORAGE_CONN = (
+    "DefaultEndpointsProtocol=https;AccountName=exampleacct;"
+    "AccountKey=FAKEacctKEY456+/xyz==;EndpointSuffix=core.windows.net"
+)
+
+
+def test_redact_secrets_redacts_azure_shared_access_key() -> None:
+    """Event Hubs / Service Bus SAS keys must be masked, including the
+    trailing base64 padding."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets(_SB_CONN)
+    assert "FAKEsasKEY0123" not in out
+    assert "==" not in out.split("SharedAccessKey=")[1].split(";")[0]
+    assert "SharedAccessKey=***;" in out
+
+
+def test_redact_secrets_keeps_azure_shared_access_key_name() -> None:
+    """`SharedAccessKeyName` is a policy name, not a secret; on-call needs it
+    to tell which policy failed. The rest of the string survives too."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets(_SB_CONN)
+    assert "SharedAccessKeyName=ExamplePolicy" in out
+    assert "EntityPath=example-hub" in out
+    assert "sb://example-ns.servicebus.windows.net/" in out
+
+
+def test_redact_secrets_redacts_azure_storage_account_key() -> None:
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets(_STORAGE_CONN)
+    assert "FAKEacctKEY456" not in out
+    assert "AccountKey=***;" in out
+    assert "AccountName=exampleacct" in out
+
+
+def test_redact_secrets_azure_keys_are_case_insensitive() -> None:
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets("sharedaccesskey=FAKElower1= ACCOUNTKEY=FAKEupper2=")
+    assert "FAKElower1" not in out
+    assert "FAKEupper2" not in out
+
+
+def test_sanitize_cause_repr_redacts_azure_connection_string() -> None:
+    from application_sdk.errors import sanitize_cause_repr
+
+    out = sanitize_cause_repr(
+        ValueError(f"{_SB_CONN} https://ns/?sr=x&sig=SIGFAKE&se=1")
+    )
+    assert "FAKEsasKEY0123" not in out
+    assert "SIGFAKE" not in out
+    assert "SharedAccessKeyName=ExamplePolicy" in out
+    assert "sig=***" in out
+
+
+def test_safe_traceback_redacts_azure_connection_string() -> None:
+    from application_sdk.errors import safe_traceback
+
+    try:
+        raise ValueError(f"connect failed: {_SB_CONN}")
+    except ValueError as exc:
+        out = safe_traceback(exc)
+    assert "FAKEsasKEY0123" not in out
+    assert "SharedAccessKeyName=ExamplePolicy" in out
