@@ -811,8 +811,8 @@ def test_sdk_base_names_matches_templates_all() -> None:
     at check time, which conformance deliberately avoids; the asserted equality
     is the lower-blast-radius alternative.
     """
-    from conformance.suite.checks.app_name_alignment._code_app_name import (
-        _SDK_APP_BASE_NAMES,
+    from conformance.suite.checks._ast_common import (
+        SDK_APP_BASE_NAMES as _SDK_APP_BASE_NAMES,
     )
 
     import application_sdk.templates as _templates

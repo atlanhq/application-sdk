@@ -41,18 +41,9 @@ import ast
 import re
 from dataclasses import dataclass, field
 
-_SDK_PREFIX = "application_sdk"
+from conformance.suite.checks._ast_common import SDK_APP_BASE_NAMES
 
-_SDK_APP_BASE_NAMES: frozenset[str] = frozenset(
-    {
-        "App",
-        "SqlApp",
-        "BaseMetadataExtractor",
-        "IncrementalSqlMetadataExtractor",
-        "SqlMetadataExtractor",
-        "SqlQueryExtractor",
-    }
-)
+_SDK_PREFIX = "application_sdk"
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +78,7 @@ def _sdk_app_aliases(tree: ast.Module) -> frozenset[str]:
     """Return local names bound to SDK App-family base classes in this module.
 
     Tracks any ``from application_sdk.<sub>... import <SDKBase> [as alias]``
-    where ``<SDKBase>`` is in :data:`_SDK_APP_BASE_NAMES`.
+    where ``<SDKBase>`` is in :data:`~conformance.suite.checks._ast_common.SDK_APP_BASE_NAMES`.
     """
     bound: set[str] = set()
     for node in ast.walk(tree):
@@ -96,7 +87,7 @@ def _sdk_app_aliases(tree: ast.Module) -> frozenset[str]:
         module = node.module or ""
         if module == _SDK_PREFIX or module.startswith(_SDK_PREFIX + "."):
             for alias in node.names:
-                if alias.name in _SDK_APP_BASE_NAMES:
+                if alias.name in SDK_APP_BASE_NAMES:
                     bound.add(alias.asname or alias.name)
     return frozenset(bound)
 
