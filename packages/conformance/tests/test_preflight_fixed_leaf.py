@@ -229,11 +229,22 @@ def test_silent_on_a_non_auth_fixed_leaf(tmp_path: Path) -> None:
         assert _f021(tmp_path, src) == [], leaf
 
 
-def test_silent_when_a_classifier_runs_first(tmp_path: Path) -> None:
+def test_fires_when_the_classification_is_ignored(tmp_path: Path) -> None:
     row = (
         "            leaf = classify_http_exception(exc)\n"
         "            if leaf is None:\n"
-        "                leaf = AuthError\n" + _failed_row("AuthError")
+        "                leaf = InternalError\n" + _failed_row("AuthError")
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_silent_when_the_classified_leaf_is_used(tmp_path: Path) -> None:
+    row = (
+        "            leaf = classify_http_exception(exc)\n"
+        "            if leaf is None:\n"
+        "                leaf = InternalError\n"
+        "            raise leaf(message='x', suggested_action='y') from exc\n"
     )
     src = _handler(_broad("except Exception as exc:", row))
     assert _f021(tmp_path, src) == []
@@ -352,14 +363,14 @@ def test_fires_when_the_classifier_is_in_a_sibling_branch(tmp_path: Path) -> Non
     assert len(_f021(tmp_path, src)) == 1
 
 
-def test_silent_on_a_walrus_classifier_before_the_fallback(tmp_path: Path) -> None:
+def test_fires_on_the_fallthrough_after_a_walrus_classifier(tmp_path: Path) -> None:
     row = (
         "            if (leaf := classify_http_exception(exc)) is not None:\n"
         "                raise leaf(message='x', suggested_action='y') from exc\n"
         + _failed_row("AuthError")
     )
     src = _handler(_broad("except Exception as exc:", row))
-    assert _f021(tmp_path, src) == []
+    assert len(_f021(tmp_path, src)) == 1
 
 
 def test_silent_under_a_condition_on_a_name_derived_from_the_exception(
@@ -417,6 +428,42 @@ def test_fires_when_only_a_diagnostic_of_the_exception_is_stored(
         row = f"            {store}\n" + _failed_row("AuthError")
         src = _handler(_broad("except Exception as exc:", row))
         assert len(_f021(tmp_path, src)) == 1, store
+
+
+def test_silent_when_a_name_derived_from_the_classification_selects_the_leaf(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            leaf = classify(exc)\n"
+        "            advisory = isinstance(leaf, AppPermissionDeniedError)\n"
+        "            error = AuthError(message='x', suggested_action='y') if advisory else leaf\n"
+        "            raise error\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_fires_when_a_stored_diagnostic_does_not_select_the_leaf(
+    tmp_path: Path,
+) -> None:
+    row = "            detail = redact(exc)\n" + _failed_row("AuthError")
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_under_a_guard_that_is_always_true_in_a_handler(tmp_path: Path) -> None:
+    for guard in (
+        "exc",
+        "exc is not None",
+        "not exc is None",
+        "isinstance(exc, Exception)",
+    ):
+        row = (
+            f"            if {guard}:\n"
+            "                raise AuthError(message='x', suggested_action='y')\n"
+        )
+        src = _handler(_broad("except Exception as exc:", row))
+        assert len(_f021(tmp_path, src)) == 1, guard
 
 
 def test_silent_under_a_match_on_the_exception(tmp_path: Path) -> None:

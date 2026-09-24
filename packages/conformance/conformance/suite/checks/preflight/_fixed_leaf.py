@@ -9,27 +9,28 @@ missing. The SDK's own subclasses outside ``application_sdk.errors``
 (``SqlClientAuthFailedError``, ``CredentialError``, ...) count too; a test pins
 ``_SDK_CUSTOMER_LEAVES`` to the SDK source so a new one cannot be missed.
 
-The caught exception counts as looked at when one of these is on the leaf's
-own path:
+The leaf is exempt only when the caught exception selects it, through one of
+these on the leaf's own path:
 
-* an enclosing ``if`` / ``while`` / conditional expression / ``match`` that
-  tests it, or a name stored from it earlier (``code = exc.status``), with the
-  leaf in the branch the test selects. The ``else`` and a catch-all
-  ``case _:`` are the fallback for everything the test did not match, so
-  ``exc if isinstance(exc, AppError) else AuthError(...)`` still fires;
+* an enclosing ``if`` / ``while`` / conditional expression / ``match`` whose
+  test reads the exception, or a name stored from it earlier, directly or
+  through other stored names (``leaf = classify(exc)``, then
+  ``advisory = isinstance(leaf, ...)``), with the leaf in the branch the test
+  selects. The ``else`` and a catch-all ``case _:`` are the fallback for
+  everything the test did not match, so
+  ``exc if isinstance(exc, AppError) else AuthError(...)`` still fires. A test
+  every caught exception passes (``if exc:``, ``exc is not None``,
+  ``isinstance(exc, Exception)``) selects nothing;
 * an enclosing call that receives the caught exception itself (a classifier
-  taking the leaf as its default);
-* a strictly earlier statement that stores the result of a call receiving it
-  (``leaf = classify_http_exception(exc)``, including a walrus in an ``if``).
+  taking the leaf as its default).
 
-A dropped result does not count (a bare ``reraise_if_transient(exc)``, a
-``logger.debug(..., safe_traceback(exc))``), nor does a stored diagnostic
-(``tb = safe_traceback(exc)``, ``getattr(exc, "status", None)``), a call inside
-the leaf's own arguments, or one in a branch that does not enclose the leaf:
-whatever those let through still gets the fixed leaf. A nested ``except`` is
-judged on its own and never makes its outer handler fire. Known limit: a
-negated guard (``if not isinstance(exc, X): AuthError(...)``) reads as a
-selected branch, not a fallback.
+Storing a result is not enough on its own: ``leaf = classify(exc)`` or
+``detail = redact(exc)`` followed by an unconditional ``AuthError(...)`` still
+fires, and so does the fallthrough after ``if transient := is_transient(exc):
+raise transient``. A nested ``except`` is judged on its own and never makes
+its outer handler fire. Known limit: a negated guard
+(``if not isinstance(exc, X): AuthError(...)``) reads as a selected branch,
+not a fallback.
 """
 
 from __future__ import annotations
@@ -78,7 +79,6 @@ _NOT_CLASSIFIERS = frozenset(
 )
 _CONDITIONS = (ast.If, ast.IfExp, ast.While)
 _STORES = (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)
-_BLOCKS = frozenset({"body", "orelse", "handlers", "finalbody", "cases"})
 _OWN_SCOPE_ENDS = (
     ast.FunctionDef,
     ast.AsyncFunctionDef,
@@ -132,52 +132,71 @@ def _customer_rooted(
 
 
 def _derived_names(handler: ast.ExceptHandler, caught: str, before: int) -> set[str]:
+    """``caught`` plus every name stored, before line ``before``, from one of them."""
+    stores = [
+        node
+        for node in _own_nodes(handler)
+        if isinstance(node, _STORES) and node.value is not None and node.lineno < before
+    ]
     names = {caught}
-    for node in _own_nodes(handler):
-        if not isinstance(node, _STORES) or node.value is None:
-            continue
-        if node.lineno >= before:
-            continue
-        if not _mentions(node.value, {caught}):
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        for target in targets:
-            names.update(n.id for n in ast.walk(target) if isinstance(n, ast.Name))
+    grew = True
+    while grew:
+        grew = False
+        for node in stores:
+            if node.value is None or not _mentions(node.value, names):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                for name in ast.walk(target):
+                    if isinstance(name, ast.Name) and name.id not in names:
+                        names.add(name.id)
+                        grew = True
     return names
 
 
-def _stores_a_classification(stmt: ast.stmt, names: set[str]) -> bool:
-    headers = [
-        value
-        for field, value in ast.iter_fields(stmt)
-        if field not in _BLOCKS and isinstance(value, ast.AST)
-    ]
-    for node in [stmt, *(n for header in headers for n in ast.walk(header))]:
-        if not isinstance(node, _STORES) or node.value is None:
-            continue
-        if any(
-            isinstance(call, ast.Call) and _receives(call, names)
-            for call in ast.walk(node.value)
-        ):
-            return True
+def _always_true(test: ast.expr, caught: str) -> bool:
+    """A guard every exception inside ``except ... as caught`` passes."""
+    while isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        test = test.operand
+    if isinstance(test, ast.Name):
+        return test.id == caught
+    if isinstance(test, ast.Compare):
+        return (
+            isinstance(test.left, ast.Name)
+            and test.left.id == caught
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], (ast.Is, ast.IsNot))
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value is None
+        )
+    if isinstance(test, ast.Call) and isinstance(test.func, ast.Name):
+        if test.func.id != "isinstance" or len(test.args) != 2:
+            return False
+        subject, kinds = test.args
+        types = kinds.elts if isinstance(kinds, ast.Tuple) else [kinds]
+        return (
+            isinstance(subject, ast.Name)
+            and subject.id == caught
+            and all(ast.unparse(t).rsplit(".", 1)[-1] in _BROAD for t in types)
+        )
     return False
 
 
-_Parents = dict[ast.AST, tuple[ast.AST, str, list[ast.stmt]]]
+def _selects(test: ast.expr, names: set[str], caught: str) -> bool:
+    return _mentions(test, names) and not _always_true(test, caught)
+
+
+_Parents = dict[ast.AST, tuple[ast.AST, str]]
 
 
 def _parents(handler: ast.ExceptHandler) -> _Parents:
-    """Map each node to its parent, its field, and the statements before it."""
     parents: _Parents = {}
     for parent in [handler, *_own_nodes(handler)]:
         for field, value in ast.iter_fields(parent):
             values = value if isinstance(value, list) else [value]
             children: list[ast.AST] = [c for c in values if isinstance(c, ast.AST)]
-            for index, child in enumerate(children):
-                earlier: list[ast.stmt] = []
-                if field in _BLOCKS:
-                    earlier = [s for s in children[:index] if isinstance(s, ast.stmt)]
-                parents[child] = (parent, field, earlier)
+            for child in children:
+                parents[child] = (parent, field)
     return parents
 
 
@@ -199,11 +218,11 @@ def _looked_at(
     names = _derived_names(handler, caught, leaf.lineno)
     child: ast.AST = leaf
     while child is not handler:
-        parent, field, earlier = parents[child]
+        parent, field = parents[child]
         if (
             isinstance(parent, _CONDITIONS)
             and field == "body"
-            and _mentions(parent.test, names)
+            and _selects(parent.test, names, caught)
         ):
             return True
         if (
@@ -213,8 +232,6 @@ def _looked_at(
         ):
             return True
         if isinstance(parent, ast.Call) and _receives(parent, {caught}):
-            return True
-        if any(_stores_a_classification(stmt, names) for stmt in earlier):
             return True
         child = parent
     return False

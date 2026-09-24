@@ -123,7 +123,7 @@ Every static detector must include all three columns as executable fixtures. The
 | F014 | Exception containing a synthetic DSN reaches message, action, or traceback locals. | Supported redaction and safe fixed messages preserve typed attribution. | Fixed non-sensitive message with separately sanitized cause. |
 | F015 | Deployment sets the removed override or test imports removed internals. | App class declares mode; tests exercise public behavior. | Negative compatibility fixture quotes the removed name without using it. |
 | F019 | Per-entrypoint callback exists but no detector visits it. | Every applicable callback is discovered and has scenarios. | App has no preflight by supported design and is explicitly reported as such. |
-| F021 | `except Exception` returns a fixed `AppPermissionDeniedError` whatever it caught. | The caught exception goes through `classify_http_exception` or an `isinstance` chain, with a fallback that does not blame the customer (`InternalError` when the cause is unknown). | A classifier that takes the permission leaf as its default, or a leaf built under a condition on the caught exception. |
+| F021 | `except Exception` returns a fixed `AppPermissionDeniedError` whatever it caught. | The caught exception goes through `classify_http_exception` or an `isinstance` chain, with a fallback that does not blame the customer (`InternalError` when the cause is unknown). | A classifier that takes the permission leaf as its default, or a leaf built in the branch that a test on the caught exception selects. |
 
 ## Executable behavioral suite
 
