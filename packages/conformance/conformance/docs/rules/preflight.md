@@ -5,7 +5,7 @@
 
 # Preflight-Gate Rules (F-series)
 
-**20 rules** · Checker: `suite.checks.preflight` (F001–F015, F019–F020: cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests) and the opt-in `--with-tests` scenario runner (F016–F018: registered pytest scenarios executed in a bounded subprocess via `conformance.preflight_testing`)
+**21 rules** · Checker: `suite.checks.preflight` (F001–F015, F019–F020: cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests) and the opt-in `--with-tests` scenario runner (F016–F018: registered pytest scenarios executed in a bounded subprocess via `conformance.preflight_testing`)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -45,6 +45,7 @@ never reused.
 | [F018](#f018) | `PreflightExitEvidence` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [F019](#f019) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F020](#f020) | `RetiredPreflightSuppression` | `warn` | `app` | `preflight-gate` | — | 0.32.0 |
+| [F021](#f021) | `PreflightFixedLeafInBroadExcept` | `warn` | `app` | `preflight-gate` | — | 0.39.0 |
 
 ---
 
@@ -297,10 +298,10 @@ no longer a fail-open request.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/handler.py — `_check_spec_source` catches AppError and returns the
-  failed row with `exc.to_failure_details()`; only the gate-transient categories are
-  re-raised, on purpose, so the gate fails open on a blip instead of the handler
-  crashing on an expected failure.
+- **Compliant example:** atlan-mysql-app app/handler.py — the advisory `connectivity` check catches the probe
+  failure and returns it on the failed row, a blip as the retryable leaf from
+  `transient_failure(e)`, so the verdict stays READY and nothing it expects escapes
+  preflight_check, where the origin-based gate would block on it.
 
 Return expected typed preflight failures rather than letting them escape.
 
@@ -591,5 +592,34 @@ the justification, or delete the directive if the finding it covered is gone.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f020).
+
+---
+
+## F021 — `PreflightFixedLeafInBroadExcept` {#f021}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.39.0
+
+> Classify a broadly caught preflight failure before naming it an auth or permission problem.
+
+**Rationale:** Customer impact: an empty credential, a DNS failure or a source 500 is reported to the
+customer as a missing grant, and the ticket chases source-side permissions that were
+never the problem.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/handler.py — the authenticationCheck probe catches
+  `(InvalidInputError, AuthError)` first and returns that typed error, and only its
+  trailing `except Exception` builds a leaf, `MetabaseSourceUnavailableError`, so a
+  failure it cannot name is never reported as a credential or grant problem.
+
+A broad `except` in `preflight_check` or a helper it reaches builds an `AuthError` or
+`AppPermissionDeniedError` subclass that no test on the caught exception selects,
+including one handed to a classifier as its default for unknown causes. Classify it
+first — `application_sdk.errors.classify_http_exception` for httpx failures, or an
+`isinstance` chain — and fall back to a leaf that does not blame the customer
+(`InternalError` when the cause is unknown), or narrow the except clause.
+
+[Investigation, remediation and verification
+guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f021).
 
 ---

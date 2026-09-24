@@ -580,6 +580,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "F016",
         "F019",
         "F020",
+        "F021",
     }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam
     # (P006/P007, BLDX-1417), declare its deprecations correctly (B002–B004),
@@ -817,13 +818,14 @@ def test_catalog_p_series_present() -> None:
 
 
 def test_catalog_f_series_present() -> None:
-    """The F-series preflight-gate rules are exactly F001–F020.
+    """The F-series preflight-gate rules are exactly F001–F021.
 
     F001–F005 were published as P032–P035 and P047 and moved to their own
     series in PR #3710 before any fleet suppression referenced them; the vacated
     P-ids are retired and never reused.  F006–F019 are the CONNECT-812 contract,
     lifetime and behavioral rules; F016–F018 are the opt-in TEST rules.  F020
-    flags a suppression that still cites one of the five retired P-ids.
+    flags a suppression that still cites one of the five retired P-ids.  F021
+    flags a fixed auth or permission leaf built in a broad except.
 
     There is deliberately no rule for a ``PreflightStatus.PARTIAL`` verdict: it
     is a read of a deprecated SDK enum member, which B001 already reports
@@ -831,7 +833,7 @@ def test_catalog_f_series_present() -> None:
     line is worse than one.
     """
     f_ids = {r.id for r in load_catalog() if r.id.startswith("F")}
-    expected = {f"F{n:03}" for n in range(1, 21)}
+    expected = {f"F{n:03}" for n in range(1, 22)}
     assert f_ids == expected, f"F-series drift: {sorted(f_ids ^ expected)}"
 
 

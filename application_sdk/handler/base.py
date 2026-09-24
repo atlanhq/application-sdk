@@ -147,21 +147,18 @@ class Handler(ABC):
 
         One method, two surfaces: the HTTP ``/check`` endpoint (Sage UI) and the
         injected pre-extraction gate. To abort a run, return
-        ``status=PreflightStatus.NOT_READY``; ``READY``/``PARTIAL`` proceed.
-        Express a readiness verdict through the returned status — that is the
-        contract, and it is what both surfaces render.
+        ``status=PreflightStatus.NOT_READY``; ``READY`` proceeds. Express a
+        readiness verdict through the returned status — that is the contract,
+        and it is what both surfaces render.
 
-        Raising is not equivalent, and what it means depends on the error's type:
-
-        - A **typed plumbing** error (``RateLimitedError``,
-          ``DependencyUnavailableError``, ``ResourceExhaustedError``) means "I could
-          not determine readiness". The gate fails open on it in both postures.
-          This is the right way to report a transient — returning ``NOT_READY``
-          for a 429 makes a hard-mode gate fail *closed* on a blip.
-        - Anything else — an untyped crash, a typed source error, or overrunning
-          ``input.timeout_seconds`` — is treated as an unverifiable source and is
-          subject to the app's ``preflight_gate_mode``. In hard mode it aborts the
-          run, attributed to preflight.
+        Raising is not equivalent. Anything that escapes this method — an
+        untyped crash, any typed error, or overrunning ``input.timeout_seconds``
+        — is the handler's statement about the source, and a hard-mode gate
+        aborts the run on it. Report a transient the extraction can cope with
+        (a 429, a database still resuming) as a failed check carrying the
+        typed retryable error on a ``READY`` verdict, not as a raise. Until
+        v3.40.0 a raise in the deprecated fail-open categories still fails open
+        with a ``DeprecationWarning``; from v3.40.0 it blocks like any other.
 
         Keep probes awaitable: the gate cancels this method at the budget, and
         cancellation only lands at an ``await``. Blocking synchronous I/O on the

@@ -1,6 +1,6 @@
 # Preflight conformance specification
 
-Current policy: the SDK deprecates `PreflightStatus.PARTIAL`. Removal lands in the first minor release after the reference apps stop returning it, anchored at v3.40.0 so B003 forces a deliberate re-schedule if that release arrives first; the gate emits a `DeprecationWarning` when a handler returns it. A PARTIAL verdict is reported by B001 as a deprecated-enum-member read, not by a preflight rule: a preflight-specific rule would put a second WARN on the same line. F016 scenarios accept PARTIAL only when every failed check is advisory; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The gate's treatment of PARTIAL is unchanged until removal. There are 20 preflight rules (17 static, 3 behavioral), with 7 BLOCK and 13 WARN; the generated catalog page `packages/conformance/conformance/docs/rules/preflight.md` is the source of truth for tiers.
+Current policy: the SDK deprecates `PreflightStatus.PARTIAL`. Removal lands in the first minor release after the reference apps stop returning it, anchored at v3.40.0 so B003 forces a deliberate re-schedule if that release arrives first; the gate emits a `DeprecationWarning` when a handler returns it. A PARTIAL verdict is reported by B001 as a deprecated-enum-member read, not by a preflight rule: a preflight-specific rule would put a second WARN on the same line. F016 scenarios accept PARTIAL only when every failed check is advisory; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The gate's treatment of PARTIAL is unchanged until removal. There are 21 preflight rules (18 static, 3 behavioral), with 7 BLOCK and 14 WARN; the generated catalog page `packages/conformance/conformance/docs/rules/preflight.md` is the source of truth for tiers.
 
 Status: conformance implementation and remaining acceptance requirements, 2026-09-08. F003, F006, F007 and F016–F018 join F001 at BLOCK; other preflight rules remain WARN. Static checks run by default; behavioral checks require `--with-tests` and app/SDK scenario adapters. SDK production behavior is unchanged.
 
@@ -79,7 +79,7 @@ Implementation references:
 
 ## Proposed rule allocation
 
-The preflight rules occupy their own F-series: F001–F005 (formerly P032–P035 and P047), F006–F019, and F020, which flags a suppression that still cites one of the five retired P-ids. The vacated P-ids stay unused. Catalog tests enforce uniqueness and pin the F-series to exactly F001–F020.
+The preflight rules occupy their own F-series: F001–F005 (formerly P032–P035 and P047), F006–F019, F020, which flags a suppression that still cites one of the five retired P-ids, and F021, which flags a fixed auth or permission leaf built in a broad except. The vacated P-ids stay unused. Catalog tests enforce uniqueness and pin the F-series to exactly F001–F021.
 
 Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level corresponding to BLOCK. F001, F003, F006, F007, and F016–F018 use BLOCK (SARIF `error`). F003/F006/F007 enforce typed failures, handler contracts, and definite missing failure guidance. Behavioral rules require complete passing scenarios when explicitly run with `--with-tests`; missing or skipped scenarios are errors. Static-only runs still report behavioral checks as not evaluated. Other preflight rules remain WARN because their findings include heuristics, unresolved analysis, or SDK-version-dependent advice. `--exit-zero` preserves error findings while returning a successful process exit for soft enforcement. Further BLOCK promotions require the graduation criteria below. Do not promote heuristic findings merely because a rollout deadline arrives.
 
@@ -99,6 +99,7 @@ Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level correspo
 | F017 PreflightWorkflowEnforcement | SDK / TEST | Real workflow execution prevents extraction scheduling on hard-mode gate rejection and handles infrastructure/cancellation paths according to contract. | BLOCK |
 | F018 PreflightExitEvidence | SDK / TEST | Consistent typed status/check payloads across HTTP, supported SDR, activity and workflow exits; complete outcome schema; safe log-buffer handoff. | BLOCK |
 | F019 PreflightAnalysisCoverage | APP / STATIC | Declared preflight entrypoints not analyzed, unresolved dispatch/contract shapes, and absent required scenario registration. Known no-preflight apps are explicitly not applicable, not healthy preflight implementations. | WARN for unresolved analysis; BLOCK for missing required registration after adoption |
+| F021 PreflightFixedLeafInBroadExcept | APP / STATIC | A broad except on a preflight path that builds an Auth- or Permission-rooted leaf that no test on the caught exception selects, including one handed to a classifier as its unknown-cause default. | WARN |
 
 F016 can emit separately identified scenario failures under one rule. Do not create an independent rule for every spelling of the same error or every connector. Error-category correctness and preflight/extraction tolerance parity remain behavioral requirements; simple co-occurrence of two error subclasses does not prove misclassification.
 
@@ -122,6 +123,7 @@ Every static detector must include all three columns as executable fixtures. The
 | F014 | Exception containing a synthetic DSN reaches message, action, or traceback locals. | Supported redaction and safe fixed messages preserve typed attribution. | Fixed non-sensitive message with separately sanitized cause. |
 | F015 | Deployment sets the removed override or test imports removed internals. | App class declares mode; tests exercise public behavior. | Negative compatibility fixture quotes the removed name without using it. |
 | F019 | Per-entrypoint callback exists but no detector visits it. | Every applicable callback is discovered and has scenarios. | App has no preflight by supported design and is explicitly reported as such. |
+| F021 | `except Exception` returns a fixed `AppPermissionDeniedError` whatever it caught. | The caught exception goes through `classify_http_exception` or an `isinstance` chain, with a fallback that does not blame the customer (`InternalError` when the cause is unknown). | A leaf built in the branch that a test on the caught exception selects, or a classifier whose default does not blame the customer. |
 
 ## Executable behavioral suite
 

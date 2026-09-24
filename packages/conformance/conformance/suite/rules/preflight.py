@@ -10,7 +10,8 @@ metadata (F003), the silent metadata/contract drift that no runtime signal
 can catch (F004), and preflight failures logged below the customer's default
 ERROR filter (F005, FND-901).
 
-F006-F020 add the CONNECT-812 contract, lifetime and behavioral rules.
+F006-F020 add the CONNECT-812 contract, lifetime and behavioral rules. F021
+flags a fixed auth or permission leaf built in a broad except (CONNECT-1358).
 
 There is deliberately no preflight rule for a ``PARTIAL`` verdict: it is a
 read of the deprecated ``PreflightStatus.PARTIAL`` member, which B001 already
@@ -320,10 +321,10 @@ _CONTRACT_RULES = (
     RuleDefinition(
         id="F008",
         canonical_reference=(
-            "atlan-openapi-app app/handler.py — `_check_spec_source` catches AppError and "
-            "returns the failed row with `exc.to_failure_details()`; only the gate-transient "
-            "categories are re-raised, on purpose, so the gate fails open on a blip instead "
-            "of the handler crashing on an expected failure."
+            "atlan-mysql-app app/handler.py — the advisory `connectivity` check catches the "
+            "probe failure and returns it on the failed row, a blip as the retryable leaf "
+            "from `transient_failure(e)`, so the verdict stays READY and nothing it expects "
+            "escapes preflight_check, where the origin-based gate would block on it."
         ),
         name="PreflightExpectedFailureRaised",
         scope=RuleScope.APP,
@@ -602,6 +603,40 @@ _CONTRACT_RULES = (
             "no signal that the stale directive is the cause."
         ),
         help_uri=f"{_HELP_BASE}#f020",
+    ),
+    RuleDefinition(
+        id="F021",
+        canonical_reference=(
+            "atlan-metabase-app app/handler.py — the authenticationCheck probe "
+            "catches `(InvalidInputError, AuthError)` first and returns that typed "
+            "error, and only its trailing `except Exception` builds a leaf, "
+            "`MetabaseSourceUnavailableError`, so a failure it cannot name is never "
+            "reported as a credential or grant problem."
+        ),
+        name="PreflightFixedLeafInBroadExcept",
+        scope=RuleScope.APP,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        orthogonal_gate="tests",
+        since="0.39.0",
+        short_description="Classify a broadly caught preflight failure before naming it an auth or permission problem.",
+        full_description=(
+            "A broad ``except`` in ``preflight_check`` or a helper it reaches "
+            "builds an ``AuthError`` or ``AppPermissionDeniedError`` subclass "
+            "that no test on the caught exception selects, including one handed "
+            "to a classifier as its default for unknown causes. "
+            "Classify it first — ``application_sdk.errors.classify_http_exception`` "
+            "for httpx failures, or an ``isinstance`` chain — and fall back to a leaf "
+            "that does not blame the customer (``InternalError`` when the cause is "
+            "unknown), or narrow the except clause."
+        ),
+        rationale=(
+            "Customer impact: an empty credential, a DNS failure or a source 500 is "
+            "reported to the customer as a missing grant, and the ticket chases "
+            "source-side permissions that were never the problem."
+        ),
+        help_uri=f"{_HELP_BASE}#f021",
     ),
 )
 
