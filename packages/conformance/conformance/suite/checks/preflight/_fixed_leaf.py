@@ -2,7 +2,9 @@
 
 Flags a broad ``except`` inside ``preflight_check`` (or a helper it reaches)
 that builds an Auth- or Permission-rooted error without looking at what it
-caught. Every failure in the ``try`` then reaches the customer as a credential
+caught. The SDK's own subclasses outside ``application_sdk.errors``
+(``SqlClientAuthFailedError``, ``CredentialError``, ...) count too; a test pins
+``_SDK_CUSTOMER_LEAVES`` to the SDK source so a new one cannot be missed. Every failure in the ``try`` then reaches the customer as a credential
 or grant problem: an empty credential, a DNS failure and a 500 all read as
 "grant access", and the ticket chases source-side grants that were never
 missing.
@@ -42,6 +44,22 @@ _F021 = "F021"
 
 _BROAD = frozenset({"Exception", "BaseException"})
 _CUSTOMER_ROOTS = frozenset({"AuthError", "AppPermissionDeniedError"})
+_SDK_CUSTOMER_LEAVES = frozenset(
+    {
+        "AwsAssumeRoleError",
+        "AwsRdsTokenError",
+        "AzureClientAuthError",
+        "AzureCredentialError",
+        "CredentialError",
+        "CredentialNotFoundError",
+        "CredentialParseError",
+        "CredentialValidationError",
+        "OAuthTokenError",
+        "SqlAwsCredentialsError",
+        "SqlClientAuthFailedError",
+        "StoragePermissionError",
+    }
+)
 _NOT_CLASSIFIERS = frozenset({"str", "repr", "format", "type", "print"})
 _CONDITIONS = (ast.If, ast.IfExp, ast.While)
 _STORES = (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)
@@ -81,11 +99,18 @@ def _receives(call: ast.Call, names: set[str]) -> bool:
     return any(isinstance(v, ast.Name) and v.id in names for v in values)
 
 
-def _customer_leaf(checker: _Checker, src, call: ast.Call) -> bool:
+def _customer_rooted(checker: _Checker, src, node: ast.AST, seen=frozenset()) -> bool:
+    name = _qualified(src, node)
+    if name.startswith("application_sdk."):
+        return name.rsplit(".", 1)[-1] in _CUSTOMER_ROOTS | _SDK_CUSTOMER_LEAVES
+    resolved = checker.symbol(src, node)
+    if resolved is None:
+        return False
+    owner, cls = resolved
+    if not isinstance(cls, ast.ClassDef) or id(cls) in seen:
+        return False
     return any(
-        n.startswith("application_sdk.errors.")
-        and n.rsplit(".", 1)[-1] in _CUSTOMER_ROOTS
-        for n in checker.error_names(src, call.func)
+        _customer_rooted(checker, owner, base, seen | {id(cls)}) for base in cls.bases
     )
 
 
@@ -161,7 +186,9 @@ def _fixed_leaf(checker: _Checker, src, handler: ast.ExceptHandler) -> ast.Call 
     names = _derived_names(handler, handler.name) if handler.name else set()
     parents = _parents(handler)
     for node in _own_nodes(handler):
-        if not (isinstance(node, ast.Call) and _customer_leaf(checker, src, node)):
+        if not (
+            isinstance(node, ast.Call) and _customer_rooted(checker, src, node.func)
+        ):
             continue
         if not names or not _looked_at(node, names, parents, handler):
             return node

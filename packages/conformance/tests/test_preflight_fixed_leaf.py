@@ -95,6 +95,62 @@ def test_fires_on_app_subclass_of_permission_leaf(tmp_path: Path) -> None:
     assert len(_f021(tmp_path, src)) == 1
 
 
+def test_fires_on_an_sdk_shipped_auth_leaf(tmp_path: Path) -> None:
+    extra = "from application_sdk.clients.sql_errors import SqlClientAuthFailedError\n"
+    row = "            raise SqlClientAuthFailedError(cause=exc) from exc\n"
+    src = _handler(_broad("except Exception as exc:", row), extra)
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_on_an_sdk_leaf_imported_through_a_re_export(tmp_path: Path) -> None:
+    extra = "from application_sdk.credentials import CredentialError\n"
+    row = "            raise CredentialError(message='x', suggested_action='y')\n"
+    src = _handler(_broad("except Exception as exc:", row), extra)
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_on_an_app_subclass_of_an_sdk_shipped_leaf(tmp_path: Path) -> None:
+    extra = (
+        "from application_sdk.credentials.oauth import OAuthTokenError\n"
+        "class SourceTokenError(OAuthTokenError):\n"
+        '    code = "SOURCE_TOKEN"\n'
+    )
+    row = "            raise SourceTokenError(message='x', suggested_action='y')\n"
+    src = _handler(_broad("except Exception as exc:", row), extra)
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_silent_on_a_non_auth_sdk_leaf_outside_errors(tmp_path: Path) -> None:
+    extra = "from application_sdk.storage.errors import StorageNotFoundError\n"
+    row = "            raise StorageNotFoundError(message='x', key='k')\n"
+    src = _handler(_broad("except Exception as exc:", row), extra)
+    assert _f021(tmp_path, src) == []
+
+
+def test_sdk_customer_leaves_match_the_sdk_source() -> None:
+    import ast
+
+    from conformance.suite.checks.preflight._fixed_leaf import (
+        _CUSTOMER_ROOTS,
+        _SDK_CUSTOMER_LEAVES,
+    )
+
+    import application_sdk
+
+    bases: dict[str, set[str]] = {}
+    for path in Path(application_sdk.__file__).parent.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ClassDef):
+                names = {ast.unparse(b).rsplit(".", 1)[-1] for b in node.bases}
+                bases.setdefault(node.name, set()).update(names)
+    closure = set(_CUSTOMER_ROOTS)
+    grown = {name for name, parents in bases.items() if parents & closure}
+    while not grown <= closure:
+        closure |= grown
+        grown = {name for name, parents in bases.items() if parents & closure}
+    assert closure - _CUSTOMER_ROOTS == _SDK_CUSTOMER_LEAVES
+
+
 def test_fires_on_bare_except_and_base_exception(tmp_path: Path) -> None:
     for clause in (
         "except:",
