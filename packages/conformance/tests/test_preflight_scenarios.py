@@ -408,7 +408,7 @@ def entrypoint_matrix(scenario: str):
     )
 """
     messages = _grade(tmp_path, _matrix_module(swapped), app=CONNECTOR)
-    assert sum("runs with entrypoint='extract_lineage'" in m for m in messages) == 2
+    assert sum("run with entrypoint='extract_lineage'" in m for m in messages) == 2
     assert (
         sum("for entrypoint extract_metadata is not registered" in m for m in messages)
         == 2
@@ -579,3 +579,212 @@ def test_scan_all_keeps_test_modules_out_of_the_app_analysis(tmp_path: Path) -> 
         "        return True\n"
     )
     assert scan_all(discover(tmp_path), tmp_path) == []
+
+
+# --- second review round ------------------------------------------------------
+
+NEVER_CALLS = "never reachably calls assert_preflight_result"
+UNREADABLE = "cannot be read statically"
+
+
+@pytest.mark.parametrize(
+    "rebinding",
+    [
+        "from mylib import assert_preflight_result",
+        "try:\n    import fast\nexcept ImportError:\n    assert_preflight_result = print",
+        "if True:\n    def assert_preflight_result(*args, **kwargs):\n        pass",
+    ],
+    ids=["later-import", "fallback-in-try", "definition-in-if"],
+)
+def test_a_later_rebinding_replaces_the_contract_import(
+    tmp_path: Path, rebinding: str
+) -> None:
+    messages = _grade(tmp_path, _module(rebinding, _test(HEALTHY), LIFETIME))
+    assert any(NEVER_CALLS in m for m in messages)
+
+
+def test_a_contract_import_after_an_unrelated_one_is_credited(tmp_path: Path) -> None:
+    prelude = (
+        "import pytest\nfrom mylib import assert_preflight_result\n"
+        + PRELUDE.replace("import pytest\n", "")
+    )
+    assert _grade(tmp_path, _module(_test(HEALTHY), LIFETIME, prelude=prelude)) == []
+
+
+def test_a_shadowed_dotted_root_is_not_the_contract_module(tmp_path: Path) -> None:
+    prelude = "import pytest\nimport conformance.preflight_testing\n\n"
+    call = "conformance.preflight_testing.assert_preflight_result"
+    lifetime = LIFETIME.replace("assert_preflight_result", call).replace(
+        "assert_probe_lifetime", "conformance.preflight_testing.assert_probe_lifetime"
+    )
+    healthy_body = ASSERT.replace("assert_preflight_result", call)
+    shadowed = f"{HEALTHY}\ndef test_healthy(conformance):\n{healthy_body}"
+    messages = _grade(tmp_path, _module(shadowed, lifetime, prelude=prelude))
+    assert any(NEVER_CALLS in m for m in messages)
+    # The same call without the shadowing parameter is the contract assertion.
+    plain = _test(HEALTHY, healthy_body)
+    assert _grade(tmp_path, _module(plain, lifetime, prelude=prelude)) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    if True:\n        return\n" + ASSERT,
+        "    if ready():\n        return\n    else:\n        return\n" + ASSERT,
+        "    with context():\n        return\n" + ASSERT,
+        "    assert 0, 'unreachable'\n" + ASSERT,
+        "    False and " + ASSERT.lstrip(),
+        "    True or " + ASSERT.lstrip(),
+        "    checks = (" + ASSERT.strip() + " for _ in range(1))\n",
+        "    assert result, " + ASSERT.strip() + "\n",
+        "    value = "
+        + ASSERT.strip().replace(
+            "assert_preflight_result(", "(assert_preflight_result("
+        )
+        + ") if False else None\n",
+    ],
+    ids=[
+        "literal-branch-return",
+        "both-branches-return",
+        "return-inside-with",
+        "assert-literal-false",
+        "and-false",
+        "or-true",
+        "unconsumed-generator",
+        "assert-message",
+        "dead-ifexp-branch",
+    ],
+)
+def test_a_statically_skipped_assertion_is_not_credited(
+    tmp_path: Path, body: str
+) -> None:
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in m for m in messages)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    if ready():\n        return\n" + ASSERT,
+        "    with pytest.raises(ValueError):\n        raise ValueError()\n" + ASSERT,
+        "    try:\n        raise ValueError()\n    except ValueError:\n        pass\n"
+        + ASSERT,
+        "    ready() and " + ASSERT.lstrip(),
+        "    checks = [" + ASSERT.strip() + " for _ in range(1)]\n",
+        "    for attempt in range(2):\n        if attempt:\n            break\n"
+        + ASSERT,
+    ],
+    ids=[
+        "one-branch-returns",
+        "raise-absorbed-by-with",
+        "raise-caught-by-try",
+        "dynamic-and",
+        "eager-list-comprehension",
+        "break-ends-only-the-loop",
+    ],
+)
+def test_an_assertion_that_can_run_is_credited(tmp_path: Path, body: str) -> None:
+    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
+
+
+def test_an_unresolved_parametrize_withholds_a_function_marker(tmp_path: Path) -> None:
+    decorated = (
+        '@pytest.mark.parametrize("entrypoint", build_cases())\n'
+        f"{HEALTHY}\ndef test_healthy(entrypoint):\n{ASSERT}"
+    )
+    messages = _grade(tmp_path, _module(decorated, LIFETIME))
+    assert any(UNREADABLE in m for m in messages)
+    assert any(NOT_REGISTERED in m for m in messages)
+
+
+@pytest.mark.parametrize(
+    ("alias", "expected"),
+    [
+        ('skip_ci = pytest.mark.skipif(True, reason="ci")', NOT_RUN),
+        ('skip_ci = pytest.mark.skipif(os.environ.get("CI"), reason="ci")', UNREADABLE),
+        ("skip_ci = pytest.mark.skipif(*conditions())", UNREADABLE),
+    ],
+    ids=["literal", "dynamic-condition", "unreadable-alias"],
+)
+def test_a_module_mark_alias_is_applied(
+    tmp_path: Path, alias: str, expected: str
+) -> None:
+    decorated = _test("@skip_ci\n" + HEALTHY)
+    messages = _grade(tmp_path, _module(alias, decorated, LIFETIME))
+    assert any(expected in m for m in messages)
+
+
+def test_a_decorator_that_applies_no_marks_is_ignored(tmp_path: Path) -> None:
+    decorated = _test("@respx.mock\n@pytest.mark.asyncio\n" + HEALTHY)
+    assert _grade(tmp_path, _module("import respx", decorated, LIFETIME)) == []
+
+
+def _entrypoint_param(values: list[str]) -> str:
+    cases = ", ".join(values)
+    return f'@pytest.mark.parametrize("entrypoint", [{cases}])'
+
+
+LINEAGE_ONLY = '@pytest.mark.parametrize("entrypoint", ["extract_lineage"])'
+
+
+def test_a_function_marker_needs_a_case_with_its_entrypoint(tmp_path: Path) -> None:
+    marker = '@pytest.mark.preflight_conformance(rule="F016", scenario="healthy", entrypoint="extract_metadata")'
+    decorated = f"{LINEAGE_ONLY}\n{marker}\ndef test_healthy(entrypoint):\n{ASSERT}"
+    messages = _grade(tmp_path, _module(decorated, LIFETIME), app=CONNECTOR)
+    assert any("run with entrypoint='extract_lineage'" in m for m in messages)
+    assert any(
+        "healthy for entrypoint extract_metadata is not registered" in m
+        for m in messages
+    )
+
+
+def test_a_function_marker_with_a_matching_runnable_case_counts(tmp_path: Path) -> None:
+    marker = '@pytest.mark.preflight_conformance(rule="F016", scenario="healthy", entrypoint="extract_metadata")'
+    cases = ['"extract_lineage"', '"extract_metadata"']
+    decorated = (
+        f"{_entrypoint_param(cases)}\n{marker}\ndef test_healthy(entrypoint):\n{ASSERT}"
+    )
+    messages = _grade(tmp_path, _module(decorated, LIFETIME), app=CONNECTOR)
+    assert not any("healthy for entrypoint extract_metadata" in m for m in messages)
+
+
+def test_a_matching_case_that_is_skipped_does_not_count(tmp_path: Path) -> None:
+    marker = '@pytest.mark.preflight_conformance(rule="F016", scenario="healthy", entrypoint="extract_metadata")'
+    cases = [
+        '"extract_lineage"',
+        'pytest.param("extract_metadata", marks=pytest.mark.skip(reason="x"))',
+    ]
+    decorated = (
+        f"{_entrypoint_param(cases)}\n{marker}\ndef test_healthy(entrypoint):\n{ASSERT}"
+    )
+    messages = _grade(tmp_path, _module(decorated, LIFETIME), app=CONNECTOR)
+    assert any("run with entrypoint='extract_lineage'" in m for m in messages)
+
+
+def test_a_stacked_entrypoint_parametrize_is_matched(tmp_path: Path) -> None:
+    """The marker rides one parametrize; the entrypoint comes from another."""
+    decorated = (
+        f"{LINEAGE_ONLY}\n"
+        '@pytest.mark.parametrize("mode", [pytest.param("soft", marks=pytest.mark.preflight_conformance(rule="F016", scenario="healthy", entrypoint="extract_metadata"))])\n'
+        f"def test_healthy(entrypoint, mode):\n{ASSERT}"
+    )
+    messages = _grade(tmp_path, _module(decorated, LIFETIME), app=CONNECTOR)
+    assert any("run with entrypoint='extract_lineage'" in m for m in messages)
+
+
+@pytest.mark.parametrize("value", ["None", "0", "('extract_metadata',)"])
+def test_a_non_string_case_entrypoint_is_a_mismatch(tmp_path: Path, value: str) -> None:
+    helper = f"""
+def entrypoint_matrix(scenario: str):
+    return pytest.mark.parametrize(
+        "entrypoint",
+        [
+            pytest.param({value}, marks=pytest.mark.preflight_conformance(rule="F016", scenario=scenario, entrypoint="extract_metadata")),
+            pytest.param("extract_lineage", marks=pytest.mark.preflight_conformance(rule="F016", scenario=scenario, entrypoint="extract_lineage")),
+        ],
+    )
+"""
+    messages = _grade(tmp_path, _matrix_module(helper), app=CONNECTOR)
+    assert (
+        sum("but its runnable cases run with entrypoint=" in m for m in messages) == 2
+    )

@@ -229,7 +229,8 @@ def test_clearing_never_executes_the_tests(repo, monkeypatch):
     (repo / "tests" / "unit").mkdir(parents=True)
     (repo / "tests" / "unit" / "test_contract.py").write_text(
         SCENARIO.format(decorators=REGISTERED).replace(
-            "def test_healthy():\n", "def test_healthy():\n    assert False\n"
+            "def test_healthy():\n",
+            'def test_healthy():\n    assert 1 == 2, "fails if run"\n',
         )
     )
     assert _f019_files(repo) == {"unparsed.py"}

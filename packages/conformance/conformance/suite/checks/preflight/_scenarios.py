@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
@@ -115,8 +115,9 @@ class _Registration:
     entrypoint: str
     unsupported: bool
     runs: _Runs
-    #: Set when the case's ``entrypoint`` argument disagrees with the marker.
-    runs_as: object = None
+    #: The ``entrypoint`` value(s) the runnable cases actually supply, when
+    #: none of them is the one the marker claims.
+    runs_as: str | None = None
 
 
 @dataclass
@@ -131,6 +132,8 @@ class _Module:
     assertion_names: dict[str, str]
     #: Local names bound to the ``conformance.preflight_testing`` module.
     assertion_modules: frozenset[str]
+    #: Module-level names bound to a mark expression (``skip_ci = pytest.mark.skipif(...)``).
+    mark_aliases: dict[str, ast.expr] = field(default_factory=dict)
 
 
 def _pytest_bindings(
@@ -153,14 +156,18 @@ def _pytest_bindings(
 
 
 def _bound_names(node: ast.stmt) -> set[str]:
-    """Names a module-level statement (re)binds, other than by import."""
+    """Names a statement binds directly, other than by import."""
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         return {node.name}
     targets: list[ast.expr] = []
     if isinstance(node, ast.Assign):
         targets = list(node.targets)
-    elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+    elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.For, ast.AsyncFor)):
         targets = [node.target]
+    elif isinstance(node, (ast.With, ast.AsyncWith)):
+        targets = [i.optional_vars for i in node.items if i.optional_vars is not None]
+    elif isinstance(node, ast.Try | ast.TryStar):
+        return {h.name for h in node.handlers if h.name}
     return {
         sub.id
         for target in targets
@@ -169,34 +176,73 @@ def _bound_names(node: ast.stmt) -> set[str]:
     }
 
 
+def _nested_blocks(node: ast.stmt) -> list[list[ast.stmt]]:
+    """Statement blocks a compound statement runs in the enclosing scope."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return []
+    blocks = [
+        block
+        for name in ("body", "orelse", "finalbody")
+        if isinstance(block := getattr(node, name, None), list)
+    ]
+    blocks += [h.body for h in getattr(node, "handlers", None) or []]
+    blocks += [c.body for c in getattr(node, "cases", None) or []]
+    return blocks
+
+
 def _assertion_bindings(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
     """Resolve which local names reach the ``conformance.preflight_testing`` assertions.
 
-    A same-named function the module defines, or a name it rebinds, is not
-    the contract assertion and is dropped.
+    Bindings are replayed in source order, into nested module-level blocks,
+    so the state is what a test sees once the module has imported: a later
+    import, definition or assignment of the same name — including the root of
+    a dotted ``import conformance.preflight_testing`` — replaces the contract
+    assertion, and the scanner forgets it.
     """
     names: dict[str, str] = {}
     modules: set[str] = set()
-    rebound: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.ImportFrom) and node.level == 0:
-            if node.module == _ASSERTION_MODULE:
+
+    def rebind(local: str) -> None:
+        names.pop(local, None)
+        for dotted in [m for m in modules if m.split(".", 1)[0] == local]:
+            modules.discard(dotted)
+
+    def visit(stmts: list[ast.stmt]) -> None:
+        for node in stmts:
+            if isinstance(node, ast.ImportFrom):
                 for alias in node.names:
-                    if alias.name in _ASSERTIONS:
-                        names[alias.asname or alias.name] = alias.name
-            elif node.module == "conformance":
+                    local = alias.asname or alias.name
+                    rebind(local)
+                    if node.level or alias.name == "*":
+                        continue
+                    if node.module == _ASSERTION_MODULE and alias.name in _ASSERTIONS:
+                        names[local] = alias.name
+                    elif (
+                        node.module == "conformance"
+                        and alias.name == "preflight_testing"
+                    ):
+                        modules.add(local)
+            elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name == "preflight_testing":
-                        modules.add(alias.asname or alias.name)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == _ASSERTION_MODULE:
-                    modules.add(alias.asname or _ASSERTION_MODULE)
-        else:
-            rebound |= _bound_names(node)
-    for name in rebound:
-        names.pop(name, None)
-        modules.discard(name)
+                    if alias.asname is not None:
+                        rebind(alias.asname)
+                        if alias.name == _ASSERTION_MODULE:
+                            modules.add(alias.asname)
+                        continue
+                    root = alias.name.split(".", 1)[0]
+                    # `import conformance.x` rebinds `conformance` to the same
+                    # package, so a dotted path through it survives.
+                    if root != "conformance":
+                        rebind(root)
+                    if alias.name == _ASSERTION_MODULE:
+                        modules.add(_ASSERTION_MODULE)
+            else:
+                for local in _bound_names(node):
+                    rebind(local)
+                for block in _nested_blocks(node):
+                    visit(block)
+
+    visit(tree.body)
     return names, frozenset(modules)
 
 
@@ -240,7 +286,7 @@ def _module_constants(tree: ast.Module) -> dict[str, object]:
 def _load(src: Source) -> _Module:
     modules, marks, params = _pytest_bindings(src.tree)
     assertion_names, assertion_modules = _assertion_bindings(src.tree)
-    return _Module(
+    mod = _Module(
         src=src,
         constants=_module_constants(src.tree),
         functions={
@@ -254,6 +300,27 @@ def _load(src: Source) -> _Module:
         assertion_names=assertion_names,
         assertion_modules=assertion_modules,
     )
+    for node in src.tree.body:
+        if isinstance(node, ast.Assign):
+            targets: list[ast.expr] = list(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        value = node.value
+        if len(targets) != 1 or not isinstance(targets[0], ast.Name) or value is None:
+            continue
+        name = targets[0].id
+        if name == "pytestmark":
+            continue
+        if any(
+            isinstance(sub, ast.Attribute) and _mark_name(sub, mod) is not None
+            for sub in ast.walk(value)
+        ):
+            mod.mark_aliases[name] = value
+        else:
+            mod.mark_aliases.pop(name, None)
+    return mod
 
 
 def _mark_name(node: ast.expr, mod: _Module) -> str | None:
@@ -369,6 +436,8 @@ def _marks(
     name = _mark_name(node, mod)
     if name is not None:
         return (_Mark(name),)
+    if isinstance(node, ast.Name) and node.id in mod.mark_aliases:
+        return _marks(mod.mark_aliases[node.id], mod, mod.constants, depth + 1)
     if not isinstance(node, ast.Call):
         raise _Unresolved(ast.unparse(node))
     name = _mark_name(node.func, mod)
@@ -485,10 +554,31 @@ def _pytestmark(body: list[ast.stmt], mod: _Module) -> tuple[_Mark, ...]:
     return marks
 
 
+def _is_mark_expression(node: ast.expr, mod: _Module) -> bool:
+    """True when *node* applies pytest marks: a ``pytest.mark.*`` expression, a
+    module helper that returns one, or a module-level alias bound to one."""
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Attribute) and _mark_name(sub, mod) is not None:
+            return True
+        if isinstance(sub, ast.Name) and sub.id in mod.mark_aliases:
+            return True
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in mod.functions
+    )
+
+
 def _decorator_marks(
     decorators: list[ast.expr], mod: _Module
 ) -> tuple[tuple[_Mark, ...], list[ast.expr]]:
-    """Resolved marks, and the decorators naming the marker that did not resolve."""
+    """Resolved marks, and the decorators naming the marker that did not resolve.
+
+    An unreadable decorator that applies marks — an unresolved parametrize, a
+    ``skipif`` built at import time — is kept as ``_UNRESOLVED_MARK``: whether
+    pytest collects a runnable case is then unknown, and nothing it covers is
+    credited. Only decorators that apply no marks (``respx.mock``) are dropped.
+    """
     marks: list[_Mark] = []
     unresolved: list[ast.expr] = []
     for dec in decorators:
@@ -497,6 +587,8 @@ def _decorator_marks(
         except _Unresolved:
             if _names_marker(dec, mod):
                 unresolved.append(dec)
+            elif _is_mark_expression(dec, mod):
+                marks.append(_Mark(_UNRESOLVED_MARK))
     return tuple(marks), unresolved
 
 
@@ -576,56 +668,147 @@ def _constant_truth(test: ast.expr) -> bool | None:
     return None
 
 
-def _reachable(stmts: list[ast.stmt]) -> Iterator[ast.AST]:
-    """Nodes a block can execute: dead branches, nested scopes and code after an
-    unconditional exit are left out."""
-    for stmt in stmts:
-        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            yield from stmt.decorator_list
-            continue
-        if isinstance(stmt, ast.If):
-            yield stmt.test
-            truth = _constant_truth(stmt.test)
-            if truth is not False:
-                yield from _reachable(stmt.body)
-            if truth is not True:
-                yield from _reachable(stmt.orelse)
-        elif isinstance(stmt, ast.While):
-            yield stmt.test
-            if _constant_truth(stmt.test) is not False:
-                yield from _reachable(stmt.body)
-            yield from _reachable(stmt.orelse)
-        else:
-            blocks = [
-                getattr(stmt, name)
-                for name in ("body", "orelse", "finalbody")
-                if isinstance(getattr(stmt, name, None), list)
-            ]
-            handlers = getattr(stmt, "handlers", None) or []
-            cases = getattr(stmt, "cases", None) or []
-            for child in ast.iter_child_nodes(stmt):
-                if isinstance(child, ast.stmt) or child in handlers or child in cases:
-                    continue
-                yield from _expression_nodes(child)
-            for block in blocks:
-                yield from _reachable(block)
-            for handler in (*handlers, *cases):
-                yield from _reachable(handler.body)
-        if isinstance(stmt, (ast.Return, ast.Raise, ast.Continue, ast.Break)):
-            return
+class _Flow(Enum):
+    """How a block ends, for deciding whether the statements after it run.
+
+    ``RAISES`` is kept apart from ``RETURNS`` because an enclosing ``with``
+    (``pytest.raises``) or ``try`` can absorb an exception, so code after it
+    may still run; a ``return`` is never absorbed.
+    """
+
+    FALLS = "falls"
+    RETURNS = "returns"
+    RAISES = "raises"
+    JUMPS = "jumps"  # break / continue
 
 
-def _expression_nodes(node: ast.AST) -> Iterator[ast.AST]:
-    """``ast.walk`` that does not descend into a lambda's body."""
+def _either(first: _Flow, second: _Flow) -> _Flow:
+    """Two alternative paths end the block only if both end it the same way."""
+    return first if first is second else _Flow.FALLS
+
+
+def _expression(node: ast.AST, out: list[ast.AST]) -> None:
+    """Collect the nodes evaluating *node* runs, leaving out deferred parts.
+
+    A lambda body and a generator expression's element run only if something
+    later calls or consumes them, and a statically short-circuited operand
+    never runs; none of them counts.
+    """
     if isinstance(node, ast.Lambda):
         return
-    yield node
+    if isinstance(node, ast.GeneratorExp):
+        _expression(node.generators[0].iter, out)
+        return
+    if isinstance(node, ast.BoolOp):
+        for value in node.values:
+            _expression(value, out)
+            truth = _constant_truth(value)
+            if isinstance(node.op, ast.And) and truth is False:
+                return
+            if isinstance(node.op, ast.Or) and truth is True:
+                return
+        return
+    if isinstance(node, ast.IfExp):
+        _expression(node.test, out)
+        truth = _constant_truth(node.test)
+        if truth is not False:
+            _expression(node.body, out)
+        if truth is not True:
+            _expression(node.orelse, out)
+        return
+    out.append(node)
     for child in ast.iter_child_nodes(node):
-        yield from _expression_nodes(child)
+        _expression(child, out)
+
+
+def _block(stmts: list[ast.stmt], out: list[ast.AST]) -> _Flow:
+    """Collect the nodes a block can execute; return how it ends.
+
+    Dead branches, nested scopes, deferred expressions and everything after
+    a definite exit are left out.
+    """
+    for stmt in stmts:
+        flow = _statement(stmt, out)
+        if flow is not _Flow.FALLS:
+            return flow
+    return _Flow.FALLS
+
+
+def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        for dec in stmt.decorator_list:
+            _expression(dec, out)
+        return _Flow.FALLS
+    if isinstance(stmt, ast.Return):
+        if stmt.value is not None:
+            _expression(stmt.value, out)
+        return _Flow.RETURNS
+    if isinstance(stmt, ast.Raise):
+        if stmt.exc is not None:
+            _expression(stmt.exc, out)
+        return _Flow.RAISES
+    if isinstance(stmt, (ast.Break, ast.Continue)):
+        return _Flow.JUMPS
+    if isinstance(stmt, ast.Assert):
+        # The message is evaluated only when the assertion fails.
+        _expression(stmt.test, out)
+        return _Flow.RAISES if _constant_truth(stmt.test) is False else _Flow.FALLS
+    if isinstance(stmt, ast.If):
+        _expression(stmt.test, out)
+        truth = _constant_truth(stmt.test)
+        if truth is True:
+            return _block(stmt.body, out)
+        if truth is False:
+            return _block(stmt.orelse, out)
+        return _either(_block(stmt.body, out), _block(stmt.orelse, out))
+    if isinstance(stmt, ast.While):
+        _expression(stmt.test, out)
+        truth = _constant_truth(stmt.test)
+        if truth is False:
+            return _block(stmt.orelse, out)
+        body = _block(stmt.body, out)
+        if truth is True and body in (_Flow.RETURNS, _Flow.RAISES):
+            return body
+        _block(stmt.orelse, out)
+        return _Flow.FALLS
+    if isinstance(stmt, (ast.For, ast.AsyncFor)):
+        _expression(stmt.iter, out)
+        _block(stmt.body, out)  # may run zero times
+        _block(stmt.orelse, out)
+        return _Flow.FALLS
+    if isinstance(stmt, (ast.With, ast.AsyncWith)):
+        for item in stmt.items:
+            _expression(item.context_expr, out)
+        body = _block(stmt.body, out)
+        # A context manager can suppress the exception; it cannot undo a return.
+        return _Flow.FALLS if body is _Flow.RAISES else body
+    if isinstance(stmt, ast.Try | ast.TryStar):
+        body = _block(stmt.body, out)
+        handlers = [_block(h.body, out) for h in stmt.handlers]
+        orelse = _block(stmt.orelse, out) if body is _Flow.FALLS else _Flow.FALLS
+        final = _block(stmt.finalbody, out)
+        if final is not _Flow.FALLS:
+            return final
+        if body is _Flow.FALLS:
+            return orelse
+        if body is _Flow.RAISES and stmt.handlers:
+            flows = set(handlers)
+            return flows.pop() if len(flows) == 1 else _Flow.FALLS
+        return body
+    if isinstance(stmt, ast.Match):
+        _expression(stmt.subject, out)
+        for case in stmt.cases:
+            _block(case.body, out)
+        return _Flow.FALLS
+    for child in ast.iter_child_nodes(stmt):
+        _expression(child, out)
+    return _Flow.FALLS
 
 
 def _calls(stmts: list[ast.stmt]) -> list[ast.Call]:
-    return [node for node in _reachable(stmts) if isinstance(node, ast.Call)]
+    out: list[ast.AST] = []
+    _block(stmts, out)
+    return [node for node in out if isinstance(node, ast.Call)]
 
 
 def _assertion(call: ast.Call, mod: _Module, shadowed: frozenset[str]) -> str | None:
@@ -635,7 +818,8 @@ def _assertion(call: ast.Call, mod: _Module, shadowed: frozenset[str]) -> str | 
         return mod.assertion_names.get(func.id)
     if isinstance(func, ast.Attribute) and func.attr in _ASSERTIONS:
         dotted = ast.unparse(func.value)
-        if dotted not in shadowed and dotted in mod.assertion_modules:
+        # A local rebinding of the dotted path's root shadows the whole path.
+        if dotted.split(".", 1)[0] not in shadowed and dotted in mod.assertion_modules:
             return func.attr
     return None
 
@@ -705,10 +889,12 @@ def _registrations(
     base = _Runs.NO if body_skips else _marks_run(plain)
     for mark in (m for m in plain if m.name == MARKER):
         # A function-level registration runs only if every parametrize it is
-        # combined with has at least one case that runs.
-        yield _as_registration(
+        # combined with has at least one case that runs — and, where one
+        # supplies `entrypoint`, a runnable case with the claimed value.
+        reg = _as_registration(
             mark, _combine(base, *(_any_case_runs(p) for p in parametrizes))
         )
+        yield _match_entrypoint(reg, parametrizes)
     for index, parametrize in enumerate(parametrizes):
         others = [p for i, p in enumerate(parametrizes) if i != index]
         for param in parametrize.params:
@@ -717,19 +903,57 @@ def _registrations(
             )
             for mark in (m for m in param.marks if m.name == MARKER):
                 reg = _as_registration(mark, runs)
-                actual = param.values.get("entrypoint", reg.entrypoint)
-                if actual is UNKNOWN:
-                    reg = _Registration(
-                        reg.scenario, reg.entrypoint, reg.unsupported, _Runs.UNKNOWN
-                    )
-                elif (
-                    isinstance(actual, str)
-                    and actual.replace("-", "_") != reg.entrypoint
-                ):
-                    reg = _Registration(
-                        reg.scenario, reg.entrypoint, reg.unsupported, reg.runs, actual
-                    )
-                yield reg
+                if "entrypoint" in param.values:
+                    yield _check_value(reg, param.values["entrypoint"])
+                else:
+                    yield _match_entrypoint(reg, others)
+
+
+def _normalise(value: object) -> object:
+    return value.replace("-", "_") if isinstance(value, str) else value
+
+
+def _check_value(reg: _Registration, actual: object) -> _Registration:
+    """Hold a registration to the entrypoint value its own case runs with."""
+    if actual is UNKNOWN:
+        return replace(reg, runs=_combine(reg.runs, _Runs.UNKNOWN))
+    if _normalise(actual) != reg.entrypoint:
+        # Any known value that differs — a string, None, a number — is a
+        # different entrypoint from the one the marker claims.
+        return replace(reg, runs_as=repr(actual))
+    return reg
+
+
+def _match_entrypoint(reg: _Registration, parametrizes: list[_Mark]) -> _Registration:
+    """Hold a registration to the `entrypoint` a combined parametrize supplies.
+
+    Credit needs a case that runs with the claimed value. A case whose run
+    state or value is unreadable leaves it unknown; a set of runnable cases
+    that all supply other values is a mismatch.
+    """
+    for parametrize in parametrizes:
+        if "entrypoint" not in parametrize.argnames:
+            continue
+        runnable = [
+            (state, p.values.get("entrypoint", UNKNOWN))
+            for p in parametrize.params
+            if (state := _marks_run(p.marks)) is not _Runs.NO
+        ]
+        if any(
+            state is _Runs.YES and _normalise(value) == reg.entrypoint
+            for state, value in runnable
+        ):
+            continue
+        if any(
+            value is UNKNOWN or _normalise(value) == reg.entrypoint
+            for _, value in runnable
+        ):
+            reg = replace(reg, runs=_combine(reg.runs, _Runs.UNKNOWN))
+            continue
+        if runnable:
+            values = sorted({repr(v) for _, v in runnable})
+            reg = replace(reg, runs_as=", ".join(values))
+    return reg
 
 
 def _as_registration(mark: _Mark, runs: _Runs) -> _Registration:
@@ -809,9 +1033,9 @@ def _scan_test_module(
                 )
             elif reg.runs_as is not None:
                 message = (
-                    f"{func.name} registers preflight scenario {label}, but that "
-                    f"case runs with entrypoint={reg.runs_as!r}; a case defines only "
-                    "the entrypoint it actually runs."
+                    f"{func.name} registers preflight scenario {label}, but its "
+                    f"runnable cases run with entrypoint={reg.runs_as}; a case "
+                    "defines only the entrypoint it actually runs."
                 )
             elif reg.unsupported:
                 message = (
