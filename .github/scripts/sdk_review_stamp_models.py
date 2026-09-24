@@ -70,26 +70,27 @@ def models_line(models: str) -> str:
 def stamp(body: str, models: str) -> str | None:
     """`body` with its Models footer set to `models`, or None if unchanged.
 
-    Replaces the LAST `**Models:**` line — the footer. A re-review carries the
-    prior summary into its delta section, so an earlier footer can be quoted
-    above the real one; the first match would "fix" the quote and leave the
-    guess standing. With no such line, one is inserted directly above the last
-    `**Run:**` line. A body with neither is left alone — there is no footer to
-    anchor to, and guessing a position risks landing inside the review text.
+    The current footer is the models line immediately above the last `**Run:**`
+    line. Replace it only when it is adjacent to that run link; otherwise insert
+    the current line there. A re-review can quote older models lines in its body,
+    which must not be rewritten. A body with no run link is left alone because
+    there is no reliable place to anchor the footer.
     Only that one line changes, so the markers, `REVIEWED_HEAD` and the run URL
     the approver, the dedupe step and the verdict gate key on stay byte-identical.
     """
+    runs = list(RUN_LINE_RE.finditer(body))
+    if not runs:
+        return None
+
     line = models_line(models)
-    footers = list(MODELS_LINE_RE.finditer(body))
-    if footers:
-        last = footers[-1]
-        new = body[: last.start()] + line + body[last.end() :]
+    run = runs[-1]
+    before_run = body[: run.start()]
+    footers = list(MODELS_LINE_RE.finditer(before_run))
+    footer = footers[-1] if footers else None
+    if footer and not before_run[footer.end() :].strip():
+        new = body[: footer.start()] + line + body[footer.end() :]
     else:
-        runs = list(RUN_LINE_RE.finditer(body))
-        if not runs:
-            return None
-        at = runs[-1].start()
-        new = body[:at] + line + "\n" + body[at:]
+        new = body[: run.start()] + line + "\n" + body[run.start() :]
     return new if new != body else None
 
 
