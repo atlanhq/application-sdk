@@ -47,6 +47,35 @@ def safe_substitute_placeholders(template: str, mapping: dict[str, str]) -> str:
     return pattern.sub(lambda m: mapping[m.group()], template)
 
 
+_SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def strip_sql_block_comments(fragment: str) -> str:
+    """Remove ``/* ... */`` block comments from a SQL fragment template.
+
+    Apps ship the temp-table fragment (``extract_temp_table_regex_table.sql``)
+    with a documentation header block, and many of their full query templates
+    mention ``{temp_table_regex_sql}`` inside their *own* header comment.
+    Substituting the fragment verbatim nests its ``/* ... */`` inside that
+    header: SQL block comments do not nest, so the fragment's ``*/`` closes
+    the outer comment early and the rest of the header becomes live SQL — a
+    syntax error on every run that sets the filter (FND-2733, reproduced on
+    MySQL 8.0). The fragment's comments carry no SQL meaning, so strip them
+    before substitution.
+
+    Apply this to the *template* fragment before substituting the user value.
+    The value itself can never open or close a comment: filter validators
+    reject ``/*`` and ``*/``.
+
+    Args:
+        fragment: A SQL fragment template, possibly with block comments.
+
+    Returns:
+        The fragment without block comments, surrounding whitespace trimmed.
+    """
+    return _SQL_BLOCK_COMMENT.sub("", fragment).strip()
+
+
 # ---------------------------------------------------------------------------
 # SQL injection deny-list for filter values (BLDX-518).
 #
@@ -418,7 +447,13 @@ def prepare_query(
         # that gate the typed extraction inputs. Run the same deny-list
         # here so user-controlled metadata can't smuggle SQL escape
         # sequences into the substituted templates.
-        temp_table_regex = metadata.get("temp-table-regex")
+        # ``exclude-table-regex`` is the contract toolkit's form key for the
+        # same filter (FND-2733); ``temp-table-regex`` wins when both are set.
+        temp_table_regex = (
+            metadata.get("temp-table-regex")
+            or metadata.get("exclude-table-regex")
+            or metadata.get("exclude_table_regex")
+        )
         if isinstance(temp_table_regex, str):
             # Translate legacy quoted-CSV shape to a v3 alternation regex
             # before applying the deny-list. Without this, raw-dict
@@ -427,9 +462,9 @@ def prepare_query(
             temp_table_regex = normalize_legacy_filter_value(temp_table_regex)
             validate_filter_no_sql_injection(temp_table_regex)
         if temp_table_regex and temp_table_regex_sql is not None:
-            temp_table_regex_sql = temp_table_regex_sql.format(
-                exclude_table_regex=temp_table_regex
-            )
+            temp_table_regex_sql = strip_sql_block_comments(
+                temp_table_regex_sql
+            ).format(exclude_table_regex=temp_table_regex)
         else:
             temp_table_regex_sql = ""
 
