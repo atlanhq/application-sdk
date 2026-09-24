@@ -12,7 +12,10 @@ missing. The SDK's own subclasses outside ``application_sdk.errors``
 The leaf is exempt only when the caught exception selects it: an enclosing
 ``if`` / ``while`` / conditional expression / ``match`` whose test reads the
 exception, or a name stored from it earlier (directly or through other stored
-names, in source order), with the leaf in the branch the test selects.
+names), with the leaf in the branch the test selects. A name counts only if
+its value depends on the exception on every path to that test: stores are
+replayed in source order up to the test, and one on a branch that may be
+skipped can clear a name but never derive it.
 
 Everything else is a fallback and fires:
 
@@ -64,6 +67,7 @@ _SDK_CUSTOMER_LEAVES = frozenset(
 )
 _CONDITIONS = (ast.If, ast.IfExp, ast.While)
 _STORES = (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)
+_BLOCK_FIELDS = frozenset({"body", "orelse", "finalbody", "cases"})
 _OWN_SCOPE_ENDS = (
     ast.FunctionDef,
     ast.AsyncFunctionDef,
@@ -120,20 +124,69 @@ def _end(node: ast.AST) -> tuple[int, int]:
     )
 
 
-def _derived_names(handler: ast.ExceptHandler, caught: str, leaf: ast.Call) -> set[str]:
-    """Names holding a value that depends on ``caught`` where ``leaf`` is built.
+_Parents = dict[ast.AST, tuple[ast.AST, str, int]]
+_Step = tuple[int, str, int]
 
-    One pass in source order, so a later store never re-derives an earlier
-    copy, and a store from anything else (or from a guard every exception
-    passes, such as ``exc is not None``) clears the name again.
+
+def _parents(handler: ast.ExceptHandler) -> _Parents:
+    """Map each node to its parent, the parent's field, and its index in it."""
+    parents: _Parents = {}
+    for parent in [handler, *_own_nodes(handler)]:
+        for field, value in ast.iter_fields(parent):
+            values = value if isinstance(value, list) else [value]
+            children: list[ast.AST] = [c for c in values if isinstance(c, ast.AST)]
+            for index, child in enumerate(children):
+                parents[child] = (parent, field, index)
+    return parents
+
+
+def _block_path(
+    node: ast.AST, parents: _Parents, handler: ast.ExceptHandler
+) -> list[_Step]:
+    """The statement-list slots from ``handler`` down to the statement holding ``node``."""
+    path: list[_Step] = []
+    child = node
+    while child is not handler:
+        parent, field, index = parents[child]
+        if field in _BLOCK_FIELDS:
+            path.append((id(parent), field, index))
+        child = parent
+    path.reverse()
+    return path
+
+
+def _dominates(store: list[_Step], point: list[_Step]) -> bool:
+    """Whether a store at ``store`` runs on every path that reaches ``point``.
+
+    True for an earlier statement in the same or an enclosing block, and for
+    the header of an enclosing statement (a walrus in an ``if`` test); false
+    for anything inside a branch the point is not in.
     """
+    if not store or len(store) > len(point):
+        return False
+    *outer, last = store
+    here = point[len(outer)]
+    return point[: len(outer)] == outer and here[:2] == last[:2] and last[2] <= here[2]
+
+
+def _derived_at(
+    point: ast.expr, caught: str, parents: _Parents, handler: ast.ExceptHandler
+) -> set[str]:
+    """Names certainly holding a value that depends on ``caught`` when ``point`` runs.
+
+    Stores are replayed in source order. Only a store that dominates the point
+    can derive a name; one on a branch that may be skipped can only clear it,
+    as can a store from anything else or from a guard every exception passes
+    (``exc is not None``).
+    """
+    point_path = _block_path(point, parents, handler)
     stores = sorted(
         (
             node
             for node in _own_nodes(handler)
             if isinstance(node, _STORES)
             and node.value is not None
-            and _end(node) <= _position(leaf)
+            and _end(node) <= _position(point)
         ),
         key=_position,
     )
@@ -141,7 +194,11 @@ def _derived_names(handler: ast.ExceptHandler, caught: str, leaf: ast.Call) -> s
     for node in stores:
         if node.value is None:
             continue
-        derived = _mentions(node.value, names) and not _always_true(node.value, caught)
+        derived = (
+            _dominates(_block_path(node, parents, handler), point_path)
+            and _mentions(node.value, names)
+            and not _always_true(node.value, caught)
+        )
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         for target in targets:
             for name in ast.walk(target):
@@ -182,24 +239,6 @@ def _always_true(test: ast.expr, caught: str) -> bool:
     return False
 
 
-def _selects(test: ast.expr, names: set[str], caught: str) -> bool:
-    return _mentions(test, names) and not _always_true(test, caught)
-
-
-_Parents = dict[ast.AST, tuple[ast.AST, str]]
-
-
-def _parents(handler: ast.ExceptHandler) -> _Parents:
-    parents: _Parents = {}
-    for parent in [handler, *_own_nodes(handler)]:
-        for field, value in ast.iter_fields(parent):
-            values = value if isinstance(value, list) else [value]
-            children: list[ast.AST] = [c for c in values if isinstance(c, ast.AST)]
-            for child in children:
-                parents[child] = (parent, field)
-    return parents
-
-
 def _catch_all(case: ast.AST) -> bool:
     return (
         isinstance(case, ast.match_case)
@@ -215,22 +254,17 @@ def _looked_at(
     parents: _Parents,
     handler: ast.ExceptHandler,
 ) -> bool:
-    names = _derived_names(handler, caught, leaf)
     child: ast.AST = leaf
     while child is not handler:
-        parent, field = parents[child]
-        if (
-            isinstance(parent, _CONDITIONS)
-            and field == "body"
-            and _selects(parent.test, names, caught)
-        ):
-            return True
-        if (
-            isinstance(parent, ast.Match)
-            and not _catch_all(child)
-            and _mentions(parent.subject, names)
-        ):
-            return True
+        parent, field, _ = parents[child]
+        if isinstance(parent, _CONDITIONS) and field == "body":
+            names = _derived_at(parent.test, caught, parents, handler)
+            if _mentions(parent.test, names) and not _always_true(parent.test, caught):
+                return True
+        if isinstance(parent, ast.Match) and not _catch_all(child):
+            names = _derived_at(parent.subject, caught, parents, handler)
+            if _mentions(parent.subject, names):
+                return True
         child = parent
     return False
 

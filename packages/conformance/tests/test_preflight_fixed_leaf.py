@@ -288,6 +288,46 @@ def test_fires_when_a_guard_copies_a_value_from_before_the_exception(
     assert len(_f021(tmp_path, src)) == 1
 
 
+def test_fires_when_the_exception_dependent_store_is_on_one_branch_only(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            ready = True\n"
+        "            if self.strict:\n"
+        "                ready = isinstance(exc, PermissionError)\n"
+        "            if ready:\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_silent_when_the_guard_name_is_reassigned_inside_its_branch(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            ready = isinstance(exc, PermissionError)\n"
+        "            if ready:\n"
+        "                ready = False\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_silent_on_a_walrus_classification_read_by_a_later_guard(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            if (kind := classify(exc)) is None:\n"
+        "                raise InternalError(message='x', suggested_action='y')\n"
+        "            if kind == 'auth':\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
 def test_fires_under_a_stored_guard_that_is_always_true(tmp_path: Path) -> None:
     for stored in ("exc is not None", "isinstance(exc, Exception)", "not exc is None"):
         row = (
