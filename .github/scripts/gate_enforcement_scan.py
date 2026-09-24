@@ -1414,21 +1414,38 @@ def _resolve_truncated(
 
     A merged pull request carries two walks — its head and its merge commit
     (FND-2783) — and only the ones that were actually cut off are paged. The
-    sample becomes a conclusive miss only once *every* truncated walk has been
-    exhausted without a sighting; any walk that cannot be finished leaves the
-    whole sample truncated, since the gate may be on the part never read.
+    walks are independent evidence, so every one is tried even after another
+    could not be finished: a sighting on any of them is ``found``. The sample
+    stays truncated only when nothing was sighted and at least one walk could
+    not be finished, since the gate may be on the part never read; once every
+    truncated walk is exhausted without a sighting it is a conclusive miss.
+
+    A paging failure is contained to its own walk for the same reason. Letting
+    a head-page ``GhError`` escape would discard a merge commit that was never
+    read, and a merge-queue repo's gate may be on that commit alone.
     """
     if sample.get("found") or not sample.get("truncated"):
         return _public_sample(sample)
 
+    unfinished = False
     for walk in sample.get("walks") or []:
         if not walk["truncated"]:
             continue
-        outcome = _page_walk(repo, owner, name, sample, walk, required_context, run)
+        try:
+            outcome = _page_walk(repo, owner, name, sample, walk, required_context, run)
+        except GhError as exc:
+            print(
+                f"::warning::{repo}: PR #{sample.get('number')}: context paging "
+                f"failed for {walk.get('oid')}: {exc}",
+                file=sys.stderr,
+            )
+            outcome = _Walk.UNFINISHED
         if outcome is _Walk.FOUND:
             return _public_sample({**sample, "found": True, "truncated": False})
         if outcome is _Walk.UNFINISHED:
-            return _public_sample(sample)
+            unfinished = True
+    if unfinished:
+        return _public_sample(sample)
     # Every truncated walk was exhausted and the gate was not anywhere in it.
     # That is now a *conclusive* miss — the whole point of paging.
     return _public_sample({**sample, "truncated": False})

@@ -1886,6 +1886,73 @@ def test_an_unfinished_merge_commit_walk_keeps_the_sample_out_of_the_denominator
     assert samples == [{"number": 1, "found": False, "truncated": True}]
 
 
+def _both_truncated_arrival(head_page):
+    """A stub: a merged PR whose head *and* merge commit both spill past page
+    one. ``head_page`` answers the head's paging request (a callable, so it can
+    raise); the merge commit's next page carries a `merge_group` gate."""
+    node = _merged(
+        1,
+        _run_contexts(
+            [_run_ctx("x", "merge_group")], total=136, has_next=True, cursor="mc"
+        ),
+        merge_oid="m1",
+    )
+    node["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = _contexts(
+        ["x"], total=152, has_next=True, cursor="hc"
+    )
+    node["commits"]["nodes"][0]["commit"]["oid"] = "h1"
+
+    def run(args: list) -> str:
+        if not _is_page_query(args):
+            return _arrival_nodes(node)
+        if "oid=h1" in args:
+            return head_page()
+        return json.dumps(_page(_run_contexts([_run_ctx(GATE, "merge_group")])))
+
+    return run
+
+
+def _unresolvable_head() -> str:
+    return json.dumps({"data": {"repository": {"object": None}}})
+
+
+def _failing_head() -> str:
+    raise GhError("HTTP 502 on the head page")
+
+
+@pytest.mark.parametrize(
+    "head_page",
+    [
+        pytest.param(_unresolvable_head, id="unfinished-head"),
+        pytest.param(_failing_head, id="failed-head"),
+    ],
+)
+def test_a_head_walk_that_cannot_finish_does_not_hide_the_merge_commit(head_page):
+    """The walks are independent evidence. Stopping at an unfinished or failed
+    head walk excluded a valid `merge_group` gate on a later merge-commit page
+    as truncated — and a repo whose samples all took that path read `unknown`
+    rather than `reporting`."""
+    samples = fetch_arrival_samples(
+        REPO, "main", 5, GATE, run=_both_truncated_arrival(head_page)
+    )
+    assert samples == [{"number": 1, "found": True, "truncated": False}]
+
+
+def test_no_sighting_with_an_unfinished_walk_stays_truncated():
+    """The merge commit was walked to the end without a gate, but the head was
+    never finished — the gate may be on the part never read."""
+
+    def run(args: list) -> str:
+        if not _is_page_query(args):
+            return _both_truncated_arrival(_unresolvable_head)(args)
+        if "oid=h1" in args:
+            return _unresolvable_head()
+        return json.dumps(_page(_run_contexts([_run_ctx(GATE, "push")])))
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": False, "truncated": True}]
+
+
 @pytest.mark.parametrize(
     "ctx, match",
     [
