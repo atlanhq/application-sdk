@@ -1563,11 +1563,21 @@ def _collect_source_usage(
                 ] = {}
                 self.local_names: dict[tuple[str, ...], set[str]] = {}
                 self.parameters: dict[tuple[str, ...], set[str]] = {}
-                self.mutated_names: set[str] = set()
+                self.mutations: list[tuple[tuple[int, int], str, tuple[str, ...]]] = []
+                self.invocations: dict[str, list[tuple[int, int]]] = {}
+                self.function_definitions: dict[str, tuple[int, int]] = {}
+                self.dict_contexts: dict[
+                    int, tuple[tuple[str, ...], tuple[int, int]]
+                ] = {}
+                self.dict_bindings: dict[str, int] = {}
                 self.calls: list[tuple[ast.Call, tuple[str, ...]]] = []
 
             def visit_Call(self, node: ast.Call) -> None:
                 self.calls.append((node, self.scope))
+                if not self.scope and isinstance(node.func, ast.Name):
+                    self.invocations.setdefault(node.func.id, []).append(
+                        (node.lineno, node.col_offset)
+                    )
                 self.generic_visit(node)
 
             def _record_binding(
@@ -1590,13 +1600,35 @@ def _collect_source_usage(
                         else target.value
                     )
                     if isinstance(base, ast.Name):
-                        self.mutated_names.add(base.id)
+                        position = (
+                            getattr(target, "lineno", 0),
+                            getattr(target, "col_offset", 0),
+                        )
+                        self.mutations.append((position, base.id, self.scope))
 
             def visit_Assign(self, node: ast.Assign) -> None:
                 self.visit(node.value)
                 for target in node.targets:
                     if isinstance(target, ast.Name):
                         self._record_binding(target.id, node.value, node)
+                        if isinstance(node.value, ast.Dict):
+                            self.dict_contexts[id(node.value)] = (
+                                self.scope,
+                                (
+                                    node.end_lineno or node.lineno,
+                                    node.end_col_offset or 0,
+                                ),
+                            )
+                            self.dict_bindings[target.id] = id(node.value)
+                        elif (
+                            isinstance(node.value, ast.Name)
+                            and node.value.id in self.dict_bindings
+                        ):
+                            self.dict_bindings[target.id] = self.dict_bindings[
+                                node.value.id
+                            ]
+                        else:
+                            self.dict_bindings.pop(target.id, None)
                     else:
                         self._record_target_mutations(target)
                 for target in node.targets:
@@ -1610,6 +1642,17 @@ def _collect_source_usage(
                     else:
                         self._record_target_mutations(node.target)
                 self.visit(node.target)
+
+            def visit_For(self, node: ast.For) -> None:
+                self._record_target_mutations(node.target)
+                self.visit(node.iter)
+                for statement in node.body:
+                    self.visit(statement)
+                for statement in node.orelse:
+                    self.visit(statement)
+
+            def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+                self.visit_For(node)  # type: ignore[arg-type]
 
             def visit_AugAssign(self, node: ast.AugAssign) -> None:
                 self._record_target_mutations(node.target)
@@ -1646,6 +1689,7 @@ def _collect_source_usage(
                     self.scope = self.scope[:-1]
 
             def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                self.function_definitions[node.name] = (node.lineno, node.col_offset)
                 for default in (*node.args.defaults, *node.args.kw_defaults):
                     if default is not None:
                         self.visit(default)
@@ -1684,10 +1728,8 @@ def _collect_source_usage(
                 return node
             for depth in range(len(scope), -1, -1):
                 binding_scope = scope[:depth]
-                if (
-                    binding_scope
-                    and depth < len(scope)
-                    and node.id in source.local_names.get(binding_scope, set())
+                if binding_scope and node.id in source.local_names.get(
+                    binding_scope, set()
                 ):
                     choices = [
                         item
@@ -1706,21 +1748,32 @@ def _collect_source_usage(
                     binding_scope, set()
                 ):
                     return node
+                resolution_position = position
+                if depth == 0 and scope:
+                    function_name = scope[0].split(":", 1)[0]
+                    definition_position = source.function_definitions.get(function_name)
+                    invocation_positions = source.invocations.get(function_name, [])
+                    if definition_position is None:
+                        return node
+                    calls_after_definition = [
+                        call_position
+                        for call_position in invocation_positions
+                        if call_position > definition_position
+                    ]
+                    if not calls_after_definition:
+                        return node
+                    resolution_position = min(calls_after_definition)
                 choices = [
                     item
                     for item in source.bindings.get(binding_scope, [])
-                    if item[1] == node.id
-                    and (
-                        depth < len(scope)
-                        or item[0] < position
-                        or (scope and binding_scope == () and item[0][0] > position[0])
-                    )
+                    if item[1] == node.id and item[0] < resolution_position
                 ]
                 if choices:
+                    resolution_position = choices[-1][0]
                     return value_at(
                         choices[-1][2],
                         binding_scope,
-                        choices[-1][0],
+                        resolution_position,
                         seen | {node.id},
                     )
             return node
@@ -1831,9 +1884,21 @@ def _collect_source_usage(
                     ),
                     None,
                 )
-            if (
-                isinstance(configuration, ast.Name)
-                and configuration.id in source.mutated_names
+            config_node = value_at(configuration, scope, position)
+            construction = source.dict_contexts.get(id(config_node))
+            construction_scope, construction_position = (
+                construction if construction is not None else (scope, position)
+            )
+            config_binding = (
+                source.dict_bindings.get(configuration.id)
+                if isinstance(configuration, ast.Name)
+                else None
+            )
+            if config_binding is not None and any(
+                source.dict_bindings.get(mutation_name) == config_binding
+                and mutation_scope == scope[: len(mutation_scope)]
+                and mutation_position < position
+                for mutation_position, mutation_name, mutation_scope in source.mutations
             ):
                 return []
             prefixes = (
@@ -1849,11 +1914,15 @@ def _collect_source_usage(
                 if key is None:
                     return []
                 for prefix in prefixes:
-                    if argument_values(key, scope, position) == [f"{prefix}url"]:
+                    if argument_values(
+                        key, construction_scope, construction_position
+                    ) == [f"{prefix}url"]:
                         matches.append(value)
             if len(matches) != 1:
                 return []
-            return argument_values(matches[0], scope, position)
+            return argument_values(
+                matches[0], construction_scope, construction_position
+            )
 
         for call, scope in source.calls:
             func = call.func
