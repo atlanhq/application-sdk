@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.38.0
-source-sha:    d93627a10191966c3f534bef688cbe60f4347e26
-source-date:   2026-09-23T12:48:45+05:30
+sdk-version:   3.39.0
+source-sha:    61c6975dd9707bbb6d3068a5a9ab4dda64615078
+source-date:   2026-09-24T18:58:13+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 69 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 71 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -1689,6 +1689,20 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 ### Functions
+
+#### `classify_http_exception`
+
+- **Import:** `from application_sdk.errors import classify_http_exception`
+- **Signature:** `classify_http_exception(exc: BaseException, *, overrides: Mapping[int, type[AppError]] | None = None)`
+- **Summary:** Return the leaf class for the first httpx failure in ``exc``'s chain.
+- **Defined in:** `application_sdk/errors/http.py`
+
+#### `classify_http_status`
+
+- **Import:** `from application_sdk.errors import classify_http_status`
+- **Signature:** `classify_http_status(status: int, *, overrides: Mapping[int, type[AppError]] | None = None)`
+- **Summary:** Return the leaf class for an HTTP status, or ``None`` when unmapped.
+- **Defined in:** `application_sdk/errors/http.py`
 
 #### `redact_secrets`
 

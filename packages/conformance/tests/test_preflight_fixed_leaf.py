@@ -1,0 +1,367 @@
+"""Meta-tests for F021 PreflightFixedLeafInBroadExcept (CONNECT-1358)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from conformance.suite.checks.preflight import scan_all
+from conformance.suite.rules import get_rule
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
+
+_IMPORTS = (
+    "import httpx\n"
+    "from application_sdk.errors import (\n"
+    "    AppError, AppPermissionDeniedError, AuthError, InternalError,\n"
+    "    PreconditionError, SourceUnavailableError, classify_http_exception,\n"
+    ")\n"
+    "from application_sdk.handler.base import Handler\n"
+    "from application_sdk.handler.contracts import "
+    "PreflightCheck, PreflightInput, PreflightOutput\n"
+)
+
+
+def _handler(body: str, extra: str = "") -> str:
+    return (
+        _IMPORTS
+        + extra
+        + "class H(Handler):\n"
+        + "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        + body
+    )
+
+
+def _f021(tmp_path: Path, src: str) -> list:
+    path = tmp_path / "h.py"
+    path.write_text(src)
+    return [f for f in scan_all([path], tmp_path) if f.rule_id == "F021"]
+
+
+def _failed_row(leaf: str, cause: str = "exc") -> str:
+    return (
+        "            return PreflightOutput(checks=[PreflightCheck(\n"
+        '                name="access", passed=False,\n'
+        f'                error={leaf}(message="Could not verify access.",\n'
+        '                    suggested_action="Grant access, then re-run.",\n'
+        f"                    cause={cause}).to_failure_details(),\n"
+        "            )])\n"
+    )
+
+
+def _broad(handler: str, row: str) -> str:
+    return (
+        "        try:\n"
+        "            await probe()\n"
+        f"        {handler}\n"
+        f"{row}"
+        "        return PreflightOutput(checks=[])\n"
+    )
+
+
+def test_rule_metadata() -> None:
+    rule = get_rule("F021")
+    assert rule.scope is RuleScope.APP
+    assert rule.tier is EnforcementTier.WARN
+    assert rule.mechanism is RuleMechanism.STATIC
+    assert "classify_http_exception" in rule.full_description
+
+
+def test_fires_on_fixed_permission_leaf(tmp_path: Path) -> None:
+    src = _handler(
+        _broad("except Exception as exc:", _failed_row("AppPermissionDeniedError"))
+    )
+    findings = _f021(tmp_path, src)
+    assert len(findings) == 1
+    assert "classify_http_exception" in findings[0].message
+
+
+def test_fires_on_fixed_auth_leaf(tmp_path: Path) -> None:
+    src = _handler(_broad("except Exception as exc:", _failed_row("AuthError")))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_on_app_subclass_of_permission_leaf(tmp_path: Path) -> None:
+    extra = (
+        "class SourcePermissionDenied(AppPermissionDeniedError):\n"
+        '    code = "SOURCE_PERMISSION"\n'
+    )
+    src = _handler(
+        _broad("except Exception as exc:", _failed_row("SourcePermissionDenied")),
+        extra,
+    )
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_on_bare_except_and_base_exception(tmp_path: Path) -> None:
+    for clause in (
+        "except:",
+        "except BaseException:",
+        "except (ValueError, Exception):",
+    ):
+        src = _handler(_broad(clause, _failed_row("AuthError", cause="None")))
+        assert len(_f021(tmp_path, src)) == 1, clause
+
+
+def test_fires_when_only_transients_are_reraised_first(tmp_path: Path) -> None:
+    row = "            _reraise_if_transient(exc)\n" + _failed_row(
+        "AppPermissionDeniedError"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_when_the_exception_is_only_logged(tmp_path: Path) -> None:
+    row = (
+        '            logger.debug("probe failed: %s", safe_traceback(exc))\n'
+        + _failed_row("AppPermissionDeniedError")
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_when_an_isinstance_guard_only_reraises(tmp_path: Path) -> None:
+    row = (
+        "            if isinstance(exc, SourceUnavailableError):\n"
+        "                raise\n" + _failed_row("AppPermissionDeniedError")
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_on_raise_from(tmp_path: Path) -> None:
+    row = (
+        "            raise AuthError(message='Could not log in.',\n"
+        "                suggested_action='Check the credentials.') from exc\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_in_a_helper_reached_from_preflight_check(tmp_path: Path) -> None:
+    src = _handler(
+        "        return await self._check_access()\n"
+        "    async def _check_access(self):\n"
+        + _broad("except Exception as exc:", _failed_row("AppPermissionDeniedError"))
+    )
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_in_a_check_passed_as_a_callback(tmp_path: Path) -> None:
+    extra = "async def _check_access(client):\n" + _broad(
+        "except Exception as exc:", _failed_row("AppPermissionDeniedError")
+    )
+    src = _handler(
+        "        return await _run_required(_check_access, self.client)\n", extra
+    )
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_silent_on_a_narrow_except(tmp_path: Path) -> None:
+    src = _handler(
+        _broad("except httpx.HTTPStatusError as exc:", _failed_row("AuthError"))
+    )
+    assert _f021(tmp_path, src) == []
+
+
+def test_silent_on_a_non_auth_fixed_leaf(tmp_path: Path) -> None:
+    for leaf in ("SourceUnavailableError", "InternalError", "PreconditionError"):
+        src = _handler(_broad("except Exception as exc:", _failed_row(leaf)))
+        assert _f021(tmp_path, src) == [], leaf
+
+
+def test_silent_when_a_classifier_runs_first(tmp_path: Path) -> None:
+    row = (
+        "            leaf = classify_http_exception(exc)\n"
+        "            if leaf is None:\n"
+        "                leaf = AuthError\n" + _failed_row("AuthError")
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_silent_on_a_classifier_default(tmp_path: Path) -> None:
+    row = (
+        "            error = _classify(exc, AppPermissionDeniedError(\n"
+        '                message="Cannot list objects.",\n'
+        '                suggested_action="Grant read access."))\n'
+        "            return PreflightOutput(checks=[PreflightCheck(\n"
+        '                name="access", passed=False,\n'
+        "                error=error.to_failure_details())])\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_fires_on_the_fallback_of_an_isinstance_pass_through(tmp_path: Path) -> None:
+    row = (
+        "            error = exc if isinstance(exc, AppError) else AuthError(\n"
+        '                message="Could not log in.", suggested_action="Check it.",\n'
+        "                cause=exc)\n"
+        "            return PreflightOutput(checks=[PreflightCheck(\n"
+        '                name="access", passed=False,\n'
+        "                error=error.to_failure_details())])\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_on_the_else_of_a_condition_on_the_exception(tmp_path: Path) -> None:
+    row = (
+        "            if isinstance(exc, TimeoutError):\n"
+        "                raise SourceUnavailableError(message='x', suggested_action='y')\n"
+        "            else:\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_silent_on_an_elif_on_the_exception(tmp_path: Path) -> None:
+    row = (
+        "            if isinstance(exc, TimeoutError):\n"
+        "                raise SourceUnavailableError(message='x', suggested_action='y')\n"
+        "            elif is_privilege_error(exc):\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+        "            raise InternalError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_silent_under_a_predicate_on_the_caught_exception(tmp_path: Path) -> None:
+    row = (
+        "            if is_privilege_error(exc):\n"
+        + "    "
+        + _failed_row("AppPermissionDeniedError").replace(
+            "\n            ", "\n                "
+        )
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_silent_when_the_exception_goes_to_a_helper_that_types_it(
+    tmp_path: Path,
+) -> None:
+    row = "            return self._preflight_error(exc)\n"
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_fires_when_str_of_the_exception_is_the_only_use(tmp_path: Path) -> None:
+    row = "            detail = str(exc)\n" + _failed_row("AppPermissionDeniedError")
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_silent_outside_preflight_reach(tmp_path: Path) -> None:
+    src = _handler(
+        "        return PreflightOutput(checks=[])\n"
+        "    async def extract(self):\n"
+        + _broad("except Exception as exc:", _failed_row("AuthError"))
+    )
+    assert _f021(tmp_path, src) == []
+
+
+def test_suppressed(tmp_path: Path) -> None:
+    clause = (
+        "# conformance: ignore[F021] login probe, any failure is auth\n"
+        "        except Exception as exc:"
+    )
+    findings = _f021(tmp_path, _handler(_broad(clause, _failed_row("AuthError"))))
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
+
+
+def test_fires_when_the_classifier_only_wraps_the_message(tmp_path: Path) -> None:
+    row = (
+        "            raise AuthError(message=redact(exc),\n"
+        "                suggested_action='Check the credentials.')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_when_the_classifier_is_in_a_sibling_branch(tmp_path: Path) -> None:
+    row = (
+        "            if self.verbose:\n"
+        "                detail = describe(exc)\n"
+        + _failed_row("AppPermissionDeniedError")
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_silent_on_a_walrus_classifier_before_the_fallback(tmp_path: Path) -> None:
+    row = (
+        "            if (leaf := classify_http_exception(exc)) is not None:\n"
+        "                raise leaf(message='x', suggested_action='y') from exc\n"
+        + _failed_row("AuthError")
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_silent_under_a_condition_on_a_name_derived_from_the_exception(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            code = exc.response.status_code\n"
+        "            if code == 403:\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_silent_under_a_match_on_the_exception(tmp_path: Path) -> None:
+    row = (
+        "            match exc:\n"
+        "                case PermissionError():\n"
+        "                    raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_nested_try_reports_only_the_inner_handler(tmp_path: Path) -> None:
+    row = (
+        "            try:\n"
+        "                await retry()\n"
+        "            except Exception as inner:\n"
+        "                raise AuthError(message='x', suggested_action='y') from inner\n"
+    )
+    findings = _f021(tmp_path, _handler(_broad("except Exception as exc:", row)))
+    assert len(findings) == 1
+
+
+def test_nested_try_that_classifies_inside_does_not_flag_the_outer(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            try:\n"
+        "                await retry()\n"
+        "            except Exception as inner:\n"
+        "                if isinstance(inner, ValueError):\n"
+        "                    raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
+def test_keyword_only_parameter_does_not_resolve_to_a_module_function(
+    tmp_path: Path,
+) -> None:
+    extra = "async def check(client):\n" + _broad(
+        "except Exception as exc:", _failed_row("AuthError")
+    )
+    src = _handler(
+        "        return await self._runner(check=self._ok)\n"
+        "    async def _runner(self, *, check):\n"
+        "        return await run(check)\n",
+        extra,
+    )
+    assert _f021(tmp_path, src) == []

@@ -222,6 +222,53 @@ raise StorageNotFoundError(
 )
 ```
 
+### Map an HTTP failure to a leaf
+
+`classify_http_status(status)` and `classify_http_exception(exc)` pick the leaf for an HTTP
+failure, so an app does not keep its own status table. Both return the leaf **class**, or
+`None` when nothing maps; the app builds it with its own `message`, `suggested_action` and
+`cause`.
+
+| Status | Leaf |
+| --- | --- |
+| 401 | `AuthError` |
+| 403 | `AppPermissionDeniedError` |
+| 404 | `NotFoundError` |
+| 429 | `RateLimitedError` |
+| 5xx | `SourceUnavailableError` |
+
+`classify_http_exception` walks `__cause__` / `__context__` (honouring `raise ... from None`)
+to the first `httpx` failure it can map: a network error, a timeout or a dropped connection
+is `SourceUnavailableError`, and an `HTTPStatusError` goes through the table.
+`httpx.PoolTimeout` is skipped, because it is the client's own pool running dry, not the
+source. `overrides` replaces an entry, including one in the 5xx range, for a source whose
+statuses mean something else:
+
+```python
+from application_sdk.errors import (
+    AuthError,
+    InternalError,
+    RateLimitedError,
+    classify_http_exception,
+)
+
+leaf = classify_http_exception(exc, overrides={402: AuthError, 503: RateLimitedError})
+if leaf is None:
+    leaf = InternalError
+error = leaf(
+    message="Could not list the source's projects.",
+    suggested_action="Check the connection settings, then try again.",
+    cause=exc,
+)
+```
+
+Fall back to `InternalError` when nothing maps. It files the failure against the app, so an
+unknown cause is never reported as a customer credential or grant problem (conformance rule
+F021).
+
+The helper only picks the leaf. In `preflight_check`, whether the error is a blocking check
+or an advisory row on a `READY` verdict is still the handler's decision.
+
 ### Catch by shape or by domain
 
 ```python

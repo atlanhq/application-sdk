@@ -16,6 +16,7 @@ Canonical API (v3.x+)::
         ObjectStoreReadError, ObjectStoreDownloadError,
         ResourceExhaustedError, DiskFullError,
         DataIntegrityError, CancelledError, InternalError,
+        classify_http_status, classify_http_exception,
     )
 
 Legacy constants (v3.x — deprecated, removed in v4.0)::
@@ -34,6 +35,7 @@ from application_sdk.errors.base import (
     sanitize_cause_repr,
 )
 from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.http import classify_http_exception, classify_http_status
 from application_sdk.errors.leaves import (
     WORKER_EVICTED_TYPE,
     AlreadyExistsError,
@@ -169,6 +171,8 @@ __all__ = [
     "TaskStalledError",
     "UnimplementedError",
     "WORKER_EVICTED_TYPE",
+    "classify_http_exception",
+    "classify_http_status",
     # Legacy (deprecated — removed in v4.0)
     "ErrorCode",
     "APP_ERROR",
