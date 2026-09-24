@@ -14,6 +14,7 @@ modes. The line is drawn by who raised, never by the error's category.
 from __future__ import annotations
 
 import asyncio
+import warnings
 from datetime import timedelta
 from unittest import mock
 
@@ -25,12 +26,21 @@ from application_sdk.credentials.errors import CredentialNotFoundError
 from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
+    AlreadyExistsError,
+    AppPermissionDeniedError,
+    AppTimeoutError,
     AuthError,
     CancelledError,
+    DataIntegrityError,
     DependencyUnavailableError,
+    InternalError,
+    InvalidInputError,
+    NotFoundError,
+    PreconditionError,
     RateLimitedError,
     ResourceExhaustedError,
     SourceUnavailableError,
+    UnimplementedError,
 )
 from application_sdk.execution._temporal.preflight_gate import (
     DEPRECATED_FAIL_OPEN_CATEGORIES,
@@ -491,6 +501,27 @@ class TestHandlerRaisedBlockPassesThrough:
         assert _outcome_rows(mock_logger) == []
 
 
+# One leaf per category outside the deprecated fail-open train: each is a
+# typed handler-origin failure the mode must apply to.
+_BLOCKING_TYPED_LEAVES: list[AppError] = [
+    SourceUnavailableError(message="no answer"),
+    AuthError(message="bad"),
+    AppPermissionDeniedError(message="no grant"),
+    NotFoundError(message="no such database"),
+    AlreadyExistsError(message="exists"),
+    InvalidInputError(message="bad host"),
+    PreconditionError(message="wrong state"),
+    AppTimeoutError(message="source read timed out"),
+    DataIntegrityError(message="corrupt catalog"),
+    InternalError(message="invariant broken"),
+    UnimplementedError(message="not built"),
+]
+
+
+def _leaf_id(exc: AppError) -> str:
+    return exc.category.value
+
+
 class TestHandlerRaisedPlumbingIsSourceSide:
     """Plumbing is decided by who raised it, not by the error's category.
 
@@ -501,19 +532,9 @@ class TestHandlerRaisedPlumbingIsSourceSide:
     the deprecated train pinned by the next class.
     """
 
-    @pytest.mark.parametrize(
-        ("exc", "category", "audience"),
-        [
-            (
-                SourceUnavailableError(message="no answer"),
-                FailureCategory.SOURCE_UNAVAILABLE,
-                Audience.USER,
-            ),
-            (AuthError(message="bad"), FailureCategory.AUTH, Audience.USER),
-        ],
-    )
+    @pytest.mark.parametrize("exc", _BLOCKING_TYPED_LEAVES, ids=_leaf_id)
     async def test_hard_mode_blocks_with_the_handlers_own_details(
-        self, exc: Exception, category: FailureCategory, audience: Audience
+        self, exc: AppError
     ) -> None:
         gate = _gate(_RaisingHandler(exc), mode=PreflightGateMode.HARD)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
@@ -521,19 +542,17 @@ class TestHandlerRaisedPlumbingIsSourceSide:
                 await gate(PreflightGateInput())
         err = excinfo.value
         assert err.type == PREFLIGHT_FAILED_ERROR_TYPE
-        assert _primary_details(err).category is category
-        assert _primary_details(err).audience is audience
+        assert _primary_details(err).category is exc.category
+        assert _primary_details(err).audience is exc.audience
         row = _outcome(mock_logger)
         assert row["outcome"] == "blocked"
         assert (
             row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
         )
-        assert row[FAILURE_AUDIENCE_KEY] == audience.value
+        assert row[FAILURE_AUDIENCE_KEY] == exc.audience.value
 
-    @pytest.mark.parametrize(
-        "exc", [SourceUnavailableError(message="no answer"), AuthError(message="bad")]
-    )
-    async def test_soft_mode_reports_and_proceeds(self, exc: Exception) -> None:
+    @pytest.mark.parametrize("exc", _BLOCKING_TYPED_LEAVES, ids=_leaf_id)
+    async def test_soft_mode_reports_and_proceeds(self, exc: AppError) -> None:
         gate = _gate(_RaisingHandler(exc), mode=PreflightGateMode.SOFT)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
             result = await gate(PreflightGateInput())
@@ -543,6 +562,12 @@ class TestHandlerRaisedPlumbingIsSourceSide:
         assert (
             row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
         )
+
+    def test_every_non_train_category_is_pinned(self) -> None:
+        """A new category joins the blocking matrix or the train — never neither."""
+        pinned = {exc.category for exc in _BLOCKING_TYPED_LEAVES}
+        assert pinned | DEPRECATED_FAIL_OPEN_CATEGORIES == set(FailureCategory)
+        assert not pinned & DEPRECATED_FAIL_OPEN_CATEGORIES
 
 
 _DEPRECATED_FAIL_OPEN_LEAVES = [
@@ -1448,6 +1473,64 @@ class TestTheRowShapeIsOne:
         with mock.patch(f"{_GATE}.logger") as mock_logger:
             await gate(PreflightGateInput())
         row = _outcome(mock_logger)
+        assert set(GATE_OUTCOME_ROW_KEYS) <= row.keys()
+
+    @staticmethod
+    def _not_ready() -> PreflightOutput:
+        return PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, error=AuthError(message="bad password")
+                )
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        ("handler", "mode", "outcome"),
+        [
+            (
+                lambda: _ReturningHandler(TestTheRowShapeIsOne._not_ready()),
+                PreflightGateMode.HARD,
+                "blocked",
+            ),
+            (
+                lambda: _ReturningHandler(TestTheRowShapeIsOne._not_ready()),
+                PreflightGateMode.SOFT,
+                "would_block",
+            ),
+            (
+                lambda: _RaisingHandler(AuthError(message="bad password")),
+                PreflightGateMode.HARD,
+                "blocked",
+            ),
+            (
+                lambda: _RaisingHandler(RateLimitedError(message="429")),
+                PreflightGateMode.HARD,
+                "no_verdict",
+            ),
+        ],
+        ids=["returned_block", "would_block", "raised_block", "deprecated_train"],
+    )
+    async def test_every_other_exit_row_has_every_declared_key(
+        self, handler, mode: PreflightGateMode, outcome: str
+    ) -> None:
+        """Rows that stop or flag a run are parsed like the proceed row, so a
+        consumer filtering on any declared key never drops the rows that matter."""
+        gate = _gate(handler(), mode=mode)
+        with (
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+            warnings.catch_warnings(),
+        ):
+            warnings.simplefilter("ignore", DeprecationWarning)
+            if outcome == "blocked":
+                with pytest.raises(ApplicationError) as excinfo:
+                    await gate(PreflightGateInput())
+                assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+            else:
+                await gate(PreflightGateInput())
+        row = _outcome(mock_logger)
+        assert row["outcome"] == outcome
         assert set(GATE_OUTCOME_ROW_KEYS) <= row.keys()
 
 

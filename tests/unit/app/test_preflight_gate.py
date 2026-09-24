@@ -542,6 +542,25 @@ class TestEveryWorkflowRowCarriesTheFullShape:
             await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert _row(safe_log)[GATE_TIMEOUT_KEY] == GATE_TIMEOUT_DEFAULT_SECONDS
 
+    @pytest.mark.parametrize("gate_mode", ["hard", "soft"])
+    async def test_dead_frame_verdict_carries_every_key(
+        self, safe_log, gate_mode: str
+    ) -> None:
+        _, exec_patch = _exec(side_effect=_killed_attempt_after_marker())
+        with _patched(True), exec_patch:
+            if gate_mode == "hard":
+                with pytest.raises(ApplicationError):
+                    await _run_preflight_gate(
+                        _ResolvableInput(), "myapp", "crawl", gate_mode=gate_mode
+                    )
+            else:
+                await _run_preflight_gate(
+                    _ResolvableInput(), "myapp", "crawl", gate_mode=gate_mode
+                )
+        row = _row(safe_log)
+        assert row["outcome"] == ("blocked" if gate_mode == "hard" else "would_block")
+        assert set(GATE_OUTCOME_ROW_KEYS) <= row.keys()
+
     async def test_malformed_declared_mode_reads_as_soft(self, safe_log) -> None:
         with _patched(False):
             await _run_preflight_gate(
