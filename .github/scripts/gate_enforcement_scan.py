@@ -93,6 +93,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import enum
 import json
 import re
 import subprocess
@@ -730,6 +731,23 @@ def fetch_tests_workflow_last_modified(
 #   * `isDraft` — policy call from the review of that incident: a draft pull
 #     request influences no Fleet-Drift dimension. A merged PR is never draft,
 #     so this only ever drops open ones.
+#
+# `mergeCommit` is FND-2783. On a merge-queue repo the run that actually gated a
+# pull request can exist only on the `merge_group` commit, which becomes the
+# merge commit on the default branch — not on the head. `atlan-bw-app` #138 and
+# `atlan-cognos-app` #151 were both stale Renovate branches the fleet bot
+# force-pushed and queued a second later: no `pull_request` run of tests.yaml
+# ever started for the new head, the `merge_group` run passed, and the PR merged.
+# Reading the head alone scored that as a conclusive miss and made both repos
+# `intermittent`. It is null on an open pull request, so an open one still reads
+# the head only.
+#
+# The merge commit is *positive-only* evidence, and only from a `merge_group`
+# run — hence `checkSuite.workflowRun.event`. The same commit also carries the
+# `push`-to-default-branch run of tests.yaml, under the identical context name,
+# and that run starts after the merge: it proves nothing about whether the pull
+# request was gated. Accepting the bare name would make every merged PR on a
+# repo whose tests.yaml runs on push read `found`, whatever gated it.
 _ARRIVAL_QUERY = """
 query($owner: String!, $name: String!, $base: String!, $first: Int!) {
   repository(owner: $owner, name: $name) {
@@ -749,10 +767,24 @@ query($owner: String!, $name: String!, $base: String!, $first: Int!) {
                   pageInfo { hasNextPage endCursor }
                   nodes {
                     __typename
-                    ... on CheckRun { name }
+                    ... on CheckRun { name checkSuite { workflowRun { event } } }
                     ... on StatusContext { context }
                   }
                 }
+              }
+            }
+          }
+        }
+        mergeCommit {
+          oid
+          statusCheckRollup {
+            contexts(first: 100) {
+              totalCount
+              pageInfo { hasNextPage endCursor }
+              nodes {
+                __typename
+                ... on CheckRun { name checkSuite { workflowRun { event } } }
+                ... on StatusContext { context }
               }
             }
           }
@@ -781,7 +813,7 @@ query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String!) {
             pageInfo { hasNextPage endCursor }
             nodes {
               __typename
-              ... on CheckRun { name }
+              ... on CheckRun { name checkSuite { workflowRun { event } } }
               ... on StatusContext { context }
             }
           }
@@ -919,7 +951,10 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
         )
         if rollup is None:
             # No checks ran on the head commit at all — carries no information
-            # about whether the gate would have arrived.
+            # about whether the gate would have arrived. Skipped before the
+            # merge commit is read: that commit is positive-only evidence
+            # (FND-2783), so it may upgrade a head reading but not stand in for
+            # a missing one.
             continue
 
         contexts = _expect_object(rollup.get("contexts"), f"{where}.contexts")
@@ -940,21 +975,68 @@ def parse_arrival_nodes(payload: dict, required_context: str) -> list:
                 f"{type(committed_date).__name__}"
             )
 
+        found = required_context in page["names"]
+        walks = [_walk(oid, page, "names")]
+
+        merge_page = _merge_commit_page(pr, where)
+        if merge_page is not None:
+            merge_contexts, merge_oid = merge_page
+            found = found or required_context in merge_contexts["mergeGroupNames"]
+            walks.append(_walk(merge_oid, merge_contexts, "mergeGroupNames"))
+
         samples.append(
             {
                 "number": pr.get("number"),
-                "found": required_context in page["names"],
-                "truncated": page["hasNextPage"],
-                # Paging handles, consumed by `fetch_arrival_samples` and
-                # stripped before the sample reaches `classify_arrival`.
-                "oid": oid,
-                "cursor": page["cursor"],
+                "found": found,
+                "truncated": any(w["truncated"] for w in walks),
+                # Paging handles, one per commit read, consumed by
+                # `fetch_arrival_samples` and stripped before the sample
+                # reaches `classify_arrival`.
+                "walks": walks,
                 # Staleness handle, consumed by `select_arrival_samples` and
                 # stripped by `_public_sample` alongside the paging ones.
                 "committedDate": committed_date,
             }
         )
     return samples
+
+
+def _walk(oid: Optional[str], page: dict, key: str) -> dict:
+    """One commit's paging state. ``key`` names the page field a sighting must
+    appear in: ``names`` on the head, ``mergeGroupNames`` on the merge commit."""
+    return {
+        "oid": oid,
+        "cursor": page["cursor"],
+        "truncated": page["hasNextPage"],
+        "key": key,
+    }
+
+
+def _merge_commit_page(pr: dict, where: str) -> Optional[tuple]:
+    """``(page, oid)`` for a merged pull request's merge commit, else ``None``.
+
+    ``None`` when there is nothing to read: an open pull request (GitHub returns
+    ``mergeCommit: null``) or a merge commit with no checks at all. Either way
+    the head's reading stands unchanged, which is what keeps this additive — a
+    merge commit can only ever turn a miss into ``found``, never the reverse.
+    """
+    merge = _expect_object(pr.get("mergeCommit"), f"{where}.mergeCommit")
+    if merge is None:
+        return None
+    rollup = _expect_object(
+        merge.get("statusCheckRollup"), f"{where}.mergeCommit.statusCheckRollup"
+    )
+    if rollup is None:
+        return None
+    contexts = _expect_object(rollup.get("contexts"), f"{where}.mergeCommit.contexts")
+    page = parse_contexts_page(contexts, f"{where}.mergeCommit.contexts")
+    oid = merge.get("oid")
+    if oid is not None and not isinstance(oid, str):
+        raise GhError(
+            f"malformed arrival payload: expected {where}.mergeCommit.oid to be "
+            f"a string, got {type(oid).__name__}"
+        )
+    return page, oid
 
 
 def _parse_timestamp(value: str, what: str) -> datetime:
@@ -1041,17 +1123,46 @@ def select_arrival_samples(
     return selected
 
 
+MERGE_GROUP_EVENT = "merge_group"
+
+
+def _run_event(ctx: dict, where: str) -> Optional[str]:
+    """The triggering event of the workflow run behind one check-run context.
+
+    ``None`` for anything that is not an Actions check run — a StatusContext, or
+    a check suite some other App created (``workflowRun: null``). Those can
+    never prove a ``merge_group`` run, so ``None`` is the conservative reading,
+    not a guess. A present-but-wrong-typed level is schema drift and raises, per
+    the same contract as the leaves in ``parse_contexts_page``.
+    """
+    suite = _expect_object(ctx.get("checkSuite"), f"{where}.checkSuite")
+    run = _expect_object(
+        suite.get("workflowRun") if suite else None, f"{where}.checkSuite.workflowRun"
+    )
+    event = run.get("event") if run else None
+    if event is not None and not isinstance(event, str):
+        raise GhError(
+            f"malformed arrival payload: expected {where}.checkSuite.workflowRun."
+            f"event to be a string, got {type(event).__name__}"
+        )
+    return event
+
+
 def parse_contexts_page(contexts: Optional[dict], where: str) -> dict:
     """Read one page of a ``statusCheckRollup.contexts`` connection.
 
-    Returns ``{"names", "count", "hasNextPage", "cursor"}``. Shared by the bulk
-    arrival query and the per-commit paging query so both walk the leaves under
-    the same fail-loud rules, and so a schema drift is caught in one place.
+    Returns ``{"names", "mergeGroupNames", "count", "hasNextPage", "cursor"}``.
+    ``mergeGroupNames`` is the subset of ``names`` reported by a check run of a
+    ``merge_group`` workflow run — the only sighting a merge commit may
+    contribute (FND-2783). Shared by the bulk arrival query and the per-commit
+    paging query so both walk the leaves under the same fail-loud rules, and so
+    a schema drift is caught in one place.
     """
     context_nodes = _expect_list(
         contexts.get("nodes") if contexts else None, f"{where}.nodes"
     )
     names = set()
+    merge_group_names = set()
     for ctx_index, ctx_node in enumerate(context_nodes):
         ctx = _expect_object(ctx_node, f"{where}.nodes[{ctx_index}]")
         if ctx is None:
@@ -1081,6 +1192,8 @@ def parse_contexts_page(contexts: Optional[dict], where: str) -> dict:
                 f"string, got {type(name).__name__}"
             )
         names.add(name)
+        if _run_event(ctx, f"{where}.nodes[{ctx_index}]") == MERGE_GROUP_EVENT:
+            merge_group_names.add(name)
 
     total = (contexts or {}).get("totalCount")
     if total is None:
@@ -1120,6 +1233,7 @@ def parse_contexts_page(contexts: Optional[dict], where: str) -> dict:
 
     return {
         "names": names,
+        "mergeGroupNames": merge_group_names,
         "count": len(context_nodes),
         "hasNextPage": has_next,
         "cursor": cursor,
@@ -1153,6 +1267,7 @@ def parse_contexts_response(payload: dict) -> dict:
     if commit is None:
         return {
             "names": set(),
+            "mergeGroupNames": set(),
             "count": 0,
             "hasNextPage": False,
             "cursor": None,
@@ -1296,31 +1411,66 @@ def _resolve_truncated(
 
     Paging stops the moment the gate is seen, and never starts for a sample that
     already found it on page one — the common case costs nothing extra.
+
+    A merged pull request carries two walks — its head and its merge commit
+    (FND-2783) — and only the ones that were actually cut off are paged. The
+    sample becomes a conclusive miss only once *every* truncated walk has been
+    exhausted without a sighting; any walk that cannot be finished leaves the
+    whole sample truncated, since the gate may be on the part never read.
     """
     if sample.get("found") or not sample.get("truncated"):
         return _public_sample(sample)
 
-    oid = sample.get("oid")
-    cursor = sample.get("cursor")
+    for walk in sample.get("walks") or []:
+        if not walk["truncated"]:
+            continue
+        outcome = _page_walk(repo, owner, name, sample, walk, required_context, run)
+        if outcome is _Walk.FOUND:
+            return _public_sample({**sample, "found": True, "truncated": False})
+        if outcome is _Walk.UNFINISHED:
+            return _public_sample(sample)
+    # Every truncated walk was exhausted and the gate was not anywhere in it.
+    # That is now a *conclusive* miss — the whole point of paging.
+    return _public_sample({**sample, "truncated": False})
+
+
+class _Walk(enum.Enum):
+    """How paging one commit ended."""
+
+    FOUND = "found"
+    EXHAUSTED = "exhausted"
+    UNFINISHED = "unfinished"
+
+
+def _page_walk(
+    repo: str,
+    owner: str,
+    name: str,
+    sample: dict,
+    walk: dict,
+    required_context: str,
+    run: RunFn,
+) -> _Walk:
+    """Page one commit's remaining contexts; returns how it ended."""
+    oid = walk.get("oid")
+    cursor = walk.get("cursor")
     if not oid or not cursor:
         # No handle to page with (a null `endCursor`, or an oid GitHub did not
         # return). Leave it truncated: excluded from the denominator, which is
         # the pre-paging behaviour, and never a false miss.
-        return _public_sample(sample)
+        return _Walk.UNFINISHED
 
     for _ in range(MAX_CONTEXT_PAGES):
         page = fetch_context_page(repo, owner, name, oid, cursor, run=run)
-        if required_context in page["names"]:
-            return _public_sample({**sample, "found": True, "truncated": False})
+        if required_context in page[walk["key"]]:
+            return _Walk.FOUND
         if page["unresolvable"]:
             # The commit could not be read, so nothing was ruled out. Checked
             # before the exhaustion branch below, which would otherwise read
             # this identical shape as "walked it all, the gate was not there".
-            return _public_sample(sample)
+            return _Walk.UNFINISHED
         if not page["hasNextPage"] or not page["cursor"]:
-            # The connection is exhausted and the gate was not anywhere in it.
-            # That is now a *conclusive* miss — the whole point of paging.
-            return _public_sample({**sample, "truncated": False})
+            return _Walk.EXHAUSTED
         cursor = page["cursor"]
 
     print(
@@ -1328,7 +1478,7 @@ def _resolve_truncated(
         f"contexts after {MAX_CONTEXT_PAGES} pages; sample excluded",
         file=sys.stderr,
     )
-    return _public_sample(sample)
+    return _Walk.UNFINISHED
 
 
 def scan_repo(
