@@ -5,6 +5,7 @@ import pytest
 
 import application_sdk.errors as errors
 from application_sdk.errors import (
+    AppError,
     AppPermissionDeniedError,
     AuthError,
     NotFoundError,
@@ -62,12 +63,12 @@ def test_both_classifiers_are_public():
         (599, SourceUnavailableError),
     ],
 )
-def test_default_table(status, leaf):
+def test_default_table(status: int, leaf: type[AppError]) -> None:
     assert classify_http_status(status) is leaf
 
 
 @pytest.mark.parametrize("status", [200, 302, 400, 402, 409, 418, 600])
-def test_unmapped_status_returns_none(status):
+def test_unmapped_status_returns_none(status: int) -> None:
     assert classify_http_status(status) is None
 
 
@@ -109,7 +110,9 @@ def test_exception_status_error():
         httpx.RemoteProtocolError("server disconnected", request=_REQUEST),
     ],
 )
-def test_exception_transport_failure_is_source_unavailable(transport_error):
+def test_exception_transport_failure_is_source_unavailable(
+    transport_error: httpx.TransportError,
+) -> None:
     assert classify_http_exception(transport_error) is SourceUnavailableError
 
 

@@ -40,7 +40,7 @@ from collections.abc import Iterator
 from conformance.suite.checks._ast_common import make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._common import Registry, iter_function_nodes, reachable_preflight_sites
+from ._common import Registry, Source, iter_function_nodes, reachable_preflight_sites
 from ._contracts import _Checker, _qualified
 
 _F021 = "F021"
@@ -96,7 +96,7 @@ def _own_nodes(node: ast.AST) -> Iterator[ast.AST]:
         yield from _own_nodes(child)
 
 
-def _is_broad(src, handler: ast.ExceptHandler) -> bool:
+def _is_broad(src: Source, handler: ast.ExceptHandler) -> bool:
     if handler.type is None:
         return True
     kinds = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
@@ -114,7 +114,9 @@ def _receives(call: ast.Call, names: set[str]) -> bool:
     return any(isinstance(v, ast.Name) and v.id in names for v in values)
 
 
-def _customer_rooted(checker: _Checker, src, node: ast.AST, seen=frozenset()) -> bool:
+def _customer_rooted(
+    checker: _Checker, src: Source, node: ast.AST, seen: frozenset[int] = frozenset()
+) -> bool:
     name = _qualified(src, node)
     if name.startswith("application_sdk."):
         return name.rsplit(".", 1)[-1] in _CUSTOMER_ROOTS | _SDK_CUSTOMER_LEAVES
@@ -161,13 +163,21 @@ def _stores_a_classification(stmt: ast.stmt, names: set[str]) -> bool:
     return False
 
 
-def _parents(handler: ast.ExceptHandler) -> dict[ast.AST, tuple[ast.AST, str]]:
-    parents: dict[ast.AST, tuple[ast.AST, str]] = {}
+_Parents = dict[ast.AST, tuple[ast.AST, str, list[ast.stmt]]]
+
+
+def _parents(handler: ast.ExceptHandler) -> _Parents:
+    """Map each node to its parent, its field, and the statements before it."""
+    parents: _Parents = {}
     for parent in [handler, *_own_nodes(handler)]:
         for field, value in ast.iter_fields(parent):
-            for child in value if isinstance(value, list) else [value]:
-                if isinstance(child, ast.AST):
-                    parents[child] = (parent, field)
+            values = value if isinstance(value, list) else [value]
+            children: list[ast.AST] = [c for c in values if isinstance(c, ast.AST)]
+            for index, child in enumerate(children):
+                earlier: list[ast.stmt] = []
+                if field in _BLOCKS:
+                    earlier = [s for s in children[:index] if isinstance(s, ast.stmt)]
+                parents[child] = (parent, field, earlier)
     return parents
 
 
@@ -183,13 +193,13 @@ def _catch_all(case: ast.AST) -> bool:
 def _looked_at(
     leaf: ast.Call,
     caught: str,
-    parents: dict[ast.AST, tuple[ast.AST, str]],
+    parents: _Parents,
     handler: ast.ExceptHandler,
 ) -> bool:
     names = _derived_names(handler, caught, leaf.lineno)
     child: ast.AST = leaf
     while child is not handler:
-        parent, field = parents[child]
+        parent, field, earlier = parents[child]
         if (
             isinstance(parent, _CONDITIONS)
             and field == "body"
@@ -204,16 +214,15 @@ def _looked_at(
             return True
         if isinstance(parent, ast.Call) and _receives(parent, {caught}):
             return True
-        block = getattr(parent, field)
-        if isinstance(block, list) and field in _BLOCKS:
-            earlier = block[: block.index(child)]
-            if any(_stores_a_classification(stmt, names) for stmt in earlier):
-                return True
+        if any(_stores_a_classification(stmt, names) for stmt in earlier):
+            return True
         child = parent
     return False
 
 
-def _fixed_leaf(checker: _Checker, src, handler: ast.ExceptHandler) -> ast.Call | None:
+def _fixed_leaf(
+    checker: _Checker, src: Source, handler: ast.ExceptHandler
+) -> ast.Call | None:
     parents = _parents(handler)
     for node in _own_nodes(handler):
         if not (

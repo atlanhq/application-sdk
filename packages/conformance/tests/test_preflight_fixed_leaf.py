@@ -11,6 +11,7 @@ from conformance.suite.schema.disposition import (
     RuleMechanism,
     RuleScope,
 )
+from conformance.suite.schema.findings import Finding
 
 _IMPORTS = (
     "import httpx\n"
@@ -34,7 +35,7 @@ def _handler(body: str, extra: str = "") -> str:
     )
 
 
-def _f021(tmp_path: Path, src: str) -> list:
+def _f021(tmp_path: Path, src: str) -> list[Finding]:
     path = tmp_path / "h.py"
     path.write_text(src)
     return [f for f in scan_all([path], tmp_path) if f.rule_id == "F021"]
