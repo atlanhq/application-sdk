@@ -250,7 +250,7 @@ def test_silent_when_the_classified_leaf_is_used(tmp_path: Path) -> None:
     assert _f021(tmp_path, src) == []
 
 
-def test_silent_on_a_classifier_default(tmp_path: Path) -> None:
+def test_fires_on_a_customer_blaming_classifier_default(tmp_path: Path) -> None:
     row = (
         "            error = _classify(exc, AppPermissionDeniedError(\n"
         '                message="Cannot list objects.",\n'
@@ -260,7 +260,43 @@ def test_silent_on_a_classifier_default(tmp_path: Path) -> None:
         "                error=error.to_failure_details())])\n"
     )
     src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_silent_on_a_classifier_with_a_safe_default(tmp_path: Path) -> None:
+    row = (
+        "            error = _classify(exc, InternalError(\n"
+        '                message="Could not list objects.",\n'
+        '                suggested_action="Retry, then contact support."))\n'
+        "            raise error\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
     assert _f021(tmp_path, src) == []
+
+
+def test_fires_when_a_guard_copies_a_value_from_before_the_exception(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            flag = True\n"
+        "            ready = flag\n"
+        "            flag = isinstance(exc, PermissionError)\n"
+        "            if ready:\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_under_a_stored_guard_that_is_always_true(tmp_path: Path) -> None:
+    for stored in ("exc is not None", "isinstance(exc, Exception)", "not exc is None"):
+        row = (
+            f"            ready = {stored}\n"
+            "            if ready:\n"
+            "                raise AuthError(message='x', suggested_action='y')\n"
+        )
+        src = _handler(_broad("except Exception as exc:", row))
+        assert len(_f021(tmp_path, src)) == 1, stored
 
 
 def test_fires_on_the_fallback_of_an_isinstance_pass_through(tmp_path: Path) -> None:

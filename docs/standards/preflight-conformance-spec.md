@@ -99,7 +99,7 @@ Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level correspo
 | F017 PreflightWorkflowEnforcement | SDK / TEST | Real workflow execution prevents extraction scheduling on hard-mode gate rejection and handles infrastructure/cancellation paths according to contract. | BLOCK |
 | F018 PreflightExitEvidence | SDK / TEST | Consistent typed status/check payloads across HTTP, supported SDR, activity and workflow exits; complete outcome schema; safe log-buffer handoff. | BLOCK |
 | F019 PreflightAnalysisCoverage | APP / STATIC | Declared preflight entrypoints not analyzed, unresolved dispatch/contract shapes, and absent required scenario registration. Known no-preflight apps are explicitly not applicable, not healthy preflight implementations. | WARN for unresolved analysis; BLOCK for missing required registration after adoption |
-| F021 PreflightFixedLeafInBroadExcept | APP / STATIC | A broad except on a preflight path that builds an Auth- or Permission-rooted leaf without testing the caught exception or passing it to a classifier. | WARN |
+| F021 PreflightFixedLeafInBroadExcept | APP / STATIC | A broad except on a preflight path that builds an Auth- or Permission-rooted leaf that no test on the caught exception selects, including one handed to a classifier as its unknown-cause default. | WARN |
 
 F016 can emit separately identified scenario failures under one rule. Do not create an independent rule for every spelling of the same error or every connector. Error-category correctness and preflight/extraction tolerance parity remain behavioral requirements; simple co-occurrence of two error subclasses does not prove misclassification.
 
@@ -123,7 +123,7 @@ Every static detector must include all three columns as executable fixtures. The
 | F014 | Exception containing a synthetic DSN reaches message, action, or traceback locals. | Supported redaction and safe fixed messages preserve typed attribution. | Fixed non-sensitive message with separately sanitized cause. |
 | F015 | Deployment sets the removed override or test imports removed internals. | App class declares mode; tests exercise public behavior. | Negative compatibility fixture quotes the removed name without using it. |
 | F019 | Per-entrypoint callback exists but no detector visits it. | Every applicable callback is discovered and has scenarios. | App has no preflight by supported design and is explicitly reported as such. |
-| F021 | `except Exception` returns a fixed `AppPermissionDeniedError` whatever it caught. | The caught exception goes through `classify_http_exception` or an `isinstance` chain, with a fallback that does not blame the customer (`InternalError` when the cause is unknown). | A classifier that takes the permission leaf as its default, or a leaf built in the branch that a test on the caught exception selects. |
+| F021 | `except Exception` returns a fixed `AppPermissionDeniedError` whatever it caught. | The caught exception goes through `classify_http_exception` or an `isinstance` chain, with a fallback that does not blame the customer (`InternalError` when the cause is unknown). | A leaf built in the branch that a test on the caught exception selects, or a classifier whose default does not blame the customer. |
 
 ## Executable behavioral suite
 

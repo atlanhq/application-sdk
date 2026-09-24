@@ -624,8 +624,8 @@ _CONTRACT_RULES = (
         full_description=(
             "A broad ``except`` in ``preflight_check`` or a helper it reaches "
             "builds an ``AuthError`` or ``AppPermissionDeniedError`` subclass "
-            "unless a test on the caught exception selects it or a classifier "
-            "receives the exception and the leaf as its default. "
+            "that no test on the caught exception selects, including one handed "
+            "to a classifier as its default for unknown causes. "
             "Classify it first — ``application_sdk.errors.classify_http_exception`` "
             "for httpx failures, or an ``isinstance`` chain — and fall back to a leaf "
             "that does not blame the customer (``InternalError`` when the cause is "
