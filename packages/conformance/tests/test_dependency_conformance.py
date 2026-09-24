@@ -6,7 +6,9 @@ import json
 import re
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
+import conformance.suite.checks.dependency_conformance as dependency_conformance
 import pytest
 from conformance.suite.checks._ast_common import _is_suppressed, parse_toml_suppressions
 from conformance.suite.checks.dependency_conformance import (
@@ -15,6 +17,7 @@ from conformance.suite.checks.dependency_conformance import (
     SDK_PYTHON_FLOOR,
     _collect_dialect_drivers,
     _collect_dialect_names,
+    _dist_dialect_entry_points,
     _env_dialect_entry_points,
     _is_bounded_specifier,
     _is_floating_range,
@@ -1218,6 +1221,57 @@ def test_d003_collects_dialect_scheme_from_source_string(tmp_path: Path) -> None
     assert [f for f in findings if f.rule_id == "D003"] == []
 
 
+def test_collect_source_usage_parses_each_file_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "client.py"
+    src.write_text(
+        'import requests\nURL = "mysql+aiomysql://host"\n'
+        'TEMPLATE = "crate://host"\n',
+        encoding="utf-8",
+    )
+
+    original_parse = dependency_conformance.ast.parse
+    parsed: list[bytes | str] = []
+
+    def count_parse(source: bytes | str, *args: object, **kwargs: object) -> object:
+        parsed.append(source)
+        return original_parse(source, *args, **kwargs)
+
+    monkeypatch.setattr(dependency_conformance.ast, "parse", count_parse)
+    modules, drivers, dialect_names = dependency_conformance._collect_source_usage(
+        [src]
+    )
+
+    assert modules == {"requests"}
+    assert drivers == {"aiomysql"}
+    assert dialect_names == {"mysql.aiomysql", "crate"}
+    assert parsed.count(src.read_bytes()) == 1
+
+
+def test_scan_all_skips_dialect_metadata_without_url_schemes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n'
+        'dependencies = ["requests>=2,<3"]\n',
+        encoding="utf-8",
+    )
+    src = tmp_path / "client.py"
+    src.write_text("import requests\n", encoding="utf-8")
+    monkeypatch.setattr(
+        dependency_conformance,
+        "_env_distribution_metadata",
+        lambda *args, **kwargs: pytest.fail(
+            "no dialect URLs require entry-point metadata"
+        ),
+    )
+
+    findings = scan_all([pp, src], tmp_path, dist_import_map={"requests": {"requests"}})
+    assert [f for f in findings if f.rule_id == "D003"] == []
+
+
 def test_collect_dialect_names_renders_sqlalchemy_lookup_names(
     tmp_path: Path,
 ) -> None:
@@ -1230,6 +1284,37 @@ def test_collect_dialect_names_renders_sqlalchemy_lookup_names(
         encoding="utf-8",
     )
     assert _collect_dialect_names([src]) == {"crate", "foo.bar", "https"}
+
+
+def test_env_dialect_entry_points_preserves_empty_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site = tmp_path / "site-packages"
+    info = site / "sqlalchemy_cratedb-0.41.0.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: sqlalchemy-cratedb\nVersion: 0.41.0\n",
+        encoding="utf-8",
+    )
+    interpreter_dist = SimpleNamespace(
+        entry_points=[SimpleNamespace(group="sqlalchemy.dialects", name="crate")]
+    )
+    lookups: list[str] = []
+
+    def interpreter_distribution(name: str) -> object:
+        lookups.append(name)
+        return interpreter_dist
+
+    monkeypatch.setattr(
+        dependency_conformance.importlib_metadata,
+        "distribution",
+        interpreter_distribution,
+    )
+
+    env_map = _env_dialect_entry_points([str(site)])
+    assert env_map == {"sqlalchemy-cratedb": set()}
+    assert _dist_dialect_entry_points("sqlalchemy-cratedb", env_map=env_map) == set()
+    assert lookups == []
 
 
 def test_env_dialect_entry_points_reads_installed_metadata(tmp_path: Path) -> None:
@@ -1251,7 +1336,10 @@ def test_env_dialect_entry_points_reads_installed_metadata(tmp_path: Path) -> No
             encoding="utf-8",
         )
         (info / "entry_points.txt").write_text(entry_points, encoding="utf-8")
-    assert _env_dialect_entry_points([str(site)]) == {"sqlalchemy-cratedb": {"crate"}}
+    assert _env_dialect_entry_points([str(site)]) == {
+        "sqlalchemy-cratedb": {"crate"},
+        "some-cli": set(),
+    }
 
 
 def test_d003_skips_unresolvable_dependency_and_reports_it(

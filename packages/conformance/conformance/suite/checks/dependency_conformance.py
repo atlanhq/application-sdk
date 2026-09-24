@@ -1470,27 +1470,7 @@ def _collect_top_level_imports(py_files: Iterable[Path]) -> set[str]:
     (``from . import x``) are skipped — they target the app's own package, never
     a declared third-party distribution.
     """
-    modules: set[str] = set()
-    for path in py_files:
-        try:
-            raw = path.read_bytes()
-        except OSError:
-            continue
-        try:
-            # Parse from bytes so ``ast`` honours a PEP 263 coding cookie; a
-            # legacy non-UTF-8 source (e.g. ``# -*- coding: latin-1 -*-``) is
-            # decoded correctly instead of crashing on a UTF-8 decode.
-            tree = ast.parse(raw)
-        except (SyntaxError, ValueError):
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    modules.add(alias.name.split(".", 1)[0])
-            elif isinstance(node, ast.ImportFrom):
-                if node.level == 0 and node.module:
-                    modules.add(node.module.split(".", 1)[0])
-    return modules
+    return _collect_source_usage(py_files)[0]
 
 
 # A SQLAlchemy dialect string encodes the DBAPI driver as ``dialect+driver`` —
@@ -1502,20 +1482,8 @@ _SQLALCHEMY_DIALECT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+([A-Za-z_][A-Za-z0
 
 
 def _collect_dialect_drivers(py_files: Iterable[Path]) -> set[str]:
-    """Return DBAPI driver names referenced in SQLAlchemy ``dialect+driver`` strings.
-
-    Scans string literals across *py_files* for the ``dialect+driver`` form and
-    keeps the ``driver`` component (``mysql+aiomysql`` -> ``aiomysql``). Used to
-    mark a dependency loaded dynamically by SQLAlchemy as used, so D003 does not
-    flag it as unimported. Deliberately biased toward matching (WARN-tier, zero
-    false positives): an over-captured token only ever suppresses a D003 finding
-    for a dependency literally named like that token.
-    """
-    drivers: set[str] = set()
-    for value in _iter_string_literals(py_files):
-        for match in _SQLALCHEMY_DIALECT_RE.finditer(value):
-            drivers.add(match.group(1))
-    return drivers
+    """Return DBAPI driver names referenced in SQLAlchemy dialect strings."""
+    return _collect_source_usage(py_files)[1]
 
 
 # A SQLAlchemy URL's scheme also names the dialect class to load. A dialect
@@ -1530,39 +1498,46 @@ _SQLALCHEMY_URL_SCHEME_RE = re.compile(
 _SQLALCHEMY_DIALECTS_GROUP = "sqlalchemy.dialects"
 
 
-def _collect_dialect_names(py_files: Iterable[Path]) -> set[str]:
-    """Return the ``sqlalchemy.dialects`` entry-point names URL schemes select.
+def _collect_source_usage(
+    py_files: Iterable[Path],
+) -> tuple[set[str], set[str], set[str]]:
+    """Collect imported modules, SQLAlchemy drivers, and URL dialect names.
 
-    Scans string literals across *py_files* for ``scheme://`` and
-    ``scheme+driver://`` and renders each the way SQLAlchemy looks it up
-    (``crate://`` -> ``crate``, ``foo+bar://`` -> ``foo.bar``). Biased toward
-    matching like _collect_dialect_drivers: an unrelated scheme such as
-    ``https`` only clears a finding for a dependency that registers a
-    SQLAlchemy dialect under that exact name.
+    Each source file is read and parsed once. Relative imports are skipped —
+    they target the app's own package, never a declared third-party distribution.
     """
-    names: set[str] = set()
-    for value in _iter_string_literals(py_files):
-        for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(value):
-            dialect, driver = match.group(1), match.group(2)
-            names.add(f"{dialect}.{driver}" if driver else dialect)
-    return names
-
-
-def _iter_string_literals(py_files: Iterable[Path]) -> Iterator[str]:
-    """Yield every string constant in *py_files*, skipping unreadable or
-    unparseable files."""
+    modules: set[str] = set()
+    drivers: set[str] = set()
+    dialect_names: set[str] = set()
     for path in py_files:
         try:
             raw = path.read_bytes()
         except OSError:
             continue
         try:
+            # Parse from bytes so ``ast`` honours a PEP 263 coding cookie.
             tree = ast.parse(raw)
         except (SyntaxError, ValueError):
             continue
         for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                yield node.value
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    modules.add(alias.name.split(".", 1)[0])
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    modules.add(node.module.split(".", 1)[0])
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                for match in _SQLALCHEMY_DIALECT_RE.finditer(node.value):
+                    drivers.add(match.group(1))
+                for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(node.value):
+                    dialect, driver = match.group(1), match.group(2)
+                    dialect_names.add(f"{dialect}.{driver}" if driver else dialect)
+    return modules, drivers, dialect_names
+
+
+def _collect_dialect_names(py_files: Iterable[Path]) -> set[str]:
+    """Return dialect entry-point names selected by SQLAlchemy URL schemes."""
+    return _collect_source_usage(py_files)[2]
 
 
 def _repo_site_packages(root: Path) -> list[str]:
@@ -1590,23 +1565,35 @@ def _repo_site_packages(root: Path) -> list[str]:
 
 
 def _env_import_names(search_path: list[str]) -> dict[str, set[str]]:
-    """Map normalised distribution name -> provided import names for every
-    distribution installed under *search_path*.
+    """Map each installed target distribution to its provided import names."""
+    return _env_distribution_metadata(
+        search_path, include_imports=True, include_dialects=False
+    )[0]
 
-    One pass over the environment, rather than a lookup per dependency, so the
-    cost does not scale with the dependency count. Empty dict when
-    *search_path* is empty — callers then fall back to the running interpreter.
+
+def _env_distribution_metadata(
+    search_path: list[str], *, include_imports: bool, include_dialects: bool
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Read requested metadata maps in one target distribution inventory.
+
+    Empty entry-point sets are retained so a target distribution with no
+    registration cannot fall back to a different version in the invoking
+    interpreter.
     """
     if not search_path:
-        return {}
-    out: dict[str, set[str]] = {}
+        return {}, {}
+    imports: dict[str, set[str]] = {}
+    dialects: dict[str, set[str]] = {}
     for dist in importlib_metadata.distributions(path=search_path):
-        # Broken/partial metadata directories can yield a nameless dist.
         name = dist.metadata["Name"] if dist.metadata else None
         if not name:
             continue
-        out[_normalise_name(name)] = _provided_import_names(dist)
-    return out
+        normalised = _normalise_name(name)
+        if include_imports:
+            imports[normalised] = _provided_import_names(dist)
+        if include_dialects:
+            dialects[normalised] = _dialect_entry_point_names(dist)
+    return imports, dialects
 
 
 def _dist_import_names(
@@ -1635,20 +1622,10 @@ def _dist_import_names(
 
 
 def _env_dialect_entry_points(search_path: list[str]) -> dict[str, set[str]]:
-    """Map normalised distribution name -> the ``sqlalchemy.dialects`` entry
-    points it registers, for every distribution under *search_path* that
-    registers any. Empty dict when *search_path* is empty."""
-    if not search_path:
-        return {}
-    out: dict[str, set[str]] = {}
-    for dist in importlib_metadata.distributions(path=search_path):
-        name = dist.metadata["Name"] if dist.metadata else None
-        if not name:
-            continue
-        eps = _dialect_entry_point_names(dist)
-        if eps:
-            out[_normalise_name(name)] = eps
-    return out
+    """Map every target distribution to its dialect entry points, including none."""
+    return _env_distribution_metadata(
+        search_path, include_imports=False, include_dialects=True
+    )[1]
 
 
 def _dist_dialect_entry_points(
@@ -1661,9 +1638,9 @@ def _dist_dialect_entry_points(
     — the dependency then falls through to the ordinary unused check.
     """
     if env_map is not None:
-        eps = env_map.get(_normalise_name(dist_name))
-        if eps:
-            return eps
+        normalised = _normalise_name(dist_name)
+        if normalised in env_map:
+            return env_map[normalised]
     try:
         dist = importlib_metadata.distribution(dist_name)
     except importlib_metadata.PackageNotFoundError:
@@ -2594,27 +2571,42 @@ def scan_all(
     if not dep_entries:
         return findings
 
-    if imported_modules is None:
-        imported_modules = _collect_top_level_imports(py_files)
+    if imported_modules is None or dialect_drivers is None or dialect_names is None:
+        source_imports, source_drivers, source_dialect_names = _collect_source_usage(
+            py_files
+        )
+        if imported_modules is None:
+            imported_modules = source_imports
+        if dialect_drivers is None:
+            dialect_drivers = source_drivers
+        if dialect_names is None:
+            dialect_names = source_dialect_names
     # Resolve against the repo under test first (see _repo_site_packages), so
     # the finding set belongs to the repo and not to whichever interpreter
     # happened to invoke the suite.
     site_packages = _repo_site_packages(root)
+    need_imports = dist_import_map is None
+    need_dialects = dialect_entry_points is None and bool(dialect_names)
+    if need_imports or need_dialects:
+        env_imports, env_dialects = _env_distribution_metadata(
+            site_packages,
+            include_imports=need_imports,
+            include_dialects=need_dialects,
+        )
+    else:
+        env_imports, env_dialects = {}, {}
     if dist_import_map is None:
-        env_map = _env_import_names(site_packages)
         dist_import_map = {
-            e.name: _dist_import_names(e.name, env_map=env_map) for e in dep_entries
+            e.name: _dist_import_names(e.name, env_map=env_imports) for e in dep_entries
         }
-    if dialect_drivers is None:
-        dialect_drivers = _collect_dialect_drivers(py_files)
-    if dialect_names is None:
-        dialect_names = _collect_dialect_names(py_files)
     if dialect_entry_points is None:
-        env_eps = _env_dialect_entry_points(site_packages)
-        dialect_entry_points = {
-            e.name: _dist_dialect_entry_points(e.name, env_map=env_eps)
-            for e in dep_entries
-        }
+        if dialect_names:
+            dialect_entry_points = {
+                e.name: _dist_dialect_entry_points(e.name, env_map=env_dialects)
+                for e in dep_entries
+            }
+        else:
+            dialect_entry_points = {}
 
     try:
         rel = root_pyproject.relative_to(root)
