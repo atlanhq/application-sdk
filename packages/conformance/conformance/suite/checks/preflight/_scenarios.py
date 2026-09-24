@@ -225,11 +225,13 @@ def _statically_empty(node: ast.expr) -> bool:
 #: contract assertions, and the context managers that can absorb an exception.
 _PYTEST_RAISES = ("pytest", "raises")
 _CONTEXTLIB_SUPPRESS = ("contextlib", "suppress")
+_ASYNCIO_RUN = ("asyncio", "run")
 _TRACKED_CALLABLES = frozenset(
     {
         *((_ASSERTION_MODULE, name) for name in _ASSERTIONS),
         _PYTEST_RAISES,
         _CONTEXTLIB_SUPPRESS,
+        _ASYNCIO_RUN,
     }
 )
 _TRACKED_MODULES = frozenset({module for module, _ in _TRACKED_CALLABLES})
@@ -1252,13 +1254,16 @@ def _resolve(func: ast.expr, scope: _Scope) -> tuple[str, str] | None:
     return None
 
 
-def _is_pytest_raises(item: ast.withitem, scope: _Scope) -> bool:
-    expr = item.context_expr
-    return isinstance(expr, ast.Call) and _resolve(expr.func, scope) == _PYTEST_RAISES
+@dataclass(frozen=True)
+class _Suppressor:
+    #: The exception types the context absorbs.
+    accepted: tuple[str, ...]
+    #: ``pytest.raises`` fails the test when its block exits normally.
+    fails_on_exit: bool
 
 
-def _suppressed_types(item: ast.withitem, scope: _Scope) -> tuple[str, ...] | None:
-    """The types a ``pytest.raises`` / ``contextlib.suppress`` context absorbs.
+def _suppressor(item: ast.withitem, scope: _Scope) -> _Suppressor | None:
+    """A ``pytest.raises`` / ``contextlib.suppress`` context, resolved.
 
     ``None`` when the context is not one of them: an arbitrary context
     manager is not assumed to swallow anything.
@@ -1272,9 +1277,12 @@ def _suppressed_types(item: ast.withitem, scope: _Scope) -> tuple[str, ...] | No
         for kw in expr.keywords:
             if kw.arg == "expected_exception":
                 expected = kw.value
-        return () if expected is None else _handler_types(expected)
+        accepted = () if expected is None else _handler_types(expected) or ()
+        return _Suppressor(accepted, fails_on_exit=True)
     if target == _CONTEXTLIB_SUPPRESS:
-        return tuple(ast.unparse(arg) for arg in expr.args)
+        return _Suppressor(
+            tuple(ast.unparse(arg) for arg in expr.args), fails_on_exit=False
+        )
     return None
 
 
@@ -1370,15 +1378,16 @@ def _statement(stmt: ast.stmt, out: list[ast.AST], scope: _Scope) -> _Flow:
         # Only a known suppressor turns an exception it accepts into
         # fallthrough; the innermost context sees the body's exit first.
         for item in reversed(stmt.items):
-            accepted = _suppressed_types(item, scope)
-            if accepted is None:
+            suppressor = _suppressor(item, scope)
+            if suppressor is None:
                 continue
             raised = _exceptions(body)
-            absorbs, escaped = _handle(raised, accepted)
+            absorbs, escaped = _handle(raised, suppressor.accepted)
+            if suppressor.fails_on_exit and FALLS in body:
+                # A normal exit is not a pass: pytest.raises raises Failed.
+                body = (body - _FALL) | {_RAISE + "Failed"}
             if absorbs:
                 body = (body - raised) | escaped | _FALL
-            if _is_pytest_raises(item, scope) and not raised:
-                body -= _FALL
         return body | context_flow
     if isinstance(stmt, ast.Try | ast.TryStar):
         body = _block(stmt.body, out, scope)
@@ -1411,9 +1420,57 @@ def _statement(stmt: ast.stmt, out: list[ast.AST], scope: _Scope) -> _Flow:
 
 
 def _calls(stmts: list[ast.stmt], scope: _Scope) -> list[ast.Call]:
+    return [node for node in _reached(stmts, scope) if isinstance(node, ast.Call)]
+
+
+def _reached(stmts: list[ast.stmt], scope: _Scope) -> list[ast.AST]:
     out: list[ast.AST] = []
     _block(stmts, out, scope)
-    return [node for node in out if isinstance(node, ast.Call)]
+    return out
+
+
+def _driven(nodes: list[ast.AST], scope: _Scope) -> set[int]:
+    """Ids of the calls whose coroutine is run: awaited, or passed to ``asyncio.run``."""
+    driven: set[int] = set()
+    for node in nodes:
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            driven.add(id(node.value))
+        elif (
+            isinstance(node, ast.Call)
+            and node.args
+            and isinstance(node.args[0], ast.Call)
+            and _resolve(node.func, scope) == _ASYNCIO_RUN
+        ):
+            driven.add(id(node.args[0]))
+    return driven
+
+
+def _runs_body(
+    helper: ast.FunctionDef | ast.AsyncFunctionDef, call: ast.Call, driven: set[int]
+) -> bool:
+    """Whether *call* runs *helper*'s body.
+
+    A generator's body waits for a consumer, and a coroutine's for an
+    ``await`` (or ``asyncio.run``); a plain function runs when called.
+    """
+    if any(isinstance(node, (ast.Yield, ast.YieldFrom)) for node in _own_nodes(helper)):
+        return False
+    return not isinstance(helper, ast.AsyncFunctionDef) or id(call) in driven
+
+
+def _own_nodes(func: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterator[ast.AST]:
+    """The nodes of *func*'s own scope, not those of nested functions."""
+    stack: list[ast.AST] = list(func.body)
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(
+            child
+            for child in ast.iter_child_nodes(node)
+            if not isinstance(
+                child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+            )
+        )
 
 
 def _assertion(call: ast.Call, scope: _Scope) -> str | None:
@@ -1457,16 +1514,12 @@ def _parameters(func: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
 
 def _assertions(func: ast.FunctionDef | ast.AsyncFunctionDef, mod: _Module) -> set[str]:
     """Contract assertions the test reachably calls, directly or through a
-    same-module helper it calls directly."""
+    same-module helper it calls directly and whose body that call runs."""
     made: set[str] = set()
     scope = _Scope(mod, _parameters(func))
-    awaited = {
-        node.value
-        for stmt in func.body
-        for node in ast.walk(stmt)
-        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
-    }
-    for call in _calls(func.body, scope):
+    reached = _reached(func.body, scope)
+    driven = _driven(reached, scope)
+    for call in (node for node in reached if isinstance(node, ast.Call)):
         if (name := _assertion(call, scope)) is not None:
             made.add(name)
         elif (
@@ -1475,7 +1528,7 @@ def _assertions(func: ast.FunctionDef | ast.AsyncFunctionDef, mod: _Module) -> s
             and call.func.id in mod.functions
         ):
             helper = mod.functions[call.func.id]
-            if isinstance(helper, ast.AsyncFunctionDef) and call not in awaited:
+            if not _runs_body(helper, call, driven):
                 continue
             inner = _Scope(mod, _parameters(helper))
             made |= {

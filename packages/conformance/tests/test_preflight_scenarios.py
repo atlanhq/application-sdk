@@ -1289,3 +1289,68 @@ def test_a_handler_does_not_catch_an_explicit_raise_of_another_type(
     )
     messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
     assert any(NEVER_CALLS in message for message in messages)
+
+
+# --- sixth review round -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "block",
+    ["        pass\n", "        result = None\n"],
+    ids=["empty", "no-raise"],
+)
+def test_a_pytest_raises_block_that_exits_normally_fails_before_the_assertion(
+    tmp_path: Path, block: str
+) -> None:
+    body = "    with pytest.raises(ValueError):\n" + block + ASSERT
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+def test_a_suppress_block_that_exits_normally_reaches_the_assertion(
+    tmp_path: Path,
+) -> None:
+    body = "    with contextlib.suppress(ValueError):\n        pass\n" + ASSERT
+    module = _module(
+        _test(HEALTHY, body), LIFETIME, prelude=PRELUDE + "import contextlib\n"
+    )
+    assert _grade(tmp_path, module) == []
+
+
+ASYNC_HELPER = "async def check(result):\n" + ASSERT
+GENERATOR_HELPER = "def check(result):\n    yield\n" + ASSERT
+
+
+@pytest.mark.parametrize(
+    ("helper", "test"),
+    [
+        (ASYNC_HELPER, f"{HEALTHY}\nasync def test_healthy():\n    check(result)\n"),
+        (ASYNC_HELPER, f"{HEALTHY}\ndef test_healthy():\n    check(result)\n"),
+        (GENERATOR_HELPER, f"{HEALTHY}\ndef test_healthy():\n    check(result)\n"),
+    ],
+    ids=["unawaited-coroutine", "coroutine-from-sync-test", "unconsumed-generator"],
+)
+def test_a_helper_call_that_does_not_run_its_body_is_not_credited(
+    tmp_path: Path, helper: str, test: str
+) -> None:
+    messages = _grade(tmp_path, _module(helper, test, LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    ("prelude", "test"),
+    [
+        (PRELUDE, f"{HEALTHY}\nasync def test_healthy():\n    await check(result)\n"),
+        (
+            PRELUDE + "import asyncio\n",
+            f"{HEALTHY}\ndef test_healthy():\n    asyncio.run(check(result))\n",
+        ),
+    ],
+    ids=["awaited", "asyncio-run"],
+)
+def test_an_async_helper_that_is_run_is_credited(
+    tmp_path: Path, prelude: str, test: str
+) -> None:
+    assert (
+        _grade(tmp_path, _module(ASYNC_HELPER, test, LIFETIME, prelude=prelude)) == []
+    )
