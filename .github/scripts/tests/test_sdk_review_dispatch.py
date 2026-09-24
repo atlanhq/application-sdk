@@ -262,6 +262,7 @@ def test_outputs_on_a_clean_run():
         "final_cost": "0.83",
         "final_err_code": "",
         "final_err_msg": "",
+        "models_used": "",
     }
 
 
@@ -547,6 +548,7 @@ def test_a_mid_stream_drop_keeps_everything_seen_before_it(exc):
         "final_cost",
         "final_err_code",
         "final_err_msg",
+        "models_used",
     }
     code, messages = sd.decide_exit(st, False, "42")
     assert code == 1 and "without a 'complete' event" in messages[-1]
@@ -1297,6 +1299,7 @@ def test_a_single_attempt_reports_its_own_cost_unchanged():
         "final_cost": "0.83",
         "final_err_code": "",
         "final_err_msg": "",
+        "models_used": "",
     }
     assert sd.render_outputs(st, one) == expected
     assert sd.render_outputs(st) == expected
@@ -1702,3 +1705,50 @@ def test_the_same_model_is_the_one_that_RAN_not_the_one_attempt_n_implies():
         plan = sd.retry_decision(st, 1, 6000, ran)
         assert plan.retry is True
         assert plan.model == ran, plan.reason
+
+
+# ---------------------------------------------------------------------------
+# models_used — what the stream says answered, not what the reviewer claims
+# ---------------------------------------------------------------------------
+
+
+def _assistant(model: str) -> list[str]:
+    inner = {"type": "assistant", "message": {"model": model, "content": []}}
+    return ["event: response", f"data: {_frame(inner)}", ""]
+
+
+def _result(usage: dict) -> list[str]:
+    inner = {"type": "result", "result": "done", "modelUsage": usage}
+    return ["event: response", f"data: {_frame(inner)}", ""]
+
+
+def test_models_used_unions_turns_and_the_usage_bill_in_first_seen_order():
+    st = _stream(
+        *_assistant("gpt-6-sol"),
+        *_assistant("gpt-6-sol"),
+        *_result({"gpt-6-sol": {}, "gpt-6-luna": {}}),
+        *_event("complete", {"status": "completed", "cost_usd": "1"}),
+    )
+    assert sd.render_outputs(st)["models_used"] == "gpt-6-sol, gpt-6-luna"
+
+
+def test_models_used_survives_a_dropped_terminal_frame():
+    """The SSE queue drops on overflow; per-turn models still name the run."""
+    assert sd.models_used(_stream(*_assistant("gpt-6-sol"))) == "gpt-6-sol"
+
+
+def test_synthetic_turns_are_not_models():
+    st = _stream(*_assistant("<synthetic>"), *_assistant("gpt-6-sol"))
+    assert sd.models_used(st) == "gpt-6-sol"
+
+
+def test_models_used_unions_across_retry_attempts():
+    first = _stream(*_assistant("gpt-6-sol"))
+    second = _stream(*_assistant("gpt-6-luna"), *_assistant("gpt-6-sol"))
+    ladder = [sd.Attempt(1, "gpt-6-sol", first), sd.Attempt(2, "gpt-6-luna", second)]
+    assert sd.render_outputs(second, ladder)["models_used"] == "gpt-6-sol, gpt-6-luna"
+
+
+def test_frame_models_ignores_non_frames():
+    assert sd.frame_models("not json") == []
+    assert sd.frame_models(json.dumps({"content": "plain text"})) == []
