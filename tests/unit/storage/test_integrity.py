@@ -924,3 +924,72 @@ class TestAllPathsConverge:
         await transfer.download("conv/rt/", str(dest), store=store)
         assert (dest / "a.json").read_bytes() == b'{"a": 1}'
         assert (dest / "b.json").read_bytes() == b'{"b": 2}'
+
+
+class TestDeferredRemoteVerify:
+    """``upload_file(defer_remote_verify=True)``: local check on, readback HEAD off.
+
+    The directory upload path verifies a whole batch against one listing of
+    its prefix (FND-1339); this is the per-file primitive it leans on.
+    """
+
+    @staticmethod
+    def _count_heads(monkeypatch) -> list[str]:
+        import application_sdk.storage.ops as ops_mod
+
+        heads: list[str] = []
+        real = ops_mod.get_file_meta
+
+        async def meta(key, *a, **kw):
+            heads.append(key)
+            return await real(key, *a, **kw)
+
+        monkeypatch.setattr(ops_mod, "get_file_meta", meta)
+        return heads
+
+    async def test_default_still_reads_back_with_a_head(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        from application_sdk.storage.ops import upload_file
+
+        heads = self._count_heads(monkeypatch)
+        f = tmp_path / "c.bin"
+        f.write_bytes(b"x" * 100)
+
+        await upload_file("k/c.bin", f, store)
+
+        assert heads == ["k/c.bin"]
+
+    async def test_deferred_skips_the_head_but_keeps_digest_and_sidecar(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        from application_sdk.storage.ops import _get_bytes, upload_file
+
+        heads = self._count_heads(monkeypatch)
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"x" * 100)
+
+        digest = await upload_file("k/a.bin", f, store, defer_remote_verify=True)
+
+        assert digest == hashlib.sha256(b"x" * 100).hexdigest()
+        assert heads == []
+        sidecar = await _get_bytes("k/a.bin.sha256", store, normalize=False)
+        assert sidecar is not None
+        assert sidecar.decode().strip() == digest
+
+    async def test_deferred_with_write_sidecar_false_holds_the_sidecar_back(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        from application_sdk.storage.ops import exists, upload_file
+
+        self._count_heads(monkeypatch)
+        f = tmp_path / "b.bin"
+        f.write_bytes(b"y" * 50)
+
+        digest = await upload_file(
+            "k/b.bin", f, store, defer_remote_verify=True, write_sidecar=False
+        )
+
+        assert digest == hashlib.sha256(b"y" * 50).hexdigest()
+        assert await exists("k/b.bin", store, normalize=False) is True
+        assert await exists("k/b.bin.sha256", store, normalize=False) is False
