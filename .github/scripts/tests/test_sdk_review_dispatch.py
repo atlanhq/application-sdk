@@ -92,12 +92,12 @@ def test_payload_clones_the_head_ref_not_main():
 
 
 def test_payload_pins_all_three_model_lanes():
-    # Leaving any lane unset silently falls back to mothership's Claude
-    # defaults, and `small_fast_model` unset resolves to `model`.
+    # Leaving any lane unset silently falls back to mothership's default
+    # models, and `small_fast_model` unset resolves to `model`.
     p = _payload()
-    assert p["model"] == "xai/grok-4.6"
-    assert p["small_fast_model"] == "gpt-5.6-luna"
-    assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
+    assert p["model"] == "gpt-6-sol"
+    assert p["small_fast_model"] == "gpt-6-sol"
+    assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-6-sol"
     encoded = json.loads(json.dumps(p))
     for value in (
         encoded["model"],
@@ -674,7 +674,7 @@ def test_a_genuine_transport_drop_is_still_never_retried():
 
 
 def test_the_http_error_body_reaches_the_error_message():
-    body = b"Invalid model name passed in model=xai/grok-4.6" + b"x" * 600
+    body = b"Invalid model name passed in model=gpt-6-sol" + b"x" * 600
 
     class _FakeFp:
         def read(self):
@@ -709,13 +709,13 @@ def test_the_http_error_body_reaches_the_error_message():
     assert st2.err_code == "http_502"
 
 
-def test_main_model_is_not_an_openrouter_style_id():
+def test_every_pinned_model_is_a_bare_gateway_alias():
     # Weak guard, deliberately: CI has no LiteLLM key, so the real check
     # (GET /v1/models on llmproxy.atlan.dev) cannot run here. This only catches
-    # the specific `x-ai/` vs `xai/` prefix confusion that broke FND-660 —
-    # `x-ai/grok-4.6` is the OpenRouter-style id and this proxy rejects it.
-    assert "x-ai/" not in sd.MAIN_MODEL
-    assert "x-ai/" not in sd.FAST_MODEL
+    # a provider prefix sneaking back in, the shape of the FND-660 breakage —
+    # the proxy serves the GPT-6 tier under bare aliases.
+    for model in (sd.MAIN_MODEL, sd.FAST_MODEL, sd.RETRY_MAIN_MODEL):
+        assert "/" not in model
 
 
 # ---------------------------------------------------------------------------
@@ -1121,7 +1121,7 @@ def test_a_clean_completed_sandbox_that_said_nothing_retries_on_the_same_model()
     """`complete` IS the terminal event, so the sandbox is provably finished.
 
     Nothing about the model failed — the turn ended early — so dragging in
-    RETRY_MAIN_MODEL would spend the expensive lane on a fault it cannot fix.
+    RETRY_MAIN_MODEL would spend a model swap on a fault it cannot fix.
     """
     st = _completed("3.307718")
     assert sd.sandbox_completed_cleanly(st) is True

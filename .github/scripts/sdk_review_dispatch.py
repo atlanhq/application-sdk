@@ -126,43 +126,27 @@ STREAM_TRANSPORT_ERRORS = (
 # the sandbox looks stalled. Re-armed by every content-bearing event.
 IDLE_WARN_SECONDS = 300
 
-# Models this lane runs on. The main lane is pinned to Grok 4.6 by operator
-# request, replacing kimi-k3 (which was itself chosen on cost per TASK, not per
-# token: index 57.2, ~$0.85/task vs claude-opus-5 at 60.5, ~$2.40). Two things
-# have to hold on the proxy side or every dispatch dies on turn one, and the
-# codes tell you which: 400 means the pinned name is not one the
-# llmproxy.atlan.dev catalog recognises (its own message is "Invalid model
-# name passed in model=..."), 403 means the `sdk_review` gateway key does not
-# allowlist it.
+# Models this lane runs on, by operator request: gpt-6-sol for both the main
+# and the fast lane, gpt-6-luna for the retry. Two things have to hold on the
+# proxy side or every dispatch dies on turn one, and the codes tell you which:
+# 400 means the pinned name is not one the llmproxy.atlan.dev catalog
+# recognises (its own message is "Invalid model name passed in model=..."),
+# 403 means the `sdk_review` gateway key does not allowlist it.
 #
 # Mothership itself does not validate the name at all: `_validate_model_ids`
 # in `harness/api/models/sandbox.py` only rejects blank/whitespace/control-char
 # values, by design ("No allow-list of names: new models must work without a
 # code change"). So a typo in this constant is never caught at dispatch - it
 # boots a real sandbox, bills for it, and only dies mid-run when the container
-# itself calls the proxy. That is exactly what happened for FND-660: this
-# constant carried the OpenRouter-style `x-ai/` prefix instead of this proxy's
-# `xai/`, so any dispatch that reached the sandbox would have paid for one
-# and failed on its first proxy call.
+# itself calls the proxy. That is exactly what happened for FND-660, where the
+# constant carried the wrong provider prefix.
 #
-# KNOWN RISK, carried deliberately: xAI does NOT prompt-cache on the
-# Anthropic `/v1/messages` route Claude Code uses (verified in the LiteLLM
-# ledger when mothership pinned its PR reviewer to xai/grok-4.5 in Jul 2026 -
-# Cache Hit False even with Claude Code sending cache_control), so a multi-turn
-# agentic reviewer re-bills its full context every turn. That is why mothership
-# reverted its own grok pin. This lane has the same shape, so watch the
-# per-review cost before treating the switch as settled. That risk was
-# measured on grok-4.5, not 4.6: a manual `/v1/messages` probe of
-# `xai/grok-4.6` on 2026-08-20 returned a non-zero `cache_read_input_tokens`,
-# so the no-caching claim is unverified for 4.6 and the per-run cost should be
-# re-measured before it is treated as settled.
-#
-# The fast lane stays on gpt-5.6-luna. `small_fast_model` must be pinned
-# explicitly: mothership's model_routing_env does `fast = small_fast_model or
-# model`, so pinning `model` alone would drag the background lane onto the main
-# model too.
-MAIN_MODEL = "xai/grok-4.6"
-FAST_MODEL = "gpt-5.6-luna"
+# `small_fast_model` must be pinned explicitly even though it equals `model`
+# here: mothership's model_routing_env does `fast = small_fast_model or model`,
+# so leaving it unset would drag the fast lane onto RETRY_MAIN_MODEL on
+# attempt 2.
+MAIN_MODEL = "gpt-6-sol"
+FAST_MODEL = "gpt-6-sol"
 IDLE_TIMEOUT_SECONDS = 1800
 
 # --- Re-dispatch when the sandbox dies on a hard error ----------------------
@@ -170,10 +154,10 @@ IDLE_TIMEOUT_SECONDS = 1800
 # FND-641. Mothership's intra-group provider fallback already exists and fires
 # on a 429, but every provider in a model's group serves the SAME model, so a
 # same-model re-dispatch just re-hits the same model-level fault (observed on
-# resolve while the main lane was kimi-k3: the 429 fell through to Moonshot AI,
-# which returned 400 "the message at position 21 with role 'assistant' must not
-# be empty" — same model, same bug). Swapping the model is the whole point of
-# the retry.
+# resolve: the 429 fell through to a second provider of the same model, which
+# returned 400 "the message at position 21 with role 'assistant' must not be
+# empty" — same model, same bug). Swapping the model is the whole point of the
+# retry.
 MAX_DISPATCH_ATTEMPTS = 2
 # Mothership names the sandbox after the `session_id` it is handed, and that
 # name is a DNS label: `worker /sandbox/create` answers HTTP 500
@@ -189,14 +173,12 @@ SANDBOX_ID_MAX_CHARS = 63
 # is ~40 bits — collision-proof enough for one repo's review ids, and short
 # enough to leave the human-readable head intact.
 SANDBOX_ID_DIGEST_CHARS = 10
-# Attempt 2's main model: mothership's own DEFAULT_CLAUDE_MODEL, named
-# explicitly rather than by omitting `model` from the payload, so a test can
-# assert the two attempts actually differ and the retry does not silently
-# follow a mothership config change. `small_fast_model` and
-# CLAUDE_CODE_SUBAGENT_MODEL stay pinned to FAST_MODEL — mothership's
-# model_routing_env does `fast = small_fast_model or model`, so changing only
-# `model` must not drag the background lane along.
-RETRY_MAIN_MODEL = "claude-opus-5"
+# Attempt 2's main model, named explicitly so a test can assert the two
+# attempts actually differ. `small_fast_model` and CLAUDE_CODE_SUBAGENT_MODEL
+# stay pinned to FAST_MODEL — mothership's model_routing_env does
+# `fast = small_fast_model or model`, so changing only `model` must not drag
+# the background lane along.
+RETRY_MAIN_MODEL = "gpt-6-luna"
 # Retry only a fault a different model can plausibly survive. This is an
 # allowlist, not a denylist: a wrong retry burns a second sandbox boot — up to
 # an hour of the job's 130-min budget plus a real bill — so an unrecognised
@@ -224,7 +206,7 @@ RETRYABLE_ERR_CODES = frozenset(
 # does carry information — "401 upstream auth failed" mentions upstream and is
 # nonetheless a permanent fault that would fail identically on any model.
 RETRYABLE_ERR_PATTERNS = (
-    "must not be empty",  # the empty-assistant-turn fault (first seen on kimi-k3)
+    "must not be empty",  # the empty-assistant-turn fault
     "rate-limited",
     "rate limited",
     "overloaded",
