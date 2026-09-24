@@ -205,13 +205,6 @@ def test_an_unconditional_runtime_skip_does_not_define_its_scenario(
     assert any(NOT_RUN in m for m in _grade(tmp_path, _module(skipped, LIFETIME)))
 
 
-def test_a_conditional_runtime_skip_still_defines_it(tmp_path: Path) -> None:
-    guarded = _test(
-        HEALTHY, '    if windows():\n        pytest.skip("posix only")\n' + ASSERT
-    )
-    assert _grade(tmp_path, _module(guarded, LIFETIME)) == []
-
-
 def test_a_declared_unsupported_scenario_is_still_a_gap(tmp_path: Path) -> None:
     unsupported = _test(
         '@pytest.mark.preflight_conformance(rule="F016", scenario="healthy", unsupported=True, reason="n/a")'
@@ -228,13 +221,7 @@ def test_registration_without_the_contract_assertion_is_not_a_definition(
 ) -> None:
     bare = _test(HEALTHY, "    assert True\n")
     messages = _grade(tmp_path, _module(bare, LIFETIME))
-    assert any("never reachably calls assert_preflight_result" in m for m in messages)
-
-
-def test_the_assertion_may_sit_in_a_module_helper(tmp_path: Path) -> None:
-    helper = "def _check(result):\n" + ASSERT
-    via_helper = _test(HEALTHY, "    _check(run())\n")
-    assert _grade(tmp_path, _module(helper, via_helper, LIFETIME)) == []
+    assert any("does not call assert_preflight_result" in m for m in messages)
 
 
 @pytest.mark.parametrize(
@@ -252,12 +239,7 @@ def test_an_unreachable_assertion_is_not_a_definition(
     tmp_path: Path, body: str
 ) -> None:
     messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
-    assert any("never reachably calls assert_preflight_result" in m for m in messages)
-
-
-def test_an_assertion_in_the_live_branch_counts(tmp_path: Path) -> None:
-    body = "    if True:\n    " + ASSERT + "    else:\n        pass\n"
-    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
+    assert any("does not call assert_preflight_result" in m for m in messages)
 
 
 @pytest.mark.parametrize(
@@ -284,13 +266,13 @@ def test_a_same_named_function_is_not_the_contract_assertion(
     messages = _grade(
         tmp_path, _module(extra, _test(HEALTHY), LIFETIME, prelude=prelude)
     )
-    assert any("never reachably calls assert_preflight_result" in m for m in messages)
+    assert any("does not call assert_preflight_result" in m for m in messages)
 
 
 def test_a_fixture_parameter_shadows_the_assertion(tmp_path: Path) -> None:
     shadowed = f"{HEALTHY}\ndef test_healthy(assert_preflight_result):\n{ASSERT}"
     messages = _grade(tmp_path, _module(shadowed, LIFETIME))
-    assert any("never reachably calls assert_preflight_result" in m for m in messages)
+    assert any("does not call assert_preflight_result" in m for m in messages)
 
 
 @pytest.mark.parametrize(
@@ -320,7 +302,7 @@ def test_a_lifetime_scenario_needs_the_lifetime_assertion(tmp_path: Path) -> Non
         name="test_hung",
     )
     messages = _grade(tmp_path, _module(_test(HEALTHY), hung))
-    assert any("never reachably calls assert_probe_lifetime" in m for m in messages)
+    assert any("does not call assert_probe_lifetime" in m for m in messages)
 
 
 # --- parametrize --------------------------------------------------------------
@@ -582,9 +564,9 @@ def test_scan_all_keeps_test_modules_out_of_the_app_analysis(tmp_path: Path) -> 
     assert scan_all(discover(tmp_path), tmp_path) == []
 
 
-# --- second review round ------------------------------------------------------
+# --- names and entrypoints ------------------------------------------------------
 
-NEVER_CALLS = "never reachably calls assert_preflight_result"
+NEVER_CALLS = "does not call assert_preflight_result"
 UNREADABLE = "cannot be read statically"
 
 
@@ -602,14 +584,6 @@ def test_a_later_rebinding_replaces_the_contract_import(
 ) -> None:
     messages = _grade(tmp_path, _module(rebinding, _test(HEALTHY), LIFETIME))
     assert any(NEVER_CALLS in m for m in messages)
-
-
-def test_a_contract_import_after_an_unrelated_one_is_credited(tmp_path: Path) -> None:
-    prelude = (
-        "import pytest\nfrom mylib import assert_preflight_result\n"
-        + PRELUDE.replace("import pytest\n", "")
-    )
-    assert _grade(tmp_path, _module(_test(HEALTHY), LIFETIME, prelude=prelude)) == []
 
 
 def test_a_shadowed_dotted_root_is_not_the_contract_module(tmp_path: Path) -> None:
@@ -633,7 +607,6 @@ def test_a_shadowed_dotted_root_is_not_the_contract_module(tmp_path: Path) -> No
         "    if True:\n        return\n" + ASSERT,
         "    if ready():\n        return\n    else:\n        return\n" + ASSERT,
         "    with context():\n        return\n" + ASSERT,
-        "    assert 0, 'unreachable'\n" + ASSERT,
         "    False and " + ASSERT.lstrip(),
         "    True or " + ASSERT.lstrip(),
         "    checks = (" + ASSERT.strip() + " for _ in range(1))\n",
@@ -648,7 +621,6 @@ def test_a_shadowed_dotted_root_is_not_the_contract_module(tmp_path: Path) -> No
         "literal-branch-return",
         "both-branches-return",
         "return-inside-with",
-        "assert-literal-false",
         "and-false",
         "or-true",
         "unconsumed-generator",
@@ -663,31 +635,6 @@ def test_a_statically_skipped_assertion_is_not_credited(
     assert any(NEVER_CALLS in m for m in messages)
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        "    if ready():\n        return\n" + ASSERT,
-        "    with pytest.raises(ValueError):\n        raise ValueError()\n" + ASSERT,
-        "    try:\n        raise ValueError()\n    except ValueError:\n        pass\n"
-        + ASSERT,
-        "    ready() and " + ASSERT.lstrip(),
-        "    checks = [" + ASSERT.strip() + " for _ in range(1)]\n",
-        "    for attempt in range(2):\n        if attempt:\n            break\n"
-        + ASSERT,
-    ],
-    ids=[
-        "one-branch-returns",
-        "raise-absorbed-by-with",
-        "raise-caught-by-try",
-        "dynamic-and",
-        "eager-list-comprehension",
-        "break-ends-only-the-loop",
-    ],
-)
-def test_an_assertion_that_can_run_is_credited(tmp_path: Path, body: str) -> None:
-    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
-
-
 def test_an_unresolved_parametrize_withholds_a_function_marker(tmp_path: Path) -> None:
     decorated = (
         '@pytest.mark.parametrize("entrypoint", build_cases())\n'
@@ -696,23 +643,6 @@ def test_an_unresolved_parametrize_withholds_a_function_marker(tmp_path: Path) -
     messages = _grade(tmp_path, _module(decorated, LIFETIME))
     assert any(UNREADABLE in m for m in messages)
     assert any(NOT_REGISTERED in m for m in messages)
-
-
-@pytest.mark.parametrize(
-    ("alias", "expected"),
-    [
-        ('skip_ci = pytest.mark.skipif(True, reason="ci")', NOT_RUN),
-        ('skip_ci = pytest.mark.skipif(os.environ.get("CI"), reason="ci")', UNREADABLE),
-        ("skip_ci = pytest.mark.skipif(*conditions())", UNREADABLE),
-    ],
-    ids=["literal", "dynamic-condition", "unreadable-alias"],
-)
-def test_a_module_mark_alias_is_applied(
-    tmp_path: Path, alias: str, expected: str
-) -> None:
-    decorated = _test("@skip_ci\n" + HEALTHY)
-    messages = _grade(tmp_path, _module(alias, decorated, LIFETIME))
-    assert any(expected in m for m in messages)
 
 
 def test_a_decorator_that_applies_no_marks_is_ignored(tmp_path: Path) -> None:
@@ -791,89 +721,12 @@ def entrypoint_matrix(scenario: str):
     )
 
 
-# --- third review round -------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "dead",
-    [
-        "if False:\n    assert_preflight_result = print",
-        "while False:\n    assert_preflight_result = print",
-        "if True:\n    pass\nelse:\n    from mylib import assert_preflight_result",
-    ],
-    ids=["if-false", "while-false", "dead-else"],
-)
-def test_a_dead_branch_rebinding_keeps_the_contract_import(
-    tmp_path: Path, dead: str
-) -> None:
-    assert _grade(tmp_path, _module(dead, _test(HEALTHY), LIFETIME)) == []
-
-
-def test_a_live_branch_rebinding_still_replaces_it(tmp_path: Path) -> None:
-    live = "if True:\n    assert_preflight_result = print"
-    messages = _grade(tmp_path, _module(live, _test(HEALTHY), LIFETIME))
-    assert any(NEVER_CALLS in m for m in messages)
-
-
-def test_a_later_def_replaces_a_mark_alias(tmp_path: Path) -> None:
-    rebinding = (
-        'skip_ci = pytest.mark.skipif(False, reason="x")\n\n\n'
-        "def skip_ci(fn):\n"
-        '    return pytest.mark.skip(reason="x")(fn)'
-    )
-    decorated = _test("@skip_ci\n" + HEALTHY)
-    messages = _grade(tmp_path, _module(rebinding, decorated, LIFETIME))
-    assert any(UNREADABLE in m for m in messages)
-    assert any(NOT_REGISTERED in m for m in messages)
-
-
-def test_a_later_import_replaces_a_mark_alias(tmp_path: Path) -> None:
-    rebinding = (
-        'skip_ci = pytest.mark.skipif(True, reason="x")\nfrom helpers import skip_ci'
-    )
-    decorated = _test("@skip_ci\n" + HEALTHY)
-    # The imported decorator is opaque and applies no mark the reader can see.
-    assert _grade(tmp_path, _module(rebinding, decorated, LIFETIME)) == []
-
-
-def test_an_alias_defined_after_a_def_is_the_alias(tmp_path: Path) -> None:
-    rebinding = (
-        "def skip_ci(fn):\n    return fn\n\n\n"
-        'skip_ci = pytest.mark.skipif(True, reason="x")'
-    )
-    decorated = _test("@skip_ci\n" + HEALTHY)
-    messages = _grade(tmp_path, _module(rebinding, decorated, LIFETIME))
-    assert any(NOT_RUN in m for m in messages)
-
-
-@pytest.mark.parametrize(
-    "factory",
-    [
-        "def identity():\n    return lambda fn: fn",
-        "def identity(fn=None):\n    def wrap(f):\n        return f\n    return wrap",
-    ],
-    ids=["lambda", "closure"],
-)
-def test_an_ordinary_decorator_factory_is_ignored(tmp_path: Path, factory: str) -> None:
-    decorated = _test("@identity()\n" + HEALTHY)
-    assert _grade(tmp_path, _module(factory, decorated, LIFETIME)) == []
-
-
-def test_a_bare_helper_decorator_that_builds_a_mark_is_unknown(tmp_path: Path) -> None:
-    helper = "def gate(fn):\n    return pytest.mark.skipif(flaky(), reason='x')(fn)"
-    decorated = _test("@gate\n" + HEALTHY)
-    messages = _grade(tmp_path, _module(helper, decorated, LIFETIME))
-    assert any(UNREADABLE in m for m in messages)
-
-
-def test_a_deferred_mark_producing_decorator_is_unknown(tmp_path: Path) -> None:
-    helper = (
-        "def gate():\n" "    return lambda fn: pytest.mark.skip(reason='later')(fn)"
-    )
-    decorated = _test("@gate()\n" + HEALTHY)
-    messages = _grade(tmp_path, _module(helper, decorated, LIFETIME))
-    assert any(UNREADABLE in m for m in messages)
-    assert any(NOT_REGISTERED in m for m in messages)
+# --- the allowlist ------------------------------------------------------------
+#
+# F016 accepts the shapes atlan-openapi-app, atlan-mysql-app and
+# atlan-metabase-app use, and reports anything else rather than modelling it.
+# The only question it answers about the body is whether the test can *pass*
+# without making the call; a statement that fails the test is the test gate's.
 
 
 def _assert_collectable(module: dict[str, str]) -> None:
@@ -889,468 +742,360 @@ def _assert_collectable(module: dict[str, str]) -> None:
         # The marker is registered by the consumer's conftest, not here.
         warnings.simplefilter("ignore", pytest.PytestUnknownMarkWarning)
         exec(compile(source, "test_preflight.py", "exec"), namespace)  # noqa: S102
-    assert callable(namespace["test_healthy"])
-
-
-def test_a_lambda_decorator_that_skips_is_not_credited(tmp_path: Path) -> None:
-    module = _module(
-        _test("@(lambda fn: pytest.mark.skip(reason='later')(fn))\n" + HEALTHY),
-        LIFETIME,
+    assert all(
+        callable(namespace[name]) for name in namespace if name.startswith("test_")
     )
-    _assert_collectable(module)
-    messages = _grade(tmp_path, module)
-    assert any(UNREADABLE in message for message in messages)
-    assert any(NOT_REGISTERED in message for message in messages)
 
 
-def test_a_lambda_decorator_without_marks_is_ignored(tmp_path: Path) -> None:
-    module = _module(_test("@(lambda fn: fn)\n" + HEALTHY), LIFETIME)
+def _loop(header: str, *after: str) -> str:
+    """A loop whose body is the contract assertion, then *after*."""
+    return (
+        f"    {header}\n    " + ASSERT + "".join(f"        {line}\n" for line in after)
+    )
+
+
+#: One test per shape the three reference apps use, condensed. The
+#: cancellation test's ``with pytest.raises(asyncio.CancelledError): await
+#: task`` is the one the flow-modelling reader wrongly rejected in all three.
+REFERENCE_APP_SHAPES = (
+    PRELUDE
+    + "import asyncio\nimport logging\nfrom unittest import mock\n\n"
+    + """
+async def _run(**kwargs):
+    return None
+
+
+@pytest.mark.asyncio
+@mock.patch.dict("os.environ", {})
+@pytest.mark.preflight_conformance(rule="F016", scenario="healthy")
+async def test_healthy():
+    result = await _run()
+ASSERT
+
+
+@pytest.mark.preflight_conformance(rule="F016", scenario="hung_probe")
+async def test_hung(closed_clients):
+    with pytest.raises(TimeoutError) as hung:
+        await _run(budget=5)
+    assert hung.value.__class__.__name__ == "TimeoutError"
+    assert_probe_lifetime(elapsed=0, budget=5.0, background_stopped=bool(closed_clients))
+    result = await _run(budget=5)
+ASSERT
+
+
+@pytest.mark.preflight_conformance(rule="F016", scenario="cancellation_cleanup")
+async def test_cancellation(closed_clients):
+    probing = asyncio.Event()
+    task = asyncio.create_task(_run(budget=5))
+    await asyncio.wait_for(probing.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert_probe_lifetime(elapsed=0, budget=5.0, background_stopped=bool(closed_clients))
+    result = await _run(budget=5)
+ASSERT
+
+
+@pytest.mark.preflight_conformance(rule="F016", scenario="budget_retry")
+async def test_budget_retry(closed_clients):
+    budgets = (60, 10, 2)
+    for index, budget in enumerate(budgets, start=1):
+        result = await _run(budget=budget)
+    ASSERT
+        assert_probe_lifetime(elapsed=0, budget=float(budget), background_stopped=len(closed_clients) == index)
+
+
+@pytest.mark.preflight_conformance(rule="F016", scenario="credential_entrypoint_shapes")
+async def test_shapes():
+    shapes: list[tuple[dict, str]] = [({}, "ready"), ({"creds": []}, "not_ready")]
+    for kwargs, expected in shapes:
+        result = await _run(**kwargs)
+    ASSERT
+    for _ in range(2):
+        result = await _run()
+    ASSERT
+
+
+@pytest.mark.preflight_conformance(rule="F016", scenario="extraction_fallback")
+async def test_extraction_fallback(caplog):
+    client = object()
+    try:
+        with pytest.raises(Exception) as probe_error:
+            await _run(client=client)
+    finally:
+        await _run(close=client)
+    with caplog.at_level(logging.DEBUG):
+        result = await _run()
+ASSERT
+""".replace("\nASSERT\n", "\n" + ASSERT).replace("    ASSERT\n", "    " + ASSERT)
+)
+
+
+def test_every_reference_app_shape_is_credited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        SCENARIOS,
+        "F016",
+        (
+            "healthy",
+            "hung_probe",
+            "cancellation_cleanup",
+            "budget_retry",
+            "credential_entrypoint_shapes",
+            "extraction_fallback",
+        ),
+    )
+    module = {"tests/unit/test_preflight.py": REFERENCE_APP_SHAPES}
     _assert_collectable(module)
     assert _grade(tmp_path, module) == []
 
 
-def test_an_invoked_lambda_returns_the_mark_it_was_passed(tmp_path: Path) -> None:
-    module = _module(
-        _test("@(lambda mark: mark)(pytest.mark.skip(reason='x'))\n" + HEALTHY),
-        LIFETIME,
-    )
-    _assert_collectable(module)
-    messages = _grade(tmp_path, module)
-    assert any(NOT_RUN in message for message in messages)
-    assert any(NOT_REGISTERED in message for message in messages)
-
-
-def test_a_dead_conditional_arm_in_a_lambda_decorator_is_ignored(
-    tmp_path: Path,
-) -> None:
-    module = _module(
-        _test("@(lambda fn: fn if True else pytest.mark.skip(fn))\n" + HEALTHY),
-        LIFETIME,
-    )
-    _assert_collectable(module)
-    assert _grade(tmp_path, module) == []
-
-
 @pytest.mark.parametrize(
-    "body",
+    ("extra", "body"),
     [
-        "    if ready():\n        return\n    else:\n        raise RuntimeError()\n"
-        + ASSERT,
-        "    if ready():\n        raise RuntimeError()\n    return\n" + ASSERT,
-        "    while True:\n        if ready():\n            return\n        raise RuntimeError()\n"
-        + ASSERT,
-        "    try:\n        return\n    finally:\n        raise RuntimeError()\n"
-        + ASSERT,
-    ],
-    ids=["return-or-raise", "raise-then-return", "infinite-loop", "finally-raises"],
-)
-def test_a_mixed_definite_exit_ends_the_test(tmp_path: Path, body: str) -> None:
-    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
-    assert any(NEVER_CALLS in m for m in messages)
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        "    with pytest.raises(RuntimeError):\n        if ready():\n            return\n        raise RuntimeError()\n"
-        + ASSERT,
-        "    try:\n        if ready():\n            return\n        raise RuntimeError()\n    except RuntimeError:\n        pass\n"
-        + ASSERT,
-        "    while True:\n        if ready():\n            break\n        raise RuntimeError()\n"
-        + ASSERT,
-    ],
-    ids=["raise-absorbed-by-with", "raise-caught-by-try", "break-leaves-loop"],
-)
-def test_a_mixed_exit_that_can_be_absorbed_still_reaches_the_assertion(
-    tmp_path: Path, body: str
-) -> None:
-    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
-
-
-# --- fourth review round ------------------------------------------------------
-
-
-def test_a_statically_empty_loop_preserves_a_mark_alias(tmp_path: Path) -> None:
-    alias = (
-        'gate = pytest.mark.skip(reason="skip")\n' "for _ in []:\n    gate = object()"
-    )
-    messages = _grade(tmp_path, _module(alias, _test("@gate\n" + HEALTHY), LIFETIME))
-    assert any(NOT_RUN in message for message in messages)
-
-
-def test_an_unknown_loop_binding_makes_the_alias_unresolved(tmp_path: Path) -> None:
-    alias = (
-        'gate = pytest.mark.skipif(False, reason="skip")\n'
-        "for _ in dynamic_values():\n    gate = object()"
-    )
-    messages = _grade(tmp_path, _module(alias, _test("@gate\n" + HEALTHY), LIFETIME))
-    assert any(UNREADABLE in message for message in messages)
-    assert any(NOT_REGISTERED in message for message in messages)
-
-
-def test_a_decorator_uses_bindings_at_its_definition_site(tmp_path: Path) -> None:
-    source = (
-        'gate = pytest.mark.skip(reason="skip")\n'
-        + _test("@gate\n" + HEALTHY)
-        + "\ngate = object()"
-    )
-    messages = _grade(tmp_path, _module(source, LIFETIME))
-    assert any(NOT_RUN in message for message in messages)
-    assert any(NOT_REGISTERED in message for message in messages)
-
-
-def test_a_copied_mark_alias_keeps_its_original_value(tmp_path: Path) -> None:
-    source = (
-        'gate = pytest.mark.skipif(False, reason="source")\n'
-        "saved = gate\n"
-        'gate = pytest.mark.skipif(True, reason="rebound")\n'
-        + _test("@saved\n" + HEALTHY)
-    )
-    assert _grade(tmp_path, _module(source, LIFETIME)) == []
-
-
-def test_a_transitive_local_decorator_that_may_skip_is_unknown(tmp_path: Path) -> None:
-    helpers = (
-        "def inner():\n    return pytest.mark.skip(reason='skip')\n\n"
-        "def outer(fn):\n"
-        "    if dynamic():\n        return inner()(fn)\n"
-        "    return fn"
-    )
-    messages = _grade(
-        tmp_path,
-        _module(helpers, _test("@outer()\n" + HEALTHY), LIFETIME),
-    )
-    assert any(UNREADABLE in message for message in messages)
-    assert any(NOT_REGISTERED in message for message in messages)
-
-
-def test_a_dead_mark_in_an_identity_decorator_is_ignored(tmp_path: Path) -> None:
-    helper = (
-        "def identity(fn):\n"
-        "    if False:\n        return pytest.mark.skip(fn)\n"
-        "    return fn"
-    )
-    assert (
-        _grade(tmp_path, _module(helper, _test("@identity\n" + HEALTHY), LIFETIME))
-        == []
-    )
-
-
-def test_an_unused_mark_lambda_in_an_identity_decorator_is_ignored(
-    tmp_path: Path,
-) -> None:
-    helper = (
-        "def identity(fn):\n"
-        "    unused = lambda: pytest.mark.skip(fn)\n"
-        "    return fn"
-    )
-    assert (
-        _grade(tmp_path, _module(helper, _test("@identity\n" + HEALTHY), LIFETIME))
-        == []
-    )
-
-
-def test_a_return_only_try_does_not_make_its_handler_reachable(tmp_path: Path) -> None:
-    body = "    try:\n        return\n    except Exception:\n        pass\n" + ASSERT
-    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
-    assert any(NEVER_CALLS in message for message in messages)
-
-
-def test_a_caught_call_can_reach_the_contract_assertion(tmp_path: Path) -> None:
-    body = (
-        "    try:\n"
-        "        check_source()\n"
-        "    except ExpectedError:\n"
-        "        " + ASSERT.lstrip()
-    )
-    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
-
-
-@pytest.mark.parametrize("inner", ["except BaseException:", "except:"])
-def test_an_exhaustive_inner_handler_does_not_make_an_outer_handler_reachable(
-    tmp_path: Path, inner: str
-) -> None:
-    body = (
-        "    try:\n"
-        "        try:\n"
-        "            check_source()\n"
-        f"        {inner}\n"
-        "            pass\n"
-        "    except BaseException:\n"
-        "        " + ASSERT.lstrip()
-    )
-    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
-    assert any(NEVER_CALLS in message for message in messages)
-
-
-def test_an_except_exception_leaves_base_exceptions_for_an_outer_handler(
-    tmp_path: Path,
-) -> None:
-    """``SystemExit`` from the call passes ``except Exception``."""
-    body = (
-        "    try:\n"
-        "        try:\n"
-        "            check_source()\n"
-        "        except Exception:\n"
-        "            pass\n"
-        "    except BaseException:\n"
-        "        " + ASSERT.lstrip()
-    )
-    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
-
-
-def test_a_handler_after_except_exception_sees_no_exception_subclass(
-    tmp_path: Path,
-) -> None:
-    body = (
-        "    try:\n"
-        "        check_source()\n"
-        "    except Exception:\n"
-        "        pass\n"
-        "    except ValueError:\n"
-        "        " + ASSERT.lstrip()
-    )
-    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
-    assert any(NEVER_CALLS in message for message in messages)
-
-
-def test_an_unmatched_inner_handler_keeps_the_outer_exception_path(
-    tmp_path: Path,
-) -> None:
-    body = (
-        "    try:\n"
-        "        try:\n"
-        "            check_source()\n"
-        "        except ValueError:\n"
-        "            pass\n"
-        "    except Exception:\n"
-        "        " + ASSERT.lstrip()
-    )
-    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
-
-
-@pytest.mark.parametrize("context", ["with nullcontext():", "with open('path'):"])
-def test_a_non_suppressing_context_does_not_reach_after_return_call(
-    tmp_path: Path, context: str
-) -> None:
-    body = f"    {context}\n        return check_source()\n" + ASSERT
-    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
-    assert any(NEVER_CALLS in message for message in messages)
-
-
-def test_a_pytest_raises_context_can_reach_after_a_call_exception(
-    tmp_path: Path,
-) -> None:
-    body = "    with pytest.raises(ExpectedError):\n        check_source()\n" + ASSERT
-    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
-
-
-def test_an_empty_pytest_raises_block_does_not_reach_afterward(
-    tmp_path: Path,
-) -> None:
-    body = "    with pytest.raises(ValueError):\n        pass\n" + ASSERT
-    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
-    assert any(NEVER_CALLS in message for message in messages)
-
-
-def test_an_awaited_async_helper_counts_its_contract_assertion(
-    tmp_path: Path,
-) -> None:
-    helper = "async def assert_result():\n" "    " + ASSERT.lstrip()
-    body = "    await assert_result()\n"
-    assert _grade(tmp_path, _module(helper, _test(HEALTHY, body), LIFETIME)) == []
-
-
-def test_an_unawaited_async_helper_does_not_count_its_contract_assertion(
-    tmp_path: Path,
-) -> None:
-    helper = "async def assert_result():\n" "    " + ASSERT.lstrip()
-    body = "    assert_result()\n"
-    messages = _grade(tmp_path, _module(helper, _test(HEALTHY, body), LIFETIME))
-    assert any(NEVER_CALLS in message for message in messages)
-
-
-def test_a_mixed_finally_exit_can_be_absorbed_and_reach_the_assertion(
-    tmp_path: Path,
-) -> None:
-    body = (
-        "    with pytest.raises(RuntimeError):\n"
-        "        try:\n            pass\n"
-        "        finally:\n            if dynamic():\n"
-        "                raise RuntimeError()\n" + ASSERT
-    )
-    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
-
-
-# --- fifth review round -------------------------------------------------------
-
-SUPPRESSED_RAISE = "        raise ExpectedError()\n" + ASSERT
-
-
-@pytest.mark.parametrize(
-    ("imports", "context"),
-    [
-        ("import pytest as pt\n", "pt.raises(ExpectedError)"),
-        ("from pytest import raises\n", "raises(ExpectedError)"),
-        ("from contextlib import suppress\n", "suppress(ExpectedError)"),
-        ("import contextlib as cl\n", "cl.suppress(ExpectedError)"),
-        ("import contextlib\n", "contextlib.suppress(ExpectedError)"),
+        ("", _loop("for _ in range(2):")),
+        ("", _loop("for _ in range(1, 3):")),
+        ("", _loop("for case in ['a', 'b']:")),
+        ("", "    cases = ('a',)\n" + _loop("for case in cases:")),
+        (
+            "",
+            "    cases: list[str] = ['a']\n"
+            + _loop("for index, case in enumerate(cases, start=1):"),
+        ),
+        ("CASES = ('a', 'b')", _loop("for case in CASES:")),
+        ("", _loop("for _ in range(2):", "break")),
+        (
+            "",
+            "    for _ in range(2):\n        for inner in range(3):\n"
+            "            break\n    " + ASSERT,
+        ),
     ],
     ids=[
-        "pytest-alias",
-        "from-pytest",
-        "from-contextlib",
-        "contextlib-alias",
-        "contextlib",
+        "range",
+        "range-bounds",
+        "literal",
+        "local-name",
+        "annotated-enumerate",
+        "module-tuple",
+        "break-after",
+        "inner-loop-break",
     ],
 )
-def test_an_imported_suppressor_is_resolved_by_its_binding(
-    tmp_path: Path, imports: str, context: str
+def test_a_loop_that_provably_runs_its_body_is_credited(
+    tmp_path: Path, extra: str, body: str
 ) -> None:
-    body = f"    with {context}:\n" + SUPPRESSED_RAISE
-    module = _module(_test(HEALTHY, body), LIFETIME, prelude=PRELUDE + imports)
+    module = _module(extra, _test(HEALTHY, body), LIFETIME)
     _assert_collectable(module)
     assert _grade(tmp_path, module) == []
 
 
 @pytest.mark.parametrize(
-    ("prelude", "signature", "context"),
+    "body",
     [
-        (PRELUDE, "test_healthy(pytest)", "pytest.raises(ExpectedError)"),
+        _loop("for case in load_cases():"),
+        _loop("for case in []:"),
+        _loop("for _ in range(0):"),
+        _loop("for _ in range(attempts):"),
+        "    cases = []\n" + _loop("for case in cases:"),
+        "    cases = ['a']\n    cases = load()\n" + _loop("for case in cases:"),
+        "    range = fake_range\n" + _loop("for _ in range(2):"),
+        _loop("while True:", "break"),
+        "    for _ in range(2):\n        if skip_it():\n            continue\n    "
+        + ASSERT,
+        "    for _ in range(2):\n        break\n    " + ASSERT,
+    ],
+    ids=[
+        "call",
+        "empty-literal",
+        "range-zero",
+        "range-unknown",
+        "empty-local",
+        "rebound-local",
+        "shadowed-range",
+        "while",
+        "continue-before",
+        "break-before",
+    ],
+)
+def test_a_loop_that_may_skip_its_body_is_not_credited(
+    tmp_path: Path, body: str
+) -> None:
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    ("prelude", "body"),
+    [
+        (PRELUDE, "    if ready():\n        return\n" + ASSERT),
+        (PRELUDE, "    with context():\n        return\n" + ASSERT),
+        (PRELUDE, "    if windows():\n        pytest.skip('posix only')\n" + ASSERT),
+        (PRELUDE, "    if flaky():\n        pytest.xfail('flaky')\n" + ASSERT),
+        (PRELUDE, "    pytest.importorskip('respx')\n" + ASSERT),
+        (PRELUDE, "    pytest.exit('stop')\n" + ASSERT),
         (
-            PRELUDE
-            + "from contextlib import suppress\n\n"
-            + "def suppress(*types):\n    return nullcontext()\n",
-            "test_healthy()",
-            "suppress(ExpectedError)",
+            PRELUDE + "from pytest import skip\n",
+            "    if windows():\n        skip('posix only')\n" + ASSERT,
         ),
-        (PRELUDE, "test_healthy()", "contextlib.suppress(ExpectedError)"),
+        (PRELUDE, "    yield\n" + ASSERT),
+        (PRELUDE, ASSERT + "    yield\n"),
     ],
-    ids=["shadowed-by-parameter", "rebound-at-module-level", "never-imported"],
+    ids=[
+        "conditional-return",
+        "return-in-with",
+        "conditional-skip",
+        "conditional-xfail",
+        "importorskip",
+        "exit",
+        "imported-skip",
+        "generator",
+        "generator-after",
+    ],
 )
-def test_a_shadowed_or_unbound_suppressor_absorbs_nothing(
-    tmp_path: Path, prelude: str, signature: str, context: str
+def test_a_way_to_pass_without_the_call_is_not_credited(
+    tmp_path: Path, prelude: str, body: str
 ) -> None:
-    source = f"{HEALTHY}\ndef {signature}:\n    with {context}:\n" + SUPPRESSED_RAISE
-    messages = _grade(tmp_path, _module(source, LIFETIME, prelude=prelude))
+    messages = _grade(
+        tmp_path, _module(_test(HEALTHY, body), LIFETIME, prelude=prelude)
+    )
     assert any(NEVER_CALLS in message for message in messages)
 
 
 @pytest.mark.parametrize(
-    ("context", "raised"),
+    ("extra", "body"),
     [
-        ("pytest.raises(ValueError)", "TypeError()"),
-        ("contextlib.suppress(ValueError)", "TypeError"),
-        ("pytest.raises((ValueError, KeyError))", "TypeError()"),
-        ("pytest.raises(ExpectedError)", "OtherError()"),
-        ("pytest.raises(ValueError)", "error"),
+        ("", "    if ready():\n    " + ASSERT),
+        ("", "    if True:\n    " + ASSERT),
+        ("", "    try:\n    " + ASSERT + "    finally:\n        cleanup()\n"),
+        (
+            "",
+            "    try:\n        check_source()\n    except ExpectedError:\n    "
+            + ASSERT,
+        ),
+        ("", "    with caplog.at_level(10):\n    " + ASSERT),
+        ("", "    outcome = " + ASSERT.lstrip()),
+        ("", "    [" + ASSERT.strip() + " for _ in range(1)]\n"),
+        ("", "    def later():\n    " + ASSERT + "    later()\n"),
+        ("def check(result):\n" + ASSERT, "    check(result)\n"),
     ],
-    ids=["raises", "suppress", "tuple", "unrelated-names", "raised-value"],
+    ids=[
+        "if",
+        "if-true",
+        "try",
+        "except-handler",
+        "with",
+        "assigned",
+        "comprehension",
+        "nested-def",
+        "helper",
+    ],
 )
-def test_a_suppressor_does_not_absorb_an_exception_it_does_not_accept(
-    tmp_path: Path, context: str, raised: str
+def test_a_call_outside_the_accepted_positions_is_not_credited(
+    tmp_path: Path, extra: str, body: str
 ) -> None:
-    body = f"    with {context}:\n        raise {raised}\n" + ASSERT
-    module = _module(
-        _test(HEALTHY, body), LIFETIME, prelude=PRELUDE + "import contextlib\n"
-    )
-    _assert_collectable(module)
-    messages = _grade(tmp_path, module)
+    messages = _grade(tmp_path, _module(extra, _test(HEALTHY, body), LIFETIME))
     assert any(NEVER_CALLS in message for message in messages)
 
 
-@pytest.mark.parametrize(
-    ("context", "raised"),
-    [
-        ("pytest.raises(LookupError)", "KeyError()"),
-        ("pytest.raises(expected_exception=ValueError)", "ValueError"),
-        ("contextlib.suppress(OSError, ValueError)", "FileNotFoundError()"),
-        ("pytest.raises(errors.ExpectedError)", "errors.ExpectedError()"),
-    ],
-    ids=["builtin-subclass", "keyword", "suppress-many", "dotted-name"],
-)
-def test_a_suppressor_absorbs_an_exception_it_accepts(
-    tmp_path: Path, context: str, raised: str
-) -> None:
-    body = f"    with {context}:\n        raise {raised}\n" + ASSERT
-    module = _module(
-        _test(HEALTHY, body), LIFETIME, prelude=PRELUDE + "import contextlib\n"
-    )
-    _assert_collectable(module)
-    assert _grade(tmp_path, module) == []
-
-
-def test_a_handler_does_not_catch_an_explicit_raise_of_another_type(
-    tmp_path: Path,
-) -> None:
-    body = (
-        "    try:\n        raise TypeError()\n"
-        "    except ValueError:\n        " + ASSERT.lstrip()
-    )
-    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
-    assert any(NEVER_CALLS in message for message in messages)
-
-
-# --- sixth review round -------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "block",
-    ["        pass\n", "        result = None\n"],
-    ids=["empty", "no-raise"],
-)
-def test_a_pytest_raises_block_that_exits_normally_fails_before_the_assertion(
-    tmp_path: Path, block: str
-) -> None:
-    body = "    with pytest.raises(ValueError):\n" + block + ASSERT
-    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
-    assert any(NEVER_CALLS in message for message in messages)
-
-
-def test_a_suppress_block_that_exits_normally_reaches_the_assertion(
-    tmp_path: Path,
-) -> None:
-    body = "    with contextlib.suppress(ValueError):\n        pass\n" + ASSERT
-    module = _module(
-        _test(HEALTHY, body), LIFETIME, prelude=PRELUDE + "import contextlib\n"
-    )
-    assert _grade(tmp_path, module) == []
-
-
-ASYNC_HELPER = "async def check(result):\n" + ASSERT
-GENERATOR_HELPER = "def check(result):\n    yield\n" + ASSERT
-
-
-@pytest.mark.parametrize(
-    ("helper", "test"),
-    [
-        (ASYNC_HELPER, f"{HEALTHY}\nasync def test_healthy():\n    check(result)\n"),
-        (ASYNC_HELPER, f"{HEALTHY}\ndef test_healthy():\n    check(result)\n"),
-        (GENERATOR_HELPER, f"{HEALTHY}\ndef test_healthy():\n    check(result)\n"),
-    ],
-    ids=["unawaited-coroutine", "coroutine-from-sync-test", "unconsumed-generator"],
-)
-def test_a_helper_call_that_does_not_run_its_body_is_not_credited(
-    tmp_path: Path, helper: str, test: str
-) -> None:
+def test_an_awaited_async_helper_is_not_credited(tmp_path: Path) -> None:
+    helper = "async def check(result):\n" + ASSERT
+    test = f"{HEALTHY}\nasync def test_healthy():\n    await check(result)\n"
     messages = _grade(tmp_path, _module(helper, test, LIFETIME))
     assert any(NEVER_CALLS in message for message in messages)
 
 
 @pytest.mark.parametrize(
-    ("prelude", "test"),
+    "before",
     [
-        (PRELUDE, f"{HEALTHY}\nasync def test_healthy():\n    await check(result)\n"),
+        "    with pytest.raises(ValueError):\n        pass\n",
+        "    with pytest.raises(ValueError):\n        raise TypeError()\n",
+        "    assert False\n",
+        "    raise RuntimeError('not yet')\n",
+    ],
+    ids=["raises-saw-nothing", "raises-wrong-type", "assert-false", "raise"],
+)
+def test_a_statement_that_fails_the_test_does_not_withhold_credit(
+    tmp_path: Path, before: str
+) -> None:
+    """Each of these fails the test before the call, so the test gate goes red.
+
+    F016 guards against a test that passes without making the call; it does
+    not second-guess one that fails, which the gate already reports.
+    """
+    assert _grade(tmp_path, _module(_test(HEALTHY, before + ASSERT), LIFETIME)) == []
+
+
+@pytest.mark.parametrize(
+    ("prelude", "decorator"),
+    [
+        (PRELUDE + "import respx\n", "@respx.mock"),
+        (PRELUDE + "from unittest import mock\n", '@mock.patch("os.getcwd")'),
+        (PRELUDE + "from helpers import retry\n", "@retry(3)"),
+    ],
+    ids=["module-attribute", "patch", "from-import"],
+)
+def test_an_imported_decorator_is_taken_not_to_skip(
+    tmp_path: Path, prelude: str, decorator: str
+) -> None:
+    module = _module(_test(f"{decorator}\n{HEALTHY}"), LIFETIME, prelude=prelude)
+    assert _grade(tmp_path, module) == []
+
+
+@pytest.mark.parametrize(
+    ("extra", "decorator"),
+    [
+        ("def identity(fn):\n    return fn", "@identity"),
+        ("def identity():\n    return lambda fn: fn", "@identity()"),
+        ("", "@(lambda fn: fn)"),
+        ('skip_ci = pytest.mark.skipif(False, reason="ci")', "@skip_ci"),
+        ('gate = pytest.mark.skip(reason="later")', "@gate"),
+    ],
+    ids=["local-def", "local-factory", "lambda", "mark-alias", "skip-alias"],
+)
+def test_a_decorator_defined_in_the_module_is_not_read(
+    tmp_path: Path, extra: str, decorator: str
+) -> None:
+    module = _module(extra, _test(f"{decorator}\n{HEALTHY}"), LIFETIME)
+    _assert_collectable(module)
+    messages = _grade(tmp_path, module)
+    assert any(UNREADABLE in message for message in messages)
+    assert any(NOT_REGISTERED in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    ("prelude", "extra"),
+    [
         (
-            PRELUDE + "import asyncio\n",
-            f"{HEALTHY}\ndef test_healthy():\n    asyncio.run(check(result))\n",
+            "import pytest\nfrom mylib import assert_preflight_result\n"
+            + PRELUDE.replace("import pytest\n", ""),
+            "",
+        ),
+        (PRELUDE, "if False:\n    assert_preflight_result = print"),
+        (
+            PRELUDE,
+            "try:\n    import fast\nexcept ImportError:\n    assert_preflight_result = print",
         ),
     ],
-    ids=["awaited", "asyncio-run"],
+    ids=["imported-twice", "dead-branch-rebinding", "fallback-rebinding"],
 )
-def test_an_async_helper_that_is_run_is_credited(
-    tmp_path: Path, prelude: str, test: str
+def test_an_assertion_name_bound_twice_is_not_resolved(
+    tmp_path: Path, prelude: str, extra: str
 ) -> None:
-    assert (
-        _grade(tmp_path, _module(ASYNC_HELPER, test, LIFETIME, prelude=prelude)) == []
+    messages = _grade(
+        tmp_path, _module(extra, _test(HEALTHY), LIFETIME, prelude=prelude)
     )
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    "prelude",
+    [PRELUDE + "import pytest\n", PRELUDE + "from helpers import *\n"],
+    ids=["pytest-imported-twice", "star-import"],
+)
+def test_an_ambiguous_pytest_binding_leaves_the_marker_unresolved(
+    tmp_path: Path, prelude: str
+) -> None:
+    messages = _grade(tmp_path, _module(_test(HEALTHY), LIFETIME, prelude=prelude))
+    assert any("not statically resolvable" in message for message in messages)
+    assert any(NOT_REGISTERED in message for message in messages)
