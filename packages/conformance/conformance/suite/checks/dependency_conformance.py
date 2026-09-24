@@ -1526,8 +1526,6 @@ def _collect_source_usage(
         engine_factories: set[str] = set()
         sqlalchemy_modules: set[str] = set()
         url_classes: set[str] = set()
-        assignments: dict[str, str] = {}
-        calls: list[ast.Call] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -1552,29 +1550,113 @@ def _collect_source_usage(
                                 engine_factories.add(alias.asname or alias.name)
                             elif alias.name == "URL":
                                 url_classes.add(alias.asname or alias.name)
-            elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
-                if isinstance(node.value.value, str):
-                    for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            assignments[target.id] = node.value.value
-            elif isinstance(node, ast.AnnAssign) and isinstance(
-                node.value, ast.Constant
-            ):
-                if isinstance(node.value.value, str) and isinstance(
-                    node.target, ast.Name
-                ):
-                    assignments[node.target.id] = node.value.value
-            elif isinstance(node, ast.Call):
-                calls.append(node)
 
-        def literal_values(node: ast.AST) -> list[str]:
+        class _SourceBindings(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.scope: tuple[str, ...] = ()
+                self.bindings: dict[
+                    tuple[str, ...], list[tuple[tuple[int, int], str, ast.expr]]
+                ] = {}
+                self.calls: list[tuple[ast.Call, tuple[str, ...]]] = []
+
+            def visit_Call(self, node: ast.Call) -> None:
+                self.calls.append((node, self.scope))
+                self.generic_visit(node)
+
+            def visit_Assign(self, node: ast.Assign) -> None:
+                self.visit(node.value)
+                position = (node.end_lineno or node.lineno, node.end_col_offset or 0)
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.bindings.setdefault(self.scope, []).append(
+                            (position, target.id, node.value)
+                        )
+                for target in node.targets:
+                    self.visit(target)
+
+            def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+                if node.value is not None:
+                    self.visit(node.value)
+                    if isinstance(node.target, ast.Name):
+                        position = (
+                            node.end_lineno or node.lineno,
+                            node.end_col_offset or 0,
+                        )
+                        self.bindings.setdefault(self.scope, []).append(
+                            (position, node.target.id, node.value)
+                        )
+                self.visit(node.target)
+
+            def _visit_scoped_body(self, node: ast.AST, body: list[ast.stmt]) -> None:
+                if isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    for decorator in node.decorator_list:
+                        self.visit(decorator)
+                    for base in getattr(node, "bases", []):
+                        self.visit(base)
+                    node_name = getattr(node, "name", "scope")
+                    node_line = getattr(node, "lineno", 0)
+                    self.scope += (f"{node_name}:{node_line}",)
+                    for statement in body:
+                        self.visit(statement)
+                    self.scope = self.scope[:-1]
+
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                for default in (*node.args.defaults, *node.args.kw_defaults):
+                    if default is not None:
+                        self.visit(default)
+                self._visit_scoped_body(node, node.body)
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+                self.visit_FunctionDef(node)  # type: ignore[arg-type]
+
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                self._visit_scoped_body(node, node.body)
+
+        source = _SourceBindings()
+        source.visit(tree)
+        for binding_list in source.bindings.values():
+            binding_list.sort(key=lambda item: item[0])
+
+        def value_at(
+            node: ast.AST,
+            scope: tuple[str, ...],
+            position: tuple[int, int],
+            seen: frozenset[str] = frozenset(),
+        ) -> ast.AST:
+            if not isinstance(node, ast.Name) or node.id in seen:
+                return node
+            for depth in range(len(scope), -1, -1):
+                binding_scope = scope[:depth]
+                choices = [
+                    item
+                    for item in source.bindings.get(binding_scope, [])
+                    if item[1] == node.id and item[0] < position
+                ]
+                if choices:
+                    return value_at(choices[-1][2], scope, position, seen | {node.id})
+            return node
+
+        def literal_values(
+            node: ast.AST,
+            scope: tuple[str, ...],
+            position: tuple[int, int],
+        ) -> list[str]:
+            node = value_at(node, scope, position)
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 return [node.value]
-            if isinstance(node, ast.Name):
-                value = assignments.get(node.id)
-                return [value] if value is not None else []
+            if isinstance(node, ast.JoinedStr):
+                prefix = ""
+                for value in node.values:
+                    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                        prefix += value.value
+                    else:
+                        break
+                return [prefix] if prefix else []
             if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-                left, right = literal_values(node.left), literal_values(node.right)
+                left = literal_values(node.left, scope, position)
+                right = literal_values(node.right, scope, position)
                 return [a + b for a in left for b in right]
             return []
 
@@ -1604,9 +1686,71 @@ def _collect_source_usage(
                 )
             return False
 
-        for call in calls:
+        def argument_values(
+            node: ast.AST,
+            scope: tuple[str, ...],
+            position: tuple[int, int],
+        ) -> list[str]:
+            return literal_values(node, scope, position)
+
+        def engine_from_config_urls(
+            call: ast.Call,
+            scope: tuple[str, ...],
+            position: tuple[int, int],
+        ) -> list[str]:
+            configuration = call.args[0] if call.args else None
+            if configuration is None:
+                configuration = next(
+                    (
+                        keyword.value
+                        for keyword in call.keywords
+                        if keyword.arg == "configuration"
+                    ),
+                    None,
+                )
+            if configuration is None:
+                return []
+            prefix_node = call.args[1] if len(call.args) > 1 else None
+            if prefix_node is None:
+                prefix_node = next(
+                    (
+                        keyword.value
+                        for keyword in call.keywords
+                        if keyword.arg == "prefix"
+                    ),
+                    None,
+                )
+            prefixes = (
+                argument_values(prefix_node, scope, position)
+                if prefix_node
+                else ["sqlalchemy."]
+            )
+            mapping = value_at(configuration, scope, position)
+            if not isinstance(mapping, ast.Dict):
+                return []
+            values: list[str] = []
+            for key, value in zip(mapping.keys, mapping.values):
+                if key is None:
+                    continue
+                for prefix in prefixes:
+                    if argument_values(key, scope, position) == [f"{prefix}url"]:
+                        values.extend(argument_values(value, scope, position))
+            return values
+
+        for call, scope in source.calls:
             func = call.func
-            if is_url_factory(func):
+            position = (call.lineno, call.col_offset)
+            factory_name = (
+                func.id
+                if isinstance(func, ast.Name)
+                else func.attr
+                if isinstance(func, ast.Attribute)
+                else ""
+            )
+            if factory_name == "engine_from_config" and is_url_factory(func):
+                for value in engine_from_config_urls(call, scope, position):
+                    collect_url(value)
+            elif is_url_factory(func):
                 url_arg = call.args[0] if call.args else None
                 if url_arg is None:
                     url_arg = next(
@@ -1618,7 +1762,7 @@ def _collect_source_usage(
                         None,
                     )
                 if url_arg is not None:
-                    for value in literal_values(url_arg):
+                    for value in argument_values(url_arg, scope, position):
                         collect_url(value)
             elif (
                 isinstance(func, ast.Attribute)
@@ -1639,7 +1783,7 @@ def _collect_source_usage(
                     )
                 )
                 if drivername is not None:
-                    for value in literal_values(drivername):
+                    for value in argument_values(drivername, scope, position):
                         match = _SQLALCHEMY_DRIVERNAME_RE.fullmatch(value)
                         if match is None:
                             continue
