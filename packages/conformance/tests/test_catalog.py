@@ -828,8 +828,9 @@ def test_catalog_f_series_present() -> None:
     F001–F005 were published as P032–P035 and P047 and moved to their own
     series in PR #3710 before any fleet suppression referenced them; the vacated
     P-ids are retired and never reused.  F006–F019 are the CONNECT-812 contract,
-    lifetime and behavioral rules; F016–F018 are the opt-in TEST rules.  F020
-    flags a suppression that still cites one of the five retired P-ids.
+    lifetime and behavioral rules; F016 checks the scenario matrix is defined,
+    and F017–F018 are retired in place until 0.40.0.  F020 flags a suppression
+    that still cites a retired id.
 
     There is deliberately no rule for a ``PreflightStatus.PARTIAL`` verdict: it
     is a read of a deprecated SDK enum member, which B001 already reports

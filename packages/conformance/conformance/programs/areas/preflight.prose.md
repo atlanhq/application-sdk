@@ -38,10 +38,11 @@ about their source.  The only evidence that a preflight verdict is truthful is a
 real-handler scenario (F016) or a human who knows the source.  Per design §6.1,
 a fix no gate can validate must not be auto-applied.
 
-F016–F018 are TEST rules: a finding means a registered scenario is missing,
-skipped or failing.  Their fix is a source adapter and a pytest scenario, not an
-edit to the handler, so they are `not_remediable` here and route to residue with
-the scenario name.  F019 reports what static analysis could not resolve; it has
+F016 reports a required scenario that is not defined: missing, skipped, not
+asserting the contract, or unreadable.  Conformance never runs the scenarios;
+the test gate does.  The fix is a source adapter and a pytest scenario, not an
+edit to the handler, so F016 is `not_remediable` here and routes to residue with
+the scenario name.  F017 and F018 are retired and never fire.  F019 reports what static analysis could not resolve; it has
 no fix of its own and routes to residue as an investigation pointer.
 
 ### Requires
@@ -120,17 +121,17 @@ action the source does not support.
   return `outcome = "fix"`.  Never suggest a `# conformance: ignore[F0xx]` for
   a BLOCK-tier finding; for a WARN-tier finding in strict mode a suppression is
   a valid draft only when the guide's **Investigate** paragraph names the case.
-- **F016, F017, F018** — a required scenario is missing, skipped or failing.
+- **F016** — a required scenario is not defined.
   Set `not_remediable = true`, name the scenario from
   `conformance.preflight_testing.SCENARIOS` in the residue note, and stop.
 - **F019** — analysis was unresolved.  Set `not_remediable = true` and record
   the unresolved construct so a human can decide whether to refactor toward a
-  supported shape or supply behavioral evidence.  Say which of the two the
+  supported shape or define the F016 scenarios.  Say which of the two the
   finding admits: a value-level gap (a computed aggregation or an unresolvable
   row inside one, an expanded failure constructor, an unresolved error
   expression, a dynamic `passed`)
-  clears once the F016 matrix is complete under `--with-tests`, so completing
-  that matrix is a real remedy; a structural gap (unparsed file, unresolved
+  clears once the F016 matrix is fully defined, so defining that matrix is a
+  real remedy; a structural gap (unparsed file, unresolved
   `preflight_check`, dynamically bound callback, unresolved input contract)
   never clears that way and only a resolvable shape fixes it.
 
