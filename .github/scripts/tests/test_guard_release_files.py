@@ -51,6 +51,37 @@ CONFORMANCE_CHANGELOG_DIFF = _diff(
     "+- hand-written note",
 )
 
+SERVER_VERSION_DIFF = _diff(
+    "diff --git a/packages/server/pyproject.toml b/packages/server/pyproject.toml",
+    "index 333..444 100644",
+    "--- a/packages/server/pyproject.toml",
+    "+++ b/packages/server/pyproject.toml",
+    "@@ -5,7 +5,7 @@",
+    ' name = "atlan-application-sdk-server"',
+    '-version = "0.1.0"',
+    '+version = "0.2.0"',
+    ' description = "..."',
+)
+
+SERVER_DUNDER_DIFF = _diff(
+    "diff --git a/packages/server/server_sdk/__init__.py b/packages/server/server_sdk/__init__.py",
+    "--- a/packages/server/server_sdk/__init__.py",
+    "+++ b/packages/server/server_sdk/__init__.py",
+    "@@ -66 +66 @@",
+    '-__version__ = "0.1.0"',
+    '+__version__ = "0.2.0"',
+)
+
+SERVER_CHANGELOG_DIFF = _diff(
+    "diff --git a/packages/server/CHANGELOG.md b/packages/server/CHANGELOG.md",
+    "--- a/packages/server/CHANGELOG.md",
+    "+++ b/packages/server/CHANGELOG.md",
+    "@@ -3,0 +4,3 @@",
+    "+## [Unreleased]",
+    "+",
+    "+- hand-written note",
+)
+
 TOOLKIT_VERSION_DIFF = _diff(
     "diff --git a/contract-toolkit/src/PklProject b/contract-toolkit/src/PklProject",
     "--- a/contract-toolkit/src/PklProject",
@@ -153,6 +184,9 @@ class TestViolationsOffBumpBranch:
             (CONFORMANCE_CHANGELOG_DIFF, "packages/conformance/CHANGELOG.md"),
             (TOOLKIT_VERSION_DIFF, "contract-toolkit/src/PklProject"),
             (TOOLKIT_CHANGELOG_DIFF, "contract-toolkit/CHANGELOG.md"),
+            (SERVER_VERSION_DIFF, "packages/server/pyproject.toml"),
+            (SERVER_DUNDER_DIFF, "packages/server/server_sdk/__init__.py"),
+            (SERVER_CHANGELOG_DIFF, "packages/server/CHANGELOG.md"),
         ],
     )
     def test_flags_release_owned_edits(self, diff, expected_path):
@@ -183,6 +217,22 @@ class TestAllowed:
     def test_toolkit_bump_branch_allows_toolkit_files(self):
         parsed = grf.parse_diff(TOOLKIT_VERSION_DIFF + TOOLKIT_CHANGELOG_DIFF)
         assert grf.evaluate(parsed, "bump-version-contract-toolkit") == []
+
+    def test_server_bump_branch_allows_server_files(self):
+        parsed = grf.parse_diff(
+            SERVER_VERSION_DIFF + SERVER_DUNDER_DIFF + SERVER_CHANGELOG_DIFF
+        )
+        assert grf.evaluate(parsed, "bump-version-server") == []
+
+    def test_server_bump_branch_does_not_exempt_conformance_files(self):
+        parsed = grf.parse_diff(CONFORMANCE_VERSION_DIFF)
+        violations = grf.evaluate(parsed, "bump-version-server")
+        assert "packages/conformance/pyproject.toml" in [p for p, _ in violations]
+
+    def test_conformance_bump_branch_does_not_exempt_server_files(self):
+        parsed = grf.parse_diff(SERVER_VERSION_DIFF)
+        violations = grf.evaluate(parsed, "bump-version-conformance")
+        assert "packages/server/pyproject.toml" in [p for p, _ in violations]
 
     def test_conformance_bump_branch_does_not_exempt_toolkit_files(self):
         # A branch may only touch the files of the package it releases.
