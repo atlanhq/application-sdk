@@ -190,6 +190,23 @@ def _nested_blocks(node: ast.stmt) -> list[list[ast.stmt]]:
     return blocks
 
 
+def _live_blocks(node: ast.stmt) -> list[list[ast.stmt]]:
+    """``_nested_blocks`` without the branches a literal test never takes.
+
+    ``if False:`` never binds anything at import time, so a rebinding inside
+    it must not erase a live import; ``while False:`` likewise never runs.
+    """
+    if isinstance(node, ast.If):
+        truth = _constant_truth(node.test)
+        if truth is True:
+            return [node.body]
+        if truth is False:
+            return [node.orelse]
+    if isinstance(node, ast.While) and _constant_truth(node.test) is False:
+        return [node.orelse]
+    return _nested_blocks(node)
+
+
 def _assertion_bindings(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
     """Resolve which local names reach the ``conformance.preflight_testing`` assertions.
 
@@ -239,7 +256,7 @@ def _assertion_bindings(tree: ast.Module) -> tuple[dict[str, str], frozenset[str
             else:
                 for local in _bound_names(node):
                     rebind(local)
-                for block in _nested_blocks(node):
+                for block in _live_blocks(node):
                     visit(block)
 
     visit(tree.body)
@@ -289,38 +306,69 @@ def _load(src: Source) -> _Module:
     mod = _Module(
         src=src,
         constants=_module_constants(src.tree),
-        functions={
-            node.name: node
-            for node in src.tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        },
+        functions={},
         pytest_names=modules,
         mark_names=marks,
         param_names=params,
         assertion_names=assertion_names,
         assertion_modules=assertion_modules,
     )
-    for node in src.tree.body:
-        if isinstance(node, ast.Assign):
-            targets: list[ast.expr] = list(node.targets)
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
-        else:
-            continue
-        value = node.value
-        if len(targets) != 1 or not isinstance(targets[0], ast.Name) or value is None:
-            continue
-        name = targets[0].id
-        if name == "pytestmark":
-            continue
-        if any(
-            isinstance(sub, ast.Attribute) and _mark_name(sub, mod) is not None
-            for sub in ast.walk(value)
-        ):
-            mod.mark_aliases[name] = value
-        else:
-            mod.mark_aliases.pop(name, None)
+    _replay_module_bindings(src.tree.body, mod)
     return mod
+
+
+def _replay_module_bindings(stmts: list[ast.stmt], mod: _Module) -> None:
+    """Replay helper and mark-alias bindings in source order.
+
+    What a decorator name means is its last binding at import time: a
+    ``def skip_ci`` after ``skip_ci = pytest.mark.skipif(False)`` replaces
+    the alias, and an assignment or import after a ``def`` replaces the
+    helper. Every binding of a name forgets what it meant before; only a
+    module-level function or a single-name assignment of a mark expression
+    gives it a meaning the reader can follow. Literal-dead branches bind
+    nothing.
+    """
+    for node in stmts:
+        bound = set(_bound_names(node))
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound |= {
+                (a.asname or a.name).split(".", 1)[0]
+                for a in node.names
+                if a.name != "*"
+            }
+        for name in bound:
+            mod.functions.pop(name, None)
+            mod.mark_aliases.pop(name, None)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            mod.functions[node.name] = node
+            continue
+        targets = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+            if isinstance(node, ast.AnnAssign)
+            else []
+        )
+        value = getattr(node, "value", None)
+        if (
+            len(targets) == 1
+            and isinstance(targets[0], ast.Name)
+            and targets[0].id != "pytestmark"
+            and value is not None
+            and _mentions_marks(value, mod)
+        ):
+            mod.mark_aliases[targets[0].id] = value
+        for block in _live_blocks(node):
+            _replay_module_bindings(block, mod)
+
+
+def _mentions_marks(node: ast.AST, mod: _Module) -> bool:
+    """True when *node* contains a ``pytest.mark.*`` expression or a mark alias."""
+    return any(
+        (isinstance(sub, ast.Attribute) and _mark_name(sub, mod) is not None)
+        or (isinstance(sub, ast.Name) and sub.id in mod.mark_aliases)
+        for sub in ast.walk(node)
+    )
 
 
 def _mark_name(node: ast.expr, mod: _Module) -> str | None:
@@ -555,17 +603,20 @@ def _pytestmark(body: list[ast.stmt], mod: _Module) -> tuple[_Mark, ...]:
 
 
 def _is_mark_expression(node: ast.expr, mod: _Module) -> bool:
-    """True when *node* applies pytest marks: a ``pytest.mark.*`` expression, a
-    module helper that returns one, or a module-level alias bound to one."""
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Attribute) and _mark_name(sub, mod) is not None:
-            return True
-        if isinstance(sub, ast.Name) and sub.id in mod.mark_aliases:
-            return True
+    """True when *node* may apply pytest marks.
+
+    That is a ``pytest.mark.*`` expression or a mark alias, or a same-module
+    function — called as a factory or used bare — whose body builds one. An
+    ordinary decorator factory (``def identity(): return lambda fn: fn``)
+    applies no marks, so it is ignored rather than made unknown.
+    """
+    if _mentions_marks(node, mod):
+        return True
+    target = node.func if isinstance(node, ast.Call) else node
     return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in mod.functions
+        isinstance(target, ast.Name)
+        and target.id in mod.functions
+        and _mentions_marks(mod.functions[target.id], mod)
     )
 
 
@@ -668,23 +719,14 @@ def _constant_truth(test: ast.expr) -> bool | None:
     return None
 
 
-class _Flow(Enum):
-    """How a block ends, for deciding whether the statements after it run.
-
-    ``RAISES`` is kept apart from ``RETURNS`` because an enclosing ``with``
-    (``pytest.raises``) or ``try`` can absorb an exception, so code after it
-    may still run; a ``return`` is never absorbed.
-    """
-
-    FALLS = "falls"
-    RETURNS = "returns"
-    RAISES = "raises"
-    JUMPS = "jumps"  # break / continue
-
-
-def _either(first: _Flow, second: _Flow) -> _Flow:
-    """Two alternative paths end the block only if both end it the same way."""
-    return first if first is second else _Flow.FALLS
+#: How a block can end. A block's flow is the set of ways it may end: it is
+#: definitely over when ``FALLS`` is not in the set, whatever mix of the other
+#: exits remains. ``RAISES`` is kept apart from ``RETURNS`` because an
+#: enclosing ``with`` (``pytest.raises``) or ``try`` can absorb an exception,
+#: so code after it may still run; a ``return`` is never absorbed.
+FALLS, RETURNS, RAISES, JUMPS = "falls", "returns", "raises", "jumps"
+_Flow = frozenset[str]
+_FALL: _Flow = frozenset({FALLS})
 
 
 def _expression(node: ast.AST, out: list[ast.AST]) -> None:
@@ -722,37 +764,47 @@ def _expression(node: ast.AST, out: list[ast.AST]) -> None:
 
 
 def _block(stmts: list[ast.stmt], out: list[ast.AST]) -> _Flow:
-    """Collect the nodes a block can execute; return how it ends.
+    """Collect the nodes a block can execute; return how it can end.
 
     Dead branches, nested scopes, deferred expressions and everything after
-    a definite exit are left out.
+    a statement that cannot fall through are left out.
     """
+    exits: set[str] = set()
     for stmt in stmts:
         flow = _statement(stmt, out)
-        if flow is not _Flow.FALLS:
-            return flow
-    return _Flow.FALLS
+        exits |= flow - _FALL
+        if FALLS not in flow:
+            return frozenset(exits)
+    return frozenset(exits | _FALL)
+
+
+def _loop(body: _Flow, orelse: _Flow, *, infinite: bool) -> _Flow:
+    """A loop ends the enclosing block only if it cannot finish or break."""
+    if infinite and JUMPS not in body:
+        # Only a return or raise leaves `while True:` without a break.
+        return body - _FALL
+    return (body - {JUMPS}) | orelse | _FALL
 
 
 def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         for dec in stmt.decorator_list:
             _expression(dec, out)
-        return _Flow.FALLS
+        return _FALL
     if isinstance(stmt, ast.Return):
         if stmt.value is not None:
             _expression(stmt.value, out)
-        return _Flow.RETURNS
+        return frozenset({RETURNS})
     if isinstance(stmt, ast.Raise):
         if stmt.exc is not None:
             _expression(stmt.exc, out)
-        return _Flow.RAISES
+        return frozenset({RAISES})
     if isinstance(stmt, (ast.Break, ast.Continue)):
-        return _Flow.JUMPS
+        return frozenset({JUMPS})
     if isinstance(stmt, ast.Assert):
         # The message is evaluated only when the assertion fails.
         _expression(stmt.test, out)
-        return _Flow.RAISES if _constant_truth(stmt.test) is False else _Flow.FALLS
+        return frozenset({RAISES}) if _constant_truth(stmt.test) is False else _FALL
     if isinstance(stmt, ast.If):
         _expression(stmt.test, out)
         truth = _constant_truth(stmt.test)
@@ -760,49 +812,44 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
             return _block(stmt.body, out)
         if truth is False:
             return _block(stmt.orelse, out)
-        return _either(_block(stmt.body, out), _block(stmt.orelse, out))
+        # Either branch may run: the if falls through only if one of them does.
+        return _block(stmt.body, out) | _block(stmt.orelse, out)
     if isinstance(stmt, ast.While):
         _expression(stmt.test, out)
         truth = _constant_truth(stmt.test)
         if truth is False:
             return _block(stmt.orelse, out)
         body = _block(stmt.body, out)
-        if truth is True and body in (_Flow.RETURNS, _Flow.RAISES):
-            return body
-        _block(stmt.orelse, out)
-        return _Flow.FALLS
+        orelse = _block(stmt.orelse, out) if truth is not True else frozenset()
+        return _loop(body, orelse, infinite=truth is True)
     if isinstance(stmt, (ast.For, ast.AsyncFor)):
         _expression(stmt.iter, out)
-        _block(stmt.body, out)  # may run zero times
-        _block(stmt.orelse, out)
-        return _Flow.FALLS
+        body = _block(stmt.body, out)  # may run zero times
+        return _loop(body, _block(stmt.orelse, out), infinite=False)
     if isinstance(stmt, (ast.With, ast.AsyncWith)):
         for item in stmt.items:
             _expression(item.context_expr, out)
         body = _block(stmt.body, out)
         # A context manager can suppress the exception; it cannot undo a return.
-        return _Flow.FALLS if body is _Flow.RAISES else body
+        return body | _FALL if RAISES in body else body
     if isinstance(stmt, ast.Try | ast.TryStar):
         body = _block(stmt.body, out)
         handlers = [_block(h.body, out) for h in stmt.handlers]
-        orelse = _block(stmt.orelse, out) if body is _Flow.FALLS else _Flow.FALLS
+        result = body - _FALL
+        if FALLS in body:
+            result |= _block(stmt.orelse, out)
+        for handler in handlers:
+            # Anything in the body may raise into a handler.
+            result |= handler
         final = _block(stmt.finalbody, out)
-        if final is not _Flow.FALLS:
-            return final
-        if body is _Flow.FALLS:
-            return orelse
-        if body is _Flow.RAISES and stmt.handlers:
-            flows = set(handlers)
-            return flows.pop() if len(flows) == 1 else _Flow.FALLS
-        return body
+        return final if FALLS not in final else frozenset(result)
     if isinstance(stmt, ast.Match):
         _expression(stmt.subject, out)
-        for case in stmt.cases:
-            _block(case.body, out)
-        return _Flow.FALLS
+        flows = [_block(case.body, out) for case in stmt.cases]
+        return frozenset().union(*flows) | _FALL
     for child in ast.iter_child_nodes(stmt):
         _expression(child, out)
-    return _Flow.FALLS
+    return _FALL
 
 
 def _calls(stmts: list[ast.stmt]) -> list[ast.Call]:

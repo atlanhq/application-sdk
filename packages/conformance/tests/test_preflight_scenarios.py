@@ -788,3 +788,114 @@ def entrypoint_matrix(scenario: str):
     assert (
         sum("but its runnable cases run with entrypoint=" in m for m in messages) == 2
     )
+
+
+# --- third review round -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "dead",
+    [
+        "if False:\n    assert_preflight_result = print",
+        "while False:\n    assert_preflight_result = print",
+        "if True:\n    pass\nelse:\n    from mylib import assert_preflight_result",
+    ],
+    ids=["if-false", "while-false", "dead-else"],
+)
+def test_a_dead_branch_rebinding_keeps_the_contract_import(
+    tmp_path: Path, dead: str
+) -> None:
+    assert _grade(tmp_path, _module(dead, _test(HEALTHY), LIFETIME)) == []
+
+
+def test_a_live_branch_rebinding_still_replaces_it(tmp_path: Path) -> None:
+    live = "if True:\n    assert_preflight_result = print"
+    messages = _grade(tmp_path, _module(live, _test(HEALTHY), LIFETIME))
+    assert any(NEVER_CALLS in m for m in messages)
+
+
+def test_a_later_def_replaces_a_mark_alias(tmp_path: Path) -> None:
+    rebinding = (
+        'skip_ci = pytest.mark.skipif(False, reason="x")\n\n\n'
+        "def skip_ci(fn):\n"
+        '    return pytest.mark.skip(reason="x")(fn)'
+    )
+    decorated = _test("@skip_ci\n" + HEALTHY)
+    messages = _grade(tmp_path, _module(rebinding, decorated, LIFETIME))
+    assert any(UNREADABLE in m for m in messages)
+    assert any(NOT_REGISTERED in m for m in messages)
+
+
+def test_a_later_import_replaces_a_mark_alias(tmp_path: Path) -> None:
+    rebinding = (
+        'skip_ci = pytest.mark.skipif(True, reason="x")\nfrom helpers import skip_ci'
+    )
+    decorated = _test("@skip_ci\n" + HEALTHY)
+    # The imported decorator is opaque and applies no mark the reader can see.
+    assert _grade(tmp_path, _module(rebinding, decorated, LIFETIME)) == []
+
+
+def test_an_alias_defined_after_a_def_is_the_alias(tmp_path: Path) -> None:
+    rebinding = (
+        "def skip_ci(fn):\n    return fn\n\n\n"
+        'skip_ci = pytest.mark.skipif(True, reason="x")'
+    )
+    decorated = _test("@skip_ci\n" + HEALTHY)
+    messages = _grade(tmp_path, _module(rebinding, decorated, LIFETIME))
+    assert any(NOT_RUN in m for m in messages)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        "def identity():\n    return lambda fn: fn",
+        "def identity(fn=None):\n    def wrap(f):\n        return f\n    return wrap",
+    ],
+    ids=["lambda", "closure"],
+)
+def test_an_ordinary_decorator_factory_is_ignored(tmp_path: Path, factory: str) -> None:
+    decorated = _test("@identity()\n" + HEALTHY)
+    assert _grade(tmp_path, _module(factory, decorated, LIFETIME)) == []
+
+
+def test_a_bare_helper_decorator_that_builds_a_mark_is_unknown(tmp_path: Path) -> None:
+    helper = "def gate(fn):\n    return pytest.mark.skipif(flaky(), reason='x')(fn)"
+    decorated = _test("@gate\n" + HEALTHY)
+    messages = _grade(tmp_path, _module(helper, decorated, LIFETIME))
+    assert any(UNREADABLE in m for m in messages)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    if ready():\n        return\n    else:\n        raise RuntimeError()\n"
+        + ASSERT,
+        "    if ready():\n        raise RuntimeError()\n    return\n" + ASSERT,
+        "    while True:\n        if ready():\n            return\n        raise RuntimeError()\n"
+        + ASSERT,
+        "    try:\n        return\n    finally:\n        raise RuntimeError()\n"
+        + ASSERT,
+    ],
+    ids=["return-or-raise", "raise-then-return", "infinite-loop", "finally-raises"],
+)
+def test_a_mixed_definite_exit_ends_the_test(tmp_path: Path, body: str) -> None:
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in m for m in messages)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    with pytest.raises(RuntimeError):\n        if ready():\n            return\n        raise RuntimeError()\n"
+        + ASSERT,
+        "    try:\n        if ready():\n            return\n        raise RuntimeError()\n    except RuntimeError:\n        pass\n"
+        + ASSERT,
+        "    while True:\n        if ready():\n            break\n        raise RuntimeError()\n"
+        + ASSERT,
+    ],
+    ids=["raise-absorbed-by-with", "raise-caught-by-try", "break-leaves-loop"],
+)
+def test_a_mixed_exit_that_can_be_absorbed_still_reaches_the_assertion(
+    tmp_path: Path, body: str
+) -> None:
+    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
