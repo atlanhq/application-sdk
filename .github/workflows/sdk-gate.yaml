@@ -259,6 +259,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_sdk == 'true'
     uses: ./.github/workflows/sdk-tests-reusable.yaml
+    # packages: read lets the Storage Emulator job pull the private MinIO
+    # mirror (ghcr.io/atlanhq/ci-mirror/minio). A called workflow cannot hold
+    # more than its caller grants, so it has to be granted here.
+    permissions:
+      contents: read
+      packages: read
     secrets: inherit
 
   conformance:

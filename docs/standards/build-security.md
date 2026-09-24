@@ -110,6 +110,18 @@ against, so an unverified redirect is indistinguishable from a stale one and the
 closed. Re-run once Harbor recovers — unsetting `use_ghcr_base` does not route around a
 Harbor outage, it just moves the failure from the preflight to the base-image pull.
 
+## CI test images (MinIO mirror)
+
+The Storage Emulator Tests pull MinIO only from our own private GHCR package, `ghcr.io/atlanhq/ci-mirror/minio`, and never from a vendor registry. MinIO's community images disappeared from Docker Hub and then from quay.io in the same month, pinned digests included. The mirror holds a byte-for-byte copy of Chainguard's free `cgr.dev/chainguard/minio`, tagged with the MinIO release it contains.
+
+- **Pin:** `MINIO_IMAGE` in `.github/workflows/sdk-tests-reusable.yaml`, as `tag@digest`. Connector repos that run MinIO should pin the same reference.
+- **Refresh:** dispatch **Refresh MinIO CI mirror** (`.github/workflows/mirror-minio-image.yaml`). Leave `source_digest` empty to take Chainguard's current `:latest`, or pass a digest. Use `dry_run` to see what it would do. The run prints the `tag@digest` to pin. Paste it into `MINIO_IMAGE` and into the local-run docstrings in `tests/integration/storage/test_emulator_*.py`, then open a PR.
+- **Tags never move.** Chainguard rebuilds the same MinIO release every day, so a refresh that finds the release already mirrored at a different digest is refused. That means no new MinIO release exists yet, and nothing needs doing.
+- **Release-age cooldown:** Chainguard only serves `latest`, so a refreshed digest is always fresh. It is a test-only emulator, not a runtime dependency. Note the build date in the PR so a reviewer can accept it.
+- **Access:** the package is private on purpose, so we are not publicly redistributing a third-party image. Jobs log in to `ghcr.io` with `GITHUB_TOKEN` and need `packages: read`. A reusable workflow's token is capped by its caller, so the calling job must grant it too. Each repo that pulls the image needs a grant under the package's *Manage Actions access* setting: **Write** for application-sdk, which also runs the refresh, and **Read** for any connector repo. A missing grant fails as `permission_denied`.
+
+If Chainguard withdraws the image, CI keeps working from the mirror. Only refreshes stop.
+
 ## Consuming Dapr components in an app repo
 
 App repos should **not** curl these files from `raw.githubusercontent.com` or the GitHub contents API pinned to a hardcoded SDK tag (that pattern hits GitHub's unauthenticated rate limit under CI concurrency and silently drifts from the app's actual `atlan-application-sdk` version). Instead, copy them out of the installed package, e.g. as the app's `download-components` poe task:
