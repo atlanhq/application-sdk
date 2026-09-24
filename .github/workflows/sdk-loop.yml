@@ -4,8 +4,8 @@
 #   fence -> review 1 -> finalize                    (workflow_dispatch review_only)
 #
 # One workflow run, one job per phase, up to 8 review/resolve pairs. The review
-# phase runs on xai/grok-4.6 — the same model the existing lanes review with
-# — and the resolve phase on gpt-5.6-luna via opencode, both
+# phase runs on gpt-6-sol — the same model the existing lanes review with
+# — and the resolve phase on gpt-6-luna via opencode, both
 # through the Atlan AI gateway — a public edge, so no VPN and no mothership
 # sandbox. Its URL is a secret and is deliberately not written anywhere in
 # this repo. Every phase reads the EXISTING playbooks from this checkout:
@@ -40,8 +40,8 @@
 # CI staleness: python3 .github/scripts/gen_sdk_loop_workflow.py --check
 #
 # Required configuration:
-#   secrets.LITELLM_API_KEY           gateway key entitled to BOTH xai/grok-4.6
-#                                     and gpt-5.6-luna. An unentitled model is a
+#   secrets.LITELLM_API_KEY           gateway key entitled to BOTH gpt-6-sol
+#                                     and gpt-6-luna. An unentitled model is a
 #                                     fast 400 with real cost, so check first.
 #   secrets.FLEET_APP_ID              atlan-app-fleet — already configured for
 #   secrets.FLEET_APP_PRIVATE_KEY     the existing lanes. Each phase mints its
