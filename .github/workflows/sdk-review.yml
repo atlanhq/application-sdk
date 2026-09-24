@@ -723,6 +723,21 @@ jobs:
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/sdk_review_verdict_gate.py
 
+      # The reviewer cannot see its own model routing, so the `**Models:**`
+      # footer it writes is a guess. Overwrite it with the models the dispatch
+      # step saw answering in the stream. Not gated on success(): a verdict
+      # posted before a stream fault is still delivered and still needs the
+      # true footer. Fails open — a wrong footer never reds a review.
+      - name: Stamp observed models onto the review summary
+        if: ${{ !cancelled() && steps.dispatch.outcome != 'skipped' && steps.parse.outputs.pr_number != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          MODELS_USED: ${{ steps.dispatch.outputs.models_used }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/sdk_review_stamp_models.py
+
       # Cancelling this job does NOT stop the sandbox.
       #
       # mothership runs the sandbox on a thread-pool executor with a

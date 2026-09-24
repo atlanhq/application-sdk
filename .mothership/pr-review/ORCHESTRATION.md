@@ -1396,13 +1396,15 @@ scopes.
 <contents of /tmp/TOOLKIT_ROVER_NOTE.md>
 
 ---
-**Models:** <primary review model>
+**Models:** (stamped by the workflow)
 **Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
 
-Fill the model names from the models that actually ran this review —
-never hardcode them in this template; stale model names in posted
-reviews erode trust in everything else the summary claims.
+Write the `**Models:**` line exactly as shown — do NOT fill in model
+names. You cannot observe which models served this run (routing happens
+outside the sandbox), so any name you write is a guess. The workflow
+overwrites this line with the models the run's stream reports after you
+post (`sdk_review_stamp_models.py`).
 
 **Title selection — "Review" vs "Re-review":**
 - If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first
