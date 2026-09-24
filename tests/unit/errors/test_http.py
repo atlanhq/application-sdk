@@ -8,6 +8,7 @@ from application_sdk.errors import (
     AppError,
     AppPermissionDeniedError,
     AuthError,
+    InternalError,
     NotFoundError,
     RateLimitedError,
     SourceUnavailableError,
@@ -116,8 +117,50 @@ def test_exception_transport_failure_is_source_unavailable(
     assert classify_http_exception(transport_error) is SourceUnavailableError
 
 
-def test_exception_pool_timeout_is_not_blamed_on_the_source():
-    assert classify_http_exception(httpx.PoolTimeout("pool full")) is None
+@pytest.mark.parametrize(
+    ("status", "leaf"),
+    [
+        (401, AuthError),
+        (403, AppPermissionDeniedError),
+        (404, NotFoundError),
+        (429, RateLimitedError),
+        (500, SourceUnavailableError),
+        (599, SourceUnavailableError),
+    ],
+)
+def test_exception_direct_status_uses_the_default_table(
+    status: int, leaf: type[AppError]
+) -> None:
+    assert classify_http_exception(_status_error(status)) is leaf
+
+
+def test_exception_unmapped_status_returns_none():
+    assert classify_http_exception(_status_error(400)) is None
+
+
+def test_exception_uses_overrides():
+    exc = _raised_from(RuntimeError("licence"), _status_error(402))
+    assert classify_http_exception(exc, overrides={402: AuthError}) is AuthError
+    overridden = classify_http_exception(
+        _status_error(503), overrides={503: RateLimitedError}
+    )
+    assert overridden is RateLimitedError
+
+
+def test_exception_walks_an_explicit_cause():
+    exc = _raised_from(RuntimeError("client failed"), _status_error(403))
+    assert classify_http_exception(exc) is AppPermissionDeniedError
+
+
+@pytest.mark.parametrize(
+    ("outer", "status"),
+    [(KeyError("items"), 403), (ValueError("bad json"), 429)],
+)
+def test_exception_does_not_inherit_a_status_from_implicit_context(
+    outer: Exception, status: int
+) -> None:
+    exc = _raised_during(outer, _status_error(status))
+    assert classify_http_exception(exc) is None
 
 
 def test_exception_does_not_walk_a_suppressed_context():
@@ -130,24 +173,44 @@ def test_exception_does_not_walk_a_suppressed_context():
         assert classify_http_exception(exc) is None
 
 
-def test_exception_walks_cause():
-    exc = _raised_from(RuntimeError("client failed"), _status_error(401))
-    assert classify_http_exception(exc) is AuthError
+def test_exception_follows_the_explicit_cause_not_the_implicit_context():
+    try:
+        try:
+            raise _status_error(403)
+        except httpx.HTTPStatusError:
+            raise RuntimeError("wrapped") from KeyError("unrelated")
+    except RuntimeError as exc:
+        assert classify_http_exception(exc) is None
 
 
-def test_exception_walks_context():
-    exc = _raised_during(ValueError("while parsing"), _status_error(429))
-    assert classify_http_exception(exc) is RateLimitedError
+def test_exception_pool_timeout_is_not_blamed_on_the_source():
+    assert classify_http_exception(httpx.PoolTimeout("pool full")) is None
 
 
-def test_exception_skips_unmapped_status_and_keeps_walking():
+def test_exception_pool_timeout_is_a_boundary():
+    implicit = _raised_during(httpx.PoolTimeout("pool full"), _status_error(403))
+    explicit = _raised_from(httpx.PoolTimeout("pool full"), _status_error(403))
+    assert classify_http_exception(implicit) is None
+    assert classify_http_exception(explicit) is None
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        httpx.DecodingError("bad gzip"),
+        httpx.TooManyRedirects("loop"),
+        httpx.LocalProtocolError("bad header"),
+        httpx.UnsupportedProtocol("ftp"),
+    ],
+)
+def test_exception_other_httpx_errors_are_a_boundary(frame: httpx.HTTPError) -> None:
+    exc = _raised_from(frame, _status_error(403))
+    assert classify_http_exception(exc) is None
+
+
+def test_exception_unmapped_status_is_a_boundary():
     exc = _raised_from(_status_error(400), httpx.ConnectError("refused"))
-    assert classify_http_exception(exc) is SourceUnavailableError
-
-
-def test_exception_uses_overrides():
-    exc = _raised_from(RuntimeError("licence"), _status_error(402))
-    assert classify_http_exception(exc, overrides={402: AuthError}) is AuthError
+    assert classify_http_exception(exc) is None
 
 
 def test_exception_with_no_http_frame_returns_none():
@@ -161,3 +224,32 @@ def test_exception_stops_on_a_cause_cycle():
     first.__cause__ = second
     second.__cause__ = first
     assert classify_http_exception(first) is None
+
+
+def _app_preflight_error(
+    exc: Exception, overrides: dict[int, type[AppError]] | None = None
+) -> AppError:
+    if isinstance(exc, AppError):
+        return exc
+    leaf = classify_http_exception(exc, overrides=overrides)
+    if leaf is None:
+        leaf = InternalError
+    return leaf(message=f"{leaf.__name__} from the probe.", cause=exc)
+
+
+def test_documented_pattern_keeps_a_typed_error():
+    typed = AuthError(message="The API key is empty.")
+    assert _app_preflight_error(typed) is typed
+
+
+def test_documented_pattern_falls_back_to_internal_error():
+    error = _app_preflight_error(KeyError("items"))
+    assert type(error) is InternalError
+    assert isinstance(error.cause, KeyError)
+
+
+def test_documented_pattern_applies_vendor_overrides():
+    wrapped = _raised_from(RuntimeError("licence"), _status_error(402))
+    assert type(_app_preflight_error(wrapped)) is InternalError
+    assert type(_app_preflight_error(wrapped, {402: AuthError})) is AuthError
+    assert type(_app_preflight_error(_status_error(403))) is AppPermissionDeniedError

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.39.0
-source-sha:    61c6975dd9707bbb6d3068a5a9ab4dda64615078
-source-date:   2026-09-24T18:58:13+05:30
+source-sha:    55556d00b4e36222e3ab672ed45a7b7df769915b
+source-date:   2026-09-24T19:28:58+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -1694,7 +1694,7 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import classify_http_exception`
 - **Signature:** `classify_http_exception(exc: BaseException, *, overrides: Mapping[int, type[AppError]] | None = None)`
-- **Summary:** Return the leaf class for the first httpx failure in ``exc``'s chain.
+- **Summary:** Return the leaf class for the httpx failure behind ``exc``, or ``None``.
 - **Defined in:** `application_sdk/errors/http.py`
 
 #### `classify_http_status`

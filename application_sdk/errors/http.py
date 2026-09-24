@@ -48,33 +48,34 @@ def classify_http_status(
 def classify_http_exception(
     exc: BaseException, *, overrides: Mapping[int, type[AppError]] | None = None
 ) -> type[AppError] | None:
-    """Return the leaf class for the first httpx failure in ``exc``'s chain.
+    """Return the leaf class for the httpx failure behind ``exc``, or ``None``.
 
-    Walks ``exc`` and its ``__cause__`` / ``__context__`` links, honouring
-    ``raise ... from None``. A network failure, a timeout or a dropped
-    connection is ``SourceUnavailableError``; an ``httpx.HTTPStatusError``
-    goes through :func:`classify_http_status`. ``httpx.PoolTimeout`` is the
-    client's own connection pool running dry, not the source, so it is skipped.
+    Looks at ``exc`` and then its explicit ``__cause__`` links only
+    (``raise Wrapper(...) from err``). Implicit ``__context__`` is never
+    followed: an error raised while handling a 403 happened after it, not
+    because of it. A network failure, a timeout or a dropped connection is
+    ``SourceUnavailableError``; an ``httpx.HTTPStatusError`` goes through
+    :func:`classify_http_status`. The first httpx frame decides: an unmapped
+    status, ``httpx.PoolTimeout`` (the client's own pool running dry, not the
+    source) and any other httpx error (a decoding or redirect failure) return
+    ``None`` rather than borrowing an older failure further down the chain.
     """
-    for frame in _walk_chain(exc):
+    for frame in _walk_causes(exc):
         if isinstance(frame, httpx.PoolTimeout):
-            continue
+            return None
         if isinstance(frame, _SOURCE_TRANSPORT_FAILURES):
             return SourceUnavailableError
         if isinstance(frame, httpx.HTTPStatusError):
-            leaf = classify_http_status(frame.response.status_code, overrides=overrides)
-            if leaf is not None:
-                return leaf
+            return classify_http_status(frame.response.status_code, overrides=overrides)
+        if isinstance(frame, httpx.HTTPError):
+            return None
     return None
 
 
-def _walk_chain(exc: BaseException) -> Iterator[BaseException]:
+def _walk_causes(exc: BaseException) -> Iterator[BaseException]:
     seen: set[int] = set()
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         yield current
-        if current.__cause__ is not None or current.__suppress_context__:
-            current = current.__cause__
-        else:
-            current = current.__context__
+        current = current.__cause__

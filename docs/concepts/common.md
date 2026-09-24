@@ -237,37 +237,63 @@ failure, so an app does not keep its own status table. Both return the leaf **cl
 | 429 | `RateLimitedError` |
 | 5xx | `SourceUnavailableError` |
 
-`classify_http_exception` walks `__cause__` / `__context__` (honouring `raise ... from None`)
-to the first `httpx` failure it can map: a network error, a timeout or a dropped connection
-is `SourceUnavailableError`, and an `HTTPStatusError` goes through the table.
-`httpx.PoolTimeout` is skipped, because it is the client's own pool running dry, not the
-source. `overrides` replaces an entry, including one in the 5xx range, for a source whose
-statuses mean something else:
+`classify_http_exception` looks at the exception and then its explicit `__cause__` links
+(`raise Wrapper(...) from err`). It never follows implicit `__context__`: an error raised
+*while* handling a 403, such as a `KeyError` in your parsing code, is not a permission
+failure. The first `httpx` frame decides. A network error, a timeout or a dropped connection
+is `SourceUnavailableError`, and an `HTTPStatusError` goes through the table. An unmapped
+status, `httpx.PoolTimeout` (the client's own pool running dry, not the source) and any other
+httpx error (a decoding or redirect failure) return `None` instead of borrowing an older
+failure further down the chain. `overrides` replaces an entry, including one in the 5xx
+range, for a source whose statuses mean something else.
+
+The helpers are opt-in: nothing in the SDK calls them for you. The pattern is to keep a
+typed error you already have, classify an untyped HTTP failure, and fall back to
+`InternalError` for anything else, with wording that matches the leaf you picked:
 
 ```python
 from application_sdk.errors import (
+    AppError,
+    AppPermissionDeniedError,
     AuthError,
     InternalError,
+    NotFoundError,
     RateLimitedError,
+    SourceUnavailableError,
     classify_http_exception,
 )
 
-leaf = classify_http_exception(exc, overrides={402: AuthError, 503: RateLimitedError})
-if leaf is None:
-    leaf = InternalError
-error = leaf(
-    message="Could not list the source's projects.",
-    suggested_action="Check the connection settings, then try again.",
-    cause=exc,
-)
+_WORDING = {
+    AuthError: ("The source rejected the credentials.", "Check the API key, then try again."),
+    AppPermissionDeniedError: (
+        "The credentials cannot read the projects.",
+        "Grant the API user read access to the projects, then try again.",
+    ),
+    NotFoundError: ("The configured workspace was not found.", "Check the workspace name."),
+    RateLimitedError: ("The source is rate limiting requests.", "Wait, then try again."),
+    SourceUnavailableError: ("The source did not respond.", "Check that it is up, then retry."),
+    InternalError: ("Could not check the source.", "Retry, then contact support."),
+}
+
+
+def preflight_error(exc: Exception) -> AppError:
+    if isinstance(exc, AppError):
+        return exc
+    leaf = classify_http_exception(exc, overrides={402: AuthError, 503: RateLimitedError})
+    if leaf is None:
+        leaf = InternalError
+    message, action = _WORDING[leaf]
+    return leaf(message=message, suggested_action=action, cause=exc)
 ```
 
-Fall back to `InternalError` when nothing maps. It files the failure against the app, so an
-unknown cause is never reported as a customer credential or grant problem (conformance rule
+Validate what you know is a credential problem (an empty or malformed credential) with its
+own typed error before the call that can fail; the fallback is for causes you cannot name,
+and `InternalError` files them against the app rather than the customer (conformance rule
 F021).
 
-The helper only picks the leaf. In `preflight_check`, whether the error is a blocking check
-or an advisory row on a `READY` verdict is still the handler's decision.
+The helper only picks the leaf. A retryable leaf does not make a check advisory: in
+`preflight_check`, whether the error is a blocking check or an advisory row on a `READY`
+verdict is still the handler's decision.
 
 ### Catch by shape or by domain
 
