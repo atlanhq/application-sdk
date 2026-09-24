@@ -2,31 +2,34 @@
 
 Flags a broad ``except`` inside ``preflight_check`` (or a helper it reaches)
 that builds an Auth- or Permission-rooted error without looking at what it
-caught. The SDK's own subclasses outside ``application_sdk.errors``
-(``SqlClientAuthFailedError``, ``CredentialError``, ...) count too; a test pins
-``_SDK_CUSTOMER_LEAVES`` to the SDK source so a new one cannot be missed. Every failure in the ``try`` then reaches the customer as a credential
+caught. Every failure in the ``try`` then reaches the customer as a credential
 or grant problem: an empty credential, a DNS failure and a 500 all read as
 "grant access", and the ticket chases source-side grants that were never
-missing.
+missing. The SDK's own subclasses outside ``application_sdk.errors``
+(``SqlClientAuthFailedError``, ``CredentialError``, ...) count too; a test pins
+``_SDK_CUSTOMER_LEAVES`` to the SDK source so a new one cannot be missed.
 
-The caught exception, or a name derived from it (``code = exc.status``),
-counts as looked at when one of these is on the leaf's own path:
+The caught exception counts as looked at when one of these is on the leaf's
+own path:
 
 * an enclosing ``if`` / ``while`` / conditional expression / ``match`` that
-  tests it (``isinstance(exc, ...)``, ``is_privilege_error(exc)``) with the
-  leaf in the branch the test selects. The ``else`` is the fallback for
-  everything the test did not match, so
+  tests it, or a name stored from it earlier (``code = exc.status``), with the
+  leaf in the branch the test selects. The ``else`` and a catch-all
+  ``case _:`` are the fallback for everything the test did not match, so
   ``exc if isinstance(exc, AppError) else AuthError(...)`` still fires;
-* an enclosing call that receives it (a classifier taking the leaf as its
-  default);
+* an enclosing call that receives the caught exception itself (a classifier
+  taking the leaf as its default);
 * a strictly earlier statement that stores the result of a call receiving it
   (``leaf = classify_http_exception(exc)``, including a walrus in an ``if``).
 
 A dropped result does not count (a bare ``reraise_if_transient(exc)``, a
-``logger.debug(..., safe_traceback(exc))``), nor does a call inside the leaf's
-own arguments or in a branch that does not enclose the leaf: whatever those
-let through still gets the fixed leaf. A nested ``except`` is judged on its
-own and never makes its outer handler fire.
+``logger.debug(..., safe_traceback(exc))``), nor does a stored diagnostic
+(``tb = safe_traceback(exc)``, ``getattr(exc, "status", None)``), a call inside
+the leaf's own arguments, or one in a branch that does not enclose the leaf:
+whatever those let through still gets the fixed leaf. A nested ``except`` is
+judged on its own and never makes its outer handler fire. Known limit: a
+negated guard (``if not isinstance(exc, X): AuthError(...)``) reads as a
+selected branch, not a fallback.
 """
 
 from __future__ import annotations
@@ -60,7 +63,19 @@ _SDK_CUSTOMER_LEAVES = frozenset(
         "StoragePermissionError",
     }
 )
-_NOT_CLASSIFIERS = frozenset({"str", "repr", "format", "type", "print"})
+_NOT_CLASSIFIERS = frozenset(
+    {
+        "str",
+        "repr",
+        "format",
+        "type",
+        "print",
+        "getattr",
+        "hasattr",
+        "safe_traceback",
+        "sanitize_cause_repr",
+    }
+)
 _CONDITIONS = (ast.If, ast.IfExp, ast.While)
 _STORES = (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)
 _BLOCKS = frozenset({"body", "orelse", "handlers", "finalbody", "cases"})
@@ -114,10 +129,12 @@ def _customer_rooted(checker: _Checker, src, node: ast.AST, seen=frozenset()) ->
     )
 
 
-def _derived_names(handler: ast.ExceptHandler, caught: str) -> set[str]:
+def _derived_names(handler: ast.ExceptHandler, caught: str, before: int) -> set[str]:
     names = {caught}
     for node in _own_nodes(handler):
         if not isinstance(node, _STORES) or node.value is None:
+            continue
+        if node.lineno >= before:
             continue
         if not _mentions(node.value, {caught}):
             continue
@@ -154,12 +171,22 @@ def _parents(handler: ast.ExceptHandler) -> dict[ast.AST, tuple[ast.AST, str]]:
     return parents
 
 
+def _catch_all(case: ast.AST) -> bool:
+    return (
+        isinstance(case, ast.match_case)
+        and case.guard is None
+        and isinstance(case.pattern, ast.MatchAs)
+        and case.pattern.pattern is None
+    )
+
+
 def _looked_at(
     leaf: ast.Call,
-    names: set[str],
+    caught: str,
     parents: dict[ast.AST, tuple[ast.AST, str]],
     handler: ast.ExceptHandler,
 ) -> bool:
+    names = _derived_names(handler, caught, leaf.lineno)
     child: ast.AST = leaf
     while child is not handler:
         parent, field = parents[child]
@@ -169,9 +196,13 @@ def _looked_at(
             and _mentions(parent.test, names)
         ):
             return True
-        if isinstance(parent, ast.Match) and _mentions(parent.subject, names):
+        if (
+            isinstance(parent, ast.Match)
+            and not _catch_all(child)
+            and _mentions(parent.subject, names)
+        ):
             return True
-        if isinstance(parent, ast.Call) and _receives(parent, names):
+        if isinstance(parent, ast.Call) and _receives(parent, {caught}):
             return True
         block = getattr(parent, field)
         if isinstance(block, list) and field in _BLOCKS:
@@ -183,14 +214,13 @@ def _looked_at(
 
 
 def _fixed_leaf(checker: _Checker, src, handler: ast.ExceptHandler) -> ast.Call | None:
-    names = _derived_names(handler, handler.name) if handler.name else set()
     parents = _parents(handler)
     for node in _own_nodes(handler):
         if not (
             isinstance(node, ast.Call) and _customer_rooted(checker, src, node.func)
         ):
             continue
-        if not names or not _looked_at(node, names, parents, handler):
+        if handler.name is None or not _looked_at(node, handler.name, parents, handler):
             return node
     return None
 

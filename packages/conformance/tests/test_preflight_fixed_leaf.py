@@ -373,6 +373,51 @@ def test_silent_under_a_condition_on_a_name_derived_from_the_exception(
     assert _f021(tmp_path, src) == []
 
 
+def test_fires_when_the_first_failure_is_kept_in_a_variable(tmp_path: Path) -> None:
+    row = (
+        "            if error is None:\n"
+        "                error = AuthError(message='x', suggested_action='y', cause=exc)\n"
+    )
+    src = _handler("        error = None\n" + _broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_when_the_row_carries_a_message_derived_from_the_exception(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            error_msg = str(exc)\n"
+        "            return PreflightOutput(checks=[PreflightCheck(\n"
+        '                name="access", passed=False, message=error_msg,\n'
+        "                error=AuthError(message='x', suggested_action='y',\n"
+        "                    cause=exc).to_failure_details())])\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_on_a_catch_all_case_of_a_match_on_the_exception(tmp_path: Path) -> None:
+    for pattern in ("_", "other"):
+        row = (
+            "            match exc:\n"
+            "                case TimeoutError():\n"
+            "                    raise SourceUnavailableError(message='x', suggested_action='y')\n"
+            f"                case {pattern}:\n"
+            "                    raise AuthError(message='x', suggested_action='y')\n"
+        )
+        src = _handler(_broad("except Exception as exc:", row))
+        assert len(_f021(tmp_path, src)) == 1, pattern
+
+
+def test_fires_when_only_a_diagnostic_of_the_exception_is_stored(
+    tmp_path: Path,
+) -> None:
+    for store in ("tb = safe_traceback(exc)", "code = getattr(exc, 'status', None)"):
+        row = f"            {store}\n" + _failed_row("AuthError")
+        src = _handler(_broad("except Exception as exc:", row))
+        assert len(_f021(tmp_path, src)) == 1, store
+
+
 def test_silent_under_a_match_on_the_exception(tmp_path: Path) -> None:
     row = (
         "            match exc:\n"
