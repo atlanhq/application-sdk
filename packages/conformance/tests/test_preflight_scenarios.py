@@ -10,6 +10,7 @@ dashboard.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import pytest
@@ -875,21 +876,59 @@ def test_a_deferred_mark_producing_decorator_is_unknown(tmp_path: Path) -> None:
     assert any(NOT_REGISTERED in m for m in messages)
 
 
-def test_an_applied_lambda_decorator_that_skips_is_not_credited(
-    tmp_path: Path,
-) -> None:
-    decorated = _test(
-        "@(lambda fn: pytest.mark.skip(reason='later')(fn))()\n" + HEALTHY
+def _assert_collectable(module: dict[str, str]) -> None:
+    """Import the generated module, so every decorator it applies is evaluated.
+
+    A fixture whose decorator raises at import time is never collected by
+    pytest, so it cannot show the reader telling a runnable test from a
+    skipped one.
+    """
+    (source,) = module.values()
+    namespace: dict[str, object] = {}
+    with warnings.catch_warnings():
+        # The marker is registered by the consumer's conftest, not here.
+        warnings.simplefilter("ignore", pytest.PytestUnknownMarkWarning)
+        exec(compile(source, "test_preflight.py", "exec"), namespace)  # noqa: S102
+    assert callable(namespace["test_healthy"])
+
+
+def test_a_lambda_decorator_that_skips_is_not_credited(tmp_path: Path) -> None:
+    module = _module(
+        _test("@(lambda fn: pytest.mark.skip(reason='later')(fn))\n" + HEALTHY),
+        LIFETIME,
     )
-    messages = _grade(tmp_path, _module(decorated, LIFETIME))
+    _assert_collectable(module)
+    messages = _grade(tmp_path, module)
+    assert any(UNREADABLE in message for message in messages)
     assert any(NOT_REGISTERED in message for message in messages)
 
 
-def test_an_applied_lambda_decorator_without_marks_is_ignored(
+def test_a_lambda_decorator_without_marks_is_ignored(tmp_path: Path) -> None:
+    module = _module(_test("@(lambda fn: fn)\n" + HEALTHY), LIFETIME)
+    _assert_collectable(module)
+    assert _grade(tmp_path, module) == []
+
+
+def test_an_invoked_lambda_returns_the_mark_it_was_passed(tmp_path: Path) -> None:
+    module = _module(
+        _test("@(lambda mark: mark)(pytest.mark.skip(reason='x'))\n" + HEALTHY),
+        LIFETIME,
+    )
+    _assert_collectable(module)
+    messages = _grade(tmp_path, module)
+    assert any(NOT_RUN in message for message in messages)
+    assert any(NOT_REGISTERED in message for message in messages)
+
+
+def test_a_dead_conditional_arm_in_a_lambda_decorator_is_ignored(
     tmp_path: Path,
 ) -> None:
-    decorated = _test("@(lambda fn: fn)()\n" + HEALTHY)
-    assert _grade(tmp_path, _module(decorated, LIFETIME)) == []
+    module = _module(
+        _test("@(lambda fn: fn if True else pytest.mark.skip(fn))\n" + HEALTHY),
+        LIFETIME,
+    )
+    _assert_collectable(module)
+    assert _grade(tmp_path, module) == []
 
 
 @pytest.mark.parametrize(
@@ -1027,9 +1066,27 @@ def test_a_caught_call_can_reach_the_contract_assertion(tmp_path: Path) -> None:
     assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
 
 
-def test_an_inner_handler_does_not_make_an_outer_handler_reachable(
+@pytest.mark.parametrize("inner", ["except BaseException:", "except:"])
+def test_an_exhaustive_inner_handler_does_not_make_an_outer_handler_reachable(
+    tmp_path: Path, inner: str
+) -> None:
+    body = (
+        "    try:\n"
+        "        try:\n"
+        "            check_source()\n"
+        f"        {inner}\n"
+        "            pass\n"
+        "    except BaseException:\n"
+        "        " + ASSERT.lstrip()
+    )
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+def test_an_except_exception_leaves_base_exceptions_for_an_outer_handler(
     tmp_path: Path,
 ) -> None:
+    """``SystemExit`` from the call passes ``except Exception``."""
     body = (
         "    try:\n"
         "        try:\n"
@@ -1037,8 +1094,21 @@ def test_an_inner_handler_does_not_make_an_outer_handler_reachable(
         "        except Exception:\n"
         "            pass\n"
         "    except BaseException:\n"
-        "        assert_preflight_result(result, required_checks=set(), "
-        "observed_checks=set(), expected_status='ready')\n"
+        "        " + ASSERT.lstrip()
+    )
+    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
+
+
+def test_a_handler_after_except_exception_sees_no_exception_subclass(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "    try:\n"
+        "        check_source()\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    except ValueError:\n"
+        "        " + ASSERT.lstrip()
     )
     messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
     assert any(NEVER_CALLS in message for message in messages)
@@ -1085,3 +1155,112 @@ def test_a_mixed_finally_exit_can_be_absorbed_and_reach_the_assertion(
         "                raise RuntimeError()\n" + ASSERT
     )
     assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
+
+
+# --- fifth review round -------------------------------------------------------
+
+SUPPRESSED_RAISE = "        raise ExpectedError()\n" + ASSERT
+
+
+@pytest.mark.parametrize(
+    ("imports", "context"),
+    [
+        ("import pytest as pt\n", "pt.raises(ExpectedError)"),
+        ("from pytest import raises\n", "raises(ExpectedError)"),
+        ("from contextlib import suppress\n", "suppress(ExpectedError)"),
+        ("import contextlib as cl\n", "cl.suppress(ExpectedError)"),
+        ("import contextlib\n", "contextlib.suppress(ExpectedError)"),
+    ],
+    ids=[
+        "pytest-alias",
+        "from-pytest",
+        "from-contextlib",
+        "contextlib-alias",
+        "contextlib",
+    ],
+)
+def test_an_imported_suppressor_is_resolved_by_its_binding(
+    tmp_path: Path, imports: str, context: str
+) -> None:
+    body = f"    with {context}:\n" + SUPPRESSED_RAISE
+    module = _module(_test(HEALTHY, body), LIFETIME, prelude=PRELUDE + imports)
+    _assert_collectable(module)
+    assert _grade(tmp_path, module) == []
+
+
+@pytest.mark.parametrize(
+    ("prelude", "signature", "context"),
+    [
+        (PRELUDE, "test_healthy(pytest)", "pytest.raises(ExpectedError)"),
+        (
+            PRELUDE
+            + "from contextlib import suppress\n\n"
+            + "def suppress(*types):\n    return nullcontext()\n",
+            "test_healthy()",
+            "suppress(ExpectedError)",
+        ),
+        (PRELUDE, "test_healthy()", "contextlib.suppress(ExpectedError)"),
+    ],
+    ids=["shadowed-by-parameter", "rebound-at-module-level", "never-imported"],
+)
+def test_a_shadowed_or_unbound_suppressor_absorbs_nothing(
+    tmp_path: Path, prelude: str, signature: str, context: str
+) -> None:
+    source = f"{HEALTHY}\ndef {signature}:\n    with {context}:\n" + SUPPRESSED_RAISE
+    messages = _grade(tmp_path, _module(source, LIFETIME, prelude=prelude))
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    ("context", "raised"),
+    [
+        ("pytest.raises(ValueError)", "TypeError()"),
+        ("contextlib.suppress(ValueError)", "TypeError"),
+        ("pytest.raises((ValueError, KeyError))", "TypeError()"),
+        ("pytest.raises(ExpectedError)", "OtherError()"),
+        ("pytest.raises(ValueError)", "error"),
+    ],
+    ids=["raises", "suppress", "tuple", "unrelated-names", "raised-value"],
+)
+def test_a_suppressor_does_not_absorb_an_exception_it_does_not_accept(
+    tmp_path: Path, context: str, raised: str
+) -> None:
+    body = f"    with {context}:\n        raise {raised}\n" + ASSERT
+    module = _module(
+        _test(HEALTHY, body), LIFETIME, prelude=PRELUDE + "import contextlib\n"
+    )
+    _assert_collectable(module)
+    messages = _grade(tmp_path, module)
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    ("context", "raised"),
+    [
+        ("pytest.raises(LookupError)", "KeyError()"),
+        ("pytest.raises(expected_exception=ValueError)", "ValueError"),
+        ("contextlib.suppress(OSError, ValueError)", "FileNotFoundError()"),
+        ("pytest.raises(errors.ExpectedError)", "errors.ExpectedError()"),
+    ],
+    ids=["builtin-subclass", "keyword", "suppress-many", "dotted-name"],
+)
+def test_a_suppressor_absorbs_an_exception_it_accepts(
+    tmp_path: Path, context: str, raised: str
+) -> None:
+    body = f"    with {context}:\n        raise {raised}\n" + ASSERT
+    module = _module(
+        _test(HEALTHY, body), LIFETIME, prelude=PRELUDE + "import contextlib\n"
+    )
+    _assert_collectable(module)
+    assert _grade(tmp_path, module) == []
+
+
+def test_a_handler_does_not_catch_an_explicit_raise_of_another_type(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "    try:\n        raise TypeError()\n"
+        "    except ValueError:\n        " + ASSERT.lstrip()
+    )
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)

@@ -27,6 +27,7 @@ an unreadable registration is not evidence either way.
 from __future__ import annotations
 
 import ast
+import builtins
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -128,10 +129,10 @@ class _Module:
     pytest_names: frozenset[str]
     mark_names: frozenset[str]
     param_names: frozenset[str]
-    #: Local name → contract assertion it is bound to.
-    assertion_names: dict[str, str]
-    #: Local names bound to the ``conformance.preflight_testing`` module.
-    assertion_modules: frozenset[str]
+    #: Local name → the tracked ``(module, callable)`` it is bound to.
+    imported_names: dict[str, tuple[str, str]]
+    #: Local dotted path → the tracked module it is bound to.
+    imported_modules: dict[str, str]
     #: Module-level names bound to their evaluated pytest marks.
     mark_aliases: dict[str, tuple[_Mark, ...]] = field(default_factory=dict)
     #: Binding state when a module-level definition's decorators are evaluated.
@@ -220,22 +221,46 @@ def _statically_empty(node: ast.expr) -> bool:
     )
 
 
-def _assertion_bindings(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
-    """Resolve which local names reach the ``conformance.preflight_testing`` assertions.
+#: Imported callables the scanner resolves by binding, not by spelling: the
+#: contract assertions, and the context managers that can absorb an exception.
+_PYTEST_RAISES = ("pytest", "raises")
+_CONTEXTLIB_SUPPRESS = ("contextlib", "suppress")
+_TRACKED_CALLABLES = frozenset(
+    {
+        *((_ASSERTION_MODULE, name) for name in _ASSERTIONS),
+        _PYTEST_RAISES,
+        _CONTEXTLIB_SUPPRESS,
+    }
+)
+_TRACKED_MODULES = frozenset({module for module, _ in _TRACKED_CALLABLES})
+
+
+def _import_bindings(
+    tree: ast.Module,
+) -> tuple[dict[str, tuple[str, str]], dict[str, str]]:
+    """Resolve which local names reach a tracked callable or its module.
+
+    Returns local name → ``(module, attribute)`` for directly imported
+    callables, and local dotted path → module for imported modules.
 
     Bindings are replayed in source order, into nested module-level blocks,
     so the state is what a test sees once the module has imported: a later
     import, definition or assignment of the same name — including the root of
-    a dotted ``import conformance.preflight_testing`` — replaces the contract
-    assertion, and the scanner forgets it.
+    a dotted ``import conformance.preflight_testing`` — replaces the binding,
+    and the scanner forgets it.
     """
-    names: dict[str, str] = {}
-    modules: set[str] = set()
+    names: dict[str, tuple[str, str]] = {}
+    modules: dict[str, str] = {}
 
-    def rebind(local: str) -> None:
+    def rebind(local: str, *, keep_real_paths: bool = False) -> None:
         names.pop(local, None)
-        for dotted in [m for m in modules if m.split(".", 1)[0] == local]:
-            modules.discard(dotted)
+        for dotted, module in list(modules.items()):
+            if dotted.split(".", 1)[0] != local:
+                continue
+            # `import a.x` rebinds `a` to the same package, so a dotted path
+            # that spells the real module (`a.b`) survives; an alias does not.
+            if not (keep_real_paths and dotted == module):
+                del modules[dotted]
 
     def visit(stmts: list[ast.stmt]) -> None:
         for node in stmts:
@@ -243,29 +268,22 @@ def _assertion_bindings(tree: ast.Module) -> tuple[dict[str, str], frozenset[str
                 for alias in node.names:
                     local = alias.asname or alias.name
                     rebind(local)
-                    if node.level or alias.name == "*":
+                    if node.level or alias.name == "*" or node.module is None:
                         continue
-                    if node.module == _ASSERTION_MODULE and alias.name in _ASSERTIONS:
-                        names[local] = alias.name
-                    elif (
-                        node.module == "conformance"
-                        and alias.name == "preflight_testing"
-                    ):
-                        modules.add(local)
+                    if (node.module, alias.name) in _TRACKED_CALLABLES:
+                        names[local] = (node.module, alias.name)
+                    elif f"{node.module}.{alias.name}" in _TRACKED_MODULES:
+                        modules[local] = f"{node.module}.{alias.name}"
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     if alias.asname is not None:
                         rebind(alias.asname)
-                        if alias.name == _ASSERTION_MODULE:
-                            modules.add(alias.asname)
+                        if alias.name in _TRACKED_MODULES:
+                            modules[alias.asname] = alias.name
                         continue
-                    root = alias.name.split(".", 1)[0]
-                    # `import conformance.x` rebinds `conformance` to the same
-                    # package, so a dotted path through it survives.
-                    if root != "conformance":
-                        rebind(root)
-                    if alias.name == _ASSERTION_MODULE:
-                        modules.add(_ASSERTION_MODULE)
+                    rebind(alias.name.split(".", 1)[0], keep_real_paths=True)
+                    if alias.name in _TRACKED_MODULES:
+                        modules[alias.name] = alias.name
             else:
                 for local in _bound_names(node):
                     rebind(local)
@@ -273,7 +291,7 @@ def _assertion_bindings(tree: ast.Module) -> tuple[dict[str, str], frozenset[str
                     visit(block)
 
     visit(tree.body)
-    return names, frozenset(modules)
+    return names, modules
 
 
 def _literal(node: ast.expr, env: Mapping[str, object]) -> object:
@@ -315,7 +333,7 @@ def _module_constants(tree: ast.Module) -> dict[str, object]:
 
 def _load(src: Source) -> _Module:
     modules, marks, params = _pytest_bindings(src.tree)
-    assertion_names, assertion_modules = _assertion_bindings(src.tree)
+    imported_names, imported_modules = _import_bindings(src.tree)
     mod = _Module(
         src=src,
         constants=_module_constants(src.tree),
@@ -323,8 +341,8 @@ def _load(src: Source) -> _Module:
         pytest_names=modules,
         mark_names=marks,
         param_names=params,
-        assertion_names=assertion_names,
-        assertion_modules=assertion_modules,
+        imported_names=imported_names,
+        imported_modules=imported_modules,
     )
     _replay_module_bindings(src.tree.body, mod)
     return mod
@@ -463,6 +481,12 @@ def _mentions_marks(
             _mentions_marks(stmt, mod, seen, functions=functions, aliases=aliases)
             for stmt in node.orelse
         )
+    if isinstance(node, (ast.IfExp, ast.BoolOp)):
+        # A statically dead arm or short-circuited operand never evaluates.
+        return any(
+            _mentions_marks(part, mod, seen, functions=functions, aliases=aliases)
+            for part in _live_operands(node)
+        )
     if isinstance(node, ast.GeneratorExp):
         return bool(node.generators) and _mentions_marks(
             node.generators[0].iter,
@@ -494,6 +518,26 @@ def _mentions_marks(
         for child in ast.iter_child_nodes(node)
         if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
     )
+
+
+def _live_operands(node: ast.IfExp | ast.BoolOp) -> list[ast.expr]:
+    """The parts of a conditional or boolean expression that may evaluate."""
+    if isinstance(node, ast.IfExp):
+        truth = _constant_truth(node.test)
+        if truth is True:
+            return [node.test, node.body]
+        if truth is False:
+            return [node.test, node.orelse]
+        return [node.test, node.body, node.orelse]
+    live: list[ast.expr] = []
+    for value in node.values:
+        live.append(value)
+        truth = _constant_truth(value)
+        if (isinstance(node.op, ast.And) and truth is False) or (
+            isinstance(node.op, ast.Or) and truth is True
+        ):
+            break
+    return live
 
 
 def _mark_name(node: ast.expr, mod: _Module) -> str | None:
@@ -647,8 +691,24 @@ def _marks(
     functions = functions if functions is not None else mod.functions
     if isinstance(node, ast.Name) and node.id in aliases:
         return aliases[node.id]
+    if (
+        isinstance(node, ast.IfExp)
+        and (truth := _constant_truth(node.test)) is not None
+    ):
+        return _marks(
+            node.body if truth else node.orelse,
+            mod,
+            env,
+            depth,
+            functions=functions,
+            aliases=aliases,
+        )
     if not isinstance(node, ast.Call):
         raise _Unresolved(ast.unparse(node))
+    if isinstance(node.func, ast.Lambda):
+        return _applied_lambda_marks(
+            node.func, node, mod, env, depth, functions=functions, aliases=aliases
+        )
     name = _mark_name(node.func, mod)
     if name == "parametrize":
         return (
@@ -684,6 +744,53 @@ def _marks(
             aliases=aliases,
         )
     raise _Unresolved(ast.unparse(node))
+
+
+def _applied_lambda_marks(
+    func: ast.Lambda,
+    call: ast.Call,
+    mod: _Module,
+    env: Mapping[str, object],
+    depth: int,
+    *,
+    functions: Mapping[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    aliases: Mapping[str, tuple[_Mark, ...]],
+) -> tuple[_Mark, ...]:
+    """The marks a directly invoked lambda returns, its arguments bound.
+
+    ``(lambda mark: mark)(pytest.mark.skip(...))`` returns the skip it was
+    passed. A parameter bound to a mark expression reads as that mark; any
+    other parameter shadows the module name it spells.
+    """
+    args = func.args
+    params = [a.arg for a in (*args.posonlyargs, *args.args)]
+    if (
+        call.keywords
+        or len(call.args) != len(params)
+        or args.vararg
+        or args.kwarg
+        or args.kwonlyargs
+        or any(isinstance(arg, ast.Starred) for arg in call.args)
+    ):
+        raise _Unresolved(ast.unparse(call))
+    bound_aliases = {k: v for k, v in aliases.items() if k not in params}
+    bound_functions = {k: v for k, v in functions.items() if k not in params}
+    for param, arg in zip(params, call.args):
+        try:
+            bound_aliases[param] = _marks(
+                arg, mod, env, depth, functions=functions, aliases=aliases
+            )
+        except _Unresolved:
+            if _mentions_marks(arg, mod, functions=functions, aliases=aliases):
+                bound_aliases[param] = (_Mark(_UNRESOLVED_MARK),)
+    return _marks(
+        func.body,
+        mod,
+        env,
+        depth + 1,
+        functions=bound_functions,
+        aliases=bound_aliases,
+    )
 
 
 def _helper_marks(
@@ -862,9 +969,10 @@ def _is_mark_expression(
     if isinstance(node, ast.Lambda):
         return _mentions_marks(node.body, mod, functions=functions, aliases=aliases)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Lambda):
+        # Its body runs now, and its arguments are what that body may return.
         return _mentions_marks(
             node.func.body, mod, functions=functions, aliases=aliases
-        )
+        ) or _mentions_marks(node, mod, functions=functions, aliases=aliases)
     if _mentions_marks(node, mod, functions=functions, aliases=aliases):
         return True
     target = node.func if isinstance(node, ast.Call) else node
@@ -990,17 +1098,39 @@ def _constant_truth(test: ast.expr) -> bool | None:
 
 #: How a block can end. A block's flow is the set of ways it may end: it is
 #: definitely over when ``FALLS`` is not in the set, whatever mix of the other
-#: exits remains. Explicit ``RAISES`` and possible call exceptions are separate:
-#: a try handler can absorb either, while a context manager only absorbs raises.
-FALLS, RETURNS, RAISES, JUMPS, CALL_RAISES = (
-    "falls",
-    "returns",
-    "raises",
-    "jumps",
-    "call_raises",
-)
+#: exits remains. An exception exit carries what is known of its type:
+#:
+#: * ``raises:<Name>`` — a ``raise`` of a spelled class;
+#: * ``CALL_RAISES`` — a call may raise any exception at all;
+#: * ``_NON_EXCEPTION`` — what an ``except Exception`` lets past a call:
+#:   ``SystemExit`` and the rest of ``BaseException`` outside ``Exception``;
+#: * ``_UNKNOWN_RAISE`` — a re-raise or a raised value of unreadable type.
+#:
+#: A handler or suppressor is credited with an explicit raise only when the
+#: types definitely match; a call exception may be anything, so any typed
+#: handler may catch it.
+FALLS, RETURNS, JUMPS = "falls", "returns", "jumps"
+_RAISE = "raises:"
+CALL_RAISES = _RAISE + "*"
+_NON_EXCEPTION = _RAISE + "!Exception"
+_UNKNOWN_RAISE = _RAISE + "?"
 _Flow = frozenset[str]
 _FALL: _Flow = frozenset({FALLS})
+
+
+class _Catch(Enum):
+    MUST = "must"
+    MAY = "may"
+    NO = "no"
+
+
+@dataclass(frozen=True)
+class _Scope:
+    """What a function body's names resolve to."""
+
+    mod: _Module
+    #: Names the function binds itself, hiding the module-level binding.
+    shadowed: frozenset[str]
 
 
 def _expression(node: ast.AST, out: list[ast.AST]) -> None:
@@ -1015,22 +1145,9 @@ def _expression(node: ast.AST, out: list[ast.AST]) -> None:
     if isinstance(node, ast.GeneratorExp):
         _expression(node.generators[0].iter, out)
         return
-    if isinstance(node, ast.BoolOp):
-        for value in node.values:
-            _expression(value, out)
-            truth = _constant_truth(value)
-            if isinstance(node.op, ast.And) and truth is False:
-                return
-            if isinstance(node.op, ast.Or) and truth is True:
-                return
-        return
-    if isinstance(node, ast.IfExp):
-        _expression(node.test, out)
-        truth = _constant_truth(node.test)
-        if truth is not False:
-            _expression(node.body, out)
-        if truth is not True:
-            _expression(node.orelse, out)
+    if isinstance(node, (ast.BoolOp, ast.IfExp)):
+        for part in _live_operands(node):
+            _expression(part, out)
         return
     out.append(node)
     for child in ast.iter_child_nodes(node):
@@ -1046,45 +1163,117 @@ def _call_raises(out: list[ast.AST], start: int) -> _Flow:
     )
 
 
-def _suppresses_exceptions(items: list[ast.withitem]) -> bool:
-    """Whether a context expression names a known exception suppressor."""
-    for item in items:
-        expr = item.context_expr
-        if not isinstance(expr, ast.Call):
-            continue
-        func = expr.func
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr == "raises"
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "pytest"
-        ):
-            return True
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr == "suppress"
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "contextlib"
-        ):
-            return True
-    return False
+def _exceptions(flow: _Flow) -> set[str]:
+    return {exit for exit in flow if exit.startswith(_RAISE)}
 
 
-def _catches_all_exceptions(handler: ast.ExceptHandler) -> bool:
-    """Whether the handler catches every exception a call may raise."""
-    if handler.type is None:
-        return True
-    if isinstance(handler.type, ast.Name):
-        return handler.type.id in {"BaseException", "Exception"}
-    if isinstance(handler.type, ast.Tuple):
-        return any(
-            isinstance(item, ast.Name) and item.id in {"BaseException", "Exception"}
-            for item in handler.type.elts
-        )
-    return False
+def _raised(exc: ast.expr | None) -> str:
+    """The exception exit a ``raise`` statement takes."""
+    target = exc.func if isinstance(exc, ast.Call) else exc
+    if isinstance(target, (ast.Name, ast.Attribute)):
+        return _RAISE + ast.unparse(target)
+    return _UNKNOWN_RAISE
 
 
-def _block(stmts: list[ast.stmt], out: list[ast.AST]) -> _Flow:
+def _builtin_exception(name: str) -> type[BaseException] | None:
+    value = getattr(builtins, name, None)
+    if isinstance(value, type) and issubclass(value, BaseException):
+        return value
+    return None
+
+
+def _catches(exit: str, accepted: tuple[str, ...] | None) -> _Catch:
+    """Whether a handler for *accepted* types catches exception *exit*.
+
+    ``None`` is a bare ``except:``. A type the scanner cannot place in the
+    builtin hierarchy matches an explicit raise only by identical spelling.
+    """
+    if accepted is None or "BaseException" in accepted:
+        return _Catch.MUST
+    if exit == CALL_RAISES:
+        return _Catch.MAY if accepted else _Catch.NO
+    if exit == _NON_EXCEPTION:
+        outside = [
+            name
+            for name in accepted
+            if (cls := _builtin_exception(name)) is None
+            or not issubclass(cls, Exception)
+        ]
+        return _Catch.MAY if outside else _Catch.NO
+    if exit == _UNKNOWN_RAISE:
+        return _Catch.NO
+    kind = exit.removeprefix(_RAISE)
+    raised = _builtin_exception(kind)
+    for name in accepted:
+        cls = _builtin_exception(name)
+        if name == kind or (raised and cls and issubclass(raised, cls)):
+            return _Catch.MUST
+    return _Catch.NO
+
+
+def _escapes(exit: str, accepted: tuple[str, ...] | None) -> str | None:
+    """The exception exit left after the handler, or ``None`` when caught."""
+    if _catches(exit, accepted) is _Catch.MUST:
+        return None
+    if exit == CALL_RAISES and accepted and "Exception" in accepted:
+        return _NON_EXCEPTION
+    return exit
+
+
+def _handle(
+    pending: set[str], accepted: tuple[str, ...] | None
+) -> tuple[bool, set[str]]:
+    """Whether a handler may run for *pending*, and what escapes it."""
+    runs = any(_catches(exit, accepted) is not _Catch.NO for exit in pending)
+    escaped = {e for exit in pending if (e := _escapes(exit, accepted)) is not None}
+    return runs, escaped
+
+
+def _handler_types(node: ast.expr | None) -> tuple[str, ...] | None:
+    if node is None:
+        return None
+    elts = node.elts if isinstance(node, ast.Tuple) else [node]
+    return tuple(ast.unparse(elt) for elt in elts)
+
+
+def _resolve(func: ast.expr, scope: _Scope) -> tuple[str, str] | None:
+    """The tracked ``(module, callable)`` *func* is bound to, if any."""
+    if isinstance(func, ast.Name):
+        if func.id in scope.shadowed:
+            return None
+        return scope.mod.imported_names.get(func.id)
+    if isinstance(func, ast.Attribute):
+        dotted = ast.unparse(func.value)
+        # A local rebinding of the dotted path's root shadows the whole path.
+        if dotted.split(".", 1)[0] in scope.shadowed:
+            return None
+        module = scope.mod.imported_modules.get(dotted)
+        return (module, func.attr) if module is not None else None
+    return None
+
+
+def _suppressed_types(item: ast.withitem, scope: _Scope) -> tuple[str, ...] | None:
+    """The types a ``pytest.raises`` / ``contextlib.suppress`` context absorbs.
+
+    ``None`` when the context is not one of them: an arbitrary context
+    manager is not assumed to swallow anything.
+    """
+    expr = item.context_expr
+    if not isinstance(expr, ast.Call):
+        return None
+    target = _resolve(expr.func, scope)
+    if target == _PYTEST_RAISES:
+        expected = expr.args[0] if expr.args else None
+        for kw in expr.keywords:
+            if kw.arg == "expected_exception":
+                expected = kw.value
+        return () if expected is None else _handler_types(expected)
+    if target == _CONTEXTLIB_SUPPRESS:
+        return tuple(ast.unparse(arg) for arg in expr.args)
+    return None
+
+
+def _block(stmts: list[ast.stmt], out: list[ast.AST], scope: _Scope) -> _Flow:
     """Collect the nodes a block can execute; return how it can end.
 
     Dead branches, nested scopes, deferred expressions and everything after
@@ -1092,7 +1281,7 @@ def _block(stmts: list[ast.stmt], out: list[ast.AST]) -> _Flow:
     """
     exits: set[str] = set()
     for stmt in stmts:
-        flow = _statement(stmt, out)
+        flow = _statement(stmt, out, scope)
         exits |= flow - _FALL
         if FALLS not in flow:
             return frozenset(exits)
@@ -1107,7 +1296,7 @@ def _loop(body: _Flow, orelse: _Flow, *, infinite: bool) -> _Flow:
     return (body - {JUMPS}) | orelse | _FALL
 
 
-def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
+def _statement(stmt: ast.stmt, out: list[ast.AST], scope: _Scope) -> _Flow:
     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         start = len(out)
         for dec in stmt.decorator_list:
@@ -1119,16 +1308,22 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
             _expression(stmt.value, out)
         return frozenset({RETURNS}) | _call_raises(out, start)
     if isinstance(stmt, ast.Raise):
+        # Constructing the exception is not a separate exit: the raise's own
+        # type is what a handler has to match.
         if stmt.exc is not None:
             _expression(stmt.exc, out)
-        return frozenset({RAISES})
+        return frozenset({_raised(stmt.exc)})
     if isinstance(stmt, (ast.Break, ast.Continue)):
         return frozenset({JUMPS})
     if isinstance(stmt, ast.Assert):
         # The message is evaluated only when the assertion fails.
         start = len(out)
         _expression(stmt.test, out)
-        flow = frozenset({RAISES}) if _constant_truth(stmt.test) is False else _FALL
+        flow = (
+            frozenset({_RAISE + "AssertionError"})
+            if _constant_truth(stmt.test) is False
+            else _FALL
+        )
         return flow | _call_raises(out, start)
     if isinstance(stmt, ast.If):
         start = len(out)
@@ -1136,54 +1331,62 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
         test_flow = _call_raises(out, start)
         truth = _constant_truth(stmt.test)
         if truth is True:
-            return _block(stmt.body, out) | test_flow
+            return _block(stmt.body, out, scope) | test_flow
         if truth is False:
-            return _block(stmt.orelse, out) | test_flow
+            return _block(stmt.orelse, out, scope) | test_flow
         # Either branch may run: the if falls through only if one of them does.
-        return _block(stmt.body, out) | _block(stmt.orelse, out) | test_flow
+        body = _block(stmt.body, out, scope)
+        return body | _block(stmt.orelse, out, scope) | test_flow
     if isinstance(stmt, ast.While):
         start = len(out)
         _expression(stmt.test, out)
         test_flow = _call_raises(out, start)
         truth = _constant_truth(stmt.test)
         if truth is False:
-            return _block(stmt.orelse, out) | test_flow
-        body = _block(stmt.body, out)
-        orelse = _block(stmt.orelse, out) if truth is not True else frozenset()
+            return _block(stmt.orelse, out, scope) | test_flow
+        body = _block(stmt.body, out, scope)
+        orelse = _block(stmt.orelse, out, scope) if truth is not True else frozenset()
         return _loop(body, orelse, infinite=truth is True) | test_flow
     if isinstance(stmt, (ast.For, ast.AsyncFor)):
         start = len(out)
         _expression(stmt.iter, out)
         iter_flow = _call_raises(out, start)
         if _statically_empty(stmt.iter):
-            return _block(stmt.orelse, out) | iter_flow
-        body = _block(stmt.body, out)  # may run zero times
-        return _loop(body, _block(stmt.orelse, out), infinite=False) | iter_flow
+            return _block(stmt.orelse, out, scope) | iter_flow
+        body = _block(stmt.body, out, scope)  # may run zero times
+        orelse = _block(stmt.orelse, out, scope)
+        return _loop(body, orelse, infinite=False) | iter_flow
     if isinstance(stmt, (ast.With, ast.AsyncWith)):
         start = len(out)
         for item in stmt.items:
             _expression(item.context_expr, out)
         context_flow = _call_raises(out, start)
-        body = _block(stmt.body, out)
-        # Only known suppressors can turn an exception into fallthrough.
-        if _suppresses_exceptions(stmt.items) and body & {RAISES, CALL_RAISES}:
-            body |= _FALL
+        body = _block(stmt.body, out, scope)
+        # Only a known suppressor turns an exception it accepts into
+        # fallthrough; the innermost context sees the body's exit first.
+        for item in reversed(stmt.items):
+            accepted = _suppressed_types(item, scope)
+            if accepted is None:
+                continue
+            raised = _exceptions(body)
+            absorbs, escaped = _handle(raised, accepted)
+            if absorbs:
+                body = (body - raised) | escaped | _FALL
         return body | context_flow
     if isinstance(stmt, ast.Try | ast.TryStar):
-        body = _block(stmt.body, out)
-        raised = body & {RAISES, CALL_RAISES}
-        result = body - {FALLS, RAISES, CALL_RAISES}
+        body = _block(stmt.body, out, scope)
+        pending = _exceptions(body)
+        result = body - pending - _FALL
         if FALLS in body:
-            result |= _block(stmt.orelse, out)
-        if raised:
-            catches_all = any(
-                _catches_all_exceptions(handler) for handler in stmt.handlers
-            )
-            for handler in stmt.handlers:
-                result |= _block(handler.body, out)
-            if not catches_all:
-                result |= raised
-        final = _block(stmt.finalbody, out)
+            result |= _block(stmt.orelse, out, scope)
+        # Handlers are tried in order: each runs only for an exception that
+        # may still reach it, and what it definitely catches stops there.
+        for handler in stmt.handlers:
+            runs, pending = _handle(pending, _handler_types(handler.type))
+            if runs:
+                result |= _block(handler.body, out, scope)
+        result |= pending
+        final = _block(stmt.finalbody, out, scope)
         if not stmt.finalbody:
             return frozenset(result)
         final_exits = final - {FALLS}
@@ -1192,7 +1395,7 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
         start = len(out)
         _expression(stmt.subject, out)
         subject_flow = _call_raises(out, start)
-        flows = [_block(case.body, out) for case in stmt.cases]
+        flows = [_block(case.body, out, scope) for case in stmt.cases]
         return frozenset().union(*flows) | _FALL | subject_flow
     start = len(out)
     for child in ast.iter_child_nodes(stmt):
@@ -1200,22 +1403,17 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
     return _FALL | _call_raises(out, start)
 
 
-def _calls(stmts: list[ast.stmt]) -> list[ast.Call]:
+def _calls(stmts: list[ast.stmt], scope: _Scope) -> list[ast.Call]:
     out: list[ast.AST] = []
-    _block(stmts, out)
+    _block(stmts, out, scope)
     return [node for node in out if isinstance(node, ast.Call)]
 
 
-def _assertion(call: ast.Call, mod: _Module, shadowed: frozenset[str]) -> str | None:
+def _assertion(call: ast.Call, scope: _Scope) -> str | None:
     """The contract assertion *call* invokes, resolved through its import."""
-    func = call.func
-    if isinstance(func, ast.Name) and func.id not in shadowed:
-        return mod.assertion_names.get(func.id)
-    if isinstance(func, ast.Attribute) and func.attr in _ASSERTIONS:
-        dotted = ast.unparse(func.value)
-        # A local rebinding of the dotted path's root shadows the whole path.
-        if dotted.split(".", 1)[0] not in shadowed and dotted in mod.assertion_modules:
-            return func.attr
+    target = _resolve(call.func, scope)
+    if target is not None and target[0] == _ASSERTION_MODULE:
+        return target[1] if target[1] in _ASSERTIONS else None
     return None
 
 
@@ -1254,20 +1452,21 @@ def _assertions(func: ast.FunctionDef | ast.AsyncFunctionDef, mod: _Module) -> s
     """Contract assertions the test reachably calls, directly or through a
     same-module helper it calls directly."""
     made: set[str] = set()
-    shadowed = _parameters(func)
-    for call in _calls(func.body):
-        if (name := _assertion(call, mod, shadowed)) is not None:
+    scope = _Scope(mod, _parameters(func))
+    for call in _calls(func.body, scope):
+        if (name := _assertion(call, scope)) is not None:
             made.add(name)
         elif (
             isinstance(call.func, ast.Name)
-            and call.func.id not in shadowed
+            and call.func.id not in scope.shadowed
             and call.func.id in mod.functions
         ):
             helper = mod.functions[call.func.id]
+            inner = _Scope(mod, _parameters(helper))
             made |= {
                 name
-                for inner in _calls(helper.body)
-                if (name := _assertion(inner, mod, _parameters(helper))) is not None
+                for helper_call in _calls(helper.body, inner)
+                if (name := _assertion(helper_call, inner)) is not None
             }
     return made
 
