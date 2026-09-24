@@ -1380,6 +1380,10 @@ class BaseE2ETest:
         self._connection_create_attempted = False
         self._submitted_connection_qns: list[str] = []
         self._payload_substitutions: MustacheSubstitutions | None = None
+        self._dag_submitted = False
+        # AE run ids submitted but not yet seen terminal. Teardown terminates
+        # whatever is left — see :meth:`_terminate_unsettled_runs`.
+        self._unsettled_run_ids: list[str] = []
         self._seeded_connection_qns: list[str] = []
         # Each seed's object-store root, keyed to the connection it was seeded
         # under — the QN whose connection-delete run is what reclaims it.
@@ -1800,9 +1804,45 @@ class BaseE2ETest:
                 signature.
         """
         try:
+            # First: a run still extracting must not race the delete of the
+            # connection it is writing into.
+            await self._terminate_unsettled_runs()
             await self._delete_connections()
         finally:
             await self._close_clients()
+
+    async def _terminate_unsettled_runs(self) -> None:
+        """Terminate every AE run this test submitted and never saw finish.
+
+        The harness stops watching a run on several exits that leave it going —
+        the progress watchdog, the poll ceiling, a no-worker verdict, or an
+        extract child that AE is retrying after a failed first attempt. The
+        extract node of a CI e2e run is dispatched to a task queue served only
+        by the worker the CI job started, so once the job exits nothing can
+        progress it, and the child waits on that queue until its workflow
+        execution timeout (up to days) closes it as "Timed out". Those orphans
+        are what a fleet-wide "Timed out" pattern on CI tenants is made of.
+
+        Terminating the AE root closes the child with it (children are started
+        with terminate-on-parent-close). Nothing here raises: an unstoppable run
+        is logged, and the connection delete still runs.
+        """
+        run_ids = tuple(getattr(self, "_unsettled_run_ids", ()))
+        ae = getattr(self, "_ae", None)
+        if not run_ids or ae is None:
+            return
+        for run_id in run_ids:
+            try:
+                await ae.terminate_run(run_id)
+            # conformance: ignore[E004] teardown boundary — a cleanup failure must never replace the run's verdict, and one unstoppable run must not skip the rest of teardown
+            except Exception:
+                logger.warning(
+                    "e2e cleanup: could not terminate AE run %s; it may keep "
+                    "running until its workflow execution timeout",
+                    run_id,
+                    exc_info=True,
+                )
+        self._unsettled_run_ids = []
 
     async def _delete_connections(self) -> None:
         """Delete every ephemeral connection this run touched, if there are any.
@@ -4243,6 +4283,12 @@ class BaseE2ETest:
             ]
         run_id = await self._submit(payload, slug=slug)
         logger.info("AE submit returned run_id=%s", run_id)
+        # Recorded before anything else can raise, and cleared only once AE
+        # reports the run terminal: every exit in between — the watchdog, the
+        # ceiling, a no-worker verdict, a failed manifest check — leaves a run
+        # that teardown has to stop.
+        unsettled = self.__dict__.setdefault("_unsettled_run_ids", [])
+        unsettled.append(run_id)
 
         # Before the poll: submit is what makes Heracles fetch the tenant pod's
         # manifest and publish it over our seed, so this is the earliest point
@@ -4251,6 +4297,8 @@ class BaseE2ETest:
         await self._assert_deployed_manifest_matches(slug)
 
         ae_result = await self._poll_dag(run_id)
+        if ae_result.status.is_terminal and run_id in unsettled:
+            unsettled.remove(run_id)
 
         # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
         # indexing lag cannot masquerade as an absence. See

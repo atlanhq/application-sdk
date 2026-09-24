@@ -2088,3 +2088,168 @@ class TestResolvedConnectorConfigName:
 
         body = payload["payload"][0]["body"]
         assert body["connectorConfigName"] == "atlan-connectors-legacy"
+
+
+# ---------------------------------------------------------------------------
+# Teardown stops the AE run the harness stopped watching
+# ---------------------------------------------------------------------------
+
+
+class _TerminatingFakeAE(_FakeAE):
+    """``_FakeAE`` that also records ``terminate_run`` calls.
+
+    ``order`` is shared with the teardown stubs so a test can assert the
+    terminate happens *before* the connection delete.
+    """
+
+    def __init__(
+        self,
+        *,
+        poll: object = None,
+        order: list[str] | None = None,
+        terminate_raises: BaseException | None = None,
+    ) -> None:
+        super().__init__(poll=poll)
+        self.terminated: list[str] = []
+        self.order = order if order is not None else []
+        self._terminate_raises = terminate_raises
+
+    async def terminate_run(self, run_id: str) -> bool | None:
+        self.order.append(f"terminate:{run_id}")
+        if self._terminate_raises is not None:
+            raise self._terminate_raises
+        self.terminated.append(run_id)
+        return True
+
+
+def _stub_teardown_io(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> None:
+    """Replace the tenant-bound teardown steps with order-recording no-ops."""
+
+    async def _delete_connections(self: object) -> None:
+        order.append("delete_connections")
+
+    async def _noop(self: object) -> None:
+        return None
+
+    monkeypatch.setattr(_ConcreteE2ETest, "_delete_connections", _delete_connections)
+    monkeypatch.setattr(_ConcreteE2ETest, "_delete_seed_objects", _noop)
+    monkeypatch.setattr(_ConcreteE2ETest, "_close_clients", _noop)
+
+
+def _stub_post_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let a poll that *returns* reach the end of run_full_dag hermetically."""
+
+    async def _noop(self: object, *args: object, **kwargs: object) -> None:
+        return None
+
+    async def _read_atlas(self: object, ae_result: DAGRunResult) -> DAGRunResult:
+        return ae_result
+
+    monkeypatch.setattr(_ConcreteE2ETest, "_assert_deployed_manifest_matches", _noop)
+    monkeypatch.setattr(_ConcreteE2ETest, "_capture_stop_point_pollers", _noop)
+    monkeypatch.setattr(_ConcreteE2ETest, "_read_atlas", _read_atlas)
+
+
+class TestTeardownTerminatesUnsettledRuns:
+    """A run the harness stopped watching must not outlive the CI job.
+
+    The extract node of a CI e2e run is dispatched to a task queue served only
+    by the worker the CI job itself started. When the harness stops watching a
+    run that is still going — the progress watchdog, the poll ceiling, a
+    no-worker verdict, or the child's own workflow-level retry after a failed
+    first attempt — nothing stops it, the CI job exits, the worker goes with it,
+    and the child sits on an unpolled queue until its workflow execution
+    timeout (hours to days) closes it as "Timed out". Teardown is the one hook
+    that runs on every outcome, so it is where the run is stopped.
+    """
+
+    def _harness(self, ae: _FakeAE) -> _ConcreteE2ETest:
+        harness = _ConcreteE2ETest()
+        harness.connection_qualified_name = "default/test/1234567890"
+        harness._ae = ae
+        return harness
+
+    def test_a_stalled_run_is_terminated_before_the_connection_delete(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        ae = _TerminatingFakeAE(poll=RuntimeError("watchdog stop"), order=order)
+        harness = self._harness(ae)
+        _stub_bootstrap(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        with pytest.raises(RuntimeError, match="watchdog stop"):
+            harness.run_full_dag()
+        harness.teardown_method(None)
+
+        assert ae.terminated == ["run-1"]
+        # Stopped first: a still-running extract must not race the delete.
+        assert order == ["terminate:run-1", "delete_connections"]
+
+    def test_a_run_left_running_at_the_poll_ceiling_is_terminated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        ceiling = _timed_out_result([_node("extract", DAGNodeStatus.RUNNING)])
+        ae = _TerminatingFakeAE(poll=ceiling, order=order)
+        harness = self._harness(ae)
+        _stub_bootstrap(monkeypatch)
+        _stub_post_poll(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        harness.run_full_dag()
+        harness.teardown_method(None)
+
+        assert ae.terminated == ["run-1"]
+
+    def test_a_settled_run_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        order: list[str] = []
+        settled = DAGRunResult(
+            run_id="run-1",
+            workflow_slug="slug",
+            status=DAGRunStatus.SUCCEEDED,
+            nodes=[_node("extract", DAGNodeStatus.SUCCEEDED)],
+        )
+        ae = _TerminatingFakeAE(poll=settled, order=order)
+        harness = self._harness(ae)
+        _stub_bootstrap(monkeypatch)
+        _stub_post_poll(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        harness.run_full_dag()
+        harness.teardown_method(None)
+
+        assert ae.terminated == []
+        assert order == ["delete_connections"]
+
+    def test_a_run_that_never_submitted_terminates_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        ae = _TerminatingFakeAE(order=order)
+        harness = self._harness(ae)
+        _stub_teardown_io(monkeypatch, order)
+
+        harness.teardown_method(None)
+
+        assert ae.terminated == []
+
+    def test_a_failed_terminate_never_masks_the_verdict_or_skips_the_delete(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        ae = _TerminatingFakeAE(
+            poll=RuntimeError("watchdog stop"),
+            order=order,
+            terminate_raises=RuntimeError("AE unreachable"),
+        )
+        harness = self._harness(ae)
+        _stub_bootstrap(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        with pytest.raises(RuntimeError, match="watchdog stop"):
+            harness.run_full_dag()
+        # Must not raise.
+        harness.teardown_method(None)
+
+        assert order == ["terminate:run-1", "delete_connections"]

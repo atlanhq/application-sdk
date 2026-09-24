@@ -1369,6 +1369,54 @@ class AEClient:
         )
         return False
 
+    async def terminate_run(self, run_id: str) -> bool | None:
+        """Ask AE to terminate *run_id* immediately. Never raises.
+
+        The teardown's stop for a run the harness stopped watching while it was
+        still going. A CI e2e run's extract node is dispatched to a task queue
+        only the CI job's own worker serves, so once the job exits nothing can
+        make progress on it — and without a stop the child sits on that dead
+        queue until its workflow execution timeout closes it as "Timed out",
+        hours or days later. Terminate rather than cancel: a graceful cancel
+        has to be delivered to the child's worker, which is exactly what is
+        gone; terminating the AE root closes the child through its
+        terminate-on-parent-close policy without any worker's help.
+
+        AE answers a run that is already terminal with a 2xx and no action, so
+        calling this on a run that settled on its own is harmless.
+
+        Args:
+            run_id: AE's run id, as ``submit_workflow`` returned it.
+
+        Returns:
+            ``True`` if AE accepted the terminate (or the run was already
+            terminal), ``False`` if it answered with an error, ``None`` if the
+            request did not get through.
+        """
+        path = f"/automation/api/v1/runs/{quote(run_id, safe='')}/terminate"
+        try:
+            status, body = await self._request("POST", path)
+        except AppError:
+            logger.warning(
+                "e2e cleanup: terminate for AE run %s did not get through; the "
+                "run may keep running until its workflow execution timeout",
+                run_id,
+                exc_info=True,
+            )
+            return None
+        if status >= 300:
+            logger.warning(
+                "e2e cleanup: AE refused to terminate run %s (HTTP %d); the run "
+                "may keep running until its workflow execution timeout\n"
+                "response=%r",
+                run_id,
+                status,
+                body,
+            )
+            return False
+        logger.info("e2e cleanup: AE run %s terminated (or already terminal)", run_id)
+        return True
+
     async def submit_workflow(
         self,
         payload: dict[str, Any],
