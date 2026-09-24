@@ -945,8 +945,7 @@ def test_the_lane_reaches_exactly_two_models_and_has_no_fallback() -> None:
     """Owner's decision: xai/grok-4.6 for review, gpt-5.6-luna for resolve,
     nothing else.
 
-    Both existing lanes carry RETRY_MAIN_MODEL = claude-opus-5 as a second
-    attempt. This one deliberately does not: a failed phase is a failed phase,
+    Both existing lanes carry a RETRY_MAIN_MODEL second attempt. This one deliberately does not: a failed phase is a failed phase,
     and a silent retry on a different model makes cost and behaviour harder to
     reason about across rounds. Pinned so a future edit adding a ladder has to
     change this test and say why.

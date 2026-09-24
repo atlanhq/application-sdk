@@ -851,7 +851,7 @@ blowing up the context with 3500 lines of unchanged code.
 
 If despite all truncation the context STILL exceeds limits:
 1. Drop STRUCTURE agent (least critical)
-2. Drop GPT adversarial
+2. Drop the Wave 2 adversarial
 3. Send only the diff (no full file contents) to remaining agents
 4. Note in review: "Context truncated due to PR size. Some issues may be missed."
 
@@ -864,7 +864,7 @@ then `bash /tmp/budget.sh` — act on its verdict before entering Phase 2.
 
 ## Phase 2: Review (budget from tier table)
 
-### 2a. Wave 1 — Opus Domain Agents (parallel, native)
+### 2a. Wave 1 — Domain Agents (parallel, native)
 
 Based on `review_scope`, dispatch agents via the Agent tool:
 
@@ -938,18 +938,18 @@ CORRECTNESS is ALWAYS kept — it carries guardrail coverage G1-G5.
 
 Parse JSON findings from each agent response.
 
-### 2b. Wave 2 — GPT-5.3-codex Adversarial (via proxy)
+### 2b. Wave 2 — gpt-6-luna Adversarial (via proxy)
 
-After Wave 1, call GPT to challenge your findings.
+After Wave 1, call the adversarial model to challenge your findings.
 
 **Skip conditions** (no adversarial):
 - `review_scope` is tests-only, conformance-only, config-only, docs-only, or minor
 - `review_scope` is contract-toolkit and toolkit-review.md produced zero findings
-- `review_tier` is "staged" (massive PR — too much context for one GPT call)
+- `review_tier` is "staged" (massive PR — too much context for one adversarial call)
 - Wave 1 produced zero findings (nothing to challenge)
 - Time budget already over 70% consumed — run `bash /tmp/budget.sh` here
   and skip whenever it prints `OVER 70%` or `OVER HARD STOP`. This is the
-  single most expensive optional step in the run (a full GPT-5.3-codex
+  single most expensive optional step in the run (a full adversarial
   call over the whole diff plus every Wave 1 finding), so it is the first
   thing an over-budget run must give up.
 
@@ -960,7 +960,7 @@ curl -s "$PROXY_BASE/proxy/litellm/chat/completions" \
   -H "Authorization: Bearer $PROXY_JWT" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-5.3-codex",
+    "model": "gpt-6-luna",
     "temperature": 0.2,
     "max_tokens": 16000,
     "messages": [
@@ -970,24 +970,25 @@ curl -s "$PROXY_BASE/proxy/litellm/chat/completions" \
   }'
 ```
 
-GPT challenges every Opus finding. GPT also discovers findings Opus missed.
+Wave 2 challenges every Wave 1 finding, and also discovers findings Wave 1
+missed.
 
-If GPT unavailable or skipped: keep all Opus findings >= 80%.
+If Wave 2 is unavailable or skipped: keep all Wave 1 findings >= 80%.
 Note in review: "Cross-model adversarial: <skipped (reason) | ran | unavailable>."
 
 ### 2c. De-Bias (deterministic)
 
-| Opus (Wave 1) | GPT (Wave 2) | Action |
+| Wave 1 | Wave 2 | Action |
 |---|---|---|
 | >= 90% confidence | AGREE or not reviewed | Keep |
 | >= 80% confidence | AGREE | Keep |
 | >= 80% confidence | DISAGREE | **Drop** |
 | >= 80% confidence | PARTIAL | Keep, downgrade severity |
-| Not flagged | GPT >= 90% | Keep (blind spot) |
-| Not flagged | GPT < 90% | Drop |
+| Not flagged | Wave 2 >= 90% | Keep (blind spot) |
+| Not flagged | Wave 2 < 90% | Drop |
 | **Guardrail violation** | **Any** | **Always keep** |
 
-If GPT was unavailable or skipped: keep all Opus findings >= 80%.
+If Wave 2 was unavailable or skipped: keep all Wave 1 findings >= 80%.
 
 ### 2d. Root-Cause Clustering & Class-Completeness Sweep
 

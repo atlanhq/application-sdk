@@ -124,6 +124,15 @@ def test_payload_declares_an_attributed_gateway_key():
     assert p["ai_gateway_key_name"] == "sdk_review"
 
 
+def test_payload_pins_all_three_model_lanes():
+    # Leaving any lane unset silently falls back to mothership's default
+    # models, and `small_fast_model` unset resolves to `model`.
+    p = md.build_payload("BLDX-1", "HIGH", "2026-09-10", "http://run")
+    assert p["model"] == "gpt-6-luna"
+    assert p["small_fast_model"] == "gpt-6-luna"
+    assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-6-luna"
+
+
 # ---------------------------------------------------------------------------
 # health check
 # ---------------------------------------------------------------------------

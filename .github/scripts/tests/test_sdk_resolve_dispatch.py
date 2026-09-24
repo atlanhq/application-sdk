@@ -76,8 +76,8 @@ def test_payload_declares_attributed_gateway_key():
 
 def test_payload_pins_all_three_model_lanes():
     # All three lanes must be pinned: leaving any unset silently falls back to
-    # mothership's Claude defaults (main -> claude-opus-5, sub-agent ->
-    # claude-sonnet-5), and `small_fast_model` unset resolves to `model`.
+    # mothership's default models, and `small_fast_model` unset resolves to
+    # `model`.
     p = sr.build_payload(
         "1",
         "u",
@@ -87,9 +87,9 @@ def test_payload_pins_all_three_model_lanes():
         "requester-login",
         model=sr.MAIN_MODEL,
     )
-    assert p["model"] == "xai/grok-4.6"
-    assert p["small_fast_model"] == "gpt-5.6-luna"
-    assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
+    assert p["model"] == "gpt-6-luna"
+    assert p["small_fast_model"] == "gpt-6-luna"
+    assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-6-luna"
     # Every pinned value must survive JSON encoding as a non-blank string —
     # env_vars skips the API's model-id validation that `model` gets.
     encoded = json.loads(json.dumps(p))
@@ -703,7 +703,7 @@ def test_retry_payload_clamps_the_sandbox_timeout():
 
 def test_provider_faults_are_retryable():
     for code, msg in (
-        ("429", "moonshotai/kimi-k3 is temporarily rate-limited upstream"),
+        ("429", "gpt-6-luna is temporarily rate-limited upstream"),
         ("400", "the message at position 21 with role 'assistant' must not be empty"),
         ("sandbox_error", ""),
         ("503", ""),
@@ -846,7 +846,7 @@ def test_a_genuine_transport_drop_is_still_never_retried():
 
 
 def test_the_http_error_body_reaches_the_error_message():
-    body = b"Invalid model name passed in model=xai/grok-4.6" + b"x" * 600
+    body = b"Invalid model name passed in model=gpt-6-luna" + b"x" * 600
 
     class _FakeFp:
         def read(self):
@@ -877,13 +877,13 @@ def test_the_http_error_body_reaches_the_error_message():
     assert st2.err_code == "http_502"
 
 
-def test_main_model_is_not_an_openrouter_style_id():
+def test_every_pinned_model_is_a_bare_gateway_alias():
     # Weak guard, deliberately: CI has no LiteLLM key, so the real check
     # (GET /v1/models on llmproxy.atlan.dev) cannot run here. This only catches
-    # the specific `x-ai/` vs `xai/` prefix confusion that broke FND-660 —
-    # `x-ai/grok-4.6` is the OpenRouter-style id and this proxy rejects it.
-    assert "x-ai/" not in sr.MAIN_MODEL
-    assert "x-ai/" not in sr.FAST_MODEL
+    # a provider prefix sneaking back in, the shape of the FND-660 breakage —
+    # the proxy serves the GPT-6 tier under bare aliases.
+    for model in (sr.MAIN_MODEL, sr.FAST_MODEL, sr.RETRY_MAIN_MODEL):
+        assert "/" not in model
 
 
 def test_total_cost_sums_attempts_and_skips_unreported_ones():
@@ -988,7 +988,7 @@ def test_main_redispatches_on_a_model_fault_and_recovers(monkeypatch, capsys):
     dead = sr.SSEState()
     dead.got_event = dead.completed = dead.errored = True
     dead.status, dead.cost, dead.err_code = "error", "1.75", "429"
-    dead.err_msg = "moonshotai/kimi-k3 is temporarily rate-limited upstream"
+    dead.err_msg = "gpt-6-luna is temporarily rate-limited upstream"
     good = _completed_stream("2.10")
     payloads = _record_dispatches(monkeypatch, [dead, good])
 
