@@ -2753,8 +2753,21 @@ def test_p052_class_body_binding_is_not_visible_to_methods() -> None:
         "ee.to_atlas_format_dict(asset)\n",
         "import application_sdk.common.entity_envelope\n"
         "application_sdk.common.entity_envelope.to_atlas_format_dict(asset)\n",
+        # asset_serialization imports it at module level, so it resolves there
+        # too even though it is not in that module's __all__.
+        "from application_sdk.common.asset_serialization import "
+        "to_atlas_format_dict\n"
+        "to_atlas_format_dict(asset)\n",
+        "from application_sdk.common import asset_serialization as ser\n"
+        "ser.to_atlas_format_dict(asset)\n",
     ],
-    ids=["from-import", "module-alias", "dotted"],
+    ids=[
+        "from-import",
+        "module-alias",
+        "dotted",
+        "asset-serialization-from-import",
+        "asset-serialization-module-alias",
+    ],
 )
 def test_p052_fires_on_sdk_to_atlas_format_dict(src: str) -> None:
     assert len(_p052(src)) == 1
@@ -2822,6 +2835,33 @@ def test_p052_unconditional_rebinding_after_a_branch_hides_it() -> None:
         "if flag:\n" "    enc = to_atlas_format\n" "enc = other\n" "enc(asset)\n"
     )
     assert _p052(src) == []
+
+
+def test_p052_finally_rebinding_is_definite_after_the_try() -> None:
+    # finally always runs before the statement after the try is reached.
+    src = _P052_ENCODER_IMPORT + (
+        "try:\n"
+        "    pass\n"
+        "finally:\n"
+        "    to_atlas_format = other\n"
+        "to_atlas_format(asset)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_rebinding_in_try_body_stays_conditional_despite_finally() -> None:
+    # The try body may raise before its rebinding; finally does not change that.
+    src = _P052_ENCODER_IMPORT + (
+        "try:\n"
+        "    risky()\n"
+        "    to_atlas_format = other\n"
+        "except ValueError:\n"
+        "    pass\n"
+        "finally:\n"
+        "    cleanup()\n"
+        "to_atlas_format(asset)\n"
+    )
+    assert len(_p052(src)) == 1
 
 
 def test_p052_rebinding_in_the_calls_own_branch_hides_it() -> None:

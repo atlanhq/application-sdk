@@ -68,18 +68,26 @@ _ASSET_SERIALIZERS: frozenset[str] = frozenset({"to_nested_bytes", "to_nested_di
 _ATLAS_FORMAT = "to_atlas_format"
 _PYATLAN_V9 = "pyatlan_v9"
 
-#: The SDK's internal flattening helper, and the one module that exports it.
+#: The SDK's internal flattening helper, and the modules it is importable from:
+#: ``entity_envelope`` defines and exports it; ``asset_serialization`` imports
+#: it at module level, so ``from …asset_serialization import
+#: to_atlas_format_dict`` resolves too, ``__all__`` notwithstanding.
 _SDK_ATLAS_FORMAT_DICT = "to_atlas_format_dict"
-_SDK_ENVELOPE_MODULE = "application_sdk.common.entity_envelope"
+_SDK_ATLAS_FORMAT_DICT_MODULES: frozenset[str] = frozenset(
+    {
+        "application_sdk.common.entity_envelope",
+        "application_sdk.common.asset_serialization",
+    }
+)
 
 #: Bound on alias-chain hops, so a cyclic ``a = b; b = a`` cannot loop.
 _MAX_ALIAS_DEPTH = 8
 
 #: Fields of a compound statement (or handler / match case) holding a block
-#: that may or may not run relative to its siblings.
-_BLOCK_FIELDS: frozenset[str] = frozenset(
-    {"body", "orelse", "finalbody", "handlers", "cases"}
-)
+#: that may or may not run relative to its siblings.  ``finalbody`` is absent
+#: on purpose: a ``finally`` block always runs before the statement after the
+#: ``try`` is reached, so its bindings are definite there.
+_BLOCK_FIELDS: frozenset[str] = frozenset({"body", "orelse", "handlers", "cases"})
 
 _HINT = (
     "Serialize through "
@@ -114,7 +122,7 @@ def _classify_origin(parts: list[str]) -> str | None:
         return "`pyatlan_v9` `to_atlas_format()`"
     if (
         parts[-1] == _SDK_ATLAS_FORMAT_DICT
-        and ".".join(parts[:-1]) == _SDK_ENVELOPE_MODULE
+        and ".".join(parts[:-1]) in _SDK_ATLAS_FORMAT_DICT_MODULES
     ):
         return "`to_atlas_format_dict()`"
     return None

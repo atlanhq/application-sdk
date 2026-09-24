@@ -656,6 +656,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "* ``<x>.to_nested_bytes()`` or ``<x>.to_nested_dict()``;\n"
             "* ``to_atlas_format(...)`` resolved to ``pyatlan_v9``, or the SDK's\n"
             "  internal ``application_sdk.common.entity_envelope.to_atlas_format_dict``\n"
+            "  (also importable from ``application_sdk.common.asset_serialization``)\n"
             "  (a bare imported name, aliased or not, or an attribute call through a\n"
             "  module bound to it).\n"
             "\n"
