@@ -14,6 +14,8 @@ from conformance.suite.checks.dependency_conformance import (
     _REMOTE_COMPONENT_FETCH_RE,
     SDK_PYTHON_FLOOR,
     _collect_dialect_drivers,
+    _collect_dialect_names,
+    _env_dialect_entry_points,
     _is_bounded_specifier,
     _is_floating_range,
     _iter_dep_entries,
@@ -1021,6 +1023,8 @@ def _d003_scan(
     imported_modules: set[str],
     dist_import_map: dict[str, set[str] | None],
     dialect_drivers: set[str] | None = None,
+    dialect_names: set[str] | None = None,
+    dialect_entry_points: dict[str, set[str]] | None = None,
     name: str = "my-connector",
 ) -> list:
     """Write a pyproject and run scan_all with injected import data (no env/AST).
@@ -1038,6 +1042,10 @@ def _d003_scan(
         imported_modules=imported_modules,
         dist_import_map=dist_import_map,
         dialect_drivers=set() if dialect_drivers is None else dialect_drivers,
+        dialect_names=set() if dialect_names is None else dialect_names,
+        dialect_entry_points={}
+        if dialect_entry_points is None
+        else dialect_entry_points,
     )
     return [f for f in findings if f.rule_id == "D003"]
 
@@ -1147,6 +1155,103 @@ def test_collect_dialect_drivers_parses_both_forms(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert _collect_dialect_drivers([src]) == {"aiomysql", "asyncpg"}
+
+
+_CRATEDB_DEPS = (
+    'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+    '    "sqlalchemy-cratedb>=0.41,<1",\n]\n'
+)
+
+
+def test_d003_not_flagged_when_its_dialect_entry_point_is_selected(
+    tmp_path: Path,
+) -> None:
+    """A dialect package SQLAlchemy loads through its ``sqlalchemy.dialects``
+    entry point from a bare ``crate://`` scheme is treated as used."""
+    findings = _d003_scan(
+        tmp_path,
+        _CRATEDB_DEPS,
+        imported_modules={"os"},
+        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
+        dialect_names={"crate"},
+        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
+    )
+    assert findings == []
+
+
+def test_d003_dialect_entry_point_needs_a_matching_scheme(tmp_path: Path) -> None:
+    """Registering a dialect is not enough: with no URL scheme selecting it,
+    the dependency is still flagged."""
+    findings = _d003_scan(
+        tmp_path,
+        _CRATEDB_DEPS,
+        imported_modules={"os"},
+        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
+        dialect_names={"postgresql"},
+        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
+    )
+    assert [f.message for f in findings if "sqlalchemy-cratedb" in f.message]
+
+
+def test_d003_collects_dialect_scheme_from_source_string(tmp_path: Path) -> None:
+    """End-to-end: a ``crate://`` URL template in source clears the finding
+    without an import, with dialect names computed from source."""
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
+        encoding="utf-8",
+    )
+    src = tmp_path / "app" / "clients.py"
+    src.parent.mkdir(parents=True)
+    src.write_text(
+        'TEMPLATE = "crate://{username}:{password}@{host}:{port}"\n',
+        encoding="utf-8",
+    )
+    findings = scan_all(
+        [pp, src],
+        tmp_path,
+        imported_modules={"os"},
+        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
+        dialect_drivers=set(),
+        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
+    )
+    assert [f for f in findings if f.rule_id == "D003"] == []
+
+
+def test_collect_dialect_names_renders_sqlalchemy_lookup_names(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "m.py"
+    src.write_text(
+        't1 = "crate://{username}@{host}"\n'
+        't2 = "foo+bar://u:p@h/d"\n'
+        't3 = "see https://example.com"\n'
+        'noise = "1 + 2 = 3; a.b://x"\n',
+        encoding="utf-8",
+    )
+    assert _collect_dialect_names([src]) == {"crate", "foo.bar", "https"}
+
+
+def test_env_dialect_entry_points_reads_installed_metadata(tmp_path: Path) -> None:
+    """Entry points are read from the target env's dist-info, and only the
+    ``sqlalchemy.dialects`` group counts."""
+    site = tmp_path / "site-packages"
+    for dist, entry_points in (
+        (
+            "sqlalchemy_cratedb-0.41.0",
+            "[sqlalchemy.dialects]\ncrate = sqlalchemy_cratedb:dialect\n",
+        ),
+        ("some_cli-1.0.0", "[console_scripts]\ncrate = some_cli:main\n"),
+    ):
+        info = site / f"{dist}.dist-info"
+        info.mkdir(parents=True)
+        name, version = dist.rsplit("-", 1)
+        (info / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: {name.replace('_', '-')}\nVersion: {version}\n",
+            encoding="utf-8",
+        )
+        (info / "entry_points.txt").write_text(entry_points, encoding="utf-8")
+    assert _env_dialect_entry_points([str(site)]) == {"sqlalchemy-cratedb": {"crate"}}
 
 
 def test_d003_skips_unresolvable_dependency_and_reports_it(

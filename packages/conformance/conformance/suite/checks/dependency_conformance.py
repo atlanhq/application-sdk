@@ -1512,6 +1512,45 @@ def _collect_dialect_drivers(py_files: Iterable[Path]) -> set[str]:
     for a dependency literally named like that token.
     """
     drivers: set[str] = set()
+    for value in _iter_string_literals(py_files):
+        for match in _SQLALCHEMY_DIALECT_RE.finditer(value):
+            drivers.add(match.group(1))
+    return drivers
+
+
+# A SQLAlchemy URL's scheme also names the dialect class to load. A dialect
+# SQLAlchemy does not ship is resolved through the ``sqlalchemy.dialects``
+# entry-point group: ``crate://…`` loads the entry point named ``crate`` and
+# ``foo+bar://…`` loads ``foo.bar``. The package registering it (for example
+# sqlalchemy-cratedb) is therefore used without ever being imported, and a bare
+# ``scheme://`` carries no ``+driver`` for _collect_dialect_drivers to see.
+_SQLALCHEMY_URL_SCHEME_RE = re.compile(
+    r"(?<![A-Za-z0-9_.+-])([A-Za-z_][A-Za-z0-9_]*)(?:\+([A-Za-z_][A-Za-z0-9_]*))?://"
+)
+_SQLALCHEMY_DIALECTS_GROUP = "sqlalchemy.dialects"
+
+
+def _collect_dialect_names(py_files: Iterable[Path]) -> set[str]:
+    """Return the ``sqlalchemy.dialects`` entry-point names URL schemes select.
+
+    Scans string literals across *py_files* for ``scheme://`` and
+    ``scheme+driver://`` and renders each the way SQLAlchemy looks it up
+    (``crate://`` -> ``crate``, ``foo+bar://`` -> ``foo.bar``). Biased toward
+    matching like _collect_dialect_drivers: an unrelated scheme such as
+    ``https`` only clears a finding for a dependency that registers a
+    SQLAlchemy dialect under that exact name.
+    """
+    names: set[str] = set()
+    for value in _iter_string_literals(py_files):
+        for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(value):
+            dialect, driver = match.group(1), match.group(2)
+            names.add(f"{dialect}.{driver}" if driver else dialect)
+    return names
+
+
+def _iter_string_literals(py_files: Iterable[Path]) -> Iterator[str]:
+    """Yield every string constant in *py_files*, skipping unreadable or
+    unparseable files."""
     for path in py_files:
         try:
             raw = path.read_bytes()
@@ -1523,9 +1562,7 @@ def _collect_dialect_drivers(py_files: Iterable[Path]) -> set[str]:
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                for match in _SQLALCHEMY_DIALECT_RE.finditer(node.value):
-                    drivers.add(match.group(1))
-    return drivers
+                yield node.value
 
 
 def _repo_site_packages(root: Path) -> list[str]:
@@ -1597,6 +1634,49 @@ def _dist_import_names(
     return _provided_import_names(dist)
 
 
+def _env_dialect_entry_points(search_path: list[str]) -> dict[str, set[str]]:
+    """Map normalised distribution name -> the ``sqlalchemy.dialects`` entry
+    points it registers, for every distribution under *search_path* that
+    registers any. Empty dict when *search_path* is empty."""
+    if not search_path:
+        return {}
+    out: dict[str, set[str]] = {}
+    for dist in importlib_metadata.distributions(path=search_path):
+        name = dist.metadata["Name"] if dist.metadata else None
+        if not name:
+            continue
+        eps = _dialect_entry_point_names(dist)
+        if eps:
+            out[_normalise_name(name)] = eps
+    return out
+
+
+def _dist_dialect_entry_points(
+    dist_name: str, *, env_map: Mapping[str, set[str]] | None = None
+) -> set[str]:
+    """Return the ``sqlalchemy.dialects`` entry points *dist_name* registers.
+
+    Same resolution order as :func:`_dist_import_names`: the target repo's
+    environment first, then the running interpreter. Empty when neither has it
+    — the dependency then falls through to the ordinary unused check.
+    """
+    if env_map is not None:
+        eps = env_map.get(_normalise_name(dist_name))
+        if eps:
+            return eps
+    try:
+        dist = importlib_metadata.distribution(dist_name)
+    except importlib_metadata.PackageNotFoundError:
+        return set()
+    return _dialect_entry_point_names(dist)
+
+
+def _dialect_entry_point_names(dist: importlib_metadata.Distribution) -> set[str]:
+    return {
+        ep.name for ep in dist.entry_points if ep.group == _SQLALCHEMY_DIALECTS_GROUP
+    }
+
+
 def _provided_import_names(dist: importlib_metadata.Distribution) -> set[str]:
     """Top-level import names *dist* provides, from ``top_level.txt`` when
     present plus top-level entries derived from its file list (RECORD)."""
@@ -1641,12 +1721,17 @@ def _scan_unused_dependencies(
     *,
     dist_import_map: Mapping[str, set[str] | None],
     dialect_drivers: set[str],
+    dialect_names: set[str],
+    dialect_entry_points: Mapping[str, set[str]],
 ) -> tuple[list[Finding], list[str]]:
     """Return (D003 findings, names of dependencies skipped as unresolvable).
 
     A dependency is flagged when the import names it provides are all absent
     from *imported_modules* AND it is not referenced as a SQLAlchemy
-    ``dialect+driver`` (``dialect_drivers``).  A dependency whose
+    ``dialect+driver`` (``dialect_drivers``) AND none of the
+    ``sqlalchemy.dialects`` entry points it registers
+    (``dialect_entry_points``) is selected by a URL scheme in source
+    (``dialect_names``).  A dependency whose
     ``dist_import_map`` value is ``None`` (not importable in this environment) is
     skipped and returned in the second list so the caller can surface it — never
     silently dropped.
@@ -1667,6 +1752,8 @@ def _scan_unused_dependencies(
             continue  # at least one provided module is imported -> used
         if entry.name in dialect_drivers or provided & dialect_drivers:
             continue  # loaded dynamically by SQLAlchemy via a dialect+driver string
+        if dialect_entry_points.get(entry.name, set()) & dialect_names:
+            continue  # its registered SQLAlchemy dialect is selected by a URL scheme
         provided_list = ", ".join(sorted(provided))
         findings.append(
             _make_finding(
@@ -2432,6 +2519,8 @@ def scan_all(
     dist_import_map: Mapping[str, set[str] | None] | None = None,
     imported_modules: set[str] | None = None,
     dialect_drivers: set[str] | None = None,
+    dialect_names: set[str] | None = None,
+    dialect_entry_points: Mapping[str, set[str]] | None = None,
 ) -> list[Finding]:
     """Run the full D-series over *paths*: per-file D001/D002 + cross-file D003.
 
@@ -2447,6 +2536,8 @@ def scan_all(
     Test seams: ``dist_import_map`` injects the dependency -> import-name map
     (default: resolved from installed metadata) and ``imported_modules`` injects
     the set of imported top-levels (default: parsed from the discovered sources).
+    ``dialect_names`` and ``dialect_entry_points`` inject the URL-scheme dialect
+    names and each dependency's ``sqlalchemy.dialects`` entry points.
     """
     pyprojects = [p for p in paths if p.name == "pyproject.toml"]
     py_files = [p for p in paths if p.suffix == ".py"]
@@ -2505,16 +2596,25 @@ def scan_all(
 
     if imported_modules is None:
         imported_modules = _collect_top_level_imports(py_files)
+    # Resolve against the repo under test first (see _repo_site_packages), so
+    # the finding set belongs to the repo and not to whichever interpreter
+    # happened to invoke the suite.
+    site_packages = _repo_site_packages(root)
     if dist_import_map is None:
-        # Resolve against the repo under test first (see _repo_site_packages),
-        # so the finding set belongs to the repo and not to whichever
-        # interpreter happened to invoke the suite.
-        env_map = _env_import_names(_repo_site_packages(root))
+        env_map = _env_import_names(site_packages)
         dist_import_map = {
             e.name: _dist_import_names(e.name, env_map=env_map) for e in dep_entries
         }
     if dialect_drivers is None:
         dialect_drivers = _collect_dialect_drivers(py_files)
+    if dialect_names is None:
+        dialect_names = _collect_dialect_names(py_files)
+    if dialect_entry_points is None:
+        env_eps = _env_dialect_entry_points(site_packages)
+        dialect_entry_points = {
+            e.name: _dist_dialect_entry_points(e.name, env_map=env_eps)
+            for e in dep_entries
+        }
 
     try:
         rel = root_pyproject.relative_to(root)
@@ -2528,6 +2628,8 @@ def scan_all(
         str(rel),
         dist_import_map=dist_import_map,
         dialect_drivers=dialect_drivers,
+        dialect_names=dialect_names,
+        dialect_entry_points=dialect_entry_points,
     )
     findings.extend(d003_findings)
 
