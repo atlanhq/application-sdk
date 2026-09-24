@@ -532,6 +532,43 @@ def test_fires_when_only_a_diagnostic_of_the_exception_is_stored(
         assert len(_f021(tmp_path, src)) == 1, store
 
 
+def test_fires_when_only_one_unpacked_value_depends_on_the_exception(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            ready, other = (True, isinstance(exc, PermissionError))\n"
+        "            if ready:\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_when_a_conditional_value_has_a_fixed_leaf_path(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            ready = isinstance(exc, PermissionError) if self.strict else True\n"
+        "            if ready:\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_fires_when_an_augmented_write_replaces_exception_derived_value(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            ready = isinstance(exc, PermissionError)\n"
+        "            ready += 1\n"
+        "            if ready:\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
 def test_silent_when_a_name_derived_from_the_classification_selects_the_leaf(
     tmp_path: Path,
 ) -> None:

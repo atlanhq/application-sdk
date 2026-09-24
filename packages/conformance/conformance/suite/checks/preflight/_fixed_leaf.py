@@ -201,6 +201,28 @@ def _executes_unconditionally(node: ast.AST, parents: _Parents) -> bool:
     return True
 
 
+def _depends_on_every_value_path(node: ast.expr, names: set[str]) -> bool:
+    """Whether every value selected by an expression depends on ``names``."""
+    if isinstance(node, ast.IfExp):
+        if _depends_on_every_value_path(
+            node.body, names
+        ) and _depends_on_every_value_path(node.orelse, names):
+            return True
+        if _mentions(node.test, names):
+            body, orelse = node.body, node.orelse
+            return (
+                isinstance(body, ast.Constant)
+                and isinstance(body.value, bool)
+                and isinstance(orelse, ast.Constant)
+                and isinstance(orelse.value, bool)
+                and body.value != orelse.value
+            )
+        return False
+    if isinstance(node, ast.BoolOp):
+        return all(_depends_on_every_value_path(value, names) for value in node.values)
+    return _mentions(node, names)
+
+
 def _derived_at(
     point: ast.expr, caught: str, parents: _Parents, handler: ast.ExceptHandler
 ) -> set[str]:
@@ -229,20 +251,23 @@ def _derived_at(
         store_path = _block_path(node, parents, handler)
         if not _can_reach(store_path, point_path, parents):
             continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         derived = (
             _dominates(store_path, point_path)
             and _executes_unconditionally(node, parents)
-            and _mentions(node.value, names)
+            and len(targets) == 1
+            and isinstance(targets[0], ast.Name)
+            and not isinstance(node, ast.AugAssign)
+            and _depends_on_every_value_path(node.value, names)
             and not _always_true(node.value, caught)
         )
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         for target in targets:
             for name in ast.walk(target):
                 if not isinstance(name, ast.Name):
                     continue
                 if derived:
                     names.add(name.id)
-                elif not isinstance(node, ast.AugAssign):
+                else:
                     names.discard(name.id)
     return names
 
