@@ -865,6 +865,16 @@ def test_a_bare_helper_decorator_that_builds_a_mark_is_unknown(tmp_path: Path) -
     assert any(UNREADABLE in m for m in messages)
 
 
+def test_a_deferred_mark_producing_decorator_is_unknown(tmp_path: Path) -> None:
+    helper = (
+        "def gate():\n" "    return lambda fn: pytest.mark.skip(reason='later')(fn)"
+    )
+    decorated = _test("@gate()\n" + HEALTHY)
+    messages = _grade(tmp_path, _module(helper, decorated, LIFETIME))
+    assert any(UNREADABLE in m for m in messages)
+    assert any(NOT_REGISTERED in m for m in messages)
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -974,6 +984,16 @@ def test_a_return_only_try_does_not_make_its_handler_reachable(tmp_path: Path) -
     body = "    try:\n        return\n    except Exception:\n        pass\n" + ASSERT
     messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
     assert any(NEVER_CALLS in message for message in messages)
+
+
+def test_a_caught_call_can_reach_the_contract_assertion(tmp_path: Path) -> None:
+    body = (
+        "    try:\n"
+        "        check_source()\n"
+        "    except ExpectedError:\n"
+        "        " + ASSERT.lstrip()
+    )
+    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
 
 
 def test_a_mixed_finally_exit_can_be_absorbed_and_reach_the_assertion(

@@ -425,7 +425,9 @@ def _mentions_marks(
             for stmt in node.body
         )
     if isinstance(node, ast.Lambda):
-        return False
+        return _mentions_marks(
+            node.body, mod, seen, functions=functions, aliases=aliases
+        )
     if isinstance(node, ast.If):
         truth = _constant_truth(node.test)
         branches = (
@@ -484,7 +486,7 @@ def _mentions_marks(
     return any(
         _mentions_marks(child, mod, seen, functions=functions, aliases=aliases)
         for child in ast.iter_child_nodes(node)
-        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
     )
 
 
@@ -1090,7 +1092,10 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
         # A context manager can suppress the exception; it cannot undo a return.
         return body | _FALL if RAISES in body else body
     if isinstance(stmt, ast.Try | ast.TryStar):
+        body_start = len(out)
         body = _block(stmt.body, out)
+        if any(isinstance(node, ast.Call) for node in out[body_start:]):
+            body |= frozenset({RAISES})
         result = body - _FALL
         if FALLS in body:
             result |= _block(stmt.orelse, out)
