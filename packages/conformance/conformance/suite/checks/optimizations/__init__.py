@@ -13,7 +13,7 @@ Currently implemented:
 * ``O001`` OrjsonOverStdlibJson — ``json.dumps`` / ``json.loads`` call sites
   where ``json`` resolves to the stdlib module; prefer ``orjson``.
 * ``O002`` LegacyAssetSerialization — ``.dict()`` in a module importing pyatlan
-  asset models; prefer the v9 ``asset.to_nested_bytes()`` API.
+  asset models; serialize through the SDK's ``entity_bytes`` seam.
 * ``O003`` UntypedAssetMapperReturn — a function that builds a pyatlan asset and
   returns it but has no return annotation.
 * ``O004`` LegacyPyatlanAssetImport — app code importing the legacy

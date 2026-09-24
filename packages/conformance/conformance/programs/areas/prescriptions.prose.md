@@ -107,6 +107,27 @@ gated on the SDK exposing a qualifiedName seam.  All three draft a proposal for
 human review and never auto-apply.  (These rules are backed by
 `suite.checks.prescriptions` alongside P001–P003.)
 
+P052 (pyatlan asset serialized in app code — `to_nested_bytes()`,
+`to_nested_dict()`, `pyatlan_v9` `to_atlas_format()` or the SDK's internal
+`to_atlas_format_dict()`, called directly or through a saved local alias —
+instead of through `entity_bytes`) is suggest-only too.  The proposal replaces
+the call with `entity_bytes(asset, envelope=...)` from
+`application_sdk.common.asset_serialization`, passing the app's declared
+envelope and, unless the mapper already stamps them, `connection_name` and
+`last_sync`.  The envelope must preserve the connector's released wire shape:
+the call being replaced decides it.  `to_nested_bytes()` / `to_nested_dict()`
+wrote relationship refs under `relationshipAttributes`, so that site pins
+`EnvelopeShape.PYATLAN` (a deprecated one-cycle lever) rather than silently
+flipping to the default `FLATTENED`; `to_atlas_format()` already wrote the
+flattened shape, so `FLATTENED` preserves it.  Where the line needs a key the
+model cannot hold, decode what `entity_bytes` produced and decorate that (the
+`atlan-mysql-app` `map_table` shape).  The output still changes —
+`connectionName` and the placeholder-guid strip now apply — so it is always
+`"judgment"`.  A site whose
+output is not an entity line at all (a `ConnectionRef` built from
+`to_atlas_format`) gets an inline `# conformance: ignore[P052] <reason>`
+instead.
+
 ### Requires
 
 - `scope` — repository root path.

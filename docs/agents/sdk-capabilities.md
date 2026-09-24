@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.38.0
-source-sha:    d93627a10191966c3f534bef688cbe60f4347e26
-source-date:   2026-09-23T12:48:45+05:30
+source-sha:    c7db1d98458c5816fb6b4abfbc7887c5e51e6e26
+source-date:   2026-09-23T17:55:52+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -7511,7 +7511,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `output_path: str` `= ''` — Local or object store path for output files.
   - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for excluding schemas/tables.
   - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for including schemas/tables.
-  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern identifying temporary tables.
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern for table/view names to exclude from extraction.
+  - `exclude_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Form-key name of :attr:`temp_table_regex` (FND-2733).
   - `source_tag_prefix: str` `= ''` — Tag prefix for source-level metadata.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 

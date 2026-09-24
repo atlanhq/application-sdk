@@ -422,6 +422,31 @@ Each `@task` method becomes a Temporal activity. The `run()` method orchestrates
 | `fetch_views` | `FetchViewsInput` | `FetchViewsOutput` | Optional --- add for databases with views |
 | `transform_data` | `TransformInput` | `TransformOutput` | Override to map raw results via asset mapper |
 
+### Excluding tables and views by name
+
+The connector form's "Exclude regex for tables & views" field arrives as the
+workflow arg `exclude_table_regex` (form key `exclude-table-regex`, flat or
+nested under `metadata`). `ExtractionInput` copies it into `temp_table_regex`,
+the SDK's name for the same filter, before validation, so it goes through the
+same pattern and SQL-injection checks. An explicit `temp_table_regex` wins.
+
+`SqlApp` substitutes the value into `extract_temp_table_regex_table_sql` at
+`{exclude_table_regex}` and injects the result at `{temp_table_regex_sql}`.
+The column query uses `extract_temp_table_regex_column_sql` instead when you
+declare one (for example `AND C.TABLE_NAME NOT REGEXP '{exclude_table_regex}'`).
+Otherwise it gets the table fragment too, which then needs a `T` alias in
+the column query. Wrap `{exclude_table_regex}` in single quotes in
+the fragment. Block comments in the fragment are stripped before substitution,
+so a documented fragment is safe to inject into a template that mentions
+`{temp_table_regex_sql}` in its own header comment.
+
+```sql
+-- app/sql/extract_temp_table_regex_table.sql
+AND T.TABLE_NAME NOT REGEXP '{exclude_table_regex}'
+```
+
+Read `input.temp_table_regex` in custom code, not `exclude_table_regex`.
+
 ### Adding custom tasks
 
 Use `@task` to define additional extraction steps and override `run()` to include them:

@@ -6,9 +6,9 @@ This guide is the investigation contract for agents and reviewers. Start at the 
 
 A static finding identifies a supported source pattern. Confirm its reachability and final effect before changing behavior. Absence of findings does not prove conformance: imports, dynamic dispatch, factories and complex control flow can exceed analysis coverage. F019 identifies some unresolved paths, not every possible blind spot.
 
-Separate **violation found**, **verified by executed tests**, and **not evaluated/unresolved** in reports. F016–F018 require opted-in, registered scenarios; missing, skipped and failed scenarios are not passing evidence. The presence of assertion helpers does not mean a real handler or Temporal workflow was exercised. Record the command, revision, SDK version, scenario, expected outcome and observed evidence. See [behavioral test registration](preflight-testing.md).
+Separate **violation found** from **not evaluated/unresolved** in reports. Conformance never executes tests: F016 checks that the required scenarios are *defined* (registered, collectable, not skipped, asserting the contract), and whether they *pass* is the test gate's measure. The two are reported by different gates and are not combined. Record the command, revision, SDK version, scenario, expected outcome and observed evidence. See [scenario registration](preflight-testing.md).
 
-F001, F003, F006, F007 and F016–F018 block (SARIF `error`); the other preflight rules warn. The generated [catalog page](rules/preflight.md) is the source of truth for tiers. Under `--exit-zero` an exit code of zero can still include violations and missing behavioral coverage. A guide is not permission to change gate policy or suppress an unresolved result.
+F001, F003, F006 and F007 block (SARIF `error`); the other preflight rules warn. F016 warns while the fleet registers its scenarios and is promoted to block once it has. F017 and F018 are retired. The generated [catalog page](rules/preflight.md) is the source of truth for tiers. Under `--exit-zero` an exit code of zero can still include violations and undefined scenarios. A guide is not permission to change gate policy or suppress an unresolved result.
 
 ## Shared preflight contract
 
@@ -110,37 +110,37 @@ Two different states share this rule. `ATLAN_PREFLIGHT_GATE_MODE` is **already i
 
 ## F016
 
-**Contract:** each applicable entrypoint has executed real-handler scenarios covering the required behavior matrix.
+**Contract:** an app that defines its own `preflight_check` defines every scenario in the required matrix, for each `@entrypoint` it declares, as a pytest-collected test under `tests/unit/` — the tier the test gate's unit job always runs — that drives the real handler.
 
-**Investigate:** verify fixtures invoke production handlers, replace source I/O only at controlled boundaries and declare mandatory probes. **Fix:** add meaningful scenarios for healthy, mandatory/advisory failure, recovery/exhaustion, mixed resources, input shapes, no/hung probes, cancellation, budgets and safe typed output. **Verify:** introduce a representative defect and show the scenario fails, then passes after correction. A marker or hand-built expected output is not proof of handler behavior.
+**Investigate:** read the finding: it names the scenario and entrypoint that is missing, or the test whose registration does not count and why — it does not run (skip, a true `skipif`/`xfail` condition, no runnable parametrized case), its run state cannot be read (a non-literal condition or `pytestmark` element), it is declared unsupported, its case runs a different entrypoint than its marker claims, it does not call `assert_preflight_result` from `conformance.preflight_testing` (or `assert_probe_lifetime` for hung_probe, cancellation_cleanup and budget_retry) as a statement of the test body or of a top-level loop over a non-empty literal, it names a scenario or entrypoint outside the matrix, or its marker or a decorator is outside the shapes F016 reads (see [Defining a scenario](preflight-testing.md#defining-a-scenario)). Verify fixtures invoke production handlers, replace source I/O only at controlled boundaries and declare mandatory probes. **Fix:** add meaningful scenarios for healthy, mandatory/advisory failure, recovery/exhaustion, mixed resources, input shapes, no/hung probes, cancellation, budgets and safe typed output. Spell the marker's `rule`, `scenario` and `entrypoint` as literals, directly or through a module-level helper whose body is a single `return` (the `entrypoint_matrix` shape in atlan-metabase-app). **Verify:** `detect --series F` reports no F016, and the test job runs the scenarios; introduce a representative defect and show the scenario fails in the test job. A marker or hand-built expected output is not proof of handler behavior — defining the scenario is conformance, and the test gate is what proves it passes.
 
 ## F017
 
-**Contract:** SDK workflow histories demonstrate gate enforcement, including failures after the activity starts.
+**Contract:** retired in 0.39.0, removed in 0.40.0; F017 no longer fires.
 
-**Investigate:** inspect actual Temporal execution history and the gate failure cause. An unrelated workflow failure cannot prove enforcement. **Fix:** provide SDK integration scenarios covering verdicts, raises, overruns, activity death, credentials, evidence failure, cancellation, modes and replay. **Verify:** assert extraction scheduling and terminal outcomes for each case. Fabricated histories, missing Temporal infrastructure and skipped tests provide no execution proof.
+**Investigate:** nothing to investigate for a finding: there are none. A `# conformance: ignore[F017]` directive suppresses nothing and is reported by F020. **Fix:** delete the directive. **Verify:** F020 no longer reports it. Gate enforcement through workflow histories is asserted in the SDK's own tests (`tests/unit/app/test_preflight_gate.py`); the rule was SDK-scoped and only restated them.
 
 ## F018
 
-**Contract:** HTTP, activity and workflow exits preserve typed verdicts, failure precedence and safe outcome evidence.
+**Contract:** retired in 0.39.0, removed in 0.40.0; F018 no longer fires.
 
-**Investigate:** capture the actual boundary payload and emitted outcome, including retries and plumbing failures without a verdict. **Fix:** preserve the decisive error and supported legacy behavior through serialization and handoff. **Verify:** registered exit scenarios assert status, checks, action, code, duration, attempt selection and secret exclusion. A synthetic payload validated in isolation does not verify the production handoff.
+**Investigate:** nothing to investigate for a finding: there are none. A `# conformance: ignore[F018]` directive suppresses nothing and is reported by F020. **Fix:** delete the directive. **Verify:** F020 no longer reports it. Exit-evidence behaviour is asserted in the SDK's own tests; the rule was SDK-scoped and only restated them.
 
 ## F019
 
 **Contract:** unresolved dispatch, imports or contracts remain visible as analysis gaps.
 
-**Investigate:** locate the actual handler and follow registries, dynamic imports or factories. Snowflake-style dispatch requires checking every registered probe. **Fix:** use a supported resolvable pattern where appropriate, or — for a value-level gap, see below — add the executable scenarios for the unresolved path. **Verify:** demonstrate that a known defect on that path is detected. Do not relabel unresolved as compliant or change runtime semantics merely to satisfy static discovery.
+**Investigate:** locate the actual handler and follow registries, dynamic imports or factories. Snowflake-style dispatch requires checking every registered probe. **Fix:** use a supported resolvable pattern where appropriate, or — for a value-level gap, see below — define the full F016 scenario matrix. **Verify:** demonstrate that a known defect on that path is detected. Do not relabel unresolved as compliant or change runtime semantics merely to satisfy static discovery.
 
 ### Which F019 findings scenarios clear, and which they do not
 
-F019 covers two different gaps, and only one of them is clearable by running tests. Read the message: it says which one you have.
+F019 covers two different gaps, and only one of them is cleared by defining the scenarios. Read the message: it says which one you have.
 
-A **value-level** gap means the handler was found and analysed, but one expression's value could not be resolved — a computed aggregation passed to `checks=` or a row inside one the analysis cannot read, an expanded `**kwargs` failure constructor, a computed `suggested_action`, an unresolved error expression on a failed or passed row, an untyped `except` clause, a dynamic `passed`. Each of those names a property that `assert_preflight_result` asserts on **every** executed F016 scenario: failed checks carry a typed `FailureDetails` with a nonblank message and suggested action, passed checks carry none, and the verdict agrees with the mandatory/advisory roles and the short-circuit order. So `detect --series F --with-tests` drops these findings once the F016 matrix comes back complete and passing for every entrypoint. This is deliberately all-or-nothing across the matrix — there is no per-site-to-scenario mapping, so a partial matrix clears nothing.
+A **value-level** gap means the handler was found and analysed, but one expression's value could not be resolved — a computed aggregation passed to `checks=` or a row inside one the analysis cannot read, an expanded `**kwargs` failure constructor, a computed `suggested_action`, an unresolved error expression on a failed or passed row, an untyped `except` clause, a dynamic `passed`. Each of those names a property that `assert_preflight_result` asserts in **every** F016 scenario: failed checks carry a typed `FailureDetails` with a nonblank message and suggested action, passed checks carry none, and the verdict agrees with the mandatory/advisory roles and the short-circuit order. So `detect --series F` drops these findings once the F016 matrix is fully defined for every entrypoint — every scenario registered, unskipped, and calling that assertion. Conformance does not run those tests; the test gate does, and it is the test gate that proves the assertions hold. This is deliberately all-or-nothing across the matrix — there is no per-site-to-scenario mapping, so a partial matrix clears nothing, and neither does a suppressed F016 finding.
 
-A **structural** gap means the analysis never got to the code: a file that would not parse, a `preflight_check` that does not resolve to a supported async SDK handler, a callback bound dynamically, an input contract class that is not in the registry (so metadata parity was never evaluated). No number of passing scenarios closes these, because executing the handler does not tell the analysis what it failed to read. Their messages do not ask for scenarios; they ask for a statically resolvable shape. Fix the shape.
+A **structural** gap means the analysis never got to the code: a file that would not parse, a `preflight_check` that does not resolve to a supported async SDK handler, a callback bound dynamically, an input contract class that is not in the registry (so metadata parity was never evaluated). No number of defined scenarios closes these, because a test does not tell the analysis what it failed to read. Their messages do not ask for scenarios; they ask for a statically resolvable shape. Fix the shape.
 
-Two consequences worth stating plainly. Without `--with-tests` nothing is cleared: a static-only run has no execution evidence, and every F019 it reports is honest. And zero F019 warnings is reachable for a handler whose only gaps are value-level, but *not* for one whose dispatch or contracts the analysis cannot resolve at all — that is a permanent marker until the shape changes.
+Zero F019 warnings is reachable for a handler whose only gaps are value-level, but *not* for one whose dispatch or contracts the analysis cannot resolve at all — that is a permanent marker until the shape changes.
 
 Both halves of the `checks=` gate are about resolvability, not syntax. A bare
 variable — `PreflightOutput(status=NOT_READY, checks=checks)`, the shape the
@@ -148,7 +148,7 @@ short-circuit pattern produces — is reported because the analysis cannot read
 the roles, the order or the verdicts out of it. Rewrapping it in a list display,
 `checks=[*checks]`, is a semantically identical copy and reports the same thing:
 the unpacked element is named on the finding. Building each row inline, or in a
-helper whose returns resolve, is what makes the list readable; completing the
+helper whose returns resolve, is what makes the list readable; defining the
 F016 matrix is what clears it when the rows genuinely cannot be fixed literals.
 
 Re-typing a caught SDK error onto a failed row — `except AppError as exc: ... error=exc.to_failure_details()` — resolves rather than reporting: the clause proves the value is an `AppError`, so the details are typed. Their message and suggested action belong to whichever raise site built the error, and F007 grades them there, not on the row. A clause naming no typed error — `except Exception`, a bare `except:`, a driver class — stays unresolved and says so; narrow it to the `AppError` subclasses the probe raises, or construct a typed error on that path.
@@ -170,6 +170,6 @@ Known gap: B001 matches the enum member (`PreflightStatus.PARTIAL`), so a raw-st
 
 ## F020
 
-**Contract:** a `# conformance: ignore[...]` directive that cites P032, P033, P034, P035 or P047 suppresses nothing. Those ids moved to F001 to F005 when the preflight rules got their own series, and the parser matches ids as plain strings.
+**Contract:** a `# conformance: ignore[...]` directive that cites P032, P033, P034, P035, P047, F017 or F018 suppresses nothing. The P-ids moved to F001 to F005 when the preflight rules got their own series; F017 and F018 were retired with no replacement. The parser matches ids as plain strings.
 
-**Investigate:** find the finding the directive was written for and confirm it still fires under the new id on the same line. A directive whose finding is gone is dead weight, not a carve-out. **Fix:** replace the retired id with the one named in the message and keep the justification; delete the directive if the finding no longer fires. **Verify:** rerun `--series F`. F020 disappears, and the renamed rule is suppressed with its justification counted in `atlan/summary.suppressing`.
+**Investigate:** for a moved id, find the finding the directive was written for and confirm it still fires under the new id on the same line. A directive whose finding is gone is dead weight, not a carve-out. **Fix:** replace a moved id with the one named in the message and keep the justification; delete the directive if the finding no longer fires or its rule was retired. **Verify:** rerun `--series F`. F020 disappears, and the renamed rule is suppressed with its justification counted in `atlan/summary.suppressing`.

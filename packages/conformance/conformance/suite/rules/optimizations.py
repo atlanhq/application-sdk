@@ -72,10 +72,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O002",
         canonical_reference=(
-            "atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each asset "
-            "through `asset.to_nested_bytes()`, the v9 wire shape, rather than through "
-            "`.dict()`, then decodes that output to build the publish-layer shape and merge "
-            "in extra attributes."
+            "atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each "
+            "asset through `entity_bytes` under the app's `ENTITY_ENVELOPE`, rather than "
+            "through `.dict()`, then decodes that output to merge in the custom "
+            "attributes pyatlan_v9 does not model."
         ),
         scope=RuleScope.APP,
         name="LegacyAssetSerialization",
@@ -86,23 +86,31 @@ RULES: tuple[RuleDefinition, ...] = (
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
-            "The asset-mapper pattern serialises pyatlan assets to JSONL with the v9 "
-            "API — asset.to_nested_bytes() — which emits the nested-entity wire shape "
-            "the platform expects. Serialising an asset with the pydantic .dict() "
+            "The asset-mapper pattern serialises pyatlan assets to JSONL through the "
+            "SDK's entity_bytes seam, which emits the nested-entity wire shape the "
+            "platform expects. Serialising an asset with the pydantic .dict() "
             "method produces a flat dict that still needs hand-conversion and drifts "
             "from the SDK's recommended pipeline (BLDX-1492; docs/upgrade-guide-v3.md). "
             "WARN/recommendation because .dict() is name-anchored — it can also belong "
             "to a non-asset pydantic model — so the call needs a human glance."
         ),
         short_description=(
-            "Asset serialised with .dict() — prefer the v9 asset.to_nested_bytes() API"
+            "Asset serialised with .dict() — serialize through the SDK's entity_bytes"
         ),
         full_description=(
             "Flags a ``.dict()`` method call in a module that imports pyatlan asset\n"
-            "models.  The asset-mapper pattern writes assets with the v9 serialisation\n"
-            "API — ``asset.to_nested_bytes()`` — not the pydantic ``.dict()`` form\n"
-            "(``docs/upgrade-guide-v3.md`` explicitly says 'use the v9 serialisation\n"
-            "API instead of .dict()').\n"
+            "models.  The asset-mapper pattern writes assets through\n"
+            "``application_sdk.common.asset_serialization.entity_bytes`` — not the\n"
+            "pydantic ``.dict()`` form (``docs/upgrade-guide-v3.md`` explicitly says\n"
+            "'use the v9 serialisation API instead of .dict()').  Do not swap in\n"
+            "``asset.to_nested_bytes()``: that bypasses the seam and trips P052.\n"
+            "\n"
+            "Legacy ``pyatlan.model.assets`` models: migrate the model to\n"
+            "``pyatlan_v9.model.assets`` first (O004), then switch serialization.\n"
+            "A v1 model handed to ``entity_bytes`` falls through to\n"
+            "``model_dump()``, whose snake_case field names are not the Atlas wire\n"
+            "shape, so the serialization switch alone emits malformed entities.\n"
+            "The finding message says which case applies.\n"
             "\n"
             "Coverage limits (biased to low false-positives at WARN): only ``.dict()``\n"
             "is matched (not ``.json()``, which is overwhelmingly ``response.json()``\n"
@@ -179,7 +187,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "still on the built-in AtlasTransformer (which B001 steers off). pyatlan_v9 "
             "ships inside the existing pyatlan>=9 dependency, so the switch adds nothing "
             "to resolve. A below-the-bar recommendation (O-series, WARN): the v9 models "
-            "differ in attributes and serialization (to_nested_bytes vs .dict()), so "
+            "differ in attributes and serialization (entity_bytes vs .dict()), so "
             "each site needs human judgement — never a blind name swap."
         ),
         short_description=(
@@ -204,8 +212,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Not a mechanical rewrite: the v9 models are not a drop-in rename —\n"
             "attribute\n"
-            "names and the serialization API differ (use ``asset.to_nested_bytes()``\n"
-            "rather than ``.dict()``), so each construction site needs review.\n"
+            "names and the serialization API differ (serialize through\n"
+            "``entity_bytes`` rather than ``.dict()``), so each construction site\n"
+            "needs review.\n"
             "Suppress with ``# conformance: ignore[O004] <reason>`` when a connector\n"
             "is intentionally pinned to the legacy ``AtlasTransformer`` surface.\n"
         ),

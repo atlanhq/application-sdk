@@ -211,14 +211,46 @@ human audit):
             return asset
         ```
       - **Transform task** — read typed records from the input JSONL, map each, and
-        write `asset.to_nested_bytes()` to a typed file output passed downstream as a
-        `FileReference` (no shared `output_path` scan, no `upload_to_atlan()`):
+        write each asset through `entity_bytes` to a typed file output passed
+        downstream as a `FileReference` (no shared `output_path` scan, no
+        `upload_to_atlan()`). Pass the app's declared envelope and the run's
+        sync details, not a bare `entity_bytes(asset)`.
+
+        **Choose the envelope before writing the task, from the connector's
+        released output — never by default.** A connector whose released output
+        has relationship refs under a top-level `relationshipAttributes` key (the
+        shape `asset.to_nested_bytes()` wrote) pins `EnvelopeShape.PYATLAN` for
+        this migration, so neither its wire format nor its publish diff cache
+        flips as a side effect. `PYATLAN` is a deprecated one-cycle lever
+        (removed in v4.0); moving to `FLATTENED` (refs in `attributes`) is a
+        separate, deliberate change. Only a connector with no released output,
+        or one already emitting the flattened shape, starts on `FLATTENED`.
+        Drop `connection_name` / `last_sync` only when the mapper already stamps
+        both on every asset.
         ```python
+        from application_sdk.common.asset_serialization import entity_bytes
+        from application_sdk.common.entity_envelope import EntityEnvelopePolicy, EnvelopeShape
+        from application_sdk.common.last_sync import resolve_last_sync_details
+
+        # Released output was nested (it wrote asset.to_nested_bytes()): keep it.
+        ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.PYATLAN)
+        # No released output, or already flattened, instead:
+        # ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)
+
         @task(timeout_seconds=1800)
         async def transform(self, input: TransformInput) -> TransformOutput:
+            last_sync = resolve_last_sync_details()  # once per activity
             for record in read_jsonl(input.raw_file, RecordType):
                 asset = map_entity(record, connection_qn, workflow_id)
-                out_f.write(asset.to_nested_bytes() + b"\n")
+                out_f.write(
+                    entity_bytes(
+                        asset,
+                        connection_name=connection_name,
+                        last_sync=last_sync,
+                        envelope=ENTITY_ENVELOPE,
+                    )
+                    + b"\n"
+                )
             return TransformOutput(output_file=FileReference(local_path=str(output_file)))
         ```
       - Drop the YAML query templates, the `TransformerInterface` subclass, and any
