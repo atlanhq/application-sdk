@@ -78,15 +78,15 @@ review only reports CI state on the summary's `**CI:**` line.
 
 ## Cross-Model Review Strategy
 
-YOU (Claude Opus) are the primary reviewer. You dispatch 3 domain
+YOU (gpt-6-sol, or gpt-6-luna on a retry) are the primary reviewer. You dispatch 3 domain
 sub-agents using the Agent tool for Wave 1.
 
-GPT-5.3-codex is the adversarial challenger (Wave 2) — called via
+gpt-6-luna is the adversarial challenger (Wave 2) — called via
 `$PROXY_BASE/proxy/litellm/chat/completions`.
 
-- You review the code with 3 Opus sub-agents (Agent tool, native)
-- GPT challenges every Opus finding: AGREE / DISAGREE / PARTIAL
-- GPT also discovers findings Opus missed (different model family = different blind spots)
+- You review the code with 3 domain sub-agents (Agent tool, native)
+- Wave 2 challenges every Wave 1 finding: AGREE / DISAGREE / PARTIAL
+- Wave 2 also discovers findings Wave 1 missed (a different model = different blind spots)
 - De-bias is deterministic (no LLM needed)
 
 ## Re-review Continuity (session-resume)

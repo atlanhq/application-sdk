@@ -579,9 +579,9 @@ directive is the cause.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/extracts/collections.py — its inline conformance directive names
-  a live rule id (E020) and carries a written justification. A directive that cited P034
-  now cites F003 the same way, justification kept; the id is the only part that changes.
+- **Compliant example:** atlan-metabase-app app/qualified_names.py — its inline conformance directives name a
+  live rule id (P028) and carry a written justification. A directive that cited P034 now
+  cites F003 the same way, justification kept; the id is the only part that changes.
 
 The preflight rules moved from the P-series to the F-series: P032-P035 became F001-F004
 and P047 became F005. The suppression parser matches ids as plain strings, so a `#

@@ -1,4 +1,4 @@
-# Sub-agent — STRUCTURE Review (GPT-5.3-codex)
+# Sub-agent — STRUCTURE Review
 
 ## Role
 

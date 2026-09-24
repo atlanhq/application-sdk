@@ -646,20 +646,22 @@ there is no except/raise to key on; the failure is swallowed by a plain if-guard
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/extracts/databases.py — each place an HTTP failure returns an
-  empty sentinel (`fetch_databases_summaries` and `fetch_database_metadata`) carries an
-  inline ignore[E020] naming the residual file that records it; the same shape recurs
-  across app/extracts/, each site justified. Without that evidence trail the empty
-  return has to raise.
-- **Already correct when:** A justified inline `# conformance: ignore[E020] <reason>` IS the correct end state where
-  three things hold together: the empty return is deliberate, the failure is recorded to
-  a durable evidence trail that the reason NAMES, and the run declares the resulting gap
-  rather than reporting a complete crawl (e.g. OutputStatus.PARTIAL_SUCCESS). The trail
-  makes the gap reviewable; declaring it is what stops a partial crawl being published
-  as a whole one. A directive naming no trail is unremediated, not compliant, and the
-  empty return must raise instead. Do NOT apply the default edit to a site that already
-  meets all three: raising there deletes the app's ability to degrade, so a single flaky
-  endpoint aborts the entire crawl.
+- **Compliant example:** atlan-metabase-app app/extracts/responses.py — `json_or_raise` raises the typed
+  MetabaseSourceUnavailableError (endpoint=, http_status=) on a failed response. Where
+  one failure must not abort the crawl, the extract function catches that typed error:
+  app/extracts/databases.py `fetch_databases_summaries` logs it with exc_info=True,
+  records a residual and returns [], and the run declares the gap as PARTIAL_SUCCESS. No
+  site needs a suppression.
+- **Already correct when:** The failed response raises a typed AppError at the guard. That is the whole fix where
+  the failure should abort the run. Where the app must degrade instead, the end state
+  keeps the raise and adds an explicit `except <ThatTypedError>` at the tolerating
+  function. That handler logs with exc_info=True, records the failure to a durable
+  evidence trail (a residual file), returns the empty sentinel, and the run declares the
+  gap (e.g. OutputStatus.PARTIAL_SUCCESS) rather than reporting a complete crawl. Do NOT
+  apply a raise-only edit to a site that already records and declares its gap: that
+  deletes the app's ability to degrade, so a single flaky endpoint aborts the entire
+  crawl. Convert it to the typed catch instead. An inline ignore[E020] is not the end
+  state, because the typed catch keeps the same degradation with nothing suppressed.
 
 An `if` whose test inspects an HTTP response for failure (a negation or comparison on
 `is_success` / `ok` / `status_code`) and whose branch `return`\ s an empty/None sentinel
@@ -673,10 +675,12 @@ return []`) and its mirror, success-in-the- test → empty `else` (`if resp.is_s
 else: return []`).
 
 This escapes the rest of the E-series because there is no `except`/`raise` — it is a
-plain response guard.  Fix: raise a typed `AppError` (e.g. `DependencyUnavailableError`)
-on the failure branch so it propagates.  Anchored on HTTP-response markers and a
-failure-shaped test to avoid flagging ordinary `if x is None: return None` guards;
-suppress with `# conformance: ignore[E020] <reason>` where an empty result is the
-deliberate, documented contract.
+plain response guard.  Fix: raise a typed `AppError` on the failure branch
+(`SourceUnavailableError` or an app subclass of it for a customer-controlled source API;
+see E012).  Where one failure must not abort the crawl, keep the raise and catch that
+typed error in the tolerating function.  The handler logs with `exc_info=True`, records
+a residual and returns the empty sentinel, and the run declares the gap as
+`PARTIAL_SUCCESS`.  Anchored on HTTP-response markers and a failure-shaped test to avoid
+flagging ordinary `if x is None: return None` guards.
 
 ---

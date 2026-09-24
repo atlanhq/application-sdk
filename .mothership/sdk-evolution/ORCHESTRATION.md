@@ -219,7 +219,7 @@ Print: `[Stage 4 complete] parent=<ID>, <N> FIX PRs, <M> DESIGN PRs, <C> consume
 For each PR: wait for CI (cap: daily 3 min, weekly 5 min), then deterministic
 checks — diff touches the flagged file; required test present for
 bug/security/perf; diff not bloated with unrelated files. On CI failure, one
-Sonnet-style fix attempt; if it persists → close PR + cancel ticket with a
+targeted fix attempt; if it persists → close PR + cancel ticket with a
 clear reason. Never leave a red PR open.
 
 Print: `[Stage 5 complete] <N> passed, <M> killed`

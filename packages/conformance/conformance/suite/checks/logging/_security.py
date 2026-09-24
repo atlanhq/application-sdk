@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 
 from ._base import _MixinBase
-from ._helpers import _is_credential_value_name, is_logger_call
+from ._helpers import _is_credential_value_name, is_logger_call, is_resource_token_name
 
 
 class SecurityMixin(_MixinBase):
@@ -49,6 +49,12 @@ class SecurityMixin(_MixinBase):
                     and kw.value.id in self._redacted_names
                 ):
                     continue  # value is a redaction placeholder — presence indicator only
+                if (
+                    isinstance(kw.value, ast.Name)
+                    and is_resource_token_name(kw.arg)
+                    and self._is_resource_identifier(kw.value.id)
+                ):
+                    continue  # ``report_token=report_token`` used as a URL path segment
                 self._add(
                     "L010",
                     node,
@@ -69,6 +75,8 @@ class SecurityMixin(_MixinBase):
             if name and _is_credential_value_name(name):
                 if name in self._redacted_names:
                     continue  # assigned "[REDACTED]"/None upstream — presence indicator only
+                if self._is_resource_identifier(name):
+                    continue
                 self._add(
                     "L010",
                     node,
@@ -77,3 +85,18 @@ class SecurityMixin(_MixinBase):
                     "Requires security review — suppress with justification if safe.",
                 )
                 return
+
+    def _is_resource_identifier(self, name: str) -> bool:
+        """True when *name* is a ``<noun>_token`` resource identifier.
+
+        Both halves are required: the name must be ``<noun>_token`` for a noun
+        that is not an auth word (``is_resource_token_name``), AND the enclosing
+        function must interpolate it as a URL path segment
+        (``collect_path_segment_names``) — ``f"/reports/{report_token}/queries"``.
+        A secret usually travels in a header or query parameter; the ones that
+        ride in a path (webhook, bot, service URLs) carry an auth word, which
+        ``RESOURCE_TOKEN_AUTH_QUALIFIERS`` keeps outside the exemption.
+        Neither half alone exempts anything: ``access_token`` in a path still
+        fires, and ``report_token`` that is only ever logged still fires.
+        """
+        return is_resource_token_name(name) and name in self._path_segment_names

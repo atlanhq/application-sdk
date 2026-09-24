@@ -231,8 +231,8 @@ jobs:
       #
       #   Error: [DecimalError] Invalid argument: [object Object]
       #
-      # Three theories were chased through three PRs — the dot in grok-4.6, the
-      # slash, an unpopulated cost table — before running the exact CI config
+      # Three theories were chased through three PRs — the dot in the model
+      # alias, the slash, an unpopulated cost table — before running the exact CI config
       # against 1.18.22 locally, where it works untouched. The version was the
       # whole bug.
       #

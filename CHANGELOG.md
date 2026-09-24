@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.39.0 (September 23, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.38.0...v3.39.0
+
+### Features
+
+- name the build in the App lifecycle messages, drop the log attributes (#3928) (by @vaibhavatlan in [db5da5f](https://github.com/atlanhq/application-sdk/commit/db5da5f))
+
+### Bug Fixes
+
+- redact secrets in lifecycle FAILED Body lines (#3924) (by @cmgrote in [735e8c2](https://github.com/atlanhq/application-sdk/commit/735e8c2))
+- redact Azure SharedAccessKey and AccountKey values (#3937) (by @vaibhavatlan in [9ad05d8](https://github.com/atlanhq/application-sdk/commit/9ad05d8))
+- strip pyatlan placeholder guid in entity_bytes (#3944) (by @cmgrote in [37a0fa5](https://github.com/atlanhq/application-sdk/commit/37a0fa5))
+- FND-2501 carry a typed error on AuthOutput and surface it from test_auth (#3939) (by @sachi-atlan in [6105ad1](https://github.com/atlanhq/application-sdk/commit/6105ad1))
+- redact the auth/preflight/metadata boundary logs (#3948) (by @vaibhavatlan in [e42af02](https://github.com/atlanhq/application-sdk/commit/e42af02))
+
+
 ## v3.38.0 (September 22, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.37.0...v3.38.0
