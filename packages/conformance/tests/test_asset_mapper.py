@@ -115,6 +115,42 @@ def test_o002_silent_on_json_method() -> None:
     assert "O002" not in _o_ids(src)
 
 
+def test_o002_v9_asset_points_at_entity_bytes() -> None:
+    src = (
+        "from pyatlan_v9.model.assets import Table\n\n\n"
+        "def serialize(asset):\n    return asset.dict()\n"
+    )
+    (finding,) = [f for f in o_scan(src, "app/x.py") if f.rule_id == "O002"]
+    assert "entity_bytes" in finding.message
+    assert "O004" not in finding.message
+
+
+def test_o002_legacy_asset_routes_through_o004_first() -> None:
+    # A v1 model handed to entity_bytes falls through to model_dump(), which is
+    # not the wire shape — the message must not offer that switch on its own.
+    src = (
+        "from pyatlan.model.assets import Table\n\n\n"
+        "def serialize(asset):\n    return asset.dict()\n"
+    )
+    (finding,) = [f for f in o_scan(src, "app/x.py") if f.rule_id == "O002"]
+    assert "O004" in finding.message
+    assert "pyatlan_v9.model.assets first" in finding.message
+
+
+def test_o002_mixed_generation_module_covers_both_receivers() -> None:
+    # The receiver's generation is unknown statically, so the advice must not
+    # send an already-v9 asset through O004, nor a legacy one to entity_bytes.
+    src = (
+        "from pyatlan.model.assets import Column\n"
+        "from pyatlan_v9.model.assets import Table\n\n\n"
+        "def serialize(asset):\n    return asset.dict()\n"
+    )
+    (finding,) = [f for f in o_scan(src, "app/x.py") if f.rule_id == "O002"]
+    assert "both legacy" in finding.message
+    assert "If this receiver is a pyatlan_v9 asset" in finding.message
+    assert "If it is a legacy model" in finding.message
+
+
 def test_o002_suppressed_inline() -> None:
     src = (
         "from pyatlan_v9.model.assets import Table\n\n\n"

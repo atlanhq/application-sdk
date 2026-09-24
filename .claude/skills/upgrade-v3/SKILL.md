@@ -166,13 +166,14 @@ After identifying the connector type, determine the transformation strategy:
 Extract phase:  API response → typed records (dataclass/msgspec.Struct) → JSONL files
                 Pass between tasks via FileReference
 Transform phase: Read typed records from JSONL → mapper functions → pyatlan Asset instances
-                 Write via asset.to_nested_bytes() → JSONL output file
+                 Write via entity_bytes(asset, ...) → JSONL output file
 ```
 Key elements:
 - `app/asset_mapper.py` — pure functions: `map_<entity>(record, connection_qn, ...) -> pyatlan.Asset`
 - `app/api_types.py` — typed intermediate records (dataclass or `msgspec.Struct`)
 - No `TransformerInterface`, no Daft DataFrames, no YAML query files
-- Uses `msgspec.json` or `json` for JSONL serialization
+- Each asset is serialized through `application_sdk.common.asset_serialization.entity_bytes()` — never `asset.to_nested_bytes()` / `to_nested_dict()` / `to_atlas_format()` directly (P052). `entity_bytes` injects `connectionName` and last-sync details, applies the declared entity envelope and strips the placeholder `guid`
+- `msgspec.json` or `json` only for the typed intermediate records, not for assets
 - `FileReference` in task contracts to pass file paths between extract → transform tasks
 
 ### 2b — Apply structural changes
@@ -1249,14 +1250,30 @@ def map_table(record: TableRecord, connection_qn: str, workflow_id: str, ...) ->
 ```
 
 **Transform task pattern:**
+
+Choose the envelope first, from the connector's **released** output — never by default. If it already shipped output with relationship refs under a top-level `relationshipAttributes` key (what `asset.to_nested_bytes()` writes), pin `EnvelopeShape.PYATLAN` for this migration so its wire format and publish diff cache don't flip as a side effect. `PYATLAN` is deprecated (removed in v4.0); moving to `FLATTENED` (refs in `attributes`) is a separate change. Only a connector with no released output, or one already flattened, starts on `FLATTENED` — as `atlan-openapi-app` does.
+
 ```python
+from application_sdk.common.asset_serialization import entity_bytes
+from application_sdk.common.entity_envelope import EntityEnvelopePolicy, EnvelopeShape
+
+# Released output was nested (it wrote asset.to_nested_bytes()): keep it.
+ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.PYATLAN)
+# No released output, or already flattened (atlan-openapi-app), instead:
+# ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)
+
 @task(timeout_seconds=1800)
 async def transform(self, input: TransformInput) -> TransformOutput:
     for record in read_jsonl(input.raw_file, RecordType):
         asset = map_entity(record, connection_qn, ...)
-        out_f.write(asset.to_nested_bytes() + b"\n")
+        out_f.write(
+            entity_bytes(asset, entity_type="my_entity", envelope=ENTITY_ENVELOPE)
+            + b"\n"
+        )
     return TransformOutput(output_file=FileReference(local_path=str(output_file)))
 ```
+
+This is the shape of `atlan-openapi-app` `app/connector.py` `_transform_blocking`. Always serialize through `entity_bytes()`, never `asset.to_nested_bytes()` — conformance rule P052 flags the direct call. Pass `connection_name=` and `last_sync=resolve_last_sync_details()` too, unless the mappers already stamp them on every asset. When a line needs a key the asset model cannot hold, decode what `entity_bytes()` returned and add the key to that (see `atlan-metabase-app` `app/asset_mapper.py` `serialize_entity`).
 
 ### Handler `fetch_metadata` must return widget-specific output types
 
