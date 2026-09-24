@@ -1524,6 +1524,7 @@ def _collect_source_usage(
             continue
 
         engine_factories: set[str] = set()
+        engine_from_config_factories: set[str] = set()
         sqlalchemy_modules: set[str] = set()
         url_classes: set[str] = set()
         for node in ast.walk(tree):
@@ -1541,10 +1542,13 @@ def _collect_source_usage(
                     modules.add(node.module.split(".", 1)[0])
                     if node.module.startswith("sqlalchemy"):
                         for alias in node.names:
-                            if alias.name in {
+                            if alias.name == "engine_from_config":
+                                engine_from_config_factories.add(
+                                    alias.asname or alias.name
+                                )
+                            elif alias.name in {
                                 "create_engine",
                                 "create_async_engine",
-                                "engine_from_config",
                                 "make_url",
                             }:
                                 engine_factories.add(alias.asname or alias.name)
@@ -1557,20 +1561,44 @@ def _collect_source_usage(
                 self.bindings: dict[
                     tuple[str, ...], list[tuple[tuple[int, int], str, ast.expr]]
                 ] = {}
+                self.local_names: dict[tuple[str, ...], set[str]] = {}
+                self.parameters: dict[tuple[str, ...], set[str]] = {}
+                self.mutated_names: set[str] = set()
                 self.calls: list[tuple[ast.Call, tuple[str, ...]]] = []
 
             def visit_Call(self, node: ast.Call) -> None:
                 self.calls.append((node, self.scope))
                 self.generic_visit(node)
 
+            def _record_binding(
+                self, name: str, value: ast.expr, node: ast.AST
+            ) -> None:
+                position = (
+                    getattr(node, "end_lineno", None) or getattr(node, "lineno", 0),
+                    getattr(node, "end_col_offset", None) or 0,
+                )
+                self.bindings.setdefault(self.scope, []).append((position, name, value))
+                self.local_names.setdefault(self.scope, set()).add(name)
+
+            def _record_target_mutations(self, target: ast.AST) -> None:
+                if isinstance(target, ast.Name):
+                    self.local_names.setdefault(self.scope, set()).add(target.id)
+                elif isinstance(target, (ast.Subscript, ast.Attribute)):
+                    base = (
+                        target.value
+                        if isinstance(target, ast.Subscript)
+                        else target.value
+                    )
+                    if isinstance(base, ast.Name):
+                        self.mutated_names.add(base.id)
+
             def visit_Assign(self, node: ast.Assign) -> None:
                 self.visit(node.value)
-                position = (node.end_lineno or node.lineno, node.end_col_offset or 0)
                 for target in node.targets:
                     if isinstance(target, ast.Name):
-                        self.bindings.setdefault(self.scope, []).append(
-                            (position, target.id, node.value)
-                        )
+                        self._record_binding(target.id, node.value, node)
+                    else:
+                        self._record_target_mutations(target)
                 for target in node.targets:
                     self.visit(target)
 
@@ -1578,16 +1606,26 @@ def _collect_source_usage(
                 if node.value is not None:
                     self.visit(node.value)
                     if isinstance(node.target, ast.Name):
-                        position = (
-                            node.end_lineno or node.lineno,
-                            node.end_col_offset or 0,
-                        )
-                        self.bindings.setdefault(self.scope, []).append(
-                            (position, node.target.id, node.value)
-                        )
+                        self._record_binding(node.target.id, node.value, node)
+                    else:
+                        self._record_target_mutations(node.target)
                 self.visit(node.target)
 
-            def _visit_scoped_body(self, node: ast.AST, body: list[ast.stmt]) -> None:
+            def visit_AugAssign(self, node: ast.AugAssign) -> None:
+                self._record_target_mutations(node.target)
+                self.generic_visit(node)
+
+            def visit_Delete(self, node: ast.Delete) -> None:
+                for target in node.targets:
+                    self._record_target_mutations(target)
+                self.generic_visit(node)
+
+            def _visit_scoped_body(
+                self,
+                node: ast.AST,
+                body: list[ast.stmt],
+                parameters: set[str] | None = None,
+            ) -> None:
                 if isinstance(
                     node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
                 ):
@@ -1598,6 +1636,11 @@ def _collect_source_usage(
                     node_name = getattr(node, "name", "scope")
                     node_line = getattr(node, "lineno", 0)
                     self.scope += (f"{node_name}:{node_line}",)
+                    if parameters:
+                        self.parameters[self.scope] = set(parameters)
+                        self.local_names.setdefault(self.scope, set()).update(
+                            parameters
+                        )
                     for statement in body:
                         self.visit(statement)
                     self.scope = self.scope[:-1]
@@ -1606,10 +1649,22 @@ def _collect_source_usage(
                 for default in (*node.args.defaults, *node.args.kw_defaults):
                     if default is not None:
                         self.visit(default)
-                self._visit_scoped_body(node, node.body)
+                parameters = {
+                    arg.arg
+                    for arg in (
+                        *node.args.posonlyargs,
+                        *node.args.args,
+                        *node.args.kwonlyargs,
+                    )
+                }
+                if node.args.vararg:
+                    parameters.add(node.args.vararg.arg)
+                if node.args.kwarg:
+                    parameters.add(node.args.kwarg.arg)
+                self._visit_scoped_body(node, node.body, parameters)
 
             def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-                self.visit_FunctionDef(node)  # type: ignore[arg-type]
+                self.visit_FunctionDef(node)
 
             def visit_ClassDef(self, node: ast.ClassDef) -> None:
                 self._visit_scoped_body(node, node.body)
@@ -1629,24 +1684,60 @@ def _collect_source_usage(
                 return node
             for depth in range(len(scope), -1, -1):
                 binding_scope = scope[:depth]
+                if (
+                    binding_scope
+                    and depth < len(scope)
+                    and node.id in source.local_names.get(binding_scope, set())
+                ):
+                    choices = [
+                        item
+                        for item in source.bindings.get(binding_scope, [])
+                        if item[1] == node.id and item[0] < position
+                    ]
+                    if choices:
+                        return value_at(
+                            choices[-1][2],
+                            binding_scope,
+                            choices[-1][0],
+                            seen | {node.id},
+                        )
+                    return node
+                if depth == len(scope) and node.id in source.parameters.get(
+                    binding_scope, set()
+                ):
+                    return node
                 choices = [
                     item
                     for item in source.bindings.get(binding_scope, [])
-                    if item[1] == node.id and item[0] < position
+                    if item[1] == node.id
+                    and (
+                        depth < len(scope)
+                        or item[0] < position
+                        or (scope and binding_scope == () and item[0][0] > position[0])
+                    )
                 ]
                 if choices:
-                    return value_at(choices[-1][2], scope, position, seen | {node.id})
+                    return value_at(
+                        choices[-1][2],
+                        binding_scope,
+                        choices[-1][0],
+                        seen | {node.id},
+                    )
             return node
 
         def literal_values(
             node: ast.AST,
             scope: tuple[str, ...],
             position: tuple[int, int],
+            *,
+            allow_formatted_prefix: bool = True,
         ) -> list[str]:
             node = value_at(node, scope, position)
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 return [node.value]
             if isinstance(node, ast.JoinedStr):
+                if not allow_formatted_prefix:
+                    return []
                 prefix = ""
                 for value in node.values:
                     if isinstance(value, ast.Constant) and isinstance(value.value, str):
@@ -1655,8 +1746,18 @@ def _collect_source_usage(
                         break
                 return [prefix] if prefix else []
             if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-                left = literal_values(node.left, scope, position)
-                right = literal_values(node.right, scope, position)
+                left = literal_values(
+                    node.left,
+                    scope,
+                    position,
+                    allow_formatted_prefix=allow_formatted_prefix,
+                )
+                right = literal_values(
+                    node.right,
+                    scope,
+                    position,
+                    allow_formatted_prefix=allow_formatted_prefix,
+                )
                 return [a + b for a in left for b in right]
             return []
 
@@ -1666,6 +1767,16 @@ def _collect_source_usage(
             for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(value):
                 dialect, driver = match.group(1), match.group(2)
                 dialect_names.add(f"{dialect}.{driver}" if driver else dialect)
+
+        def is_engine_from_config(func: ast.AST) -> bool:
+            if isinstance(func, ast.Name):
+                return func.id in engine_from_config_factories
+            return (
+                isinstance(func, ast.Attribute)
+                and func.attr == "engine_from_config"
+                and isinstance(func.value, ast.Name)
+                and func.value.id in sqlalchemy_modules
+            )
 
         def is_url_factory(func: ast.AST) -> bool:
             if isinstance(func, ast.Name):
@@ -1720,6 +1831,11 @@ def _collect_source_usage(
                     ),
                     None,
                 )
+            if (
+                isinstance(configuration, ast.Name)
+                and configuration.id in source.mutated_names
+            ):
+                return []
             prefixes = (
                 argument_values(prefix_node, scope, position)
                 if prefix_node
@@ -1728,26 +1844,21 @@ def _collect_source_usage(
             mapping = value_at(configuration, scope, position)
             if not isinstance(mapping, ast.Dict):
                 return []
-            values: list[str] = []
+            matches: list[ast.expr] = []
             for key, value in zip(mapping.keys, mapping.values):
                 if key is None:
-                    continue
+                    return []
                 for prefix in prefixes:
                     if argument_values(key, scope, position) == [f"{prefix}url"]:
-                        values.extend(argument_values(value, scope, position))
-            return values
+                        matches.append(value)
+            if len(matches) != 1:
+                return []
+            return argument_values(matches[0], scope, position)
 
         for call, scope in source.calls:
             func = call.func
             position = (call.lineno, call.col_offset)
-            factory_name = (
-                func.id
-                if isinstance(func, ast.Name)
-                else func.attr
-                if isinstance(func, ast.Attribute)
-                else ""
-            )
-            if factory_name == "engine_from_config" and is_url_factory(func):
+            if is_engine_from_config(func):
                 for value in engine_from_config_urls(call, scope, position):
                     collect_url(value)
             elif is_url_factory(func):
@@ -1783,7 +1894,12 @@ def _collect_source_usage(
                     )
                 )
                 if drivername is not None:
-                    for value in argument_values(drivername, scope, position):
+                    for value in literal_values(
+                        drivername,
+                        scope,
+                        position,
+                        allow_formatted_prefix=False,
+                    ):
                         match = _SQLALCHEMY_DRIVERNAME_RE.fullmatch(value)
                         if match is None:
                             continue
