@@ -132,8 +132,15 @@ class _Module:
     assertion_names: dict[str, str]
     #: Local names bound to the ``conformance.preflight_testing`` module.
     assertion_modules: frozenset[str]
-    #: Module-level names bound to a mark expression (``skip_ci = pytest.mark.skipif(...)``).
-    mark_aliases: dict[str, ast.expr] = field(default_factory=dict)
+    #: Module-level names bound to their evaluated pytest marks.
+    mark_aliases: dict[str, tuple[_Mark, ...]] = field(default_factory=dict)
+    #: Binding state when a module-level definition's decorators are evaluated.
+    decorator_functions: dict[
+        ast.AST, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]
+    ] = field(default_factory=dict)
+    decorator_aliases: dict[ast.AST, dict[str, tuple[_Mark, ...]]] = field(
+        default_factory=dict
+    )
 
 
 def _pytest_bindings(
@@ -191,11 +198,7 @@ def _nested_blocks(node: ast.stmt) -> list[list[ast.stmt]]:
 
 
 def _live_blocks(node: ast.stmt) -> list[list[ast.stmt]]:
-    """``_nested_blocks`` without the branches a literal test never takes.
-
-    ``if False:`` never binds anything at import time, so a rebinding inside
-    it must not erase a live import; ``while False:`` likewise never runs.
-    """
+    """``_nested_blocks`` without the branches a literal test never takes."""
     if isinstance(node, ast.If):
         truth = _constant_truth(node.test)
         if truth is True:
@@ -204,7 +207,17 @@ def _live_blocks(node: ast.stmt) -> list[list[ast.stmt]]:
             return [node.orelse]
     if isinstance(node, ast.While) and _constant_truth(node.test) is False:
         return [node.orelse]
+    if isinstance(node, (ast.For, ast.AsyncFor)) and _statically_empty(node.iter):
+        return [node.orelse]
     return _nested_blocks(node)
+
+
+def _statically_empty(node: ast.expr) -> bool:
+    return (isinstance(node, (ast.Tuple, ast.List, ast.Set)) and not node.elts) or (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, (str, bytes))
+        and not node.value
+    )
 
 
 def _assertion_bindings(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
@@ -318,17 +331,48 @@ def _load(src: Source) -> _Module:
 
 
 def _replay_module_bindings(stmts: list[ast.stmt], mod: _Module) -> None:
-    """Replay helper and mark-alias bindings in source order.
-
-    What a decorator name means is its last binding at import time: a
-    ``def skip_ci`` after ``skip_ci = pytest.mark.skipif(False)`` replaces
-    the alias, and an assignment or import after a ``def`` replaces the
-    helper. Every binding of a name forgets what it meant before; only a
-    module-level function or a single-name assignment of a mark expression
-    gives it a meaning the reader can follow. Literal-dead branches bind
-    nothing.
-    """
+    """Replay helper and mark-alias bindings in source order."""
     for node in stmts:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            mod.decorator_functions[node] = dict(mod.functions)
+            mod.decorator_aliases[node] = dict(mod.mark_aliases)
+        targets = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+            if isinstance(node, ast.AnnAssign)
+            else []
+        )
+        value = getattr(node, "value", None)
+        alias = (
+            targets[0].id
+            if len(targets) == 1 and isinstance(targets[0], ast.Name)
+            else None
+        )
+        mark_value: tuple[_Mark, ...] | None = None
+        if alias is not None and alias != "pytestmark" and value is not None:
+            try:
+                mark_value = _marks(value, mod, mod.constants)
+            except _Unresolved:
+                if _mentions_marks(value, mod):
+                    mark_value = (_Mark(_UNRESOLVED_MARK),)
+                elif isinstance(value, ast.Name) and value.id in mod.mark_aliases:
+                    mark_value = mod.mark_aliases[value.id]
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            if _statically_empty(node.iter):
+                _replay_module_bindings(node.orelse, mod)
+                continue
+            # The body may run zero or more times. A binding in it is therefore
+            # neither the old value nor any one value the body might assign.
+            uncertain = _block_bound_names([*node.body, *node.orelse])
+            uncertain.update(
+                sub.id for sub in ast.walk(node.target) if isinstance(sub, ast.Name)
+            )
+            for name in uncertain:
+                mod.functions.pop(name, None)
+                mod.mark_aliases[name] = (_Mark(_UNRESOLVED_MARK),)
+            _replay_module_bindings(node.orelse, mod)
+            continue
         bound = set(_bound_names(node))
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             bound |= {
@@ -342,32 +386,105 @@ def _replay_module_bindings(stmts: list[ast.stmt], mod: _Module) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             mod.functions[node.name] = node
             continue
-        targets = (
-            node.targets
-            if isinstance(node, ast.Assign)
-            else [node.target]
-            if isinstance(node, ast.AnnAssign)
-            else []
-        )
-        value = getattr(node, "value", None)
-        if (
-            len(targets) == 1
-            and isinstance(targets[0], ast.Name)
-            and targets[0].id != "pytestmark"
-            and value is not None
-            and _mentions_marks(value, mod)
-        ):
-            mod.mark_aliases[targets[0].id] = value
+        if alias is not None and alias != "pytestmark" and mark_value is not None:
+            mod.mark_aliases[alias] = mark_value
         for block in _live_blocks(node):
             _replay_module_bindings(block, mod)
 
 
-def _mentions_marks(node: ast.AST, mod: _Module) -> bool:
-    """True when *node* contains a ``pytest.mark.*`` expression or a mark alias."""
+def _block_bound_names(stmts: list[ast.stmt]) -> set[str]:
+    names: set[str] = set()
+    for stmt in stmts:
+        names.update(_bound_names(stmt))
+        if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for block in _nested_blocks(stmt):
+                names.update(_block_bound_names(block))
+    return names
+
+
+def _mentions_marks(
+    node: ast.AST,
+    mod: _Module,
+    seen: frozenset[str] = frozenset(),
+    *,
+    functions: Mapping[str, ast.FunctionDef | ast.AsyncFunctionDef] | None = None,
+    aliases: Mapping[str, tuple[_Mark, ...]] | None = None,
+) -> bool:
+    """True when reachable *node* may evaluate a mark expression or alias."""
+    functions = functions if functions is not None else mod.functions
+    aliases = aliases if aliases is not None else mod.mark_aliases
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return any(
+            _mentions_marks(
+                stmt,
+                mod,
+                seen | {node.name},
+                functions=functions,
+                aliases=aliases,
+            )
+            for stmt in node.body
+        )
+    if isinstance(node, ast.Lambda):
+        return False
+    if isinstance(node, ast.If):
+        truth = _constant_truth(node.test)
+        branches = (
+            node.body
+            if truth is True
+            else node.orelse
+            if truth is False
+            else [*node.body, *node.orelse]
+        )
+        return _mentions_marks(
+            node.test, mod, seen, functions=functions, aliases=aliases
+        ) or any(
+            _mentions_marks(stmt, mod, seen, functions=functions, aliases=aliases)
+            for stmt in branches
+        )
+    if isinstance(node, ast.While) and _constant_truth(node.test) is False:
+        return _mentions_marks(
+            node.test, mod, seen, functions=functions, aliases=aliases
+        ) or any(
+            _mentions_marks(stmt, mod, seen, functions=functions, aliases=aliases)
+            for stmt in node.orelse
+        )
+    if isinstance(node, (ast.For, ast.AsyncFor)) and _statically_empty(node.iter):
+        return _mentions_marks(
+            node.iter, mod, seen, functions=functions, aliases=aliases
+        ) or any(
+            _mentions_marks(stmt, mod, seen, functions=functions, aliases=aliases)
+            for stmt in node.orelse
+        )
+    if isinstance(node, ast.GeneratorExp):
+        return bool(node.generators) and _mentions_marks(
+            node.generators[0].iter,
+            mod,
+            seen,
+            functions=functions,
+            aliases=aliases,
+        )
+    if isinstance(node, ast.Name) and node.id in aliases:
+        return True
+    if isinstance(node, ast.Attribute) and _mark_name(node, mod) is not None:
+        return True
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in functions
+        and node.func.id not in seen
+        and _mentions_marks(
+            functions[node.func.id],
+            mod,
+            seen | {node.func.id},
+            functions=functions,
+            aliases=aliases,
+        )
+    ):
+        return True
     return any(
-        (isinstance(sub, ast.Attribute) and _mark_name(sub, mod) is not None)
-        or (isinstance(sub, ast.Name) and sub.id in mod.mark_aliases)
-        for sub in ast.walk(node)
+        _mentions_marks(child, mod, seen, functions=functions, aliases=aliases)
+        for child in ast.iter_child_nodes(node)
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
     )
 
 
@@ -444,7 +561,13 @@ def _case_values(
 
 
 def _parametrize(
-    node: ast.Call, mod: _Module, env: Mapping[str, object], depth: int
+    node: ast.Call,
+    mod: _Module,
+    env: Mapping[str, object],
+    depth: int,
+    *,
+    functions: Mapping[str, ast.FunctionDef | ast.AsyncFunctionDef] | None = None,
+    aliases: Mapping[str, tuple[_Mark, ...]] | None = None,
 ) -> _Mark:
     argnames_node = node.args[0] if node.args else None
     argvalues_node = node.args[1] if len(node.args) > 1 else None
@@ -462,7 +585,18 @@ def _parametrize(
             marks_kw = next(
                 (kw.value for kw in elt.keywords if kw.arg == "marks"), None
             )
-            marks = _marks(marks_kw, mod, bound, depth) if marks_kw else ()
+            marks = (
+                _marks(
+                    marks_kw,
+                    mod,
+                    bound,
+                    depth,
+                    functions=functions,
+                    aliases=aliases,
+                )
+                if marks_kw
+                else ()
+            )
             if len(elt.args) == len(argnames):
                 values = {n: _value(v, bound) for n, v in zip(argnames, elt.args)}
             else:
@@ -474,23 +608,51 @@ def _parametrize(
 
 
 def _marks(
-    node: ast.expr, mod: _Module, env: Mapping[str, object], depth: int = 0
+    node: ast.expr,
+    mod: _Module,
+    env: Mapping[str, object],
+    depth: int = 0,
+    *,
+    functions: Mapping[str, ast.FunctionDef | ast.AsyncFunctionDef] | None = None,
+    aliases: Mapping[str, tuple[_Mark, ...]] | None = None,
 ) -> tuple[_Mark, ...]:
     """Evaluate a decorator or ``marks=`` expression to the marks it applies."""
     if depth > _MAX_DEPTH:
         raise _Unresolved("helper nesting")
     if isinstance(node, (ast.List, ast.Tuple)):
-        return tuple(m for elt in node.elts for m in _marks(elt, mod, env, depth))
+        return tuple(
+            mark
+            for elt in node.elts
+            for mark in _marks(
+                elt,
+                mod,
+                env,
+                depth,
+                functions=functions,
+                aliases=aliases,
+            )
+        )
     name = _mark_name(node, mod)
     if name is not None:
         return (_Mark(name),)
-    if isinstance(node, ast.Name) and node.id in mod.mark_aliases:
-        return _marks(mod.mark_aliases[node.id], mod, mod.constants, depth + 1)
+    aliases = aliases if aliases is not None else mod.mark_aliases
+    functions = functions if functions is not None else mod.functions
+    if isinstance(node, ast.Name) and node.id in aliases:
+        return aliases[node.id]
     if not isinstance(node, ast.Call):
         raise _Unresolved(ast.unparse(node))
     name = _mark_name(node.func, mod)
     if name == "parametrize":
-        return (_parametrize(node, mod, env, depth),)
+        return (
+            _parametrize(
+                node,
+                mod,
+                env,
+                depth,
+                functions=functions,
+                aliases=aliases,
+            ),
+        )
     if name is not None:
         return (
             _Mark(
@@ -503,8 +665,16 @@ def _marks(
                 },
             ),
         )
-    if isinstance(node.func, ast.Name) and node.func.id in mod.functions:
-        return _helper_marks(mod.functions[node.func.id], node, mod, env, depth)
+    if isinstance(node.func, ast.Name) and node.func.id in functions:
+        return _helper_marks(
+            functions[node.func.id],
+            node,
+            mod,
+            env,
+            depth,
+            functions=functions,
+            aliases=aliases,
+        )
     raise _Unresolved(ast.unparse(node))
 
 
@@ -514,6 +684,9 @@ def _helper_marks(
     mod: _Module,
     env: Mapping[str, object],
     depth: int,
+    *,
+    functions: Mapping[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    aliases: Mapping[str, tuple[_Mark, ...]],
 ) -> tuple[_Mark, ...]:
     """Evaluate a module-level helper whose body is a single ``return``."""
     body = [
@@ -538,22 +711,75 @@ def _helper_marks(
         bound.setdefault(arg_name, _literal(default, mod.constants))
     if any(arg_name not in bound for arg_name in names):
         raise _Unresolved(helper.name)
-    return _marks(body[0].value, mod, bound, depth + 1)
-
-
-def _names_marker(node: ast.expr, mod: _Module) -> bool:
-    """True when *node*, or the module helper it calls, mentions the marker."""
-    if MARKER in ast.unparse(node):
-        return True
-    return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in mod.functions
-        and MARKER in ast.unparse(mod.functions[node.func.id])
+    return _marks(
+        body[0].value,
+        mod,
+        bound,
+        depth + 1,
+        functions=functions,
+        aliases=aliases,
     )
 
 
-def _lenient_marks(node: ast.expr, mod: _Module) -> tuple[_Mark, ...]:
+def _names_marker(
+    node: ast.AST,
+    mod: _Module,
+    functions: Mapping[str, ast.FunctionDef | ast.AsyncFunctionDef] | None = None,
+    seen: frozenset[str] = frozenset(),
+) -> bool:
+    """True when *node*, or a reachable local helper it calls, names the marker."""
+    functions = functions if functions is not None else mod.functions
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return any(
+            _names_marker(stmt, mod, functions, seen | {node.name})
+            for stmt in node.body
+        )
+    if isinstance(node, (ast.Lambda, ast.GeneratorExp)):
+        return False
+    if isinstance(node, ast.If):
+        truth = _constant_truth(node.test)
+        branches = (
+            node.body
+            if truth is True
+            else node.orelse
+            if truth is False
+            else [*node.body, *node.orelse]
+        )
+        return _names_marker(node.test, mod, functions, seen) or any(
+            _names_marker(stmt, mod, functions, seen) for stmt in branches
+        )
+    if isinstance(node, ast.While) and _constant_truth(node.test) is False:
+        return _names_marker(node.test, mod, functions, seen) or any(
+            _names_marker(stmt, mod, functions, seen) for stmt in node.orelse
+        )
+    if isinstance(node, (ast.For, ast.AsyncFor)) and _statically_empty(node.iter):
+        return _names_marker(node.iter, mod, functions, seen) or any(
+            _names_marker(stmt, mod, functions, seen) for stmt in node.orelse
+        )
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == MARKER
+    ):
+        return True
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        name = node.func.id
+        if name in functions and name not in seen:
+            return _names_marker(functions[name], mod, functions, seen | {name})
+    return any(
+        _names_marker(child, mod, functions, seen)
+        for child in ast.iter_child_nodes(node)
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+    )
+
+
+def _lenient_marks(
+    node: ast.expr,
+    mod: _Module,
+    *,
+    functions: Mapping[str, ast.FunctionDef | ast.AsyncFunctionDef] | None = None,
+    aliases: Mapping[str, tuple[_Mark, ...]] | None = None,
+) -> tuple[_Mark, ...]:
     """Marks from a ``pytestmark`` value, element by element.
 
     A resolvable element keeps its effect; an unreadable one becomes
@@ -564,7 +790,9 @@ def _lenient_marks(node: ast.expr, mod: _Module) -> tuple[_Mark, ...]:
     marks: list[_Mark] = []
     for elt in elements:
         try:
-            marks.extend(_marks(elt, mod, mod.constants))
+            marks.extend(
+                _marks(elt, mod, mod.constants, functions=functions, aliases=aliases)
+            )
         except _Unresolved:
             marks.append(_Mark(_UNRESOLVED_MARK))
     return tuple(marks)
@@ -577,6 +805,8 @@ def _pytestmark(body: list[ast.stmt], mod: _Module) -> tuple[_Mark, ...]:
     last one wins, as it does at import time.
     """
     marks: tuple[_Mark, ...] = ()
+    functions = mod.functions
+    aliases = mod.mark_aliases
     for stmt in body:
         value: ast.expr | None = None
         if isinstance(stmt, ast.Assign) and any(
@@ -595,14 +825,23 @@ def _pytestmark(body: list[ast.stmt], mod: _Module) -> tuple[_Mark, ...]:
             and isinstance(stmt.target, ast.Name)
             and stmt.target.id == "pytestmark"
         ):
-            marks = (*marks, *_lenient_marks(stmt.value, mod))
+            marks = (
+                *marks,
+                *_lenient_marks(stmt.value, mod, functions=functions, aliases=aliases),
+            )
             continue
         if value is not None:
-            marks = _lenient_marks(value, mod)
+            marks = _lenient_marks(value, mod, functions=functions, aliases=aliases)
     return marks
 
 
-def _is_mark_expression(node: ast.expr, mod: _Module) -> bool:
+def _is_mark_expression(
+    node: ast.expr,
+    mod: _Module,
+    *,
+    functions: Mapping[str, ast.FunctionDef | ast.AsyncFunctionDef] | None = None,
+    aliases: Mapping[str, tuple[_Mark, ...]] | None = None,
+) -> bool:
     """True when *node* may apply pytest marks.
 
     That is a ``pytest.mark.*`` expression or a mark alias, or a same-module
@@ -610,18 +849,22 @@ def _is_mark_expression(node: ast.expr, mod: _Module) -> bool:
     ordinary decorator factory (``def identity(): return lambda fn: fn``)
     applies no marks, so it is ignored rather than made unknown.
     """
-    if _mentions_marks(node, mod):
+    functions = functions if functions is not None else mod.functions
+    aliases = aliases if aliases is not None else mod.mark_aliases
+    if _mentions_marks(node, mod, functions=functions, aliases=aliases):
         return True
     target = node.func if isinstance(node, ast.Call) else node
     return (
         isinstance(target, ast.Name)
-        and target.id in mod.functions
-        and _mentions_marks(mod.functions[target.id], mod)
+        and target.id in functions
+        and _mentions_marks(
+            functions[target.id], mod, functions=functions, aliases=aliases
+        )
     )
 
 
 def _decorator_marks(
-    decorators: list[ast.expr], mod: _Module
+    decorators: list[ast.expr], mod: _Module, owner: ast.AST | None = None
 ) -> tuple[tuple[_Mark, ...], list[ast.expr]]:
     """Resolved marks, and the decorators naming the marker that did not resolve.
 
@@ -632,13 +875,25 @@ def _decorator_marks(
     """
     marks: list[_Mark] = []
     unresolved: list[ast.expr] = []
+    functions = (
+        mod.decorator_functions.get(owner, mod.functions)
+        if owner is not None
+        else mod.functions
+    )
+    aliases = (
+        mod.decorator_aliases.get(owner, mod.mark_aliases)
+        if owner is not None
+        else mod.mark_aliases
+    )
     for dec in decorators:
         try:
-            marks.extend(_marks(dec, mod, mod.constants))
+            marks.extend(
+                _marks(dec, mod, mod.constants, functions=functions, aliases=aliases)
+            )
         except _Unresolved:
-            if _names_marker(dec, mod):
+            if _names_marker(dec, mod, functions):
                 unresolved.append(dec)
-            elif _is_mark_expression(dec, mod):
+            elif _is_mark_expression(dec, mod, functions=functions, aliases=aliases):
                 marks.append(_Mark(_UNRESOLVED_MARK))
     return tuple(marks), unresolved
 
@@ -824,6 +1079,8 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
         return _loop(body, orelse, infinite=truth is True)
     if isinstance(stmt, (ast.For, ast.AsyncFor)):
         _expression(stmt.iter, out)
+        if _statically_empty(stmt.iter):
+            return _block(stmt.orelse, out)
         body = _block(stmt.body, out)  # may run zero times
         return _loop(body, _block(stmt.orelse, out), infinite=False)
     if isinstance(stmt, (ast.With, ast.AsyncWith)):
@@ -834,15 +1091,17 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
         return body | _FALL if RAISES in body else body
     if isinstance(stmt, ast.Try | ast.TryStar):
         body = _block(stmt.body, out)
-        handlers = [_block(h.body, out) for h in stmt.handlers]
         result = body - _FALL
         if FALLS in body:
             result |= _block(stmt.orelse, out)
-        for handler in handlers:
-            # Anything in the body may raise into a handler.
-            result |= handler
+        if RAISES in body:
+            for handler in stmt.handlers:
+                result |= _block(handler.body, out)
         final = _block(stmt.finalbody, out)
-        return final if FALLS not in final else frozenset(result)
+        if not stmt.finalbody:
+            return frozenset(result)
+        final_exits = final - {FALLS}
+        return frozenset(final_exits | (result if FALLS in final else set()))
     if isinstance(stmt, ast.Match):
         _expression(stmt.subject, out)
         flows = [_block(case.body, out) for case in stmt.cases]
@@ -1047,7 +1306,7 @@ def _scan_test_module(
         func: ast.FunctionDef | ast.AsyncFunctionDef,
         inherited: tuple[_Mark, ...],
     ) -> None:
-        own, unresolved = _decorator_marks(func.decorator_list, mod)
+        own, unresolved = _decorator_marks(func.decorator_list, mod, owner=func)
         for dec in unresolved:
             findings.append(
                 _finding(mod, dec, _UNRESOLVED_REGISTRATION.format(name=func.name))
@@ -1124,7 +1383,7 @@ def _scan_test_module(
             isinstance(stmt, ast.FunctionDef) and stmt.name == "__init__"
             for stmt in node.body
         ):
-            class_marks, _ = _decorator_marks(node.decorator_list, mod)
+            class_marks, _ = _decorator_marks(node.decorator_list, mod, owner=node)
             inherited = (*module_marks, *class_marks, *_pytestmark(node.body, mod))
             for stmt in node.body:
                 if is_test_function(stmt):

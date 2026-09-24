@@ -899,3 +899,90 @@ def test_a_mixed_exit_that_can_be_absorbed_still_reaches_the_assertion(
     tmp_path: Path, body: str
 ) -> None:
     assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
+
+
+# --- fourth review round ------------------------------------------------------
+
+
+def test_a_statically_empty_loop_preserves_a_mark_alias(tmp_path: Path) -> None:
+    alias = (
+        'gate = pytest.mark.skip(reason="skip")\n' "for _ in []:\n    gate = object()"
+    )
+    messages = _grade(tmp_path, _module(alias, _test("@gate\n" + HEALTHY), LIFETIME))
+    assert any(NOT_RUN in message for message in messages)
+
+
+def test_an_unknown_loop_binding_makes_the_alias_unresolved(tmp_path: Path) -> None:
+    alias = (
+        'gate = pytest.mark.skipif(False, reason="skip")\n'
+        "for _ in dynamic_values():\n    gate = object()"
+    )
+    messages = _grade(tmp_path, _module(alias, _test("@gate\n" + HEALTHY), LIFETIME))
+    assert any(UNREADABLE in message for message in messages)
+    assert any(NOT_REGISTERED in message for message in messages)
+
+
+def test_a_decorator_uses_bindings_at_its_definition_site(tmp_path: Path) -> None:
+    source = (
+        'gate = pytest.mark.skip(reason="skip")\n'
+        + _test("@gate\n" + HEALTHY)
+        + "\ngate = object()"
+    )
+    messages = _grade(tmp_path, _module(source, LIFETIME))
+    assert any(NOT_RUN in message for message in messages)
+    assert any(NOT_REGISTERED in message for message in messages)
+
+
+def test_a_copied_mark_alias_keeps_its_original_value(tmp_path: Path) -> None:
+    source = (
+        'gate = pytest.mark.skipif(False, reason="source")\n'
+        "saved = gate\n"
+        'gate = pytest.mark.skipif(True, reason="rebound")\n'
+        + _test("@saved\n" + HEALTHY)
+    )
+    assert _grade(tmp_path, _module(source, LIFETIME)) == []
+
+
+def test_a_transitive_local_decorator_that_may_skip_is_unknown(tmp_path: Path) -> None:
+    helpers = (
+        "def inner():\n    return pytest.mark.skip(reason='skip')\n\n"
+        "def outer(fn):\n"
+        "    if dynamic():\n        return inner()(fn)\n"
+        "    return fn"
+    )
+    messages = _grade(
+        tmp_path,
+        _module(helpers, _test("@outer()\n" + HEALTHY), LIFETIME),
+    )
+    assert any(UNREADABLE in message for message in messages)
+    assert any(NOT_REGISTERED in message for message in messages)
+
+
+def test_a_dead_mark_in_an_identity_decorator_is_ignored(tmp_path: Path) -> None:
+    helper = (
+        "def identity(fn):\n"
+        "    if False:\n        return pytest.mark.skip(fn)\n"
+        "    return fn"
+    )
+    assert (
+        _grade(tmp_path, _module(helper, _test("@identity\n" + HEALTHY), LIFETIME))
+        == []
+    )
+
+
+def test_a_return_only_try_does_not_make_its_handler_reachable(tmp_path: Path) -> None:
+    body = "    try:\n        return\n    except Exception:\n        pass\n" + ASSERT
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+def test_a_mixed_finally_exit_can_be_absorbed_and_reach_the_assertion(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "    with pytest.raises(RuntimeError):\n"
+        "        try:\n            pass\n"
+        "        finally:\n            if dynamic():\n"
+        "                raise RuntimeError()\n" + ASSERT
+    )
+    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
