@@ -1495,16 +1495,19 @@ def _collect_dialect_drivers(py_files: Iterable[Path]) -> set[str]:
 _SQLALCHEMY_URL_SCHEME_RE = re.compile(
     r"(?<![A-Za-z0-9_.+-])([A-Za-z_][A-Za-z0-9_]*)(?:\+([A-Za-z_][A-Za-z0-9_]*))?://"
 )
+_SQLALCHEMY_DRIVERNAME_RE = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]*)(?:\+([A-Za-z_][A-Za-z0-9_]*))?$"
+)
 _SQLALCHEMY_DIALECTS_GROUP = "sqlalchemy.dialects"
 
 
 def _collect_source_usage(
     py_files: Iterable[Path],
 ) -> tuple[set[str], set[str], set[str]]:
-    """Collect imported modules, SQLAlchemy drivers, and URL dialect names.
+    """Collect imports and SQLAlchemy dialects used by URL constructors.
 
-    Each source file is read and parsed once. Relative imports are skipped —
-    they target the app's own package, never a declared third-party distribution.
+    Each source file is read and parsed once. URL evidence must flow into a
+    SQLAlchemy URL API, so docstrings and unrelated strings cannot suppress D003.
     """
     modules: set[str] = set()
     drivers: set[str] = set()
@@ -1519,19 +1522,131 @@ def _collect_source_usage(
             tree = ast.parse(raw)
         except (SyntaxError, ValueError):
             continue
+
+        engine_factories: set[str] = set()
+        sqlalchemy_modules: set[str] = set()
+        url_classes: set[str] = set()
+        assignments: dict[str, str] = {}
+        calls: list[ast.Call] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     modules.add(alias.name.split(".", 1)[0])
+                    if alias.name == "sqlalchemy":
+                        sqlalchemy_modules.add(alias.asname or alias.name)
+                    elif alias.name.startswith("sqlalchemy."):
+                        sqlalchemy_modules.add(
+                            alias.asname or alias.name.split(".", 1)[0]
+                        )
             elif isinstance(node, ast.ImportFrom):
                 if node.level == 0 and node.module:
                     modules.add(node.module.split(".", 1)[0])
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                for match in _SQLALCHEMY_DIALECT_RE.finditer(node.value):
-                    drivers.add(match.group(1))
-                for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(node.value):
-                    dialect, driver = match.group(1), match.group(2)
-                    dialect_names.add(f"{dialect}.{driver}" if driver else dialect)
+                    if node.module.startswith("sqlalchemy"):
+                        for alias in node.names:
+                            if alias.name in {
+                                "create_engine",
+                                "create_async_engine",
+                                "engine_from_config",
+                                "make_url",
+                            }:
+                                engine_factories.add(alias.asname or alias.name)
+                            elif alias.name == "URL":
+                                url_classes.add(alias.asname or alias.name)
+            elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+                if isinstance(node.value.value, str):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            assignments[target.id] = node.value.value
+            elif isinstance(node, ast.AnnAssign) and isinstance(
+                node.value, ast.Constant
+            ):
+                if isinstance(node.value.value, str) and isinstance(
+                    node.target, ast.Name
+                ):
+                    assignments[node.target.id] = node.value.value
+            elif isinstance(node, ast.Call):
+                calls.append(node)
+
+        def literal_values(node: ast.AST) -> list[str]:
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                return [node.value]
+            if isinstance(node, ast.Name):
+                value = assignments.get(node.id)
+                return [value] if value is not None else []
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                left, right = literal_values(node.left), literal_values(node.right)
+                return [a + b for a in left for b in right]
+            return []
+
+        def collect_url(value: str) -> None:
+            for match in _SQLALCHEMY_DIALECT_RE.finditer(value):
+                drivers.add(match.group(1))
+            for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(value):
+                dialect, driver = match.group(1), match.group(2)
+                dialect_names.add(f"{dialect}.{driver}" if driver else dialect)
+
+        def is_url_factory(func: ast.AST) -> bool:
+            if isinstance(func, ast.Name):
+                return func.id in engine_factories
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                return (
+                    func.attr
+                    in {
+                        "create_engine",
+                        "create_async_engine",
+                        "engine_from_config",
+                        "make_url",
+                    }
+                    and func.value.id in engine_factories
+                ) or (
+                    func.attr in {"create_engine", "create_async_engine", "make_url"}
+                    and func.value.id in sqlalchemy_modules
+                )
+            return False
+
+        for call in calls:
+            func = call.func
+            if is_url_factory(func):
+                url_arg = call.args[0] if call.args else None
+                if url_arg is None:
+                    url_arg = next(
+                        (
+                            keyword.value
+                            for keyword in call.keywords
+                            if keyword.arg in {"url", "name_or_url"}
+                        ),
+                        None,
+                    )
+                if url_arg is not None:
+                    for value in literal_values(url_arg):
+                        collect_url(value)
+            elif (
+                isinstance(func, ast.Attribute)
+                and func.attr == "create"
+                and isinstance(func.value, ast.Name)
+                and func.value.id in url_classes
+            ):
+                drivername = (
+                    call.args[0]
+                    if call.args
+                    else next(
+                        (
+                            keyword.value
+                            for keyword in call.keywords
+                            if keyword.arg == "drivername"
+                        ),
+                        None,
+                    )
+                )
+                if drivername is not None:
+                    for value in literal_values(drivername):
+                        match = _SQLALCHEMY_DRIVERNAME_RE.fullmatch(value)
+                        if match is None:
+                            continue
+                        dialect, driver = match.groups()
+                        dialect_names.add(f"{dialect}.{driver}" if driver else dialect)
+                        if driver:
+                            drivers.add(driver)
     return modules, drivers, dialect_names
 
 

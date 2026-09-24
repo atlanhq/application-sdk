@@ -1135,8 +1135,9 @@ def test_d003_collects_dialect_driver_from_source_string(tmp_path: Path) -> None
     src = tmp_path / "app" / "client.py"
     src.parent.mkdir(parents=True)
     src.write_text(
+        "from sqlalchemy import create_engine\n"
         'URL = "mysql+aiomysql://user:pw@host:3306/db"\n'
-        'DRIVERNAME = "mysql+aiomysql"\n',
+        "engine = create_engine(URL)\n",
         encoding="utf-8",
     )
     findings = scan_all(
@@ -1149,15 +1150,22 @@ def test_d003_collects_dialect_driver_from_source_string(tmp_path: Path) -> None
     assert [f for f in findings if f.rule_id == "D003"] == []
 
 
-def test_collect_dialect_drivers_parses_both_forms(tmp_path: Path) -> None:
+def test_collect_dialect_drivers_from_sqlalchemy_url_apis(tmp_path: Path) -> None:
     src = tmp_path / "m.py"
     src.write_text(
-        't1 = "mysql+aiomysql://u:p@h/d"\n'
-        't2 = "postgresql+asyncpg"\n'
-        'noise = "1 + 2 = 3"\n',
+        "from sqlalchemy import create_engine\n"
+        "from sqlalchemy.engine import URL\n"
+        "import sqlalchemy as sa\n"
+        'url = "mysql+aiomysql://u:p@h/d"\n'
+        "engine = create_engine(url)\n"
+        'created = URL.create(drivername="postgresql+asyncpg")\n'
+        'positional = URL.create("sqlite")\n'
+        'noise = "unused+driver://host"\n'
+        'sa.create_engine("postgresql+psycopg://host")\n'
+        'other.create_engine("ignored+driver://host")\n',
         encoding="utf-8",
     )
-    assert _collect_dialect_drivers([src]) == {"aiomysql", "asyncpg"}
+    assert _collect_dialect_drivers([src]) == {"aiomysql", "asyncpg", "psycopg"}
 
 
 _CRATEDB_DEPS = (
@@ -1207,7 +1215,9 @@ def test_d003_collects_dialect_scheme_from_source_string(tmp_path: Path) -> None
     src = tmp_path / "app" / "clients.py"
     src.parent.mkdir(parents=True)
     src.write_text(
-        'TEMPLATE = "crate://{username}:{password}@{host}:{port}"\n',
+        "from sqlalchemy.engine.url import URL\n"
+        'DIALECT = "crate"\n'
+        "url = URL.create(drivername=DIALECT)\n",
         encoding="utf-8",
     )
     findings = scan_all(
@@ -1221,13 +1231,40 @@ def test_d003_collects_dialect_scheme_from_source_string(tmp_path: Path) -> None
     assert [f for f in findings if f.rule_id == "D003"] == []
 
 
+def test_d003_docstring_url_does_not_count_as_dialect_usage(tmp_path: Path) -> None:
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
+        encoding="utf-8",
+    )
+    src = tmp_path / "app" / "clients.py"
+    src.parent.mkdir(parents=True)
+    src.write_text(
+        '"""Example connection: crate://user:password@host/db"""\n'
+        "from sqlalchemy.engine import URL\n"
+        'EXAMPLE_URL = "crate://user:password@host/db"\n',
+        encoding="utf-8",
+    )
+
+    findings = scan_all(
+        [pp, src],
+        tmp_path,
+        imported_modules={"os"},
+        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
+    )
+    assert any(
+        f.rule_id == "D003" and "sqlalchemy-cratedb" in f.message for f in findings
+    )
+
+
 def test_collect_source_usage_parses_each_file_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     src = tmp_path / "client.py"
     src.write_text(
-        'import requests\nURL = "mysql+aiomysql://host"\n'
-        'TEMPLATE = "crate://host"\n',
+        "import requests\nfrom sqlalchemy import create_engine\n"
+        'URL = "mysql+aiomysql://host"\n'
+        'TEMPLATE = "crate://host"\nengine = create_engine(URL)\n',
         encoding="utf-8",
     )
 
@@ -1243,9 +1280,9 @@ def test_collect_source_usage_parses_each_file_once(
         [src]
     )
 
-    assert modules == {"requests"}
+    assert modules == {"requests", "sqlalchemy"}
     assert drivers == {"aiomysql"}
-    assert dialect_names == {"mysql.aiomysql", "crate"}
+    assert dialect_names == {"mysql.aiomysql"}
     assert parsed.count(src.read_bytes()) == 1
 
 
@@ -1277,10 +1314,14 @@ def test_collect_dialect_names_renders_sqlalchemy_lookup_names(
 ) -> None:
     src = tmp_path / "m.py"
     src.write_text(
+        "from sqlalchemy import create_engine\n"
         't1 = "crate://{username}@{host}"\n'
         't2 = "foo+bar://u:p@h/d"\n'
         't3 = "see https://example.com"\n'
-        'noise = "1 + 2 = 3; a.b://x"\n',
+        'noise = "1 + 2 = 3; a.b://x"\n'
+        "engine = create_engine(t1)\n"
+        "engine2 = create_engine(t2)\n"
+        "engine3 = create_engine(t3)\n",
         encoding="utf-8",
     )
     assert _collect_dialect_names([src]) == {"crate", "foo.bar", "https"}
