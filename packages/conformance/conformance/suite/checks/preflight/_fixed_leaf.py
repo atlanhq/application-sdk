@@ -169,6 +169,38 @@ def _dominates(store: list[_Step], point: list[_Step]) -> bool:
     return point[: len(outer)] == outer and here[:2] == last[:2] and last[2] <= here[2]
 
 
+def _can_reach(store: list[_Step], point: list[_Step], parents: _Parents) -> bool:
+    """Whether a store can run on a path that reaches ``point``.
+
+    Stores in the other arm of an if or match cannot change the value seen at
+    the point. Earlier conditional stores in its path can reach it, but do not
+    necessarily dominate it.
+    """
+    for left, right in zip(store, point):
+        if left[0] != right[0]:
+            continue
+        parent = next((node for node in parents if id(node) == left[0]), None)
+        if left[1] != right[1] and {left[1], right[1]} <= {"body", "orelse"}:
+            return False
+        if isinstance(parent, ast.Match) and left[1] == right[1] == "cases":
+            if left[2] != right[2]:
+                return False
+    return True
+
+
+def _executes_unconditionally(node: ast.AST, parents: _Parents) -> bool:
+    """Whether expression-level short circuiting can skip this store."""
+    child = node
+    while child in parents:
+        parent, field, index = parents[child]
+        if isinstance(parent, ast.BoolOp) and field == "values" and index > 0:
+            return False
+        if isinstance(parent, ast.IfExp) and field in {"body", "orelse"}:
+            return False
+        child = parent
+    return True
+
+
 def _derived_at(
     point: ast.expr, caught: str, parents: _Parents, handler: ast.ExceptHandler
 ) -> set[str]:
@@ -194,8 +226,12 @@ def _derived_at(
     for node in stores:
         if node.value is None:
             continue
+        store_path = _block_path(node, parents, handler)
+        if not _can_reach(store_path, point_path, parents):
+            continue
         derived = (
-            _dominates(_block_path(node, parents, handler), point_path)
+            _dominates(store_path, point_path)
+            and _executes_unconditionally(node, parents)
             and _mentions(node.value, names)
             and not _always_true(node.value, caught)
         )

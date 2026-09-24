@@ -315,6 +315,32 @@ def test_silent_when_the_guard_name_is_reassigned_inside_its_branch(
     assert _f021(tmp_path, src) == []
 
 
+def test_fires_when_short_circuit_skips_the_exception_dependent_store(
+    tmp_path: Path,
+) -> None:
+    row = (
+        "            ready = True\n"
+        "            self.strict and (ready := isinstance(exc, PermissionError))\n"
+        "            if ready:\n"
+        "                raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert len(_f021(tmp_path, src)) == 1
+
+
+def test_silent_when_a_sibling_branch_cannot_reach_the_guard(tmp_path: Path) -> None:
+    row = (
+        "            ready = isinstance(exc, PermissionError)\n"
+        "            if self.strict:\n"
+        "                ready = False\n"
+        "            else:\n"
+        "                if ready:\n"
+        "                    raise AuthError(message='x', suggested_action='y')\n"
+    )
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+
+
 def test_silent_on_a_walrus_classification_read_by_a_later_guard(
     tmp_path: Path,
 ) -> None:
