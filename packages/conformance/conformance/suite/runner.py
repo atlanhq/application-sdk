@@ -32,7 +32,9 @@ from conformance.suite.checks import (
     asyncio_loop_scope,
     atomic_publish,
     bootstrap_drift,
+    card_listing,
     client_seam,
+    contract_hygiene,
     coverage_config,
     dependency_conformance,
     deprecation,
@@ -304,6 +306,18 @@ _CHECKS: list[CheckRegistration] = [
         discover=release_contract.discover,
         scan_path=release_contract.scan_path,
         scan_all=release_contract.scan_all,
+    ),
+    CheckRegistration(
+        series=card_listing.SERIES,
+        discover=card_listing.discover,
+        scan_path=card_listing.scan_path,
+        scan_all=card_listing.scan_all,
+    ),
+    CheckRegistration(
+        series=contract_hygiene.SERIES,
+        discover=contract_hygiene.discover,
+        scan_path=contract_hygiene.scan_path,
+        scan_all=contract_hygiene.scan_all,
     ),
     CheckRegistration(
         series=sdr_checks.SERIES,

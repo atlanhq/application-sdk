@@ -1970,4 +1970,277 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k021"
         ),
     ),
+    RuleDefinition(
+        id="K022",
+        canonical_reference=(
+            "application_sdk contract-toolkit/src/App.pkl -- `shortDescription` is the "
+            "declared home for card text, and the toolkit feeds it to every "
+            "entrypoint that does not override it."
+        ),
+        fix_locus=FixLocus.CONTRACT,
+        scope=RuleScope.APP,
+        name="CardDescriptionMissing",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.37.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "The marketplace card is the first thing a customer sees when "
+            "choosing a connector. The toolkit emits "
+            "entrypoints[].description = e.description ?? shortDescription, so "
+            "an app that declares neither publishes a card whose text resolves "
+            "against the hand-curated Global Marketplace App row -- a database "
+            "value no one reviews, that no diff shows, and that nothing keeps in "
+            "step with the contract. When that row is empty too, the card ships "
+            "blank. A fleet sweep found 50 of 70 contract-driven connectors "
+            "supplying no description of their own and six rendering blank "
+            "today. Nothing reports it: the app builds, publishes and installs "
+            "successfully. Declaring the text on the contract makes it "
+            "reviewable, survives every regeneration, and feeds both the "
+            "published entrypoint and the GM row."
+        ),
+        short_description=(
+            "atlan.yaml supplies no marketplace-card description -- no top-level "
+            "short_description and no entrypoint description"
+        ),
+        full_description=(
+            "The generated ``atlan.yaml`` carries no usable card text: the "
+            "top-level ``short_description`` is absent or empty, and no entry in "
+            "the ``entrypoints`` listing supplies a ``description``.\n"
+            "\n"
+            "The card falls back to the Global Marketplace App row, which is "
+            "curated by hand and is not derived from the repo. That fallback is "
+            "invisible in review and renders blank when the row is empty.\n"
+            "\n"
+            "**Fix.** Set ``shortDescription`` in ``contract/app.pkl`` and "
+            "regenerate (``uv run poe generate``). The toolkit feeds it to both "
+            "the top-level ``short_description`` and every entrypoint that does "
+            "not override it. Where the app has an Argo predecessor in "
+            "marketplace-packages, restoring that package's description keeps "
+            "the card reading as it did before.\n"
+            "\n"
+            "Declaring a per-entrypoint ``description`` instead also satisfies "
+            "the rule -- the requirement is that the contract supply the text, "
+            "not where it is written."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k022"
+        ),
+    ),
+    RuleDefinition(
+        id="K023",
+        canonical_reference=(
+            "atlan-metabase-app contract/app.pkl -- `icon` set to a reachable "
+            "assets.atlan.com URL, which `iconUrl` and `logo` both default to."
+        ),
+        fix_locus=FixLocus.CONTRACT,
+        scope=RuleScope.APP,
+        name="CardIconBlank",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.37.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "``icon`` is a required field on App.pkl, so a blank rendered "
+            "``icon_url`` means the value was overridden to an empty string, or "
+            "the manifest was hand-written and the key left empty. Either way "
+            "the marketplace card renders with no logo, and nothing reports it: "
+            "an empty string is a valid YAML scalar, the publish step accepts "
+            "it, and the install succeeds. Six contract-driven connectors are in "
+            "that state today. This rule checks only that a value is present -- "
+            "whether the URL resolves is a publish-time concern, since a static "
+            "scanner makes no network calls."
+        ),
+        short_description=(
+            "atlan.yaml declares an empty icon_url at app or entrypoint level -- "
+            "the marketplace card renders with no logo"
+        ),
+        full_description=(
+            "The generated ``atlan.yaml`` has a top-level ``icon_url`` that is "
+            "absent or empty, or an entry in the ``entrypoints`` listing whose "
+            "``icon_url`` is empty.\n"
+            "\n"
+            "``icon`` is REQUIRED on ``App.pkl`` and both ``iconUrl`` and "
+            "``logo`` default to it, so a blank value in the manifest is always "
+            "an explicit empty override or a hand-written manifest -- never the "
+            "toolkit's own output for a well-formed contract.\n"
+            "\n"
+            "**Fix.** Set ``icon`` in ``contract/app.pkl`` to the asset URL and "
+            "regenerate (``uv run poe generate``).\n"
+            "\n"
+            "**Scope.** The rule asserts presence, not reachability. An icon URL "
+            "that is set but returns 404 passes here and is caught by the "
+            "marketplace card guard at publish."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k023"
+        ),
+    ),
+    RuleDefinition(
+        id="K024",
+        canonical_reference=(
+            "atlan-metabase-app contract/app.pkl -- `atlanYamlOverrides` carries only "
+            "`dockerfile`, `argo_package_names` and `release_model`, none of which "
+            "App.pkl models as a typed field."
+        ),
+        fix_locus=FixLocus.CONTRACT,
+        scope=RuleScope.APP,
+        name="EscapeHatchShadowsTypedField",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.37.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "``metadata`` and ``atlanYamlOverrides`` are deep-merged onto the "
+            "rendered manifest after every typed field, so a key that App.pkl "
+            "already models silently wins over the typed value. The contract "
+            "then states one thing and ships another, and the override is an "
+            "untyped Mapping<String, Any> that pkl eval cannot check -- a "
+            "misspelt nested key inside it fails silently where the typed field "
+            "would have failed the build. It also puts the value out of reach of "
+            "toolkit migrations: the 0.17.0 pools refactor rewrote typed deploy "
+            "fields and could not touch an override blob. Fifteen contract-driven "
+            "connectors shadow a typed field today, three of them placing their "
+            "entire deploy block in the escape hatch. Keys the toolkit does not "
+            "model are the hatch working as intended and are not reported."
+        ),
+        short_description=(
+            "metadata or atlanYamlOverrides sets a key App.pkl already models as "
+            "a typed field, silently overriding it"
+        ),
+        full_description=(
+            "``contract/app.pkl`` routes a manifest key through ``metadata`` or "
+            "``atlanYamlOverrides`` although ``App.pkl`` declares a typed field "
+            "for it.\n"
+            "\n"
+            "Both hatches deep-merge onto the generated manifest last, so the "
+            "typed value is discarded. Three consequences:\n"
+            "\n"
+            "* ``pkl eval`` type-checks the typed field and not the override\n"
+            "* the contract and the published manifest disagree, invisibly\n"
+            "* toolkit migrations rewrite typed fields and skip override blobs\n"
+            "\n"
+            "**Fix.** Move the value onto the typed field and delete the "
+            "override entry, then regenerate (``uv run poe generate``) and "
+            "confirm the manifest is unchanged.\n"
+            "\n"
+            "**Not reported.** Keys with no typed equivalent -- currently "
+            "``release_model``, ``dockerfile``, ``description``, ``categories``, "
+            "``source``, ``source_category`` and ``package_id`` -- are the only "
+            "way to set those values and are intentionally out of scope."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k024"
+        ),
+    ),
+    RuleDefinition(
+        id="K025",
+        canonical_reference=(
+            "atlan-mysql-app contract/app.pkl -- optional String fields are omitted "
+            "rather than assigned an empty string."
+        ),
+        fix_locus=FixLocus.CONTRACT,
+        scope=RuleScope.APP,
+        name="BlankStringAssignment",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.37.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            'An App.pkl String field that defaults to "" and is then assigned '
+            '"" restates its own default. The toolkit omits empty values from '
+            "the generated manifest, so the line renders nothing -- but it reads "
+            "in review like a deliberate choice, and someone later treats the "
+            "field as handled. Sixteen contract-driven connectors carry one, most "
+            "often ``docsUrl``, whose absence means the marketplace card links "
+            "nowhere. The rule does not require a value; it requires that a field "
+            "left unset be left out."
+        ),
+        short_description=(
+            "A contract String field is assigned an empty string, restating its "
+            "own default and rendering nothing"
+        ),
+        full_description=(
+            '``contract/app.pkl`` assigns ``""`` to a String field whose '
+            '``App.pkl`` default is already ``""`` -- one of ``docsUrl``, '
+            "``helpdeskLink``, ``shortDescription``, ``longDescription``, "
+            "``credentialConnectorType`` or ``credentialAuthTitle``.\n"
+            "\n"
+            "The toolkit omits empty values when rendering, so the assignment "
+            "produces no manifest key. It is a no-op that reads like a decision.\n"
+            "\n"
+            "**Fix.** Give the field a real value, or delete the line. For "
+            "``docsUrl`` specifically, a value is worth adding -- an empty one "
+            "means the marketplace card carries no documentation link."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k025"
+        ),
+    ),
+    RuleDefinition(
+        id="K026",
+        canonical_reference=(
+            "atlan-metabase-app contract/app.pkl -- documents why no `entrypoints` "
+            "listing is declared instead of reaching for `emitEntrypoints`."
+        ),
+        fix_locus=FixLocus.CONTRACT,
+        scope=RuleScope.APP,
+        name="DeprecatedContractField",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.37.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "B001 flags deprecated SDK Python symbols; nothing flags a deprecated "
+            "pkl contract field. ``emitEntrypoints`` is marked @Deprecated in "
+            "App.pkl with removal stated for the next minor toolkit version, and "
+            "fifteen contract-driven connectors still set it. When the field is "
+            "dropped their contracts stop evaluating -- and because Renovate "
+            "bumps the toolkit automatically, the break arrives on a dependency "
+            "PR rather than on a change anyone made to the contract. A warning "
+            "now converts a future hard failure into a scheduled migration."
+        ),
+        short_description=(
+            "contract/app.pkl sets a field App.pkl marks deprecated with a stated "
+            "removal version"
+        ),
+        full_description=(
+            "``contract/app.pkl`` assigns a field that ``App.pkl`` marks "
+            "``@Deprecated``. Currently one field qualifies:\n"
+            "\n"
+            '``emitEntrypoints`` -- *"use the entrypoints listing with packageId '
+            "set on those that should render as marketplace cards, rather than "
+            "toggling the entire block. Will be removed in the next minor "
+            'version."*\n'
+            "\n"
+            "The contract stops evaluating once the field is removed, and the "
+            "toolkit bump that removes it typically arrives as an automated "
+            "dependency PR.\n"
+            "\n"
+            "**Fix.** Declare the ``entrypoints`` listing and set ``packageId`` "
+            "on the entries that should render as marketplace cards, then delete "
+            "the ``emitEntrypoints`` assignment and regenerate. Note that a "
+            "non-empty ``entrypoints`` listing switches the toolkit into bundle "
+            "mode, which changes the generated layout -- verify the manifest "
+            "before merging."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k026"
+        ),
+    ),
 )
