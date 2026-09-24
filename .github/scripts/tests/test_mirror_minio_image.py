@@ -39,6 +39,9 @@ class FakeRegistry:
         self.digest_err = digest_err
         self.calls: list[list[str]] = []
         self.copy_result: str | None = DIGEST
+        #: The only digest `docker run` may read the release from. Anything else
+        #: means the version was read from a different image than the one copied.
+        self.selected = DIGEST
 
     def __call__(self, cmd: list[str]):
         self.calls.append(cmd)
@@ -52,6 +55,8 @@ class FakeRegistry:
             self.mirror = self.copy_result
             return _done(cmd)
         if cmd[:2] == ["docker", "run"]:
+            if cmd[-2] != f"{mod.SOURCE_REPO}@{self.selected}":
+                raise AssertionError(f"read the release from {cmd[-2]}")
             return _done(cmd, out=VERSION_OUT)
         raise AssertionError(f"unexpected command {cmd}")
 
@@ -142,9 +147,29 @@ class TestMain:
         assert out.read_text() == f"image={DEST}@{DIGEST}\naction=copy\n"
         assert f"{DEST}@{DIGEST}" in summ.read_text()
 
-    def test_explicit_digest_skips_latest(self, registry: FakeRegistry) -> None:
-        assert mod.main(["--source-digest", DIGEST]) == 0
+    def test_explicit_digest_is_the_one_read_and_copied(
+        self, registry: FakeRegistry
+    ) -> None:
+        # :latest resolves to DIGEST; the request names OTHER. Version detection
+        # and the copy must both use OTHER.
+        registry.selected = registry.copy_result = OTHER
+        assert mod.main(["--source-digest", OTHER]) == 0
         assert ["crane", "digest", f"{mod.SOURCE_REPO}:latest"] not in registry.calls
+        runs = [c for c in registry.calls if c[:2] == ["docker", "run"]]
+        assert runs == [
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--platform",
+                "linux/amd64",
+                f"{mod.SOURCE_REPO}@{OTHER}",
+                "--version",
+            ]
+        ]
+        assert registry.copies == [
+            ["crane", "copy", f"{mod.SOURCE_REPO}@{OTHER}", DEST]
+        ]
 
     def test_dry_run_does_not_copy(self, registry: FakeRegistry) -> None:
         assert mod.main(["--dry-run", "true"]) == 0
