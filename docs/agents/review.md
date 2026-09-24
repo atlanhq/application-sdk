@@ -68,10 +68,10 @@ contributors cannot.
 
 ### Cross-Model Review
 
-The review uses two model families to eliminate bias:
+The review uses two models to reduce bias:
 
-- **Claude Opus 4.6** reviews the code (3 domain agents in parallel)
-- **GPT-5.3-codex** challenges every finding (adversarial)
+- **gpt-6-sol** reviews the code (3 domain agents in parallel)
+- **gpt-6-luna** challenges every finding (adversarial)
 - Findings where the models disagree are dropped (model bias)
 - Guardrail violations are always kept regardless of model agreement
 
