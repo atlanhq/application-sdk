@@ -1231,6 +1231,32 @@ def test_d003_collects_dialect_scheme_from_source_string(tmp_path: Path) -> None
     assert [f for f in findings if f.rule_id == "D003"] == []
 
 
+def test_d003_unrelated_url_does_not_count_as_dialect_usage(tmp_path: Path) -> None:
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
+        encoding="utf-8",
+    )
+    src = tmp_path / "app" / "clients.py"
+    src.parent.mkdir(parents=True)
+    src.write_text(
+        'EXAMPLE = "crate://user:password@host/db"\n'
+        "def send_request(url):\n"
+        "    return http_client.get(url)\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_all(
+        [pp, src],
+        tmp_path,
+        imported_modules={"os"},
+        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
+    )
+    assert any(
+        f.rule_id == "D003" and "sqlalchemy-cratedb" in f.message for f in findings
+    )
+
+
 def test_d003_docstring_url_does_not_count_as_dialect_usage(tmp_path: Path) -> None:
     pp = tmp_path / "pyproject.toml"
     pp.write_text(
