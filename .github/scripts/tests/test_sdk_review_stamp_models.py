@@ -28,7 +28,7 @@ BODY = (
 
 def test_stamp_replaces_only_the_models_line():
     new = sm.stamp(BODY, "gpt-6-sol")
-    assert new == BODY.replace(GUESS, "**Models:** gpt-6-sol")
+    assert new == BODY.replace(GUESS, "**Models (CLI stream observed):** gpt-6-sol")
     # Everything the approver / dedupe / verdict gate key on is untouched.
     assert "<!-- SDK_REVIEW -->" in new and "REVIEWED_HEAD" in new and RUN in new
 
@@ -40,20 +40,23 @@ def test_stamp_rewrites_the_footer_not_a_quoted_prior_footer():
     new = sm.stamp(body, "gpt-6-sol")
     assert new is not None
     assert quoted in new
-    assert GUESS not in new and "**Models:** gpt-6-sol\n**Run:**" in new
+    assert (
+        GUESS not in new
+        and "**Models (CLI stream observed):** gpt-6-sol\n**Run:**" in new
+    )
 
 
 def test_stamp_never_keeps_the_guess_when_the_stream_named_nothing():
     new = sm.stamp(BODY, "")
     assert new is not None
-    assert f"**Models:** {sm.NOT_REPORTED}" in new
+    assert f"**Models (CLI stream observed):** {sm.NOT_REPORTED}" in new
     assert "Claude" not in new
 
 
 def test_stamp_inserts_the_line_above_run_when_missing():
     new = sm.stamp(BODY.replace(f"{GUESS}\n", ""), "gpt-6-sol")
     assert new is not None
-    assert "**Models:** gpt-6-sol\n**Run:**" in new
+    assert "**Models (CLI stream observed):** gpt-6-sol\n**Run:**" in new
 
 
 def test_stamp_is_idempotent_and_leaves_footerless_bodies_alone():
@@ -103,7 +106,7 @@ def test_main_patches_only_this_runs_summary(env):
     gh = FakeGh([_comment(1, theirs), _comment(2, BODY)])
     assert sm.main(runner=gh, sleeper=_no_sleep) == 0
     assert [p[0] for p in gh.patches] == ["repos/o/r/issues/comments/2"]
-    assert "**Models:** gpt-6-sol\n" in gh.patches[0][1]
+    assert "**Models (CLI stream observed):** gpt-6-sol\n" in gh.patches[0][1]
 
 
 def test_main_never_touches_a_summary_that_does_not_name_this_run(env):

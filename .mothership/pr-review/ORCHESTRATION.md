@@ -1396,15 +1396,15 @@ scopes.
 <contents of /tmp/TOOLKIT_ROVER_NOTE.md>
 
 ---
-**Models:** (stamped by the workflow)
+**Models (CLI stream observed):** (stamped by the workflow)
 **Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
 
-Write the `**Models:**` line exactly as shown — do NOT fill in model
-names. You cannot observe which models served this run (routing happens
-outside the sandbox), so any name you write is a guess. The workflow
-overwrites this line with the models the run's stream reports after you
-post (`sdk_review_stamp_models.py`).
+Write the `**Models (CLI stream observed):**` line exactly as shown — do NOT
+fill in model names. You cannot observe which models served the CLI stream
+(routing happens outside the sandbox), and this line does not include out-of-band
+calls such as the adversarial review. The workflow overwrites this line with the
+models the CLI stream reports after you post (`sdk_review_stamp_models.py`).
 
 **Title selection — "Review" vs "Re-review":**
 - If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first

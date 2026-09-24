@@ -18,11 +18,11 @@ lines of `run:` shell that used to sit in `sdk-review.yml`; the step's
     final_cost      cost_usd, else "unknown"
     final_err_code  error code from either error source, else ""
     final_err_msg   error message, newlines flattened to spaces
-    models_used     comma-joined models the stream shows actually answering,
+    models_used     comma-joined models the CLI stream shows answering,
                     across every attempt, else "" (read by
                     `sdk_review_stamp_models.py` to overwrite the summary's
-                    `**Models:**` footer — the reviewer cannot see its own
-                    routing, so its own guess is never trusted)
+                    CLI-stream-observed models footer; out-of-band review calls
+                    are not included)
 
 Two behaviours are carried over from the shell that the resolve lane does not
 have, because the review lane needs them:

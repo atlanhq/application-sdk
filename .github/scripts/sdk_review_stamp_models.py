@@ -8,10 +8,12 @@ agent can observe, so it filled the line from its own Claude Code context and
 posted reviews claimed Claude models on runs pinned entirely to non-Claude
 ones.
 
-The dispatch step does know. It reads the raw CLI frames mothership forwards,
-and each carries the model the API reported answering (see
-`sdk_review_dispatch.frame_models`). This step writes that list over whatever
-the reviewer put there, or inserts the line if it is missing.
+The dispatch step can report the models visible in the raw CLI frames
+mothership forwards (see `sdk_review_dispatch.frame_models`). Those frames do
+not include out-of-band calls such as the adversarial review, so this step labels
+the list as CLI-stream-observed rather than claiming it covers the whole review.
+It writes that list over whatever the reviewer put there, or inserts the line if
+it is missing.
 
 Only summaries attributed to this run BY RUN URL are touched — the rule
 `sdk_review_summaries.attribute()` sets for every caller that writes to the PR.
@@ -51,16 +53,18 @@ from sdk_review_verdict_gate import (  # noqa: E402  (needs the sys.path bootstr
 )
 
 # The whole footer line, whatever the reviewer wrote after the label.
-MODELS_LINE_RE = re.compile(r"^\*\*Models:\*\*.*$", re.MULTILINE)
+MODELS_LINE_RE = re.compile(
+    r"^\*\*Models(?: \(CLI stream observed\))?:\*\*.*$", re.MULTILINE
+)
 RUN_LINE_RE = re.compile(r"^\*\*Run:\*\*", re.MULTILINE)
 
 # What the footer says when the stream showed no model at all. Saying so is
 # the point: leaving the reviewer's guess in place is the defect being fixed.
-NOT_REPORTED = "not reported by the run stream"
+NOT_REPORTED = "no models reported by the CLI stream"
 
 
 def models_line(models: str) -> str:
-    return f"**Models:** {models.strip() or NOT_REPORTED}"
+    return f"**Models (CLI stream observed):** {models.strip() or NOT_REPORTED}"
 
 
 def stamp(body: str, models: str) -> str | None:
