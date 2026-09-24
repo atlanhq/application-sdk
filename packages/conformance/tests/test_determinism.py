@@ -508,6 +508,55 @@ def test_p023_silent_in_sync_def() -> None:
     assert _rule(body, "P023") == []
 
 
+def _p023_async_task(header: str, stmt: str) -> str:
+    return (
+        f"{header}\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        f"        {stmt}\n"
+    )
+
+
+def test_p023_silent_on_requests_and_urllib_constructors() -> None:
+    header = (
+        "import requests\nimport urllib.request\n"
+        "from requests.adapters import HTTPAdapter\n"
+        "from requests.auth import HTTPBasicAuth\n"
+    )
+    for stmt in (
+        "s = requests.Session()",
+        "a = requests.adapters.HTTPAdapter()",
+        "a = HTTPAdapter(max_retries=3)",
+        "r = requests.Request('GET', 'http://x').prepare()",
+        "p = requests.PreparedRequest()",
+        "auth = HTTPBasicAuth('u', 'p')",
+        "raise requests.exceptions.HTTPError('x')",
+        "req = urllib.request.Request('http://x')",
+        "o = urllib.request.build_opener()",
+    ):
+        assert _rule(_p023_async_task(header, stmt), "P023") == [], stmt
+
+
+def test_p023_flags_blocking_requests_and_urllib_calls() -> None:
+    header = "import requests\nimport urllib.request\nfrom requests import post\n"
+    for stmt in (
+        "requests.get('http://x')",
+        "requests.post('http://x', json={})",
+        "requests.put('http://x')",
+        "requests.patch('http://x')",
+        "requests.delete('http://x')",
+        "requests.head('http://x')",
+        "requests.options('http://x')",
+        "requests.request('GET', 'http://x')",
+        "post('http://x')",
+        "urllib.request.urlopen('http://x')",
+        "urllib.request.urlretrieve('http://x', 'f')",
+        "requests.Session().get('http://x')",
+    ):
+        assert len(_rule(_p023_async_task(header, stmt), "P023")) == 1, stmt
+
+
 def test_p023_dedup_workflow_sleep_is_p020_not_p023() -> None:
     src = "import time\n" + _wrap_run("time.sleep(1)")
     assert len(_rule(src, "P020")) == 1

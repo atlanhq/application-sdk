@@ -9,9 +9,13 @@ code — the second half of the user's async-correctness ask.  Two patterns:
   inside a running one is an error; ``await`` the coroutine directly.  Flagged in
   any ``async def``.
 
-* **Blocking sync I/O** — a synchronous library call (``requests.*``,
-  ``urllib.request.*``, ``time.sleep``) that blocks the event loop instead of
-  awaiting an async equivalent / offloading via ``App.run_in_thread()``.  Flagged
+* **Blocking sync I/O** — a synchronous call that sends a request or sleeps
+  (``requests.get``/``post``/…/``request``, an inline
+  ``requests.Session().get(...)``, ``urllib.request.urlopen``/``urlretrieve``,
+  ``time.sleep``) and blocks the event loop instead of awaiting an async
+  equivalent / offloading via ``App.run_in_thread()``.  Constructors that do no
+  I/O — ``requests.Session()``, ``requests.adapters.HTTPAdapter()``,
+  ``urllib.request.Request()`` — are not flagged.  Flagged
   in ``async def`` bodies **outside** workflow context — inside workflow methods
   the same calls are already owned by P020 (sleep) and P021 (network), so they are
   skipped here to avoid double-reporting.
@@ -82,7 +86,32 @@ RULE_ID = "P023"
 _BRIDGE_EXACT = frozenset({"asyncio.run"})
 _BRIDGE_ATTR = "run_until_complete"
 _BLOCKING_EXACT = frozenset({"time.sleep"})
-_BLOCKING_PREFIXES = ("requests.", "urllib.request.")
+# Only the calls that send a request. Constructors (`requests.Session`,
+# `requests.adapters.HTTPAdapter`, `urllib.request.Request`, ...) do no I/O:
+# connections open lazily on the first send. Matched on the root plus the last
+# segment, because `import urllib.request` binds `urllib` to `urllib.request`
+# and the resolved target repeats the submodule.
+_REQUESTS_VERBS = frozenset(
+    {"get", "post", "put", "patch", "delete", "head", "options", "request"}
+)
+_URLLIB_BLOCKING = frozenset({"urlopen", "urlretrieve"})
+_SESSION_FACTORIES = frozenset({"Session", "session"})
+
+
+def _is_blocking_network(target: str) -> bool:
+    last = target.rsplit(".", 1)[-1]
+    return (target.startswith("requests.") and last in _REQUESTS_VERBS) or (
+        target.startswith("urllib.request.") and last in _URLLIB_BLOCKING
+    )
+
+
+def _is_session_factory(target: str | None) -> bool:
+    return (
+        target is not None
+        and target.startswith("requests.")
+        and target.rsplit(".", 1)[-1] in _SESSION_FACTORIES
+    )
+
 
 # Tree-scale filesystem work: duration scales with the tree, not with a fixed
 # syscall cost. Single-inode ops (os.remove / os.unlink / os.rmdir) are
@@ -322,14 +351,16 @@ class _Visitor(ast.NodeVisitor):
             return
         target = resolve_call_target(node.func, self.bindings)
         if target is None:
+            verb = self._inline_session_verb(node)
+            if self._wf_depth == 0 and verb is not None:
+                self._add(node, f"requests.Session().{verb}()", _BLOCKING_HINT)
             return
         if target in _BRIDGE_EXACT:
             self._add(node, f"{target}()", _BRIDGE_HINT)
             return
         # Blocking sync I/O — skip inside workflow context (P020/P021 own it).
         if self._wf_depth == 0 and (
-            target in _BLOCKING_EXACT
-            or any(target.startswith(p) for p in _BLOCKING_PREFIXES)
+            target in _BLOCKING_EXACT or _is_blocking_network(target)
         ):
             self._add(node, f"{target}()", _BLOCKING_HINT)
             return
@@ -378,6 +409,17 @@ class _Visitor(ast.NodeVisitor):
             return
         if target.endswith(_TRAVERSAL_SUFFIXES):
             self._add(node, f"{target}()", _TRAVERSAL_HINT)
+
+    def _inline_session_verb(self, node: ast.Call) -> str | None:
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in _REQUESTS_VERBS
+            and isinstance(func.value, ast.Call)
+            and _is_session_factory(resolve_call_target(func.value.func, self.bindings))
+        ):
+            return func.attr
+        return None
 
     def _add(self, node: ast.Call, label: str, hint: str) -> None:
         self.findings.append(

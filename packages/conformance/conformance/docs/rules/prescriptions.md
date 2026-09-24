@@ -1097,11 +1097,12 @@ await an async equivalent, or offload blocking work via App.run_in_thread() insi
 
 Inside an `async def`, code either re-enters the event loop (`asyncio.run(...)` or
 `*.run_until_complete(...)`, including `loop.run_until_complete` /
-`asyncio.get_event_loop()....`), makes a blocking synchronous call (`requests.*`,
-`urllib.request.*`, `time.sleep`), or does tree-scale filesystem work (`shutil.rmtree` /
-`shutil.copytree` / `shutil.move`, plus the SDK's `SafeFileOps.rmtree` /
-`SafeFileOps.move` wrappers).  Await the coroutine directly, or offload genuinely
-blocking work with `App.run_in_thread()` inside a `@task`.
+`asyncio.get_event_loop()....`), makes a blocking synchronous call (`requests.get` /
+`post` / … / `request`, `urllib.request.urlopen` / `urlretrieve`, `time.sleep`), or does
+tree-scale filesystem work (`shutil.rmtree` / `shutil.copytree` / `shutil.move`, plus
+the SDK's `SafeFileOps.rmtree` / `SafeFileOps.move` wrappers).  Await the coroutine
+directly, or offload genuinely blocking work with `App.run_in_thread()` inside a
+`@task`.
 
 The same data-scale property extends the inventory to tree traversal (`os.walk` /
 `os.scandir` / `glob.glob` / `Path.glob` / `Path.rglob`), pandas and pyarrow readers and
@@ -1109,6 +1110,12 @@ writers (`pandas.read_sql` / `read_parquet` / `DataFrame.to_parquet` / `pq.read_
 …), whole-file `pathlib` accessors (`Path.read_text` / `write_bytes` / …), file-handle
 (de)serialization (`json.load` / `json.dump` / `pickle` / `tomllib`), and `subprocess.*`
 / `os.system`.
+
+Only the calls that send a request are network findings. Constructors do no I/O —
+`requests.Session()`, `requests.adapters.HTTPAdapter()`, `requests.Request()`,
+`urllib.request.Request()` — so building a session in an `async def` is silent; an
+inline `requests.Session().get(...)` is still flagged.  A send through a named session
+(`s.get(...)`) is not seen: the receiver is a local.
 
 Single-syscall filesystem operations (`os.remove`, `os.unlink`, `os.rmdir`) are **not**
 flagged: one inode operation does not earn a thread hop, and flagging them would bury
