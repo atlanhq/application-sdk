@@ -1472,7 +1472,8 @@ def main() -> int:
         print(
             f"[attempt {attempt}/{MAX_DISPATCH_ATTEMPTS}] model={model} "
             f"status={st.status or 'none'} cost_usd={st.cost or 'n/a'} "
-            f"code={st.err_code or 'none'}"
+            f"code={st.err_code or 'none'} "
+            f"models_seen={models_used(st) or 'none'}"
         )
 
         # Stream ended. Establish whether the verdict landed before anything

@@ -33,6 +33,16 @@ def test_stamp_replaces_only_the_models_line():
     assert "<!-- SDK_REVIEW -->" in new and "REVIEWED_HEAD" in new and RUN in new
 
 
+def test_stamp_rewrites_the_footer_not_a_quoted_prior_footer():
+    """A re-review's delta section can quote the previous summary's footer."""
+    quoted = "**Models:** an older run's line\n"
+    body = BODY.replace("Looks fine.\n", "Looks fine.\n" + quoted)
+    new = sm.stamp(body, "gpt-6-sol")
+    assert new is not None
+    assert quoted in new
+    assert GUESS not in new and "**Models:** gpt-6-sol\n**Run:**" in new
+
+
 def test_stamp_never_keeps_the_guess_when_the_stream_named_nothing():
     new = sm.stamp(BODY, "")
     assert new is not None

@@ -66,20 +66,26 @@ def models_line(models: str) -> str:
 def stamp(body: str, models: str) -> str | None:
     """`body` with its Models footer set to `models`, or None if unchanged.
 
-    Replaces the existing line; otherwise inserts one directly above the
+    Replaces the LAST `**Models:**` line — the footer. A re-review carries the
+    prior summary into its delta section, so an earlier footer can be quoted
+    above the real one; the first match would "fix" the quote and leave the
+    guess standing. With no such line, one is inserted directly above the last
     `**Run:**` line. A body with neither is left alone — there is no footer to
     anchor to, and guessing a position risks landing inside the review text.
     Only that one line changes, so the markers, `REVIEWED_HEAD` and the run URL
     the approver, the dedupe step and the verdict gate key on stay byte-identical.
     """
     line = models_line(models)
-    if MODELS_LINE_RE.search(body):
-        new = MODELS_LINE_RE.sub(lambda _: line, body, count=1)
+    footers = list(MODELS_LINE_RE.finditer(body))
+    if footers:
+        last = footers[-1]
+        new = body[: last.start()] + line + body[last.end() :]
     else:
-        run = RUN_LINE_RE.search(body)
-        if run is None:
+        runs = list(RUN_LINE_RE.finditer(body))
+        if not runs:
             return None
-        new = body[: run.start()] + line + "\n" + body[run.start() :]
+        at = runs[-1].start()
+        new = body[:at] + line + "\n" + body[at:]
     return new if new != body else None
 
 
