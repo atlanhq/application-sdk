@@ -729,7 +729,7 @@ jobs:
       # posted before a stream fault is still delivered and still needs the
       # true footer. Fails open — a wrong footer never reds a review.
       - name: Stamp observed models onto the review summary
-        if: ${{ !cancelled() && steps.dispatch.outcome != 'skipped' && steps.parse.outputs.pr_number != '' }}
+        if: ${{ !cancelled() && steps.parse.outputs.pr_number != '' && steps.lock_gate.outputs.decision != 'skip' && steps.dispatch.outcome != 'skipped' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
