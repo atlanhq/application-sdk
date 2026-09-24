@@ -179,7 +179,7 @@ _SERIES_META: list[SeriesMeta] = [
         checker=(
             "`suite.checks.preflight` (cross-file AST over the preflight handler, "
             "its helpers and the entrypoint contracts; F015 also reads deployment "
-            "manifests, and F016 reads the scenario registrations under `tests/`). "
+            "manifests, and F016 reads the scenario registrations under `tests/unit/`). "
             "No rule executes tests: F016 checks the scenario matrix is defined, "
             "and the test gate checks it passes. F017–F018 are retired"
         ),

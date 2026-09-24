@@ -5,7 +5,7 @@
 
 # Preflight-Gate Rules (F-series)
 
-**20 rules** · Checker: `suite.checks.preflight` (cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests, and F016 reads the scenario registrations under `tests/`). No rule executes tests: F016 checks the scenario matrix is defined, and the test gate checks it passes. F017–F018 are retired
+**20 rules** · Checker: `suite.checks.preflight` (cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests, and F016 reads the scenario registrations under `tests/unit/`). No rule executes tests: F016 checks the scenario matrix is defined, and the test gate checks it passes. F017–F018 are retired
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -499,13 +499,15 @@ runs. A missing scenario is a behaviour nothing verifies.
   a module-level `entrypoint_matrix(scenario)` parametrize helper.
 
 Every scenario in the F016 matrix must be defined, for each `@entrypoint` the app
-declares, as a pytest-collected test under `tests/` marked
-`preflight_conformance(rule="F016", scenario=..., entrypoint=...)` that calls
-`assert_preflight_result` (and `assert_probe_lifetime` for hung_probe,
-cancellation_cleanup and budget_retry). A skipped, xfail or unsupported registration
-does not define its scenario, and neither does one the static reader cannot resolve.
-This rule checks the matrix is defined; whether the tests pass is the test gate's
-measure, and conformance never executes them. WARN while the fleet registers its
+declares, as a pytest-collected test under `tests/unit/` (the tier the test gate always
+runs) marked `preflight_conformance(rule="F016", scenario=..., entrypoint=...)` that
+reachably calls `assert_preflight_result` from `conformance.preflight_testing` (and
+`assert_probe_lifetime` for hung_probe, cancellation_cleanup and budget_retry). A
+registration on a test that does not run (skip, a true skipif or xfail condition, no
+runnable parametrized case), a declared-unsupported one, a case whose entrypoint
+argument differs from its marker, and one the static reader cannot resolve do not define
+the scenario. This rule checks the matrix is defined; whether the tests pass is the test
+gate's measure, and conformance never executes them. WARN while the fleet registers its
 scenarios; promoted to BLOCK once it has.
 
 [Investigation, remediation and verification

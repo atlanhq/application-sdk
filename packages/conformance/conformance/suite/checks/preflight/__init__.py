@@ -5,7 +5,7 @@ Cross-file only: ``scan_path`` is a no-op and ``scan_all`` builds one shared
 passes over it. Owns the ``F`` series and its leg of the fleet CI matrix.
 
 Nothing here executes tests. F016 reads the scenario registrations under
-``tests/`` statically; whether those tests pass is the test gate's measure.
+``tests/unit/`` statically; whether those tests pass is the test gate's measure.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
 
 
 def discover(root: Path) -> list[Path]:
-    """App sources, plus the ``tests/`` modules F016 reads registrations from."""
+    """App sources, plus the ``tests/unit/`` modules F016 reads registrations from."""
     tests = root / "tests"
     scenario_modules = (
         [

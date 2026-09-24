@@ -510,12 +510,15 @@ _CONTRACT_RULES = (
         full_description=(
             "Every scenario in the F016 matrix must be defined, for each "
             "``@entrypoint`` the app declares, as a pytest-collected test under "
-            '``tests/`` marked ``preflight_conformance(rule="F016", scenario=..., '
-            "entrypoint=...)`` that calls ``assert_preflight_result`` (and "
-            "``assert_probe_lifetime`` for hung_probe, cancellation_cleanup and "
-            "budget_retry). A skipped, xfail or unsupported registration does not "
-            "define its scenario, and neither does one the static reader cannot "
-            "resolve. This rule checks the matrix is defined; whether the tests "
+            "``tests/unit/`` (the tier the test gate always runs) marked "
+            '``preflight_conformance(rule="F016", scenario=..., entrypoint=...)`` '
+            "that reachably calls ``assert_preflight_result`` from "
+            "``conformance.preflight_testing`` (and ``assert_probe_lifetime`` for "
+            "hung_probe, cancellation_cleanup and budget_retry). A registration "
+            "on a test that does not run (skip, a true skipif or xfail condition, "
+            "no runnable parametrized case), a declared-unsupported one, a case "
+            "whose entrypoint argument differs from its marker, and one the "
+            "static reader cannot resolve do not define the scenario. This rule checks the matrix is defined; whether the tests "
             "pass is the test gate's measure, and conformance never executes them. "
             "WARN while the fleet registers its scenarios; promoted to BLOCK once "
             "it has."

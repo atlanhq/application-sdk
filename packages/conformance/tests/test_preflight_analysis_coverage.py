@@ -104,12 +104,17 @@ def test_unparsed_source_is_never_scenario_cleared(tmp_path):
     assert all(f.cleared_by == frozenset() for f in findings)
 
 
-def test_dynamic_callback_binding_is_never_scenario_cleared(tmp_path):
+@pytest.mark.parametrize(
+    "binding",
+    ["preflight_check = lookup()\n", "preflight_check: Callable = lookup()\n"],
+    ids=["plain", "annotated"],
+)
+def test_dynamic_callback_binding_is_never_scenario_cleared(tmp_path, binding):
     reg = _registry(
         tmp_path,
+        "from collections.abc import Callable\n"
         "async def _probe(input: PreflightInput) -> PreflightOutput:\n"
-        "  return PreflightOutput(checks=[])\n"
-        "preflight_check = lookup()\n",
+        "  return PreflightOutput(checks=[])\n" + binding,
     )
     findings = _f019(coverage_findings(reg))
     assert findings, "expected a dynamic-binding F019"
@@ -162,8 +167,8 @@ REGISTERED = '@pytest.mark.preflight_conformance(rule="F016", scenario="healthy"
 
 
 def _define(repo, decorators=REGISTERED):
-    (repo / "tests").mkdir(exist_ok=True)
-    (repo / "tests" / "test_contract.py").write_text(
+    (repo / "tests" / "unit").mkdir(parents=True, exist_ok=True)
+    (repo / "tests" / "unit" / "test_contract.py").write_text(
         SCENARIO.format(decorators=decorators)
     )
 
@@ -221,8 +226,8 @@ def test_clearing_never_executes_the_tests(repo, monkeypatch):
         raise AssertionError("conformance must not start a subprocess for tests")
 
     monkeypatch.setattr(subprocess, "Popen", _forbidden)
-    (repo / "tests").mkdir()
-    (repo / "tests" / "test_contract.py").write_text(
+    (repo / "tests" / "unit").mkdir(parents=True)
+    (repo / "tests" / "unit" / "test_contract.py").write_text(
         SCENARIO.format(decorators=REGISTERED).replace(
             "def test_healthy():\n", "def test_healthy():\n    assert False\n"
         )

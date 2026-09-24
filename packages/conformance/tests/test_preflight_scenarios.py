@@ -1,10 +1,11 @@
 """F016 reads scenario registrations statically; each shape is graded here.
 
-A scenario is defined when a pytest-collected test under ``tests/`` carries a
-resolvable ``preflight_conformance`` marker, is not skipped, and calls the
-contract assertion it needs. Every case below pairs a defining shape with the
-nearest shape that must not count, so a reader that accepts too much or too
-little fails here rather than on the fleet dashboard.
+A scenario is defined when a pytest-collected test under ``tests/unit/`` carries
+a resolvable ``preflight_conformance`` marker, runs, and reachably calls the
+contract assertion it needs from ``conformance.preflight_testing``. Every case
+below pairs a defining shape with the nearest shape that must not count, so a
+reader that accepts too much or too little fails here rather than on the fleet
+dashboard.
 """
 
 from __future__ import annotations
@@ -36,20 +37,25 @@ CONNECTOR = (
     "    async def extract_lineage(self, input): pass\n"
 )
 
+NOT_RUN = "does not run"
+NOT_REGISTERED = "healthy for entrypoint default is not registered"
+
 
 @pytest.fixture(autouse=True)
 def _one_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Narrow the matrix so each fixture defines one scenario, not thirteen."""
+    """Narrow the matrix so each fixture defines two scenarios, not thirteen."""
     monkeypatch.setitem(SCENARIOS, "F016", ("healthy", "hung_probe"))
 
 
-def _grade(tmp_path: Path, tests: dict[str, str], app: str = "") -> list[str]:
+def _grade(
+    tmp_path: Path, tests: dict[str, str], app: str = "", handler: str = HANDLER
+) -> list[str]:
     for rel, body in tests.items():
         path = tmp_path / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body)
     (tmp_path / "app").mkdir(exist_ok=True)
-    (tmp_path / "app" / "handler.py").write_text(HANDLER)
+    (tmp_path / "app" / "handler.py").write_text(handler)
     if app:
         (tmp_path / "app" / "connector.py").write_text(app)
     paths = discover(tmp_path)
@@ -73,8 +79,8 @@ LIFETIME = _test(
 )
 
 
-def _module(*tests: str) -> dict[str, str]:
-    return {"tests/unit/test_preflight.py": PRELUDE + "\n\n".join(tests)}
+def _module(*tests: str, prelude: str = PRELUDE) -> dict[str, str]:
+    return {"tests/unit/test_preflight.py": prelude + "\n\n".join(tests)}
 
 
 def test_a_complete_literal_matrix_is_defined(tmp_path: Path) -> None:
@@ -84,8 +90,11 @@ def test_a_complete_literal_matrix_is_defined(tmp_path: Path) -> None:
 def test_a_missing_scenario_is_reported_with_the_marker_to_add(tmp_path: Path) -> None:
     messages = _grade(tmp_path, _module(LIFETIME))
     assert len(messages) == 1
-    assert "healthy for entrypoint default is not registered" in messages[0]
+    assert NOT_REGISTERED in messages[0]
     assert 'scenario="healthy")' in messages[0]
+
+
+# --- whether the test runs ----------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -93,47 +102,106 @@ def test_a_missing_scenario_is_reported_with_the_marker_to_add(tmp_path: Path) -
     [
         '@pytest.mark.skip(reason="later")\n' + HEALTHY,
         '@pytest.mark.skipif(True, reason="later")\n' + HEALTHY,
+        '@pytest.mark.skipif(condition=1, reason="later")\n' + HEALTHY,
         "@pytest.mark.xfail\n" + HEALTHY,
+        '@pytest.mark.xfail(reason="flaky")\n' + HEALTHY,
     ],
-    ids=["skip", "skipif", "xfail"],
+    ids=["skip", "skipif-true", "skipif-kw", "xfail", "xfail-reason"],
 )
 def test_a_skipped_test_does_not_define_its_scenario(
     tmp_path: Path, decorators: str
 ) -> None:
     messages = _grade(tmp_path, _module(_test(decorators), LIFETIME))
-    assert any("skipped or xfail" in m for m in messages)
-    assert any(
-        "healthy for entrypoint default is not registered" in m for m in messages
-    )
+    assert any(NOT_RUN in m for m in messages)
+    assert any(NOT_REGISTERED in m for m in messages)
 
 
-def test_a_module_pytestmark_skip_reaches_every_scenario(tmp_path: Path) -> None:
-    body = _module(
-        'pytestmark = pytest.mark.skip(reason="later")', _test(HEALTHY), LIFETIME
+@pytest.mark.parametrize(
+    "decorators",
+    [
+        '@pytest.mark.skipif(False, reason="platform")\n' + HEALTHY,
+        '@pytest.mark.xfail(False, reason="fixed")\n' + HEALTHY,
+    ],
+    ids=["skipif-false", "xfail-false"],
+)
+def test_a_literally_false_condition_still_runs(
+    tmp_path: Path, decorators: str
+) -> None:
+    assert _grade(tmp_path, _module(_test(decorators), LIFETIME)) == []
+
+
+@pytest.mark.parametrize(
+    "decorators",
+    [
+        '@pytest.mark.skipif(sys.platform == "win32", reason="posix")\n' + HEALTHY,
+        '@pytest.mark.skipif("sys.platform == \'win32\'", reason="posix")\n' + HEALTHY,
+        "@pytest.mark.xfail(condition=FLAKY)\n" + HEALTHY,
+    ],
+    ids=["expression", "string-condition", "name"],
+)
+def test_a_dynamic_condition_is_unresolved_not_skipped(
+    tmp_path: Path, decorators: str
+) -> None:
+    messages = _grade(tmp_path, _module(_test(decorators), LIFETIME))
+    assert any("cannot be read statically" in m for m in messages)
+    assert not any(NOT_RUN in m for m in messages)
+    assert any(NOT_REGISTERED in m for m in messages)
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        'pytestmark = pytest.mark.skip(reason="later")',
+        'pytestmark = [pytest.mark.asyncio, pytest.mark.skip(reason="later")]',
+        'pytestmark: object = pytest.mark.skip(reason="later")',
+        'marks = pytestmark = pytest.mark.skip(reason="later")',
+        'pytestmark = []\npytestmark += [pytest.mark.skip(reason="later")]',
+    ],
+    ids=["plain", "list", "annotated", "chained", "augmented"],
+)
+def test_a_module_pytestmark_skip_reaches_every_scenario(
+    tmp_path: Path, binding: str
+) -> None:
+    messages = _grade(tmp_path, _module(binding, _test(HEALTHY), LIFETIME))
+    assert sum(NOT_RUN in m for m in messages) == 2
+
+
+def test_an_unreadable_pytestmark_element_keeps_its_readable_skip(
+    tmp_path: Path,
+) -> None:
+    binding = 'pytestmark = [pytest.mark.skip(reason="later"), dynamic_mark()]'
+    messages = _grade(tmp_path, _module(binding, _test(HEALTHY), LIFETIME))
+    assert sum(NOT_RUN in m for m in messages) == 2
+
+
+def test_an_unreadable_pytestmark_counts_nothing(tmp_path: Path) -> None:
+    messages = _grade(
+        tmp_path, _module("pytestmark = marks_for_ci()", _test(HEALTHY), LIFETIME)
     )
-    messages = _grade(tmp_path, body)
-    assert sum("skipped or xfail" in m for m in messages) == 2
+    assert sum("cannot be read statically" in m for m in messages) == 2
+    assert sum("is not registered" in m for m in messages) == 2
 
 
 def test_a_skipped_class_reaches_its_methods(tmp_path: Path) -> None:
     body = PRELUDE + (
         '@pytest.mark.skip(reason="later")\n'
+        "@some_unrelated_decorator\n"
         "class TestScenarios:\n"
         f"    {HEALTHY}\n"
         "    def test_healthy(self):\n"
         "        assert_preflight_result(result, required_checks=set(), observed_checks=set(), expected_status='ready')\n"
     )
-    messages = _grade(tmp_path, {"tests/test_preflight.py": body + "\n\n" + LIFETIME})
-    assert any("skipped or xfail" in m for m in messages)
+    messages = _grade(
+        tmp_path, {"tests/unit/test_preflight.py": body + "\n\n" + LIFETIME}
+    )
+    assert any(NOT_RUN in m for m in messages)
 
 
 def test_an_unconditional_runtime_skip_does_not_define_its_scenario(
     tmp_path: Path,
 ) -> None:
     skipped = _test(HEALTHY, '    pytest.skip("later")\n' + ASSERT)
-    assert any(
-        "skipped or xfail" in m for m in _grade(tmp_path, _module(skipped, LIFETIME))
-    )
+    assert any(NOT_RUN in m for m in _grade(tmp_path, _module(skipped, LIFETIME)))
 
 
 def test_a_conditional_runtime_skip_still_defines_it(tmp_path: Path) -> None:
@@ -147,10 +215,11 @@ def test_a_declared_unsupported_scenario_is_still_a_gap(tmp_path: Path) -> None:
     unsupported = _test(
         '@pytest.mark.preflight_conformance(rule="F016", scenario="healthy", unsupported=True, reason="n/a")'
     )
-    assert any(
-        "declared unsupported" in m
-        for m in _grade(tmp_path, _module(unsupported, LIFETIME))
-    )
+    messages = _grade(tmp_path, _module(unsupported, LIFETIME))
+    assert any("declared unsupported" in m for m in messages)
+
+
+# --- the contract assertion ---------------------------------------------------
 
 
 def test_registration_without_the_contract_assertion_is_not_a_definition(
@@ -158,7 +227,7 @@ def test_registration_without_the_contract_assertion_is_not_a_definition(
 ) -> None:
     bare = _test(HEALTHY, "    assert True\n")
     messages = _grade(tmp_path, _module(bare, LIFETIME))
-    assert any("never calls assert_preflight_result" in m for m in messages)
+    assert any("never reachably calls assert_preflight_result" in m for m in messages)
 
 
 def test_the_assertion_may_sit_in_a_module_helper(tmp_path: Path) -> None:
@@ -167,14 +236,93 @@ def test_the_assertion_may_sit_in_a_module_helper(tmp_path: Path) -> None:
     assert _grade(tmp_path, _module(helper, via_helper, LIFETIME)) == []
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    def _never_called():\n    " + ASSERT,
+        "    if False:\n    " + ASSERT,
+        "    while 0:\n    " + ASSERT,
+        "    return\n" + ASSERT,
+        "    check = lambda: assert_preflight_result(result, required_checks=set(), observed_checks=set(), expected_status='ready')\n",
+    ],
+    ids=["nested-def", "if-false", "while-false", "after-return", "lambda"],
+)
+def test_an_unreachable_assertion_is_not_a_definition(
+    tmp_path: Path, body: str
+) -> None:
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any("never reachably calls assert_preflight_result" in m for m in messages)
+
+
+def test_an_assertion_in_the_live_branch_counts(tmp_path: Path) -> None:
+    body = "    if True:\n    " + ASSERT + "    else:\n        pass\n"
+    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
+
+
+@pytest.mark.parametrize(
+    ("prelude", "extra"),
+    [
+        (
+            "import pytest\nfrom conformance.preflight_testing import assert_probe_lifetime\n\n",
+            "def assert_preflight_result(*args, **kwargs):\n    pass\n",
+        ),
+        (
+            "import pytest\nfrom mylib import assert_preflight_result, assert_probe_lifetime\n\n",
+            "",
+        ),
+        (
+            PRELUDE,
+            "def assert_preflight_result(*args, **kwargs):\n    pass\n",
+        ),
+    ],
+    ids=["local-definition", "other-module", "import-then-shadow"],
+)
+def test_a_same_named_function_is_not_the_contract_assertion(
+    tmp_path: Path, prelude: str, extra: str
+) -> None:
+    messages = _grade(
+        tmp_path, _module(extra, _test(HEALTHY), LIFETIME, prelude=prelude)
+    )
+    assert any("never reachably calls assert_preflight_result" in m for m in messages)
+
+
+def test_a_fixture_parameter_shadows_the_assertion(tmp_path: Path) -> None:
+    shadowed = f"{HEALTHY}\ndef test_healthy(assert_preflight_result):\n{ASSERT}"
+    messages = _grade(tmp_path, _module(shadowed, LIFETIME))
+    assert any("never reachably calls assert_preflight_result" in m for m in messages)
+
+
+@pytest.mark.parametrize(
+    "prelude",
+    [
+        "import pytest\nimport conformance.preflight_testing as pt\n\n",
+        "import pytest\nfrom conformance import preflight_testing as pt\n\n",
+        "import pytest\nfrom conformance.preflight_testing import assert_preflight_result as check, assert_probe_lifetime as lifetime\n\n",
+    ],
+    ids=["module-alias", "from-package", "aliased-names"],
+)
+def test_the_assertion_resolves_through_aliases(tmp_path: Path, prelude: str) -> None:
+    if "as check" in prelude:
+        call, lifetime = "check", "lifetime"
+    else:
+        call, lifetime = "pt.assert_preflight_result", "pt.assert_probe_lifetime"
+    healthy = _test(HEALTHY, ASSERT.replace("assert_preflight_result", call))
+    hung = LIFETIME.replace("assert_preflight_result", call).replace(
+        "assert_probe_lifetime", lifetime
+    )
+    assert _grade(tmp_path, _module(healthy, hung, prelude=prelude)) == []
+
+
 def test_a_lifetime_scenario_needs_the_lifetime_assertion(tmp_path: Path) -> None:
     hung = _test(
         '@pytest.mark.preflight_conformance(rule="F016", scenario="hung_probe")',
         name="test_hung",
     )
     messages = _grade(tmp_path, _module(_test(HEALTHY), hung))
-    assert any("never calls assert_probe_lifetime" in m for m in messages)
+    assert any("never reachably calls assert_probe_lifetime" in m for m in messages)
 
+
+# --- parametrize --------------------------------------------------------------
 
 MATRIX_HELPER = '''
 ENTRYPOINTS = ("extract_metadata", "extract_lineage")
@@ -197,28 +345,29 @@ def entrypoint_matrix(scenario: str):
     )
 '''
 
-
-def _matrix_test(scenario: str, name: str, extra: str = "") -> str:
-    return (
-        f'@entrypoint_matrix("{scenario}")\n'
-        f"def {name}(entrypoint):\n" + ASSERT + extra
-    )
-
-
 LIFETIME_CALL = (
     "    assert_probe_lifetime(elapsed=0, budget=1, background_stopped=True)\n"
 )
 
 
-def test_the_parametrize_helper_shape_defines_one_scenario_per_entrypoint(
-    tmp_path: Path,
-) -> None:
-    body = _module(
-        MATRIX_HELPER,
+def _matrix_test(scenario: str, name: str, extra: str = "") -> str:
+    return (
+        f'@entrypoint_matrix("{scenario}")\ndef {name}(entrypoint):\n' + ASSERT + extra
+    )
+
+
+def _matrix_module(helper: str = MATRIX_HELPER) -> dict[str, str]:
+    return _module(
+        helper,
         _matrix_test("healthy", "test_healthy"),
         _matrix_test("hung_probe", "test_hung", LIFETIME_CALL),
     )
-    assert _grade(tmp_path, body, app=CONNECTOR) == []
+
+
+def test_the_parametrize_helper_shape_defines_one_scenario_per_entrypoint(
+    tmp_path: Path,
+) -> None:
+    assert _grade(tmp_path, _matrix_module(), app=CONNECTOR) == []
 
 
 def test_the_matrix_is_owed_per_declared_entrypoint(tmp_path: Path) -> None:
@@ -242,22 +391,75 @@ def test_a_param_level_skip_removes_only_that_entrypoint(tmp_path: Path) -> None
         '                    pytest.mark.skip(reason="later"),\n'
         "                ],\n",
     )
-    body = _module(
-        helper,
-        _matrix_test("healthy", "test_healthy"),
-        _matrix_test("hung_probe", "test_hung", LIFETIME_CALL),
+    messages = _grade(tmp_path, _matrix_module(helper), app=CONNECTOR)
+    assert sum(NOT_RUN in m for m in messages) == 4
+
+
+def test_a_case_defines_only_the_entrypoint_it_runs(tmp_path: Path) -> None:
+    """A marker claiming extract_metadata on a case that runs extract_lineage."""
+    swapped = """
+def entrypoint_matrix(scenario: str):
+    return pytest.mark.parametrize(
+        "entrypoint",
+        [
+            pytest.param("extract_lineage", marks=pytest.mark.preflight_conformance(rule="F016", scenario=scenario, entrypoint="extract_metadata")),
+            pytest.param("extract_lineage", marks=pytest.mark.preflight_conformance(rule="F016", scenario=scenario, entrypoint="extract_lineage")),
+        ],
     )
-    messages = _grade(tmp_path, body, app=CONNECTOR)
-    assert sum("skipped or xfail" in m for m in messages) == 4
+"""
+    messages = _grade(tmp_path, _matrix_module(swapped), app=CONNECTOR)
+    assert sum("runs with entrypoint='extract_lineage'" in m for m in messages) == 2
+    assert (
+        sum("for entrypoint extract_metadata is not registered" in m for m in messages)
+        == 2
+    )
+
+
+def test_an_unreadable_case_entrypoint_is_not_counted(tmp_path: Path) -> None:
+    dynamic = """
+def entrypoint_matrix(scenario: str):
+    return pytest.mark.parametrize(
+        "entrypoint",
+        [
+            pytest.param(pick("m"), marks=pytest.mark.preflight_conformance(rule="F016", scenario=scenario, entrypoint="extract_metadata")),
+            pytest.param("extract_lineage", marks=pytest.mark.preflight_conformance(rule="F016", scenario=scenario, entrypoint="extract_lineage")),
+        ],
+    )
+"""
+    messages = _grade(tmp_path, _matrix_module(dynamic), app=CONNECTOR)
+    assert sum("cannot be read statically" in m for m in messages) == 2
+
+
+@pytest.mark.parametrize(
+    "parametrize",
+    [
+        '@pytest.mark.parametrize("value", [])',
+        '@pytest.mark.parametrize("value", [pytest.param(1, marks=pytest.mark.skip(reason="x"))])',
+    ],
+    ids=["empty", "every-case-skipped"],
+)
+def test_a_function_marker_needs_a_runnable_case(
+    tmp_path: Path, parametrize: str
+) -> None:
+    decorated = f"{parametrize}\n{HEALTHY}\ndef test_healthy(value):\n{ASSERT}"
+    messages = _grade(tmp_path, _module(decorated, LIFETIME))
+    assert any(NOT_RUN in m for m in messages)
+
+
+def test_a_function_marker_with_one_runnable_case_counts(tmp_path: Path) -> None:
+    parametrize = '@pytest.mark.parametrize("value", [1, pytest.param(2, marks=pytest.mark.skip(reason="x"))])'
+    decorated = f"{parametrize}\n{HEALTHY}\ndef test_healthy(value):\n{ASSERT}"
+    assert _grade(tmp_path, _module(decorated, LIFETIME)) == []
+
+
+# --- what the reader cannot resolve --------------------------------------------
 
 
 def test_an_unresolvable_scenario_is_reported_not_counted(tmp_path: Path) -> None:
     dynamic = _test('@pytest.mark.preflight_conformance(rule="F016", scenario=pick())')
     messages = _grade(tmp_path, _module(dynamic, LIFETIME))
-    assert any("not statically resolvable" in m for m in messages)
-    assert any(
-        "healthy for entrypoint default is not registered" in m for m in messages
-    )
+    assert any("not counted as coverage" in m for m in messages)
+    assert any(NOT_REGISTERED in m for m in messages)
 
 
 def test_an_unresolvable_helper_is_reported_not_counted(tmp_path: Path) -> None:
@@ -271,32 +473,48 @@ def test_an_unresolvable_helper_is_reported_not_counted(tmp_path: Path) -> None:
     assert any("not statically resolvable" in m for m in messages)
 
 
+# --- where scenarios live -------------------------------------------------------
+
+
 @pytest.mark.parametrize(
     "rel",
-    ["tests/unit/preflight_scenarios.py", "app/test_preflight.py"],
-    ids=["not-collected-name", "outside-tests"],
+    [
+        "tests/unit/preflight_scenarios.py",
+        "app/test_preflight.py",
+        "tests/test_preflight.py",
+        "tests/integration/test_preflight.py",
+        "tests/e2e/test_preflight.py",
+    ],
+    ids=["not-collected-name", "outside-tests", "tests-root", "integration", "e2e"],
 )
-def test_a_module_pytest_would_not_collect_defines_nothing(
-    tmp_path: Path, rel: str
-) -> None:
+def test_only_the_unit_tier_defines_scenarios(tmp_path: Path, rel: str) -> None:
+    """The unit job always runs tests/unit/; nothing else is guaranteed to run."""
     messages = _grade(tmp_path, {rel: PRELUDE + _test(HEALTHY) + "\n\n" + LIFETIME})
     assert sum("is not registered" in m for m in messages) == 2
+
+
+def test_a_nested_unit_module_counts(tmp_path: Path) -> None:
+    body = {
+        "tests/unit/preflight/test_scenarios.py": PRELUDE
+        + _test(HEALTHY)
+        + "\n\n"
+        + LIFETIME
+    }
+    assert _grade(tmp_path, body) == []
 
 
 def test_a_function_pytest_would_not_collect_defines_nothing(tmp_path: Path) -> None:
     helper_named = _test(HEALTHY, name="check_healthy")
     messages = _grade(tmp_path, _module(helper_named, LIFETIME))
-    assert any(
-        "healthy for entrypoint default is not registered" in m for m in messages
-    )
+    assert any(NOT_REGISTERED in m for m in messages)
 
 
 def test_an_unknown_scenario_is_reported(tmp_path: Path) -> None:
-    typo = _test('@pytest.mark.preflight_conformance(rule="F016", scenario="helthy")')
-    messages = _grade(
-        tmp_path,
-        _module(_test(HEALTHY), LIFETIME, typo.replace("test_healthy", "test_typo")),
+    typo = _test(
+        '@pytest.mark.preflight_conformance(rule="F016", scenario="helthy")',
+        name="test_typo",
     )
+    messages = _grade(tmp_path, _module(_test(HEALTHY), LIFETIME, typo))
     assert any("helthy" in m and "not in the F016 matrix" in m for m in messages)
 
 
@@ -309,15 +527,16 @@ def test_a_retired_rule_registration_is_ignored(tmp_path: Path) -> None:
 
 
 def test_from_pytest_import_mark_is_read(tmp_path: Path) -> None:
-    body = {
-        "tests/test_preflight.py": PRELUDE.replace(
-            "import pytest\n", "from pytest import mark\n"
-        )
-        + _test(HEALTHY.replace("@pytest.mark.", "@mark."))
-        + "\n\n"
-        + LIFETIME.replace("@pytest.mark.", "@mark.")
-    }
+    prelude = PRELUDE.replace("import pytest\n", "from pytest import mark\n")
+    body = _module(
+        _test(HEALTHY.replace("@pytest.mark.", "@mark.")),
+        LIFETIME.replace("@pytest.mark.", "@mark."),
+        prelude=prelude,
+    )
     assert _grade(tmp_path, body) == []
+
+
+# --- which apps owe the matrix ----------------------------------------------------
 
 
 def test_an_app_without_its_own_preflight_owes_no_scenarios(tmp_path: Path) -> None:
@@ -327,10 +546,33 @@ def test_an_app_without_its_own_preflight_owes_no_scenarios(tmp_path: Path) -> N
     assert scan_all(discover(tmp_path), tmp_path) == []
 
 
+def test_an_annotated_preflight_binding_owes_the_matrix(tmp_path: Path) -> None:
+    handler = (
+        "from collections.abc import Callable\n"
+        "from application_sdk.handler import Handler\n"
+        "async def check_source(input): ...\n"
+        "class H(Handler):\n"
+        "    preflight_check: Callable = check_source\n"
+    )
+    messages = _grade(tmp_path, _module(), handler=handler)
+    assert sum("is not registered" in m for m in messages) == 2
+
+
+def test_a_preflight_check_data_field_is_not_a_hook(tmp_path: Path) -> None:
+    """Generated input contracts carry `preflight_check: str = ""` as data."""
+    (tmp_path / "app" / "generated").mkdir(parents=True)
+    (tmp_path / "app" / "generated" / "_input.py").write_text(
+        "from pydantic import BaseModel\n"
+        "class ExtractMetadataInput(BaseModel):\n"
+        '    preflight_check: str = ""\n'
+    )
+    assert scan_all(discover(tmp_path), tmp_path) == []
+
+
 def test_scan_all_keeps_test_modules_out_of_the_app_analysis(tmp_path: Path) -> None:
     """A handler defined in a test module is not the app's handler."""
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_preflight.py").write_text(
+    (tmp_path / "tests" / "unit").mkdir(parents=True)
+    (tmp_path / "tests" / "unit" / "test_preflight.py").write_text(
         "from application_sdk.handler import Handler\n"
         "class H(Handler):\n"
         "    async def preflight_check(self, input):\n"
