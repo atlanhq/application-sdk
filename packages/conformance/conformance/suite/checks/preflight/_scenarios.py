@@ -859,6 +859,12 @@ def _is_mark_expression(
     """
     functions = functions if functions is not None else mod.functions
     aliases = aliases if aliases is not None else mod.mark_aliases
+    if isinstance(node, ast.Lambda):
+        return _mentions_marks(node.body, mod, functions=functions, aliases=aliases)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Lambda):
+        return _mentions_marks(
+            node.func.body, mod, functions=functions, aliases=aliases
+        )
     if _mentions_marks(node, mod, functions=functions, aliases=aliases):
         return True
     target = node.func if isinstance(node, ast.Call) else node
@@ -1040,6 +1046,44 @@ def _call_raises(out: list[ast.AST], start: int) -> _Flow:
     )
 
 
+def _suppresses_exceptions(items: list[ast.withitem]) -> bool:
+    """Whether a context expression names a known exception suppressor."""
+    for item in items:
+        expr = item.context_expr
+        if not isinstance(expr, ast.Call):
+            continue
+        func = expr.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "raises"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "pytest"
+        ):
+            return True
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "suppress"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "contextlib"
+        ):
+            return True
+    return False
+
+
+def _catches_all_exceptions(handler: ast.ExceptHandler) -> bool:
+    """Whether the handler catches every exception a call may raise."""
+    if handler.type is None:
+        return True
+    if isinstance(handler.type, ast.Name):
+        return handler.type.id in {"BaseException", "Exception"}
+    if isinstance(handler.type, ast.Tuple):
+        return any(
+            isinstance(item, ast.Name) and item.id in {"BaseException", "Exception"}
+            for item in handler.type.elts
+        )
+    return False
+
+
 def _block(stmts: list[ast.stmt], out: list[ast.AST]) -> _Flow:
     """Collect the nodes a block can execute; return how it can end.
 
@@ -1121,8 +1165,9 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
             _expression(item.context_expr, out)
         context_flow = _call_raises(out, start)
         body = _block(stmt.body, out)
-        # A context manager can suppress the exception; it cannot undo a return.
-        body = body | _FALL if RAISES in body or CALL_RAISES in body else body
+        # Only known suppressors can turn an exception into fallthrough.
+        if _suppresses_exceptions(stmt.items) and body & {RAISES, CALL_RAISES}:
+            body |= _FALL
         return body | context_flow
     if isinstance(stmt, ast.Try | ast.TryStar):
         body = _block(stmt.body, out)
@@ -1131,9 +1176,12 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
         if FALLS in body:
             result |= _block(stmt.orelse, out)
         if raised:
+            catches_all = any(
+                _catches_all_exceptions(handler) for handler in stmt.handlers
+            )
             for handler in stmt.handlers:
                 result |= _block(handler.body, out)
-            if not stmt.handlers:
+            if not catches_all:
                 result |= raised
         final = _block(stmt.finalbody, out)
         if not stmt.finalbody:

@@ -875,6 +875,23 @@ def test_a_deferred_mark_producing_decorator_is_unknown(tmp_path: Path) -> None:
     assert any(NOT_REGISTERED in m for m in messages)
 
 
+def test_an_applied_lambda_decorator_that_skips_is_not_credited(
+    tmp_path: Path,
+) -> None:
+    decorated = _test(
+        "@(lambda fn: pytest.mark.skip(reason='later')(fn))()\n" + HEALTHY
+    )
+    messages = _grade(tmp_path, _module(decorated, LIFETIME))
+    assert any(NOT_REGISTERED in message for message in messages)
+
+
+def test_an_applied_lambda_decorator_without_marks_is_ignored(
+    tmp_path: Path,
+) -> None:
+    decorated = _test("@(lambda fn: fn)()\n" + HEALTHY)
+    assert _grade(tmp_path, _module(decorated, LIFETIME)) == []
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -1017,14 +1034,45 @@ def test_an_inner_handler_does_not_make_an_outer_handler_reachable(
         "    try:\n"
         "        try:\n"
         "            check_source()\n"
-        "        except ExpectedError:\n"
+        "        except Exception:\n"
         "            pass\n"
-        "    except Exception:\n"
+        "    except BaseException:\n"
         "        assert_preflight_result(result, required_checks=set(), "
         "observed_checks=set(), expected_status='ready')\n"
     )
     messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
     assert any(NEVER_CALLS in message for message in messages)
+
+
+def test_an_unmatched_inner_handler_keeps_the_outer_exception_path(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "    try:\n"
+        "        try:\n"
+        "            check_source()\n"
+        "        except ValueError:\n"
+        "            pass\n"
+        "    except Exception:\n"
+        "        " + ASSERT.lstrip()
+    )
+    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
+
+
+@pytest.mark.parametrize("context", ["with nullcontext():", "with open('path'):"])
+def test_a_non_suppressing_context_does_not_reach_after_return_call(
+    tmp_path: Path, context: str
+) -> None:
+    body = f"    {context}\n        return check_source()\n" + ASSERT
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+def test_a_pytest_raises_context_can_reach_after_a_call_exception(
+    tmp_path: Path,
+) -> None:
+    body = "    with pytest.raises(ExpectedError):\n        check_source()\n" + ASSERT
+    assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
 
 
 def test_a_mixed_finally_exit_can_be_absorbed_and_reach_the_assertion(
