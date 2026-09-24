@@ -10,8 +10,9 @@ code — the second half of the user's async-correctness ask.  Two patterns:
   any ``async def``.
 
 * **Blocking sync I/O** — a synchronous call that sends a request or sleeps
-  (``requests.get``/``post``/…/``request``, an inline
-  ``requests.Session().get(...)``, ``urllib.request.urlopen``/``urlretrieve``,
+  (``requests.get``/``post``/…/``request``, a send on a ``requests.Session()``
+  built inline or bound to a name in the same function,
+  ``urllib.request.urlopen``/``urlretrieve``,
   ``time.sleep``) and blocks the event loop instead of awaiting an async
   equivalent / offloading via ``App.run_in_thread()``.  Constructors that do no
   I/O — ``requests.Session()``, ``requests.adapters.HTTPAdapter()``,
@@ -96,6 +97,7 @@ _REQUESTS_VERBS = frozenset(
 )
 _URLLIB_BLOCKING = frozenset({"urlopen", "urlretrieve"})
 _SESSION_FACTORIES = frozenset({"Session", "session"})
+_SESSION_SENDS = _REQUESTS_VERBS | {"send"}
 
 
 def _is_blocking_network(target: str) -> bool:
@@ -283,6 +285,7 @@ class _Visitor(ast.NodeVisitor):
         self.bindings = bindings
         self.workflow_ids = workflow_ids
         self._async_stack: list[bool] = []
+        self._session_stack: list[set[str]] = []
         self._wf_depth = 0
         self._awaited: set[int] = set()
         self.findings: list[Finding] = []
@@ -323,11 +326,13 @@ class _Visitor(ast.NodeVisitor):
     def _visit_func(self, node: ast.AST, is_async: bool) -> None:
         in_wf = id(node) in self.workflow_ids
         self._async_stack.append(is_async)
+        self._session_stack.append(set())
         if in_wf:
             self._wf_depth += 1
         self.generic_visit(node)
         if in_wf:
             self._wf_depth -= 1
+        self._session_stack.pop()
         self._async_stack.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -335,6 +340,45 @@ class _Visitor(ast.NodeVisitor):
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_func(node, is_async=True)
+
+    def _is_session_call(self, value: ast.expr | None) -> bool:
+        return isinstance(value, ast.Call) and _is_session_factory(
+            resolve_call_target(value.func, self.bindings)
+        )
+
+    def _bind(self, target: ast.expr, value: ast.expr | None) -> None:
+        if not self._session_stack or not isinstance(target, ast.Name):
+            return
+        if self._is_session_call(value):
+            self._session_stack[-1].add(target.id)
+        else:
+            self._session_stack[-1].discard(target.id)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.generic_visit(node)
+        for target in node.targets:
+            self._bind(target, node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self.generic_visit(node)
+        if node.value is not None:
+            self._bind(node.target, node.value)
+
+    def visit_With(self, node: ast.With) -> None:
+        for item in node.items:
+            self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                self._bind(item.optional_vars, item.context_expr)
+        for stmt in node.body:
+            self.visit(stmt)
+
+    def _is_named_session_send(self, target: str) -> bool:
+        root, _, attr = target.partition(".")
+        return (
+            bool(self._session_stack)
+            and root in self._session_stack[-1]
+            and attr in _SESSION_SENDS
+        )
 
     def _in_async(self) -> bool:
         return bool(self._async_stack) and self._async_stack[-1]
@@ -360,7 +404,9 @@ class _Visitor(ast.NodeVisitor):
             return
         # Blocking sync I/O — skip inside workflow context (P020/P021 own it).
         if self._wf_depth == 0 and (
-            target in _BLOCKING_EXACT or _is_blocking_network(target)
+            target in _BLOCKING_EXACT
+            or _is_blocking_network(target)
+            or self._is_named_session_send(target)
         ):
             self._add(node, f"{target}()", _BLOCKING_HINT)
             return

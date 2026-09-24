@@ -557,6 +557,43 @@ def test_p023_flags_blocking_requests_and_urllib_calls() -> None:
         assert len(_rule(_p023_async_task(header, stmt), "P023")) == 1, stmt
 
 
+def test_p023_flags_sends_on_a_named_session() -> None:
+    header = "import requests\nfrom requests import Session\n"
+    for stmts in (
+        "s = requests.Session()\n        s.get('http://x')",
+        "s: requests.Session = requests.session()\n        s.send(req)",
+        "s = Session()\n        s.request('GET', 'http://x')",
+        "with requests.Session() as s:\n            s.post('http://x')",
+    ):
+        assert len(_rule(_p023_async_task(header, stmts), "P023")) == 1, stmts
+
+
+def test_p023_silent_on_a_named_session_never_sent() -> None:
+    header = "import requests\n"
+    for stmts in (
+        "s = requests.Session()\n        s.verify = False\n"
+        "        s.mount('https://', a)\n        return s",
+        "with requests.Session() as s:\n            s.headers.update({})",
+        "s = requests.Session()\n        s = other()\n        s.get('http://x')",
+    ):
+        assert _rule(_p023_async_task(header, stmts), "P023") == [], stmts
+
+
+def test_p023_session_names_do_not_leak_across_functions() -> None:
+    body = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        s = requests.Session()\n"
+        "        return s\n"
+        "    @task\n"
+        "    async def fetch(self, s):\n"
+        "        return s.get('http://x')\n"
+    )
+    assert _rule(body, "P023") == []
+
+
 def test_p023_dedup_workflow_sleep_is_p020_not_p023() -> None:
     src = "import time\n" + _wrap_run("time.sleep(1)")
     assert len(_rule(src, "P020")) == 1
