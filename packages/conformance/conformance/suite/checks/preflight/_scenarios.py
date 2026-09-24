@@ -1252,6 +1252,11 @@ def _resolve(func: ast.expr, scope: _Scope) -> tuple[str, str] | None:
     return None
 
 
+def _is_pytest_raises(item: ast.withitem, scope: _Scope) -> bool:
+    expr = item.context_expr
+    return isinstance(expr, ast.Call) and _resolve(expr.func, scope) == _PYTEST_RAISES
+
+
 def _suppressed_types(item: ast.withitem, scope: _Scope) -> tuple[str, ...] | None:
     """The types a ``pytest.raises`` / ``contextlib.suppress`` context absorbs.
 
@@ -1372,6 +1377,8 @@ def _statement(stmt: ast.stmt, out: list[ast.AST], scope: _Scope) -> _Flow:
             absorbs, escaped = _handle(raised, accepted)
             if absorbs:
                 body = (body - raised) | escaped | _FALL
+            if _is_pytest_raises(item, scope) and not raised:
+                body -= _FALL
         return body | context_flow
     if isinstance(stmt, ast.Try | ast.TryStar):
         body = _block(stmt.body, out, scope)
@@ -1453,6 +1460,12 @@ def _assertions(func: ast.FunctionDef | ast.AsyncFunctionDef, mod: _Module) -> s
     same-module helper it calls directly."""
     made: set[str] = set()
     scope = _Scope(mod, _parameters(func))
+    awaited = {
+        node.value
+        for stmt in func.body
+        for node in ast.walk(stmt)
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
+    }
     for call in _calls(func.body, scope):
         if (name := _assertion(call, scope)) is not None:
             made.add(name)
@@ -1462,6 +1475,8 @@ def _assertions(func: ast.FunctionDef | ast.AsyncFunctionDef, mod: _Module) -> s
             and call.func.id in mod.functions
         ):
             helper = mod.functions[call.func.id]
+            if isinstance(helper, ast.AsyncFunctionDef) and call not in awaited:
+                continue
             inner = _Scope(mod, _parameters(helper))
             made |= {
                 name

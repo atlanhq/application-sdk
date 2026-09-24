@@ -1145,6 +1145,31 @@ def test_a_pytest_raises_context_can_reach_after_a_call_exception(
     assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
 
 
+def test_an_empty_pytest_raises_block_does_not_reach_afterward(
+    tmp_path: Path,
+) -> None:
+    body = "    with pytest.raises(ValueError):\n        pass\n" + ASSERT
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+def test_an_awaited_async_helper_counts_its_contract_assertion(
+    tmp_path: Path,
+) -> None:
+    helper = "async def assert_result():\n" "    " + ASSERT.lstrip()
+    body = "    await assert_result()\n"
+    assert _grade(tmp_path, _module(helper, _test(HEALTHY, body), LIFETIME)) == []
+
+
+def test_an_unawaited_async_helper_does_not_count_its_contract_assertion(
+    tmp_path: Path,
+) -> None:
+    helper = "async def assert_result():\n" "    " + ASSERT.lstrip()
+    body = "    assert_result()\n"
+    messages = _grade(tmp_path, _module(helper, _test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)
+
+
 def test_a_mixed_finally_exit_can_be_absorbed_and_reach_the_assertion(
     tmp_path: Path,
 ) -> None:
