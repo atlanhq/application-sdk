@@ -36,8 +36,10 @@ and not counted.
 Assertion: ``assert_preflight_result`` (plus ``assert_probe_lifetime`` for the
 lifetime scenarios), called as a statement of the test body, or of a
 top-level ``for`` loop over a provably non-empty iterable — a non-empty list
-or tuple literal, a name bound once to one, ``range(n)`` with ``n >= 1``, or
-``enumerate`` of any of those. No statement before it may ``return``,
+or tuple literal; a name bound once to a non-empty tuple (in the test or at
+module level), or to a non-empty list in the test that nothing mentions
+before the loop; ``range(n)`` with ``n >= 1``; or ``enumerate`` of any of
+those. No statement before it may ``return``,
 ``yield``, leave the loop, or call ``pytest.skip``/``xfail``/``exit``/
 ``importorskip``. Those are the only ways a test passes without making the
 call: anything else that stops it first — an exception, a ``pytest.raises``
@@ -792,24 +794,47 @@ def _builtin(name: str, mod: _Module, local: Counter[str]) -> bool:
     return name not in local and name not in mod.bound
 
 
+def _mentions(stmts: list[ast.stmt], name: str) -> bool:
+    """Whether any of *stmts*, nested scopes included, refers to *name*."""
+    return any(
+        isinstance(node, ast.Name) and node.id == name
+        for stmt in stmts
+        for node in ast.walk(stmt)
+    )
+
+
 def _non_empty(
     node: ast.expr,
     before: list[ast.stmt],
     mod: _Module,
     local: Counter[str],
 ) -> bool:
-    """Whether iterating *node* provably runs the loop body at least once."""
+    """Whether iterating *node* provably runs the loop body at least once.
+
+    A name counts when it is bound once to a non-empty literal that is still
+    non-empty when the loop starts. A tuple always is. A list can be emptied
+    by anything that reaches it, so a local list counts only when nothing
+    between its binding and the loop mentions the name, and a module-level
+    list — reachable from any code that runs first — never does.
+    """
     if isinstance(node, (ast.List, ast.Tuple)):
         return any(not isinstance(elt, ast.Starred) for elt in node.elts)
     if isinstance(node, ast.Name):
         if local[node.id] == 1:
-            for stmt in before:
+            for index, stmt in enumerate(before):
                 assignment = _single_assignment(stmt)
-                if assignment is not None and assignment[0] == node.id:
-                    return _non_empty(assignment[1], before, mod, local)
+                if assignment is None or assignment[0] != node.id:
+                    continue
+                value = assignment[1]
+                if not isinstance(value, ast.Tuple) and _mentions(
+                    before[index + 1 :], node.id
+                ):
+                    return False
+                return _non_empty(value, before, mod, local)
             return False
-        if node.id not in local and node.id in mod.sequences:
-            return _non_empty(mod.sequences[node.id], before, mod, local)
+        sequence = mod.sequences.get(node.id)
+        if node.id not in local and isinstance(sequence, ast.Tuple):
+            return _non_empty(sequence, before, mod, local)
         return False
     if not (
         isinstance(node, ast.Call)

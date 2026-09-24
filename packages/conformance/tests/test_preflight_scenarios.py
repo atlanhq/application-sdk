@@ -863,6 +863,8 @@ def test_every_reference_app_shape_is_credited(
             "    cases: list[str] = ['a']\n"
             + _loop("for index, case in enumerate(cases, start=1):"),
         ),
+        ("", "    cases = ['a']\n    budget = 5\n" + _loop("for case in cases:")),
+        ("", "    cases = ('a',)\n    print(cases)\n" + _loop("for case in cases:")),
         ("CASES = ('a', 'b')", _loop("for case in CASES:")),
         ("", _loop("for _ in range(2):", "break")),
         (
@@ -877,6 +879,8 @@ def test_every_reference_app_shape_is_credited(
         "literal",
         "local-name",
         "annotated-enumerate",
+        "untouched-local-list",
+        "mentioned-local-tuple",
         "module-tuple",
         "break-after",
         "inner-loop-break",
@@ -900,6 +904,12 @@ def test_a_loop_that_provably_runs_its_body_is_credited(
         "    cases = []\n" + _loop("for case in cases:"),
         "    cases = ['a']\n    cases = load()\n" + _loop("for case in cases:"),
         "    range = fake_range\n" + _loop("for _ in range(2):"),
+        "    cases = [None]\n    cases.clear()\n" + _loop("for result in cases:"),
+        "    cases = [None]\n    alias = cases\n    alias.clear()\n"
+        + _loop("for result in cases:"),
+        "    cases = [None]\n    drain(cases)\n" + _loop("for result in cases:"),
+        "    cases = [None]\n    def later():\n        cases.pop()\n    later()\n"
+        + _loop("for result in cases:"),
         _loop("while True:", "break"),
         "    for _ in range(2):\n        if skip_it():\n            continue\n    "
         + ASSERT,
@@ -913,6 +923,10 @@ def test_a_loop_that_provably_runs_its_body_is_credited(
         "empty-local",
         "rebound-local",
         "shadowed-range",
+        "list-cleared",
+        "list-cleared-through-alias",
+        "list-passed-to-a-call",
+        "list-mutated-by-a-closure",
         "while",
         "continue-before",
         "break-before",
@@ -922,6 +936,26 @@ def test_a_loop_that_may_skip_its_body_is_not_credited(
     tmp_path: Path, body: str
 ) -> None:
     messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "CASES = [None]",
+        "CASES = [None]\n\n\ndef test_drains():\n    CASES.clear()",
+    ],
+    ids=["module-list", "module-list-cleared-elsewhere"],
+)
+def test_a_module_level_list_does_not_prove_a_loop_runs(
+    tmp_path: Path, extra: str
+) -> None:
+    """Any code that runs first — another test, a fixture, an import — can
+    empty a module-level list; only a tuple stays non-empty."""
+    body = _loop("for result in CASES:")
+    module = _module(extra, _test(HEALTHY, body), LIFETIME)
+    _assert_collectable(module)
+    messages = _grade(tmp_path, module)
     assert any(NEVER_CALLS in message for message in messages)
 
 
