@@ -19,7 +19,11 @@ from conformance.suite.schema.findings import Finding
 
 _ASSET_MODULES = ("pyatlan_v9.model.assets", "pyatlan.model.assets")
 
-_LEGACY_ASSET_MODULE = "pyatlan.model.assets"
+#: Asset-model module per pyatlan generation.
+_GENERATION_MODULES: dict[str, str] = {
+    "legacy": "pyatlan.model.assets",
+    "v9": "pyatlan_v9.model.assets",
+}
 
 _O002_MESSAGE = (
     "Asset serialised with .dict() — serialize through "
@@ -39,6 +43,16 @@ _O002_LEGACY_MESSAGE = (
     "model_dump(), whose snake_case fields are not the Atlas wire shape. If this "
     ".dict() is on a non-asset model, suppress with "
     "# conformance: ignore[O002] <reason>."
+)
+_O002_MIXED_MESSAGE = (
+    "Asset serialised with .dict() in a module importing both legacy "
+    "pyatlan.model.assets and pyatlan_v9 models. If this receiver is a "
+    "pyatlan_v9 asset, serialize through "
+    "application_sdk.common.asset_serialization.entity_bytes. If it is a legacy "
+    "model, migrate it to pyatlan_v9.model.assets first (O004): entity_bytes on "
+    "a legacy model falls through to model_dump(), whose snake_case fields are "
+    "not the Atlas wire shape. If this .dict() is on a non-asset model, suppress "
+    "with # conformance: ignore[O002] <reason>."
 )
 _O003_MESSAGE = (
     "Function builds a pyatlan asset but has no return annotation — annotate it "
@@ -76,8 +90,9 @@ def _collect_asset_imports(tree: ast.AST) -> tuple[bool, frozenset[str]]:
     return imports_assets, frozenset(names)
 
 
-def _imports_legacy_assets(tree: ast.AST) -> bool:
-    """True when the module imports from legacy ``pyatlan.model.assets``."""
+def _asset_generations(tree: ast.AST) -> frozenset[str]:
+    """Which pyatlan asset generations the module imports: ``legacy`` / ``v9``."""
+    found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             modules = [node.module]
@@ -86,12 +101,12 @@ def _imports_legacy_assets(tree: ast.AST) -> bool:
         else:
             continue
         for module in modules:
-            if module is not None and (
-                module == _LEGACY_ASSET_MODULE
-                or module.startswith(f"{_LEGACY_ASSET_MODULE}.")
-            ):
-                return True
-    return False
+            if module is None:
+                continue
+            for generation, root in _GENERATION_MODULES.items():
+                if module == root or module.startswith(f"{root}."):
+                    found.add(generation)
+    return frozenset(found)
 
 
 def check_o002(
@@ -101,7 +116,15 @@ def check_o002(
     imports_assets, _ = _collect_asset_imports(tree)
     if not imports_assets:
         return []
-    message = _O002_LEGACY_MESSAGE if _imports_legacy_assets(tree) else _O002_MESSAGE
+    generations = _asset_generations(tree)
+    if generations == {"legacy"}:
+        message = _O002_LEGACY_MESSAGE
+    elif "legacy" in generations:
+        # Both generations in one module: the receiver's type is not known
+        # statically, so the advice has to cover either.
+        message = _O002_MIXED_MESSAGE
+    else:
+        message = _O002_MESSAGE
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if (

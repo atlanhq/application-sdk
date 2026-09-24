@@ -137,6 +137,20 @@ def test_o002_legacy_asset_routes_through_o004_first() -> None:
     assert "pyatlan_v9.model.assets first" in finding.message
 
 
+def test_o002_mixed_generation_module_covers_both_receivers() -> None:
+    # The receiver's generation is unknown statically, so the advice must not
+    # send an already-v9 asset through O004, nor a legacy one to entity_bytes.
+    src = (
+        "from pyatlan.model.assets import Column\n"
+        "from pyatlan_v9.model.assets import Table\n\n\n"
+        "def serialize(asset):\n    return asset.dict()\n"
+    )
+    (finding,) = [f for f in o_scan(src, "app/x.py") if f.rule_id == "O002"]
+    assert "both legacy" in finding.message
+    assert "If this receiver is a pyatlan_v9 asset" in finding.message
+    assert "If it is a legacy model" in finding.message
+
+
 def test_o002_suppressed_inline() -> None:
     src = (
         "from pyatlan_v9.model.assets import Table\n\n\n"

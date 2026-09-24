@@ -2538,11 +2538,14 @@ to `pyatlan_v9`, or the SDK's   internal
 `application_sdk.common.entity_envelope.to_atlas_format_dict`   (a bare imported name,
 aliased or not, or an attribute call through a   module bound to it).
 
-Names resolve by lexical scope, as Python binds them: a parameter or local helper that
-shadows an imported encoder is not flagged, and an import inside one function does not
-reach another.  A simple saved alias is followed (`encode = asset.to_nested_bytes;
-encode()`, `enc = to_atlas_format`); `getattr` / `functools.partial` / container
-indirection is out of scope.
+Names resolve by lexical scope, as Python binds them (comprehensions get their own
+scope; class bodies are skipped): a parameter or local helper that shadows an imported
+encoder is not flagged, and an import inside one function does not reach another.  Where
+a name may hold several bindings, the rule fires if any is a bypass: a rebinding in a
+branch, loop or `try` the call is not in may not run, and a function reads a module
+global when called, so every module binding counts there.  A simple saved alias is
+followed (`encode = asset.to_nested_bytes; encode()`, `enc = to_atlas_format`, chained
+`a = b = …`); `getattr` / `functools.partial` / container indirection is out of scope.
 
 `entity_bytes` owns the dispatch, the `connectionName` injection, the connector's
 declared entity envelope and the placeholder-guid strip.  Bypassing it means none of

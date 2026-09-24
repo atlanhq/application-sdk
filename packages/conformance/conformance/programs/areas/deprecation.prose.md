@@ -214,13 +214,28 @@ human audit):
         write each asset through `entity_bytes` to a typed file output passed
         downstream as a `FileReference` (no shared `output_path` scan, no
         `upload_to_atlan()`). Pass the app's declared envelope and the run's
-        sync details, not a bare `entity_bytes(asset)`:
+        sync details, not a bare `entity_bytes(asset)`.
+
+        **Choose the envelope before writing the task, from the connector's
+        released output — never by default.** A connector whose released output
+        has relationship refs under a top-level `relationshipAttributes` key (the
+        shape `asset.to_nested_bytes()` wrote) pins `EnvelopeShape.PYATLAN` for
+        this migration, so neither its wire format nor its publish diff cache
+        flips as a side effect. `PYATLAN` is a deprecated one-cycle lever
+        (removed in v4.0); moving to `FLATTENED` (refs in `attributes`) is a
+        separate, deliberate change. Only a connector with no released output,
+        or one already emitting the flattened shape, starts on `FLATTENED`.
+        Drop `connection_name` / `last_sync` only when the mapper already stamps
+        both on every asset.
         ```python
         from application_sdk.common.asset_serialization import entity_bytes
         from application_sdk.common.entity_envelope import EntityEnvelopePolicy, EnvelopeShape
         from application_sdk.common.last_sync import resolve_last_sync_details
 
-        ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)
+        # Released output was nested (it wrote asset.to_nested_bytes()): keep it.
+        ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.PYATLAN)
+        # No released output, or already flattened, instead:
+        # ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)
 
         @task(timeout_seconds=1800)
         async def transform(self, input: TransformInput) -> TransformOutput:
@@ -238,15 +253,6 @@ human audit):
                 )
             return TransformOutput(output_file=FileReference(local_path=str(output_file)))
         ```
-        **Choose the envelope from the connector's released output, never by
-        default.** `FLATTENED` puts relationship refs in `attributes`; a connector
-        whose released output already has them under a top-level
-        `relationshipAttributes` key (the shape `to_nested_bytes()` wrote) must
-        pin `EnvelopeShape.PYATLAN` for this migration, so neither its wire
-        format nor its publish diff cache flips as a side effect.
-        `PYATLAN` is a deprecated one-cycle lever (removed in v4.0): moving to
-        `FLATTENED` is a separate, deliberate change. Drop `connection_name` /
-        `last_sync` only when the mapper already stamps both on every asset.
       - Drop the YAML query templates, the `TransformerInterface` subclass, and any
         Daft DataFrame use that existed only to feed the transformer. Full guidance:
         `docs/upgrade-guide-v3.md` (Step 2 / asset-mapper section).

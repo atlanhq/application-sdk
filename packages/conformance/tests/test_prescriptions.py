@@ -2788,6 +2788,98 @@ def test_p052_follows_saved_serializer_alias(src: str) -> None:
     assert len(_p052(src)) == 1
 
 
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A rebinding in a branch that may not run leaves the import live.
+        _P052_ENCODER_IMPORT
+        + "if use_other:\n    to_atlas_format = other\nto_atlas_format(asset)\n",
+        # Either branch may bind it; one of them is the encoder.
+        "if flag:\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format as enc\n"
+        "else:\n"
+        "    enc = other\n"
+        "enc(asset)\n",
+        # The try-import fallback shape.
+        "try:\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format\n"
+        "except ImportError:\n"
+        "    to_atlas_format = None\n"
+        "to_atlas_format(asset)\n",
+        # A loop that runs zero times never binds its target.
+        _P052_ENCODER_IMPORT
+        + "for to_atlas_format in callbacks:\n    pass\nto_atlas_format(asset)\n",
+    ],
+    ids=["if-no-else", "if-else", "try-except", "for-target"],
+)
+def test_p052_conditional_rebinding_keeps_the_encoder_visible(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+def test_p052_unconditional_rebinding_after_a_branch_hides_it() -> None:
+    # The straight-line rebinding definitely runs last, whatever the branch did.
+    src = _P052_ENCODER_IMPORT + (
+        "if flag:\n" "    enc = to_atlas_format\n" "enc = other\n" "enc(asset)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_rebinding_in_the_calls_own_branch_hides_it() -> None:
+    src = _P052_ENCODER_IMPORT + (
+        "if flag:\n    to_atlas_format = other\n    to_atlas_format(asset)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_late_global_rebinding_is_seen_by_a_function() -> None:
+    # f reads the module global when it is called — after the rebinding.
+    # By source line the latest binding above f is the harmless one; by
+    # runtime it is the encoder.
+    src = (
+        "enc = other\n"
+        "def f(a):\n"
+        "    return enc(a)\n"
+        "from pyatlan_v9.model.transform import to_atlas_format as enc\n"
+        "f(asset)\n"
+    )
+    fs = _p052(src)
+    assert [f.line for f in fs] == [3]
+
+
+def test_p052_comprehension_target_does_not_shadow_the_enclosing_scope() -> None:
+    # The comprehension's target lives in its own scope; the later call is
+    # still pyatlan's encoder.
+    src = _P052_ENCODER_IMPORT + (
+        "[x for to_atlas_format in callbacks]\nto_atlas_format(asset)\n"
+    )
+    fs = _p052(src)
+    assert [f.line for f in fs] == [3]
+
+
+def test_p052_comprehension_target_shadows_inside_the_comprehension() -> None:
+    src = _P052_ENCODER_IMPORT + "[to_atlas_format(a) for to_atlas_format in cbs]\n"
+    assert _p052(src) == []
+
+
+def test_p052_comprehension_reads_its_enclosing_scope_with_control_flow() -> None:
+    # The comprehension runs where it is written, after the rebinding.
+    src = _P052_ENCODER_IMPORT + (
+        "to_atlas_format = other\n[to_atlas_format(a) for a in assets]\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_comprehension_still_catches_the_encoder() -> None:
+    src = _P052_ENCODER_IMPORT + "[to_atlas_format(a) for a in assets]\n"
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize("name", ["encode", "retained"])
+def test_p052_chained_assignment_aliases_every_target(name: str) -> None:
+    src = f"encode = retained = asset.to_nested_bytes\n{name}()\n"
+    assert len(_p052(src)) == 1
+
+
 def test_p052_cyclic_alias_terminates() -> None:
     assert _p052("a = b\nb = a\na()\n") == []
 

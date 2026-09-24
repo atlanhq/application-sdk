@@ -19,15 +19,28 @@ Per-file.  Flags, in hand-written app code only (``app/`` minus
   ``application_sdk.common.entity_envelope.to_atlas_format_dict`` (the helper
   ``entity_bytes`` calls internally — public, so an app can reach it).
 
-Resolution is by lexical scope, the way Python binds names: a call's name is
-looked up in its own function scope, then the enclosing function scopes, then
-the module (class bodies are skipped, as Python skips them).  Within a scope the
-latest binding at or before the call wins.  So a parameter or local helper that
-shadows an imported encoder is not flagged, and an import in one function does
-not leak into another.  A simple local alias is followed — ``encode =
-asset.to_nested_bytes`` or ``enc = to_atlas_format`` — so saving the callable
-before calling it does not hide the bypass.  Deeper indirection (``getattr``,
-``functools.partial``, containers) is out of scope.
+Name resolution
+---------------
+Names resolve by lexical scope, the way Python binds them: the call's own
+scope, then the enclosing function scopes, then the module.  Class bodies are
+skipped, as Python skips them, and comprehensions get a scope of their own.
+
+A name can have several possible bindings at a call, and the rule fires when
+*any* of them is a bypass.  It is a warning, so an uncertain binding stays
+visible instead of silently passing:
+
+* **In the call's own scope** control flow decides.  The latest earlier binding
+  whose block encloses the call definitely runs and hides everything before it.
+  A later binding inside a branch, loop or ``try`` the call is not in may or may
+  not run, so it is a candidate alongside the definite one.
+* **In an enclosing scope** line order means nothing: a function body reads a
+  module global when it is *called*, possibly after a later rebinding.  Every
+  binding of the name there is a candidate.
+
+A simple local alias is followed — ``encode = asset.to_nested_bytes``,
+``enc = to_atlas_format``, chained ``a = b = …`` — so saving the callable before
+calling it does not hide the bypass.  Deeper indirection (``getattr``,
+``functools.partial``, containers, attribute stores) is out of scope.
 
 A call to ``entity_bytes`` itself is never flagged, and neither is anything it
 calls internally — the SDK is not in scope.
@@ -40,6 +53,8 @@ sanctioned carve-out, suppressed inline with a reason.
 from __future__ import annotations
 
 import ast
+import itertools
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import PurePath
 
@@ -59,6 +74,12 @@ _SDK_ENVELOPE_MODULE = "application_sdk.common.entity_envelope"
 
 #: Bound on alias-chain hops, so a cyclic ``a = b; b = a`` cannot loop.
 _MAX_ALIAS_DEPTH = 8
+
+#: Fields of a compound statement (or handler / match case) holding a block
+#: that may or may not run relative to its siblings.
+_BLOCK_FIELDS: frozenset[str] = frozenset(
+    {"body", "orelse", "finalbody", "handlers", "cases"}
+)
 
 _HINT = (
     "Serialize through "
@@ -111,7 +132,7 @@ class _Import:
 
 @dataclass(frozen=True)
 class _Alias:
-    """``name = <value>`` — a single-name assignment that may alias a callable."""
+    """``name = <value>`` — a simple-name assignment that may alias a callable."""
 
     value: ast.expr
 
@@ -123,42 +144,92 @@ class _Other:
 
 _Binding = _Import | _Alias | _Other
 
+#: Where a statement sits inside its scope: the ids of the blocks enclosing it,
+#: outermost first.  A binding's block encloses a use when its path is a prefix
+#: of the use's path.
+_Path = tuple[int, ...]
 
-@dataclass
+
+@dataclass(frozen=True)
+class _Site:
+    """One binding of a name: where it happens and what it binds."""
+
+    lineno: int
+    path: _Path
+    binding: _Binding
+
+
+@dataclass(frozen=True)
+class _Use:
+    """Where a name is read: its scope, line and block path."""
+
+    scope: _Scope
+    lineno: int
+    path: _Path
+
+
+@dataclass(eq=False)
 class _Scope:
     parent: _Scope | None
-    bindings: dict[str, list[tuple[int, _Binding]]] = field(default_factory=dict)
+    #: For a scope that runs inline where it is written (a comprehension), the
+    #: point in the parent it runs at, so the parent is read with control flow.
+    #: ``None`` for a function or class body, which reads the parent at runtime.
+    entry: _Use | None = None
+    bindings: dict[str, list[_Site]] = field(default_factory=dict)
 
-    def bind(self, name: str, lineno: int, binding: _Binding) -> None:
-        self.bindings.setdefault(name, []).append((lineno, binding))
+    def bind(self, name: str, site: _Site) -> None:
+        self.bindings.setdefault(name, []).append(site)
 
-    def lookup(self, name: str, lineno: int) -> tuple[_Scope, int, _Binding] | None:
-        """The binding *name* resolves to from a use at *lineno*, walking outward.
-
-        The latest binding at or before *lineno* wins; if the scope binds the
-        name only later (a function body referring to a module name assigned
-        below it), the latest binding in that scope stands in.
-        """
+    def candidates(self, name: str, use: _Use) -> Iterator[tuple[_Scope, _Site]]:
+        """Every binding *name* may hold at *use* (see the module docstring)."""
         scope: _Scope | None = self
+        at: _Use | None = use
         while scope is not None:
-            entries = scope.bindings.get(name)
-            if entries:
-                preceding = [e for e in entries if e[0] <= lineno]
-                line, binding = max(preceding or entries, key=lambda e: e[0])
-                return scope, line, binding
-            scope = scope.parent
-        return None
+            sites = scope.bindings.get(name)
+            if sites:
+                chosen = sites if at is None else _reaching(sites, at)
+                yield from ((scope, site) for site in chosen)
+                return
+            at, scope = scope.entry, scope.parent
+
+
+def _reaching(sites: list[_Site], use: _Use) -> list[_Site]:
+    """The bindings in the use's own scope that may be live at *use*."""
+    earlier = [s for s in sites if s.lineno <= use.lineno]
+    if not earlier:
+        # Bound in this scope only below the use — a loop body reaching round,
+        # or code that fails with UnboundLocalError. Keep them all visible.
+        return sites
+    definite = [s for s in earlier if use.path[: len(s.path)] == s.path]
+    if not definite:
+        return earlier
+    last = max(definite, key=lambda s: s.lineno)
+    return [last, *(s for s in earlier if s.lineno > last.lineno)]
 
 
 class _ScopeBuilder(ast.NodeVisitor):
     """Record every name binding per lexical scope, and the scope of each call."""
 
     def __init__(self) -> None:
+        self._ids = itertools.count()
         self._scope = _Scope(parent=None)
         # The scope a function defined here closes over. A class body is not
         # visible to its methods, so entering one does not move this.
         self._closure = self._scope
-        self.calls: list[tuple[ast.Call, _Scope]] = []
+        self._path: _Path = (next(self._ids),)
+        self.calls: list[tuple[ast.Call, _Use]] = []
+
+    def _bind(self, name: str, lineno: int, binding: _Binding) -> None:
+        self._scope.bind(name, _Site(lineno, self._path, binding))
+
+    def _enter(self, scope: _Scope, closure: _Scope) -> tuple[_Scope, _Scope, _Path]:
+        saved = (self._scope, self._closure, self._path)
+        self._scope, self._closure = scope, closure
+        self._path = (next(self._ids),)
+        return saved
+
+    def _leave(self, saved: tuple[_Scope, _Scope, _Path]) -> None:
+        self._scope, self._closure, self._path = saved
 
     # Scopes
 
@@ -171,22 +242,22 @@ class _ScopeBuilder(ast.NodeVisitor):
                 self.visit(deco)
             if node.returns is not None:
                 self.visit(node.returns)
-            self._scope.bind(node.name, node.lineno, _Other())
         for default in [*node.args.defaults, *node.args.kw_defaults]:
             if default is not None:
                 self.visit(default)
-        inner = _Scope(parent=self._closure)
+        if not isinstance(node, ast.Lambda):
+            self._bind(node.name, node.lineno, _Other())
+        saved = self._enter(_Scope(parent=self._closure), self._closure)
+        self._closure = self._scope
         args = node.args
         for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
-            inner.bind(arg.arg, node.lineno, _Other())
+            self._bind(arg.arg, node.lineno, _Other())
         for arg in (args.vararg, args.kwarg):
             if arg is not None:
-                inner.bind(arg.arg, node.lineno, _Other())
-        outer, outer_closure = self._scope, self._closure
-        self._scope = self._closure = inner
+                self._bind(arg.arg, node.lineno, _Other())
         for stmt in node.body if isinstance(node.body, list) else [node.body]:
             self.visit(stmt)
-        self._scope, self._closure = outer, outer_closure
+        self._leave(saved)
 
     visit_FunctionDef = _visit_function
     visit_AsyncFunctionDef = _visit_function
@@ -195,12 +266,104 @@ class _ScopeBuilder(ast.NodeVisitor):
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         for expr in [*node.decorator_list, *node.bases, *node.keywords]:
             self.visit(expr)
-        self._scope.bind(node.name, node.lineno, _Other())
-        outer = self._scope
-        self._scope = _Scope(parent=outer)
+        self._bind(node.name, node.lineno, _Other())
+        saved = self._enter(_Scope(parent=self._scope), self._closure)
         for stmt in node.body:
             self.visit(stmt)
-        self._scope = outer
+        self._leave(saved)
+
+    def _visit_comprehension(
+        self, node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp
+    ) -> None:
+        # The first iterable evaluates in the enclosing scope; everything else,
+        # including every target, belongs to the comprehension's own scope.
+        first, *rest = node.generators
+        self.visit(first.iter)
+        # Inside a class body the comprehension skips the class scope, so the
+        # scope it reads is not the one it is written in: no flow to borrow.
+        entry = (
+            _Use(self._scope, node.lineno, self._path)
+            if self._scope is self._closure
+            else None
+        )
+        saved = self._enter(_Scope(parent=self._closure, entry=entry), self._closure)
+        self._closure = self._scope
+        self.visit(first.target)
+        for cond in first.ifs:
+            self.visit(cond)
+        for gen in rest:
+            self.visit(gen)
+        if isinstance(node, ast.DictComp):
+            self.visit(node.key)
+            self.visit(node.value)
+        else:
+            self.visit(node.elt)
+        self._leave(saved)
+
+    visit_ListComp = _visit_comprehension
+    visit_SetComp = _visit_comprehension
+    visit_GeneratorExp = _visit_comprehension
+    visit_DictComp = _visit_comprehension
+
+    # Blocks — each statement list of a compound statement may or may not run.
+
+    def _visit_compound(self, node: ast.AST) -> None:
+        for name, value in ast.iter_fields(node):
+            if name in _BLOCK_FIELDS and isinstance(value, list):
+                # One id per block; each handler / match case opens its own
+                # (see _visit_alternative), as they are alternatives.
+                outer = self._path
+                self._path = (*outer, next(self._ids))
+                for item in value:
+                    if isinstance(item, (ast.ExceptHandler, ast.match_case)):
+                        self._path = outer
+                    self.visit(item)
+                self._path = outer
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        self.visit(item)
+            elif name == "target" and isinstance(node, (ast.For, ast.AsyncFor)):
+                # A loop that runs zero times never binds its target.
+                outer = self._path
+                self._path = (*outer, next(self._ids))
+                self.visit(value)
+                self._path = outer
+            elif isinstance(value, ast.AST):
+                self.visit(value)
+
+    visit_If = _visit_compound
+    visit_For = _visit_compound
+    visit_AsyncFor = _visit_compound
+    visit_While = _visit_compound
+    visit_With = _visit_compound
+    visit_AsyncWith = _visit_compound
+    visit_Try = _visit_compound
+    visit_Match = _visit_compound
+
+    def visit_TryStar(self, node: ast.AST) -> None:  # Python >= 3.11
+        self._visit_compound(node)
+
+    def _visit_alternative(self, node: ast.ExceptHandler | ast.match_case) -> None:
+        outer = self._path
+        self._path = (*outer, next(self._ids))
+        if isinstance(node, ast.ExceptHandler) and node.name:
+            self._bind(node.name, node.lineno, _Other())
+        self._visit_compound_fields(node)
+        self._path = outer
+
+    def _visit_compound_fields(self, node: ast.AST) -> None:
+        # Children of a handler / case all run together once it is chosen.
+        for _, value in ast.iter_fields(node):
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        self.visit(item)
+            elif isinstance(value, ast.AST):
+                self.visit(value)
+
+    visit_ExceptHandler = _visit_alternative
+    visit_match_case = _visit_alternative
 
     # Bindings
 
@@ -208,55 +371,51 @@ class _ScopeBuilder(ast.NodeVisitor):
         for alias in node.names:
             dotted = tuple(alias.name.split("."))
             if alias.asname:
-                self._scope.bind(alias.asname, node.lineno, _Import(dotted))
+                self._bind(alias.asname, node.lineno, _Import(dotted))
             else:
                 # ``import a.b.c`` binds ``a`` to the top-level package.
-                self._scope.bind(dotted[0], node.lineno, _Import(dotted[:1]))
+                self._bind(dotted[0], node.lineno, _Import(dotted[:1]))
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         module = tuple((node.module or "").split(".")) if node.level == 0 else None
         for alias in node.names:
             bound = alias.asname or alias.name
             if module is None or alias.name == "*":
-                self._scope.bind(bound, node.lineno, _Other())
+                self._bind(bound, node.lineno, _Other())
             else:
-                self._scope.bind(bound, node.lineno, _Import((*module, alias.name)))
+                self._bind(bound, node.lineno, _Import((*module, alias.name)))
 
     def visit_Assign(self, node: ast.Assign) -> None:
         self.visit(node.value)
-        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            self._scope.bind(node.targets[0].id, node.lineno, _Alias(node.value))
-            return
+        # ``a = b = value`` binds every simple-name target to the same value.
         for target in node.targets:
-            self.visit(target)
+            if isinstance(target, ast.Name):
+                self._bind(target.id, node.lineno, _Alias(node.value))
+            else:
+                self.visit(target)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         self.visit(node.annotation)
         if node.value is not None:
             self.visit(node.value)
         if isinstance(node.target, ast.Name) and node.value is not None:
-            self._scope.bind(node.target.id, node.lineno, _Alias(node.value))
+            self._bind(node.target.id, node.lineno, _Alias(node.value))
         else:
             self.visit(node.target)
 
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, (ast.Store, ast.Del)):
-            self._scope.bind(node.id, node.lineno, _Other())
-
-    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
-        if node.name:
-            self._scope.bind(node.name, node.lineno, _Other())
-        self.generic_visit(node)
+            self._bind(node.id, node.lineno, _Other())
 
     # Uses
 
     def visit_Call(self, node: ast.Call) -> None:
-        self.calls.append((node, self._scope))
+        self.calls.append((node, _Use(self._scope, node.lineno, self._path)))
         self.generic_visit(node)
 
 
-def _resolve(expr: ast.expr, scope: _Scope, lineno: int, depth: int = 0) -> str | None:
-    """Describe the seam-bypassing serializer *expr* names, or ``None``."""
+def _resolve(expr: ast.expr, use: _Use, depth: int = 0) -> str | None:
+    """Describe a seam-bypassing serializer *expr* may name at *use*, or ``None``."""
     if depth > _MAX_ALIAS_DEPTH:
         return None
     if isinstance(expr, ast.Attribute) and expr.attr in _ASSET_SERIALIZERS:
@@ -264,21 +423,22 @@ def _resolve(expr: ast.expr, scope: _Scope, lineno: int, depth: int = 0) -> str 
     parts = _dotted_parts(expr)
     if parts is None:
         return None
-    found = scope.lookup(parts[0], lineno)
-    if found is None:
-        return None
-    bound_scope, bound_line, binding = found
     rest = parts[1:]
-    if isinstance(binding, _Import):
-        return _classify_origin([*binding.origin, *rest])
-    if isinstance(binding, _Alias):
-        # ``t = transform; t.to_atlas_format(x)``: re-root the rest of the
-        # attribute chain on the aliased value and resolve that where it was
-        # bound.
-        value = binding.value
-        for attr in rest:
-            value = ast.Attribute(value=value, attr=attr, ctx=ast.Load())
-        return _resolve(value, bound_scope, bound_line, depth + 1)
+    for scope, site in use.scope.candidates(parts[0], use):
+        binding = site.binding
+        what: str | None = None
+        if isinstance(binding, _Import):
+            what = _classify_origin([*binding.origin, *rest])
+        elif isinstance(binding, _Alias):
+            # ``t = transform; t.to_atlas_format(x)``: re-root the rest of the
+            # attribute chain on the aliased value and resolve that where it
+            # was bound.
+            value = binding.value
+            for attr in rest:
+                value = ast.Attribute(value=value, attr=attr, ctx=ast.Load())
+            what = _resolve(value, _Use(scope, site.lineno, site.path), depth + 1)
+        if what is not None:
+            return what
     return None
 
 
@@ -293,8 +453,8 @@ def check_p052(
     builder = _ScopeBuilder()
     builder.visit(tree)
     findings: list[Finding] = []
-    for call, scope in builder.calls:
-        what = _resolve(call.func, scope, call.lineno)
+    for call, use in builder.calls:
+        what = _resolve(call.func, use)
         if what is None:
             continue
         findings.append(
