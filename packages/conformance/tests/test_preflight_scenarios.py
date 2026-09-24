@@ -980,6 +980,20 @@ def test_a_dead_mark_in_an_identity_decorator_is_ignored(tmp_path: Path) -> None
     )
 
 
+def test_an_unused_mark_lambda_in_an_identity_decorator_is_ignored(
+    tmp_path: Path,
+) -> None:
+    helper = (
+        "def identity(fn):\n"
+        "    unused = lambda: pytest.mark.skip(fn)\n"
+        "    return fn"
+    )
+    assert (
+        _grade(tmp_path, _module(helper, _test("@identity\n" + HEALTHY), LIFETIME))
+        == []
+    )
+
+
 def test_a_return_only_try_does_not_make_its_handler_reachable(tmp_path: Path) -> None:
     body = "    try:\n        return\n    except Exception:\n        pass\n" + ASSERT
     messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
@@ -994,6 +1008,23 @@ def test_a_caught_call_can_reach_the_contract_assertion(tmp_path: Path) -> None:
         "        " + ASSERT.lstrip()
     )
     assert _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME)) == []
+
+
+def test_an_inner_handler_does_not_make_an_outer_handler_reachable(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "    try:\n"
+        "        try:\n"
+        "            check_source()\n"
+        "        except ExpectedError:\n"
+        "            pass\n"
+        "    except Exception:\n"
+        "        assert_preflight_result(result, required_checks=set(), "
+        "observed_checks=set(), expected_status='ready')\n"
+    )
+    messages = _grade(tmp_path, _module(_test(HEALTHY, body), LIFETIME))
+    assert any(NEVER_CALLS in message for message in messages)
 
 
 def test_a_mixed_finally_exit_can_be_absorbed_and_reach_the_assertion(

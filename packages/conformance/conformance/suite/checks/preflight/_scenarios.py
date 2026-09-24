@@ -424,10 +424,16 @@ def _mentions_marks(
             )
             for stmt in node.body
         )
-    if isinstance(node, ast.Lambda):
+    if isinstance(node, ast.Return) and isinstance(node.value, ast.Lambda):
         return _mentions_marks(
-            node.body, mod, seen, functions=functions, aliases=aliases
+            node.value.body,
+            mod,
+            seen,
+            functions=functions,
+            aliases=aliases,
         )
+    if isinstance(node, ast.Lambda):
+        return False
     if isinstance(node, ast.If):
         truth = _constant_truth(node.test)
         branches = (
@@ -978,10 +984,15 @@ def _constant_truth(test: ast.expr) -> bool | None:
 
 #: How a block can end. A block's flow is the set of ways it may end: it is
 #: definitely over when ``FALLS`` is not in the set, whatever mix of the other
-#: exits remains. ``RAISES`` is kept apart from ``RETURNS`` because an
-#: enclosing ``with`` (``pytest.raises``) or ``try`` can absorb an exception,
-#: so code after it may still run; a ``return`` is never absorbed.
-FALLS, RETURNS, RAISES, JUMPS = "falls", "returns", "raises", "jumps"
+#: exits remains. Explicit ``RAISES`` and possible call exceptions are separate:
+#: a try handler can absorb either, while a context manager only absorbs raises.
+FALLS, RETURNS, RAISES, JUMPS, CALL_RAISES = (
+    "falls",
+    "returns",
+    "raises",
+    "jumps",
+    "call_raises",
+)
 _Flow = frozenset[str]
 _FALL: _Flow = frozenset({FALLS})
 
@@ -1020,6 +1031,15 @@ def _expression(node: ast.AST, out: list[ast.AST]) -> None:
         _expression(child, out)
 
 
+def _call_raises(out: list[ast.AST], start: int) -> _Flow:
+    """A call in the evaluated nodes may add an exception exit."""
+    return (
+        frozenset({CALL_RAISES})
+        if any(isinstance(node, ast.Call) for node in out[start:])
+        else frozenset()
+    )
+
+
 def _block(stmts: list[ast.stmt], out: list[ast.AST]) -> _Flow:
     """Collect the nodes a block can execute; return how it can end.
 
@@ -1045,13 +1065,15 @@ def _loop(body: _Flow, orelse: _Flow, *, infinite: bool) -> _Flow:
 
 def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        start = len(out)
         for dec in stmt.decorator_list:
             _expression(dec, out)
-        return _FALL
+        return _FALL | _call_raises(out, start)
     if isinstance(stmt, ast.Return):
+        start = len(out)
         if stmt.value is not None:
             _expression(stmt.value, out)
-        return frozenset({RETURNS})
+        return frozenset({RETURNS}) | _call_raises(out, start)
     if isinstance(stmt, ast.Raise):
         if stmt.exc is not None:
             _expression(stmt.exc, out)
@@ -1060,60 +1082,74 @@ def _statement(stmt: ast.stmt, out: list[ast.AST]) -> _Flow:
         return frozenset({JUMPS})
     if isinstance(stmt, ast.Assert):
         # The message is evaluated only when the assertion fails.
+        start = len(out)
         _expression(stmt.test, out)
-        return frozenset({RAISES}) if _constant_truth(stmt.test) is False else _FALL
+        flow = frozenset({RAISES}) if _constant_truth(stmt.test) is False else _FALL
+        return flow | _call_raises(out, start)
     if isinstance(stmt, ast.If):
+        start = len(out)
         _expression(stmt.test, out)
+        test_flow = _call_raises(out, start)
         truth = _constant_truth(stmt.test)
         if truth is True:
-            return _block(stmt.body, out)
+            return _block(stmt.body, out) | test_flow
         if truth is False:
-            return _block(stmt.orelse, out)
+            return _block(stmt.orelse, out) | test_flow
         # Either branch may run: the if falls through only if one of them does.
-        return _block(stmt.body, out) | _block(stmt.orelse, out)
+        return _block(stmt.body, out) | _block(stmt.orelse, out) | test_flow
     if isinstance(stmt, ast.While):
+        start = len(out)
         _expression(stmt.test, out)
+        test_flow = _call_raises(out, start)
         truth = _constant_truth(stmt.test)
         if truth is False:
-            return _block(stmt.orelse, out)
+            return _block(stmt.orelse, out) | test_flow
         body = _block(stmt.body, out)
         orelse = _block(stmt.orelse, out) if truth is not True else frozenset()
-        return _loop(body, orelse, infinite=truth is True)
+        return _loop(body, orelse, infinite=truth is True) | test_flow
     if isinstance(stmt, (ast.For, ast.AsyncFor)):
+        start = len(out)
         _expression(stmt.iter, out)
+        iter_flow = _call_raises(out, start)
         if _statically_empty(stmt.iter):
-            return _block(stmt.orelse, out)
+            return _block(stmt.orelse, out) | iter_flow
         body = _block(stmt.body, out)  # may run zero times
-        return _loop(body, _block(stmt.orelse, out), infinite=False)
+        return _loop(body, _block(stmt.orelse, out), infinite=False) | iter_flow
     if isinstance(stmt, (ast.With, ast.AsyncWith)):
+        start = len(out)
         for item in stmt.items:
             _expression(item.context_expr, out)
+        context_flow = _call_raises(out, start)
         body = _block(stmt.body, out)
         # A context manager can suppress the exception; it cannot undo a return.
-        return body | _FALL if RAISES in body else body
+        body = body | _FALL if RAISES in body or CALL_RAISES in body else body
+        return body | context_flow
     if isinstance(stmt, ast.Try | ast.TryStar):
-        body_start = len(out)
         body = _block(stmt.body, out)
-        if any(isinstance(node, ast.Call) for node in out[body_start:]):
-            body |= frozenset({RAISES})
-        result = body - _FALL
+        raised = body & {RAISES, CALL_RAISES}
+        result = body - {FALLS, RAISES, CALL_RAISES}
         if FALLS in body:
             result |= _block(stmt.orelse, out)
-        if RAISES in body:
+        if raised:
             for handler in stmt.handlers:
                 result |= _block(handler.body, out)
+            if not stmt.handlers:
+                result |= raised
         final = _block(stmt.finalbody, out)
         if not stmt.finalbody:
             return frozenset(result)
         final_exits = final - {FALLS}
         return frozenset(final_exits | (result if FALLS in final else set()))
     if isinstance(stmt, ast.Match):
+        start = len(out)
         _expression(stmt.subject, out)
+        subject_flow = _call_raises(out, start)
         flows = [_block(case.body, out) for case in stmt.cases]
-        return frozenset().union(*flows) | _FALL
+        return frozenset().union(*flows) | _FALL | subject_flow
+    start = len(out)
     for child in ast.iter_child_nodes(stmt):
         _expression(child, out)
-    return _FALL
+    return _FALL | _call_raises(out, start)
 
 
 def _calls(stmts: list[ast.stmt]) -> list[ast.Call]:
