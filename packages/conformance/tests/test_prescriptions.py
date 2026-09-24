@@ -2636,7 +2636,7 @@ def _p052(src: str, file: str = "app/connector.py") -> list:
 
 
 def test_p052_fires_on_to_nested_bytes() -> None:
-    # The atlan-openapi-app shape: the asset writes its own wire line.
+    # A transform that has the asset write its own wire line.
     src = 'out_f.write(asset.to_nested_bytes() + b"\\n")\n'
     assert len(_p052(src)) == 1
 

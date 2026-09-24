@@ -72,10 +72,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O002",
         canonical_reference=(
-            "application_sdk application_sdk/templates/sql_app.py — `_transform_entity` "
-            "hands each mapper's pyatlan_v9 asset to `entity_bytes`, which emits the "
-            "nested-entity wire line; no `.dict()` and no hand-conversion of a flat "
-            "dict anywhere on the path."
+            "atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each "
+            "asset through `entity_bytes` under the app's `ENTITY_ENVELOPE`, rather than "
+            "through `.dict()`, then decodes that output to merge in the custom "
+            "attributes pyatlan_v9 does not model."
         ),
         scope=RuleScope.APP,
         name="LegacyAssetSerialization",

@@ -2521,11 +2521,9 @@ copied, the bypass spreads.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/mysql.py — `map_table` needs a view line the pyatlan_v9 model cannot
-  carry (`defaultCatalogName` / `defaultSchemaName`), and still gets the wire shape from
-  `entity_bytes(asset)` and decorates the result, rather than calling
-  `asset.to_nested_bytes()` itself. Every other mapper returns the asset and lets
-  `SqlApp._transform_entity` reach `entity_bytes`.
+- **Compliant example:** atlan-openapi-app app/connector.py — `_transform_blocking` writes every connection,
+  APISpec and APIPath line as `entity_bytes(asset, entity_type=...,
+  envelope=ENTITY_ENVELOPE)`; no mapper result is serialized any other way.
 - **Already correct when:** A justified inline `# conformance: ignore[P052] <reason>` is the correct end state only
   where the value serialized is not an entity line at all — e.g. a `ConnectionRef` built
   from `to_atlas_format`, as the SDK's own `application_sdk/contracts/types.py` does.
@@ -2546,7 +2544,6 @@ those apply, and no SDK-side fix can reach the app.
 Fix: serialize through `entity_bytes(asset, envelope=...)`; when the line needs a key
 the model cannot hold, decode what `entity_bytes` produced and decorate it.  WARN tier —
 suppress with `# conformance: ignore[P052] <reason>` only for a genuine non-entity use,
-such as a `ConnectionRef` built from `to_atlas_format`. Promotion to BLOCK is expected
-once the reference apps are migrated.
+such as a `ConnectionRef` built from `to_atlas_format`.
 
 ---

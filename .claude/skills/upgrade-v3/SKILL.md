@@ -157,7 +157,7 @@ After identifying the connector type, determine the transformation strategy:
 - Inform the user: _"This connector has N workflows. In v3 they become N `@entrypoint` methods on one App class, sharing task helpers and the handler. I'll consolidate them into a single App."_
 
 **REST/API connectors** (v2 `BaseMetadataExtractor`, Custom App — note `BaseMetadataExtractor` is deprecated too; the v3 landing place is a plain `App` subclass, or `SqlApp` if it turns out to be SQL-backed):
-- **Default to the asset-mapper approach.** This is the v3-native pattern (see `atlan-openapi-app` as the reference implementation — except its transform, which still calls `asset.to_nested_bytes()` directly; do not copy that, conformance rule P052 flags it). Inform the user:
+- **Default to the asset-mapper approach.** This is the v3-native pattern (see `atlan-openapi-app` as the reference implementation). Inform the user:
   > "REST/API connectors in v3 use the asset-mapper pattern: typed Python records → pure Python mapper functions → pyatlan Asset instances → JSONL. This replaces the v2 `QueryBasedTransformer`/`AtlasTransformer` approach. The reference implementation is `atlan-openapi-app`. Shall I proceed with this approach?"
 - If the user prefers to keep the existing transformer, respect that — but note it as a manual follow-up item in the summary.
 
@@ -1252,27 +1252,22 @@ def map_table(record: TableRecord, connection_qn: str, workflow_id: str, ...) ->
 **Transform task pattern:**
 ```python
 from application_sdk.common.asset_serialization import entity_bytes
-from application_sdk.common.last_sync import resolve_last_sync_details
+from application_sdk.common.entity_envelope import EntityEnvelopePolicy, EnvelopeShape
+
+ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)
 
 @task(timeout_seconds=1800)
 async def transform(self, input: TransformInput) -> TransformOutput:
-    last_sync = resolve_last_sync_details()  # once per activity, not per record
     for record in read_jsonl(input.raw_file, RecordType):
         asset = map_entity(record, connection_qn, ...)
         out_f.write(
-            entity_bytes(
-                asset,
-                connection_name=connection_name,
-                last_sync=last_sync,
-                # envelope= defaults to DEFAULT_ENVELOPE; pass the app's
-                # declared EntityEnvelopePolicy only if it has one.
-            )
+            entity_bytes(asset, entity_type="my_entity", envelope=ENTITY_ENVELOPE)
             + b"\n"
         )
     return TransformOutput(output_file=FileReference(local_path=str(output_file)))
 ```
 
-Never write `asset.to_nested_bytes()` here: it bypasses the SDK's serialization seam and conformance rule P052 flags it. When a line needs a key the asset model cannot hold, decode what `entity_bytes()` returned and add the key to that (see `atlan-mysql-app` `app/mysql.py` `map_table`).
+This is the shape of `atlan-openapi-app` `app/connector.py` `_transform_blocking`. Always serialize through `entity_bytes()`, never `asset.to_nested_bytes()` — conformance rule P052 flags the direct call. When a line needs a key the asset model cannot hold, decode what `entity_bytes()` returned and add the key to that (see `atlan-metabase-app` `app/asset_mapper.py` `serialize_entity`).
 
 ### Handler `fetch_metadata` must return widget-specific output types
 

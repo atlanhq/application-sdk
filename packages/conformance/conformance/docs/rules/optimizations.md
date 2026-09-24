@@ -88,9 +88,9 @@ also belong to a non-asset pydantic model — so the call needs a human glance.
 
 ### What correct looks like
 
-- **Compliant example:** application_sdk application_sdk/templates/sql_app.py — `_transform_entity` hands each
-  mapper's pyatlan_v9 asset to `entity_bytes`, which emits the nested-entity wire line;
-  no `.dict()` and no hand-conversion of a flat dict anywhere on the path.
+- **Compliant example:** atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each asset through
+  `entity_bytes` under the app's `ENTITY_ENVELOPE`, rather than through `.dict()`, then
+  decodes that output to merge in the custom attributes pyatlan_v9 does not model.
 
 Flags a `.dict()` method call in a module that imports pyatlan asset models.  The
 asset-mapper pattern writes assets through

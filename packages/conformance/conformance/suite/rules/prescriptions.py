@@ -616,12 +616,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P052",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — `map_table` needs a view line the "
-            "pyatlan_v9 model cannot carry (`defaultCatalogName` / "
-            "`defaultSchemaName`), and still gets the wire shape from "
-            "`entity_bytes(asset)` and decorates the result, rather than calling "
-            "`asset.to_nested_bytes()` itself. Every other mapper returns the asset "
-            "and lets `SqlApp._transform_entity` reach `entity_bytes`."
+            "atlan-openapi-app app/connector.py — `_transform_blocking` writes every "
+            "connection, APISpec and APIPath line as `entity_bytes(asset, "
+            "entity_type=..., envelope=ENTITY_ENVELOPE)`; no mapper result is "
+            "serialized any other way."
         ),
         terminal_state=(
             "A justified inline `# conformance: ignore[P052] <reason>` is the "
@@ -671,7 +669,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "it.  WARN tier — suppress with\n"
             "``# conformance: ignore[P052] <reason>`` only for a genuine non-entity\n"
             "use, such as a ``ConnectionRef`` built from ``to_atlas_format``.\n"
-            "Promotion to BLOCK is expected once the reference apps are migrated.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p052",
     ),
