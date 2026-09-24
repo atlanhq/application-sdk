@@ -168,11 +168,23 @@ two auto-fixable rules:
   serialization seam — `out_f.write(entity_bytes(asset, envelope=...) + b"\n")`
   (`from application_sdk.common.asset_serialization import entity_bytes`) — which
   emits the nested-entity wire shape the platform ingests; `.dict()` produces a
-  flat dict that still needs hand-conversion.  Draft the switch to
-  `entity_bytes(asset, ...)` (note it returns `bytes`, so the sink must be a
-  bytes/JSONL writer).  Never draft `asset.to_nested_bytes()`: it bypasses the
-  seam and trips P052.  If the flagged `.dict()` is on a **non-asset** pydantic
-  model, propose an inline `# conformance: ignore[O002] <reason>` instead.
+  flat dict that still needs hand-conversion.  For a `pyatlan_v9` asset, draft
+  the switch to `entity_bytes(asset, ...)` (note it returns `bytes`, so the sink
+  must be a bytes/JSONL writer).  Never draft `asset.to_nested_bytes()`: it
+  bypasses the seam and trips P052.
+
+  If the asset is a legacy `pyatlan.model.assets` model (O004 fires in the same
+  file, and the O002 message says so), **do not** draft the `entity_bytes`
+  switch on its own: a v1 model falls through to `model_dump()`, whose
+  snake_case field names are not the Atlas wire shape, so the rewrite would
+  emit malformed entities while looking finished.  The fix is the O004
+  migration first — move the model to `pyatlan_v9.model.assets` and confirm
+  every field the mapper sets exists on the v9 class — and only then the
+  serialization switch.  Draft both together as one proposal, or route the
+  site to residue if the model migration is not in reach.
+
+  If the flagged `.dict()` is on a **non-asset** pydantic model, propose an
+  inline `# conformance: ignore[O002] <reason>` instead.
 
 - **O003 UntypedAssetMapperReturn** (asset-mapper, BLDX-1492) — a function builds
   a pyatlan asset and returns it but declares no return annotation.  Draft the

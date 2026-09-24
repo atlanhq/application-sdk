@@ -2534,16 +2534,26 @@ App code under `app/` (`app/generated/` excluded) turns a pyatlan asset into wir
 itself instead of through `application_sdk.common.asset_serialization.entity_bytes`:
 
 * `<x>.to_nested_bytes()` or `<x>.to_nested_dict()`; * `to_atlas_format(...)` resolved
-to `pyatlan_v9` (a bare imported   name, aliased or not, or an attribute call through a
-module bound to   it).  A same-named local helper is not flagged.
+to `pyatlan_v9`, or the SDK's   internal
+`application_sdk.common.entity_envelope.to_atlas_format_dict`   (a bare imported name,
+aliased or not, or an attribute call through a   module bound to it).
+
+Names resolve by lexical scope, as Python binds them: a parameter or local helper that
+shadows an imported encoder is not flagged, and an import inside one function does not
+reach another.  A simple saved alias is followed (`encode = asset.to_nested_bytes;
+encode()`, `enc = to_atlas_format`); `getattr` / `functools.partial` / container
+indirection is out of scope.
 
 `entity_bytes` owns the dispatch, the `connectionName` injection, the connector's
 declared entity envelope and the placeholder-guid strip.  Bypassing it means none of
 those apply, and no SDK-side fix can reach the app.
 
-Fix: serialize through `entity_bytes(asset, envelope=...)`; when the line needs a key
-the model cannot hold, decode what `entity_bytes` produced and decorate it.  WARN tier —
-suppress with `# conformance: ignore[P052] <reason>` only for a genuine non-entity use,
-such as a `ConnectionRef` built from `to_atlas_format`.
+Fix: serialize through `entity_bytes(asset, envelope=...)` with an envelope that keeps
+the connector's released wire shape — `to_nested_bytes()` / `to_nested_dict()` output
+matches `EnvelopeShape.PYATLAN`, `to_atlas_format()` output matches `FLATTENED` — and
+pass `connection_name` / `last_sync` unless the mapper already stamps them.  When the
+line needs a key the model cannot hold, decode what `entity_bytes` produced and decorate
+it.  WARN tier — suppress with `# conformance: ignore[P052] <reason>` only for a genuine
+non-entity use, such as a `ConnectionRef` built from `to_atlas_format`.
 
 ---

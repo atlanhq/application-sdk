@@ -99,6 +99,12 @@ form (`docs/upgrade-guide-v3.md` explicitly says 'use the v9 serialisation API i
 of .dict()').  Do not swap in `asset.to_nested_bytes()`: that bypasses the seam and
 trips P052.
 
+Legacy `pyatlan.model.assets` models: migrate the model to `pyatlan_v9.model.assets`
+first (O004), then switch serialization. A v1 model handed to `entity_bytes` falls
+through to `model_dump()`, whose snake_case field names are not the Atlas wire shape, so
+the serialization switch alone emits malformed entities. The finding message says which
+case applies.
+
 Coverage limits (biased to low false-positives at WARN): only `.dict()` is matched (not
 `.json()`, which is overwhelmingly `response.json()` on HTTP clients), and only in files
 that import asset models.  A `.dict()` on a *non-asset* pydantic model in such a file is

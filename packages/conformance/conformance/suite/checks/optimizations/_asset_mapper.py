@@ -19,10 +19,25 @@ from conformance.suite.schema.findings import Finding
 
 _ASSET_MODULES = ("pyatlan_v9.model.assets", "pyatlan.model.assets")
 
+_LEGACY_ASSET_MODULE = "pyatlan.model.assets"
+
 _O002_MESSAGE = (
     "Asset serialised with .dict() — serialize through "
     "application_sdk.common.asset_serialization.entity_bytes instead (emits the "
-    "nested-entity wire shape the asset-mapper pipeline expects). If this .dict() is on a non-asset model, suppress with "
+    "nested-entity wire shape the asset-mapper pipeline expects). If this "
+    ".dict() is on a non-asset model, suppress with "
+    "# conformance: ignore[O002] <reason>."
+)
+# A legacy model handed to entity_bytes falls through to model_dump(), whose
+# snake_case field names are not the Atlas wire shape — so for these the
+# serialization switch cannot come first.
+_O002_LEGACY_MESSAGE = (
+    "Asset serialised with .dict() on a legacy pyatlan.model.assets model — "
+    "migrate the asset to pyatlan_v9.model.assets first (O004), then serialize "
+    "through application_sdk.common.asset_serialization.entity_bytes. Do not "
+    "switch a legacy model to entity_bytes alone: it falls through to "
+    "model_dump(), whose snake_case fields are not the Atlas wire shape. If this "
+    ".dict() is on a non-asset model, suppress with "
     "# conformance: ignore[O002] <reason>."
 )
 _O003_MESSAGE = (
@@ -61,6 +76,24 @@ def _collect_asset_imports(tree: ast.AST) -> tuple[bool, frozenset[str]]:
     return imports_assets, frozenset(names)
 
 
+def _imports_legacy_assets(tree: ast.AST) -> bool:
+    """True when the module imports from legacy ``pyatlan.model.assets``."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            modules = [node.module]
+        elif isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        else:
+            continue
+        for module in modules:
+            if module is not None and (
+                module == _LEGACY_ASSET_MODULE
+                or module.startswith(f"{_LEGACY_ASSET_MODULE}.")
+            ):
+                return True
+    return False
+
+
 def check_o002(
     tree: ast.AST, filename: str, directives: dict[int, _IgnoreDirective]
 ) -> list[Finding]:
@@ -68,6 +101,7 @@ def check_o002(
     imports_assets, _ = _collect_asset_imports(tree)
     if not imports_assets:
         return []
+    message = _O002_LEGACY_MESSAGE if _imports_legacy_assets(tree) else _O002_MESSAGE
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if (
@@ -80,7 +114,7 @@ def check_o002(
                     filename=filename,
                     rule_id="O002",
                     node=node,
-                    message=_O002_MESSAGE,
+                    message=message,
                     directives=directives,
                 )
             )

@@ -1267,7 +1267,9 @@ async def transform(self, input: TransformInput) -> TransformOutput:
     return TransformOutput(output_file=FileReference(local_path=str(output_file)))
 ```
 
-This is the shape of `atlan-openapi-app` `app/connector.py` `_transform_blocking`. Always serialize through `entity_bytes()`, never `asset.to_nested_bytes()` — conformance rule P052 flags the direct call. When a line needs a key the asset model cannot hold, decode what `entity_bytes()` returned and add the key to that (see `atlan-metabase-app` `app/asset_mapper.py` `serialize_entity`).
+This is the shape of `atlan-openapi-app` `app/connector.py` `_transform_blocking`. Always serialize through `entity_bytes()`, never `asset.to_nested_bytes()` — conformance rule P052 flags the direct call.
+
+Pick the envelope from the connector's **released** output, not by default. `FLATTENED` (above) puts relationship refs in `attributes`. If the connector already shipped output with refs under a top-level `relationshipAttributes` key (what `to_nested_bytes()` writes), pin `EntityEnvelopePolicy(shape=EnvelopeShape.PYATLAN)` for this migration so its wire format and publish diff cache don't flip as a side effect. `PYATLAN` is deprecated (removed in v4.0); moving to `FLATTENED` is a separate change. Pass `connection_name=` and `last_sync=resolve_last_sync_details()` too, unless the mappers already stamp them on every asset. When a line needs a key the asset model cannot hold, decode what `entity_bytes()` returned and add the key to that (see `atlan-metabase-app` `app/asset_mapper.py` `serialize_entity`).
 
 ### Handler `fetch_metadata` must return widget-specific output types
 

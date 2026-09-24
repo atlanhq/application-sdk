@@ -2685,6 +2685,113 @@ def test_p052_fires_on_function_local_import() -> None:
     assert len(_p052(src)) == 1
 
 
+_P052_ENCODER_IMPORT = "from pyatlan_v9.model.transform import to_atlas_format\n"
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A parameter shadows the module-level import.
+        "def f(to_atlas_format, a):\n    return to_atlas_format(a)\n",
+        # A local helper shadows it.
+        "def f(a):\n"
+        "    def to_atlas_format(x):\n"
+        "        return x\n"
+        "    return to_atlas_format(a)\n",
+        # A later module-level rebinding shadows it for calls after it.
+        "def to_atlas_format(x):\n    return x\nto_atlas_format(1)\n",
+    ],
+    ids=["parameter", "local-def", "module-rebind"],
+)
+def test_p052_no_finding_when_encoder_is_shadowed(src: str) -> None:
+    assert _p052(_P052_ENCODER_IMPORT + src) == []
+
+
+def test_p052_import_in_one_function_does_not_leak_into_another() -> None:
+    src = (
+        "def g(a):\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format\n"
+        "    return a\n"
+        "def f(a):\n"
+        "    return to_atlas_format(a)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_unrelated_local_import_does_not_mask_module_encoder() -> None:
+    # g's import of a same-named helper is g's business; f still calls
+    # pyatlan's encoder through the module-level import.
+    src = _P052_ENCODER_IMPORT + (
+        "def g(a):\n"
+        "    from mylib.encoders import to_atlas_format\n"
+        "    return to_atlas_format(a)\n"
+        "def f(a):\n"
+        "    return to_atlas_format(a)\n"
+    )
+    fs = _p052(src)
+    assert [f.line for f in fs] == [6]
+
+
+def test_p052_class_body_binding_is_not_visible_to_methods() -> None:
+    # Python skips class scope when resolving names inside a method, so the
+    # method's call is the module-level pyatlan encoder.
+    src = _P052_ENCODER_IMPORT + (
+        "class C:\n"
+        "    to_atlas_format = staticmethod(lambda a: a)\n"
+        "    def m(self, a):\n"
+        "        return to_atlas_format(a)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from application_sdk.common.entity_envelope import to_atlas_format_dict\n"
+        "to_atlas_format_dict(asset)\n",
+        "from application_sdk.common import entity_envelope as ee\n"
+        "ee.to_atlas_format_dict(asset)\n",
+        "import application_sdk.common.entity_envelope\n"
+        "application_sdk.common.entity_envelope.to_atlas_format_dict(asset)\n",
+    ],
+    ids=["from-import", "module-alias", "dotted"],
+)
+def test_p052_fires_on_sdk_to_atlas_format_dict(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+def test_p052_no_finding_on_unrelated_to_atlas_format_dict() -> None:
+    src = "from mylib import to_atlas_format_dict\nto_atlas_format_dict(asset)\n"
+    assert _p052(src) == []
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "encode = asset.to_nested_bytes\nencode()\n",
+        "def f(asset):\n    encode = asset.to_nested_dict\n    return encode()\n",
+        _P052_ENCODER_IMPORT + "enc = to_atlas_format\nenc(asset)\n",
+        _P052_ENCODER_IMPORT + "enc = to_atlas_format\nenc2 = enc\nenc2(asset)\n",
+        "from pyatlan_v9.model import transform\n"
+        "t = transform\n"
+        "t.to_atlas_format(asset)\n",
+    ],
+    ids=[
+        "bound-method",
+        "bound-method-in-function",
+        "encoder-alias",
+        "alias-chain",
+        "module-alias",
+    ],
+)
+def test_p052_follows_saved_serializer_alias(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+def test_p052_cyclic_alias_terminates() -> None:
+    assert _p052("a = b\nb = a\na()\n") == []
+
+
 def test_p052_no_finding_on_entity_bytes() -> None:
     # The atlan-mysql-app shape: entity_bytes owns the wire line, the app
     # decorates what it produced.
