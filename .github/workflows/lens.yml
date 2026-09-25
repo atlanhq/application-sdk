@@ -119,8 +119,12 @@ jobs:
       # a head where every finding at every level is resolved, and withdraws lens's
       # earlier approval when a review is not ready. The ruleset dismisses approvals
       # on push.
+      # always(), not "review succeeded": a failed review exits 1 but still sets the
+      # `lens` status to error and writes a withdraw decision, and the approval must
+      # follow that status. A review that crashed before its verdict writes no
+      # decision, and this step then does nothing.
       - name: Approve as code owner (ready to merge only)
-        if: always() && steps.review.outcome == 'success'
+        if: always()
         working-directory: .github/scripts
         env:
           GITHUB_TOKEN: ${{ steps.app.outputs.token }}

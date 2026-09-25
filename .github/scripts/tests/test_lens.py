@@ -3189,6 +3189,7 @@ def test_approval_is_decided_only_when_every_finding_at_every_level_is_closed():
         approve_mod.decision_for(_res(incomplete=["b: fatal"]))["action"] == "withdraw"
     )
     assert approve_mod.decision_for(_res(pending=["x.py"]))["action"] == "withdraw"
+    # a failed review sets the status to error: an earlier approval must not survive it
     assert approve_mod.decision_for(_res(failed=True))["action"] == "withdraw"
     assert approve_mod.decision_for(_res(action="skipped"))["action"] == "none"
     # a /lens dismiss that closes the last finding makes the reviewed head ready
@@ -3303,7 +3304,8 @@ def test_only_the_approval_step_holds_the_code_owner_token():
     review = next(st for st in steps if st.get("id") == "review")
     assert "APPROVER_TOKEN" not in json.dumps(review)
     step = next(st for st in steps if st.get("name") == holders[0])
-    assert step["if"] == "always() && steps.review.outcome == 'success'"
+    # A failed review exits 1 yet still decides "withdraw"; the step must run to act on it.
+    assert step["if"] == "always()"
     assert "lens approve" in step["run"]
 
 
@@ -3659,3 +3661,31 @@ def test_a_first_review_with_findings_points_to_the_summary_instead_of_repeating
     assert review["comments"]  # the inline finding is still posted
     assert gh.posted == []
     assert "❌ **Changes requested**" in gh.comments[0]["body"]
+
+
+def test_a_failed_review_still_leaves_a_withdraw_decision(monkeypatch, tmp_path):
+    """The review step exits 1 on a model/transport failure; the decision is written
+    first, so the always() approval step withdraws an approval the error status contradicts."""
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
+    monkeypatch.setattr(cli, "GitHub", _CliGitHub)
+    monkeypatch.setattr(cli, "run", lambda **kw: _res(failed=True))
+    out = tmp_path / "approval.json"
+    monkeypatch.setenv("LENS_APPROVAL_PATH", str(out))
+    root = str(Path(__file__).resolve().parents[3])
+    code = cli.main(
+        [
+            "review",
+            "--repo",
+            "o/r",
+            "--root",
+            root,
+            "--event-name",
+            "issue_comment",
+            "--event-path",
+            _event_file(tmp_path),
+        ]
+    )
+    assert code == 1
+    assert json.loads(out.read_text())["action"] == "withdraw"
