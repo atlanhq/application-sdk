@@ -44,7 +44,7 @@ cards = ["v3-architecture", "security", "error-handling-and-logging", "python-co
 
 [[path]]
 glob = "application_sdk/observability/**"
-cards = ["error-handling-and-logging", "security", "performance", "python-correctness"]
+cards = ["observability", "error-handling-and-logging", "security", "performance"]
 
 [[path]]
 glob = "application_sdk/errors/**"

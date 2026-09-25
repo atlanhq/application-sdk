@@ -3161,14 +3161,41 @@ def test_every_path_a_card_cites_exists():
     assert not missing, f"cards cite paths that do not exist: {missing}"
 
 
-def test_every_conformance_rule_id_a_card_cites_exists():
+def _rule_tiers() -> dict[str, str]:
+    """Rule id -> BLOCK/WARN, read from each `RuleDefinition(...)` in the catalog."""
     rules_dir = _REPO / "packages" / "conformance" / "conformance" / "suite" / "rules"
-    known = set()
+    tiers: dict[str, str] = {}
     for f in rules_dir.glob("*.py"):
-        known |= set(re.findall(r'id="([A-Z]\d{3})"', f.read_text(encoding="utf-8")))
+        text = f.read_text(encoding="utf-8")
+        starts = [m for m in re.finditer(r'id="([A-Z]\d{3})"', text)]
+        for i, m in enumerate(starts):
+            end = starts[i + 1].start() if i + 1 < len(starts) else len(text)
+            tier = re.search(r"tier=EnforcementTier\.(\w+)", text[m.start() : end])
+            tiers[m.group(1)] = tier.group(1) if tier else "?"
+    return tiers
+
+
+def test_every_conformance_rule_id_a_card_cites_exists():
+    known = set(_rule_tiers())
     assert known, "conformance catalog not found"
     cited = []
     for name, text in load_rules(_LENS).cards.items():
         cited += [(name, i) for i in re.findall(r"\b([A-Z]\d{3})\b", text)]
     unknown = [f"{n}: {i}" for n, i in cited if i not in known]
     assert not unknown, f"cards cite conformance rules that do not exist: {unknown}"
+
+
+def test_dont_flag_lines_cite_only_rules_that_fail_ci():
+    """A WARN rule never fails CI on an SDK PR, so telling the reviewer not to flag it
+    leaves the problem unenforced by anyone. Only BLOCK rules may appear there."""
+    tiers = _rule_tiers()
+    wrong = []
+    for name, text in load_rules(_LENS).cards.items():
+        for line in text.splitlines():
+            if line.lstrip("- ").startswith("Don't flag"):
+                wrong += [
+                    f"{name}: {i} is {tiers.get(i)}"
+                    for i in re.findall(r"\b([A-Z]\d{3})\b", line)
+                    if tiers.get(i) != "BLOCK"
+                ]
+    assert not wrong, f"Don't-flag lines cite rules CI only warns on: {wrong}"

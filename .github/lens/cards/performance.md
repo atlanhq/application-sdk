@@ -1,11 +1,9 @@
 # performance: Event loop, memory, timeouts, progress
-- Flag: blocking file/DB/cloud-SDK calls in async code or a `@task` without `self.run_in_thread(...)` (the call needs its own timeout).
-- Flag: HTTP clients/DB connections created per item in a loop; reuse a pooled `httpx.AsyncClient`.
-- Flag: HTTP calls with no timeout; source DB queries with no statement timeout.
-- Flag: unbounded whole-dataset loads (`json.load`, `f.read()`, one list over all pages, `orjson.dumps(all)`); stream or use `RollingFileWriter`.
-- Flag: N+1 per-item calls where a batch call exists; independent awaits run serially instead of `asyncio.gather`.
-- Flag: `gather` over thousands of `run_in_thread`/requests without an `asyncio.Semaphore`.
-- Flag: long loops or opaque awaits that report no progress: call `self.heartbeat(...)`, or bound the wait with `self.holding_progress(label, timeout=...)`. `run_in_thread` is already held; wrap it only to bound it. Stalls warn by default and fail only under `@task(progress_watchdog="enforce")` (`docs/concepts/progress-and-stalls.md`).
-- Flag: `duckdb`/`pandas`/`daft` imported at top level of general modules (lazy import with `# noqa: PLC0415` and a reason).
-- Don't flag (CI enforces): `time.sleep`/`requests` in async, stdlib `json` in hot paths, per-item INFO logs, costly log args, ad-hoc executors.
+- Flag: blocking file/DB/cloud-SDK calls in async code or a `@task` not in `self.run_in_thread(...)` (with its own timeout).
+- Flag: HTTP clients/DB connections created per item; HTTP calls or source queries with no timeout.
+- Flag: unbounded whole-dataset loads (`json.load`, `f.read()`, all pages in one list); stream or use `RollingFileWriter`.
+- Flag: N+1 calls where a batch exists; independent awaits run serially; `gather` over thousands of tasks without a `Semaphore`.
+- Flag: long loops or opaque awaits reporting no progress: `self.heartbeat(...)`, or bound with `self.holding_progress(label, timeout=...)` (`run_in_thread` is already held). Stalls only warn unless `progress_watchdog="enforce"`.
+- Flag: `duckdb`/`pandas`/`daft` at module top level (lazy import with `# noqa: PLC0415` and a reason).
+- Flag new ones (CI only warns): blocking calls in `async def` (P023), `to_thread`/`run_in_executor(None)` (P031), a bare process pool (P036), stdlib `json` in hot paths (O001), INFO in loops (L006), eager debug args (L008).
 - Severity: high if it blocks the loop, hangs, or can OOM on real data; medium otherwise; low for micro-optimisations.

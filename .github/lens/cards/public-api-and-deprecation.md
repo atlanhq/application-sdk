@@ -1,10 +1,10 @@
 # public-api-and-deprecation: Importable surface, env vars, cross-repo values
-- Flag: a public (non-`_`) name, method, kwarg or `application_sdk.testing` helper removed or renamed that was not already deprecated in the previous release (`docs/standards/symbols.md`). A red Symbol Removal Check is an obligation, not noise.
-- Flag: a deprecation that doesn't delegate to the replacement, or uses the wrong marker: `@deprecated` (typing_extensions) or a `DeprecationWarning` from `__init__`/`__init_subclass__` for classes and functions; `__deprecated_members__` for enum members; `_DEPRECATED_CONSTANTS` + module `__getattr__` for constants (and no module-scope re-export of that name, which silences it).
-- Flag: a deliberate break not declared as `feat!:` / `BREAKING CHANGE:`.
-- Flag: a new required param, a changed default, or a moved symbol without a re-export.
-- Flag: a new public symbol not in `__all__`, or only reachable via a `_` path; a new `__init__.py` export with no test.
-- Flag: a new env var without `ATLAN_` (except `OTEL_`/`DAPR_`/`K8S_`); an env var dropped or renamed without a fallback and without adding the old name to `_REMOVED_ENV_VARS` (`application_sdk/common/env_warnings.py`, `docs/standards/env-vars.md`).
-- Flag: a change to a value other repos read (served manifest `task_queue`, error-envelope keys, persistent-artifact prefixes, preflight payloads) without following `docs/standards/cross-repo-contracts.md`.
-- Don't flag (CI enforces): contract field removal/retype (B005/B006), a notice missing its replacement or removal version (B002/B003); `_` names.
-- Severity: critical for a public break without deprecation; high for kwarg/env-var/cross-repo breaks; medium for notices/ergonomics; low otherwise.
+- Flag: a public name, method, kwarg or `application_sdk.testing` helper removed/renamed without being deprecated in the previous release (`docs/standards/symbols.md`); a red Symbol Removal Check is an obligation.
+- Flag: a deprecation that doesn't delegate, or the wrong marker: `@deprecated` or an `__init__` `DeprecationWarning` (classes/functions), `__deprecated_members__` (enum members), `_DEPRECATED_CONSTANTS` + `__getattr__` (constants; no module-scope re-export).
+- Flag: a deliberate break not declared `feat!:`/`BREAKING CHANGE:`; a new required param, changed default, or moved symbol without re-export.
+- Flag: a new public symbol not in `__all__`; a new `__init__.py` export with no test.
+- Flag: a new env var without `ATLAN_` (except `OTEL_`/`DAPR_`/`K8S_`); one removed/renamed without a fallback and `_REMOVED_ENV_VARS` entry (`docs/standards/env-vars.md`).
+- Flag: a value other repos read (served `task_queue`, error-envelope keys, persistent prefixes, preflight payloads) changed without `docs/standards/cross-repo-contracts.md`.
+- Flag (CI only warns): a notice without replacement and removal version (B002), or past its removal version (B003).
+- Don't flag (CI blocks): contract field removal/retype (B005/B006); `_` names.
+- Severity: critical for a public break without deprecation; high for kwarg/env-var/cross-repo breaks; medium otherwise.

@@ -9,5 +9,6 @@
 - Flag: `concurrency:` used as a lock, or keyed on `github.ref` for dispatch paths; `with:` values that can render empty.
 - Flag: `|| true`/`continue-on-error` hiding a gate; multi-line shell without `set -euo pipefail`.
 - Flag: changes to `.github/workflow-templates/` or `packages/conformance/conformance/bootstrap/templates/` — they ship verbatim to other repos.
-- Don't flag (CI enforces): action SHA-pinning and unretried tool downloads (conformance C), artifact `-retry` naming and label-gate checks (script tests), YAML/expression errors (actionlint).
+- Flag: a tool download with no retry (C004 only warns).
+- Don't flag (CI enforces): action SHA-pinning (C001), artifact `-retry` naming and label-gate checks (script tests), YAML/expression errors (actionlint).
 - Severity: critical for script injection, secret exposure, untrusted code with write tokens; high for gate bypass or broken triggers/permissions; medium otherwise.

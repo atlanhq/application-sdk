@@ -5,5 +5,6 @@
 - Flag: large data inline in contracts; new use of the deprecated `ParquetFileWriter`/`JsonFileWriter` or their readers (use `RollingFileWriter`).
 - Flag: an empty listing/download treated as success; raise `ObjectStoreReadError`/`ObjectStoreDownloadError`. ENOSPC should surface as `DiskFullError`.
 - Flag: keys that bypass the run-scoped layout (`WORKFLOW_OUTPUT_PATH_TEMPLATE`); credential files read through the data object-store binding.
+- Flag: a change to how `get_persistent_s3_prefix()` derives its path: it is a data migration (markers relocate and every connection re-extracts in full, `docs/standards/cross-repo-contracts.md`).
 - Flag: storage errors re-raised without key/path context.
 - Severity: critical for credential/data store mixing or cross-run keys; high for truncated artifacts, silent empty hand-off, swapped key/path; medium otherwise.
