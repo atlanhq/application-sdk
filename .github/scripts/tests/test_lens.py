@@ -1203,20 +1203,23 @@ def test_workflow_triggers_only_on_invocation():
 
 
 def test_maintainer_comment_triggers_and_force_is_parsed():
-    assert decide("issue_comment", _comment("@lens"), REPO).run
-    d = decide("issue_comment", _comment("@lens force please"), REPO)
+    assert decide("issue_comment", _comment("/lens"), REPO).run
+    d = decide("issue_comment", _comment("/lens force please"), REPO)
     assert d.run and d.force
 
 
 @pytest.mark.parametrize(
     "event",
     [
-        _comment("@lens", assoc="CONTRIBUTOR"),
-        _comment("@lens", assoc="NONE"),
-        _comment("@lens", user_type="Bot"),
-        _comment("please @lens"),
-        _comment("@lens", on_pr=False),
-        _comment("@lensfoo"),
+        _comment("/lens", assoc="CONTRIBUTOR"),
+        _comment("/lens", assoc="NONE"),
+        _comment("/lens", user_type="Bot"),
+        _comment("please /lens"),
+        _comment("/lens", on_pr=False),
+        _comment("/lensfoo"),
+        _comment(
+            "@lens"
+        ),  # an @-mention links/notifies a real GitHub user: never the trigger
     ],
 )
 def test_untrusted_or_unaddressed_comments_do_not_trigger(event):
@@ -1788,7 +1791,7 @@ class _CliGitHub:
         return []
 
 
-def _event_file(tmp_path, body="@lens"):
+def _event_file(tmp_path, body="/lens"):
     ev = {
         "action": "created",
         "issue": {"number": 7, "pull_request": {}},

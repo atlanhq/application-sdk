@@ -145,7 +145,7 @@ class GitHub:
         self._call("POST", f"/repos/{self.repo}/statuses/{sha}", body)
 
     def react(self, comment_id: int, content: str) -> None:
-        """A reaction on the `@lens` comment: 👀 started, 🚀 posted, 😕 failed/dropped.
+        """A reaction on the `/lens` comment: 👀 started, 🚀 posted, 😕 failed/dropped.
         Best-effort — a reaction that fails must never fail the review."""
         try:
             self._call(

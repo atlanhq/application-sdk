@@ -120,13 +120,13 @@ def run(
     if state.reviewed_head == head and same_reviewer and not force and not retry_only:
         return RunResult(
             "skipped",
-            f"head {head[:8]} already reviewed; comment `@lens force` to re-run",
+            f"head {head[:8]} already reviewed; comment `/lens force` to re-run",
             state=state,
         )
     if state.round >= cfg.max_rounds and not force:
         return RunResult(
             "skipped",
-            f"round cap ({cfg.max_rounds}) reached; comment `@lens force` to review anyway",
+            f"round cap ({cfg.max_rounds}) reached; comment `/lens force` to review anyway",
             state=state,
         )
     # No "N clean rounds, stop" rule: lens runs only when a human asks, and a
@@ -248,7 +248,7 @@ def run(
     # ---- approach check: once per PR, FIRST --------------------------------
     # It runs before the line review so every bundle reviews against the PR's
     # intent. It is stored in state and reused on every later invocation — a
-    # re-review never pays to re-understand the PR (only `@lens force` redoes it).
+    # re-review never pays to re-understand the PR (only `/lens force` redoes it).
     pr_meta["mechanical"] = res.triage.summary_lines() + [
         f"rename: {a} -> {b}" for a, b in res.triage.renames
     ]
@@ -324,7 +324,7 @@ def run(
     # the unchanged-head rule skip it and count it as a dry round — a broken
     # alias or a spent key turning into a permanent, silent "all clear".
     # What did get reviewed is kept; only the files of failed bundles are
-    # remembered as pending, and the next `@lens` retries exactly those.
+    # remembered as pending, and the next `/lens` retries exactly those.
     if res.bundles and len(failed_paths) == sum(len(b.paths) for b in bundles):
         pass  # nothing was reviewed: leave the head unreviewed so the next run redoes it all
     else:
@@ -466,7 +466,7 @@ def render_summary(res: RunResult) -> str:
     if res.incomplete:
         verdict = (
             "⚠️ **Review incomplete** — part of this change was not reviewed; this is not an all-clear. "
-            "Comment `@lens` to retry the part that failed.\n\n"
+            "Comment `/lens` to retry the part that failed.\n\n"
             + "\n".join(f"- {r}" for r in res.incomplete)
         )
     elif blocking:
@@ -536,7 +536,7 @@ def render_summary(res: RunResult) -> str:
     if st.pending_files:
         lines.append(
             f"\n**{len(st.pending_files)} file(s) could not be reviewed this run** and will be retried "
-            "by the next `@lens`: " + ", ".join(f"`{p}`" for p in st.pending_files[:20])
+            "by the next `/lens`: " + ", ".join(f"`{p}`" for p in st.pending_files[:20])
         )
     if res.skipped_files:
         lines.append(
