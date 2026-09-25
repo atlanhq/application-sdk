@@ -5,9 +5,9 @@ Kept out of the workflow YAML (docs/standards/ci.md: no branching shell in
 
 lens reviews only when asked — a push never spends money on its own:
 
-- `issue_comment` on a PR whose body starts with `@lens` from an OWNER,
+- `issue_comment` on a PR whose body starts with `/lens` from an OWNER,
   MEMBER or COLLABORATOR: run. Each run continues from the last one (it
-  reviews only commits since the last reviewed head). `@lens force` also
+  reviews only commits since the last reviewed head). `/lens force` also
   bypasses the unchanged-head and round-cap admission rules and redoes the
   approach check (the $ cap still holds — force cannot buy more budget).
 - `workflow_dispatch` with a PR number: run (maintainers, from the Actions tab).
@@ -28,14 +28,14 @@ class Decision:
     pr: int = 0
     force: bool = False
     reason: str = ""
-    comment_id: int = 0  # the `@lens` comment to react on (0 = none, e.g. a dispatch)
+    comment_id: int = 0  # the `/lens` comment to react on (0 = none, e.g. a dispatch)
 
 
 def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
     if event_name in ("pull_request", "pull_request_target"):
         # lens reviews only when asked. A push never spends money on its own.
         return Decision(
-            False, reason="lens runs only when invoked: comment `@lens` on the PR"
+            False, reason="lens runs only when invoked: comment `/lens` on the PR"
         )
 
     if event_name == "issue_comment":
@@ -44,8 +44,8 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
         if event.get("action") != "created" or "pull_request" not in issue:
             return Decision(False, reason="not a new PR comment")
         words = (comment.get("body") or "").strip().split()
-        if not words or words[0].lower() != "@lens":
-            return Decision(False, reason="comment is not addressed to @lens")
+        if not words or words[0].lower() != "/lens":
+            return Decision(False, reason="comment is not addressed to /lens")
         if comment.get("author_association") not in TRUSTED:
             return Decision(
                 False,
