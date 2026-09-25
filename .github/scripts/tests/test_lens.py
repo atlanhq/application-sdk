@@ -214,6 +214,7 @@ class FakeGitHub:
         self.comments: list[dict[str, Any]] = []
         self.reviews: list[dict[str, Any]] = []
         self.statuses: list[dict[str, Any]] = []
+        self.posted: list[str] = []  # plain PR comments (the per-run verdict)
         self.status = "ahead"
 
     def pr(self, n):
@@ -251,7 +252,10 @@ class FakeGitHub:
         return f"https://github.test/c/{len(self.comments)}"
 
     def review(self, n, head, body, comments):
-        self.reviews.append({"head": head, "comments": comments})
+        self.reviews.append({"head": head, "comments": comments, "body": body})
+
+    def comment(self, n, body):
+        self.posted.append(body)
 
     def set_status(self, sha, state, description, target_url=""):
         self.statuses.append(
@@ -2179,3 +2183,230 @@ def test_a_rejected_effort_level_steps_down_one_rung_instead_of_dropping_reasoni
         "effort": "xhigh"
     }  # still reasoning, one rung lower
     assert c.reasoning_effort == "xhigh"
+
+
+# ---- observability: the run report -------------------------------------------------------------------------
+
+
+def test_every_request_is_recorded_with_counts_only_and_reported(
+    repo: Path, tmp_path: Path
+):
+    from lens import report  # noqa: PLC0415 - module under test
+
+    gh = FakeGitHub()
+    logged: list[str] = []
+
+    def factory(ledger):
+        c = Client(
+            model="gpt-6-luna", price=PRICE, ledger=ledger, transport=_review_script()
+        )
+        c.log = lambda e: logged.append(report.call_line(e))
+        return c
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=factory,
+    )
+    assert [c["stage"].split(":")[0] for c in res.calls] == [
+        "approach",
+        "review",
+        "reflect",
+    ]
+    for c in res.calls:
+        assert {
+            "stage",
+            "status",
+            "latency_ms",
+            "input",
+            "cached",
+            "output",
+            "reasoning",
+            "cost",
+        } <= set(c)
+        assert not any(
+            isinstance(v, str) and len(v) > 200 for v in c.values()
+        )  # no prompt or code text
+    assert len(logged) == 3 and all(line.startswith("lens: call") for line in logged)
+    assert set(res.timings_ms) >= {
+        "scope",
+        "index",
+        "approach",
+        "review",
+        "publish",
+        "total",
+    }
+
+    rep = report.write(res, 1, str(tmp_path / "run.json"), str(tmp_path / "summary.md"))
+    assert rep["totals"]["requests"] == 3 and rep["totals"][
+        "cost_usd"
+    ] == pytest.approx(0.006)
+    assert (
+        rep["bundles"][0]["stop"] == "done"
+        and rep["new_findings"][0]["severity"] == "high"
+    )
+    page = (tmp_path / "summary.md").read_text()
+    assert (
+        "## lens · PR #1" in page
+        and "### Bundles" in page
+        and "Every model request" in page
+    )
+    blob = (tmp_path / "run.json").read_text() + page
+    assert (
+        "Bearer" not in blob and "ignore previous instructions" not in blob
+    )  # no key, no PR text
+
+
+def test_a_failed_request_is_recorded_with_a_redacted_error():
+    sent = Script((401, {}, '{"error": "bad key sk-secret123"}'))
+    c = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=sent)
+    with pytest.raises(FatalRequestError):
+        c.complete("review:x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    [call] = c.calls
+    assert (
+        call["status"] == 401
+        and "sk-secret123" not in call["error"]
+        and "sk-…" in call["error"]
+    )
+
+
+def test_workflow_uploads_the_run_report_even_on_failure():
+    wf = (Path(__file__).resolve().parents[2] / "workflows" / "lens.yml").read_text()
+    upload = wf.split("- name: Upload the run report", 1)[1]
+    assert "if: always()" in upload and "actions/upload-artifact@" in upload
+    assert "LENS_REPORT_PATH: ${{ runner.temp }}/lens-run.json" in wf
+
+
+# ---- the verdict at the bottom, and the step trace -----------------------------------------------------------
+
+
+def test_the_verdict_with_the_full_approach_check_is_carried_by_the_review(repo: Path):
+    gh = FakeGitHub()
+    concern = response(
+        [
+            tool_call(
+                "approach_verdict",
+                {
+                    "problem": "fetch() returned bytes",
+                    "approach": "decode in fetch()",
+                    "verdict": "concerns",
+                    "concerns": [
+                        {
+                            "title": "Fixes the symptom",
+                            "why": "cause is upstream",
+                            "alternative": "fix client.get",
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(Script(*_review_script().responses, approach=concern)),
+    )
+    [review] = gh.reviews
+    assert gh.posted == []  # the review carries it; no extra comment
+    body = review["body"]
+    assert (
+        "❌ **lens · round 1 (full)**" in body
+        and "🟠 1 high" in body
+        and "New this round:** 1" in body
+    )
+    assert (
+        "Approach check — ⚠️ concerns (advisory)" in body
+        and "*Problem:* fetch() returned bytes" in body
+    )
+    assert "Fixes the symptom" in body and "*Instead:* fix client.get" in body
+
+
+def test_a_clean_run_posts_its_verdict_as_a_comment_at_the_bottom(repo: Path):
+    gh = FakeGitHub()
+    script = Script(
+        response([tool_call("task_done", {"state": "DONE"})]),
+        approach=response(
+            [
+                tool_call(
+                    "approach_verdict",
+                    {"problem": "p1", "approach": "a1", "verdict": "sound"},
+                )
+            ]
+        ),
+    )
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=RuleSet([], {}),
+        client_factory=_factory(script),
+    )
+    assert gh.reviews == []
+    [brief] = gh.posted
+    assert "✅ **lens · round 1 (full)**" in brief and "Open findings:" in brief
+    assert (
+        "Approach check — ✅ sound" in brief
+        and "*Problem:* p1" in brief
+        and "*How the PR solves it:* a1" in brief
+    )
+    assert "[Full summary](https://github.test/c/1)" in brief
+
+
+def test_the_job_log_traces_every_phase_turn_and_tool_call(repo: Path, capsys):
+    gh = FakeGitHub()
+    script = Script(
+        response([tool_call("find_symbol", {"name": "fetch"})]),
+        response(
+            [
+                tool_call("code_comment", {"comments": [COMMENT]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(script),
+    )
+    log = capsys.readouterr().err
+    for phase in (
+        "1 · admission",
+        "2 · scope",
+        "5 · approach check",
+        "6 · line review",
+        "7 · verdict",
+        "8 · publish",
+    ):
+        assert f"lens · {phase}" in log, phase
+    assert "decision: REVIEW round 1, mode=full" in log
+    assert "selected  application_sdk/storage/fetch.py" in log
+    assert (
+        "→ find_symbol(fetch)" in log and "→ code_comment(1 comment(s) high×1)" in log
+    )
+    assert "placement: 1 raw comment(s) → 1 anchored inline" in log
+    assert "fact-check: kept 1, removed 0" in log
+    assert "NEW F-" in log and "status 'lens' on h1: failure" in log
+    assert "ignore previous instructions" not in log  # the PR body is never echoed
+
+
+def test_the_trace_uses_collapsible_groups_in_actions(monkeypatch, capsys):
+    from lens import trace  # noqa: PLC0415 - module under test
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    with trace.group("x"):
+        trace.line("inside")
+    err = capsys.readouterr().err
+    assert (
+        "::group::lens · x" in err and "lens: inside" in err and "::endgroup::" in err
+    )

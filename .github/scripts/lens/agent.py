@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import prompts
+from . import prompts, trace
 from .bundle import Bundle
 from .diff import FileDiff, anchor
 from .findings import Finding
@@ -250,6 +250,9 @@ def review_bundle(
     res.turn_budget = limits.turn_budget(len(bundle.files), bundle.changed_lines)
     try:
         if limits.plan and bundle.changed_lines >= limits.plan_min_lines:
+            trace.line(
+                f"[{bundle.label}] plan turn (bundle has {bundle.changed_lines} changed lines)"
+            )
             _plan(client, bundle, messages, limits)
             res.planned = True
         _loop(
@@ -289,16 +292,47 @@ def review_bundle(
     except LLMError as e:
         res.stop, res.error = "llm_error", str(e)
 
-    placed = [
-        f
-        for f in (place(ws, bundle, c) for c in raw_comments[: limits.max_comments])
-        if f
-    ]
+    raw = raw_comments[: limits.max_comments]
+    placed = [f for f in (place(ws, bundle, c) for c in raw) if f]
+    trace.line(
+        f"[{bundle.label}] placement: {len(raw)} raw comment(s) → {sum(1 for f in placed if f.line)} anchored inline, "
+        f"{sum(1 for f in placed if not f.line)} summary-only, {len(raw) - len(placed)} dropped (no evidence / not locatable)"
+        + (
+            f"; {len(raw_comments) - len(raw)} over the {limits.max_comments}-comment cap"
+            if len(raw_comments) > len(raw)
+            else ""
+        )
+    )
     if reflect and placed and res.stop != "budget":
         placed = _reflect(client, bundle, placed, limits, res)
+        trace.line(
+            f"[{bundle.label}] fact-check: kept {len(placed)}, removed {len(res.removed_by_reflector)}"
+            + (
+                ": "
+                + ", ".join(
+                    f"{f.id} {trace.short(f.title, 50)!r}"
+                    for f in res.removed_by_reflector
+                )
+                if res.removed_by_reflector
+                else ""
+            )
+        )
     # Nits are capped in code, never by asking: every finding at medium+ is kept.
-    nits = [f for f in placed if f.severity == "low"][: limits.max_nits]
+    nits_all = [f for f in placed if f.severity == "low"]
+    nits = nits_all[: limits.max_nits]
+    if len(nits_all) > len(nits):
+        trace.line(
+            f"[{bundle.label}] nit cap: kept {len(nits)} of {len(nits_all)} low-severity findings"
+        )
     placed = [f for f in placed if f.severity != "low"] + nits
+    for f in placed:
+        trace.line(
+            f"[{bundle.label}] finding {f.id} {f.severity} {f.category} {f.path}:{f.line or '-'} {trace.short(f.title, 80)!r}"
+        )
+    trace.line(
+        f"[{bundle.label}] done: stop={res.stop} turns={res.turns}"
+        + (f" error={trace.short(res.error, 140)}" if res.error else "")
+    )
     res.findings = [f for f in placed if f.line]
     res.unplaced = [f for f in placed if not f.line]
     return res
@@ -353,6 +387,14 @@ def _loop(
         broke = budget_usd is not None and spent >= budget_usd * 0.85
         if (turns >= turn_budget or over or broke) and not final:
             final = True
+            why = (
+                "turn budget"
+                if turns >= turn_budget
+                else ("context ceiling" if over else "bundle budget share")
+            )
+            trace.line(
+                f"[{bundle.label}] final turn forced ({why}): only code_comment/task_done now"
+            )
             messages.append({"role": "user", "content": prompts.FINAL_ROUND})
         # The tool list never changes, not even on the final turn: swapping it would
         # break the cached prefix. The final turn is enforced by refusing other tools.
@@ -366,8 +408,16 @@ def _loop(
         )
         turns += 1
         res.turns += 1
+        u = comp.usage or {}
+        trace.line(
+            f"[{bundle.label}] turn {res.turns}/{turn_budget}: {len(comp.tool_calls)} tool call(s), "
+            f"reasoning={u.get('reasoning_tokens', 0)} out={u.get('completion_tokens', 0)} ${comp.cost:.5f}"
+        )
         if not comp.tool_calls:
             empty += 1
+            trace.line(
+                f"[{bundle.label}]   no tool call (empty turn {empty}/{limits.max_empty_turns})"
+            )
             if final or empty >= limits.max_empty_turns:
                 res.stop = "empty_turns"
                 return
@@ -393,6 +443,14 @@ def _loop(
                 reply = "Unavailable on the final turn: call code_comment or task_done."
             else:
                 reply = run_tool(ws, name, args)
+            trace.line(
+                f"[{bundle.label}]   → {name}({trace.args_summary(name, args)})"
+                + (
+                    f" ← {len(reply)} chars"
+                    if name not in ("code_comment", "task_done")
+                    else ""
+                )
+            )
             messages.append(
                 {"role": "tool", "tool_call_id": tc.get("id") or name, "content": reply}
             )

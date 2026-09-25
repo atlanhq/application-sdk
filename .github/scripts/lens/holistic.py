@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import trace
 from .diff import FileDiff
 from .llm import BudgetExhausted, Client, LLMError, assistant_turn, estimate_tokens
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
@@ -223,6 +224,9 @@ def check(
                 if name in _LOOKUPS and not last:
                     out.lookups += 1
                     reply = run_tool(ws, name, args)
+                    trace.line(
+                        f"[approach] lookup {out.lookups}: {name}({trace.args_summary(name, args)}) ← {len(reply)} chars"
+                    )
                 else:
                     reply = "Unavailable: call approach_verdict."
                 messages.append(

@@ -20,12 +20,13 @@ The round rules that make the loop converge are here, in code:
 from __future__ import annotations
 
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import holistic, prompts
+from . import holistic, prompts, trace
 from .agent import BundleResult, review_bundle
 from .bundle import Bundle, group
 from .config import Config
@@ -60,6 +61,10 @@ class RunResult:
     notes: list[str] = field(
         default_factory=list
     )  # advisory run notes (e.g. an API fallback)
+    # Observability: per-request records from the client and per-phase wall time.
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    timings_ms: dict[str, int] = field(default_factory=dict)
+    head: str = ""
     preflight_error: str = ""
     incomplete: list[str] = field(
         default_factory=list
@@ -101,11 +106,27 @@ def run(
     force: bool = False,
     post: bool = True,
 ) -> RunResult:
+    t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
     base = pr["base"]["sha"]
     state, _ = find_state(gh, number)
     state = state or PRState()
+    with trace.group("1 · admission"):
+        trace.line(
+            f"PR #{number} head={head[:9]} base={base[:9]} title={trace.short(pr.get('title'), 90)!r}"
+        )
+        if state.reviewed_head:
+            trace.line(
+                f"previous state: round {state.round}, reviewed_head={state.reviewed_head[:9]}, "
+                f"{len(state.open_findings())} open finding(s), ${float((state.ledger or {}).get('spent_usd', 0)):.4f} spent, "
+                f"pending retry: {len(state.pending_files)} file(s)"
+            )
+        else:
+            trace.line("no previous lens state on this PR: first review")
+        trace.line(
+            f"model={cfg.model} api={cfg.api} effort={cfg.reasoning_effort} config={cfg.raw_hash} force={force}"
+        )
 
     # ---- admission (0 model calls) --------------------------------------
     same_reviewer = state.model == cfg.model and state.config_hash == cfg.raw_hash
@@ -118,12 +139,16 @@ def run(
         and bool(state.pending_files)
     )
     if state.reviewed_head == head and same_reviewer and not force and not retry_only:
+        trace.line(
+            "decision: SKIP — this head was already reviewed by the same model and config"
+        )
         return RunResult(
             "skipped",
             f"head {head[:8]} already reviewed; comment `/lens force` to re-run",
             state=state,
         )
     if state.round >= cfg.max_rounds and not force:
+        trace.line(f"decision: SKIP — round cap {cfg.max_rounds} reached")
         return RunResult(
             "skipped",
             f"round cap ({cfg.max_rounds}) reached; comment `/lens force` to review anyway",
@@ -139,6 +164,7 @@ def run(
         else Ledger(cfg.cap_usd_per_pr)
     )
     if ledger.remaining <= 0.01:
+        trace.line(f"decision: SKIP — PR budget ${cfg.cap_usd_per_pr:.2f} spent")
         return RunResult(
             "skipped",
             f"PR budget of ${cfg.cap_usd_per_pr:.2f} spent",
@@ -173,6 +199,10 @@ def run(
 
     round_no = state.round + 1
     res = RunResult("reviewed", mode=mode, state=state, ledger=ledger)
+    trace.line(
+        f"decision: REVIEW round {round_no}, mode={mode}, range={range_base[:9]}..{head[:9]}, "
+        f"{len(all_files)} file(s) in range ({len(full_files)} in the whole PR), budget left ${ledger.remaining:.4f}"
+    )
 
     # ---- head text for changed files (data only; never executed) -----------
     head_text: dict[str, str] = {}
@@ -192,6 +222,11 @@ def run(
             f.status = "fixed"
             res.resolved_free.append(f.id)
 
+    if res.resolved_free:
+        trace.line(
+            f"resolved for free (quoted code gone): {', '.join(res.resolved_free)}"
+        )
+
     # ---- scope -----------------------------------------------------------
     sel = select_files(all_files, exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude))
     res.skipped_files = sel.skipped
@@ -207,7 +242,35 @@ def run(
     )
 
     bundles = plan_bundles(res.triage.reviewed, cfg, res)
+    with trace.group("2 · scope: files, triage, bundles"):
+        for fd in sel.reviewed:
+            trace.line(
+                f"selected  {fd.path} ({fd.status}, +{fd.additions}/-{fd.deletions})"
+            )
+        for path, why in sel.skipped:
+            trace.line(f"skipped   {path}: {why}")
+        for reason, paths in res.triage.mechanical.items():
+            trace.line(
+                f"mechanical ({reason}): {', '.join(paths[:10])}{' …' if len(paths) > 10 else ''}"
+            )
+        for dup, rep_path in res.triage.duplicate_of.items():
+            trace.line(f"duplicate {dup}: same change as {rep_path} (reviewed once)")
+        if res.triage.renames:
+            trace.line(
+                "renames: " + ", ".join(f"{a}->{b}" for a, b in res.triage.renames)
+            )
+        for b in bundles:
+            cards = rules.render_for(b.paths).count("<rules card=")
+            trace.line(
+                f"bundle {b.label!r}: {len(b.files)} file(s), {b.changed_lines} changed lines, "
+                f"~{b.diff_tokens()} diff tokens, {cards} rule card(s): {', '.join(b.paths)}"
+            )
+        if not bundles:
+            trace.line("no bundles: nothing substantive to line-review")
 
+    res.head = head
+    res.timings_ms["scope"] = int((time.monotonic() - t_start) * 1000)
+    t_phase = time.monotonic()
     idx = build_index(root, overrides=head_text)
     ws = Workspace(
         root=root,
@@ -229,7 +292,13 @@ def run(
         or (cfg.verify and round_no > 1 and state.open_findings())
     )
     if cfg.preflight and will_call:
-        reason = client.preflight(min_budget_usd=min(0.05, round_cap))
+        with trace.group("3 · preflight (zero tokens)"):
+            reason = client.preflight(min_budget_usd=min(0.05, round_cap))
+            for d in getattr(client, "diagnostics", []):
+                trace.line(d)
+            trace.line(
+                f"result: {'STOP — ' + reason if reason else 'ok, the run may start'}"
+            )
         res.notes.extend(getattr(client, "diagnostics", []))
         if reason:
             res.preflight_error = reason
@@ -237,15 +306,19 @@ def run(
             state.ledger = ledger.to_dict()
             if post:
                 url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+                gh.comment(number, verdict_brief(res, url))
                 gh.set_status(head, *verdict_status(res), url)
             return res
 
     # ---- verify still-open findings in touched files (1 call) -------------
     if cfg.verify and round_no > 1:
-        res.resolved_verified = _verify(
-            client, ws, [f for f in state.open_findings() if f.path in touched]
-        )
+        to_verify = [f for f in state.open_findings() if f.path in touched]
+        with trace.group(f"4 · verify {len(to_verify)} still-open finding(s)"):
+            res.resolved_verified = _verify(client, ws, to_verify)
+            trace.line(f"verified fixed: {', '.join(res.resolved_verified) or 'none'}")
 
+    res.timings_ms["index"] = int((time.monotonic() - t_phase) * 1000)
+    t_phase = time.monotonic()
     # ---- approach check: once per PR, FIRST --------------------------------
     # It runs before the line review so every bundle reviews against the PR's
     # intent. It is stored in state and reused on every later invocation — a
@@ -254,13 +327,27 @@ def run(
         f"rename: {a} -> {b}" for a, b in res.triage.renames
     ]
     if cfg.approach and (not state.approach or force) and sel.reviewed:
-        ac = holistic.check(
-            client, ws, full_files if incremental else sel.reviewed, pr_meta
-        )
-        if ac.ran:
-            state.approach = holistic.to_state(ac, head)
+        with trace.group("5 · approach check (once per PR)"):
+            ac = holistic.check(
+                client, ws, full_files if incremental else sel.reviewed, pr_meta
+            )
+            if ac.ran:
+                state.approach = holistic.to_state(ac, head)
+                trace.line(f"problem: {trace.short(ac.problem, 240)}")
+                trace.line(f"approach: {trace.short(ac.approach, 240)}")
+                trace.line(
+                    f"verdict: {ac.verdict} ({len(ac.concerns)} concern(s), {ac.lookups} lookup(s))"
+                )
+                for c in ac.concerns:
+                    trace.line(f"concern: {trace.short(c.get('title'), 120)}")
+            else:
+                trace.line(f"did not complete: {ac.error or 'no verdict returned'}")
+    elif state.approach:
+        trace.line("approach check: reused from an earlier round (not re-run)")
     pr_meta["understanding"] = holistic.understanding_from_state(state.approach or {})
 
+    res.timings_ms["approach"] = int((time.monotonic() - t_phase) * 1000)
+    t_phase = time.monotonic()
     # ---- review ----------------------------------------------------------
     confirmed = [f for f in state.findings if f.status == "open"]
 
@@ -283,11 +370,17 @@ def run(
             budget_usd=left * weights[b.label] / total_w,
         )
 
-    with ThreadPoolExecutor(max_workers=max(1, cfg.concurrency)) as pool:
-        res.bundles = list(pool.map(one, bundles))
+    with trace.group(f"6 · line review: {len(bundles)} bundle(s)"):
+        trace.line(
+            f"up to {cfg.concurrency} bundles in parallel; lines are prefixed [bundle]"
+        )
+        with ThreadPoolExecutor(max_workers=max(1, cfg.concurrency)) as pool:
+            res.bundles = list(pool.map(one, bundles))
     if getattr(client, "fell_back", ""):
         res.notes.append(client.fell_back)
 
+    res.timings_ms["review"] = int((time.monotonic() - t_phase) * 1000)
+    res.calls = list(getattr(client, "calls", []))
     fresh: list[Finding] = []
     for br in res.bundles:
         fresh.extend(br.findings)
@@ -302,6 +395,26 @@ def run(
             if _sev_at_least(f.severity, cfg.later_round_min_severity)
         ]
     res.new_findings = merge_new(state, fresh, round_no=round_no)
+    with trace.group("7 · verdict"):
+        for b in res.bundles:
+            trace.line(
+                f"bundle {b.label!r}: stop={b.stop} turns={b.turns}/{b.turn_budget} "
+                f"findings={len(b.findings)} unplaced={len(b.unplaced)} fact-check removed={len(b.removed_by_reflector)}"
+                + (f" error={trace.short(b.error, 160)}" if b.error else "")
+            )
+        for f in res.new_findings:
+            trace.line(
+                f"NEW {f.id} {f.severity:<8} {f.path}:{f.line} {trace.short(f.title, 100)}"
+            )
+        if round_no > 1:
+            trace.line(
+                f"later round: only >= {cfg.later_round_min_severity} findings may be newly raised"
+            )
+        blocking = state.open_findings(BLOCKING)
+        trace.line(
+            f"open findings now: {len(state.open_findings())} ({len(blocking)} blocking); "
+            f"new this round: {len(res.new_findings)}"
+        )
 
     # ---- state -----------------------------------------------------------
     ledger.spent_usd += round_ledger.spent_usd
@@ -348,7 +461,11 @@ def run(
     )
 
     if post:
-        publish(gh, number, head, res)
+        t_phase = time.monotonic()
+        with trace.group("8 · publish"):
+            publish(gh, number, head, res)
+        res.timings_ms["publish"] = int((time.monotonic() - t_phase) * 1000)
+    res.timings_ms["total"] = int((time.monotonic() - t_start) * 1000)
     return res
 
 
@@ -575,25 +692,98 @@ def _inline(f: Finding) -> dict[str, Any]:
     return c
 
 
+def verdict_brief(res: RunResult, summary_url: str) -> str:
+    """This run's verdict, posted at the BOTTOM of the conversation.
+
+    The sticky summary is edited in place, so it stays wherever the PR's first
+    review put it — often far above the latest `/lens`. Every run therefore
+    also posts this where the requester is looking: the verdict, counts at
+    every level, the approach check, cost, and a link to the full summary."""
+    st = res.state or PRState()
+    by_level = {s: len(st.open_findings((s,))) for s in SEVERITIES}
+    counts = " · ".join(
+        f"{_SEV_ICON[s]} {by_level[s]} {_SEV_LABEL[s]}" for s in SEVERITIES
+    )
+    state, description = verdict_status(res)
+    icon = {"success": "✅", "failure": "❌", "error": "⚠️"}.get(state, "ℹ️")
+    lines = [
+        f"{icon} **lens · round {st.round} ({res.mode})** — {description}",
+        "",
+        f"**Open findings:** {counts}",
+    ]
+    if res.new_findings:
+        lines.append(f"**New this round:** {len(res.new_findings)} (inline below)")
+    fixed = len(res.resolved_free) + len(res.resolved_verified)
+    if fixed:
+        lines.append(f"**Resolved this round:** {fixed}")
+    ap = st.approach or {}
+    if ap.get("verdict"):
+        # The holistic review, in full: how lens reads the change, and whether the
+        # approach is the right one — not just a one-word verdict.
+        lines.append("")
+        lines.append(
+            f"**Approach check — {'⚠️ concerns (advisory)' if ap['verdict'] == 'concerns' else '✅ sound'}**"
+        )
+        if ap.get("problem"):
+            lines.append(f"- *Problem:* {ap['problem']}")
+        if ap.get("approach"):
+            lines.append(f"- *How the PR solves it:* {ap['approach']}")
+        for c in ap.get("concerns") or []:
+            alt = f" *Instead:* {c['alternative']}" if c.get("alternative") else ""
+            lines.append(f"- ⚠️ **{c.get('title', '')}** — {c.get('why', '')}{alt}")
+        lines.append("")
+    led = st.ledger or {}
+    lines.append(
+        f"<sub>${float(led.get('spent_usd', 0)):.3f} of ${float(led.get('cap_usd', 0)):.2f} · "
+        f"{led.get('calls', 0)} model calls · {led.get('failed_requests', 0)} failed requests</sub>"
+    )
+    if summary_url:
+        lines.append(f"\n[Full summary]({summary_url})")
+    return "\n".join(lines)
+
+
 def publish(gh: GitHub, number: int, head: str, res: RunResult) -> None:
-    """Inline comments first, then the summary — so a comment GitHub refuses
-    (a 422 on a line it does not consider part of the diff) is reported in
-    the summary instead of being lost, and one bad line never sinks the rest."""
-    body = "lens found issues on this change — see the summary comment."
+    """Summary, then inline comments carrying this run's verdict, then status.
+
+    A comment GitHub refuses (a 422 on a line it does not consider part of the
+    diff) is moved to the summary instead of being lost, and one bad line never
+    sinks the rest. The verdict always lands at the bottom of the conversation:
+    as the review body when there are new findings, as a comment otherwise."""
+    url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+    body = verdict_brief(res, url)
     todo = list(res.new_findings)
+    posted = False
+    refused = False
     for i in range(0, len(todo), 50):
         batch = todo[i : i + 50]
         try:
             gh.review(number, head, body, [_inline(f) for f in batch])
+            posted = True
         except GitHubError:
             for f in batch:
                 try:
                     gh.review(number, head, body, [_inline(f)])
+                    posted = True
                 except GitHubError:
                     res.unplaced.append(f)
-    url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+                    refused = True
+    if refused:
+        url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+    if not posted:
+        gh.comment(number, verdict_brief(res, url))
     state, description = verdict_status(res)
     gh.set_status(head, state, description, url)
+    trace.line(f"sticky summary: {url or '(url unavailable)'}")
+    trace.line(
+        f"inline comments: {len(todo) - sum(1 for f in res.unplaced if f in todo)} posted"
+        + (", some refused by GitHub (moved to the summary)" if refused else "")
+        + (
+            "; verdict carried by the review"
+            if posted
+            else "; verdict posted as a comment"
+        )
+    )
+    trace.line(f"status 'lens' on {head[:9]}: {state} — {description}")
 
 
 def verdict_status(res: RunResult) -> tuple[str, str]:
