@@ -17,7 +17,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import report, trace
+from . import approve, report, trace
 from .config import load_config, validate
 from .event import DISMISS_USAGE, decide
 from .github import GitHub
@@ -39,7 +39,15 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--config-dir", default=None, help="default: <root>/.github/lens")
     r.add_argument("--force", action="store_true")
     r.add_argument("--dry-run", action="store_true")
+    a = sub.add_parser(
+        "approve",
+        help="act on the review's approval decision (the workflow's last step)",
+    )
+    a.add_argument("--repo", required=True)
+    a.add_argument("--decision", required=True)
     args = ap.parse_args(argv)
+    if args.cmd == "approve":
+        return approve.run_step(args.repo, args.decision)
 
     comment_id = 0
     dismissal = None
@@ -113,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
             run_url=run_url,
         )
         print(f"lens: {res.action} {res.reason}".strip())
+        if live:
+            approve.write_decision(
+                os.environ.get("LENS_APPROVAL_PATH"), args.pr, approve.decision_for(res)
+            )
         react("rocket" if res.action == "dismissed" else "confused")
         return 0
     # A "running" note while the review is in progress, with a link to the live log. It is
@@ -155,6 +167,12 @@ def main(argv: list[str] | None = None) -> int:
         react("confused")
         raise
     _best_effort(gh.delete_comment, progress_id)
+    if live:
+        # The approval happens in the workflow's last step, which alone holds the
+        # code-owner token (lens/approve.py); this step only decides.
+        approve.write_decision(
+            os.environ.get("LENS_APPROVAL_PATH"), args.pr, approve.decision_for(res)
+        )
     if args.dry_run:
         print(to_json(res))
         if res.action == "reviewed":

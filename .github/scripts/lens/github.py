@@ -190,6 +190,33 @@ class GitHub:
         )
         return str((out or {}).get("html_url") or "")
 
+    def reviews(self, number: int) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            batch = self._call(
+                "GET",
+                f"/repos/{self.repo}/pulls/{number}/reviews?per_page=100&page={page}",
+            )
+            out.extend(batch or [])
+            if len(batch or []) < 100:
+                return out
+            page += 1
+
+    def approve(self, number: int, head: str, body: str) -> None:
+        self._call(
+            "POST",
+            f"/repos/{self.repo}/pulls/{number}/reviews",
+            {"commit_id": head, "event": "APPROVE", "body": body},
+        )
+
+    def dismiss_review(self, number: int, review_id: int, message: str) -> None:
+        self._call(
+            "PUT",
+            f"/repos/{self.repo}/pulls/{number}/reviews/{review_id}/dismissals",
+            {"message": message, "event": "DISMISS"},
+        )
+
     def review(
         self, number: int, head: str, body: str, comments: list[dict[str, Any]]
     ) -> None:
