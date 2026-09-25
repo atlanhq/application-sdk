@@ -1,9 +1,11 @@
 # contract-toolkit: Pkl app-contract toolkit
-- Flag: `src/*.pkl` changes (`NativeApp.pkl`, `NativeAppBundle.pkl`, `Config.pkl`, `AgentConfig.pkl`) with no `examples/` update or no update to both `README.md` and `docs/reference.md` (`read_diff`).
-- Flag: default output changed for existing apps when not a deliberate bug fix (new behaviour should be opt-in); no default-behaviour assertion in `tests/*_test.pkl`.
-- Flag: broken value flow: config field → `manifest.json` arg → `_input.py` field; credential field → credential config → UI conditionals; typed node property → manifest node args. A `{{params.x}}` with no generated field, or a required value with no producer/consumer.
-- Flag: generated `AppInputContract` not extending `ExtractionInput`, or a field dropped/renamed/retyped; top-level `extraction_method`/`credential_guid`/`agent_json` removed or nested (preflight gate).
-- Flag: new native credential logic in legacy `Credential.pkl` or rendering in `Renderers.pkl`; raw `DAGNode` where a typed node (`PublishNode`, `LineageNode`) fits.
-- Flag: a fix or invariant with no Pkl test; a `pkl` version restated instead of read from `application_sdk/pkl_version.py`.
-- Flag: internal consumer repo names, paths or branches in public docs.
-- Severity: high for silent breakage of generated artifacts or the UI/manifest/SDK contract; medium for missing tests/docs/examples; low otherwise.
+- `contract-toolkit/src/App.pkl` is canonical; `NativeApp.pkl`, `NativeAppBundle.pkl`, `AgentConfig.pkl`, `Config.pkl`, `Credential.pkl`, `Renderers.pkl` are legacy. Each release regenerates every app: the `contract-toolkit/examples/` diff is the fleet diff.
+- Flag: a change to `NativeApp.pkl` (or another legacy module) with no equivalent in `App.pkl`; new features go in `App.pkl` only. Don't ask for `App.pkl` changes to be mirrored back.
+- Flag: default output changed for apps that don't opt in, unless the PR says what and why; a break with no `!` in the title.
+- Flag: an `inputs.args` key renamed/nested/flattened (dropped silently; K018 only warns); a `$.extract.outputs.<f>` the SDK Output lacks (K006); a `{{params.x}}` with no form field.
+- Flag: a generated `_input.py` field dropped/renamed/retyped (B005 on every app); `extraction_method`/`credential_guid`/`agent_json` moved off top level.
+- Flag: a changed identity key: DAG node id, schedule `name`, alias, configmap name, workflow type, baked `app_name`.
+- Flag: generated code importing an SDK symbol newer than apps' SDK with no floor stated (`contract-toolkit/scripts/test-sdk-import.py` tests HEAD only); a new generated JSON not in `application_sdk/app/_generated_tree.py`'s non-form stems.
+- Flag: a new eval-time throw with no case in `contract-toolkit/scripts/check-invariants.sh`; a fix with no `*_test.pkl` fact; a public property with no doc comment.
+- Don't flag (CI/release automation owns): stale examples, generated-Python lint, `PklProject` version, the toolkit CHANGELOG and baseline.
+- Severity: high for silent breakage of generated artifacts or the UI/manifest/SDK contract; medium for missing tests/docs; low otherwise.
