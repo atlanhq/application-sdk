@@ -1,0 +1,11 @@
+# security: Secrets, credentials, injection, isolation
+- Flag: hardcoded keys/tokens/passwords/private keys/DSNs; real creds in fixtures. Never quote the value.
+- Flag: logging credential objects, auth headers, DSNs with passwords, tokens, cookies, JWTs.
+- Flag: raw dict credentials instead of `CredentialRef` + `CredentialResolver`; secrets in Temporal Input/Output (pass `CredentialRef`); creds in `app_state` not `SecretStore`.
+- Flag: secret material (`*.pem|key|keytab|p12|jks`, refresh tokens) read via a storage/Dapr binding also used for data (`DEPLOYMENT_OBJECT_STORE_NAME`, `OUTPUT_*`).
+- Flag: f-string/concat SQL (dynamic identifiers need allowlist + `sql.Identifier`); `os.system`, `shell=True` with variables, `eval`/`exec`, untrusted `pickle.loads`, `yaml.load` without SafeLoader.
+- Flag: caller-controlled path joins without traversal checks; a string field skipping the `validate_*` validator its same-sink siblings use.
+- Flag: `tenant_id` from request body/params; storage/state keys not tenant-scoped.
+- Flag: `verify=False`, wildcard CORS, `str(e)`/tracebacks in HTTP responses (use `HandlerError`).
+- Flag: bodies to Atlan edge routes carrying PEM, `{{ }}`/`{% %}`/`${}` or `<placeholder>` text unencoded (WAF rejects).
+- Severity: critical for secret exposure, creds in logs/payloads, injection, cross-tenant access, shared cred/data storage; high otherwise. Never low.

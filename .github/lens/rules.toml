@@ -1,0 +1,160 @@
+# First matching [[path]] entry wins; `cards` lists card ids.
+# Globs: `**` crosses directories, `*` does not, `**/` may match zero dirs. No {a,b} braces.
+# Keep specific entries above general ones and at most 4 cards per entry, most relevant first.
+
+# --- application_sdk: specific areas first ---------------------------------
+[[path]]
+glob = "application_sdk/credentials/**"
+cards = ["security", "error-handling-and-logging", "python-correctness", "public-api-and-deprecation"]
+
+[[path]]
+glob = "application_sdk/storage/**"
+cards = ["security", "storage-io", "error-handling-and-logging", "performance"]
+
+[[path]]
+glob = "application_sdk/outputs/**"
+cards = ["storage-io", "performance", "error-handling-and-logging", "python-correctness"]
+
+[[path]]
+glob = "application_sdk/handler/**"
+cards = ["security", "v3-architecture", "error-handling-and-logging", "public-api-and-deprecation"]
+
+[[path]]
+glob = "application_sdk/server/**"
+cards = ["security", "error-handling-and-logging", "python-correctness", "performance"]
+
+[[path]]
+glob = "application_sdk/clients/**"
+cards = ["security", "performance", "error-handling-and-logging", "python-correctness"]
+
+[[path]]
+glob = "application_sdk/infrastructure/**"
+cards = ["v3-architecture", "security", "error-handling-and-logging", "python-correctness"]
+
+[[path]]
+glob = "application_sdk/observability/**"
+cards = ["error-handling-and-logging", "security", "performance", "python-correctness"]
+
+[[path]]
+glob = "application_sdk/errors/**"
+cards = ["error-handling-and-logging", "public-api-and-deprecation", "python-correctness"]
+
+[[path]]
+glob = "application_sdk/contracts/**"
+cards = ["v3-architecture", "public-api-and-deprecation", "storage-io", "python-correctness"]
+
+[[path]]
+glob = "application_sdk/testing/**"
+cards = ["tests", "public-api-and-deprecation", "python-correctness", "v3-architecture"]
+
+[[path]]
+glob = "application_sdk/test_utils/**"
+cards = ["tests", "public-api-and-deprecation", "python-correctness"]
+
+[[path]]
+glob = "application_sdk/transformers/**"
+cards = ["performance", "python-correctness", "v3-architecture", "error-handling-and-logging"]
+
+[[path]]
+glob = "application_sdk/templates/**"
+cards = ["v3-architecture", "performance", "public-api-and-deprecation", "error-handling-and-logging"]
+
+[[path]]
+glob = "application_sdk/**/*.py"
+cards = ["python-correctness", "v3-architecture", "error-handling-and-logging", "public-api-and-deprecation"]
+
+# --- CI --------------------------------------------------------------------
+[[path]]
+glob = ".github/workflows/**"
+cards = ["github-actions", "security"]
+
+[[path]]
+glob = ".github/actions/**"
+cards = ["github-actions", "security"]
+
+[[path]]
+glob = ".github/scripts/tests/**"
+cards = ["tests", "ci-scripts"]
+
+[[path]]
+glob = ".github/scripts/**"
+cards = ["ci-scripts", "security", "python-correctness"]
+
+# --- conformance / remediation / toolkit -----------------------------------
+[[path]]
+glob = "packages/conformance/tests/**"
+cards = ["conformance-rules", "tests"]
+
+[[path]]
+glob = "packages/*/pyproject.toml"
+cards = ["build-config"]
+
+[[path]]
+glob = "packages/**"
+cards = ["conformance-rules", "python-correctness"]
+
+[[path]]
+glob = "remediation/**"
+cards = ["conformance-rules"]
+
+[[path]]
+glob = "conformance/**"
+cards = ["conformance-rules", "python-correctness"]
+
+[[path]]
+glob = "contract-toolkit/**/*.md"
+cards = ["contract-toolkit", "docs"]
+
+[[path]]
+glob = "contract-toolkit/**"
+cards = ["contract-toolkit"]
+
+# --- tests, infra, build ---------------------------------------------------
+[[path]]
+glob = "tests/**"
+cards = ["tests", "python-correctness"]
+
+[[path]]
+glob = "**/tests/**"
+cards = ["tests", "python-correctness"]
+
+[[path]]
+glob = "components/**"
+cards = ["security"]
+
+[[path]]
+glob = "**/Dockerfile*"
+cards = ["build-config", "security"]
+
+[[path]]
+glob = "**/pyproject.toml"
+cards = ["build-config"]
+
+[[path]]
+glob = ".pre-commit-config.yaml"
+cards = ["build-config"]
+
+[[path]]
+glob = "renovate.json"
+cards = ["build-config"]
+
+[[path]]
+glob = "renovate-config/**"
+cards = ["build-config"]
+
+# --- docs and fallbacks ----------------------------------------------------
+[[path]]
+glob = "docs/**"
+cards = ["docs"]
+
+[[path]]
+glob = "**/*.md"
+cards = ["docs"]
+
+[[path]]
+glob = "**/*.py"
+cards = ["python-correctness"]
+
+[[path]]
+glob = "**"
+cards = ["python-correctness"]

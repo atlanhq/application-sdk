@@ -1,0 +1,13 @@
+# github-actions: Workflows and composite actions
+- Flag: `if`/`else`, loops, `case` or branching `&&`/`||` in an inlined `run:`; move it to a `.github/scripts/` Python script with a pytest in `.github/scripts/tests/`.
+- Flag: `${{ github.event.* }}` text, `inputs.*` or step outputs inlined in `run:`; pass via `env:` and quote.
+- Flag: `pull_request_target`/`workflow_run` running PR head code.
+- Flag: missing/over-broad `permissions:`; a reusable's caller whose `permissions:` omits scopes it needs (it's exhaustive).
+- Flag: security/release gates skippable via caller inputs, `client_payload` or empty values; release tags not ancestry-checked.
+- Flag: derived secrets written to `$GITHUB_ENV`/`$GITHUB_OUTPUT` before `::add-mask::` (per value, per line); secrets in artifacts; creds in docker `build-args`.
+- Flag: label gates on `labeled` not checking `github.event.label.name`.
+- Flag: `concurrency:` used as a lock, or keyed on `github.ref` for dispatch paths.
+- Flag: upload retry reusing the artifact name (use `<name>-retry`); `with:` values that can render empty.
+- Flag: `|| true`/`continue-on-error` hiding a gate; multi-line shell without `set -euo pipefail`.
+- Don't flag: action SHA-pinning (conformance C owns it).
+- Severity: critical for script injection, secret exposure, untrusted code with write tokens; high for gate bypass or broken triggers/permissions; medium otherwise.
