@@ -267,7 +267,7 @@ to before this block existed, so adoption is per-app and per-entrypoint.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `artifactSchemas` | `Mapping<ContractFieldName, ArtifactSchema>` | `new Mapping {}` | Declared shapes for this entrypoint's artifacts, keyed by contract field name. Rendered to `app/generated/artifact_schemas.json` when non-empty; no file at all when empty. |
+| `artifactSchemas` | `Mapping<ContractFieldName, ArtifactSchema\|PklArtifactSchema>` | `new Mapping {}` | Declared shapes for this entrypoint's artifacts, keyed by contract field name. Rendered to `app/generated/artifact_schemas.json` when non-empty; no file at all when empty. |
 
 **Keys are contract field names, never paths.** A key is the name of a `FileReference`
 field on this entrypoint's input or output contract model — a Python identifier,
@@ -504,6 +504,63 @@ contract model of its own, so a key there could not name a real `FileReference` 
 and the shared file it would emit could be picked up as a fallback for an entrypoint
 that declares nothing — checking the wrong declarations silently. Two entrypoints that
 genuinely share an artifact assign one shared `ArtifactSchema` value into both contracts.
+
+#### Pkl-module artifacts (`PklArtifactSchema`)
+
+Some entrypoints take a `.pkl` file that the app evaluates itself, for example a typedef
+module that amends the typedef toolkit's `Typedefs.pkl`. For such a file the declaration
+is **the module it amends**, not a list of fields. That module already fixes every
+property, type and constraint, so an `ArtifactField` list would only be a weaker copy
+that someone has to maintain by hand. This follows the same reasoning as the SDK's
+`AssetArtifact` marker: when an executable schema exists, it is the declaration.
+
+```pkl
+artifactSchemas {
+  ["model_module"] = new PklArtifactSchema {
+    amendsModule = "package://example.com/toolkits/typedef/models@1.2.3#/Typedefs.pkl"
+    description = "Typedef module the app renders into Atlas typedefs."
+  }
+}
+```
+
+→ generated entry:
+
+```json
+"model_module": {
+  "format": "pkl",
+  "description": "Typedef module the app renders into Atlas typedefs.",
+  "amends_module": "package://example.com/toolkits/typedef/models@1.2.3#/Typedefs.pkl"
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `format` | `"pkl"` | `"pkl"` | Fixed. Rendered so readers dispatch on `format` the same way they do for an `ArtifactSchema`. |
+| `amendsModule` | `PklModuleUri` | — | The module the artifact must amend. It must be an absolute, version-pinned `package://<host>/<path>@<version>#/<module>.pkl` URI; anything else fails generation. Pin the version the app actually evaluates against. |
+| `description` | String? | null | Free-form, never asserted. Omitted from the output when unset. |
+
+**Why only a pinned `package:` URI.** The declaration is read by whoever is on the
+other side of the hand-off, so it has to name one immutable module that anyone can
+resolve. Each alternative can mean different things to different readers:
+- A relative path.
+- A `@dependency/...` import, which resolves through the *declaring* app's `PklProject`,
+  and the reader does not have that file.
+- An unversioned URI.
+
+**It is a separate class, not a third `format` on `ArtifactSchema`.** A field map and
+a module reference are different declarations. A single class with optional halves
+would accept `fields` on a Pkl artifact, and it would accept a parquet schema with no
+`fields`. `new ArtifactSchema { format = "pkl" }` fails generation.
+
+**Scope.**
+- What changes today: this declaration satisfies conformance K016, and the SDK loads it
+  as a typed declaration.
+- What does not change yet: the SDK ships no validator for `pkl`. The hand-off outcome
+  is therefore `unsupported`, and the report names the format. It is never a silent
+  pass. A validator that evaluates the artifact and checks its `amends` target is a
+  follow-up, and it needs the `pkl` CLI in the worker image.
+- An archive, such as a zip that bundles a module, is not a declarable shape. Hand off
+  the module itself.
 
 Unlike the workflow config and manifest, this file does **not** depend on `uiConfig`: a
 declaration describes data hand-offs, which an app has whether or not it renders a setup

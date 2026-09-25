@@ -21,6 +21,9 @@
 ///     (`struct`), `attributes.columns[].name` (`string`). No recursive grammar.
 ///   - an artifact declared on the app's **input**: the consumer owns the
 ///     declaration, so a consuming app states what it requires of what it reads.
+///   - an input that is itself a **Pkl module**, declared with
+///     `PklArtifactSchema`: it names the published module the file must amend
+///     instead of listing fields, because that module already is the declaration.
 ///
 /// Generated layout:
 ///   atlan.yaml
@@ -199,5 +202,13 @@ artifactSchemas {
         description = "Id of the process that produced the edge. Groups edges into one lineage process on read."
       }
     }
+  }
+
+  // Input that is itself a Pkl module the app evaluates. The module it amends is
+  // the declaration, so there is no field list; pin the version the app evaluates
+  // against.
+  ["typedef_module"] = new PklArtifactSchema {
+    amendsModule = "package://example.com/toolkits/typedef/models@1.2.3#/Typedefs.pkl"
+    description = "Typedef module this app renders into Atlas typedefs."
   }
 }

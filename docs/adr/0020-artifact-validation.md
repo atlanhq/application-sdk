@@ -62,6 +62,15 @@ already does.
 app's own `contract/app.pkl` and emitted by the contract toolkit. Loaded with `orjson` (a core
 dependency).
 
+*Addendum (FND-2839):* a `ContractSource` entry can also resolve to a **Pkl module reference**
+(`PklModuleDeclaration`, authored as the toolkit's `PklArtifactSchema`). This covers an artifact
+that is itself a `.pkl` file the app evaluates, and it applies `ModelSource`'s rule in Pkl: when
+an executable schema exists, it is the declaration. So the entry names the pinned module the
+artifact must amend and lists no fields. The entry renders `format = "pkl"`. No `pkl` validator
+ships yet, so dispatch reports `unsupported` for it, the same way the parquet × model cell is
+reported. An archive that bundles other artifacts (e.g. a zip) is deliberately not a format. The
+thing to declare is what the archive carries, and the hand-off should carry that directly.
+
 **There is no inline source.** No literal field map, no dict escape hatch, not even for a three-field
 artifact. Every declaration is version-controlled. This is deliberate: the contracts FND-397 found in
 the field were prose comments spread across each app's source, load-bearing and well written, which

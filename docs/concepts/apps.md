@@ -783,6 +783,24 @@ A leftover `artifactSchemas` entry for a marked field is **ignored** — a field
 declarations, and of the two the model is the stronger. Deleting the entry changes nothing at
 runtime, which is what makes it safe to remove.
 
+**An artifact that is itself a Pkl module works the same way, declared from pkl.** Suppose an
+entry point takes a `.pkl` file that the app evaluates, such as a typedef module amending the
+typedef toolkit's `Typedefs.pkl`. The module it amends already is the declaration, so name that
+module with `PklArtifactSchema` instead of listing fields:
+
+```pkl
+artifactSchemas {
+  ["model_module"] = new PklArtifactSchema {
+    amendsModule = "package://example.com/toolkits/typedef/models@1.2.3#/Typedefs.pkl"
+  }
+}
+```
+
+The URI must be an absolute, version-pinned `package:` URI, and the toolkit refuses anything
+else. The entry satisfies K016 and the registration-time guard. The SDK has no `pkl` validator
+yet, so the outcome row reads `outcome=unsupported` and names the format. A zip that bundles
+such a module is not a declarable shape: hand off the module itself.
+
 Declare it keyed by the **contract field name**, never by a storage path (a path-shaped key fails
 generation, by design — path-shape inference is what let an earlier upload-time hook match nothing
 and silently validate zero records):

@@ -495,7 +495,20 @@ pipeline: Pipeline = new Pipeline {}
 ///   }
 /// }
 /// ```
-artifactSchemas: Mapping<ContractFieldName, ArtifactSchema> = new Mapping {}
+///
+/// An artifact that is itself a Pkl module (e.g. a typedef `.pkl` the app evaluates)
+/// is declared with `PklArtifactSchema` instead: it names the published module the
+/// artifact must amend rather than listing fields, because that module already *is*
+/// the declaration.
+///
+/// ```pkl
+/// artifactSchemas {
+///   ["model_module"] = new PklArtifactSchema {
+///     amendsModule = "package://example.com/toolkits/typedef/models@1.2.3#/Typedefs.pkl"
+///   }
+/// }
+/// ```
+artifactSchemas: Mapping<ContractFieldName, ArtifactSchema|PklArtifactSchema> = new Mapping {}
 
 // ── DEPLOY CONFIG ─────────────────────────────────────────────────────────────
 
@@ -4481,19 +4494,77 @@ local function renderArtifactField(f: ArtifactField): Mapping<String, Any> = new
   ["description"] = f.description
 }
 
-local function renderArtifactSchema(s: ArtifactSchema): Mapping<String, Any> =
-  // Hidden properties are lazy — reference the validator so its `throw` fires at eval
-  // time rather than silently rendering a declaration with an undeclared container.
-  let (_nesting = s._nestingCheck)
-  new Mapping {
-  ["format"] = s.format
-  when (s.description != null) { ["description"] = s.description }
-  ["fields"] = new Listing {
-    for (f in s.fields) {
-      renderArtifactField(f)
-    }
-  }
+/// Absolute, version-pinned URI of a published Pkl module:
+/// `package://<host>/<path>@<version>#/<module>.pkl`.
+///
+/// Deliberately only the `package:` scheme, and only with a version. A declaration
+/// is read by whoever sits on the other side of the hand-off, so it must name one
+/// immutable module that anyone can resolve. A relative path, a `@dependency/...`
+/// import (it resolves through the *declaring* app's `PklProject`, which the reader
+/// does not have), or an unversioned URI would each let the declaration mean
+/// something different depending on who reads it.
+typealias PklModuleUri =
+  String(matches(Regex("package://[^/@#\\s]+/[^@#\\s]+@[0-9]+\\.[0-9]+\\.[0-9]+[^#\\s]*#/[^#\\s]+\\.pkl")))
+
+/// The declared shape of an artifact that is itself a **Pkl module**: one that must
+/// `amends` a published module the consumer names.
+///
+/// This is the Pkl counterpart of the SDK's `AssetArtifact` marker. The declaration
+/// is an executable schema rather than a field map, so there is no field list to
+/// author: the module being amended already fixes every property, type and
+/// constraint, and restating that as `ArtifactField`s would be a strictly weaker,
+/// hand-maintained copy. Use it when an entrypoint takes (or hands off) a `.pkl`
+/// file that the app evaluates itself, e.g. a typedef module amending the typedef
+/// toolkit's `Typedefs.pkl`.
+///
+/// A separate class from `ArtifactSchema`, not a third `format` on it: a field map
+/// and a module reference are different declarations, and one class with optional
+/// halves would accept `fields` on a Pkl artifact and a missing `fields` on a
+/// parquet one. The rendered entry carries `format = "pkl"`, so readers still
+/// dispatch on `format`.
+///
+/// ```pkl
+/// artifactSchemas {
+///   ["model_module"] = new PklArtifactSchema {
+///     amendsModule = "package://example.com/toolkits/typedef/models@1.2.3#/Typedefs.pkl"
+///     description = "Typedef module the app renders into Atlas typedefs."
+///   }
+/// }
+/// ```
+class PklArtifactSchema {
+  /// Always `"pkl"`. Rendered so readers dispatch on `format` exactly as they do for
+  /// an `ArtifactSchema`.
+  fixed format: "pkl" = "pkl"
+
+  /// The module the artifact must amend. No default: the whole declaration is this
+  /// one URI. Pin the version the consumer actually evaluates against — the SDK
+  /// validator (when it lands) checks the artifact's `amends` target against it.
+  amendsModule: PklModuleUri
+
+  /// Free-form note for humans reading the generated artifact. Never asserted.
+  description: String?
 }
+
+local function renderArtifactSchema(s: ArtifactSchema|PklArtifactSchema): Mapping<String, Any> =
+  if (s is PklArtifactSchema)
+    new Mapping {
+      ["format"] = s.format
+      when (s.description != null) { ["description"] = s.description }
+      ["amends_module"] = s.amendsModule
+    }
+  else
+    // Hidden properties are lazy — reference the validator so its `throw` fires at eval
+    // time rather than silently rendering a declaration with an undeclared container.
+    let (_nesting = s._nestingCheck)
+    new Mapping {
+      ["format"] = s.format
+      when (s.description != null) { ["description"] = s.description }
+      ["fields"] = new Listing {
+        for (f in s.fields) {
+          renderArtifactField(f)
+        }
+      }
+    }
 
 /// Envelope version of `artifact_schemas.json`. Bump only on a breaking change to
 /// the file's shape; the SDK loader reads it to decide how to parse.

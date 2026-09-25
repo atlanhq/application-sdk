@@ -32,9 +32,11 @@ import pytest
 from application_sdk.validation.artifacts import (
     FORMAT_NDJSON,
     FORMAT_PARQUET,
+    FORMAT_PKL,
     DeclaredField,
     FieldMapDeclaration,
     ModelDeclaration,
+    PklModuleDeclaration,
 )
 from application_sdk.validation.protocols import SchemaSource
 from application_sdk.validation.sources import (
@@ -256,12 +258,55 @@ def test_an_input_artifact_is_declarable(generated_dir: Path) -> None:
     assert declaration.field_count == 3
 
 
+# ---------------------------------------------------------------------------
+# ContractSource — a Pkl-module artifact (the toolkit's PklArtifactSchema)
+# ---------------------------------------------------------------------------
+
+
+def test_loads_a_pkl_module_declaration(generated_dir: Path) -> None:
+    """The amended module is the declaration: typed, with no field list to require."""
+    declaration = ContractSource(
+        field="typedef_module", generated_dir=generated_dir
+    ).resolve()
+
+    assert declaration == PklModuleDeclaration(
+        amends_module=(
+            "package://example.com/toolkits/typedef/models@1.2.3#/Typedefs.pkl"
+        )
+    )
+    assert declaration.artifact_format == FORMAT_PKL
+    assert declaration.field_count == 0
+
+
+def test_a_pkl_entry_does_not_make_its_neighbours_unreadable(tmp_path: Path) -> None:
+    """One Pkl entry must not fail the whole file.
+
+    The loader parses a file all-or-nothing, so before ``pkl`` was understood an
+    entry with no ``fields`` list raised for the *file* — silently dropping every
+    other declaration the app made next to it.
+    """
+    _load_schemas.cache_clear()
+    document = _valid_document()
+    document["schemas"]["module"] = {
+        "format": FORMAT_PKL,
+        "amends_module": "package://example.com/m@1.0.0#/M.pkl",
+    }
+    _write(tmp_path / ARTIFACT_SCHEMAS_FILENAME, document)
+
+    edges = ContractSource(field="edges", generated_dir=tmp_path).resolve()
+    module = ContractSource(field="module", generated_dir=tmp_path).resolve()
+
+    assert isinstance(edges, FieldMapDeclaration)
+    assert isinstance(module, PklModuleDeclaration)
+    assert declared_artifact_fields(generated_dir=tmp_path) == ("edges", "module")
+
+
 def test_declarations_are_frozen(generated_dir: Path) -> None:
     """Nothing hands out a mutable declaration — the parse is cached and shared."""
     declaration = ContractSource(
         field="raw_queries", generated_dir=generated_dir
     ).resolve()
-    assert declaration is not None
+    assert isinstance(declaration, FieldMapDeclaration)
     with pytest.raises(dataclasses.FrozenInstanceError):
         # Deliberate: assigning to a frozen field is the thing under test, so the
         # checker's complaint is the behaviour being asserted at runtime.
@@ -309,6 +354,16 @@ def test_undeclared_field_is_none(generated_dir: Path) -> None:
         (
             "no fields list",
             _valid_document(schemas={"edges": {"format": FORMAT_NDJSON}}),
+        ),
+        (
+            "pkl declaration with no module",
+            _valid_document(schemas={"edges": {"format": FORMAT_PKL}}),
+        ),
+        (
+            "pkl declaration with an empty module",
+            _valid_document(
+                schemas={"edges": {"format": FORMAT_PKL, "amends_module": ""}}
+            ),
         ),
         (
             "zero fields",
@@ -514,7 +569,12 @@ def test_flat_file_is_used_when_the_entrypoint_has_no_file(tmp_path: Path) -> No
 def test_declared_fields_lists_names_only(generated_dir: Path) -> None:
     """A tuple of names, not a mapping: no dict-shaped API on the source seam."""
     names = declared_artifact_fields(generated_dir=generated_dir)
-    assert names == ("raw_queries", "transformed_entities", "upstream_lineage")
+    assert names == (
+        "raw_queries",
+        "transformed_entities",
+        "upstream_lineage",
+        "typedef_module",
+    )
     assert isinstance(names, tuple)
 
 

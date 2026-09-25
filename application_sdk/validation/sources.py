@@ -51,10 +51,15 @@ from application_sdk.errors.leaves import DataIntegrityError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.validation.artifacts import (
     FORMAT_NDJSON,
+    FORMAT_PKL,
     DeclaredField,
     FieldMapDeclaration,
     ModelDeclaration,
+    PklModuleDeclaration,
 )
+
+_ContractDeclaration = FieldMapDeclaration | PklModuleDeclaration
+"""What a generated ``artifact_schemas.json`` entry can resolve to."""
 
 logger = get_logger(__name__)
 
@@ -262,7 +267,7 @@ def _parse_field(raw: object, *, field_key: str, path: Path) -> DeclaredField:
     )
 
 
-def _parse_schemas(path: Path, raw_bytes: bytes) -> Mapping[str, FieldMapDeclaration]:
+def _parse_schemas(path: Path, raw_bytes: bytes) -> Mapping[str, _ContractDeclaration]:
     """Parse one ``artifact_schemas.json`` into declarations keyed by contract field."""
     try:
         document = orjson.loads(raw_bytes)
@@ -307,7 +312,7 @@ def _parse_schemas(path: Path, raw_bytes: bytes) -> Mapping[str, FieldMapDeclara
             observed=type(schemas).__name__,
         )
 
-    declarations: dict[str, FieldMapDeclaration] = {}
+    declarations: dict[str, _ContractDeclaration] = {}
     for field_key, entry in schemas.items():
         where = f"{path}: schema '{field_key}'"
         if not isinstance(entry, dict):
@@ -326,6 +331,23 @@ def _parse_schemas(path: Path, raw_bytes: bytes) -> Mapping[str, FieldMapDeclara
                 expectation="a non-empty string 'format'",
                 observed=type(artifact_format).__name__,
             )
+
+        if artifact_format == FORMAT_PKL:
+            # The toolkit's `PklArtifactSchema`: the amended module is the whole
+            # declaration, so there is no field list to require. Branching here —
+            # before the `fields` checks — is what keeps one Pkl entry from making
+            # the *whole file* unreadable, which would silently drop every other
+            # declaration the app made alongside it.
+            amends_module = entry.get("amends_module")
+            if not isinstance(amends_module, str) or not amends_module:
+                raise ArtifactDeclarationError(
+                    message=f"{where} is a pkl declaration with no 'amends_module'",
+                    location=str(path),
+                    expectation="a non-empty string 'amends_module'",
+                    observed=type(amends_module).__name__,
+                )
+            declarations[field_key] = PklModuleDeclaration(amends_module=amends_module)
+            continue
 
         fields = entry.get("fields")
         if not isinstance(fields, list):
@@ -360,7 +382,7 @@ def _parse_schemas(path: Path, raw_bytes: bytes) -> Mapping[str, FieldMapDeclara
 
 
 @functools.lru_cache(maxsize=None)
-def _load_schemas(path: Path) -> Mapping[str, FieldMapDeclaration] | None:
+def _load_schemas(path: Path) -> Mapping[str, _ContractDeclaration] | None:
     """Load and parse ``path``, or ``None`` when the app generated no such file.
 
     Cached per path, mirroring ``_relationship_field_names`` in
@@ -442,7 +464,7 @@ class ContractSource:
             entrypoint=self.entrypoint, generated_dir=self.generated_dir
         )
 
-    def resolve(self) -> FieldMapDeclaration | None:
+    def resolve(self) -> _ContractDeclaration | None:
         """Load this field's declaration, or ``None`` when it has none.
 
         ``None`` covers both "the app generated no declaration file" and "the file
