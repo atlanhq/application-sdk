@@ -150,9 +150,13 @@ class _WorkflowSafeLogger:
                         "Failed to resolve v3 correlation context for log enrichment",
                         exc_info=True,
                     )
+            exc_info = kwargs.pop("exc_info", False)
             logger = self._get_structlog_logger()
-            log_method = getattr(logger, level)
-            log_method(message, *args, **kwargs)
+            if kwargs:
+                logger = logger.bind(**kwargs)
+            if exc_info:
+                logger = logger.opt(exception=exc_info)
+            getattr(logger, level)(message, *args)
 
     def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log a debug message."""
