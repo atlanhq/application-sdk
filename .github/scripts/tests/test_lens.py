@@ -1203,20 +1203,21 @@ def test_workflow_triggers_only_on_invocation():
 
 
 def test_maintainer_comment_triggers_and_force_is_parsed():
-    assert decide("issue_comment", _comment("@lens"), REPO).run
-    d = decide("issue_comment", _comment("@lens force please"), REPO)
+    assert decide("issue_comment", _comment("/lens"), REPO).run
+    d = decide("issue_comment", _comment("/lens force please"), REPO)
     assert d.run and d.force
 
 
 @pytest.mark.parametrize(
     "event",
     [
-        _comment("@lens", assoc="CONTRIBUTOR"),
-        _comment("@lens", assoc="NONE"),
-        _comment("@lens", user_type="Bot"),
-        _comment("please @lens"),
-        _comment("@lens", on_pr=False),
-        _comment("@lensfoo"),
+        _comment("/lens", assoc="CONTRIBUTOR"),
+        _comment("/lens", assoc="NONE"),
+        _comment("/lens", user_type="Bot"),
+        _comment("please /lens"),
+        _comment("/lens", on_pr=False),
+        _comment("/lensfoo"),
+        _comment("@lens"),
     ],
 )
 def test_untrusted_or_unaddressed_comments_do_not_trigger(event):
@@ -1307,7 +1308,8 @@ def test_two_simultaneous_requests_resolve_to_exactly_one_review():
 
 def test_workflow_names_runs_for_the_guard_and_has_no_queueing_concurrency():
     wf = (Path(__file__).resolve().parents[2] / "workflows" / "lens.yml").read_text()
-    assert "run-name: lens #${{ github.event.issue.number || inputs.pr }}" in wf
+    # Quoted, or YAML truncates the name at " #" to plain "lens" (seen on the first live run).
+    assert 'run-name: "lens #${{ github.event.issue.number || inputs.pr }}"' in wf
     assert run_name(42) == "lens #42"
     assert (
         "\nconcurrency:" not in wf
@@ -1624,6 +1626,9 @@ def _meta(
         (_meta(), None),
         (_meta(models=("other-model",)), "not available"),
         (_meta(models_status=401), "rejected"),
+        # A key scoped to the completion routes gets 403 on metadata routes: not a bad key
+        # (the first live run). Skip the check; a real refusal fails the first call fast.
+        (_meta(models_status=403), None),
         (_meta(spend=299.99), "budget left"),
         (
             _meta(key_status=404),
@@ -1643,6 +1648,26 @@ def test_preflight_catches_bad_alias_key_and_budget_with_zero_tokens(meta, expec
     reason = c.preflight(min_budget_usd=0.05)
     assert (reason is None) if expect is None else (expect in reason)
     assert sent.requests == []
+
+
+def test_preflight_says_what_answered_an_unexpected_status_and_redacts_keys():
+    def meta(path):
+        if path == "/v1/models":
+            return 403, "<html><title>Attention Required! | Cloudflare</title></html>"
+        return 403, '{"error": "route not allowed for key sk-abc123XYZ"}'
+
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script(),
+        meta_transport=meta,
+    )
+    assert c.preflight(min_budget_usd=0.05) is None  # neither 403 is a reason to stop
+    models, key = c.diagnostics
+    assert "/v1/models: HTTP 403 from a Cloudflare page" in models
+    assert "/key/info: HTTP 403 from the gateway's JSON" in key
+    assert "sk-abc123XYZ" not in key and "sk-…" in key
 
 
 def test_a_failed_preflight_sends_no_request_and_turns_the_status_error(repo: Path):
@@ -1784,7 +1809,7 @@ class _CliGitHub:
         return []
 
 
-def _event_file(tmp_path, body="@lens"):
+def _event_file(tmp_path, body="/lens"):
     ev = {
         "action": "created",
         "issue": {"number": 7, "pull_request": {}},

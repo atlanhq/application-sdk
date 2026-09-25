@@ -122,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         if res.action == "skipped" and comment_id:
             # Asked, but nothing to do: say why instead of leaving the author guessing.
             gh.comment(args.pr, f"lens: nothing to review — {res.reason}.")
+    for n in res.notes:
+        print(f"lens: note: {n}", file=sys.stderr)
     for r in res.incomplete:
         print(f"lens: incomplete: {r}", file=sys.stderr)
     react(

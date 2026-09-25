@@ -13,7 +13,7 @@ explicit steps the model must write out:
 2. **Verdict** — given that, is this the right way to do it?
 
 Bounded so it cannot become a rabbit hole:
-- runs FIRST, once per PR (again only on `@lens force`), never re-litigated
+- runs FIRST, once per PR (again only on `/lens force`), never re-litigated
   on later invocations;
 - its input is assembled in code (intent, file list, changed symbols with
   caller counts, a capped diff excerpt); it may make at most `max_lookups`

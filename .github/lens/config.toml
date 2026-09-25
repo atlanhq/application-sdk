@@ -26,7 +26,7 @@ cap_usd_per_pr = 1.0      # every round of every run on one PR, combined
 first_round_share = 0.6   # round 1 may use at most this share; later rounds get what is left
 
 [rounds]
-max_rounds = 5                    # invocations per PR; `@lens force` bypasses (the $ cap still holds)
+max_rounds = 5                    # invocations per PR; `/lens force` bypasses (the $ cap still holds)
 later_round_min_severity = "high" # after round 1, only critical/high may be newly raised
 
 [scope]

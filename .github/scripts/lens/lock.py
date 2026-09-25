@@ -41,5 +41,5 @@ def older_active_run(
 
 BUSY_NOTE = (
     "lens is already reviewing this PR ({url}), so this request was ignored. "
-    "Comment `@lens` again once that review has posted."
+    "Comment `/lens` again once that review has posted."
 )
