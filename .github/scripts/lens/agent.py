@@ -25,9 +25,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import prompts
+from . import context, prompts, trace
 from .bundle import Bundle
-from .diff import FileDiff, anchor
+from .diff import anchor, locate_in_text
 from .findings import Finding
 from .llm import (
     BudgetExhausted,
@@ -54,6 +54,7 @@ class AgentLimits:
     reflect_max_tokens: int = 8_000
     max_comments: int = 12
     max_nits: int = 5  # low-severity findings kept per bundle (REVIEW.md-style nit cap)
+    max_unchanged: int = 2  # incomplete-fix suggestions on unchanged code, per bundle
     plan: int = 1  # 0 disables
     plan_min_lines: int = 60
     plan_max_tokens: int = 8_000
@@ -83,32 +84,6 @@ class BundleResult:
 
 
 # ---- context -----------------------------------------------------------------
-
-
-def _changed_symbols(ws: Workspace, fd: FileDiff, limit: int = 6) -> list[str]:
-    """For each symbol that encloses an added line: signature, callers, tests.
-    This is the lookup a general agent would spend its first turns on."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for line in sorted(fd.added_lines):
-        s = ws.index.enclosing(fd.path, line)
-        if s is None or s.qualname in seen:
-            continue
-        seen.add(s.qualname)
-        callers = ws.index.callers_of(s.name, limit=3)
-        total = len(ws.index.callers.get(s.name, []))
-        call_txt = (
-            "; ".join(
-                f"{c.path}:{c.start}" for c in callers if c.qualname != s.qualname
-            )
-            or "none found"
-        )
-        out.append(
-            f"- {s.signature}  [{fd.path}:{s.start}-{s.end}]  callers({total}): {call_txt}"
-        )
-        if len(out) >= limit:
-            break
-    return out
 
 
 def build_rules_message(bundle: Bundle, rules: RuleSet) -> str:
@@ -150,27 +125,13 @@ def build_context(
             "against this intent; flag code that does not achieve it.\n"
             f"{pr_meta['understanding']}\n</pr_understanding>"
         )
-    ctx: list[str] = []
-    for fd in bundle.files:
-        tests = ws.index.tests_for.get(fd.path, [])
-        syms = _changed_symbols(ws, fd) if fd.path.endswith(".py") else []
-        if syms or fd.path.endswith(".py"):
-            ctx.append(
-                f"{fd.path} ({fd.status}, +{fd.additions}/-{fd.deletions}); tests importing it: "
-                + (", ".join(tests[:4]) if tests else "NONE")
-            )
-            ctx.extend(syms)
-    others = [p for p in ws.diffs if p not in bundle.paths]
-    if others:
-        ctx.append(
-            "Other files changed in this PR (read_diff to see them): "
-            + ", ".join(
-                f"{p} (+{ws.diffs[p].additions}/-{ws.diffs[p].deletions})"
-                for p in others[:30]
-            )
-        )
-    if ctx:
-        parts.append("<context>\n" + "\n".join(ctx) + "\n</context>")
+    # Callers (followed through thin wrappers), ranked tests, public-API flags,
+    # each changed function in full, and repo code the change or the PR names.
+    ctx_block, _api = context.build(
+        ws, bundle.files, f"{pr_meta.get('title') or ''}\n{pr_meta.get('body') or ''}"
+    )
+    if ctx_block:
+        parts.append(ctx_block)
 
     if confirmed:
         lines = [f"- [{f.id}] {f.path}: {f.title}" for f in confirmed[:30]]
@@ -214,12 +175,54 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
         if span:
             f.path = fd.path
             f.line, f.end_line = span
+            if not any(n in fd.added_lines for n in range(f.line, f.end_line + 1)):
+                f.scope = "unchanged"  # a diff-context line, not a changed one
             f.id = f.fingerprint()
             return f
     if path not in bundle.paths:
         return None  # outside its review set and not locatable: not this agent's finding to make
+    # Quoted from <changed_functions> outside any hunk: unchanged code, not inline-
+    # commentable. Keep where it is in the file so the summary can point at it.
+    f.head_line = locate_in_text(ws.text(path) or "", evidence)
+    if f.head_line:
+        f.scope = "unchanged"
     f.id = f.fingerprint()
     return f  # line 0: reported in the summary, not inline
+
+
+def calibrate(
+    found: list[Finding], limits: "AgentLimits"
+) -> tuple[list[Finding], list[str]]:
+    """Severity rules enforced in code, never by asking.
+
+    - Unchanged code (the incomplete-fix exception) is a suggestion: capped at
+      low, at most `max_unchanged` per bundle — a pointer, never a rabbit hole.
+    - A finding only in a test file is test hygiene: capped at low, unless it is
+      a security finding (a real credential in a fixture is still critical).
+    Returns the kept findings and a note per change made."""
+    notes: list[str] = []
+    kept: list[Finding] = []
+    unchanged = 0
+    for f in found:
+        if f.scope == "unchanged":
+            unchanged += 1
+            if unchanged > limits.max_unchanged:
+                notes.append(
+                    f"dropped {f.id}: over {limits.max_unchanged} unchanged-code suggestions"
+                )
+                continue
+            if f.severity != "low":
+                notes.append(f"{f.id}: {f.severity} → low (unchanged code)")
+                f.severity = "low"
+        elif (
+            context._is_test(f.path)
+            and f.category != "security"
+            and f.severity in ("critical", "high", "medium")
+        ):
+            notes.append(f"{f.id}: {f.severity} → low (test-only)")
+            f.severity = "low"
+        kept.append(f)
+    return kept, notes
 
 
 # ---- the loop ----------------------------------------------------------------
@@ -250,6 +253,9 @@ def review_bundle(
     res.turn_budget = limits.turn_budget(len(bundle.files), bundle.changed_lines)
     try:
         if limits.plan and bundle.changed_lines >= limits.plan_min_lines:
+            trace.line(
+                f"[{bundle.label}] plan turn (bundle has {bundle.changed_lines} changed lines)"
+            )
             _plan(client, bundle, messages, limits)
             res.planned = True
         _loop(
@@ -289,16 +295,50 @@ def review_bundle(
     except LLMError as e:
         res.stop, res.error = "llm_error", str(e)
 
-    placed = [
-        f
-        for f in (place(ws, bundle, c) for c in raw_comments[: limits.max_comments])
-        if f
-    ]
+    raw = raw_comments[: limits.max_comments]
+    placed = [f for f in (place(ws, bundle, c) for c in raw) if f]
+    trace.line(
+        f"[{bundle.label}] placement: {len(raw)} raw comment(s) → {sum(1 for f in placed if f.line)} anchored inline, "
+        f"{sum(1 for f in placed if not f.line)} summary-only, {len(raw) - len(placed)} dropped (no evidence / not locatable)"
+        + (
+            f"; {len(raw_comments) - len(raw)} over the {limits.max_comments}-comment cap"
+            if len(raw_comments) > len(raw)
+            else ""
+        )
+    )
     if reflect and placed and res.stop != "budget":
         placed = _reflect(client, bundle, placed, limits, res)
+        trace.line(
+            f"[{bundle.label}] fact-check: kept {len(placed)}, removed {len(res.removed_by_reflector)}"
+            + (
+                ": "
+                + ", ".join(
+                    f"{f.id} {trace.short(f.title, 50)!r}"
+                    for f in res.removed_by_reflector
+                )
+                if res.removed_by_reflector
+                else ""
+            )
+        )
+    placed, calibration = calibrate(placed, limits)
+    for note in calibration:
+        trace.line(f"[{bundle.label}] severity rule: {note}")
     # Nits are capped in code, never by asking: every finding at medium+ is kept.
-    nits = [f for f in placed if f.severity == "low"][: limits.max_nits]
+    nits_all = [f for f in placed if f.severity == "low"]
+    nits = nits_all[: limits.max_nits]
+    if len(nits_all) > len(nits):
+        trace.line(
+            f"[{bundle.label}] nit cap: kept {len(nits)} of {len(nits_all)} low-severity findings"
+        )
     placed = [f for f in placed if f.severity != "low"] + nits
+    for f in placed:
+        trace.line(
+            f"[{bundle.label}] finding {f.id} {f.severity} {f.category} {f.path}:{f.line or '-'} {trace.short(f.title, 80)!r}"
+        )
+    trace.line(
+        f"[{bundle.label}] done: stop={res.stop} turns={res.turns}"
+        + (f" error={trace.short(res.error, 140)}" if res.error else "")
+    )
     res.findings = [f for f in placed if f.line]
     res.unplaced = [f for f in placed if not f.line]
     return res
@@ -353,6 +393,14 @@ def _loop(
         broke = budget_usd is not None and spent >= budget_usd * 0.85
         if (turns >= turn_budget or over or broke) and not final:
             final = True
+            why = (
+                "turn budget"
+                if turns >= turn_budget
+                else ("context ceiling" if over else "bundle budget share")
+            )
+            trace.line(
+                f"[{bundle.label}] final turn forced ({why}): only code_comment/task_done now"
+            )
             messages.append({"role": "user", "content": prompts.FINAL_ROUND})
         # The tool list never changes, not even on the final turn: swapping it would
         # break the cached prefix. The final turn is enforced by refusing other tools.
@@ -366,8 +414,16 @@ def _loop(
         )
         turns += 1
         res.turns += 1
+        u = comp.usage or {}
+        trace.line(
+            f"[{bundle.label}] turn {res.turns}/{turn_budget}: {len(comp.tool_calls)} tool call(s), "
+            f"reasoning={u.get('reasoning_tokens', 0)} out={u.get('completion_tokens', 0)} ${comp.cost:.5f}"
+        )
         if not comp.tool_calls:
             empty += 1
+            trace.line(
+                f"[{bundle.label}]   no tool call (empty turn {empty}/{limits.max_empty_turns})"
+            )
             if final or empty >= limits.max_empty_turns:
                 res.stop = "empty_turns"
                 return
@@ -393,6 +449,14 @@ def _loop(
                 reply = "Unavailable on the final turn: call code_comment or task_done."
             else:
                 reply = run_tool(ws, name, args)
+            trace.line(
+                f"[{bundle.label}]   → {name}({trace.args_summary(name, args)})"
+                + (
+                    f" ← {len(reply)} chars"
+                    if name not in ("code_comment", "task_done")
+                    else ""
+                )
+            )
             messages.append(
                 {"role": "tool", "tool_call_id": tc.get("id") or name, "content": reply}
             )

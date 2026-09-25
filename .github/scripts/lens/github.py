@@ -156,10 +156,20 @@ class GitHub:
         except GitHubError:
             pass
 
-    def comment(self, number: int, body: str) -> None:
-        self._call(
+    def comment(self, number: int, body: str) -> int:
+        """Posts a PR comment; returns its id (0 if GitHub did not say)."""
+        out = self._call(
             "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body}
         )
+        return int((out or {}).get("id") or 0)
+
+    def edit_comment(self, comment_id: int, body: str) -> None:
+        self._call(
+            "PATCH", f"/repos/{self.repo}/issues/comments/{comment_id}", {"body": body}
+        )
+
+    def delete_comment(self, comment_id: int) -> None:
+        self._call("DELETE", f"/repos/{self.repo}/issues/comments/{comment_id}")
 
     def upsert_comment(self, number: int, marker: str, body: str) -> str:
         """One sticky comment per PR, edited in place — never a new one per round.

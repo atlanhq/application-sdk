@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import context, trace
 from .diff import FileDiff
 from .llm import BudgetExhausted, Client, LLMError, assistant_turn, estimate_tokens
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
@@ -44,7 +45,12 @@ Work in two steps.
      - it fixes a symptom where the cause is elsewhere (name where);
      - it duplicates or bypasses an existing mechanism in the codebase (name it — check with a lookup);
      - it changes behaviour or a public contract the description does not mention;
+     - the description claims a scope or guarantee the code does not deliver (quote the claim, name the
+       path it misses);
      - the change is much larger or riskier than the stated goal needs.
+   When <public_api> lists a behaviour change, weigh its blast radius from the call sites given, and state
+   plainly that consumers in other repositories were not checked — raise it as a concern when the change is
+   a deliberate contract change callers could observe.
    If none clearly applies, the verdict is sound. Most PRs are sound. Never invent a concern.
 
 You may use find_symbol / search_code / read_file a few times to check a suspicion (e.g. whether a
@@ -138,6 +144,19 @@ def build_input(
         + "\n".join(syms[:60])
         + "\n</changed_symbols>\n\n"
     )
+    api: list[str] = []
+    for f in files:
+        if f.path.endswith(".py") and not context._is_test(f.path):
+            for s in context.changed_symbols(ws, f):
+                line = context.public_api(ws, s, context.call_sites(ws, s))
+                if line and line not in api:
+                    api.append(line)
+    if api:
+        head += (
+            "<public_api>\n"
+            + "\n".join(f"- {a}" for a in api[:10])
+            + "\n</public_api>\n\n"
+        )
     mechanical = pr_meta.get("mechanical") or []
     if mechanical:
         head += (
@@ -223,6 +242,9 @@ def check(
                 if name in _LOOKUPS and not last:
                     out.lookups += 1
                     reply = run_tool(ws, name, args)
+                    trace.line(
+                        f"[approach] lookup {out.lookups}: {name}({trace.args_summary(name, args)}) ← {len(reply)} chars"
+                    )
                 else:
                     reply = "Unavailable: call approach_verdict."
                 messages.append(
