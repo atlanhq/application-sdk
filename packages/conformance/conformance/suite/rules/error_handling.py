@@ -715,8 +715,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "atlan-mysql-app app/handler.py — `preflight_check`'s probes classify the "
             "caught exception into a typed error and return it on the check's `error=`, "
             "so the rendered message is the error's authored text, never the exception's. "
-            "For `test_auth`, return the same typed error on `AuthOutput.error`; mysql's "
-            "own `test_auth` adopts it in atlan-mysql-app#729."
+            "For `test_auth`, return the same typed error as "
+            "`AuthOutput(status=FAILED, error=err.to_failure_details())`, as mysql's "
+            "own `test_auth` does from atlan-mysql-app#729."
         ),
         scope=RuleScope.BOTH,
         name="ExceptionTextInContractField",
@@ -747,9 +748,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "unsanitised upstream text still crosses the typed boundary into a field\n"
             "shown to operators and indexed in dashboards, and still collapses distinct\n"
             "failure modes into one variable-text bucket.  Classify the exception into\n"
-            "the app's typed ``AppError`` and return it on the contract's ``error=``\n"
-            "field (``AuthOutput.error`` / ``PreflightCheck.error``) with\n"
-            "``message=err.message``: the reason stays visible as authored text, one\n"
+            "the app's typed ``AppError`` and return it as\n"
+            "``error=err.to_failure_details()`` on the contract (``AuthOutput.error``\n"
+            "/ ``PreflightCheck.error``, typed ``FailureDetails | None``).  A failed\n"
+            "result renders ``error.message``, so no separate ``message=`` is needed:\n"
+            "the reason stays visible as authored text, one\n"
             "bucket per failure mode.  A fixed string also clears the rule but throws\n"
             "away the reason the caller needs, so it is not the default fix.\n"
             "\n"

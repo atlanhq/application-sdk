@@ -1124,6 +1124,93 @@ def test_b005_mutually_recursive_type_aliases_terminate(tmp_path: Path) -> None:
     assert "B005" in _ids(findings)
 
 
+_EP_IMPORTED_ALIAS = """\
+from application_sdk.app import App
+{import_line}
+
+class MyInput:
+    field: {ann}
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def _scan_imported(tmp_path: Path, import_line: str, ann: str, ledger_type: str):
+    ledger = _make_ledger(ContractField("MyInput", "field", ledger_type, "active"))
+    src = _EP_IMPORTED_ALIAS.format(import_line=import_line, ann=ann)
+    return _scan(tmp_path, {"app.py": src}, ledger)
+
+
+def test_b005_sdk_alias_imported_via_reexport_off_any_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap",
+        "FilterMap",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_sdk_alias_imported_from_defining_module_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts.sql_metadata import FilterMap",
+        "FilterMap",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_renamed_sdk_alias_import_is_not_a_break(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap as Tags",
+        "Tags",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_sdk_alias_with_a_different_outer_shape_still_fires(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap",
+        "FilterMap",
+        "list[str]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_alias_imported_from_outside_the_sdk_is_not_expanded(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from somepkg.types import FilterMap",
+        "FilterMap",
+        "dict[str, Any]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_unresolvable_sdk_import_still_fires(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import NoSuchAlias",
+        "NoSuchAlias",
+        "dict[str, Any]",
+    )
+    assert "B005" in _ids(findings)
+
+
 def test_split_union_does_not_tear_nested_brackets() -> None:
     """A naive split on '|' would break dict[str, int | None] apart."""
     from conformance.suite.checks.deprecation._contract_compat import _split_union
