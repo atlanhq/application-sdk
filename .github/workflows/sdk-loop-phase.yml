@@ -231,8 +231,8 @@ jobs:
       #
       #   Error: [DecimalError] Invalid argument: [object Object]
       #
-      # Three theories were chased through three PRs — the dot in grok-4.6, the
-      # slash, an unpopulated cost table — before running the exact CI config
+      # Three theories were chased through three PRs — the dot in the model
+      # alias, the slash, an unpopulated cost table — before running the exact CI config
       # against 1.18.22 locally, where it works untouched. The version was the
       # whole bug.
       #
@@ -282,7 +282,7 @@ jobs:
       # try, because the output looks identical.
       - name: Install uv
         if: inputs.phase != 'prep' || steps.prep.outputs.needs_agent == 'true'
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
 

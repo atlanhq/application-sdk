@@ -76,7 +76,11 @@ loop until violations is empty or attempts >= max_attempts:
         mode: mode
 
       if result.not_remediable:
-        add finding to residue with note "not remediable in this phase"
+        # A migration rule (finding.autofixable == false) arrives here by
+        # design, carrying the migration brief remediate-finding wrote after
+        # reading the reference app; keep it verbatim so the residue entry is
+        # the starting point for the connector's per-rule sub-issue.
+        add finding to residue with note (result.migration_brief or "not remediable in this phase")
         continue
 
       # Blind-gate areas (P, S) must not accept an uncited value.  Checked
@@ -86,6 +90,20 @@ loop until violations is empty or attempts >= max_attempts:
       if require_cited_evidence and result.outcome == "fix" and not result.evidence:
         add finding to residue with note "no cited evidence for the chosen value — not applied"
         continue
+
+      # A suppression that is really a rule defect (false positive, or a
+      # prescription that cannot clear the finding) is only accepted when the
+      # defect has been reported upstream: remediate-finding step 5 must have
+      # called report-rule-defect and the justification must cite its PR.
+      # Checked BEFORE the directive is written, like the evidence check above,
+      # so a silent gate-disable never reaches the tree.
+      if result.outcome == "suppress" and result.suppression_reason != "site-exception":
+        if not result.rule_defect_pr:
+          add finding to residue with note "rule-defect suppression proposed without a rule-defect PR — not applied" + (result.rule_defect_draft or "")
+          continue
+        if finding.disposition == "failing":
+          add finding to residue with note "BLOCK-tier rule defect — not suppressed; SDK fix is the unblock: " + result.rule_defect_pr
+          continue
 
       apply result.edit  # single-file text edit to finding.file, or (e.g. C002/C003) a multi-file command like `bootstrap`
 
@@ -174,6 +192,16 @@ emit residue as structured report
     - classification and outcome
     - deliver_as_draft (own column — a human applying proposals must see that
       anything delivered from this area ships as a draft with a named reviewer)
+    - impact and verification — `result.impact` (`before`: what was checked
+      around the edit and folded in; `after`: what the verified fix changed
+      behaviourally and every follow-up left for a human) and
+      `result.verification` (finding_cleared / gate_passed / no_new_findings /
+      matches_reference), or the `migration_brief` for a finding that was not
+      applied because its rule is a migration rule
+    - rule defect — `result.suppression_reason` and `result.rule_defect_pr`
+      (the application-sdk PR opened by report-rule-defect) for any finding
+      that turned out to be a false positive or a prescription defect, or the
+      `rule_defect_draft` a human still has to open
     - reason the item is in residue (judgment / suppression / recheck-failed / not-remediable)
 ```
 

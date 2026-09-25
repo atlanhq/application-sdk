@@ -23,6 +23,7 @@ import dataclasses
 import posixpath
 import time
 import traceback as tb_module
+import warnings
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -41,9 +42,12 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-from application_sdk.errors.base import AppError
+from application_sdk.errors.base import AppError, redact_secrets
 from application_sdk.errors.wire import FailureDetails
-from application_sdk.execution._temporal.preflight_gate import is_preflight_block
+from application_sdk.execution._temporal.preflight_gate import (
+    is_preflight_block,
+    preflight_block_message,
+)
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -105,8 +109,11 @@ def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
     Shape: ``FAILED (<failure.code|exception type>): <message> — at
     <file>:<line> in <fn>``. The root-cause frame is the innermost traceback
     frame; the full stacktrace still rides ``exc_info=True`` → OTel
-    ``exception.stacktrace``. Deterministic (string handling only) — safe in
-    the Temporal workflow sandbox.
+    ``exception.stacktrace``. The message is passed through
+    :func:`redact_secrets` — ``Body`` is the most searchable field, so a
+    connection-string password or presigned-URL signature must not land there.
+    Deterministic (string handling and regex only) — safe in the Temporal
+    workflow sandbox.
     """
     code = str(attrs.get("failure.code") or "") or (
         type(exc).__name__ if exc is not None else "unknown"
@@ -118,7 +125,10 @@ def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
         # would be swallowed by the caller's best-effort guard and take the
         # whole ended log with it.
         first_line = (str(exc).strip().splitlines() or [""])[0]
-        msg = first_line[:_FAILURE_MSG_MAX_CHARS]
+        # Redact before the cap: a driver error routinely quotes its connection
+        # string, and truncating first can cut a URL's ``@`` while keeping the
+        # password before it, where the userinfo regex no longer matches.
+        msg = redact_secrets(first_line)[:_FAILURE_MSG_MAX_CHARS]
     frame = ""
     try:
         if exc is not None and exc.__traceback__ is not None:
@@ -131,6 +141,21 @@ def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
     except Exception:  # noqa: S110 — degrade to code+message, never drop the log
         pass
     return f"FAILED ({code}): {msg}{frame}" if msg else f"FAILED ({code}){frame}"
+
+
+def _blocked_suffix(exc: BaseException | None) -> str:
+    """``BLOCKED (preflight gate): <the block's first line>`` for a gate block.
+
+    The one failure class carved out of :func:`_failure_suffix` — no stack, no
+    frame, because a block is a typed outcome and not a crash — used to drop
+    the message as well. That made the reason unfindable by a ``Body`` search:
+    the sentence lived only in a structured attribute on the adjacent record,
+    and a production escalation was filed as log loss on exactly that. The
+    token stays as the greppable prefix; the sentence joins it, capped like
+    every other lifecycle message. Redaction happened upstream, before the cap.
+    """
+    msg = preflight_block_message(exc)[:_FAILURE_MSG_MAX_CHARS]
+    return f"BLOCKED (preflight gate): {msg}" if msg else "BLOCKED (preflight gate)"
 
 
 def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
@@ -560,7 +585,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     # details. Real failures keep the ERROR traceback.
                     if is_preflight_block(exc_caught):
                         blocked_msg = _lifecycle_message(
-                            "workflow.ended", f"{wf_type} BLOCKED (preflight gate)"
+                            "workflow.ended", f"{wf_type} {_blocked_suffix(exc_caught)}"
                         )
                         logger.warning(blocked_msg, **ended_attrs)
                     else:
@@ -714,7 +739,8 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                     # the log. Every other failure keeps the ERROR traceback.
                     if is_preflight_block(exc_caught):
                         blocked_msg = _lifecycle_message(
-                            "activity.ended", f"{act_type} BLOCKED (preflight gate)"
+                            "activity.ended",
+                            f"{act_type} {_blocked_suffix(exc_caught)}",
                         )
                         logger.warning(blocked_msg, **ended_attrs)
                     else:
@@ -759,3 +785,74 @@ class LogInterceptor(Interceptor):
         self, next: ActivityInboundInterceptor
     ) -> ActivityInboundInterceptor:
         return _LogActivityInboundInterceptor(next)
+
+
+# ── Deprecated re-exports (FND-1936) ─────────────────────────────────────────
+#
+# #3872 imported these two from ``application_sdk.constants`` so the lifecycle
+# lines could stamp them as structured attributes. That import also made them
+# importable *from this module*, and v3.37.0/v3.38.0 shipped them that way.
+# The attributes are gone — the build identity now rides in the ``App started``
+# / ``App completed`` message, which is the only field the run-logs path
+# preserves end to end — but the names were part of the released importable
+# surface, so they cannot simply vanish.
+#
+# The gate that enforces this treats a public name in a private module as
+# binding precisely because the fleet has imported SDK privates before
+# (FND-2388), so ``_temporal`` in the path does not exempt them. Their real
+# home is and always was ``application_sdk.constants``; nothing should have
+# been reaching them through an interceptor.
+#
+# Module-level constants cannot carry ``@deprecated``, so PEP 562 module
+# ``__getattr__`` is the vehicle: it fires on *access*, so nothing is paid by
+# a caller who never touches one, and the warning names the caller's own line.
+#: name -> (replacement, why)
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "APPLICATION_VERSION": (
+        "application_sdk.constants.APPLICATION_VERSION",
+        "the same constant, at the module that owns it",
+    ),
+    "COMMIT_SHA": (
+        "application_sdk.constants.COMMIT_SHA",
+        "the same constant, at the module that owns it",
+    ),
+}
+
+
+def _deprecated_constant_value(name: str) -> object:
+    """The live value behind a deprecated constant alias.
+
+    Imported here rather than at module scope: a module-level re-export would
+    resolve before ``__getattr__`` ever ran, handing the name back silently and
+    leaving the caller with no migration signal at all. Keeping it lazy also
+    means this module no longer depends on ``constants`` for its own work,
+    which is the point of the change that removed the attributes.
+    """
+    from application_sdk import constants  # noqa: PLC0415 — see docstring
+
+    return getattr(constants, name)
+
+
+if TYPE_CHECKING:
+    # PEP 562's ``__getattr__`` can only be typed ``-> object``, which is all a
+    # type checker infers for every name it serves. Declaring the names here
+    # restores their real types for static analysis only — these statements
+    # never execute, so every runtime access still misses the module globals,
+    # still reaches ``__getattr__``, and still warns.
+    APPLICATION_VERSION: str
+    COMMIT_SHA: str
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-exports once more, with a warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated; use {replacement} instead — {note}. "
+        "Will be removed in v3.41.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _deprecated_constant_value(name)

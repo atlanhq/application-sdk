@@ -59,6 +59,50 @@ CREDENTIAL_VALUE_SUFFIXES: tuple[str, ...] = (
     "access_token",
 )
 
+# L010 — qualifiers that make ``<qualifier>_token`` an auth token, never a
+# resource identifier. Any name ending in one of these is outside the
+# path-segment exemption (``is_resource_token_name``), wherever it is used.
+# This list is the "is this an auth token" guard; when unsure, add the word —
+# it errs toward firing.
+RESOURCE_TOKEN_AUTH_QUALIFIERS: frozenset[str] = frozenset(
+    {
+        "access",
+        "api",
+        "app",
+        "auth",
+        "bearer",
+        "bot",
+        "client",
+        "confirm",
+        "csrf",
+        "device",
+        "github",
+        "hook",
+        "id",
+        "invite",
+        "jwt",
+        "magic",
+        "oauth",
+        "password",
+        "pat",
+        "personal",
+        "refresh",
+        "reset",
+        "saml",
+        "sas",
+        "secret",
+        "security",
+        "service",
+        "session",
+        "signing",
+        "slack",
+        "sso",
+        "user",
+        "verification",
+        "webhook",
+    }
+)
+
 # Acceptable suffixes for credential-named variables (labels, not values)
 CREDENTIAL_LABEL_SUFFIXES: tuple[str, ...] = (
     "_name",

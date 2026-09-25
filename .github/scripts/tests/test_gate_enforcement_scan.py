@@ -426,9 +426,11 @@ def test_parse_arrival_nodes_reads_both_context_shapes():
             "truncated": False,
             # Paging and staleness handles: absent from this fixture, and
             # stripped again by `fetch_arrival_samples` before the sample
-            # reaches the record.
-            "oid": None,
-            "cursor": None,
+            # reaches the record. One walk: an open-shaped PR with no
+            # `mergeCommit` reads the head only.
+            "walks": [
+                {"oid": None, "cursor": None, "truncated": False, "key": "names"}
+            ],
             "committedDate": None,
         }
     ]
@@ -1121,6 +1123,7 @@ def test_paging_stops_when_the_commit_can_no_longer_be_resolved():
     flagged `unresolvable` so it cannot be mistaken for an exhausted page."""
     assert parse_contexts_response({"data": {"repository": {"object": None}}}) == {
         "names": set(),
+        "mergeGroupNames": set(),
         "count": 0,
         "hasNextPage": False,
         "cursor": None,
@@ -1233,7 +1236,7 @@ def test_page_info_outranks_the_count_comparison_but_the_fallback_survives():
         _arrival_with({"totalCount": 140, "nodes": [_ctx("x")]}), GATE
     )[0]
     assert no_page_info["truncated"] is True
-    assert no_page_info["cursor"] is None
+    assert no_page_info["walks"][0]["cursor"] is None
 
 
 @pytest.mark.parametrize(
@@ -1683,3 +1686,299 @@ def test_a_wrong_typed_filter_leaf_raises_rather_than_being_ignored(pr_node, mat
     in the walk — uncaught, aborting the whole sweep."""
     with pytest.raises(GhError, match=match):
         parse_arrival_nodes(_arrival_payload(pr_node), GATE)
+
+
+# --- FND-2783: a merged PR gated only by its merge_group run ----------------
+#
+# `atlan-bw-app` and `atlan-cognos-app` reported arrival `intermittent` (4/5) on
+# gates that were wired and passing. The miss in each was a stale Renovate PR
+# the fleet bot force-pushed and queued a second later: no `pull_request` run of
+# tests.yaml started for the new head, the `merge_group` run passed on the SHA
+# that became the merge commit, and the PR merged. The scanner read the head
+# only. The merge commit also carries the `push`-to-main run of tests.yaml under
+# the same context name — which proves nothing about the PR — so only a
+# `merge_group` sighting on it may count.
+
+
+def _run_ctx(name: str, event) -> dict:
+    """A check-run context with the workflow run's triggering event."""
+    return {
+        "__typename": "CheckRun",
+        "name": name,
+        "checkSuite": {"workflowRun": {"event": event}},
+    }
+
+
+def _run_contexts(ctxs, *, total=None, has_next=False, cursor=None) -> dict:
+    return {
+        "totalCount": len(ctxs) if total is None else total,
+        "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+        "nodes": list(ctxs),
+    }
+
+
+def _merged(number, merge_contexts, *, head_found=False, merge_oid=None) -> dict:
+    """A merged PR node: its head as `_pr` builds it, plus a merge commit."""
+    node = _pr(number, found=head_found)
+    node["mergeCommit"] = {
+        "oid": merge_oid or f"merge{number}",
+        "statusCheckRollup": {"contexts": merge_contexts},
+    }
+    return node
+
+
+def _truncated_merge_arrival(page_contexts: dict):
+    """A stub: one merged PR whose head misses and whose merge commit spills
+    past page one; every paging request returns ``page_contexts``."""
+    paged_oids: list = []
+
+    def run(args: list) -> str:
+        if _is_page_query(args):
+            paged_oids.append(next(a for a in args if a.startswith("oid=")))
+            return json.dumps(_page(page_contexts))
+        return _arrival_nodes(
+            _merged(
+                1,
+                _run_contexts(
+                    [_run_ctx("x", "merge_group")], total=136, has_next=True, cursor="c"
+                ),
+                merge_oid="m1",
+            )
+        )
+
+    return run, paged_oids
+
+
+# The bw-app #138 merge commit, trimmed: the gate twice under one name, once per
+# triggering event.
+_QUEUED_MERGE = [
+    _run_ctx("Release Gate", "merge_group"),
+    _run_ctx(GATE, "merge_group"),
+    _run_ctx(GATE, "push"),
+]
+
+
+def test_the_merge_queue_incident_does_not_recur():
+    """Red-green for the ticket: the same five PRs are `intermittent` when the
+    merge commit is ignored and `reporting` when it is read."""
+    others = [_pr(n) for n in (2, 3, 4, 5)]
+    incident = _merged(1, _run_contexts(_QUEUED_MERGE))
+
+    blind = {k: v for k, v in incident.items() if k != "mergeCommit"}
+    red = fetch_arrival_samples(
+        REPO, "main", 5, GATE, run=_paged_arrival(blind, *others)
+    )
+    assert classify_arrival(red)[0] == ARRIVAL_INTERMITTENT
+
+    green = fetch_arrival_samples(
+        REPO, "main", 5, GATE, run=_paged_arrival(incident, *others)
+    )
+    assert green[0] == {"number": 1, "found": True, "truncated": False}
+    assert classify_arrival(green)[0] == ARRIVAL_REPORTING
+
+
+def test_a_push_run_on_the_merge_commit_does_not_count():
+    """The `push` run starts after the merge, so it cannot have gated the PR.
+    Accepting the bare context name would make every merged PR on a repo whose
+    tests.yaml runs on push read `found`, whatever gated it."""
+    node = _merged(1, _run_contexts([_run_ctx(GATE, "push")]))
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=_paged_arrival(node))
+    assert samples == [{"number": 1, "found": False, "truncated": False}]
+
+
+@pytest.mark.parametrize(
+    "ctx",
+    [
+        pytest.param({"__typename": "StatusContext", "context": GATE}, id="status"),
+        pytest.param(
+            {"__typename": "CheckRun", "name": GATE, "checkSuite": None}, id="no-suite"
+        ),
+        pytest.param(
+            {
+                "__typename": "CheckRun",
+                "name": GATE,
+                "checkSuite": {"workflowRun": None},
+            },
+            id="non-actions-suite",
+        ),
+    ],
+)
+def test_a_merge_commit_context_without_a_merge_group_run_does_not_count(ctx):
+    """Anything that cannot prove a `merge_group` run is not a sighting."""
+    node = _merged(1, _run_contexts([ctx]))
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=_paged_arrival(node))
+    assert samples[0]["found"] is False
+
+
+def test_a_merged_pr_with_no_gate_on_either_commit_is_still_a_miss():
+    node = _merged(1, _run_contexts([_run_ctx("Release Gate", "merge_group")]))
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=_paged_arrival(node))
+    assert samples == [{"number": 1, "found": False, "truncated": False}]
+    assert classify_arrival(samples)[0] == ARRIVAL_NEVER
+
+
+def test_an_open_pr_still_reads_the_head_only():
+    """GitHub returns `mergeCommit: null` on an open PR; the head's reading
+    stands, and no second walk is created."""
+    node = {**_pr(1, found=False), "mergeCommit": None}
+    parsed = parse_arrival_nodes(json.loads(_arrival_nodes(node)), GATE)
+    assert parsed[0]["found"] is False
+    assert [w["key"] for w in parsed[0]["walks"]] == ["names"]
+
+
+def test_a_merge_commit_with_no_checks_leaves_the_head_reading():
+    node = _pr(1, found=False)
+    node["mergeCommit"] = {"oid": "m", "statusCheckRollup": None}
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=_paged_arrival(node))
+    assert samples == [{"number": 1, "found": False, "truncated": False}]
+
+
+def test_the_arrival_queries_select_the_merge_commit_and_the_run_event():
+    """Both are read client-side, so dropping either from the selection silently
+    restores the bug — pinned here, like `isDraft` and `committedDate`. The event
+    must be on the paging query too, or a merge commit past 100 contexts can
+    never be resolved as found."""
+    sent: list = []
+    stub, _ = _truncated_merge_arrival(_run_contexts([_run_ctx(GATE, "merge_group")]))
+
+    def run(args: list) -> str:
+        sent.append(args[3])
+        return stub(args)
+
+    fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    arrival, page = sent
+    assert "mergeCommit" in arrival
+    assert "workflowRun { event }" in arrival
+    assert "workflowRun { event }" in page
+
+
+def test_a_truncated_merge_commit_is_paged_for_a_merge_group_sighting():
+    """bw-app's merge commit carried 85 contexts; busier repos pass 100, so the
+    merge commit needs the same paging as the head (FND-1947). Only the walk
+    that was cut off is paged — the head here fit on one page."""
+    run, paged_oids = _truncated_merge_arrival(
+        _run_contexts([_run_ctx(GATE, "merge_group")])
+    )
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": True, "truncated": False}]
+    assert paged_oids == ["oid=m1"]
+
+
+def test_a_push_sighting_on_a_later_merge_commit_page_does_not_count():
+    """The event filter holds on every page, not just the first. Every
+    truncated walk exhausted without a sighting is a conclusive miss."""
+    run, _ = _truncated_merge_arrival(_run_contexts([_run_ctx(GATE, "push")]))
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": False, "truncated": False}]
+
+
+def test_an_unfinished_merge_commit_walk_keeps_the_sample_out_of_the_denominator():
+    """A merge commit GitHub can no longer resolve has not been ruled out, so a
+    head miss alone must not become a conclusive miss."""
+    run, _ = _truncated_merge_arrival(None)
+
+    def unresolvable(args: list) -> str:
+        if _is_page_query(args):
+            return json.dumps({"data": {"repository": {"object": None}}})
+        return run(args)
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=unresolvable)
+    assert samples == [{"number": 1, "found": False, "truncated": True}]
+
+
+def _both_truncated_arrival(head_page):
+    """A stub: a merged PR whose head *and* merge commit both spill past page
+    one. ``head_page`` answers the head's paging request (a callable, so it can
+    raise); the merge commit's next page carries a `merge_group` gate."""
+    node = _merged(
+        1,
+        _run_contexts(
+            [_run_ctx("x", "merge_group")], total=136, has_next=True, cursor="mc"
+        ),
+        merge_oid="m1",
+    )
+    node["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = _contexts(
+        ["x"], total=152, has_next=True, cursor="hc"
+    )
+    node["commits"]["nodes"][0]["commit"]["oid"] = "h1"
+
+    def run(args: list) -> str:
+        if not _is_page_query(args):
+            return _arrival_nodes(node)
+        if "oid=h1" in args:
+            return head_page()
+        return json.dumps(_page(_run_contexts([_run_ctx(GATE, "merge_group")])))
+
+    return run
+
+
+def _unresolvable_head() -> str:
+    return json.dumps({"data": {"repository": {"object": None}}})
+
+
+def _failing_head() -> str:
+    raise GhError("HTTP 502 on the head page")
+
+
+@pytest.mark.parametrize(
+    "head_page",
+    [
+        pytest.param(_unresolvable_head, id="unfinished-head"),
+        pytest.param(_failing_head, id="failed-head"),
+    ],
+)
+def test_a_head_walk_that_cannot_finish_does_not_hide_the_merge_commit(head_page):
+    """The walks are independent evidence. Stopping at an unfinished or failed
+    head walk excluded a valid `merge_group` gate on a later merge-commit page
+    as truncated — and a repo whose samples all took that path read `unknown`
+    rather than `reporting`."""
+    samples = fetch_arrival_samples(
+        REPO, "main", 5, GATE, run=_both_truncated_arrival(head_page)
+    )
+    assert samples == [{"number": 1, "found": True, "truncated": False}]
+
+
+def test_no_sighting_with_an_unfinished_walk_stays_truncated():
+    """The merge commit was walked to the end without a gate, but the head was
+    never finished — the gate may be on the part never read."""
+
+    def run(args: list) -> str:
+        if not _is_page_query(args):
+            return _both_truncated_arrival(_unresolvable_head)(args)
+        if "oid=h1" in args:
+            return _unresolvable_head()
+        return json.dumps(_page(_run_contexts([_run_ctx(GATE, "push")])))
+
+    samples = fetch_arrival_samples(REPO, "main", 5, GATE, run=run)
+    assert samples == [{"number": 1, "found": False, "truncated": True}]
+
+
+@pytest.mark.parametrize(
+    "ctx, match",
+    [
+        pytest.param(
+            {"__typename": "CheckRun", "name": GATE, "checkSuite": "x"},
+            "checkSuite",
+            id="checkSuite",
+        ),
+        pytest.param(
+            {"__typename": "CheckRun", "name": GATE, "checkSuite": {"workflowRun": 1}},
+            "workflowRun",
+            id="workflowRun",
+        ),
+        pytest.param(_run_ctx(GATE, 7), "event", id="event"),
+    ],
+)
+def test_a_wrong_typed_run_event_raises_rather_than_being_ignored(ctx, match):
+    """Same fail-loud contract as every other leaf: drift reaches `scan_repo`
+    as a GhError (arrival `unknown`), never as a silent non-sighting."""
+    node = _merged(1, _run_contexts([ctx]))
+    with pytest.raises(GhError, match=match):
+        parse_arrival_nodes(json.loads(_arrival_nodes(node)), GATE)
+
+
+def test_a_wrong_typed_merge_commit_oid_raises():
+    node = _merged(1, _run_contexts([]))
+    node["mergeCommit"]["oid"] = 12345
+    with pytest.raises(GhError, match="mergeCommit.oid"):
+        parse_arrival_nodes(json.loads(_arrival_nodes(node)), GATE)

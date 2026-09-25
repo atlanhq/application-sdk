@@ -72,14 +72,11 @@
 # Trigger rationale lives in the caller — each consumer lists the workflow names
 # that produce its required status checks, which differ per repo.
 #
-# Push-based dashboard update:
-#   After every gate evaluation (approved or not), this workflow dispatches
-#   atlanhq/application-sdk/renovate-dashboard.yaml with the calling repo as
-#   input. This keeps the dashboard current within seconds of a PR state change
-#   rather than waiting up to 6h for the next cron. Non-critical — the cron
-#   provides fleet-wide coverage as a fallback if the dispatch fails. Uses a
-#   minted atlan-app-fleet token (isolated rate-limit budget) when available,
-#   falling back to the atlan-ci PAT chain otherwise.
+# No dashboard dispatch. This workflow used to trigger a single-repo
+# renovate-dashboard.yaml run after every gate evaluation; at four workflow_run
+# completions per Renovate push that was ~770 runs an hour against the fleet
+# App's shared budget. The dashboard now refreshes on its own hourly cron —
+# see the header of renovate-dashboard.yaml.
 
 name: "Renovate auto-approve (reusable)"
 
@@ -116,8 +113,8 @@ on:
     secrets:
       org_pat:
         description: >
-          DEPRECATED — pass `secrets: inherit` instead so ORG_PAT_GITHUB and
-          FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are picked up by their real names.
+          DEPRECATED — pass `secrets: inherit` instead so ORG_PAT_GITHUB is
+          picked up by its real name.
           Kept optional only during the fleet rollout; remove once every
           atlan-*-app caller has migrated off explicit named secrets.
         required: false
@@ -125,10 +122,10 @@ on:
         description: "PAT owned by atlan-ci with repo read + pull-request write access. Required for the approval step; available via secrets: inherit."
         required: false
       FLEET_APP_ID:
-        description: "atlan-app-fleet App ID (org secret). Used to mint a token for the (non-critical) dashboard-dispatch step; available via secrets: inherit."
+        description: "UNUSED since the dashboard dispatch was removed. Still declared so a caller that passes it by name keeps validating; drop it once no caller does."
         required: false
       FLEET_APP_PRIVATE_KEY:
-        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
+        description: "UNUSED — see FLEET_APP_ID above."
         required: false
 
 permissions:
@@ -184,32 +181,3 @@ jobs:
           DISPATCH_PR: ${{ inputs.pr_number }}
           EXTRA_DEP_PATTERN: ${{ inputs.extra_dep_file_pattern }}
         run: python3 .sdk-scripts/.github/scripts/renovate_approval_conditions.py
-
-      - name: Mint fleet App token for dashboard dispatch
-        if: always()
-        id: app-token
-        continue-on-error: true # soft-fail: falls through to the PAT chain below
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          repositories: application-sdk
-
-      - name: Trigger Renovate dashboard update
-        if: always()
-        env:
-          # Preferred: minted App token (isolated rate-limit budget, scoped to
-          # just application-sdk). Falls back to the PAT chain for callers not
-          # yet migrated to `secrets: inherit`, or if the mint step ever fails.
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.org_pat || secrets.ORG_PAT_GITHUB }}
-          REPO: ${{ github.repository }}
-        run: |
-          # Push a fresh snapshot of this repo's Renovate PR state to the dashboard.
-          # Runs after every gate evaluation so the dashboard reflects current state
-          # within seconds — approved, blocked, or skipped. Non-critical: falls back
-          # to cron coverage if the dispatch fails (e.g. token lacks actions:write).
-          gh workflow run renovate-dashboard.yaml \
-            --repo atlanhq/application-sdk \
-            --field repo="${REPO}" \
-          || echo "::warning::Could not trigger renovate-dashboard.yaml in atlanhq/application-sdk — dashboard will sync on next scheduled run."

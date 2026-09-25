@@ -17,23 +17,23 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [L001](#l001) | `FStringInLogMessage` | `block` | `both` | `log-format` | yes | 0.4.0 |
 | [L002](#l002) | `NonCanonicalLoggerFactory` | `block` | `both` | `log-format` | yes | 0.4.0 |
-| [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `both` | `log-format` | — | 0.4.0 |
+| [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `both` | `log-format` | yes | 0.4.0 |
 | [L004](#l004) | `ExceptBlockMissingExcInfoLog` | `block` | `both` | `missing-traceback` | yes | 0.4.0 |
 | [L005](#l005) | `PrintInProductionCode` | `warn` | `both` | `log-format` | yes | 0.4.0 |
-| [L006](#l006) | `InfoInTightLoop` | `warn` | `both` | `log-level` | — | 0.4.0 |
+| [L006](#l006) | `InfoInTightLoop` | `warn` | `both` | `log-level` | yes | 0.4.0 |
 | [L007](#l007) | `LoggerCriticalUsage` | `warn` | `both` | `log-level` | yes | 0.4.0 |
-| [L008](#l008) | `UnguardedExpensiveDebug` | `warn` | `both` | `log-performance` | — | 0.4.0 |
-| [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `both` | `log-noise` | — | 0.4.0 |
-| [L010](#l010) | `CredentialInLogOutput` | `block` | `both` | `security` | — | 0.4.0 |
+| [L008](#l008) | `UnguardedExpensiveDebug` | `warn` | `both` | `log-performance` | yes | 0.4.0 |
+| [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `both` | `log-noise` | yes | 0.4.0 |
+| [L010](#l010) | `CredentialInLogOutput` | `block` | `both` | `security` | yes | 0.4.0 |
 | [L011](#l011) | `StringConcatenationInLog` | `block` | `both` | `log-format` | yes | 0.4.0 |
-| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `both` | `log-crash` | — | 0.4.0 |
+| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `both` | `log-crash` | yes | 0.4.0 |
 | [L013](#l013) | `StdlibArbitraryKwargs` | `block` | `both` | `log-crash` | yes | 0.4.0 |
-| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `both` | `log-format` | — | 0.4.0 |
+| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `both` | `log-format` | yes | 0.4.0 |
 | [L015](#l015) | `DictConfigDisableExistingLoggers` | `warn` | `both` | `log-config` | yes | 0.4.0 |
-| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `both` | `log-config` | — | 0.4.0 |
+| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `both` | `log-config` | yes | 0.4.0 |
 | [L017](#l017) | `LoggerExceptionUsage` | `warn` | `both` | `log-level` | yes | 0.4.0 |
-| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `both` | `log-format` | — | 0.4.0 |
-| [L019](#l019) | `DiscardedBindResult` | `warn` | `both` | `log-config` | — | 0.4.0 |
+| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `both` | `log-format` | yes | 0.4.0 |
+| [L019](#l019) | `DiscardedBindResult` | `warn` | `both` | `log-config` | yes | 0.4.0 |
 | [L020](#l020) | `DeprecatedLoggingWarn` | `warn` | `both` | `log-format` | yes | 0.4.0 |
 | [L021](#l021) | `MissingLoggingLintRules` | `warn` | `both` | `log-config` | yes | 0.4.0 |
 
@@ -59,9 +59,10 @@ time-to-resolution.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `summarize` logs "summarize completed
-  record_count=%d message=%s" with the values passed positionally. One template, so
-  every run of that line groups together in ClickHouse.
+- **Compliant example:** atlan-metabase-app app/connector.py — `extract_collections` logs "extract_collections:
+  wrote %d records" with `len(records)` passed positionally, and every other @task in
+  the file logs the same way. One template per line, so every run of that line groups
+  together in ClickHouse.
 
 Using an f-string creates a unique message string per call, breaking log grouping and
 aggregation in Grafana/ClickHouse.  It also always evaluates eagerly — __str__ /
@@ -94,8 +95,9 @@ under the run.
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app app/handler.py — `get_logger(__name__)` at module scope, imported from
-  application_sdk.observability.logger_adaptor. No reference app calls
-  logging.getLogger, structlog.get_logger, or loguru's logger.
+  application_sdk.observability.logger_adaptor. No shipped app/ module in the three
+  reference apps calls logging.getLogger, structlog.get_logger, or loguru's logger; the
+  test files that do sit outside what this rule scans.
 
 Every module must obtain its logger via the SDK adapter:
 
@@ -123,7 +125,7 @@ records unfindable on the tenant UI.
 
 ## L003 — `ExtraKwargsWrongFramework` {#l003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > extra={} used where framework expects direct kwargs (or vice versa)
 
@@ -158,9 +160,10 @@ data — so the incident stays open for days instead of being read off the trace
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/handler.py — every log call inside an except block carries
-  exc_info=True, in `test_auth` and in each of the preflight check helpers. The rule is
-  about the except block, not about the level.
+- **Compliant example:** atlan-metabase-app app/handler.py — `test_auth` and `_read_filters` log warning(...,
+  exc_info=True) inside their except blocks, so the trace rides with the message. The
+  rule inspects warning and error calls only; `_authentication_check` logs at DEBUG
+  through sanitize_cause_repr() with no exc_info, a deliberate no-traceback boundary.
 
 Logging an exception without `exc_info=True` produces a message with no stack trace —
 the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
@@ -185,9 +188,10 @@ sink or interleave with structured lines, invisible to observability.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app pyproject.toml — T201 sits in the repo-wide lint select and is ignored
-  only for `.github/**/*.py`, where a CI script's stdout is the point. No print() exists
-  under app/.
+- **Compliant example:** atlan-mysql-app app/client.py — `provide_token` reports through `logger.debug`, never
+  print(); no print() exists under app/ in any of the three reference apps. The repo's
+  pyproject.toml backs this with T201 in the lint select, ignored only for
+  `.github/**/*.py`, where a CI script's stdout is the point.
 
 `print()` produces no level, no structured fields, no correlation IDs. In production
 services, output may go to stdout unformatted, be lost, or interleave with structured
@@ -201,7 +205,7 @@ guard. For those, stdout is the user interface, not a logging bypass.
 
 ## L006 — `InfoInTightLoop` {#l006}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.info() inside a tight loop — generates excessive log volume
 
@@ -247,7 +251,7 @@ on the observability platform.
 
 ## L008 — `UnguardedExpensiveDebug` {#l008}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-performance` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-performance` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Expensive computation in logger.debug() argument — evaluates eagerly
 
@@ -284,7 +288,7 @@ if logger.isEnabledFor(logging.DEBUG):
 
 ## L009 — `WarnThenRaiseDuplication` {#l009}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-noise` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-noise` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.warning/error immediately before raise — duplicate log records
 
@@ -294,9 +298,9 @@ without dedup logic.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `generate_greetings` raises
-  InvalidRepeatCountError with no log line before it. The raise is the record; whichever
-  handler catches it logs it once.
+- **Compliant example:** atlan-metabase-app app/connector.py — `transform_data` raises MissingTypenameInputError
+  and `_build_client` raises MetabaseCredentialInputError, with no log line before
+  either. The raise is the record; whichever handler catches it logs it once.
 
 Logging an error immediately before re-raising creates duplicate records in the log
 stream, inflating error counts in dashboards.  Acceptable only when adding context not
@@ -306,7 +310,7 @@ available to the caller.  Otherwise: just re-raise.
 
 ## L010 — `CredentialInLogOutput` {#l010}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Credential/secret value in log output — security vulnerability
 
@@ -319,9 +323,9 @@ of whether it was ever exploited.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/client.py — `get_iam_role_token` logs that AWS credentials were
-  staged into the environment and names none of them. Log that a credential was used,
-  never the credential.
+- **Compliant example:** atlan-mysql-app app/client.py — `get_iam_role_token` logs the role ARN, host and user,
+  reports the external ID only as `bool(external_id)`, and never logs the value of the
+  token it returns. Log that a credential was used, never the credential.
 
 Credentials in log output are a security vulnerability — logs are often stored in
 plaintext in log aggregation systems, accessible to more people than the credential
@@ -331,6 +335,16 @@ store.  Requires human security review before marking acceptable.  Logging a cre
 Exempt: arguments assigned a redaction placeholder in the module (e.g. password =
 "[REDACTED]" if creds.get("password") else None) — logging them is a presence indicator,
 not a value leak.
+
+Also exempt: a resource identifier some source APIs call a token (Mode's report_token /
+collection_token).  A `<noun>_token` argument is silent only when BOTH hold: the noun is
+not an auth word (access, auth, bearer, refresh, id, session, reset, secret, bot, hook,
+webhook, service, user, personal, password, sso, …; bare `token` never qualifies), AND
+the same function interpolates that name as a URL path segment
+(f"/reports/{report_token}/queries").  A secret usually travels in a header or query
+parameter; the ones that ride in a path (webhook, bot and service URLs) carry an auth
+word, so the guard errs toward firing. A resource token that is only logged — never part
+of a path — still fires; log a name beside it, or drop it.
 
 ---
 
@@ -360,7 +374,7 @@ way that breaks log grouping.  Rewrite as %-style message body.
 
 ## L012 — `StdlibExtraReservedKeyCollision` {#l012}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `log-crash` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `log-crash` · **Autofixable:** yes · **Since:** 0.4.0
 
 > extra={} key collides with stdlib LogRecord attribute — crashes caller
 
@@ -373,10 +387,11 @@ a KeyError raised by its own logging call instead of reporting the original prob
 
 ### What correct looks like
 
-- **Compliant example:** No app builds an `extra={}` dict at all —
-  application_sdk/observability/logger_adaptor.py takes %-style arguments positionally
-  and injects the Temporal context itself, so there is no caller-supplied key that can
-  collide with a stdlib LogRecord attribute.
+- **Compliant example:** atlan-openapi-app app/api_client.py — `_parse_zip` logs "extracted spec from ZIP
+  file=%s", name: the ZIP member's name travels positionally in the %-style body, where
+  a stdlib caller would reach for extra={"name": ...}, a reserved LogRecord attribute.
+  The SDK adaptor (application_sdk/observability/logger_adaptor.py) injects the Temporal
+  context itself, so no caller-supplied key is needed.
 
 stdlib's `Logger.makeRecord()` raises `KeyError` if any key in `extra={}` matches a
 `LogRecord` attribute.  This crash propagates directly to the caller — NOT caught by
@@ -400,9 +415,10 @@ first in the tenant.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/api_client.py — the logger comes from `get_logger`, which accepts
-  the SDK adaptor's kwargs. A stdlib logging.Logger appears nowhere in the four
-  reference apps, and it is the stdlib one that raises TypeError on arbitrary kwargs.
+- **Compliant example:** atlan-openapi-app app/api_client.py — the module-level logger comes from `get_logger`,
+  which accepts the SDK adaptor's kwargs. No shipped app/ module in the three reference
+  apps creates a stdlib logging.Logger, and it is the stdlib one that raises TypeError
+  on arbitrary kwargs.
 
 stdlib `logger.info()` only accepts `exc_info`, `extra`, `stack_info`, and `stacklevel`.
 Any other kwarg raises `TypeError` and crashes the caller.  Very common when migrating
@@ -412,7 +428,7 @@ from structlog/loguru. Applies to stdlib only.
 
 ## L014 — `StructlogEventKwargOverwrite` {#l014}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > event= kwarg in structlog silently overwrites the log message
 
@@ -445,9 +461,10 @@ dictConfig() — so a misconfigured call makes all library logging vanish with n
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/run_dev.py — the app awaits `run_dev_combined` and configures
-  no logging of its own. Handler configuration belongs to the SDK runtime; an app
-  calling dictConfig is reaching past it.
+- **Compliant example:** atlan-metabase-app app/run_dev.py — `main()` awaits `run_dev_combined(MetabaseApp,
+  example_input=...)`; the module imports asyncio, the SDK launcher and the app's own
+  connector and handler: no `logging`, no dictConfig. Handler configuration belongs to
+  the SDK runtime; an app calling dictConfig is reaching past it.
 
 `logging.config.dictConfig()`'s `disable_existing_loggers` defaults to `True`, which
 silently disables all loggers created before the call.  This is the most common source
@@ -458,7 +475,7 @@ Applies to stdlib only.
 
 ## L016 — `BasicConfigNoopAfterFirstCall` {#l016}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Multiple basicConfig() calls — second+ are silent no-ops
 
@@ -511,7 +528,7 @@ only to satisfy third-party Temporal callers and immediately delegates to
 
 ## L018 — `KwargsInApplicationLogCalls` {#l018}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > kwargs in application log calls — use %-style message body instead
 
@@ -521,9 +538,10 @@ blob aggregation can't reach — context belongs in the message body via %-style
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — `generate_greetings` passes its values as
-  positional arguments to a %-style template, not as kwargs. Kwargs on an application
-  log call do not reach the message a reader greps.
+- **Compliant example:** atlan-metabase-app app/connector.py — `filter_data` logs "filter_data: include=%s,
+  exclude=%s" with the two filters as positional arguments to the %-style template, not
+  as kwargs. Kwargs on an application log call land in an unindexed blob and never reach
+  the message a reader greps.
 
 Arbitrary kwargs in log calls are an anti-pattern in this project. Framework context
 (Temporal fields, correlation IDs) is auto-injected by the logging adapter; all other
@@ -534,7 +552,7 @@ directly in the message body using %-style formatting.
 
 ## L019 — `DiscardedBindResult` {#l019}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.bind() result discarded — bind() returns a new logger
 
@@ -567,8 +585,10 @@ is a trivial rename.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app pyproject.toml — LOG009 sits in the lint select list with the comment
-  that names the replacement, so logger.warn() cannot reach main in that repo.
+- **Compliant example:** atlan-metabase-app app/connector.py — `process_metabaseprocess` spells its empty-host
+  warning logger.warning(...), and no shipped app/ module in the three reference apps
+  calls .warn(). The repo's pyproject.toml also selects LOG009, so ruff rejects a
+  regression at edit time.
 
 `logger.warn()` / `logging.warn()` is a deprecated alias for `logger.warning()` that
 will be removed in a future Python version. Rename every call site to
@@ -592,6 +612,16 @@ rules enabled, engineers get no in-editor signal for L001/L005/L011/L020 equival
 - **Compliant example:** atlan-openapi-app pyproject.toml — `extend-select = ["G001", "G003", "G004", "T201",
   "LOG009"]`, which is the exact set this rule looks for. atlan-metabase-app spells the
   same list one rule per line, with a comment on why G002 is deliberately absent.
+- **Interacts with:** L001 and L011 box in the order of this fix. G004 and G003 are the ruff twins of those
+  rules, so enabling them while L001/L011 findings are still open makes the repo's
+  pre-commit ruff hook fail on every open call site, and the L021 change goes red on its
+  own. Land L021 with or after the L001/L011 fixes, and run `ruff check --select
+  G003,G004` first. L020 (`logger.warn()`) is ruff G010, which L021 does not require, so
+  it does not belong in this pre-scan. T201 overlaps L005 but is broader: it also flags
+  intentional print() in tests/ and in .github/**/*.py CLI scripts, which a
+  per-file-ignores entry scopes out (atlan-mysql-app pyproject.toml); the checker does
+  not read per-file-ignores, so that entry still satisfies L021. Found in a consumer app
+  during an auto-fixable remediation run (FND-2493).
 
 The project's `[tool.ruff.lint]` `select` / `extend-select` must cover the following
 rules (or their category prefixes, or `ALL`):

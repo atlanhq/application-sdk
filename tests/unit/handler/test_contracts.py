@@ -182,6 +182,37 @@ class TestAuthOutput:
         assert out.status == AuthStatus.FAILED
         assert out.message == "Bad credentials"
 
+    def test_error_defaults_to_none(self):
+        assert AuthOutput(status=AuthStatus.SUCCESS).error is None
+
+    def test_app_error_is_coerced_to_failure_details(self):
+        out = AuthOutput(
+            status=AuthStatus.FAILED,
+            error=AuthError(
+                message="The source rejected the credentials.",
+                suggested_action="Check the username and password.",
+            ),
+        )
+        assert isinstance(out.error, FailureDetails)
+        assert out.error.message == "The source rejected the credentials."
+        assert out.error.suggested_action == "Check the username and password."
+
+    def test_failed_result_error_wins_over_message(self):
+        out = AuthOutput(
+            status=AuthStatus.FAILED,
+            message="Authentication failed",
+            error=AuthError(message="The source rejected the credentials."),
+        )
+        assert out.message == "The source rejected the credentials."
+
+    def test_successful_result_keeps_its_message(self):
+        out = AuthOutput(
+            status=AuthStatus.SUCCESS,
+            message="Authentication successful",
+            error=AuthError(message="stale"),
+        )
+        assert out.message == "Authentication successful"
+
 
 class TestPreflightStatus:
     def test_values(self):

@@ -39,6 +39,14 @@ inputs:
       installed package metadata).
     required: false
     default: "false"
+  with-tests:
+    description: >
+      Deprecated no-op, removed in conformance v0.40.0. Accepted so a caller that
+      still passes it keeps working. Conformance checks that the preflight
+      scenarios are defined; whether they pass is the test gate's measure, so no
+      leg executes tests.
+    required: false
+    default: "false"
 
 runs:
   using: "composite"

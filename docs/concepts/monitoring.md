@@ -387,7 +387,7 @@ for dashboards and alerts:
 | Token | Level | Message body |
 |-------|-------|--------------|
 | `workflow.started` | INFO | `workflow.started <WorkflowType>` |
-| `workflow.ended` | INFO / WARNING / ERROR | `workflow.ended <WorkflowType> OK (<ms>ms)`, `… BLOCKED (preflight gate)`, or `… FAILED (<code>): <message> — at <file>:<line> in <fn>` |
+| `workflow.ended` | INFO / WARNING / ERROR | `workflow.ended <WorkflowType> OK (<ms>ms)`, `… BLOCKED (preflight gate): <message>`, or `… FAILED (<code>): <message> — at <file>:<line> in <fn>` |
 | `activity.started` | INFO | `activity.started <ActivityType>` |
 | `activity.ended` | INFO / WARNING / ERROR | same three shapes as `workflow.ended` |
 
@@ -403,6 +403,42 @@ the structured attributes, never on the body text.
     searches, and alert rules may match on these literal prefixes. The bodies after the token are
     human-readable summaries and may change; match on the token prefix and the structured
     attributes, not the body text.
+
+#### Build identity in the App lifecycle messages
+
+The `App started` and `App completed` lines name the build that produced the run, so a run's
+exported logs answer "what was running when this broke?" on their own, with no Temporal access:
+
+```
+App started sdk=3.37.0 app=0.2.3 commit=184ae7b
+App completed sdk=3.37.0 app=0.2.3 commit=184ae7b
+```
+
+| Key | Source | Meaning |
+|-----|--------|---------|
+| `sdk` | `application_sdk.__version__` | The application-sdk actually running. Always present. |
+| `app` | baked `app/atlan_build.json`, then `ATLAN_APPLICATION_VERSION` | The app release exactly as Global Marketplace stores it — a release tag for semver apps, a sha7 for CD apps. |
+| `commit` | baked `app/atlan_build.json`, then `ATLAN_COMMIT_SHA` | The git commit the image was built from. |
+
+**Why the message and not a structured attribute.** The message is the only field that survives
+every hop of the run-logs path. `observability.app_logs` has a fixed Iceberg schema whose ingest
+pipe maps a known field list onto columns, and the tenant edge then re-projects each record through
+closed structs that declare no attributes bag — so a new attribute reaches neither the run-log panel
+nor the downloaded export without a schema change in two services. A marker in the message needs
+none of that.
+
+A carrier with no value drops its key rather than emitting a bare `app=`, which would read as a
+value of its own. `sdk` is always known, so the marker is never empty and a reader never has to
+tell "no marker" from "no version". Keys are `k=v` and ASCII so an engineer grepping an exported
+run log for a version actually hits.
+
+Both boundaries carry it: a run whose logs are truncated from the top still has to answer which
+build produced it, and a failed run may never reach the end. The value is resolved once at import —
+no carrier can change for the life of the container, and both call sites run inside Temporal's
+workflow sandbox where per-call work is a determinism risk.
+
+See [Release flow → Image identity](../standards/release-flow.md#image-identity) for where the
+values come from.
 
 ### Asset-validation outcome event
 

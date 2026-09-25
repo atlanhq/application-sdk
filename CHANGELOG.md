@@ -1,5 +1,46 @@
 # Changelog
 
+## v3.39.0 (September 23, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.38.0...v3.39.0
+
+### Features
+
+- name the build in the App lifecycle messages, drop the log attributes (#3928) (by @vaibhavatlan in [db5da5f](https://github.com/atlanhq/application-sdk/commit/db5da5f))
+
+### Bug Fixes
+
+- redact secrets in lifecycle FAILED Body lines (#3924) (by @cmgrote in [735e8c2](https://github.com/atlanhq/application-sdk/commit/735e8c2))
+- redact Azure SharedAccessKey and AccountKey values (#3937) (by @vaibhavatlan in [9ad05d8](https://github.com/atlanhq/application-sdk/commit/9ad05d8))
+- strip pyatlan placeholder guid in entity_bytes (#3944) (by @cmgrote in [37a0fa5](https://github.com/atlanhq/application-sdk/commit/37a0fa5))
+- FND-2501 carry a typed error on AuthOutput and surface it from test_auth (#3939) (by @sachi-atlan in [6105ad1](https://github.com/atlanhq/application-sdk/commit/6105ad1))
+- redact the auth/preflight/metadata boundary logs (#3948) (by @vaibhavatlan in [e42af02](https://github.com/atlanhq/application-sdk/commit/e42af02))
+
+
+## v3.38.0 (September 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.37.0...v3.38.0
+
+### Features
+
+- accept explicit credentials for the IAM-role RDS token path (#3905) (by @vaibhavatlan in [a649dc5](https://github.com/atlanhq/application-sdk/commit/a649dc5))
+- name the failing check and its reason on outcome rows (CONNECT-1821) (#3901) (by @rishab-atlan in [2dd8e53](https://github.com/atlanhq/application-sdk/commit/2dd8e53))
+
+
+## v3.37.0 (September 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.3...v3.37.0
+
+### Features
+
+- hold a restarted worker back, and only when something is coming (#3722) (by @TechyMT in [8940fcc](https://github.com/atlanhq/application-sdk/commit/8940fcc))
+
+### Bug Fixes
+
+- stamp sdk and app version on every lifecycle log line (#3872) (by @vaibhavatlan in [1533fca](https://github.com/atlanhq/application-sdk/commit/1533fca))
+- emit a typed FailureCategory from the SDK's remaining untyped raise sites (#3857) (by @AtMrun in [45a8be1](https://github.com/atlanhq/application-sdk/commit/45a8be1))
+
+
 ## v3.36.3 (September 19, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.2...v3.36.3

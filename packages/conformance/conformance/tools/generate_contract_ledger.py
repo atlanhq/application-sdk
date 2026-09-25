@@ -45,7 +45,12 @@ import ast
 import sys
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import detect_scope, discover
+from conformance.suite.checks._ast_common import (
+    collect_module_alias_targets,
+    detect_scope,
+    discover,
+    register_alias_records,
+)
 from conformance.suite.checks._entrypoint_contract_fields import (
     collect_entrypoint_contract_names,
     resolve_contract_fields,
@@ -78,6 +83,7 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     file_trees: dict[Path, ast.AST] = {}
     file_aliases: dict[Path, dict[str, str]] = {}
     by_name: dict[str, ClassRecord] = {}
+    alias_targets: dict[str, str] = {}
 
     for path in paths:
         try:
@@ -97,6 +103,15 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
         file_aliases[path] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
+        for local, target in collect_module_alias_targets(tree, aliases).items():
+            alias_targets.setdefault(local, target)
+
+    # Module-level rebindings resolve to the class they name, so a contract
+    # exposed as ``OpenAPIConnectorInput = AppInputContract`` is recorded under
+    # the generated class's own name instead of being skipped entirely. The
+    # checker seeds its registry the same way, so the two cannot disagree about
+    # which contracts exist.
+    register_alias_records(by_name, alias_targets)
 
     entrypoint_names = collect_entrypoint_contract_names(file_trees, by_name)
 

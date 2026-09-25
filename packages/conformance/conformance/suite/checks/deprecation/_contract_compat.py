@@ -14,15 +14,19 @@ resolved live fields against the committed ledger.
 from __future__ import annotations
 
 import ast
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     _parse_directives,
+    collect_module_alias_targets,
     make_finding,
+    register_alias_records,
 )
 from conformance.suite.checks._entrypoint_contract_fields import (
+    _canonical_type,
     collect_entrypoint_contract_names,
     resolve_contract_fields,
 )
@@ -246,6 +250,109 @@ def _retype_is_compatible(
     return None
 
 
+def _is_type_alias_call(node: ast.Call) -> bool:
+    func = node.func
+    name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+    return name == "TypeAliasType"
+
+
+def collect_type_aliases(tree: ast.AST) -> dict[str, ast.expr]:
+    """Module-level type aliases, mapped to the expression they stand for.
+
+    Recognizes ``X = TypeAliasType("X", <expr>)``, ``X: TypeAlias = <expr>``,
+    ``type X = <expr>``, and a plain ``X = <expr>`` whose value is a subscript
+    or ``|`` union (the only plain assignments that are unambiguously types).
+    """
+    aliases: dict[str, ast.expr] = {}
+    if not isinstance(tree, ast.Module):
+        return aliases
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
+                continue
+            name, value = stmt.targets[0].id, stmt.value
+            if isinstance(value, ast.Call) and _is_type_alias_call(value):
+                target = value.args[1] if len(value.args) > 1 else None
+                for kw in value.keywords:
+                    if kw.arg == "value":
+                        target = kw.value
+                if target is not None:
+                    aliases[name] = target
+            elif isinstance(value, ast.Subscript) or (
+                isinstance(value, ast.BinOp) and isinstance(value.op, ast.BitOr)
+            ):
+                aliases[name] = value
+        elif isinstance(stmt, ast.AnnAssign):
+            if (
+                isinstance(stmt.target, ast.Name)
+                and stmt.value is not None
+                and (
+                    (
+                        isinstance(stmt.annotation, ast.Name)
+                        and stmt.annotation.id == "TypeAlias"
+                    )
+                    or (
+                        isinstance(stmt.annotation, ast.Attribute)
+                        and stmt.annotation.attr == "TypeAlias"
+                    )
+                )
+            ):
+                aliases[stmt.target.id] = stmt.value
+        elif isinstance(stmt, getattr(ast, "TypeAlias", ())) and isinstance(
+            stmt.name, ast.Name
+        ):
+            aliases[stmt.name.id] = stmt.value
+    return aliases
+
+
+_ALIAS_EXPANSION_BUDGET = 2_000
+
+
+class _AliasBudgetExceeded(Exception):
+    pass
+
+
+class _AliasExpander(ast.NodeTransformer):
+    def __init__(
+        self,
+        aliases: dict[str, ast.expr],
+        expanding: frozenset[str] = frozenset(),
+        spent: list[int] | None = None,
+    ) -> None:
+        self._aliases = aliases
+        self._expanding = expanding
+        self._spent = spent if spent is not None else [0]
+
+    def visit_Name(self, node: ast.Name) -> ast.expr:
+        target = self._aliases.get(node.id)
+        if target is None or node.id in self._expanding:
+            return node
+        self._spent[0] += sum(1 for _ in ast.walk(target))
+        if self._spent[0] > _ALIAS_EXPANSION_BUDGET:
+            raise _AliasBudgetExceeded
+        return _AliasExpander(
+            self._aliases, self._expanding | {node.id}, self._spent
+        ).visit(copy.deepcopy(target))
+
+
+def _expand_aliases(annotation: ast.expr, aliases: dict[str, ast.expr]) -> str | None:
+    """Canonical type of *annotation* with same-module aliases expanded.
+
+    Alias chains are followed; an alias already being expanded is left as its
+    name, so self- and mutually-referential aliases terminate.  An expansion
+    that grows past ``_ALIAS_EXPANSION_BUDGET`` nodes is abandoned and the
+    annotation is compared unexpanded, so a dense chain cannot blow up.
+    """
+    if not aliases:
+        return None
+    try:
+        expanded = _AliasExpander(aliases).visit(copy.deepcopy(annotation))
+    except _AliasBudgetExceeded:
+        return None
+    canonical = _canonical_type(expanded)
+    return canonical if canonical != _canonical_type(annotation) else None
+
+
 def scan_contract_compat(
     paths: list[Path],
     root: Path,
@@ -264,12 +371,17 @@ def scan_contract_compat(
     file_trees: dict[Path, ast.AST] = {}
     file_directives: dict[Path, dict[int, _IgnoreDirective]] = {}
     file_aliases: dict[Path, dict[str, str]] = {}
+    file_type_aliases: dict[Path, dict[str, ast.expr]] = {}
     by_name: dict[str, ClassRecord] = {}
     # Every declaration per class name, not just the first. The ledger keys
     # fields by BARE class name, so a name declared in two modules makes the
     # ledger ambiguous — see the B005 presence check below.
     by_name_all: dict[str, list[ClassRecord]] = {}
     aliases_by_rel: dict[str, dict[str, str]] = {}
+    # Module-level rebindings (``OpenAPIConnectorInput = AppInputContract``),
+    # merged into the class registry once every file has been parsed so a
+    # rebinding declared in one module resolves a class defined in another.
+    alias_targets: dict[str, str] = {}
 
     for path in paths:
         try:
@@ -289,10 +401,18 @@ def scan_contract_compat(
             rel = str(path)
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
         file_aliases[path] = aliases
+        file_type_aliases[path] = collect_type_aliases(tree)
         aliases_by_rel[rel] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
             by_name_all.setdefault(rec.name, []).append(rec)
+        for local, target in collect_module_alias_targets(tree, aliases).items():
+            alias_targets.setdefault(local, target)
+
+    # Only ``by_name`` is seeded: an alias is another name for a declaration
+    # already in ``by_name_all``, not a second declaration, and adding it there
+    # would make every aliased contract read as an ambiguous name.
+    register_alias_records(by_name, alias_targets)
 
     entrypoint_names = collect_entrypoint_contract_names(file_trees, by_name)
 
@@ -399,6 +519,18 @@ def scan_contract_compat(
                         lf.type, live.canonical_type, inherited=live.node is None
                     ):
                         continue
+                    expanded = (
+                        _expand_aliases(
+                            live.node.annotation, file_type_aliases.get(path, {})
+                        )
+                        if live.node is not None
+                        else None
+                    )
+                    if expanded is not None and (
+                        expanded == lf.type
+                        or _retype_is_compatible(lf.type, expanded, inherited=False)
+                    ):
+                        continue
                     inherited_note = (
                         " (inherited from a base class or mixin)"
                         if live.node is None
@@ -426,8 +558,23 @@ def scan_contract_compat(
             # B006: every live field must be recorded in the ledger
             for fi in live_fields:
                 if (class_node.name, fi.name) not in ledger_by_key:
+                    # An inherited field is a *new* commitment for THIS contract
+                    # even when its declaring base is ledgered under its own
+                    # name: the ledger records each entrypoint contract's own
+                    # wire surface, and it is this contract's entries that B005
+                    # consults if the class later changes base and drops the
+                    # field. Regenerating records it — redeclaring it on the
+                    # subclass is not required and only creates a drift site
+                    # (FND-2605).
                     inherited_note = (
                         " (inherited from a base class or mixin)"
+                        if fi.node is None
+                        else ""
+                    )
+                    inherited_remedy = (
+                        " Inheriting the field is enough: the generator records "
+                        "an inherited field exactly like a declared one, so do "
+                        "not redeclare it on this class to 'keep' it tracked."
                         if fi.node is None
                         else ""
                     )
@@ -448,7 +595,7 @@ def scan_contract_compat(
                                 "the release the CI checker runs — rewrites the ledger "
                                 "byte-identically and leaves the finding standing. "
                                 "The generator is append-only — it "
-                                "can never launder a removal."
+                                f"can never launder a removal.{inherited_remedy}"
                             ),
                             directives=directives,
                         )

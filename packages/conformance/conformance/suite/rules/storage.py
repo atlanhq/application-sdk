@@ -45,9 +45,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P008",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — `App.upload()` is called from `run()`, after "
-            "the tasks return. A @task hands its output back as a FileReference and lets "
-            "the framework move it; the transfer is the App's business, not the task's."
+            "atlan-mysql-app app/mysql.py — `run()` itself calls "
+            "`self.upload_refs(UploadRefsInput(...))`, after the extract and transform "
+            "tasks return, to deliver the FileReferences they declared. A @task hands its "
+            "output back as a FileReference and lets the framework move it; the transfer "
+            "is the App's business, not the task's."
         ),
         scope=RuleScope.APP,
         name="FrameworkTransferInsideTask",
@@ -66,6 +68,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "(upstream vs deployment). For task-to-task data, return a FileReference "
             "on the contract instead and let the activity interceptor move the bytes "
             "(BLDX-1398)."
+        ),
+        rule_interactions=(
+            "P021 pushes the other way. Where side-effecting file I/O sits in the "
+            "same block as one of these transfers, P021 says move the block into a "
+            "@task and this rule says the transfer must stay in run() — so "
+            "relocating the block wholesale trades one finding for the other "
+            "(observed going 0 -> 2 in FND-2542). Split the block by "
+            "responsibility instead: the @task takes the raw I/O and returns its "
+            "result as typed output, and the transfer stays in run(), keyed off "
+            "that output. That also removes the replay hazard P021 is really "
+            "about, since the branch then reads a recorded task result rather "
+            "than re-probing local state."
         ),
         short_description=(
             "App calls self.upload()/self.download()/self.upload_refs() inside a "
@@ -150,10 +164,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P010",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — "
-            "`FileReference(local_path=str(out_path), tier=StorageTier.RETAINED)`. The app "
-            "supplies the local path and the tier; storage_path, is_durable and file_count "
-            "are stamped by the SDK when it moves the file."
+            "atlan-metabase-app app/connector.py — `transform_data` returns "
+            "`output_file=FileReference.from_local(out_file, "
+            "tier=StorageTier.RETAINED)`, and the `_ref` helper builds the raw-file "
+            "references from only local_path and tier. storage_path, is_durable and "
+            "file_count are stamped by the SDK when it moves the file."
         ),
         scope=RuleScope.APP,
         name="ManualFileReferenceConstruction",
@@ -234,11 +249,13 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P012",
         canonical_reference=(
-            "atlan-hello-world-app app/contracts.py — `greetings_file` and `output_file` "
-            "are typed `FileReference | None`, so a hand-off survives being scheduled on "
-            "another pod. atlan-metabase-app app/contracts.py shows the legitimate "
-            "exception: `output_path` carries an inline ignore[P012] saying it is a "
-            "task-local scratch base, not a cross-worker reference."
+            "atlan-openapi-app app/contracts.py — `ExtractSpecOutput.api_spec_file` / "
+            "`api_path_file` and the matching `TransformInput` fields are typed "
+            "`FileReference | None`, so the hand-off from extract_spec to transform "
+            "survives being scheduled on another pod. The remaining `str` fields are "
+            "URLs, object-store keys and prefixes, identifiers (a legacy credential GUID, "
+            "the workflow id and type) and qualified names; none is a path on a worker's "
+            "disk."
         ),
         scope=RuleScope.APP,
         name="FilePathStringInContract",
@@ -279,10 +296,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P044",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — the whole-directory hand-off is one "
-            "`App.upload()` with an UploadInput naming local_path and storage_path. "
-            "storage.upload_prefix / download_prefix move bytes without producing a "
-            "FileReference the next task can resolve."
+            "atlan-mysql-app app/mysql.py — the final hand-off is one "
+            "`self.upload_refs(UploadRefsInput(files=[DeclaredFile(ref=ref) ...], "
+            "source_prefix=..., prefix=...))` over the transformed FileReferences the "
+            "tasks declared, not a directory scan. storage.upload_prefix / "
+            "download_prefix move bytes without producing a FileReference the next task "
+            "can resolve."
         ),
         scope=RuleScope.APP,
         name="DirectStoragePrefixTransfer",

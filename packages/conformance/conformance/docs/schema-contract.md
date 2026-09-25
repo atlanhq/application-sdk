@@ -90,6 +90,7 @@ Results that are SUPPRESSED or WARNING never fail the gate.
 | `atlan/orthogonalGate` | `string` | no | Gate a fix PR must not edit (e.g. `"tests"`) |
 | `atlan/since` | `string` | no | SDK version the rule was introduced |
 | `atlan/forcesExternalInfluence` | `bool` | no | Structural, rule-level guarantee that every fix for this rule counts as having used untrusted external content (e.g. C001), independent of the per-result `atlan/externalInfluence` below |
+| `atlan/canonicalReference` | `string` | no | The reference-app file that already has the compliant shape (`RuleDefinition.canonical_reference`); present on every app-facing rule so the remediation model knows which of `atlan-mysql-app` / `atlan-metabase-app` / `atlan-openapi-app` to open before fixing |
 
 ### 4.2 Result properties (`result.properties`)
 

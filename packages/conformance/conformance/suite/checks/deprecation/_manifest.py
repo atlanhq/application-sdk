@@ -60,7 +60,8 @@ class DeprecatedSymbol:
     for an ``enum_member``, which is not importable on its own."""
 
     kind: str
-    """``"class"`` | ``"function"`` | ``"method"`` | ``"enum_member"``."""
+    """``"class"`` | ``"function"`` | ``"method"`` | ``"property"`` |
+    ``"enum_member"`` | ``"constant"``."""
     module: str
     marker_via: str
     message: str

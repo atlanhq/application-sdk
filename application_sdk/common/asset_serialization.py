@@ -19,7 +19,9 @@ that the mapper is never handed, so an asset-returning mapper cannot set them
 correctly on its own. Today that is ``connectionName`` (FND-2056) and the
 three ``lastSync*`` attributes (FND-2097). Both are injected here rather than
 copied into every connector, because a copy in every connector is how they
-ended up wrong or missing in the first place.
+ended up wrong or missing in the first place. It also owns the one
+framework-*removed* value: the placeholder ``guid`` pyatlan creators put on
+every asset (FND-2720), for the same reason.
 
 What this module does **not** decide is the *envelope* — the shape of the line
 once serialisation has happened, and in particular where relationship
@@ -54,6 +56,7 @@ is simply its first caller.
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
 
@@ -192,6 +195,61 @@ def _set_connection_name(asset: object, connection_name: str) -> None:
         # Losing connectionName is worse than failing the run only if the
         # asset genuinely needs it, and every asset type that does exposes a
         # settable field. Swallow rather than fail the whole transform.
+        return
+
+
+#: pyatlan's ``@init_guid`` placeholder: ``str(-int(random() * 1e16))``. That
+#: is a negative integer, or ``"0"`` on the vanishingly rare draw that
+#: truncates to zero. A real Atlas guid is a UUID and can never match.
+_PLACEHOLDER_GUID = re.compile(r"-[0-9]+|0")
+
+
+def _is_placeholder_guid(value: object) -> bool:
+    return isinstance(value, str) and _PLACEHOLDER_GUID.fullmatch(value) is not None
+
+
+def _clear_placeholder_guid(asset: object) -> None:
+    """Drop the random placeholder ``guid`` a pyatlan creator put on *asset*.
+
+    pyatlan's ``.creator()`` methods are wrapped in ``@init_guid``, which sets
+    ``guid`` to a fresh random negative integer on every call. It means "not
+    yet persisted" to pyatlan's own client, which resolves it on save — but
+    the SDK never saves. It writes the value into the transformed output,
+    where it is noise that changes on every run: ``atlan-publish-app`` hashes
+    the whole entity, so every entity lands as DIFF rather than SYNCED and
+    pays for a full per-entity diff that then finds nothing.
+
+    Cleared on the asset, before the dispatch, for the same reason
+    ``connectionName`` is set there: ``to_nested_bytes`` never produces a dict
+    to patch, and doing it once here covers every envelope path with no extra
+    JSON pass. A real guid — a mapper that deliberately addresses an existing
+    entity — is left exactly as it is.
+    """
+    if isinstance(asset, dict):
+        if _is_placeholder_guid(asset.get("guid")):
+            del asset["guid"]
+        return
+
+    try:
+        current = getattr(asset, "guid")
+    except Exception:  # noqa: BLE001 - a property that raises is not ours to fix
+        return
+    if not _is_placeholder_guid(current):
+        return
+
+    # ``pyatlan_v9`` assets are msgspec structs, where "absent" is ``UNSET``
+    # and ``None`` would encode as an explicit null. Anything else (a pyatlan
+    # v1 pydantic model) has ``None`` as its absent value. Deferred import:
+    # msgspec is reached only once a placeholder is actually found, and only
+    # pyatlan puts one there.
+    import msgspec  # noqa: PLC0415 — deferred: only needed for pyatlan assets
+
+    cleared = msgspec.UNSET if isinstance(asset, msgspec.Struct) else None
+    try:
+        asset.guid = cleared  # type: ignore[attr-defined]
+    except (AttributeError, TypeError):
+        # Frozen asset: the placeholder costs a redundant diff, not a wrong
+        # entity. Same trade-off as connectionName.
         return
 
 
@@ -385,6 +443,9 @@ def entity_bytes(
 ) -> bytes:
     """Serialise a mapper's return value to one Atlas wire-shape JSON line.
 
+    A placeholder ``guid`` from a pyatlan creator (a negative-integer string)
+    is removed on every path; a real guid is kept.
+
     Args:
         asset: Whatever ``map_<entity>()`` returned — a ``pyatlan_v9`` asset, a
             pyatlan v1 asset, any object matching one of the protocols in this
@@ -423,6 +484,7 @@ def entity_bytes(
             that cannot be rendered; or ``to_nested_bytes()`` returned bytes
             spanning more than one line.
     """
+    _clear_placeholder_guid(asset)
     if connection_name:
         _set_connection_name(asset, connection_name)
     if last_sync is not None:

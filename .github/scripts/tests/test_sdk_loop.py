@@ -274,7 +274,7 @@ def test_an_auth_rejection_is_reported_as_such_not_as_a_clean_pass() -> None:
     # The most dangerous false success in a review lane: a gateway rejection
     # that reads as "the model found nothing".
     result = AgentResult(
-        exit_code=0, stdout="", stderr="Invalid model name: xai/grok-9"
+        exit_code=0, stdout="", stderr="Invalid model name: gpt-9-nonexistent"
     )
     outcome = interpret_review(result, None, "aaa")
     assert outcome.outcome == OUTCOME_FAILED
@@ -920,18 +920,18 @@ def test_no_gateway_hostname_is_committed_in_this_lane() -> None:
 def test_the_review_model_matches_what_the_existing_lanes_use() -> None:
     # All three lanes reviewing on one model means a finding difference between
     # them is about the harness, not the model.
-    assert REVIEW_MODEL == "xai/grok-4.6"
+    assert REVIEW_MODEL == "gpt-6-sol"
 
 
-def test_a_slash_bearing_alias_composes_into_provider_and_model(
+def test_the_alias_composes_into_provider_and_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`xai/grok-4.6` has a slash, and opencode splits `--model` on the FIRST
-    one — so `gateway/xai/grok-4.6` must read as provider `gateway`, model
-    `xai/grok-4.6`, and the config's `models` key must carry the full alias."""
+    """opencode splits `--model` on the FIRST slash — so `gateway/gpt-6-sol`
+    must read as provider `gateway`, model `gpt-6-sol`, and the config's
+    `models` key must carry the full alias."""
     monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
     cfg = opencode_config(REVIEW_MODEL)
-    assert cfg["model"] == "gateway/xai/grok-4.6"
+    assert cfg["model"] == "gateway/gpt-6-sol"
     assert cfg["model"].split("/", 1) == [PROVIDER, REVIEW_MODEL]
     assert REVIEW_MODEL in cfg["provider"][PROVIDER]["models"]
 
@@ -942,16 +942,15 @@ def test_an_unknown_model_fails_at_config_time_not_as_a_paid_400() -> None:
 
 
 def test_the_lane_reaches_exactly_two_models_and_has_no_fallback() -> None:
-    """Owner's decision: xai/grok-4.6 for review, gpt-5.6-luna for resolve,
+    """Owner's decision: gpt-6-sol for review, gpt-6-luna for resolve,
     nothing else.
 
-    Both existing lanes carry RETRY_MAIN_MODEL = claude-opus-5 as a second
-    attempt. This one deliberately does not: a failed phase is a failed phase,
+    Both existing lanes carry a RETRY_MAIN_MODEL second attempt. This one deliberately does not: a failed phase is a failed phase,
     and a silent retry on a different model makes cost and behaviour harder to
     reason about across rounds. Pinned so a future edit adding a ladder has to
     change this test and say why.
     """
-    assert ALLOWED_MODELS == ("xai/grok-4.6", "gpt-5.6-luna")
+    assert ALLOWED_MODELS == ("gpt-6-sol", "gpt-6-luna")
     assert len(set(ALLOWED_MODELS)) == 2
 
 
@@ -1463,35 +1462,40 @@ def test_humanised_token_counts_are_scaled_not_truncated() -> None:
     assert parse_opencode_usage("Input 999\nOutput 5")["input"] == 999
 
 
-def test_every_reachable_model_carries_a_real_price(
+def test_every_reachable_model_is_declared_to_opencode_with_a_numeric_cost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The prices were zeroes, declared to settle a DecimalError. That made
-    opencode's own `Total Cost` $0.00 by construction, and when the /key/info
-    fallback turned out to 403 there was no dollar figure left anywhere. A
-    model the lane can select but cannot price puts it straight back there."""
+    """Every allowed model is declared to opencode with a four-key numeric
+    cost — its recorded list price, or zero when none is recorded. Zero there
+    is safe because the lane's dollar figure never comes from opencode."""
     monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
     for model in ALLOWED_MODELS:
-        prices = MODEL_PRICES_USD_PER_MTOK[model]
-        assert set(prices) == {"input", "output", "cache_read", "cache_write"}
-        # input and output are never free on any real gateway; cache rates
-        # legitimately can be (xai bills no cache-write).
-        assert prices["input"] > 0 and prices["output"] > 0
-        assert opencode_config(model)["provider"][PROVIDER]["models"][model][
-            "cost"
-        ] == dict(prices)
+        cost = opencode_config(model)["provider"][PROVIDER]["models"][model]["cost"]
+        assert set(cost) == {"input", "output", "cache_read", "cache_write"}
+        assert all(isinstance(v, float) for v in cost.values())
+        assert cost == dict(MODEL_PRICES_USD_PER_MTOK.get(model, cost))
 
 
-def test_a_phase_is_priced_from_its_own_tokens() -> None:
+def test_a_model_with_no_recorded_price_reports_unavailable_not_free() -> None:
+    usage = {"input": 1_000_000, "output": 1_000_000, "cache_read": 0, "cache_write": 0}
+    for model in ALLOWED_MODELS:
+        if model not in MODEL_PRICES_USD_PER_MTOK:
+            assert usage_cost_usd(usage, model) is None
+
+
+def test_a_phase_is_priced_from_its_own_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Priced locally rather than read back from the gateway: /key/info 403s
     with this lane's key and, when it did not, summed every lane sharing it."""
     usage = {"input": 1_000_000, "output": 1_000_000, "cache_read": 0, "cache_write": 0}
-    assert usage_cost_usd(usage, "xai/grok-4.6") == pytest.approx(8.0)  # 2 + 6
-    assert usage_cost_usd(usage, "gpt-5.6-luna") == pytest.approx(1.4)  # 0.2 + 1.2
+    prices = {"input": 2.0, "output": 6.0, "cache_read": 0.5, "cache_write": 0.0}
+    monkeypatch.setitem(MODEL_PRICES_USD_PER_MTOK, "priced-model", prices)
+    assert usage_cost_usd(usage, "priced-model") == pytest.approx(8.0)  # 2 + 6
     # None, never 0.0 — a phase that reports free is worse than one that
     # reports unknown, which is the whole failure this replaces.
     assert usage_cost_usd(usage, "some-unpriced-model") is None
-    assert usage_cost_usd({}, "xai/grok-4.6") is None
+    assert usage_cost_usd({}, "priced-model") is None
     assert format_usd(None) == "unavailable"
     # Four decimals: a resolve phase lands under a cent and "$0.00" reads as
     # free.

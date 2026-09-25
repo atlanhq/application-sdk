@@ -35,7 +35,7 @@ required check and a duplicate finding just burns trust and cost.
 |---|---|
 | import ordering, star/unused imports, naming, line length | `ruff` / pre-commit |
 | f-strings in logs (G004), `%`/`+` in logs (G003/G001), `print` (T201) | `ruff` / conformance L-series |
-| logging levels, secret hygiene, no-raw-HTTP-to-Atlan, metadata rules | conformance E/L/S/P/O series (`conformance-ci.yaml`) |
+| logging levels, secret hygiene, no-raw-HTTP-to-Atlan, metadata rules | conformance E/L/S/P/O series (`conformance-reusable.yaml`) |
 | generated-artifact freshness (manifests, apidocs) | conformance K-series + `generated-freshness.yaml` |
 | dependency CVEs, SQL/command-injection static patterns | `codeql`, `trivy`, `grype`, `daily-security-scan` |
 | capability-manifest *presence* | `capability-manifest-check.yaml` |

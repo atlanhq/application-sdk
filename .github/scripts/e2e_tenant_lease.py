@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """A real ``(app, cloud)`` tenant lease for e2e runs — mutual exclusion via an
 atomic compare-and-swap on a single git ref.
 
@@ -95,7 +94,7 @@ lease open. So:
   pre-read is purely an optimisation: the CAS is still the authority, and losing
   a race after the ref looked free is handled like any other 422.
 * Rate limiting is detected separately from permission denial and never
-  fail-opens. See ``_rate_limited``.
+  fail-opens. See ``_gh_refs._rate_limited``.
 
 Liveness, not heartbeats
 ------------------------
@@ -142,23 +141,59 @@ Failure posture
   is also why a rate limit must never be allowed to reach this path.
 * **Not acquired within the wait budget** fails loudly, naming the holding run.
 
-Co-located with the composite action, and pinned ``@main`` by every consumer on
-purpose: all contenders must agree on the ref name, so the protocol must not vary
-with whichever ref a caller happens to have checked out.
+Where this runs, and why it is no longer an action
+--------------------------------------------------
+This was a composite action (``.github/actions/e2e-tenant-lease``), consumed
+``@main`` so that every contender agreed on the ref name. It is now an ordinary
+``.github/scripts`` driver run off the ``job.workflow_sha`` sparse checkout, for
+two reasons that both came due at once (FND-2674):
+
+* A composite is checked out in isolation and cannot import a sibling script, so
+  it had to carry its own copy of the ref transport. The DataForge refcount then
+  needed the same transport, the copy became the source for a third, and the
+  FND-702 rate-limit/permission split was dropped in the copying before it even
+  merged. One module (``_gh_refs``) is the fix; leaving this an action is what
+  made it impossible.
+* ``uses:`` cannot take an expression, so an action reference can only ever be
+  ``@main``. ``prepare-tenant`` already ran this driver from the checkout rather
+  than the action for exactly that reason: a PR adding a mode would call a main
+  that does not have it and die at argument parsing, and a PR changing the
+  driver would silently exercise main's copy. Acquire and release now close that
+  window too, so all three modes run ONE version of this file.
+
+The agreement between contenders is unaffected: every consumer calls
+``tests-reusable.yaml@main``, so ``job.workflow_sha`` resolves to the same commit
+``@main`` did. The one run where they differ is an application-sdk PR editing this
+file — which is precisely the run that should be testing its own version.
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import math
 import os
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from pathlib import Path
+
+# Sibling .github/scripts modules — imported, not copied (FND-2674). When invoked
+# as `python3 <path>/e2e_tenant_lease.py` the script's own dir is on sys.path
+# already; the insert makes `-m`/cwd invocations work too.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _gh_refs import (  # noqa: E402
+    Holder,
+    RateLimited,
+    delete_ref,
+    holder_is_live,
+    read_blob_json,
+    read_ref_target,
+    slug,
+    try_create_ref,
+    write_blob,
+)
 
 # A waiting lease is the longest-running step in the whole e2e run, and its only
 # outward sign of life is the per-attempt "waiting for ..." line. Python
@@ -180,45 +215,22 @@ if hasattr(sys.stdout, "reconfigure"):
 # release surface. A custom namespace is inert — nothing watches it.
 REF_NAMESPACE = "e2e-tenant-lease"
 
-# The only GitHub run status that means "over". Everything else — queued,
-# in_progress, requested, waiting, pending — is treated as live, so an unfamiliar
-# future status errs towards leaving a peer's lease alone.
-_COMPLETED = "completed"
-
 # Ceiling on how long a Retry-After will be honoured, so a long secondary-limit
 # backoff cannot swallow the whole wait budget in one sleep.
 _MAX_RETRY_AFTER = 300
 
-# Transport-level retries (curl could not complete the request, or GitHub answered
-# 5xx). Deliberately few and short: the acquire loop already retries at a much
-# coarser grain, so this only has to absorb a blip, not an outage.
-_TRANSPORT_ATTEMPTS = 3
-_TRANSPORT_BACKOFF_SECONDS = 2
-
-# Characters safe in a single git ref path component. Deliberately narrower than
-# git's own rules: app and cloud names come from workflow inputs, and a ref name
-# is the one place where "mostly valid" turns into a 422 nobody expected.
-_SAFE_SLUG_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._-")
-
-
-def slug(value: str, *, default: str = "default") -> str:
-    """Reduce a free-text key to one safe git ref path component.
-
-    ``cloud`` is legitimately empty on the single-tenant path (the fallback
-    matrix leg spells it as a defined-but-empty string), so an empty result maps
-    to ``default`` rather than producing an empty component, which git rejects.
-    """
-    cleaned = "".join(
-        char if char in _SAFE_SLUG_CHARS else "-" for char in value.strip().lower()
-    )
-    # git rejects "..", a leading "-" is hostile to CLI tooling, and a component
-    # ending ".lock" is reserved.
-    while ".." in cleaned:
-        cleaned = cleaned.replace("..", "-")
-    cleaned = cleaned.strip("-._")
-    while cleaned.endswith(".lock"):
-        cleaned = cleaned[: -len(".lock")].strip("-._")
-    return cleaned or default
+# Defaults for the knobs the workflow does not pass. They lived on the composite
+# action's `inputs:` until the action was removed (FND-2674), and they are the
+# single source now — `test_prepare_tenant_wiring.py` sizes the TTL and the wait
+# budget against the workflow's own job timeouts by reading THESE, so raising a
+# timeout forces the TTL up rather than quietly eating the margin.
+DEFAULT_WAIT_SECONDS = 5400
+DEFAULT_POLL_SECONDS = 30
+# Raised from 14400 when prepare-tenant's ceiling went to 48 min to fit the
+# publish retry (FND-760). That was the sizing test doing its job, not a margin
+# being spent: the hold this must clear is 48+120 min, and a TTL that no longer
+# cleared it by 1.5x would start breaking live holders.
+DEFAULT_TTL_SECONDS = 16200
 
 
 def lease_ref(app: str, cloud: str) -> str:
@@ -229,215 +241,6 @@ def lease_ref(app: str, cloud: str) -> str:
     collide, and collision is precisely the signal this design needs.
     """
     return f"refs/{REF_NAMESPACE}/{slug(app, default='app')}/{slug(cloud)}/holder"
-
-
-@dataclass(frozen=True)
-class Holder:
-    """Who holds a lease, read back from the blob the lease ref points at."""
-
-    run_id: int
-    attempt: int
-    acquired_at: float | None
-
-    def run_url(self, repo: str) -> str:
-        return f"https://github.com/{repo}/actions/runs/{self.run_id}"
-
-    def is_me(self, run_id: int, attempt: int) -> bool:
-        return self.run_id == run_id and self.attempt == attempt
-
-
-@dataclass(frozen=True)
-class Response:
-    """One API answer. Headers are carried because rate-limit detection needs
-    them, and mistaking a rate limit for a permission denial fails the lease
-    open under contention."""
-
-    status: int
-    headers: dict[str, str]
-    body: object | None
-
-    @property
-    def message(self) -> str:
-        return self.body.get("message", "") if isinstance(self.body, dict) else ""
-
-
-def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the HTTP client."""
-    return subprocess.run(cmd, **kwargs)
-
-
-def _parse_http(raw: str, label: str) -> Response:
-    """Split a ``curl -i`` response into status, headers and parsed body."""
-    text = raw.replace("\r\n", "\n")
-    if "\n\n" not in text:
-        raise SystemExit(f"::error::unexpected response for {label}: {text[:300]!r}")
-    header_block, _, body = text.partition("\n\n")
-    lines = header_block.splitlines()
-    try:
-        status_code = int(lines[0].split()[1])
-    except (IndexError, ValueError):
-        raise SystemExit(
-            f"::error::could not parse HTTP status line for {label}: "
-            f"{(lines[0] if lines else '')!r}"
-        )
-    headers: dict[str, str] = {}
-    for line in lines[1:]:
-        name, sep, value = line.partition(":")
-        if sep:
-            headers[name.strip().lower()] = value.strip()
-
-    if not body.strip():
-        return Response(status_code, headers, None)
-    try:
-        return Response(status_code, headers, json.loads(body))
-    except json.JSONDecodeError:
-        # A non-JSON body (an HTML error page from a proxy) must not crash the
-        # caller before it can report the status code, which is the part that
-        # decides what happens next.
-        return Response(status_code, headers, None)
-
-
-def gh_request(
-    method: str,
-    path: str,
-    payload: dict | None = None,
-    *,
-    sleep=time.sleep,
-) -> Response:
-    """Call the GitHub API, returning the status rather than raising on 4xx.
-
-    curl, not ``gh api``, for the same reason ``poll_check_runs_gate.py`` uses it:
-    ``gh api`` treats every non-2xx as a command failure and prints its own
-    diagnostic instead of the response. Here the non-2xx codes are the entire
-    mechanism — 422 on ref creation IS the lock being held, and it has to be
-    told apart from 403-permission and 403-rate-limit, which mean opposite things.
-    """
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise SystemExit("::error::GH_TOKEN (or GITHUB_TOKEN) must be set")
-
-    cmd = [
-        "curl",
-        "-sS",
-        "-i",
-        "--max-time",
-        "30",
-        "-X",
-        method,
-        # Read the Authorization header from stdin (-K -) rather than -H so the
-        # token never appears in curl's argv, where anything on the same runner
-        # could read it from /proc/<pid>/cmdline while the request runs. Only
-        # the credential goes through the pipe; the non-secret headers stay in
-        # argv, so the tests stubbing this seam still see the method and URL.
-        #
-        # Re-supplied on every retry below, because stdin is consumed per
-        # process: a retry that reused the argv without the config would send an
-        # unauthenticated request and read the 401 as a permission denial.
-        "-K",
-        "-",
-        "-H",
-        "Accept: application/vnd.github+json",
-        "-H",
-        "X-GitHub-Api-Version: 2022-11-28",
-    ]
-    config = f'header = "Authorization: Bearer {token}"\n'
-    if payload is not None:
-        cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(payload)]
-    cmd.append(f"https://api.github.com/{path}")
-
-    label = f"{method} {path}"
-    for transport_attempt in range(1, _TRANSPORT_ATTEMPTS + 1):
-        result = run(cmd, input=config, capture_output=True, text=True, check=False)
-        last = transport_attempt == _TRANSPORT_ATTEMPTS
-
-        if result.returncode != 0:
-            # curl could not complete the request at all: DNS, connect, timeout,
-            # TLS. Seen in production as `curl: (60) SSL certificate problem` on a
-            # single runner, which failed the lease job outright and — through the
-            # matrix aggregate — skipped the install on every OTHER cloud whose
-            # lease had been taken successfully. One blip must not cost a run its
-            # tenants, so these are retried.
-            if last:
-                raise SystemExit(
-                    f"::error::curl failed for {label} after "
-                    f"{_TRANSPORT_ATTEMPTS} attempts: {result.stderr.strip()}"
-                )
-            print(
-                f"::warning::transport failure on {label} "
-                f"(attempt {transport_attempt}/{_TRANSPORT_ATTEMPTS}): "
-                f"{result.stderr.strip()} — retrying."
-            )
-        else:
-            response = _parse_http(result.stdout, label)
-            # 5xx is GitHub having a moment, not an answer. Retried for the same
-            # reason: the callers treat an unreadable response conservatively
-            # (assume the lease is held), which is safe but wastes a poll.
-            if response.status < 500 or last:
-                return response
-            print(
-                f"::warning::{label} returned HTTP {response.status} "
-                f"(attempt {transport_attempt}/{_TRANSPORT_ATTEMPTS}) — retrying."
-            )
-
-        sleep(_TRANSPORT_BACKOFF_SECONDS * 2 ** (transport_attempt - 1))
-
-    # Unreachable: the final attempt either returns or raises above.
-    raise SystemExit(f"::error::exhausted transport attempts for {label}")
-
-
-def _rate_limited(response: Response) -> bool:
-    """Is this a rate limit rather than a permission problem?
-
-    Both arrive as 403, and conflating them is how the lease used to switch
-    itself OFF exactly when it was needed: several legs queueing for tenants is
-    also when the shared per-repository budget runs out, and the (then
-    nominally fail-open) denial path let every waiting run give up on the lease.
-    The denial path fails the job now (FND-702), so the same conflation would
-    turn a busy hour into a red run blaming a permission the caller has.
-
-    Detected from the headers first (``x-ratelimit-remaining: 0``, or a
-    ``retry-after`` on a secondary limit) and the message second, so it does not
-    hinge on GitHub's exact prose.
-    """
-    # 429 means this by definition, whatever else the body says.
-    if response.status == 429:
-        return True
-    if response.status != 403:
-        return False
-    # A 403 is ambiguous, so it needs evidence. Headers first, message second, so
-    # detection does not hinge on GitHub's exact prose.
-    if response.headers.get("x-ratelimit-remaining") == "0":
-        return True
-    if "retry-after" in response.headers:
-        return True
-    message = response.message.lower()
-    return "rate limit" in message or "abuse detection" in message
-
-
-def _denied(response: Response) -> bool:
-    """A genuine permission answer. GitHub 404s resources it will not admit
-    exist, so 404 counts, but a rate limit explicitly does not."""
-    return response.status in (401, 403, 404) and not _rate_limited(response)
-
-
-def _retry_after(response: Response) -> int | None:
-    try:
-        return max(0, int(response.headers["retry-after"]))
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
-class RateLimited(Exception):
-    """The API rate-limited us. Carries Retry-After when GitHub supplied one.
-
-    An exception rather than a return value so every call site cannot forget to
-    distinguish it from a permission denial — which is the mistake that made the
-    lease abandon itself under contention.
-    """
-
-    def __init__(self, retry_after: int | None = None) -> None:
-        super().__init__("rate limited")
-        self.retry_after = retry_after
 
 
 def create_identity_blob(
@@ -464,101 +267,38 @@ def create_identity_blob(
         # have queued for runners first, none of which is lease-hold time.
         "acquired_at": now,
     }
-    response = gh_request(
-        "POST",
-        f"repos/{repo}/git/blobs",
-        {"content": json.dumps(payload), "encoding": "utf-8"},
-    )
-    if (
-        response.status in (200, 201)
-        and isinstance(response.body, dict)
-        and response.body.get("sha")
-    ):
-        return str(response.body["sha"])
-    if _rate_limited(response):
-        raise RateLimited(_retry_after(response))
-    if _denied(response):
-        return None
-    raise SystemExit(
-        f"::error::could not write the tenant lease holder record in {repo}: "
-        f"HTTP {response.status} {response.message!r}"
-    )
-
-
-def try_acquire(repo: str, ref: str, blob_sha: str) -> str:
-    """One atomic attempt. "acquired", "occupied" or "denied"; raises RateLimited.
-
-    The 422 is not an error path bolted on — it is the lock. GitHub evaluates
-    ref creation atomically, so of N simultaneous callers exactly one sees 201.
-    """
-    response = gh_request(
-        "POST", f"repos/{repo}/git/refs", {"ref": ref, "sha": blob_sha}
-    )
-    if response.status in (200, 201):
-        return "acquired"
-    if response.status == 422 and "already exists" in response.message.lower():
-        return "occupied"
-    if _rate_limited(response):
-        raise RateLimited(_retry_after(response))
-    if _denied(response):
-        return "denied"
-    raise SystemExit(
-        f"::error::could not take the tenant lease {ref} in {repo}: "
-        f"HTTP {response.status} {response.message!r}"
-    )
-
-
-def read_lease_target(repo: str, ref: str) -> str | None:
-    """The sha the lease ref points at, or None if unheld or unreadable.
-
-    One API call, and the cheap half of a waiting poll. None deliberately
-    conflates "nobody holds it" with "we could not tell": both mean "try the
-    CAS", and the CAS is the authority.
-    """
-    # git/ref/<name> wants the ref without the leading "refs/".
-    response = gh_request("GET", f"repos/{repo}/git/ref/{ref.removeprefix('refs/')}")
-    if response.status == 404 or not isinstance(response.body, dict):
-        return None
-    if response.status >= 400:
-        print(
-            f"::warning::could not read the tenant lease {ref} (HTTP {response.status})."
-        )
-        return None
-    target = response.body.get("object") or {}
-    sha = target.get("sha") if isinstance(target, dict) else None
-    return str(sha) if sha else None
+    return write_blob(repo, json.dumps(payload))
 
 
 def read_holder_record(repo: str, blob_sha: str) -> Holder | None:
-    """Decode the holder record a lease ref points at. One API call."""
-    response = gh_request("GET", f"repos/{repo}/git/blobs/{blob_sha}")
-    if response.status >= 400 or not isinstance(response.body, dict):
-        print(
-            f"::warning::a tenant lease holder record ({blob_sha}) is unreadable "
-            f"(HTTP {response.status})."
-        )
+    """Decode the holder record a lease ref points at. One API call.
+
+    A None from the shared reader covers every way the record can fail to
+    arrive — an HTTP failure, a body that is not a blob, a payload that is not
+    JSON — and they all mean the same thing here: ownership cannot be
+    established, so the caller waits for the CAS rather than guessing.
+    """
+    record = read_blob_json(repo, blob_sha)
+    if record is None:
+        print(f"::warning::a tenant lease holder record ({blob_sha}) is unreadable.")
         return None
-    return _parse_holder(response.body)
+    return _parse_holder(record)
 
 
 def read_holder(repo: str, ref: str) -> Holder | None:
     """Who holds `ref`, or None if unheld/unreadable. Two API calls."""
-    target = read_lease_target(repo, ref)
+    target = read_ref_target(repo, ref)
     if target is None:
         return None
     return read_holder_record(repo, target)
 
 
-def _parse_holder(blob: dict) -> Holder | None:
-    content = blob.get("content")
-    if not isinstance(content, str):
-        return None
-    try:
-        decoded = base64.b64decode(content)
-        record = json.loads(decoded)
-    except (ValueError, TypeError):
-        print("::warning::the tenant lease holder record is not valid JSON.")
-        return None
+def _parse_holder(record: object) -> Holder | None:
+    """Read the lease-specific shape out of a decoded holder record.
+
+    The decoding is the transport's; what the record must CONTAIN to name a
+    holder is this module's, which is why only this half lives here.
+    """
     if not isinstance(record, dict):
         return None
     try:
@@ -575,91 +315,6 @@ def _parse_holder(blob: dict) -> Holder | None:
         if isinstance(acquired_at, (int, float))
         else None,
     )
-
-
-def release_ref(repo: str, ref: str) -> bool:
-    """Delete the lease ref. False ⇒ it was already gone, which is not a fault."""
-    response = gh_request(
-        "DELETE", f"repos/{repo}/git/refs/{ref.removeprefix('refs/')}"
-    )
-    return response.status in (200, 204)
-
-
-def holder_is_live(
-    repo: str,
-    holder: Holder,
-    *,
-    ttl_seconds: int,
-    now: float,
-) -> bool:
-    """Is the lease still legitimately held?
-
-    Errs towards True. Reading a transient API failure as "dead" would break a
-    live holder's lease and hand the tenant to a second installer — the race
-    this module exists to close — whereas erring towards "live" only costs the
-    waiter another poll interval.
-    """
-    response = gh_request("GET", f"repos/{repo}/actions/runs/{holder.run_id}")
-    if response.status == 404:
-        # The run was deleted, or never existed. Nothing will ever release this.
-        return False
-    if response.status >= 400 or not isinstance(response.body, dict):
-        print(
-            f"::warning::could not read run {holder.run_id} in {repo} "
-            f"(HTTP {response.status}); treating its tenant lease as still held."
-        )
-        return True
-    body = response.body
-    if body.get("status") == _COMPLETED:
-        return False
-    if ttl_seconds <= 0 or holder.acquired_at is None:
-        return True
-
-    # Sanity-check the holder's own timestamp against its run before trusting it.
-    # A lease cannot have been acquired before the run that took it existed, so an
-    # earlier acquired_at means the record is wrong — a clock far out of step, or a
-    # corrupted write. Believing it would make the hold time enormous and break a
-    # LIVE holder's lease on the first poll, which is the expensive direction.
-    # Erring towards "live" costs a waiter one poll interval.
-    #
-    # A run object with no created_at at all gets the same treatment. It should
-    # never happen, so it means something has changed underneath us, and the
-    # holder's run status is then the only evidence worth acting on.
-    run_started = _timestamp(body.get("created_at"))
-    if run_started is None:
-        return True
-    if holder.acquired_at < run_started:
-        print(
-            f"::warning::the tenant lease record for run {holder.run_id} claims an "
-            "acquisition time before that run existed, so it is not trustworthy; "
-            "ignoring the TTL and treating the lease as held. Its run status is "
-            "still authoritative."
-        )
-        return True
-
-    held_for = now - holder.acquired_at
-    if held_for > ttl_seconds:
-        print(
-            f"::warning::run {holder.run_id} has held the tenant lease for "
-            f"{int(held_for)}s, past the {ttl_seconds}s TTL, and still reports "
-            f"'{body.get('status')}' — breaking it. If that run is genuinely "
-            "still working, raise ttl-seconds."
-        )
-        return False
-    return True
-
-
-def _timestamp(value: object) -> float | None:
-    """Parse an ISO-8601 GitHub timestamp to a POSIX float, or None."""
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
-    return stamp.timestamp()
 
 
 # Printed at the ONE place that can explain the failure. Reaching the install
@@ -717,7 +372,7 @@ def acquire(
     rate_limited = False
 
     for attempt_number in range(1, max_attempts + 1):
-        target = read_lease_target(repo, ref)
+        target = read_ref_target(repo, ref)
 
         if target is None:
             # Looks free — mint an identity and race for it.
@@ -726,7 +381,7 @@ def acquire(
                 if blob_sha is None:
                     print(_DENIED_ERROR)
                     return "denied", None
-                outcome = try_acquire(repo, ref, blob_sha)
+                outcome = try_create_ref(repo, ref, blob_sha)
             except RateLimited as limited:
                 rate_limited = True
                 if attempt_number < max_attempts:
@@ -764,7 +419,7 @@ def acquire(
                 f"Reaping the tenant lease of run {blocker.run_id} "
                 f"(attempt {blocker.attempt}) — that run is over."
             )
-            release_ref(repo, ref)
+            delete_ref(repo, ref)
             # Straight back to the CAS rather than sleeping: the tenant is free
             # now, and any other waiter is racing us for it on equal terms.
             continue
@@ -972,7 +627,7 @@ def release(repo: str, ref: str, run_id: int, attempt: int) -> bool:
     hold — which is exactly why the TTL errs long and why its sizing is pinned by
     a test. The TTL is load-bearing for release safety, not only for acquisition.
     """
-    target = read_lease_target(repo, ref)
+    target = read_ref_target(repo, ref)
     if target is None:
         print(f"No tenant lease to release at {ref} — already reaped.")
         return False
@@ -996,14 +651,14 @@ def release(repo: str, ref: str, run_id: int, attempt: int) -> bool:
     # Re-read the target rather than trusting the one we validated against: if the
     # lease changed hands while we were reading the record, the sha moves, and
     # deleting would take the new holder's lease rather than ours.
-    if read_lease_target(repo, ref) != target:
+    if read_ref_target(repo, ref) != target:
         print(
             f"::warning::not releasing {ref}: it changed hands while this run was "
             "confirming ownership, so the lease being held is no longer ours."
         )
         return False
 
-    if release_ref(repo, ref):
+    if delete_ref(repo, ref):
         print(f"Tenant lease released: {ref}")
         return True
     print(f"No tenant lease to release at {ref} — already reaped.")
@@ -1084,13 +739,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--wait-seconds",
         type=int,
-        default=5400,
-        help="How long to keep trying for the tenant before giving up (default 90min).",
+        default=DEFAULT_WAIT_SECONDS,
+        help="How long to keep trying for the tenant before giving up (default "
+        "90min: long enough to sit behind one full install-plus-legs run ahead in "
+        "the queue, short enough that a wedged tenant is reported the same day). "
+        "Must stay well under the TTL, or a blocked run sits silently for hours "
+        "instead of reporting who holds the tenant.",
     )
     parser.add_argument(
         "--poll-seconds",
         type=int,
-        default=30,
+        default=DEFAULT_POLL_SECONDS,
         help="Gap between attempts. A waiting pass costs two API calls (read the "
         "lease ref, check the holding run), and four on the pass that takes it. "
         "GITHUB_TOKEN allows 1000/hour per REPOSITORY and every matrix leg shares "
@@ -1099,13 +758,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ttl-seconds",
         type=int,
-        default=14400,
+        default=DEFAULT_TTL_SECONDS,
         help="How long a holder may HOLD the lease (measured from the acquisition "
         "time it recorded, not from run age) before a waiter treats it as wedged "
         "and breaks it. Must exceed the longest legitimate hold — the install plus "
         "the leg ceiling — because breaking a live holder's lease puts a second "
         "installer on the tenant, and because release safety depends on it too. "
-        "Default 4h against a 40min+120min hold. 0 disables the backstop.",
+        "Sized against the workflow's own job timeouts by a test. 0 disables the "
+        "backstop.",
     )
     parser.add_argument(
         "--on-timeout",

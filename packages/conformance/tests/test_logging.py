@@ -1540,3 +1540,181 @@ def test_l021_bare_g_selection_still_detected_as_covered(tmp_path: Path) -> None
         '[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["G", "LOG", "T201"]\n'
     )
     assert check_ruff_config(py, tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# L010 — resource-identifier tokens used as URL path segments (FND-2549)
+#
+# Some source APIs call their resource identifiers "tokens" (Mode's
+# report/collection/query tokens are the slugs in its public URLs).  A
+# ``<noun>_token`` the same function interpolates as a URL path segment is an
+# identifier; a secret travels in a header or query parameter.  Both halves of
+# the exemption are pinned: the resource shapes stay silent, and every
+# auth-shaped name or non-path use still fires.
+# ---------------------------------------------------------------------------
+
+_L010_PREAMBLE = "import logging\nlogger = logging.getLogger(__name__)\n"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Mode client: the id is the request path, then logged on retry.
+        (
+            "async def get_reports(self, workspace, collection_token):\n"
+            "    await self._get(f'/api/{workspace}/collections/{collection_token}/reports')\n"
+            "    logger.warning('retrying collection %s', collection_token)\n"
+        ),
+        # Abbreviated noun, relative path, followed by a space.
+        (
+            "def fetch(rpt_token, expected):\n"
+            "    failed.append(f'queries/{rpt_token} ({expected})')\n"
+            "    logger.error('failed report %s', rpt_token)\n"
+        ),
+        # Path ends the string; implicit f-string concatenation.
+        (
+            "def lineage(qn, report_token, query_token):\n"
+            "    q = (f'{qn}/reports/{report_token}'\n"
+            "         f'/queries/{query_token}')\n"
+            "    logger.debug('skipping query %s', query_token)\n"
+        ),
+        # Attribute access in both places.
+        (
+            "def run(self):\n"
+            "    self._get(f'/api/reports/{self.report_token}?page=1')\n"
+            "    logger.info('report %s', self.report_token)\n"
+        ),
+        # Keyword form: both the key and the value are the resource token.
+        (
+            "def run(report_token):\n"
+            "    self._get(f'/api/reports/{report_token}/queries')\n"
+            "    logger.info('report', report_token=report_token)\n"
+        ),
+    ],
+)
+def test_l010_silent_for_resource_token_used_as_path_segment(body: str) -> None:
+    assert "L010" not in _ids(_L010_PREAMBLE + body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Auth-qualified tokens fire even when they appear in a path.
+        *(
+            f"def f({name}):\n"
+            f"    get(f'/api/v1/{{{name}}}/me')\n"
+            f"    logger.info('t %s', {name})\n"
+            for name in (
+                "access_token",
+                "refresh_token",
+                "github_token",
+                "bearer_token",
+                "id_token",
+                "reset_token",
+                "session_token",
+                "client_token",
+            )
+        ),
+        # Bare `token` never qualifies.
+        (
+            "def f(token):\n"
+            "    get(f'/api/{token}/me')\n"
+            "    logger.info('t %s', token)\n"
+        ),
+        # A resource-shaped name that is only logged, never a path segment.
+        ("def f(report_token):\n" "    logger.info('report %s', report_token)\n"),
+        # Query-string position is not a path segment.
+        (
+            "def f(report_token):\n"
+            "    get(f'/api/reports?token=/{report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # URL authority (userinfo) is not a path segment.
+        (
+            "def f(repo_token):\n"
+            "    clone(f'https://{repo_token}@github.com/org/repo')\n"
+            "    logger.info('cloning with %s', repo_token)\n"
+        ),
+        (
+            "def f(repo_token):\n"
+            "    clone(f'https://x/{repo_token}:x@host/')\n"
+            "    logger.info('cloning with %s', repo_token)\n"
+        ),
+        # The path use must be in the SAME function as the log call.
+        (
+            "def build(report_token):\n"
+            "    return f'/reports/{report_token}'\n"
+            "def log_it(report_token):\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # A nested function's path use does not exempt the outer log call.
+        (
+            "def outer(report_token):\n"
+            "    def inner():\n"
+            "        return f'/reports/{report_token}'\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # Keyword form with a bare `token=` key still fires.
+        (
+            "def run(report_token):\n"
+            "    get(f'/api/reports/{report_token}/queries')\n"
+            "    logger.info('report', token=report_token)\n"
+        ),
+        # Secrets that ride in a URL path carry an auth word: still fire.
+        (
+            "def post(secret_token):\n"
+            "    send(f'/services/T1/B2/{secret_token}')\n"
+            "    logger.info('posting with %s', secret_token)\n"
+        ),
+        (
+            "def post(bot_token):\n"
+            "    send(f'/bot/{bot_token}/sendMessage')\n"
+            "    logger.info('posting with %s', bot_token)\n"
+        ),
+        (
+            "def post(hook_id, webhook_token):\n"
+            "    send(f'/webhooks/{hook_id}/{webhook_token}')\n"
+            "    logger.info('posting with %s', webhook_token)\n"
+        ),
+        (
+            "def resume(session_token):\n"
+            "    get(f'/sessions/{session_token}')\n"
+            "    logger.info('resuming %s', session_token)\n"
+        ),
+        # Query-parameter use of a resource-shaped name is not a path segment.
+        (
+            "def f(report_token):\n"
+            "    get(f'/api/reports?report_token={report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # Query/fragment context is the whole f-string, not the previous Constant.
+        (
+            "def f(prefix, private_token):\n"
+            "    get(f'/api?prefix={prefix}/{private_token}')\n"
+            "    logger.info('t %s', private_token)\n"
+        ),
+        (
+            "def f(foo, report_token):\n"
+            "    get(f'/search?q={foo}&path=/{report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        (
+            "def f(report_token):\n"
+            "    get(f'/page#/reports/{report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # Header and body uses are not path segments either.
+        (
+            "def f(report_token):\n"
+            "    get('/api/reports', headers={'X-Report-Token': report_token})\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        (
+            "def f(report_token):\n"
+            "    post('/api/reports', json={'report_token': report_token})\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+    ],
+)
+def test_l010_still_fires_outside_the_resource_token_exemption(body: str) -> None:
+    assert "L010" in _ids(_L010_PREAMBLE + body)

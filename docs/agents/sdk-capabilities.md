@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.35.0
-source-sha:    70b9a34d684248a4349f1f67b1b8cae9483080db
-source-date:   2026-09-18T22:31:12+05:30
+sdk-version:   3.38.0
+source-sha:    c7db1d98458c5816fb6b4abfbc7887c5e51e6e26
+source-date:   2026-09-23T17:55:52+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 68 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 69 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -1609,6 +1609,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import InvalidInputError`
 - **Signature:** `class InvalidInputError(*, ...)`
 - **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `InvalidInputValueError`
+
+- **Import:** `from application_sdk.errors import InvalidInputValueError`
+- **Signature:** `class InvalidInputValueError`
+- **Summary:** :class:`InvalidInputError` that is also a :class:`ValueError`.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `LocalVolumeUnwritableError`
@@ -7280,6 +7287,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `identities: list[str]` `= []` — Verified identities (e.g., usernames, roles).
   - `scopes: list[str]` `= []` — Authorized scopes or permissions.
   - `expires_at: str` `= ''` — ISO-8601 expiry timestamp (empty if no expiry).
+  - `error: FailureDetails | None` — Typed failure for a failed result, e.g. ``AuthError(...).to_failure_details()``.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `CloudEventEnvelope`
@@ -7503,7 +7511,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `output_path: str` `= ''` — Local or object store path for output files.
   - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for excluding schemas/tables.
   - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for including schemas/tables.
-  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern identifying temporary tables.
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern for table/view names to exclude from extraction.
+  - `exclude_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Form-key name of :attr:`temp_table_regex` (FND-2733).
   - `source_tag_prefix: str` `= ''` — Tag prefix for source-level metadata.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 

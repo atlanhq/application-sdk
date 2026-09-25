@@ -231,7 +231,10 @@ The third is usually best and is never derivable from the finding alone: it
 depends on whether the tool is already present on the runner image and whether
 the repo consumes the shared CI path. Auto-applying a retry would also
 entrench a download that should have been deleted, which is why this rule is
-`autofixable = false` rather than mechanically fixed with the cheapest option.
+`autofixable = true` but `classification = "judgment"`: propose the option
+that matches how `atlan-openapi-app`'s workflows obtain the same tool (the
+reference named by `finding.canonical_reference`), never the cheapest one,
+and route every result to residue.
 
 Note this rule may not touch `.github/` mechanically in any case — see the
 Write-scope constraint in `remediate-finding.prose.md`; C001 is the sole

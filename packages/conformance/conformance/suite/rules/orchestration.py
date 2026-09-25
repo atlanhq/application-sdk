@@ -35,9 +35,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P004",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — the only orchestration import is "
-            "`from application_sdk.app import App, task`. temporalio appears in none of "
-            "the four reference apps' source."
+            "atlan-metabase-app app/connector.py — the only orchestration import is "
+            "`from application_sdk.app import App, entrypoint, task`, and the string "
+            "temporalio appears nowhere under that repo's app/ or tests/. Everything a "
+            "workflow needs, including `now`, `sleep` and `uuid4`, is re-exported "
+            "through the SDK seam."
         ),
         scope=RuleScope.APP,
         name="DirectTemporalImport",
@@ -76,9 +78,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P005",
         canonical_reference=(
-            "atlan-metabase-app app/connector.py — imports come from `application_sdk.app` "
-            "and `application_sdk.contracts`, both public. A private orchestration module "
-            "is one the SDK may move without a deprecation cycle."
+            "atlan-metabase-app app/connector.py — every SDK import is from a public "
+            "module: `application_sdk.app` (App, entrypoint, task), "
+            "`application_sdk.contracts.*` and `application_sdk.observability."
+            "logger_adaptor`. None reaches an underscore-prefixed path such as "
+            "application_sdk.execution._temporal, which the SDK may move without a "
+            "deprecation cycle."
         ),
         scope=RuleScope.APP,
         name="PrivateOrchestrationInternalImport",

@@ -51,6 +51,11 @@ class ProcessOutput(Output):
     results: FileReference  # large data stored in object store
 ```
 
+SQL extraction inputs normalise the connector form's filter keys before task
+inputs are built: for example `exclude_table_regex` is routed into
+`ExtractionInput.temp_table_regex`, which is what `SqlApp` hands to its fetch
+tasks. See [Excluding tables and views by name](../guides/sql-application-guide.md#excluding-tables-and-views-by-name).
+
 ## Reporting Failure as Data
 
 Most tasks report failure by raising -- Temporal marks the activity failed and retries it

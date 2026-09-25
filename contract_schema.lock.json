@@ -44,6 +44,12 @@
     },
     {
       "contract": "ExtractionInput",
+      "field": "exclude_table_regex",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionInput",
       "field": "extraction_method",
       "status": "active",
       "type": "str"
@@ -281,6 +287,12 @@
       "field": "exclude_filter",
       "status": "active",
       "type": "FilterMap | str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "exclude_table_regex",
+      "status": "active",
+      "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",

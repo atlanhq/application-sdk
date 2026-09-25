@@ -18,7 +18,9 @@ flagged when the manifest entry's module is the imported module or a submodule o
 it (``from application_sdk.app import AppError`` → matches ``app.base``;
 ``from application_sdk.errors import AppError`` → does not).  Method calls remain
 attribute-name-anchored (a method is not importable), an accepted false-positive
-risk at WARN.
+risk at WARN.  A deprecated ``property`` is never matched: it is read, not called,
+so a call ``x.client(...)`` cannot be a use of ``BaseE2ETest.client`` — matching it
+by name only ever hit boto3's ``session.client("s3")`` factory (FND-2711).
 
 Enum members are module-aware too, via the enum class they hang off: the member
 is only matched when its enum was imported from a module the manifest entry

@@ -93,6 +93,24 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "APPLICATION_VERSION is deprecated; use application_sdk.constants.APPLICATION_VERSION \u2014 the same constant, at the module that owns it. Will be removed in v3.41.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.interceptors.log",
+      "removal_version": "3.41.0",
+      "symbol": "APPLICATION_VERSION"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "COMMIT_SHA is deprecated; use application_sdk.constants.COMMIT_SHA \u2014 the same constant, at the module that owns it. Will be removed in v3.41.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.interceptors.log",
+      "removal_version": "3.41.0",
+      "symbol": "COMMIT_SHA"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "CLASSIFICATION_GATE_BROKEN is deprecated; use PreflightClassification.GATE_BROKEN \u2014 the enum member carrying the same wire value. Will be removed in v3.40.0.",
       "migration_target": true,
       "module": "application_sdk.execution._temporal.preflight_gate",
@@ -352,7 +370,7 @@
       "symbol": "SqlQueryExtractor"
     },
     {
-      "kind": "method",
+      "kind": "property",
       "marker_via": "decorator",
       "message": "BaseE2ETest.client is deprecated and will be removed in v4.0. Use application_sdk.testing.harness.automation_engine.AEClient and application_sdk.testing.harness.atlas directly, reaching them from synchronous code through application_sdk.testing.harness.run_sync.",
       "migration_target": true,

@@ -18,6 +18,7 @@ from application_sdk.common.task_queue import (
     derive_task_queue,
 )
 from application_sdk.contracts.base import Input, Output
+from application_sdk.errors.leaves import AuthError
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -106,6 +107,47 @@ class _AuthFailedHandler(Handler):
 
     async def test_auth(self, input: AuthInput) -> AuthOutput:
         return AuthOutput(status=AuthStatus.FAILED, message="bad credentials")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthTypedFailureHandler(Handler):
+    """Handler that returns AuthStatus.FAILED carrying a typed error."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(
+            status=AuthStatus.FAILED,
+            message="Authentication failed",
+            error=AuthError(
+                message="The source rejected the credentials.",
+                suggested_action="Check the username and password.",
+            ),
+        )
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _AuthCausedFailureHandler(Handler):
+    """Handler that builds its typed error from the caught exception (E019 advice)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        try:
+            raise RuntimeError("could not connect to host db.internal user=svc_x")
+        except RuntimeError as exc:
+            return AuthOutput(
+                status=AuthStatus.FAILED,
+                error=AuthError(
+                    message="The source rejected the credentials.", cause=exc
+                ),
+            )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         return PreflightOutput(status=PreflightStatus.READY, message="ready")
@@ -286,6 +328,33 @@ class TestAuthEndpoint:
         assert body["success"] is True
         assert body["data"]["status"] == "success"
         assert body["message"] == "auth ok"
+
+    def test_auth_typed_failure_surfaces_the_error_message(self) -> None:
+        client = _make_client(_AuthTypedFailureHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": [], "connection_id": "test-conn"},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["success"] is False
+        assert body["message"] == "The source rejected the credentials."
+        assert body["data"]["message"] == "The source rejected the credentials."
+        assert body["data"]["error"]["suggested_action"] == (
+            "Check the username and password."
+        )
+
+    def test_auth_typed_failure_never_returns_the_exception_text(self) -> None:
+        client = _make_client(_AuthCausedFailureHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": [], "connection_id": "test-conn"},
+        )
+        body = response.json()
+        assert body["message"] == "The source rejected the credentials."
+        assert "cause_repr" not in body["data"]["error"]
+        assert "db.internal" not in response.text
+        assert "svc_x" not in response.text
 
     def test_auth_success_envelope_has_all_fields(self) -> None:
         client = _make_client()
@@ -948,6 +1017,39 @@ class TestPreflightEndpoint:
         assert body["preflight"]["status"] == "not_ready"
         assert "should_block" not in body["preflight"]
         assert "status" not in body["data"]
+
+    def test_a_failed_checks_typed_error_outranks_its_message(self) -> None:
+        """On a returned verdict the typed error is the check's message in both
+        the legacy ``data`` map and the typed body; the legacy text never leaks."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="auth",
+                            passed=False,
+                            message="legacy text",
+                            error=AuthError(
+                                message="typed text", suggested_action="Rotate it."
+                            ),
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        body = response.json()
+        assert body["data"]["auth"]["message"] == "typed text"
+        assert body["data"]["auth"]["failureMessage"] == "typed text"
+        (check,) = body["preflight"]["checks"]
+        assert check["message"] == "typed text"
+        assert check["suggested_action"] == "Rotate it."
+        assert check["error"]["category"] == "AUTH"
+        assert "legacy text" not in response.text
 
     def test_preflight_not_ready_status_surfaced(self) -> None:
         # Block-ness is derivable from status == not_ready — there is no
@@ -8740,3 +8842,77 @@ class TestBundleMarketplaceEntrypoints:
             assert resp.json()["detail"] == "No manifest available"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+
+# ---------------------------------------------------------------------------
+# Boundary logs must not carry credentials the driver quoted
+# ---------------------------------------------------------------------------
+
+_LEAKY_SECRET = "hunter2-not-a-real-secret"
+_LEAKY_TEXT = (
+    f"connect failed: mongodb://svc:{_LEAKY_SECRET}@db.internal/"
+    f"?tlsCertificateKeyFilePassword={_LEAKY_SECRET}"
+)
+
+
+class _LeakyHandler(Handler):
+    """Every route fails with a driver error that quotes a connection URI.
+
+    ``chained`` wraps it in a HandlerError (the deprecated typed path);
+    otherwise the raw driver error escapes (the unexpected-exception path).
+    """
+
+    def __init__(self, chained: bool) -> None:
+        super().__init__()
+        self._chained = chained
+
+    def _fail(self) -> Exception:
+        driver = RuntimeError(_LEAKY_TEXT)
+        if not self._chained:
+            return driver
+        try:
+            raise driver
+        except RuntimeError as exc:
+            err = HandlerError("source failed")
+            err.__cause__ = exc
+            return err
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        raise self._fail()
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        raise self._fail()
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        raise self._fail()
+
+
+class TestBoundaryLogRedaction:
+    """The HTTP boundary is the only server-side record of a handler failure,
+    so it keeps the traceback — but through the SDK redaction helpers, never
+    as a raw ``exc_info`` that serialises the driver's message verbatim."""
+
+    @pytest.mark.parametrize("chained", [True, False], ids=["handler-error", "raw"])
+    @pytest.mark.parametrize(
+        "route", ["/workflows/v1/auth", "/workflows/v1/check", "/workflows/v1/metadata"]
+    )
+    def test_boundary_log_redacts_message_and_traceback(
+        self, route: str, chained: bool
+    ) -> None:
+        client = _make_client(handler=_LeakyHandler(chained=chained))
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post(route, json={"credentials": []})
+        assert response.status_code >= 500
+        assert _LEAKY_SECRET not in response.text
+
+        boundary = [
+            c
+            for c in ml.error.call_args_list
+            if c.args and isinstance(c.args[0], str) and "(request %s)" in c.args[0]
+        ]
+        assert boundary, f"no boundary log for {route}"
+        for call in boundary:
+            assert "exc_info" not in call.kwargs
+            rendered = call.args[0] % call.args[1:]
+            assert _LEAKY_SECRET not in rendered
+            assert "Traceback" in rendered  # the stack survives, redacted

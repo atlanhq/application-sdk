@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 from conformance.suite.rules import CATALOG, _combine_rules, get_rule
@@ -16,6 +17,8 @@ from conformance.suite.schema.disposition import (
 )
 from conformance.suite.schema.extensions import AtlanRuleProperties
 from pydantic import ValidationError
+
+import conformance
 
 
 def test_catalog_loads_without_error() -> None:
@@ -114,6 +117,121 @@ _WARN_JUSTIFYING_PHRASES = tuple(
         "warn (per the new-rule tier policy)",
     )
 )
+
+
+_AUTOFIX_DENYING_PHRASES = tuple(
+    _word_boundary(phrase)
+    for phrase in (
+        "not autofixable",
+        "no autofix",
+        "route to residue",
+        "routes to residue",
+        "rather than an autofix",
+    )
+)
+
+#: Prose that claims a rule IS autofixable. The inverse blind spot: rewording a
+#: batch of "NOT autofixable:" openings in one pass is easy to land on a rule
+#: whose flag was False all along, producing the same contradiction upside down.
+_AUTOFIX_CLAIMING_PHRASES = tuple(
+    _word_boundary(phrase) for phrase in ("autofixable per-site", "is autofixable")
+)
+
+
+def _flat_prose(rule: RuleDefinition) -> str:
+    """Rationale + description, lowercased, with all whitespace collapsed.
+
+    Collapsing is load-bearing, not tidiness. These strings are hand-wrapped
+    across source lines, so a phrase is routinely split by a newline mid-way
+    ("findings route\nto residue"). Matching the raw text misses those silently
+    — the same class of blind spot as matching source text rather than the
+    concatenated literals, one level further down.
+    """
+    return re.sub(r"\s+", " ", f"{rule.rationale}\n{rule.full_description}").lower()
+
+
+def test_autofixable_rules_do_not_deny_their_own_autofixability() -> None:
+    """An ``autofixable = True`` rule's own prose must not say it is not.
+
+    The fleet classification (FND-2477) set ``autofixable`` as a structured
+    attribute across the catalog, but most of these paragraphs were written
+    before it existed and still open with "NOT autofixable:" or "findings route
+    to residue rather than an autofix". The generated doc renders the flag and
+    the prose side by side, so the page contradicts itself — and the remediation
+    lane reads the flag, so it picks the rule up regardless.
+
+    That is not a cosmetic mismatch. The lane is driven entirely by this flag,
+    so every one of these is a rule that tells an operator "act" and then tells
+    the engineer reading the doc "this cannot be acted on mechanically". The
+    honest form is to keep the flag (the rule IS in the auto-fixable lane) and
+    say what the prose actually means: the fix is per-site human judgement, not
+    a mechanical rewrite.
+
+    Generalises the same failure mode as
+    ``test_catalog_block_rules_carry_no_warn_justifying_prose``: an attribute
+    was changed and the paragraph explaining the old value was left behind.
+    """
+    rules = load_catalog()
+    offenders = [
+        (rule.id, phrase.pattern)
+        for rule in rules
+        if rule.autofixable
+        for phrase in _AUTOFIX_DENYING_PHRASES
+        if phrase.search(_flat_prose(rule))
+    ]
+    assert not offenders, (
+        "autofixable rules whose own prose denies it: "
+        f"{offenders} — say the fix needs per-site judgement rather than that "
+        "the rule is not autofixable, or set autofixable=False"
+    )
+
+
+def test_autofix_denying_phrases_do_not_over_match() -> None:
+    """The guard must not fire on prose that merely mentions autofixing."""
+    prose = "the autofix rewrites the call in place".lower()
+    assert not any(p.search(prose) for p in _AUTOFIX_DENYING_PHRASES)
+    canonical = (
+        "not autofixable: orjson is not a drop-in replacement",
+        "it stays advisory (warn, no autofix) because",
+        "findings route to residue instead",
+        "findings routes to residue instead",
+        "so findings go rather than an autofix",
+    )
+    for phrase, sample in zip(_AUTOFIX_DENYING_PHRASES, canonical, strict=True):
+        assert phrase.search(sample), f"{phrase.pattern!r} stopped matching {sample!r}"
+
+    # A phrase wrapped across source lines must still match once flattened —
+    # the case the guard missed on its first outing (P023).
+    wrapped = re.sub(
+        r"\s+", " ", "remediation is a restructure, so findings route\nto residue."
+    )
+    assert any(
+        p.search(wrapped) for p in _AUTOFIX_DENYING_PHRASES
+    ), "a newline-split phrase must match after whitespace collapse"
+
+
+def test_non_autofixable_rules_do_not_claim_to_be_autofixable() -> None:
+    """The same contradiction, upside down.
+
+    A rule carrying ``autofixable=False`` whose prose opens "Autofixable
+    per-site…" reads exactly as wrong on the generated page, and is the easier
+    of the two to introduce: rewording a batch of "NOT autofixable:" openings in
+    one pass lands on the rules whose flag was False all along. Both directions
+    are the same defect — the flag and the paragraph disagreeing — so both are
+    guarded.
+    """
+    offenders = [
+        (rule.id, phrase.pattern)
+        for rule in load_catalog()
+        if not rule.autofixable
+        for phrase in _AUTOFIX_CLAIMING_PHRASES
+        if phrase.search(_flat_prose(rule))
+    ]
+    assert not offenders, (
+        "non-autofixable rules whose prose claims otherwise: "
+        f"{offenders} — say 'Not a mechanical rewrite: …' rather than "
+        "'Autofixable per-site', or set autofixable=True"
+    )
 
 
 def test_catalog_block_rules_carry_no_warn_justifying_prose() -> None:
@@ -245,7 +363,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # defines get/set_app_state but apps are the ones that (mis)use it as a
     # conduit (BLDX-1500). P028: hand-built qualifiedName f-strings — connectors
     # mint asset qualifiedNames; the SDK is the framework, not an asset author
-    # (BLDX-1499).
+    # (BLDX-1499). P052: asset serialization that bypasses entity_bytes —
+    # only apps map and write assets; the SDK owns the seam (FND-2725).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # P029/P030 + P037/P038/P039/P042: SDR-readiness — only apps declare
@@ -364,6 +483,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P048",
         "P049",
         "P051",
+        "P052",
         "C002",
         "D001",
         "D002",
@@ -640,6 +760,9 @@ def test_catalog_p_series_present() -> None:
     application-sdk below 3.30.0, the floor at which the interactive setup
     surfaces (test auth / preflight / metadata browsing) become available; a WARN
     readiness nudge, not a data-loss bug (DISTR-752).
+    P052 is EntitySerializationBypass — app code serializing a pyatlan asset
+    itself (to_nested_bytes / to_nested_dict / pyatlan_v9 to_atlas_format)
+    instead of through the SDK's entity_bytes seam (FND-2725).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -691,6 +814,7 @@ def test_catalog_p_series_present() -> None:
         "P049",
         "P050",
         "P051",
+        "P052",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -704,8 +828,9 @@ def test_catalog_f_series_present() -> None:
     F001–F005 were published as P032–P035 and P047 and moved to their own
     series in PR #3710 before any fleet suppression referenced them; the vacated
     P-ids are retired and never reused.  F006–F019 are the CONNECT-812 contract,
-    lifetime and behavioral rules; F016–F018 are the opt-in TEST rules.  F020
-    flags a suppression that still cites one of the five retired P-ids.
+    lifetime and behavioral rules; F016 checks the scenario matrix is defined,
+    and F017–F018 are retired in place until 0.40.0.  F020 flags a suppression
+    that still cites a retired id.
 
     There is deliberately no rule for a ``PreflightStatus.PARTIAL`` verdict: it
     is a read of a deprecated SDK enum member, which B001 already reports
@@ -854,8 +979,12 @@ def test_to_reporting_descriptor_roundtrip() -> None:
     assert descriptor.properties["atlan/tier"] == "block"
     assert descriptor.properties["atlan/mechanism"] == "static"
     assert descriptor.properties["atlan/category"] == "silent-swallow"
-    assert descriptor.properties["atlan/autofixable"] is False
+    assert descriptor.properties["atlan/autofixable"] is True
     assert descriptor.properties["atlan/orthogonalGate"] == "tests"
+    # The reference-app pointer rides the wire so a remediation model reading
+    # only the SARIF knows which file to open before proposing a fix.
+    assert descriptor.properties["atlan/canonicalReference"] == p001.canonical_reference
+    assert "atlan-" in descriptor.properties["atlan/canonicalReference"]
 
 
 def test_to_reporting_descriptor_roundtrip_forces_external_influence() -> None:
@@ -1296,13 +1425,48 @@ def test_non_app_loci_explain_themselves() -> None:
     )
 
 
-#: The only repos a canonical reference may name.  Four maintained reference
+def test_rules_citing_a_suppression_as_compliant_license_it() -> None:
+    """A rule whose compliant example IS a suppression must say so in ``terminal_state``.
+
+    ``canonical_reference`` answers "what does correct look like here". When
+    that answer is an inline ``ignore[<ID>]``, the rule is stating that a
+    justified directive is the end state — but only ``terminal_state`` licenses
+    one. A remediation lane reads ``terminal_state``, finds nothing, strips the
+    directive and either re-opens settled work every cycle or applies a default
+    edit the reference app deliberately rejected.
+
+    E020 was exactly this: its reference named seven justified suppressions in
+    ``atlan-metabase-app`` as the compliant example while declaring no
+    ``terminal_state`` (FND-2547).
+    """
+    # Only a suppression of the rule's OWN id is a carve-out that needs a
+    # licence. A directive for a different rule is just a site the reference
+    # happens to show — F020 (directive hygiene) cites well-formed
+    # ``ignore[P028]`` directives precisely as its compliant shape, and that says nothing
+    # about when F020 itself may be suppressed.
+    cites_suppression = re.compile(r"ignore\[([A-Z]\d+)\]")
+    unlicensed = [
+        r.id
+        for r in load_catalog()
+        if r.canonical_reference
+        and r.id in cites_suppression.findall(r.canonical_reference)
+        and not r.terminal_state
+    ]
+    assert not unlicensed, (
+        "these rules name an inline suppression as their compliant example but "
+        "declare no terminal_state to license it, so a remediation run cannot "
+        f"tell a deliberate carve-out from an unfixed violation: {unlicensed}"
+    )
+
+
+#: The only repos a canonical reference may name.  Three maintained reference
 #: apps (``docs/agents/canonical-apps.md``) plus the SDK itself for rules about
-#: SDK-owned surfaces.  An arbitrary connector is excluded on purpose: at any
-#: time some are mid-migration and some carry patterns the SDK has deprecated,
-#: so copying from one reproduces the fleet's median staleness.
+#: SDK-owned surfaces.  ``atlan-hello-world-app`` is deliberately absent: it is
+#: the scaffold, too minimal to be what a fix is mirrored from (owner decision,
+#: FND-2477).  An arbitrary connector is excluded on purpose: at any time some
+#: are mid-migration and some carry patterns the SDK has deprecated, so copying
+#: from one reproduces the fleet's median staleness.
 _REFERENCE_REPOS = (
-    "atlan-hello-world-app",
     "atlan-openapi-app",
     "atlan-mysql-app",
     "atlan-metabase-app",
@@ -1363,6 +1527,221 @@ def test_canonical_references_name_something_checkable() -> None:
     assert not vague, (
         "canonical_reference must name a reference repo AND a concrete path: "
         f"{vague}"
+    )
+
+
+#: The maintained reference apps alone — ``_REFERENCE_REPOS`` minus the SDK.
+_REFERENCE_APPS = tuple(repo for repo in _REFERENCE_REPOS if repo != "application_sdk")
+
+#: Auto-fixable rules allowed an SDK-only reference, each with the reason no
+#: reference app can supply one. An entry is a claim about all three apps, so
+#: it must be re-checked (and removed) the moment an app gains a real site.
+_SDK_ONLY_REFERENCE_EXEMPT = {
+    "E008": (
+        "no reference app has an `except ImportError` in the code E008 scans "
+        "(app/, main.py — tests/ is excluded); verified FND-2702"
+    ),
+    "T025": (
+        "no reference app is in bundle mode (each emits a single generated "
+        "manifest), so T025 inspects none of them; the positive shape is the "
+        "SDK e2e harness until a multi-mode reference app exists (FND-2702)"
+    ),
+}
+
+#: A positive citation: a reference-app name immediately followed by a path in
+#: it (``atlan-mysql-app app/handler.py``, ``atlan-openapi-app pyproject.toml``).
+#: A bare mention does not count — T025 once named all three apps only to say
+#: none of them has the shape, and a substring check accepted that.
+_POSITIVE_APP_CITATION = re.compile(
+    r"(?:" + "|".join(re.escape(app) for app in _REFERENCE_APPS) + r")\s+"
+    r"(?:[\w.\-]+/[\w.\-/]*"
+    r"|[\w.\-]+\.(?:py|pkl|ya?ml|json|toml|sql|lock|cfg|txt|md)\b"
+    r"|Dockerfile\b|\.gitignore\b)"
+)
+
+
+def test_autofixable_app_facing_rules_cite_a_reference_app() -> None:
+    """An auto-fixable rule's fix is mirrored from an app, so it must cite one.
+
+    ``test_canonical_references_name_something_checkable`` accepts
+    ``application_sdk`` as a reference repo, which is right for a rule whose fix
+    is an SDK seam — but an auto-fixable rule is applied by the remediation lane
+    by mirroring how a reference app already does it, and an SDK-only reference
+    gives the lane nothing to mirror. L012 and P003 both passed the substring
+    check this way while citing no app at all (FND-2702). The citation must be
+    positive — an app name followed by a path in it — so naming the apps as
+    counter-examples does not satisfy it.
+    """
+    uncited = [
+        r.id
+        for r in load_catalog()
+        if r.autofixable
+        and r.scope in (RuleScope.APP, RuleScope.BOTH)
+        and r.canonical_reference
+        and not _POSITIVE_APP_CITATION.search(r.canonical_reference)
+        and r.id not in _SDK_ONLY_REFERENCE_EXEMPT
+    ]
+    assert not uncited, (
+        "auto-fixable app-facing rules whose canonical_reference cites no file "
+        f"in a reference app — cite one in {list(_REFERENCE_APPS)}: {uncited}"
+    )
+    catalog = {r.id: r for r in load_catalog()}
+    stale = [
+        rule_id
+        for rule_id in _SDK_ONLY_REFERENCE_EXEMPT
+        if rule_id not in catalog
+        or not catalog[rule_id].autofixable
+        or _POSITIVE_APP_CITATION.search(catalog[rule_id].canonical_reference)
+    ]
+    assert (
+        not stale
+    ), f"_SDK_ONLY_REFERENCE_EXEMPT entries no longer needed — remove them: {stale}"
+
+
+#: A count of things inside a reference app ("eleven leaves", "seven such
+#: sites", "five modules"). The apps change weekly and nothing re-counts, so a
+#: number in a reference is a claim that silently goes false — E012's said
+#: "six leaves" while the app had eleven. Describe the shape, not the tally.
+_HARD_CODED_COUNT = re.compile(
+    r"\b(?:two|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+    r"fourteen|fifteen|sixteen|twenty|\d{1,3})\b(?:\s+\w+){0,2}\s+"
+    r"(?:leaves|sites|modules|templates|tests|scenarios|checks|classes|"
+    r"subclasses|entries|widgets|files|shims|keys|fields|categories|steps|"
+    r"nodes|types|directives|calls|records|findings|entrypoints|suites|jobs)\b",
+    re.IGNORECASE,
+)
+
+
+def test_canonical_references_do_not_hard_code_counts() -> None:
+    """A reference describes a shape; it must not assert how many of it exist."""
+    counted = {
+        r.id: m.group(0)
+        for r in load_catalog()
+        if r.canonical_reference
+        and (m := _HARD_CODED_COUNT.search(r.canonical_reference))
+    }
+    assert not counted, (
+        "canonical_reference hard-codes a count that will drift as the app "
+        f"changes — describe the shape instead: {counted}"
+    )
+
+
+def test_positive_app_citation_pattern() -> None:
+    """A citation needs a path after the app name; a bare mention is not one."""
+    assert _POSITIVE_APP_CITATION.search("atlan-mysql-app app/handler.py — …")
+    assert _POSITIVE_APP_CITATION.search("atlan-openapi-app pyproject.toml — …")
+    assert _POSITIVE_APP_CITATION.search("atlan-metabase-app Dockerfile — …")
+    assert not _POSITIVE_APP_CITATION.search(
+        "atlan-openapi-app, atlan-mysql-app and atlan-metabase-app each emit …"
+    )
+    assert not _POSITIVE_APP_CITATION.search("none of the three reference apps")
+
+
+def test_hard_coded_count_pattern() -> None:
+    """The guard fires on real tallies and ignores the reference-app count."""
+    assert _HARD_CODED_COUNT.search("app/failures.py — eleven leaves, each …")
+    assert _HARD_CODED_COUNT.search("Seven such sites exist across app/extracts/")
+    assert _HARD_CODED_COUNT.search("the 15 categorical leaves")
+    assert not _HARD_CODED_COUNT.search("none of the three reference apps")
+    assert not _HARD_CODED_COUNT.search("every leaf subclasses an SDK category")
+
+
+def test_canonical_references_never_name_the_scaffold() -> None:
+    """``atlan-hello-world-app`` is not a reference app (FND-2477).
+
+    The path check above cannot catch it: a reference naming hello-world *and*
+    one of the three apps passes the substring match. Guidance that sends the
+    lane to the scaffold is the same defect wherever the lane reads it — every
+    prose field of the rule, and the remediation programs (T010's pointer lived
+    in ``areas/tests.prose.md`` as well as in the rule).
+    """
+    scaffold = "atlan-hello-world-app"
+    offenders = [
+        r.id
+        for r in load_catalog()
+        if any(
+            scaffold in (text or "")
+            for text in (
+                r.canonical_reference,
+                r.full_description,
+                r.rationale,
+                r.rule_interactions,
+                r.terminal_state,
+            )
+        )
+    ]
+    programs = Path(conformance.__file__).parent / "programs"
+    offenders += [
+        str(path.relative_to(programs))
+        for path in sorted(programs.rglob("*.prose.md"))
+        if scaffold in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        f"rules / programs that point at {scaffold}, which is not a reference "
+        f"app: {offenders}"
+    )
+
+
+#: A ``canonical_reference`` that presents an inline suppression as the
+#: compliant shape ("… carries an inline ignore[D003] saying …").
+_REFERENCE_IS_A_SUPPRESSION = re.compile(
+    r"carr(?:y|ies|ied)\s+an\s+inline\s+(?:`?#?\s*conformance:\s*)?ignore\[",
+    re.IGNORECASE,
+)
+
+
+def test_reference_that_is_a_suppression_declares_a_terminal_state() -> None:
+    """If the compliant example IS a suppression, the rule must say so in the field.
+
+    A ``canonical_reference`` reading "… carries an inline ignore[X] explaining
+    why …" tells a reader that the directive is the end state. But the field
+    that a remediation lane actually consults for that is ``terminal_state``,
+    and when it is empty the lane sees a rule with findings and no declared
+    resting point — so it re-opens settled work every cycle, and a reviewer
+    cannot tell a deliberate carve-out from an unfixed violation.
+
+    Worse, prose is not load-bearing: the app that hosted the suppression can
+    delete it the moment the checker improves, and the reference then describes
+    a file state that no longer exists. D003 and S002 both hit this — D003's
+    reference described an ``ignore[D003]`` on ``aiomysql`` that the dialect-
+    string checker made unnecessary, and S002's described two directives an app
+    removed once the missing seam was reported.
+
+    So: cite a suppression as the compliant shape only alongside a
+    ``terminal_state`` that states the condition under which it is correct.
+    Better still, point the reference at code that needs no suppression.
+    """
+    offenders = [
+        r.id
+        for r in load_catalog()
+        if r.canonical_reference
+        and _REFERENCE_IS_A_SUPPRESSION.search(r.canonical_reference)
+        and not r.terminal_state
+    ]
+    assert not offenders, (
+        "canonical_reference presents an inline suppression as the compliant "
+        f"shape but no terminal_state says when that is correct: {offenders} — "
+        "either declare terminal_state, or point the reference at code that "
+        "needs no suppression"
+    )
+
+
+def test_reference_suppression_pattern_does_not_over_match() -> None:
+    """The guard must fire on the real shape and not on a passing mention."""
+    assert _REFERENCE_IS_A_SUPPRESSION.search(
+        "atlan-mysql-app pyproject.toml — aiomysql ... carries an inline "
+        "ignore[D003] saying SQLAlchemy loads it dynamically"
+    )
+    assert _REFERENCE_IS_A_SUPPRESSION.search(
+        "the two os.environ writes carry an inline ignore[S002] explaining that"
+    )
+    # A reference that merely says no suppression is needed must not trip it.
+    assert not _REFERENCE_IS_A_SUPPRESSION.search(
+        "app/handler.py preflight_check returns a typed row, which the rule "
+        "detects — no suppression needed"
+    )
+    assert not _REFERENCE_IS_A_SUPPRESSION.search(
+        "aiomysql is declared with no Python import and carries no suppression"
     )
 
 

@@ -132,6 +132,40 @@ def test_b001_fires_on_deprecated_method_call() -> None:
     assert "upload_to_atlan" in findings[0].message
 
 
+def test_b001_never_matches_a_deprecated_property_as_a_call() -> None:
+    # A property is read, not called: ``x.client(...)`` cannot be a use of the
+    # deprecated ``BaseE2ETest.client`` property (FND-2711).
+    manifest = Manifest(
+        symbols=(
+            DeprecatedSymbol(
+                symbol="client",
+                kind="property",
+                module="application_sdk.testing.e2e.base",
+                marker_via="decorator",
+                message="BaseE2ETest.client is deprecated.",
+                migration_target=True,
+                removal_version=None,
+            ),
+        ),
+    )
+    src = "import boto3\n\ns3 = boto3.Session(region_name='x').client('s3')\n"
+    tree, directives = _tree_and_directives(src)
+    assert scan_consumer(tree, "x.py", manifest, directives) == []
+
+
+def test_b001_silent_on_boto3_session_client_with_committed_manifest() -> None:
+    # The FND-2711 regression against the real manifest: every AWS-backed
+    # connector calls ``session.client("s3")`` / ``("sts")``.
+    src = (
+        "import boto3\n\n"
+        "def make(region):\n"
+        "    session = boto3.Session(region_name=region)\n"
+        "    return session.client('s3'), session.client('sts')\n"
+    )
+    tree, directives = _tree_and_directives(src)
+    assert scan_consumer(tree, "app/clients.py", load_manifest(), directives) == []
+
+
 def test_b001_fires_on_deprecated_enum_member() -> None:
     src = (
         "from application_sdk.common.types import DataframeType\n"
@@ -544,6 +578,24 @@ def test_extractor_finds_decorated_method() -> None:
     method = next(s for s in sites if s.symbol == "m")
     assert method.kind == "method"
     assert method.marker_via == "decorator"
+
+
+def test_extractor_records_deprecated_property_as_property() -> None:
+    src = (
+        "import functools\n"
+        "from typing_extensions import deprecated\n\n"
+        "class A:\n"
+        "    @property\n"
+        "    @deprecated('gone soon')\n"
+        "    def client(self):\n"
+        "        pass\n\n"
+        "    @functools.cached_property\n"
+        "    @deprecated('gone soon')\n"
+        "    def session(self):\n"
+        "        pass\n"
+    )
+    kinds = {s.symbol: s.kind for s in extract_sites(ast.parse(src))}
+    assert kinds == {"client": "property", "session": "property"}
 
 
 def test_extractor_finds_qualified_decorator() -> None:

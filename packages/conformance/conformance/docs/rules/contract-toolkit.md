@@ -17,25 +17,25 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [K001](#k001) | `ContractAmendsLegacyModule` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K002](#k002) | `LegacyContractApi` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K003](#k003) | `ContractLockDrift` | `block` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K003](#k003) | `ContractLockDrift` | `block` | `app` | `contract-toolkit` | yes | 0.9.0 |
+| [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | yes | 0.9.0 |
 | [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.13.0 |
-| [K007](#k007) | `ToolkitVersionOutdated` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
-| [K008](#k008) | `ToolkitSourceNonCanonical` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
+| [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | yes | 0.13.0 |
+| [K007](#k007) | `ToolkitVersionOutdated` | `warn` | `app` | `contract-toolkit` | yes | 0.12.0 |
+| [K008](#k008) | `ToolkitSourceNonCanonical` | `warn` | `app` | `contract-toolkit` | yes | 0.12.0 |
 | [K009](#k009) | `UnresolvedScaffoldPlaceholder` | `block` | `app` | `contract-toolkit` | — | 0.12.0 |
-| [K010](#k010) | `E2EScaffoldingMissing` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
-| [K011](#k011) | `AppIdMissingFromContract` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
-| [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
+| [K010](#k010) | `E2EScaffoldingMissing` | `warn` | `app` | `contract-toolkit` | yes | 0.12.0 |
+| [K011](#k011) | `AppIdMissingFromContract` | `block` | `app` | `contract-toolkit` | yes | 0.14.0 |
+| [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | yes | 0.14.0 |
 | [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
-| [K014](#k014) | `ReleaseModelUndeclared` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
+| [K014](#k014) | `ReleaseModelUndeclared` | `warn` | `app` | `contract-toolkit` | yes | 0.18.0 |
 | [K015](#k015) | `LegacyWorkflowTypeContractDrift` | `block` | `app` | `contract-toolkit` | — | 0.23.0 |
 | [K016](#k016) | `EntrypointArtifactSchemaMissing` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
 | [K017](#k017) | `ArtifactSchemaWriterMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
-| [K018](#k018) | `ManifestArgNotDeclaredOnInputContract` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
-| [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
+| [K018](#k018) | `ManifestArgNotDeclaredOnInputContract` | `warn` | `app` | `contract-toolkit` | yes | 0.24.0 |
+| [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | yes | 0.24.0 |
 | [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
-| [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | — | 0.26.0 |
+| [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | yes | 0.26.0 |
 
 ---
 
@@ -57,8 +57,8 @@ and aligns every app with the one supported workflow for contract evolution (BLD
 
 - **Compliant example:** atlan-metabase-app contract/app.pkl — `amends "@app-contract-toolkit/App.pkl"`, with a
   header comment recording that toolkit 0.10.0 consolidated NativeApp.pkl into App.pkl.
-  All four reference apps amend App.pkl; NativeApp.pkl and NativeAppBundle.pkl appear in
-  none of them.
+  All three reference apps amend App.pkl; none of their contracts amends NativeApp.pkl
+  or NativeAppBundle.pkl.
 
 The `contract/app.pkl` file (or any `contract/**/*.pkl` file) contains an `amends` line
 pointing at `NativeApp.pkl` or `NativeAppBundle.pkl` instead of the canonical `App.pkl`.
@@ -112,10 +112,22 @@ fails, blocking CI (BLDX-1479).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app contract/app.pkl — the one legacy-looking import it keeps,
-  `Connectors.pkl`, carries an inline ignore[K002] recording the pkl eval that proved
-  App.pkl does not re-export Connectors.* to amending contracts. flatManifestArgs and
-  workflowTypeOverride appear nowhere.
+- **Compliant example:** atlan-openapi-app contract/app.pkl — the whole pkl surface the scanner reads, and it
+  emits nothing: no `Config.pkl`, `Credential.pkl` or `Renderers.pkl` import, and none
+  of flatManifestArgs, manifestMetadataArgs or workflowTypeOverride. The
+  `Connectors.pkl` import it does keep carries no suppression and needs none — the
+  scanner excludes that module by design (App.pkl imports it internally and types
+  `connector` as `Connectors.Type` without re-exporting the constants, so every current
+  toolkit example still imports it).
+- **Already correct when:** `Connectors.pkl` is a detector-level exemption — no directive is needed or licensed. A
+  justified inline `// conformance: ignore[K002] <reason>` IS the correct end state only
+  for a match the scanner actually emits: an import of `Config.pkl`, `Credential.pkl`,
+  or `Renderers.pkl`, or a NativeApp-only property (`flatManifestArgs`,
+  `manifestMetadataArgs`, `workflowTypeOverride`) — where the reason records the `pkl
+  eval` that PROVED the replacement does not supply those symbols, or the match is a
+  scanner false positive (the name appears only inside a string). A directive that only
+  states the import is still needed is unremediated — run the eval and record what it
+  said, or migrate the import.
 
 The `contract/**/*.pkl` file contains one or more NativeApp-only properties or imports
 that do not exist in `App.pkl`:
@@ -169,7 +181,7 @@ comment-only line directly above it.
 
 ## K003 — `ContractLockDrift` {#k003}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.9.0
 
 > contract/PklProject pin does not match the resolved version in PklProject.deps.json — re-resolve the lock
 
@@ -190,9 +202,10 @@ committed artifacts look freshly generated.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app contract/PklProject — one pinned dependency,
-  `app-contract-toolkit@0.24.0`, and contract/PklProject.deps.json resolved from it. The
-  pin and the resolved lock are regenerated together; editing one alone is what produces
+- **Compliant example:** atlan-mysql-app contract/PklProject — one pinned dependency,
+  `app-contract-toolkit@0.26.0`, and contract/PklProject.deps.json records the same
+  `@0.26.0` under resolvedDependencies with its sha256. The pin and the resolved lock
+  are regenerated together by `pkl project resolve`; editing one alone is what produces
   the drift.
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
@@ -230,7 +243,7 @@ is justified.
 
 ## K004 — `MissingGeneratedArtifact` {#k004}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.9.0
 
 > contract/app.pkl exists but an expected generated artifact (atlan.yaml / manifest.json / _input.py) is missing — regenerate
 
@@ -248,10 +261,10 @@ it.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/generated/ — atlan.yaml at the repo root plus _input.py,
-  manifest.json and artifact_schemas.json in the generated tree. A contract/app.pkl with
-  any of those missing means the repo's own generate task has not run since the contract
-  last changed.
+- **Compliant example:** atlan-metabase-app app/generated/ — atlan.yaml at the repo root plus _input.py and
+  manifest.json in app/generated/, the three outputs K004 checks. A contract/app.pkl
+  with any of those missing means the repo's own generate task has not run since the
+  contract last changed.
 
 The app defines `contract/app.pkl` but one or more of the artifacts `pkl eval` is
 expected to produce is absent:
@@ -303,10 +316,10 @@ suppressed per file rather than ever graduating to BLOCK (BLDX-1414).
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/generated/_input.py — the first two lines are the AUTO-GENERATED
-  banner naming contract/app.pkl and the command that rebuilds it. The repo-root
-  atlan.yaml carries the same banner. A stripped banner is the fingerprint of a hand
-  edit that the next regeneration will erase.
+- **Compliant example:** atlan-metabase-app app/generated/_input.py — the file opens with the `# AUTO-GENERATED
+  from contract/app.pkl — DO NOT EDIT MANUALLY.` banner. The repo-root atlan.yaml
+  carries the same banner. A stripped banner is the fingerprint of a hand edit that the
+  next regeneration will erase.
 
 A file the contract toolkit is expected to generate (`atlan.yaml`, `app.yaml`, or a
 `.py` file under `app/generated/` other than `__init__.py`) does not carry the
@@ -335,7 +348,7 @@ proves full freshness.
 
 ## K006 — `ManifestContractFieldMismatch` {#k006}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.13.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.13.0
 
 > app/generated/**/manifest.json references an $.extract.outputs.<field> the entrypoint's Output contract does not declare
 
@@ -354,10 +367,12 @@ artifacts exist, without either layer needing visibility into the other's langua
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/generated/manifest.json — the $.extract.outputs fields correspond
-  to what the entrypoint's Output contract in app/contracts.py declares. The manifest is
-  what the platform reads to wire the DAG, so a field only one side knows about is a
-  hand-off that never happens.
+- **Compliant example:** atlan-openapi-app app/generated/manifest.json — the publish node's $.extract.outputs
+  refs (connection_qualified_name, transformed_data_prefix, publish_state_prefix,
+  current_state_prefix, assertion_only_enabled) each resolve to a field on
+  `OpenAPIConnectorOutput(PublishInputMixin, Output)` in app/contracts.py, the Output of
+  `run()` in app/connector.py. The manifest is what the platform reads to wire the DAG,
+  so a field only one side knows about is a hand-off that never happens.
 
 A `$.extract.outputs.<field>` JSONPath reference in a committed
 `app/generated/**/manifest.json` DAG node's `inputs.args` names a field that the
@@ -391,7 +406,7 @@ and deliberately deferred.
 
 ## K007 — `ToolkitVersionOutdated` {#k007}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.12.0
 
 > app-contract-toolkit dependency resolves to a version below the latest published one — bump and regenerate
 
@@ -404,9 +419,10 @@ against drift in CI, so the check stays correct offline inside any consumer repo
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app contract/PklProject — `app-contract-toolkit@0.24.0`. Renovate opens
-  the bump; the fix is to take it and re-run the repo's generate task, not to edit the
-  pin alone.
+- **Compliant example:** atlan-metabase-app contract/PklProject.deps.json — resolves the `app-contract-toolkit`
+  pin in contract/PklProject to the latest version data/toolkit_baseline.json records,
+  which is the comparison K007 makes. Renovate opens the bump; the fix is to take it and
+  re-run the repo's generate task, not to edit the pin alone.
 
 The `app-contract-toolkit` dependency in `contract/PklProject` resolves (per
 `contract/PklProject.deps.json`) to a version older than the latest the SDK publishes.
@@ -427,7 +443,7 @@ comment-only line directly above it) when a deliberate lag is justified.
 
 ## K008 — `ToolkitSourceNonCanonical` {#k008}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.12.0
 
 > app-contract-toolkit is sourced from a non-canonical base URI (fork / local path / wrong host)
 
@@ -440,10 +456,11 @@ package. The canonical base URI is read from the baked-in toolkit baseline.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app contract/PklProject — the toolkit URI is
-  `package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<version>`.
-  A fork, a local path, or a different host resolves a renderer nobody else in the fleet
-  is using.
+- **Compliant example:** atlan-openapi-app contract/PklProject — under the `["app-contract-toolkit"]` key the URI
+  is
+  `package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<version>`,
+  the single SDK-published package. A fork, a local path, or a different host resolves a
+  renderer nobody else in the fleet is using.
 
 The `app-contract-toolkit` dependency in `contract/PklProject` is pointed at a base URI
 other than the canonical SDK-published package
@@ -483,10 +500,12 @@ customer's install or crawl fails on identity plumbing they can neither see nor 
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/generated/manifest.json — the only brace token that survives
-  generation is `{deployment_name}` in the task queue, which the platform substitutes at
-  deploy time. Anything else ({app_name}, {name}) is a placeholder the toolkit was meant
-  to fill and did not, usually because the pin predates the template.
+- **Compliant example:** atlan-metabase-app app/generated/manifest.json — the only single-brace token that
+  survives generation is `{deployment_name}` in the task queues (e.g.
+  atlan-metabase-{deployment_name}), which the platform substitutes at deploy time; the
+  `{{credential}}`-style tokens in args are Automation Engine runtime substitutions and
+  are legitimate too. Anything else ({app_name}, {name}) is a placeholder the toolkit
+  was meant to fill and did not, usually because the pin predates the template.
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -522,7 +541,7 @@ in a `.json` output has no comment syntax to suppress and must be regenerated.
 
 ## K010 — `E2EScaffoldingMissing` {#k010}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.12.0
 
 > Single-entrypoint contract/app.pkl exists but generated app/generated/_e2e_base.py is missing
 
@@ -556,7 +575,7 @@ single-entrypoint path.
 
 ## K011 — `AppIdMissingFromContract` {#k011}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.14.0
 
 > atlan.yaml is present but declares no top-level app_id — the marketplace publish will 404
 
@@ -612,7 +631,7 @@ app that still ships an `atlan.yaml`.
 
 ## K012 — `GeneratePoeTaskMissing` {#k012}
 
-**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
+**Tier:** `block` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.14.0
 
 > pyproject.toml defines no [tool.poe.tasks.generate] task — the SDK Certify step will abort the publish
 
@@ -685,11 +704,12 @@ neither guesses.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/generated/manifest.json — the extract node declares `app_name:
-  metabase`, matching its own workflow type and task queue
-  (atlan-metabase-{deployment_name}). The publish node declares `app_name: publish`,
-  because that node runs in the publish app. app_name names the app that owns the queue,
-  never the app doing the routing.
+- **Compliant example:** atlan-metabase-app app/generated/manifest.json — the `publish` node declares `app_name:
+  publish` on atlan-publish-{deployment_name}, and the `qi` node declares `app_name:
+  query-intelligence` on atlan-query-intelligence-{deployment_name}. Each system-app
+  node names the app that owns its queue, never the connector doing the routing; K013
+  grades only such system-app and toolkit-owned nodes, not the connector's own extract
+  node.
 
 A node in a committed generated `manifest.json` declares an `app_name` that disagrees
 with the app actually running it. Two independent signals are checked, each against a
@@ -736,7 +756,7 @@ resolution is to fix the contract and regenerate. Never hand-edit `manifest.json
 
 ## K014 — `ReleaseModelUndeclared` {#k014}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.18.0
 
 > atlan.yaml declares no top-level release_model, so the app silently inherits the 'cd' default and auto-publishes on merge
 
@@ -1001,10 +1021,11 @@ app either way.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/generated/artifact_schemas.json — the declared schemas describe
-  what app/extracts/ actually writes under raw/, processed/ and transformed/. The Python
-  and the schema are two statements about one file, and only one of them is checked at
-  runtime.
+- **Compliant example:** atlan-openapi-app app/generated/artifact_schemas.json — `output_file` is declared
+  ndjson, and app/connector.py's transform writes exactly that: one `entity_bytes()`
+  line per entity into openapi_metadata.json, returned as
+  `FileReference(local_path=str(output_file))`. The Python and the schema are two
+  statements about one file, and only one of them is checked at runtime.
 
 An `artifactSchemas` entry in the committed `artifact_schemas.json` contradicts the
 app's own writer for the same `FileReference` contract field.
@@ -1051,7 +1072,7 @@ honour.
 
 ## K018 — `ManifestArgNotDeclaredOnInputContract` {#k018}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.24.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.24.0
 
 > app/generated/**/manifest.json sends an extract-node arg the entrypoint's Input contract cannot receive
 
@@ -1143,7 +1164,7 @@ hand-edited manifest). If the arg is genuinely not wanted, remove it from
 
 ## K019 — `FormKeyMissingFromManifestArgs` {#k019}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.24.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.24.0
 
 > a contract/app.pkl uiConfig form key has no matching {{...}} placeholder in any generated manifest.json
 
@@ -1265,7 +1286,7 @@ statement that the migration is scheduled, not that the shape is fine.
 
 ## K021 — `FilterFieldRejectsAeString` {#k021}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.26.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.26.0
 
 > An entrypoint Input contract types an include_*/exclude_* filter as a strict dict that rejects the flat JSON string the Automation Engine sends
 

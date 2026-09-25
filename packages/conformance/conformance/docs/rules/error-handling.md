@@ -24,32 +24,32 @@ They are documented alongside the orchestration, storage and client seam rules i
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [E001](#e001) | `BareExceptPass` | `block` | `both` | `silent-swallow` | — | 0.2.0 |
-| [E002](#e002) | `TypedExceptPass` | `block` | `both` | `silent-swallow` | — | 0.2.0 |
-| [E003](#e003) | `BroadContextlibSuppress` | `warn` | `both` | `silent-swallow` | — | 0.2.0 |
-| [E004](#e004) | `BroadExceptClause` | `warn` | `both` | `overly-broad-catch` | — | 0.2.0 |
+| [E001](#e001) | `BareExceptPass` | `block` | `both` | `silent-swallow` | yes | 0.2.0 |
+| [E002](#e002) | `TypedExceptPass` | `block` | `both` | `silent-swallow` | yes | 0.2.0 |
+| [E003](#e003) | `BroadContextlibSuppress` | `warn` | `both` | `silent-swallow` | yes | 0.2.0 |
+| [E004](#e004) | `BroadExceptClause` | `warn` | `both` | `overly-broad-catch` | yes | 0.2.0 |
 | [E005](#e005) | `ExceptBlockMissingExcInfo` | `warn` | `both` | `missing-traceback` | yes | 0.2.0 |
-| [E006](#e006) | `BareExceptWithBody` | `block` | `both` | `silent-swallow` | — | 0.2.0 |
-| [E007](#e007) | `ErrorToReturnValue` | `warn` | `both` | `error-to-return-value` | — | 0.2.0 |
-| [E008](#e008) | `ImportErrorWithoutLogging` | `warn` | `both` | `optional-import` | — | 0.2.0 |
-| [E009](#e009) | `ExceptBlockOnlyAssigns` | `warn` | `both` | `error-to-return-value` | — | 0.2.0 |
-| [E010](#e010) | `AsyncioGatherExceptionsUnexamined` | `warn` | `both` | `asyncio-unexamined` | — | 0.2.0 |
-| [E011](#e011) | `LoggingFilterUnsafeBody` | `warn` | `both` | `filter-safety` | — | 0.2.0 |
-| [E012](#e012) | `UntypedBuiltinRaise` | `warn` | `both` | `untyped-raise` | — | 0.2.0 |
-| [E013](#e013) | `LegacyAtlanErrorRaise` | `block` | `both` | `legacy-raise` | — | 0.2.0 |
-| [E014](#e014) | `ExceptLoopControlSwallow` | `warn` | `both` | `silent-swallow` | — | 0.2.0 |
-| [E015](#e015) | `ExceptionTextInErrorMessage` | `warn` | `both` | `error-message-hygiene` | — | 0.2.0 |
+| [E006](#e006) | `BareExceptWithBody` | `block` | `both` | `silent-swallow` | yes | 0.2.0 |
+| [E007](#e007) | `ErrorToReturnValue` | `warn` | `both` | `error-to-return-value` | yes | 0.2.0 |
+| [E008](#e008) | `ImportErrorWithoutLogging` | `warn` | `both` | `optional-import` | yes | 0.2.0 |
+| [E009](#e009) | `ExceptBlockOnlyAssigns` | `warn` | `both` | `error-to-return-value` | yes | 0.2.0 |
+| [E010](#e010) | `AsyncioGatherExceptionsUnexamined` | `warn` | `both` | `asyncio-unexamined` | yes | 0.2.0 |
+| [E011](#e011) | `LoggingFilterUnsafeBody` | `warn` | `both` | `filter-safety` | yes | 0.2.0 |
+| [E012](#e012) | `UntypedBuiltinRaise` | `warn` | `both` | `untyped-raise` | yes | 0.2.0 |
+| [E013](#e013) | `LegacyAtlanErrorRaise` | `block` | `both` | `legacy-raise` | yes | 0.2.0 |
+| [E014](#e014) | `ExceptLoopControlSwallow` | `warn` | `both` | `silent-swallow` | yes | 0.2.0 |
+| [E015](#e015) | `ExceptionTextInErrorMessage` | `warn` | `both` | `error-message-hygiene` | yes | 0.2.0 |
 | [E016](#e016) | `MissingExceptionChaining` | `warn` | `both` | `exception-chaining` | yes | 0.2.0 |
-| [E017](#e017) | `SecretNamedEvidenceKey` | `block` | `both` | `security` | — | 0.2.0 |
-| [E018](#e018) | `BareParentLeafRaise` | `warn` | `both` | `untyped-raise` | — | 0.2.0 |
-| [E019](#e019) | `ExceptionTextInContractField` | `warn` | `both` | `error-message-hygiene` | — | 0.9.0 |
-| [E020](#e020) | `HttpFailureToEmptyReturn` | `warn` | `app` | `error-to-return-value` | — | 0.9.0 |
+| [E017](#e017) | `SecretNamedEvidenceKey` | `block` | `both` | `security` | yes | 0.2.0 |
+| [E018](#e018) | `BareParentLeafRaise` | `warn` | `both` | `untyped-raise` | yes | 0.2.0 |
+| [E019](#e019) | `ExceptionTextInContractField` | `warn` | `both` | `error-message-hygiene` | yes | 0.9.0 |
+| [E020](#e020) | `HttpFailureToEmptyReturn` | `warn` | `app` | `error-to-return-value` | yes | 0.9.0 |
 
 ---
 
 ## E001 — `BareExceptPass` {#e001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** yes · **Since:** 0.2.0
 
 > Bare 'except: pass' silently discards every exception
 
@@ -75,7 +75,7 @@ even cleanup paths should log at DEBUG.
 
 ## E002 — `TypedExceptPass` {#e002}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** yes · **Since:** 0.2.0
 
 > Typed 'except SomeError: pass' discards exception silently
 
@@ -106,7 +106,7 @@ reasoning.
 
 ## E003 — `BroadContextlibSuppress` {#e003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** yes · **Since:** 0.2.0
 
 > contextlib.suppress() — check whether scope is too broad
 
@@ -129,7 +129,7 @@ the suppressed exception type before classifying.
 
 ## E004 — `BroadExceptClause` {#e004}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `overly-broad-catch` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `overly-broad-catch` · **Autofixable:** yes · **Since:** 0.2.0
 
 > Overly broad 'except Exception/BaseException' without exc_info
 
@@ -140,21 +140,62 @@ root-cause analysis impossible.
 ### What correct looks like
 
 - **Compliant example:** atlan-openapi-app app/api_client.py — `_parse_zip` catches Exception per archive member
-  and logs with exc_info=True. Where breadth really is the point, atlan-mysql-app
-  app/handler.py `preflight_check` carries an inline ignore[E004] naming the boundary it
-  guards; both shapes are accepted, an unexplained bare breadth is not.
+  and logs with exc_info=True. atlan-mysql-app app/handler.py shows the other two
+  accepted shapes: `_check_connectivity` converts the caught exception into a typed
+  PreflightCheck row and returns it, and `fetch_metadata` re-raises it chained as
+  MetadataFetchError — no suppression needed at any of the three; an unexplained bare
+  breadth is not accepted.
+- **Interacts with:** The set of forms that actually clear this rule is narrower than it looks, and two of the
+  exits are closed by other rules. The checker accepts logger.exception(), or
+  warning/error/critical carrying exc_info=True, or warning/error/critical routed
+  through a redaction helper. logger.exception() is not available: L017 forbids it under
+  ADR-0011. And DEBUG is accepted by none of the three, even with exc_info=True — while
+  E005 never inspects a DEBUG line at all. So a handler that deliberately logs a broad
+  catch at DEBUG with a full traceback satisfies E005 and cannot satisfy E004. Raising
+  the level is the only way through, which is a real decision on a cleanup path that
+  runs inside a finally: the WARNING lands beside the error actually being reported.
+  Reported from a consumer app in FND-2542; whether DEBUG should join the accepted set
+  is an owner call, not a mechanical fix. The same gap meets F005 inside a
+  preflight_check override, including helpers it calls: a best-effort cleanup handler
+  (close a client, release a session) has no verdict to return, DEBUG does not clear
+  E004 even through a redaction helper, and WARNING is what F005 forbids there. The
+  recommended log that satisfies both is logger.error (logger.critical also clears both)
+  with the exception routed through a redaction helper (safe_traceback,
+  sanitize_cause_repr); the alternative is to return the failure as typed data. Found in
+  a consumer app in FND-2569.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
 (worker loops, HTTP handlers) when properly logged with `exc_info=True`.  A handler that
-unconditionally re-raises while preserving the trace is exempt — bare `raise`, `raise
-X(...)`, or `raise X(...) from e` — because nothing is swallowed; `raise X(...) from
-None` (which discards the trace) and a conditional re-raise that can fall through still
+unconditionally re-raises while preserving the cause is exempt — bare `raise`, `raise
+X(...)`, or `raise X(...) from e` — because nothing is swallowed; a `raise X(...) from
+None` that drops the cause, and a conditional re-raise that can fall through, still
 fire.
 
-Exempt: handlers whose log call formats the exception through a recognised redaction
-helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged at a deliberate
-no-traceback boundary.
+Exempt: handlers whose warning/error/critical log call formats the exception through a
+recognised redaction helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged
+at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify.
+
+Also exempt: `raise X(...) from None` whose raised error carries the caught exception
+through such a helper (directly, or via a local assigned from one).  Severing the chain
+is how a frame holding a resolved credential avoids emitting a raw traceback;
+severed-and-redacted preserves the cause, severed-and-dropped does not.  Without this
+the only way to clear E004 at such a site is a warning/error log, which is exactly what
+L009 forbids before a raise.
+
+Also exempt: a handler that converts the caught exception into typed data and hands it
+back on *every* path — `return PreflightCheck(passed=False,
+error=SourceUnavailableError(cause=exc).to_failure_details())`, or a row staged in a
+local that the enclosing function returns below the `try`. The failure leaves the frame
+in inspectable form, so no log level decides whether it is visible; demanding one is
+what makes E004 and F005 jointly unsatisfiable at the last-resort arm of a preflight
+probe.  A `return None`, a bare sentinel, a swallowing path before the typed return, a
+raw hand-off of the binding (`failed_check(name, exc, start)` proves nothing about its
+type under a broad catch), and `except Exception:` with no `as` binding all still fire.
+
+The three exemptions are one principle: the exception must leave the frame in some
+inspectable form — re-raised with its trace, re-raised with a redacted cause, or
+returned as typed data.
 
 ---
 
@@ -170,8 +211,9 @@ often impossible under production data volumes.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/mysql.py — `_epoch_ms` carries exc_info=True even on its DEBUG line.
-  The level is a volume decision; keeping the traceback is not.
+- **Compliant example:** atlan-metabase-app app/api_types.py — `_to_millis` logs an unparseable timestamp at
+  WARNING with exc_info=True before returning None. The message says what failed; the
+  traceback says where.
 
 The message is logged but the stack trace is lost.  Add `exc_info=True` to every
 `logger.warning()` / `logger.error()` call inside an except block.  `logger.exception()`
@@ -186,7 +228,7 @@ sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodi
 
 ## E006 — `BareExceptWithBody` {#e006}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** yes · **Since:** 0.2.0
 
 > Bare 'except:' (no type) — catches SystemExit and KeyboardInterrupt
 
@@ -199,7 +241,7 @@ in-flight customer workflows mid-run instead of handing them off.
 ### What correct looks like
 
 - **Compliant example:** atlan-openapi-app app/api_client.py — every handler in `validate_spec_url` and
-  `_parse_zip` names a type. A bare `except:` appears nowhere in the four reference
+  `_parse_zip` names a type. A bare `except:` appears nowhere in the three reference
   apps, so SystemExit and KeyboardInterrupt still unwind the worker.
 
 Like P001 but the block may have a body.  Still catches KeyboardInterrupt and
@@ -209,7 +251,7 @@ SystemExit.  Always specify at least `except Exception:`.
 
 ## E007 — `ErrorToReturnValue` {#e007}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** yes · **Since:** 0.2.0
 
 > except block returns a value without logging — error hidden
 
@@ -219,20 +261,44 @@ unrelated, making the original failure invisible.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/extracts/databases.py — `fetch_databases_summaries` logs the HTTP
-  status and records a residual before returning []. Where the sentinel really is the
-  contract, atlan-openapi-app app/api_client.py `redact_url` carries an inline
-  ignore[E007] saying so.
+- **Compliant example:** atlan-openapi-app app/api_client.py — `redact_url` catches the ValueError from urlsplit,
+  logs it, and only then returns its '<unparseable url>' sentinel; the sentinel is the
+  function's contract, and because the event is logged first it needs no suppression. It
+  is the credential-boundary form of the fix: the log is `logger.debug` through
+  sanitize_cause_repr with no exc_info, because the url it guards may be a pre-signed
+  secret held in that frame. Outside such a boundary, log with exc_info=True.
+- **Interacts with:** E007 and E004 judge the same handler shape with one shared predicate
+  (typed_failure_scope in checks/error_handling/_helpers.py). A return that hands the
+  caught exception back as typed data already clears both rules: a call that receives
+  the binding wrapped in a typed error (`AuthRejectedError(cause=exc)`), including
+  inside a tuple, or, under a narrow catch, a call that receives the binding directly
+  (`self._failed(name, started, exc)`). Adding a log there is a wrong edit, and inside a
+  preflight_check override a warning/error log trades the E007 for an F005. E007 applies
+  the predicate per return and E004 applies it to every exit. Bare sentinels and
+  stringified exceptions (`str(exc)`, `repr(exc)`, an f-string or `.format(exc)`) still
+  fire, because a string is the failure laundered into a plain value. Found by a
+  consumer app's preflight probe arms in FND-2493.
+- **Already correct when:** A justified inline `# conformance: ignore[E007] <reason>` IS the correct end state where
+  the sentinel genuinely IS the function's contract — the caller is documented to treat
+  the empty/None return as a normal outcome rather than as success. The reason must say
+  which contract, as atlan-openapi-app `redact_url` does. Where the sentinel instead
+  stands in for a failure the caller cannot distinguish from success, the directive is
+  unremediated: either raise, or record the failure to a durable evidence trail and
+  declare the gap (see E020).
 
 Exception is converted to a return value (None, {}, [], False) with no trace.  Callers
 see a wrong result with no idea why.  At minimum log before returning; prefer raising a
 domain-specific exception instead.
 
+A return that hands the caught exception back as typed data is not flagged: the failure
+leaves the frame for the caller to report. This is the same typed-failure predicate E004
+uses.
+
 ---
 
 ## E008 — `ImportErrorWithoutLogging` {#e008}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `optional-import` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `optional-import` · **Autofixable:** yes · **Since:** 0.2.0
 
 > except ImportError without logging — environment issues hidden
 
@@ -242,9 +308,11 @@ signal in the observability stack.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app tests/e2e/test_connection_create.py — the module guard binds `except
-  ImportError as _exc` and carries the text into the pytest.skip reason, so a missing
-  SDK export is readable from the run instead of appearing as an empty skip.
+- **Compliant example:** application_sdk/clients/ssl_utils.py — `_get_default_ca_bundle_path` catches the
+  ImportError for the optional certifi dependency and logs that it is falling back to
+  the system CA paths before continuing, so the degraded path leaves a trace. None of
+  the three reference apps has an `except ImportError` in the code E008 scans (app/ and
+  main.py; tests/ is excluded), so the SDK is the only real compliant site.
 
 Optional-dependency guard.  Acceptable when the import is genuinely optional AND the
 fallback path is correct AND there is a comment.  Log at DEBUG if the module is
@@ -255,7 +323,7 @@ later with a confusing AttributeError).
 
 ## E009 — `ExceptBlockOnlyAssigns` {#e009}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** yes · **Since:** 0.2.0
 
 > except block only assigns a variable — error hidden with no log
 
@@ -276,7 +344,7 @@ no logging.  Add a `logger.warning(..., exc_info=True)` before the assignment.
 
 ## E010 — `AsyncioGatherExceptionsUnexamined` {#e010}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `asyncio-unexamined` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `asyncio-unexamined` · **Autofixable:** yes · **Since:** 0.2.0
 
 > asyncio.gather(return_exceptions=True) results not checked for exceptions
 
@@ -287,8 +355,10 @@ the caller checks each result for Exception.
 ### What correct looks like
 
 - **Compliant example:** No reference app calls asyncio.gather(return_exceptions=True); per-item failure is
-  decided at the item, as in atlan-metabase-app app/extracts/collections.py. Where an
-  app genuinely needs concurrency, the app-facing seam is
+  decided at the item, as in atlan-metabase-app app/extracts/dashboards.py, where
+  `fetch_dashboards_details` fetches one dashboard at a time and
+  `fetch_dashboard_details` logs each failed fetch and records it as a residual. Where
+  an app genuinely needs concurrency, the app-facing seam is
   application_sdk/execution/heartbeat.py — run_in_thread / run_fault_isolated /
   run_best_effort, which surface per-unit failures for you (`_runtime.offload` is the
   SDK-internal path; importing it from an app is what P005 exists to catch).
@@ -302,7 +372,7 @@ silently.  The pattern is only a bug when results are not checked;
 
 ## E011 — `LoggingFilterUnsafeBody` {#e011}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `filter-safety` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `filter-safety` · **Autofixable:** yes · **Since:** 0.2.0
 
 > logging.Filter.filter() body not wrapped in try/except — can crash caller
 
@@ -312,10 +382,11 @@ vector hidden inside observability infra.
 
 ### What correct looks like
 
-- **Compliant example:** No app writes a logging.Filter. Filtering, redaction and Temporal-context enrichment
+- **Compliant example:** No reference app writes a logging.Filter. Filtering and Temporal-context enrichment
   belong to application_sdk/observability/logger_adaptor.py, reached through
-  `get_logger`; atlan-mysql-app app/client.py shows the whole of an app's logging setup
-  — one import and one module-level logger.
+  `get_logger`, and redaction to application_sdk/errors/base.py (`sanitize_cause_repr` /
+  `safe_traceback`); atlan-mysql-app app/client.py shows the whole of an app's logging
+  setup — one import and one module-level logger.
 
 `Logger.handle()` calls `self.filter(record)` with no surrounding try/except — unlike
 handler errors, filter exceptions are NOT caught by `handleError()`.  An unguarded
@@ -330,7 +401,7 @@ propagate.
 
 ## E012 — `UntypedBuiltinRaise` {#e012}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** yes · **Since:** 0.2.0
 
 > raise ValueError/RuntimeError/... where a typed AppError applies
 
@@ -340,9 +411,9 @@ blind, on-call routing can't branch on it, SLA gates can't classify it. (per ADR
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/failures.py — six leaves, each subclassing an SDK category
-  (`InvalidInputError`, `AuthError`, `InternalError`, `PreconditionError`) and owning a
-  `code`. Raise one of these, never a bare ValueError or RuntimeError.
+- **Compliant example:** atlan-mysql-app app/failures.py — every leaf subclasses an SDK category (e.g.
+  `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns a `code`. Raise
+  one of these, never a bare ValueError or RuntimeError.
 
 SDK code raises a bare Python builtin.  The Automation Engine receives an opaque string
 — no category, code, audience, or retryable field. Dashboards are blind; on-call routing
@@ -354,7 +425,7 @@ require `TypeError`/`ValueError` for stdlib interoperability.
 
 ## E013 — `LegacyAtlanErrorRaise` {#e013}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `legacy-raise` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `legacy-raise` · **Autofixable:** yes · **Since:** 0.2.0
 
 > raise ClientError/ApiError/... (deprecated AtlanError stack)
 
@@ -368,8 +439,8 @@ read the raw string.
 ### What correct looks like
 
 - **Compliant example:** atlan-metabase-app app/errors.py — every error is imported from
-  `application_sdk.errors`. The deprecated AtlanError stack (ClientError, ApiError, …)
-  appears nowhere in the four reference apps.
+  `application_sdk.errors`. No app/ module in the three reference apps raises or imports
+  the deprecated AtlanError stack (ClientError, ApiError, …).
 
 `AtlanError` and its subclasses emit a `DeprecationWarning` at construction time and
 reach AE as opaque strings.  They produce no typed wire envelope.  Scheduled for removal
@@ -379,7 +450,7 @@ in v4.0.  Replace with the appropriate leaf from `application_sdk.errors`.
 
 ## E014 — `ExceptLoopControlSwallow` {#e014}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** yes · **Since:** 0.2.0
 
 > except block exits loop silently (continue/break) without logging
 
@@ -403,7 +474,7 @@ log at WARNING/ERROR with `exc_info=True`.
 
 ## E015 — `ExceptionTextInErrorMessage` {#e015}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** yes · **Since:** 0.2.0
 
 > Caught exception text interpolated into typed error message= — leaks unsanitised text
 
@@ -460,7 +531,7 @@ None` (intentional suppression).
 
 ## E017 — `SecretNamedEvidenceKey` {#e017}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** yes · **Since:** 0.2.0
 
 > Error evidence kwarg ending in _secret/_password/_token — rejected by wire layer at runtime
 
@@ -490,7 +561,7 @@ before any code runs.  Rename the evidence field to a safe key (e.g. `credential
 
 ## E018 — `BareParentLeafRaise` {#e018}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** yes · **Since:** 0.2.0
 
 > Raising a bare AppError leaf class without a domain subclass overriding code
 
@@ -500,9 +571,11 @@ right rotation, or alert on per failure mode.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/errors.py — every raise site uses a connector-specific subclass
-  with its own `code`, so failures bucket per connector on the dashboard instead of
-  collapsing into the bare category leaf.
+- **Compliant example:** atlan-openapi-app app/errors.py — nineteen connector-specific subclasses, each with its
+  own `code`; app/connector.py `download_cloud_spec` raises
+  `TenantObjectStoreUnavailableError` rather than the bare DependencyUnavailableError
+  leaf, so failures bucket per connector on the dashboard. The one bare-leaf raise, in
+  `run`, is the sanctioned InternalError(classification_pending=True) placeholder.
 
 Raising a parent leaf directly (`InternalError(...)`, `InvalidInputError(...)`) without
 a domain-specific subclass that overrides `code` collapses all failure modes for a given
@@ -519,7 +592,7 @@ suppressing.
 
 ## E019 — `ExceptionTextInContractField` {#e019}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** yes · **Since:** 0.9.0
 
 > Caught exception text interpolated into a returned contract message= field — leaks unsanitised text
 
@@ -531,9 +604,11 @@ aggregation bucket instead of one countable signal.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/handler.py — `test_auth` returns the fixed message "Authentication
-  failed"; the exception text goes to the log with exc_info=True, not into the contract
-  field a caller renders.
+- **Compliant example:** atlan-mysql-app app/handler.py — `preflight_check`'s probes classify the caught
+  exception into a typed error and return it on the check's `error=`, so the rendered
+  message is the error's authored text, never the exception's. For `test_auth`, return
+  the same typed error on `AuthOutput.error`; mysql's own `test_auth` adopts it in
+  atlan-mysql-app#729.
 
 Inside an `except … as exc:` block, a call (typically a typed response/output contract
 such as `AuthOutput` or `PreflightCheck`) is constructed with a `message=` keyword that
@@ -544,9 +619,11 @@ interpolation may be an f-string (`f'…{exc}…'`), `str(exc)`, `repr(exc)`, or
 concatenation (`'…: ' + str(exc)`). This is the non-`raise` counterpart of E015: the
 unsanitised upstream text still crosses the typed boundary into a field shown to
 operators and indexed in dashboards, and still collapses distinct failure modes into one
-variable-text bucket.  Keep `message=` a stable human summary and carry the exception
-detail in a typed field (e.g. raise a typed `AppError` with `cause=exc` upstream, or
-record it in a dedicated evidence field) rather than the user-facing contract message.
+variable-text bucket.  Classify the exception into the app's typed `AppError` and return
+it on the contract's `error=` field (`AuthOutput.error` / `PreflightCheck.error`) with
+`message=err.message`: the reason stays visible as authored text, one bucket per failure
+mode.  A fixed string also clears the rule but throws away the reason the caller needs,
+so it is not the default fix.
 
 Detection scope mirrors E015 exactly (they share one matcher): it covers f-string,
 `str(exc)`, `repr(exc)` and string-concatenation (`'…' + str(exc)`) interpolation of the
@@ -558,7 +635,7 @@ follow-up kept symmetric across E015/E019.
 
 ## E020 — `HttpFailureToEmptyReturn` {#e020}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `error-to-return-value` · **Autofixable:** yes · **Since:** 0.9.0
 
 > Checked HTTP-response failure returns an empty/None sentinel instead of raising — silently publishes a failure as success
 
@@ -569,10 +646,22 @@ there is no except/raise to key on; the failure is swallowed by a plain if-guard
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/extracts/databases.py — the one place an HTTP failure returns an
-  empty sentinel carries an inline ignore[E020] naming the residual file that records
-  it. Seven such sites exist across app/extracts/, each justified. Without that evidence
-  trail the empty return has to raise.
+- **Compliant example:** atlan-metabase-app app/extracts/responses.py — `json_or_raise` raises the typed
+  MetabaseSourceUnavailableError (endpoint=, http_status=) on a failed response. Where
+  one failure must not abort the crawl, the extract function catches that typed error:
+  app/extracts/databases.py `fetch_databases_summaries` logs it with exc_info=True,
+  records a residual and returns [], and the run declares the gap as PARTIAL_SUCCESS. No
+  site needs a suppression.
+- **Already correct when:** The failed response raises a typed AppError at the guard. That is the whole fix where
+  the failure should abort the run. Where the app must degrade instead, the end state
+  keeps the raise and adds an explicit `except <ThatTypedError>` at the tolerating
+  function. That handler logs with exc_info=True, records the failure to a durable
+  evidence trail (a residual file), returns the empty sentinel, and the run declares the
+  gap (e.g. OutputStatus.PARTIAL_SUCCESS) rather than reporting a complete crawl. Do NOT
+  apply a raise-only edit to a site that already records and declares its gap: that
+  deletes the app's ability to degrade, so a single flaky endpoint aborts the entire
+  crawl. Convert it to the typed catch instead. An inline ignore[E020] is not the end
+  state, because the typed catch keeps the same degradation with nothing suppressed.
 
 An `if` whose test inspects an HTTP response for failure (a negation or comparison on
 `is_success` / `ok` / `status_code`) and whose branch `return`\ s an empty/None sentinel
@@ -586,10 +675,12 @@ return []`) and its mirror, success-in-the- test → empty `else` (`if resp.is_s
 else: return []`).
 
 This escapes the rest of the E-series because there is no `except`/`raise` — it is a
-plain response guard.  Fix: raise a typed `AppError` (e.g. `DependencyUnavailableError`)
-on the failure branch so it propagates.  Anchored on HTTP-response markers and a
-failure-shaped test to avoid flagging ordinary `if x is None: return None` guards;
-suppress with `# conformance: ignore[E020] <reason>` where an empty result is the
-deliberate, documented contract.
+plain response guard.  Fix: raise a typed `AppError` on the failure branch
+(`SourceUnavailableError` or an app subclass of it for a customer-controlled source API;
+see E012).  Where one failure must not abort the crawl, keep the raise and catch that
+typed error in the tolerating function.  The handler logs with `exc_info=True`, records
+a residual and returns the empty sentinel, and the run declares the gap as
+`PARTIAL_SUCCESS`.  Anchored on HTTP-response markers and a failure-shaped test to avoid
+flagging ordinary `if x is None: return None` guards.
 
 ---

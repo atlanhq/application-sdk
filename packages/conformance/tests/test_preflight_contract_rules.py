@@ -232,3 +232,115 @@ def test_partial_verdict_has_no_preflight_rule(tmp_path, status):
     finding.
     """
     assert check(tmp_path, f"return PreflightOutput(status={status}, checks=[])") == []
+
+
+def findings(tmp_path: Path, body: str, extra: str = ""):
+    """``check`` with the whole finding, for assertions on the message."""
+    path = tmp_path / "handler.py"
+    path.write_text(
+        IMPORTS
+        + extra
+        + "\nclass H(Handler):\n    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        + "\n".join("        " + line for line in body.splitlines())
+        + "\n"
+    )
+    return scan(build_registry([path], tmp_path))
+
+
+AGGREGATION = "checks = []\nchecks.append(PreflightCheck(name='auth', passed=True))\n"
+
+
+def test_computed_aggregation_is_unresolved(tmp_path: Path) -> None:
+    """The baseline the next test is measured against."""
+    assert check(tmp_path, AGGREGATION + "return PreflightOutput(checks=checks)") == [
+        "F019"
+    ]
+
+
+@pytest.mark.parametrize(
+    "aggregation",
+    [
+        pytest.param("[*checks]", id="starred-copy"),
+        pytest.param("[*checks, PreflightCheck(name='spec', passed=True)]", id="mixed"),
+        pytest.param("(*checks,)", id="starred-tuple"),
+        pytest.param("[*list(checks)]", id="starred-call"),
+    ],
+)
+def test_list_display_does_not_clear_an_opaque_aggregation(
+    tmp_path: Path, aggregation: str
+) -> None:
+    """A cosmetic rewrap is not a resolution.
+
+    ``[*checks]`` is a semantically identical copy of ``checks``: the list has
+    ``elts`` so the node-type gate is satisfied, but nothing downstream can read
+    a role or a verdict out of the one ``Starred`` node.  If that cleared F019,
+    two characters would buy a green rule while an honest restructure bought
+    nothing, and the rule's fleet-wide signal would be worthless.
+    """
+    assert check(
+        tmp_path, AGGREGATION + f"return PreflightOutput(checks={aggregation})"
+    ) == ["F019"]
+
+
+def test_opaque_row_names_the_element(tmp_path: Path) -> None:
+    """The finding points at the opaque row, not at the whole call."""
+    reported = [
+        f
+        for f in findings(
+            tmp_path, AGGREGATION + "return PreflightOutput(checks=[*checks])"
+        )
+        if f.rule_id == "F019"
+    ]
+    assert len(reported) == 1
+    assert "`*checks`" in reported[0].message
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(
+            "row = PreflightCheck(name='auth', passed=True)\n"
+            "return PreflightOutput(checks=[row])",
+            id="single-binding",
+        ),
+        pytest.param(
+            "return PreflightOutput(checks=[self._probe()])\n",
+            id="method-returning-a-row",
+        ),
+        pytest.param(
+            "return PreflightOutput(checks=[PreflightCheck(name='a', passed=True)"
+            " if input else PreflightCheck(name='b', passed=True)])",
+            id="conditional-row",
+        ),
+        pytest.param(
+            "return PreflightOutput(checks=[probe()])",
+            id="helper-returning-a-row",
+        ),
+    ],
+)
+def test_resolvable_rows_are_not_reported(tmp_path: Path, body: str) -> None:
+    """The gate is resolvability, so every row the analysis can read stays clean."""
+    extra = "def probe():\n    return PreflightCheck(name='auth', passed=True)\n"
+    tail = (
+        "\n    def _probe(self):\n"
+        "        return PreflightCheck(name='auth', passed=True)\n"
+    )
+    path = tmp_path / "handler.py"
+    path.write_text(
+        IMPORTS
+        + extra
+        + "\nclass H(Handler):\n    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        + "\n".join("        " + line for line in body.splitlines())
+        + tail
+    )
+    assert [f.rule_id for f in scan(build_registry([path], tmp_path))] == []
+
+
+def test_rebound_row_is_unresolved(tmp_path: Path) -> None:
+    """Two assignments leave the value the list carries at runtime unknown."""
+    assert check(
+        tmp_path,
+        "row = PreflightCheck(name='auth', passed=True)\n"
+        "row = reconcile(row)\n"
+        "return PreflightOutput(checks=[row])",
+    ) == ["F019"]

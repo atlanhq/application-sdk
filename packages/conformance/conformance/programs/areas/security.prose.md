@@ -157,6 +157,20 @@ function/class context around `finding.line` before drafting.
      Do **not** fabricate a resolution call against a store that cannot supply the
      value.  Return `outcome = "suppress"`.
 
+     "Platform self-auth" on its own is not a sufficient reason.  Name the
+     **specific value** and the **specific SDK function or seam** that cannot
+     supply it — "no `SecretStore` seam supplies `ATLAN_OAUTH2_CLIENT_SECRET`,
+     injected into the pod by `envFrom` before any credential context exists" —
+     not "no seam exists" in the abstract.  A suppression that names the missing
+     seam can be retired the day that seam ships; one that gestures at a general
+     gap never is, and it outlives the problem (BLDX-1419).
+
+     Check first that the read really has no seam.  The fallback is for values
+     the app needs *before* it can resolve anything — process-startup auth
+     against Atlan itself.  A source credential the workflow already receives as
+     a `CredentialRef` has a seam whatever its env-var name looks like, so it
+     takes route 1.
+
   Never migrate a dev harness onto the seam: `run_dev*.py` and `scripts/` are
   excluded from detection by design, so an S002 finding there should not occur —
   if one does, treat it as a discover-scope bug, not a remediation target.

@@ -71,6 +71,12 @@ Linear / GPT proxy access: use the $PROXY_BASE and $PROXY_JWT env vars
 injected by mothership (see tools.md)."""
 
 
+# The rover runs every lane on one model, by operator request. Mothership does
+# not validate the name, so a typo only surfaces mid-run as the proxy's 400
+# "Invalid model name passed in model=...".
+MODEL = "gpt-6-luna"
+
+
 def build_payload(
     ticket: str, severity: str, run_date: str, gha_run_url: str
 ) -> dict[str, Any]:
@@ -92,6 +98,14 @@ def build_payload(
         # sdk_resolve_dispatch.py); the trade is that vuln-triage spend is
         # attributed to the review lane.
         "ai_gateway_key_name": "sdk_review",
+        # Model pinning, same three lanes as sdk_resolve_dispatch.py. Without
+        # these the rover inherits mothership's default models. The
+        # `sdk_review` key above must allowlist MODEL, or the first turn 403s.
+        # `small_fast_model` must be pinned explicitly: mothership's
+        # model_routing_env does `fast = small_fast_model or model`.
+        "model": MODEL,
+        "small_fast_model": MODEL,
+        "env_vars": {"CLAUDE_CODE_SUBAGENT_MODEL": MODEL},
         "prompt": build_prompt(ticket, severity, run_date, gha_run_url),
         "max_timeout_seconds": 7200,
         "idle_timeout_seconds": 1800,

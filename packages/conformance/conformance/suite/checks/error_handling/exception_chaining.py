@@ -54,8 +54,9 @@ class ExceptionChainingMixin:
                     node,
                     f"message= on {ctor} contains interpolated exception text "
                     f"(f-string/str(exc)/repr(exc)) — leaks unsanitised text across the "
-                    f"typed boundary and breaks dashboard grouping. Keep message= a stable "
-                    f"summary and carry the detail in a typed field (e.g. cause=exc).",
+                    f"typed boundary and breaks dashboard grouping. Classify into a typed "
+                    f"AppError and return message=err.message and error=err; a fixed string "
+                    f"clears the rule but is not the default fix.",
                 )
                 return
 

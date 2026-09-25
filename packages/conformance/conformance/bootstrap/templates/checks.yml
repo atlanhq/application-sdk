@@ -23,7 +23,9 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
-<% if system_deps %>    # Extra apt packages this repo needs before setup-deps' `uv sync`: a
+<% if checks_private_git_deps %>    # private-git-deps needs ORG_PAT_GITHUB from the reusable's declared secrets.
+    secrets: inherit
+<% endif %><% if system_deps %>    # Extra apt packages this repo needs before setup-deps' `uv sync`: a
     # dependency with no manylinux wheel is built from sdist on the runner
     # and needs its C headers present first. Managed by bootstrap's
     # --system-deps and auto-detected off this file on re-run, so
@@ -31,4 +33,8 @@ jobs:
     # as drift).
     with:
       system_deps: "<< system_deps >>"
+<% endif %><% if checks_private_git_deps %><% if not system_deps %>    with:
+<% endif %>      # This repo pins a private atlanhq dep via ssh:// in pyproject.toml, and
+      # setup-deps' `uv sync` has to clone it before any hook runs.
+      private-git-deps: << checks_private_git_deps >>
 <% endif %>

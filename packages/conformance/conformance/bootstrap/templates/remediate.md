@@ -71,6 +71,73 @@ in-loop `bootstrap`, which is per-finding and gated by recheck.
 **zero C002 findings**. One that appears means Phase 0 did not converge, and is
 an independent check on the same property.
 
+## Reference apps — load before any fix, verify against them after
+
+Do not fix from memory. Every app-facing rule names a `canonical_reference`
+(SARIF `atlan/canonicalReference` on the finding): a file in one of the three
+maintained reference apps that already has the compliant shape. Before the
+first edit of a run, make the **full checkout** of all three available:
+
+```
+REFS="${XDG_CACHE_HOME:-$HOME/.cache}/atlan-conformance/refs"
+mkdir -p "$REFS"
+for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app; do
+  if [ -d "$REFS/$app/.git" ]; then
+    git -C "$REFS/$app" fetch --depth 1 origin HEAD && git -C "$REFS/$app" checkout --quiet --detach FETCH_HEAD
+  else
+    git clone --depth 1 "https://github.com/atlanhq/$app.git" "$REFS/$app"
+  fi
+done
+echo "$REFS"
+```
+
+The clones live **outside the repo** on purpose, and every later read uses the
+absolute path the snippet echoes (shell state does not carry between
+commands). Anything inside the repo is part of what `detect` scans: a
+reference app cloned under `remediation/` put its `@entrypoint`s into the F016
+matrix and produced dozens of false BLOCK failures. The reference checkouts
+are read-only — never edited, never committed, never in a fix's
+`touched_files`.
+
+For every finding, in this order (the full contract is
+`$PROGRAMS/functions/remediate-finding.prose.md`, section *Reference apps,
+impact analysis and verification*):
+
+1. **Read** the file the finding's `canonical_reference` names — the whole
+   file — then grep that reference app for the same pattern, and mirror it.
+   Never invent an API, kwarg or config key the reference app does not use.
+2. **Analyse the impact** across the whole repo before applying: callers and
+   importers, tests that pin the old behaviour, the contract and generated
+   tree, `pyproject.toml`/`uv.lock`, `.env.example` and docs. Fold every
+   in-scope consequence into the same edit; list the rest in `impact`.
+3. **Verify** after applying and record it in `verification`: the finding is
+   gone (`recheck-narrowest`), the orthogonal gate passed, a whole-series
+   re-detect on the touched files introduced **no new finding for any rule**,
+   and the fixed site now reads like the reference. All four true, or revert.
+4. **Review the consequences** once verified: what did the fix change
+   behaviourally (control flow, signatures, runtime surfaces the gates do not
+   exercise, new runtime dependencies), and who is affected? Fix what is in
+   scope in the same unit and re-verify; list the rest in `impact.after`. An
+   empty `after` is a claim that nothing follows from the fix.
+5. **A suppression is a rule-defect signal.** If the finding will not clear
+   and the only way out is `# conformance: ignore[<RULE>]`, classify why:
+   `site-exception` (rule is right, this site is a justified carve-out — the
+   normal strict-mode suppression), `false-positive` (code matches the
+   reference app, detector still flags it) or `prescription-defect` (the
+   prescribed edit cannot clear it). For the last two, run
+   `$PROGRAMS/functions/report-rule-defect.prose.md`: it opens a
+   `fix(conformance):` PR against `atlanhq/application-sdk` with a failing
+   reproducer test (and the checker/prescription fix when local), for the SDK
+   owners to review. Suppress only WARN-tier findings for these reasons, and
+   only citing that PR in the justification; BLOCK-tier stays in residue with
+   the PR link. Never merge that PR; never edit this repo's own gate.
+
+`autofixable = true` rules (the **auto-fixable** ruleset) are applied this
+way. `autofixable = false` rules (the **migration** ruleset) are never applied
+by the loop: steps 1–2 still run, and the result is a `migration_brief` in
+residue — target state in the reference app, files that would change, the
+external skill to run — for the connector's per-rule sub-issue.
+
 ## Phase 1+ — run the loop
 
 Only after Phase 0 has converged (or been recorded as residue):

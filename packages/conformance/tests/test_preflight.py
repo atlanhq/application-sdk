@@ -36,7 +36,9 @@ def _scan(tmp_path: Path, files: dict[str, str]) -> list:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(src)
         paths.append(p)
-    return scan_all(paths, tmp_path)
+    # F016 grades the scenario matrix under tests/, which these handler-shape
+    # fixtures never define; it has its own suite in test_preflight_scenarios.py.
+    return [f for f in scan_all(paths, tmp_path) if f.rule_id != "F016"]
 
 
 def _ids(tmp_path: Path, src: str) -> list[str]:

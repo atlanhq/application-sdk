@@ -113,9 +113,9 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-metabase-app contract/app.pkl — `amends "
             '"@app-contract-toolkit/App.pkl"`, with a header comment recording that '
-            "toolkit 0.10.0 consolidated NativeApp.pkl into App.pkl. All four reference "
-            "apps amend App.pkl; NativeApp.pkl and NativeAppBundle.pkl appear in none of "
-            "them."
+            "toolkit 0.10.0 consolidated NativeApp.pkl into App.pkl. All three reference "
+            "apps amend App.pkl; none of their contracts amends NativeApp.pkl or "
+            "NativeAppBundle.pkl."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
@@ -192,10 +192,26 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K002",
         canonical_reference=(
-            "atlan-mysql-app contract/app.pkl — the one legacy-looking import it keeps, "
-            "`Connectors.pkl`, carries an inline ignore[K002] recording the pkl eval that "
-            "proved App.pkl does not re-export Connectors.* to amending contracts. "
-            "flatManifestArgs and workflowTypeOverride appear nowhere."
+            "atlan-openapi-app contract/app.pkl — the whole pkl surface the scanner "
+            "reads, and it emits nothing: no `Config.pkl`, `Credential.pkl` or "
+            "`Renderers.pkl` import, and none of flatManifestArgs, "
+            "manifestMetadataArgs or workflowTypeOverride. The `Connectors.pkl` import "
+            "it does keep carries no suppression and needs none — the scanner excludes "
+            "that module by design (App.pkl imports it internally and types `connector` "
+            "as `Connectors.Type` without re-exporting the constants, so every current "
+            "toolkit example still imports it)."
+        ),
+        terminal_state=(
+            "`Connectors.pkl` is a detector-level exemption — no directive is needed or "
+            "licensed. A justified inline `// conformance: ignore[K002] <reason>` IS the "
+            "correct end state only for a match the scanner actually emits: an import of "
+            "`Config.pkl`, `Credential.pkl`, or `Renderers.pkl`, or a NativeApp-only "
+            "property (`flatManifestArgs`, `manifestMetadataArgs`, `workflowTypeOverride`) "
+            "— where the reason records the `pkl eval` that PROVED the replacement does "
+            "not supply those symbols, or the match is a scanner false positive (the name "
+            "appears only inside a string). A directive that only states the import is "
+            "still needed is unremediated — run the eval and record what it said, or "
+            "migrate the import."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
@@ -292,10 +308,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K003",
         canonical_reference=(
-            "atlan-hello-world-app contract/PklProject — one pinned dependency, "
-            "`app-contract-toolkit@0.24.0`, and contract/PklProject.deps.json resolved "
-            "from it. The pin and the resolved lock are regenerated together; editing one "
-            "alone is what produces the drift."
+            "atlan-mysql-app contract/PklProject — one pinned dependency, "
+            "`app-contract-toolkit@0.26.0`, and contract/PklProject.deps.json records "
+            "the same `@0.26.0` under resolvedDependencies with its sha256. The pin "
+            "and the resolved lock are regenerated together by `pkl project resolve`; "
+            "editing one alone is what produces the drift."
         ),
         rule_interactions=(
             "The finding may anchor on generated output (app/generated/**), which is "
@@ -311,7 +328,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.9.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -378,9 +395,9 @@ RULES: tuple[RuleDefinition, ...] = (
         id="K004",
         canonical_reference=(
             "atlan-metabase-app app/generated/ — atlan.yaml at the repo root plus "
-            "_input.py, manifest.json and artifact_schemas.json in the generated tree. A "
-            "contract/app.pkl with any of those missing means the repo's own generate task "
-            "has not run since the contract last changed."
+            "_input.py and manifest.json in app/generated/, the three outputs K004 "
+            "checks. A contract/app.pkl with any of those missing means the repo's own "
+            "generate task has not run since the contract last changed."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
@@ -388,7 +405,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.9.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -457,9 +474,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K005",
         canonical_reference=(
-            "atlan-metabase-app app/generated/_input.py — the first two lines are the "
-            "AUTO-GENERATED banner naming contract/app.pkl and the command that rebuilds "
-            "it. The repo-root atlan.yaml carries the same banner. A stripped banner is "
+            "atlan-metabase-app app/generated/_input.py — the file opens with the "
+            "`# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.` banner. The "
+            "repo-root atlan.yaml carries the same banner. A stripped banner is "
             "the fingerprint of a hand edit that the next regeneration will erase."
         ),
         fix_locus=FixLocus.CONTRACT,
@@ -525,9 +542,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K006",
         canonical_reference=(
-            "atlan-metabase-app app/generated/manifest.json — the $.extract.outputs fields "
-            "correspond to what the entrypoint's Output contract in app/contracts.py "
-            "declares. The manifest is what the platform reads to wire the DAG, so a field "
+            "atlan-openapi-app app/generated/manifest.json — the publish node's "
+            "$.extract.outputs refs (connection_qualified_name, transformed_data_prefix, "
+            "publish_state_prefix, current_state_prefix, assertion_only_enabled) each "
+            "resolve to a field on `OpenAPIConnectorOutput(PublishInputMixin, Output)` in "
+            "app/contracts.py, the Output of `run()` in app/connector.py. The manifest is what the platform reads to wire the DAG, so a field "
             "only one side knows about is a hand-off that never happens."
         ),
         fix_locus=FixLocus.CONTRACT,
@@ -536,7 +555,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.13.0",
         orthogonal_gate="tests",
         rationale=(
@@ -604,7 +623,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K007",
         canonical_reference=(
-            "atlan-metabase-app contract/PklProject — `app-contract-toolkit@0.24.0`. "
+            "atlan-metabase-app contract/PklProject.deps.json — resolves the "
+            "`app-contract-toolkit` pin in contract/PklProject to the latest version "
+            "data/toolkit_baseline.json records, which is the comparison K007 makes. "
             "Renovate opens the bump; the fix is to take it and re-run the repo's generate "
             "task, not to edit the pin alone."
         ),
@@ -614,7 +635,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -658,10 +679,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K008",
         canonical_reference=(
-            "atlan-hello-world-app contract/PklProject — the toolkit URI is "
-            "`package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<version>`. "
-            "A fork, a local path, or a different host resolves a renderer nobody else in "
-            "the fleet is using."
+            "atlan-openapi-app contract/PklProject — under the "
+            '`["app-contract-toolkit"]` key the URI is '
+            "`package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<version>`, "
+            "the single SDK-published package. A fork, a local path, or a different "
+            "host resolves a renderer nobody else in the fleet is using."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
@@ -669,7 +691,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -712,9 +734,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K009",
         canonical_reference=(
-            "atlan-metabase-app app/generated/manifest.json — the only brace token that "
-            "survives generation is `{deployment_name}` in the task queue, which the "
-            "platform substitutes at deploy time. Anything else ({app_name}, {name}) is a "
+            "atlan-metabase-app app/generated/manifest.json — the only single-brace token "
+            "that survives generation is `{deployment_name}` in the task queues "
+            "(e.g. atlan-metabase-{deployment_name}), which the platform substitutes at deploy "
+            "time; the `{{credential}}`-style tokens in args are Automation Engine runtime "
+            "substitutions and are legitimate too. Anything else ({app_name}, {name}) is a "
             "placeholder the toolkit was meant to fill and did not, usually because the "
             "pin predates the template."
         ),
@@ -807,7 +831,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -867,7 +891,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.14.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -952,7 +976,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.14.0",
         orthogonal_gate="tests",
         rationale=(
@@ -1009,11 +1033,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K013",
         canonical_reference=(
-            "atlan-metabase-app app/generated/manifest.json — the extract node declares "
-            "`app_name: metabase`, matching its own workflow type and task queue "
-            "(atlan-metabase-{deployment_name}). The publish node declares `app_name: "
-            "publish`, because that node runs in the publish app. app_name names the app "
-            "that owns the queue, never the app doing the routing."
+            "atlan-metabase-app app/generated/manifest.json — the `publish` node declares "
+            "`app_name: publish` on atlan-publish-{deployment_name}, and the `qi` node "
+            "declares `app_name: query-intelligence` on "
+            "atlan-query-intelligence-{deployment_name}. Each system-app node names the app "
+            "that owns its queue, never the connector doing the routing; K013 grades only "
+            "such system-app and toolkit-owned nodes, not the connector's own extract node."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
@@ -1117,7 +1142,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -1444,9 +1469,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K017",
         canonical_reference=(
-            "atlan-metabase-app app/generated/artifact_schemas.json — the declared schemas "
-            "describe what app/extracts/ actually writes under raw/, processed/ and "
-            "transformed/. The Python and the schema are two statements about one file, "
+            "atlan-openapi-app app/generated/artifact_schemas.json — `output_file` is "
+            "declared ndjson, and app/connector.py's transform writes exactly that: one "
+            "`entity_bytes()` line per entity into openapi_metadata.json, returned as "
+            "`FileReference(local_path=str(output_file))`. The Python and the schema are two "
+            "statements about one file, "
             "and only one of them is checked at runtime."
         ),
         fix_locus=FixLocus.CONTRACT,
@@ -1568,7 +1595,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.24.0",
         orthogonal_gate="tests",
         rationale=(
@@ -1693,7 +1720,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.24.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -1863,7 +1890,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=False,
+        autofixable=True,
         since="0.26.0",
         orthogonal_gate="tests",
         rationale=(

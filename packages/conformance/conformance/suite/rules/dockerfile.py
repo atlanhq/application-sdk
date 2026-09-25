@@ -46,10 +46,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="I001",
         canonical_reference=(
-            "atlan-hello-world-app Dockerfile — `FROM "
-            "registry.atlan.com/public/app-runtime-base:3`. atlan-mysql-app Dockerfile "
-            "reaches the same ref through an overridable `ARG BASE_IMAGE`, which is the "
-            "shape to copy when SDK PRs need to rebuild the connector on a PR-scoped base."
+            "atlan-openapi-app Dockerfile — `ARG "
+            "BASE_IMAGE=registry.atlan.com/public/app-runtime-base:3` followed by "
+            "`FROM ${BASE_IMAGE}`. The committed default is the approved v3 tag, and "
+            "the ARG is what lets SDK PRs rebuild the connector on a PR-scoped base "
+            "with --build-arg without the default ever leaving the approved image."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -157,8 +158,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="I003",
         canonical_reference=(
-            "atlan-mysql-app — ENV ATLAN_APP_MODULE is declared in the Dockerfile as "
-            "well as atlan.yaml, so the image runs on its own."
+            "atlan-metabase-app Dockerfile — `ENV ATLAN_APP_MODULE=app.connector:MetabaseApp`, "
+            "the same value atlan.yaml declares under deploy.env and pools.default.env, so "
+            "the image starts the right class on its own and agrees with its manifest."
         ),
         rule_interactions=(
             "The value must match atlan.yaml's deploy.env exactly; read it from there "
@@ -171,7 +173,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-env",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="docker-build",
         since="0.5.0",
         rationale=(
@@ -210,8 +212,8 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-openapi-app Dockerfile — ATLAN_APP_MODULE and "
             "ATLAN_CONTRACT_GENERATED_DIR are baked because they describe the image; "
-            "ATLAN_APP_MODE is not, because it describes the deployment and arrives from "
-            "atlan.yaml at schedule time."
+            "ATLAN_APP_MODE is absent, because it describes the deployment, and the SDK "
+            "reads it from the process environment the deployment supplies at runtime."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,

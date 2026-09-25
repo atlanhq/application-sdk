@@ -44,6 +44,7 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "checks.yml",
     "commits.yaml",
     "release-gate.yaml",
+    "connector-review-gate.yaml",
     "update-dashboard.yml",
     "release.yaml",
     "tag-and-publish.yaml",
@@ -116,6 +117,7 @@ MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     ),
     (".github/scripts/build_conformance_args.py", "build_conformance_args.py"),
     (".github/scripts/probe_code_scanning.py", "probe_code_scanning.py"),
+    (".github/scripts/connector_review_gate.py", "connector_review_gate.py"),
 )
 
 # Local connector-review kit. These paths are owned by bootstrap once a repo
@@ -177,6 +179,10 @@ def render(
     use_ghcr_base: str = "",
     vuln_scan_lfs: str = "",
     build_publish_lfs: str = "",
+    conformance_private_git_deps: str = "",
+    release_private_git_auth: str = "",
+    build_publish_private_git_auth: str = "",
+    checks_private_git_deps: str = "",
     force_external_runtime: str = "",
     secrets_block: str = "",
     test_paths_block: str = "",
@@ -312,6 +318,10 @@ def render(
         use_ghcr_base=use_ghcr_base,
         vuln_scan_lfs=vuln_scan_lfs,
         build_publish_lfs=build_publish_lfs,
+        conformance_private_git_deps=conformance_private_git_deps,
+        release_private_git_auth=release_private_git_auth,
+        build_publish_private_git_auth=build_publish_private_git_auth,
+        checks_private_git_deps=checks_private_git_deps,
         force_external_runtime=force_external_runtime,
         secrets_block=secrets_block,
         test_paths_block=test_paths_block,

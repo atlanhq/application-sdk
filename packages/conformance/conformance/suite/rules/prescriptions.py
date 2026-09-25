@@ -33,30 +33,51 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P001",
         canonical_reference=(
-            "atlan-mysql-app — its generated contract/_input.py subclasses "
-            "ExtractionInput with no allow_unbounded_fields at all, because every "
-            "filter is a bounded concrete type."
+            "atlan-mysql-app app/generated/_input.py — the generated "
+            "`AppInputContract(ExtractionInput)` declares no allow_unbounded_fields at "
+            "all: every field it adds is a concrete str or bool, and the include/exclude "
+            "filters it inherits from ExtractionInput are already the bounded "
+            "`FilterMap | str`."
         ),
         rule_interactions=(
-            "B005 + ledger-guard box this in. Narrowing an @entrypoint field's value "
-            "type trips B005, and `conformance ledger-guard` is append-only (status "
-            "changes and additions allowed; retypes and deletions refused), so the "
-            "retype cannot land. Wrapping Any in MaxItems clears P001 AND B005 but "
-            "the class then raises PayloadSafetyError at import: Any is refused "
-            "unconditionally."
+            "B005 + ledger-guard bound the fix, but less tightly than they look, and "
+            "reading them as a wall is how a fixable site gets suppressed. "
+            "ledger-guard refuses a change to a RECORDED type; gen-contract-ledger "
+            "never deletes an entry and never rewrites a recorded type — so narrowing "
+            "the annotation IN SOURCE leaves the ledger entry untouched and the guard "
+            "passes. A retype rejected when applied to the ledger file is not the same "
+            "as one applied to the contract; run gen-contract-ledger then ledger-guard "
+            "and read the result rather than inferring it. Removing a recorded field "
+            "does fire B005 at BLOCK tier; retiring one is the sanctioned route, but "
+            "read it precisely. B005 skips a sunset field only when it is ABSENT from "
+            "source (live is None and status == 'sunset'), so retirement is: mark "
+            "deprecated=True with json_schema_extra={'x-lifecycle': 'sunset'}, "
+            "regenerate, THEN remove the field. A sunset field still declared with a "
+            "changed type is still a retype and is judged as one. Narrowing in place is "
+            "free only where _retype_is_compatible allows it: an inherited field, a "
+            "widening, or replacing Any with a concrete type in the SAME OUTER SHAPE "
+            "(which payload safety requires anyway, so it is not optional). "
+            "Wrapping Any in MaxItems clears P001 AND B005 "
+            "but the class then raises PayloadSafetyError at import: Any is refused "
+            "unconditionally. Note also that an app-level OVERRIDE of a base-class "
+            "field is often what introduces the Any — the SDK's own ExtractionInput "
+            "already models its filters payload-safely — and dropping an override is "
+            "not a retype of your contract at all."
         ),
         terminal_state=(
             "A justified inline `# conformance: ignore[P001] <reason>` at the "
-            "declaration site IS the fix for an @entrypoint contract field whose type "
-            "is recorded in the ledger — every alternative is blocked. Treat such a "
-            "site as compliant, not as unremediated."
+            "declaration site is the fix ONLY once narrowing in source, dropping an "
+            "app-level override, and retiring the field as sunset have each been tried "
+            "and shown to fail — with the refusal quoted. It is not licensed by the "
+            "field merely being recorded in the ledger. A site whose justification "
+            "names no attempted alternative is unremediated, not compliant."
         ),
         scope=RuleScope.BOTH,
         name="UnboundedContractFields",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-payload-safety",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.3.0",
         rationale=(
@@ -92,21 +113,49 @@ RULES: tuple[RuleDefinition, ...] = (
             "``MaxItems`` does not make it acceptable.  Removing the opt-out is a\n"
             "real fix only when every field is concretely typed.\n"
             "\n"
-            "**Deciding what to do.** Three outcomes, in order of preference:\n"
+            "**The opt-out does not govern unknown keys.**  ``Input`` drops keys\n"
+            "the contract does not declare (logging which ones, once) whether or\n"
+            "not ``allow_unbounded_fields`` is set — the flag only skips the\n"
+            "payload-safety type check.  So a contract that receives more args than\n"
+            "it reads (an AE DAG node's ``credential`` / ``credential_guid``) does\n"
+            "NOT need the opt-out to tolerate them; a justification that says it\n"
+            "does is wrong, and the opt-out comes off with nothing else changed\n"
+            "once every declared field is concretely typed.\n"
+            "\n"
+            "**Deciding what to do.** Four outcomes, in order of preference.  A\n"
+            "field being recorded in the ledger does NOT by itself close the first\n"
+            "three — reading it that way is what turns fixable sites into\n"
+            "suppressions.\n"
             "\n"
             "1. *Type the field concretely.*  For filter maps the SDK already ships "
             "``FilterMap`` (``application_sdk.templates.contracts``), a bounded "
             "``dict[str, list[str]]`` — see the ``mysql`` reference app, whose "
-            "generated contract needs no opt-out at all.\n"
+            "generated contract needs no opt-out at all.  Replacing ``Any`` with a "
+            "concrete type **in the same outer shape** is compatible under B005: "
+            "payload safety refuses ``Any`` at class-definition time, so the change "
+            "is required rather than optional.  A narrowing that changes the outer "
+            "shape is not, and is judged as an ordinary retype.\n"
             "\n"
-            "2. *Add a new, bounded field* and mark the old one ``deprecated`` in "
-            "the ledger.  Additions and status changes are always allowed.\n"
+            "2. *Drop an app-level override.*  An ``Any`` often arrives because the "
+            "app re-declared a field the SDK base already models safely.  Deleting "
+            "the override inherits the base type, and an inherited field is "
+            "compatible under B005 by construction — the app did not make the "
+            "change and cannot revert it.\n"
             "\n"
-            "3. *Keep the opt-out with a justified suppression.*  This is the right "
-            "answer, not a failure, when the field is an ``@entrypoint`` contract "
-            "field: B005 forbids changing its recorded type and ``ledger-guard`` "
-            "is append-only, so options 1 and 2 are closed and the carve-out is "
-            "genuinely unavoidable.  Say that in the reason.\n"
+            "3. *Retire a field nothing populates.*  Absent from the generated "
+            "manifest's args and constructed nowhere, it is dead weight.  Mark it "
+            "``deprecated=True`` with ``x-lifecycle: sunset``, regenerate, **then "
+            "remove it from source** — B005 skips a sunset field only once it is "
+            "gone.  A sunset field still declared with a changed type is still a "
+            "retype.\n"
+            "\n"
+            "4. *Keep the opt-out with a justified suppression.*  The last resort, "
+            "reached only after 1–3 have each been tried and shown to fail, with "
+            "the refusal quoted in the reason.  ``ledger-guard`` rejects a change "
+            "to a **recorded** type; it does not stop you narrowing the annotation "
+            "in source, because ``gen-contract-ledger`` never rewrites a recorded "
+            "type.  A justification naming no attempted alternative is "
+            "unremediated, not compliant.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p001",
     ),
@@ -122,7 +171,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="category-immutability",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.3.0",
         rationale=(
@@ -141,7 +190,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "``FailureCategory`` is the closed, single-axis taxonomy the SDK owns —\n"
             "every value is the canonical answer to *what happened* and is consumed as\n"
             "an immutable reporting metric (dashboards, SLA gates, on-call routing).\n"
-            "The 15 categorical leaves in ``application_sdk.errors.leaves`` (and\n"
+            "The categorical leaves in ``application_sdk.errors.leaves`` (and\n"
             "``AppError`` itself) are the sole defining sites: each leaf binds exactly\n"
             "one ``FailureCategory`` to its ``category`` ``ClassVar``.\n"
             "\n"
@@ -164,8 +213,13 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P003",
         canonical_reference=(
-            "application_sdk/errors/leaves.py — the 15 categorical leaves and the "
-            "prefix each one owns."
+            "atlan-openapi-app app/errors.py — every subclass extends an SDK leaf and "
+            "declares a code carrying that leaf's prefix (`ZipNoSpecFoundError"
+            "(InvalidInputError)` → `INVALID_INPUT_OPENAPI_ZIP_NO_SPEC`, "
+            "`SpecFetchAuthError(AuthError)` → `AUTH_OPENAPI_SPEC_FETCH`), and none "
+            "overrides to_failure_details, so that code is what dashboards read. The "
+            "prefix table itself is application_sdk/errors/leaves.py: the categorical "
+            "leaves and the prefix each one owns."
         ),
         terminal_state=(
             "A class whose MRO overrides to_failure_details() builds the wire "
@@ -179,7 +233,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="error-code-shape",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.3.0",
         rationale=(
@@ -291,10 +345,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P014",
         canonical_reference=(
-            "atlan-hello-world-app app/contracts.py — each @task has its own Input/Output "
-            "pair (GenerateGreetingsInput/Output, SummarizeInput/Output) subclassing the "
-            "SDK bases. A dict or a bare str across a task boundary has no schema to "
-            "evolve."
+            "atlan-openapi-app app/connector.py — each @task is typed with its own "
+            "pair: `extract_spec(self, input: ExtractSpecInput) -> ExtractSpecOutput`, "
+            "`download_cloud_spec(...) -> DownloadCloudSpecOutput`, `transform(...) -> "
+            "TransformOutput`, all subclassing the SDK Input/Output. A dict or a bare "
+            "str across a task boundary has no schema to evolve."
         ),
         scope=RuleScope.APP,
         name="UntypedTaskBoundary",
@@ -349,9 +404,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P015",
         canonical_reference=(
-            "atlan-metabase-app app/contracts.py — collection fields are bounded with "
-            "`MaxItems` rather than left as an open list of primitives, which is what "
-            "keeps the payload inside Temporal's limit as the source grows."
+            "atlan-metabase-app app/contracts.py — the collection filters are "
+            "containers of a typed model, `CollectionFilter = Annotated[dict[str, "
+            "CollectionSelection], MaxItems(1000)]`, and `CollectResidualsInput.residual_files` "
+            "is `Annotated[dict[str, FileReference], MaxItems(16)]`. The value type is what "
+            "this rule grades: a bounded dict of str would still fire, because MaxItems "
+            "keeps the payload small but gives the keys and values no schema."
         ),
         scope=RuleScope.APP,
         name="UnmodeledBoundedContractField",
@@ -405,10 +463,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P026",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — `self.require(input.greetings_file, "
-            '"greetings_file")`. The field is typed, so the right move is to assert it '
-            "is present, not to getattr past the type with a default that silently changes "
-            "behaviour."
+            "atlan-openapi-app app/connector.py — `extract_spec` reads "
+            "`input.spec_url` as a plain attribute and raises SpecUrlRequiredError "
+            "when it is empty. The field is typed, so the right move is to read it and "
+            "assert it is present, not to getattr past the type with a default that "
+            "silently changes behaviour when the field is renamed."
         ),
         scope=RuleScope.APP,
         name="GetattrOnTypedContractField",
@@ -502,6 +561,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "app/qualified_names.py carries a per-function ignore[P028] naming the creator "
             "whose grammar it mirrors."
         ),
+        terminal_state=(
+            "A justified per-function inline `# conformance: ignore[P028] <reason>` IS "
+            "the correct end state in two cases, and the reason must say which. "
+            "Either the caller needs the qualifiedName STRING and not the asset, and "
+            "the f-string mirrors a pyatlan creator's grammar — the reason then names "
+            "that creator and the module it lives in, so a drift in pyatlan can be "
+            "traced here. Or no pyatlan creator owns the grammar at all (a Process / "
+            "ColumnProcess identity, a content-hashed ARS key), in which case the "
+            "reason says so and the site is centralised as the single source of truth "
+            "rather than repeated. A directive on a site that could simply call the "
+            "creator is unremediated."
+        ),
         scope=RuleScope.APP,
         name="ManualQualifiedNameFString",
         tier=EnforcementTier.WARN,
@@ -541,5 +612,82 @@ RULES: tuple[RuleDefinition, ...] = (
             "qualifiedName string is genuinely required.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p028",
+    ),
+    RuleDefinition(
+        id="P052",
+        canonical_reference=(
+            "atlan-openapi-app app/connector.py — `_transform_blocking` writes every "
+            "connection, APISpec and APIPath line as `entity_bytes(asset, "
+            "entity_type=..., envelope=ENTITY_ENVELOPE)`; no mapper result is "
+            "serialized any other way."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[P052] <reason>` is the "
+            "correct end state only where the value serialized is not an entity "
+            "line at all — e.g. a `ConnectionRef` built from `to_atlas_format`, as "
+            "the SDK's own `application_sdk/contracts/types.py` does. The reason "
+            "must name what the output is used for. A directive on a site that "
+            "writes an asset to transformed output is unremediated."
+        ),
+        scope=RuleScope.APP,
+        name="EntitySerializationBypass",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.38.0",
+        rationale=(
+            "entity_bytes is the SDK's single serialization seam for a mapper "
+            "result: it owns connectionName injection, the declared entity "
+            "envelope and placeholder-guid stripping. A central fix there reaches "
+            "only the apps that go through it; an app that calls "
+            "asset.to_nested_bytes() itself silently misses every one, and because "
+            "reference apps are copied, the bypass spreads."
+        ),
+        short_description=(
+            "Pyatlan asset serialized in app code without going through " "entity_bytes"
+        ),
+        full_description=(
+            "App code under ``app/`` (``app/generated/`` excluded) turns a pyatlan\n"
+            "asset into wire output itself instead of through\n"
+            "``application_sdk.common.asset_serialization.entity_bytes``:\n"
+            "\n"
+            "* ``<x>.to_nested_bytes()`` or ``<x>.to_nested_dict()``;\n"
+            "* ``to_atlas_format(...)`` resolved to ``pyatlan_v9``, or the SDK's\n"
+            "  internal ``application_sdk.common.entity_envelope.to_atlas_format_dict``\n"
+            "  (also importable from ``application_sdk.common.asset_serialization``)\n"
+            "  (a bare imported name, aliased or not, or an attribute call through a\n"
+            "  module bound to it).\n"
+            "\n"
+            "Names resolve by lexical scope, as Python binds them (comprehensions\n"
+            "get their own scope; class bodies are skipped): a parameter or local\n"
+            "helper that shadows an imported encoder is not flagged, and an import\n"
+            "inside one function does not reach another.  Where a name may hold\n"
+            "several bindings, the rule fires if any is a bypass: a rebinding in a\n"
+            "branch, loop or ``try`` the call is not in may not run, and a\n"
+            "function reads a module global when called, so every module binding\n"
+            "counts there.  A simple saved alias is followed (``encode =\n"
+            "asset.to_nested_bytes; encode()``, ``enc = to_atlas_format``, chained\n"
+            "``a = b = …``); ``getattr`` / ``functools.partial`` / container\n"
+            "indirection is out of scope.\n"
+            "\n"
+            "``entity_bytes`` owns the dispatch, the ``connectionName`` injection,\n"
+            "the connector's declared entity envelope and the placeholder-guid\n"
+            "strip.  Bypassing it means none of those apply, and no SDK-side fix\n"
+            "can reach the app.\n"
+            "\n"
+            "Fix: serialize through\n"
+            "``entity_bytes(asset, envelope=...)`` with an envelope that keeps the\n"
+            "connector's released wire shape — ``to_nested_bytes()`` /\n"
+            "``to_nested_dict()`` output matches ``EnvelopeShape.PYATLAN``,\n"
+            "``to_atlas_format()`` output matches ``FLATTENED`` — and pass\n"
+            "``connection_name`` / ``last_sync`` unless the mapper already stamps\n"
+            "them.  When the line needs a key the model cannot hold, decode what\n"
+            "``entity_bytes`` produced and decorate it.  WARN tier — suppress with\n"
+            "``# conformance: ignore[P052] <reason>`` only for a genuine non-entity\n"
+            "use, such as a ``ConnectionRef`` built from ``to_atlas_format``.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p052",
     ),
 )

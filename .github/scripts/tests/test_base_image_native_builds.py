@@ -239,7 +239,6 @@ _CONSUMERS_ONLY = frozenset(
         "check-dapr-version.yaml",
         "daily-security-scan.yml",
         "update-dashboard.yaml",
-        "v3-readiness-check.yaml",
         "vuln-reconcile-on-release.yml",
     }
 )

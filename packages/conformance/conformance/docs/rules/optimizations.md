@@ -23,18 +23,18 @@ reassigned.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | — | 0.3.0 |
+| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | yes | 0.3.0 |
 | [O002](#o002) | `LegacyAssetSerialization` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
-| [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `both` | `dag-write-path` | — | 0.18.0 |
+| [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `both` | `dag-write-path` | yes | 0.18.0 |
 | [O006](#o006) | `DirectRocksdictImport` | `warn` | `app` | `canonical-dependency` | — | 0.18.0 |
 
 ---
 
 ## O001 — `OrjsonOverStdlibJson` {#o001}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `canonical-dependency` · **Autofixable:** yes · **Since:** 0.3.0
 
 > json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)
 
@@ -45,9 +45,10 @@ before migrating.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — JSONL is written and read with `orjson.dumps` /
-  `orjson.loads`. orjson is a core SDK dependency, so there is no install cost to paying
-  for the speed.
+- **Compliant example:** atlan-metabase-app app/utils.py — `write_jsonl` and `read_jsonl` serialise with
+  `orjson.dumps` / `orjson.loads`, and the stdlib json module is imported nowhere under
+  app/. orjson is a core SDK dependency, so there is no install cost to paying for the
+  speed.
 
 `orjson` is already a core dependency of the application SDK, so it is available to
 every app, and it is generally *at least* 10x faster than the stdlib `json` module.
@@ -59,11 +60,16 @@ dumps|loads` binding).  Bare `.json()` attribute calls (e.g. `response.json()`) 
 never flagged. `json.JSONDecodeError` handling, `json.dump`/`json.load` (file-object
 APIs orjson does not provide), and custom `JSONEncoder` subclasses are out of scope.
 
-NOT autofixable: `orjson` is not a drop-in replacement.  `orjson.dumps` returns `bytes`
-(not `str`), has no `indent=` / `sort_keys=` / `default=` keyword surface (use
-`option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS` and the `default` positional), and
-rejects some inputs stdlib accepts.  A blind `json.`→`orjson.` swap silently changes
-`str`→`bytes` and breaks callers — each site needs human judgement.
+Autofixable per-site, not mechanically: `orjson` is not a drop-in replacement.
+`orjson.dumps` returns `bytes` (not `str`), has no `indent=` / `sort_keys=` / `default=`
+keyword surface (use `option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS` and the
+`default` positional), and rejects some inputs stdlib accepts.  A blind
+`json.`→`orjson.` swap silently changes `str`→`bytes` and breaks callers — each site
+needs human judgement. The encoded bytes also change on any call that does not already
+pass `separators=(",", ":")` and `ensure_ascii=False`: orjson is always compact and
+always writes non-ASCII as UTF-8, with no option for either.  The parsed value is
+identical, so tests that compare parsed JSON pass; a consumer that hashes, commits or
+byte-compares the output sees the difference.
 
 ---
 
@@ -71,10 +77,10 @@ rejects some inputs stdlib accepts.  A blind `json.`→`orjson.` swap silently c
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
 
-> Asset serialised with .dict() — prefer the v9 asset.to_nested_bytes() API
+> Asset serialised with .dict() — serialize through the SDK's entity_bytes
 
-**Rationale:** The asset-mapper pattern serialises pyatlan assets to JSONL with the v9 API —
-asset.to_nested_bytes() — which emits the nested-entity wire shape the platform expects.
+**Rationale:** The asset-mapper pattern serialises pyatlan assets to JSONL through the SDK's
+entity_bytes seam, which emits the nested-entity wire shape the platform expects.
 Serialising an asset with the pydantic .dict() method produces a flat dict that still
 needs hand-conversion and drifts from the SDK's recommended pipeline (BLDX-1492;
 docs/upgrade-guide-v3.md). WARN/recommendation because .dict() is name-anchored — it can
@@ -82,13 +88,22 @@ also belong to a non-asset pydantic model — so the call needs a human glance.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/mysql.py — assets are serialised through `asset.to_nested_bytes()`,
-  the v9 wire shape, rather than through `.dict()`.
+- **Compliant example:** atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each asset through
+  `entity_bytes` under the app's `ENTITY_ENVELOPE`, rather than through `.dict()`, then
+  decodes that output to merge in the custom attributes pyatlan_v9 does not model.
 
 Flags a `.dict()` method call in a module that imports pyatlan asset models.  The
-asset-mapper pattern writes assets with the v9 serialisation API —
-`asset.to_nested_bytes()` — not the pydantic `.dict()` form (`docs/upgrade-guide-v3.md`
-explicitly says 'use the v9 serialisation API instead of .dict()').
+asset-mapper pattern writes assets through
+`application_sdk.common.asset_serialization.entity_bytes` — not the pydantic `.dict()`
+form (`docs/upgrade-guide-v3.md` explicitly says 'use the v9 serialisation API instead
+of .dict()').  Do not swap in `asset.to_nested_bytes()`: that bypasses the seam and
+trips P052.
+
+Legacy `pyatlan.model.assets` models: migrate the model to `pyatlan_v9.model.assets`
+first (O004), then switch serialization. A v1 model handed to `entity_bytes` falls
+through to `model_dump()`, whose snake_case field names are not the Atlas wire shape, so
+the serialization switch alone emits malformed entities. The finding message says which
+case applies.
 
 Coverage limits (biased to low false-positives at WARN): only `.dict()` is matched (not
 `.json()`, which is overwhelmingly `response.json()` on HTTP clients), and only in files
@@ -106,20 +121,21 @@ a known false-positive — suppress with `# conformance: ignore[O002] <reason>`.
 **Rationale:** The asset-mapper pattern's value is end-to-end typing: a mapper function constructs a
 pyatlan asset and returns it, so the return annotation documents which asset it produces
 and lets pyright check the call site. A mapper that builds an asset but declares no
-return type loses that guarantee (BLDX-1492; reference app atlan-openapi-app).
+return type loses that guarantee (BLDX-1492; reference app atlan-metabase-app).
 WARN/recommendation because adding the annotation is a safe, mechanical nudge.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/asset_mapper.py — `map_connection` is annotated `-> Connection`,
-  the pyatlan type it actually builds, so a wrong asset type is a type error rather than
-  a runtime surprise in the payload.
+- **Compliant example:** atlan-metabase-app app/asset_mapper.py — `map_collection` is annotated `->
+  MetabaseCollection`, the pyatlan_v9 type it constructs and returns (`map_dashboard`
+  and `map_bi_process` likewise), so a wrong asset type is a type error rather than a
+  runtime surprise in the payload.
 
 Flags a function that constructs a pyatlan asset (instantiates a class imported from
 `pyatlan_v9.model.assets` / `pyatlan.model.assets`) and **returns that asset**, but
 carries no `-> <Asset>` return annotation. The asset-mapper pattern is typed end-to-end
 — each `map_<entity>` function declares the pyatlan asset it produces (see
-`atlan-openapi-app`).
+`atlan-metabase-app`).
 
 Keyed on actually returning the constructed asset (`return Table(...)` or `asset =
 Table(...); ... return asset`), not just a `map_` name — so a helper that builds an
@@ -140,14 +156,14 @@ legacy pyatlan.model.assets classes are the memory-heavy DataFrame/transformer-e
 serialization path, kept only for connectors still on the built-in AtlasTransformer
 (which B001 steers off). pyatlan_v9 ships inside the existing pyatlan>=9 dependency, so
 the switch adds nothing to resolve. A below-the-bar recommendation (O-series, WARN): the
-v9 models differ in attributes and serialization (to_nested_bytes vs .dict()), so each
-site needs human judgement — never a blind name swap.
+v9 models differ in attributes and serialization (entity_bytes vs .dict()), so each site
+needs human judgement — never a blind name swap.
 
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app app/mysql.py — `from pyatlan_v9.model.assets import Column, Database,
-  Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets path appears in none
-  of the four reference apps.
+  Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets path appears nowhere
+  under the three reference apps' app/ directories.
 
 Flags app code that imports asset model classes from the legacy `pyatlan.model.assets`
 package, in any of the three import forms: `from pyatlan.model.assets import X`, `import
@@ -162,16 +178,17 @@ Scope is deliberately narrow — only `pyatlan.model.assets` is matched, never t
 `pyatlan`: enums and helpers that legitimately have no v9 equivalent (e.g. `from
 pyatlan.model.enums import AtlanConnectorType`) are out of scope.
 
-NOT autofixable: the v9 models are not a drop-in rename — attribute names and the
-serialization API differ (use `asset.to_nested_bytes()` rather than `.dict()`), so each
-construction site needs review. Suppress with `# conformance: ignore[O004] <reason>`
-when a connector is intentionally pinned to the legacy `AtlasTransformer` surface.
+Not a mechanical rewrite: the v9 models are not a drop-in rename — attribute names and
+the serialization API differ (serialize through `entity_bytes` rather than `.dict()`),
+so each construction site needs review. Suppress with `# conformance: ignore[O004]
+<reason>` when a connector is intentionally pinned to the legacy `AtlasTransformer`
+surface.
 
 ---
 
 ## O005 — `UnresolvedAppNamePlaceholder` {#o005}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `dag-write-path` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `dag-write-path` · **Autofixable:** yes · **Since:** 0.18.0
 
 > Hardcoded '{app_name}' left unsubstituted in a plain string literal
 
@@ -191,8 +208,9 @@ automatic fail.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app app/connector.py — the App declares `name = "hello-world"` and
-  atlan.yaml carries the same literal. The name is resolved once, at declaration; a
+- **Compliant example:** atlan-metabase-app app/connector.py — `MetabaseApp` declares `name = "metabase"` and
+  atlan.yaml carries `name: metabase`; even the upload prefix built in
+  `extract_metadata` spells the name out. The name is resolved once, at declaration; a
   `{app_name}` left in a plain string is a substitution nothing will ever perform.
 
 Flags a string `ast.Constant` containing the literal substring `{app_name}` when the
@@ -229,10 +247,10 @@ shared `application_sdk.common.task_queue` helper (`derive_task_queue` /
 `resolve_manifest_tokens`) lands in the SDK release that ships FND-195 and is the
 canonical target once available.
 
-NOT autofixable: the correct fix depends on where `app_name` is actually available in
-scope — sometimes an f-string is right, sometimes the value needs threading in from a
-caller first. Suppress with `# conformance: ignore[O005] <reason>` for a template
-resolved by a caller in a different file than the one being scanned.
+Not a mechanical rewrite: the correct fix depends on where `app_name` is actually
+available in scope — sometimes an f-string is right, sometimes the value needs threading
+in from a caller first. Suppress with `# conformance: ignore[O005] <reason>` for a
+template resolved by a caller in a different file than the one being scanned.
 
 ---
 
@@ -276,11 +294,11 @@ happened to also be valid bare JSON.  Neither connector's hand-rolled wrapper wa
 calling anything the SDK had a fleet-wide signal for at the time; this rule is that
 signal going forward.
 
-NOT autofixable: `SpillableDict`'s key type is restricted to `str | int | float | bool |
-bytes` and it has no equivalent to a custom `rocksdict.Options` tuning surface, so each
-call site needs review before migrating.  Suppress with `# conformance: ignore[O006]
-<reason>` when a from-scratch wrapper is deliberate (e.g. custom RocksDB tuning, or
-association-list output like `rocks_backed_dict.py`'s `append_to_key` that
+Not a mechanical rewrite: `SpillableDict`'s key type is restricted to `str | int | float
+| bool | bytes` and it has no equivalent to a custom `rocksdict.Options` tuning surface,
+so each call site needs review before migrating.  Suppress with `# conformance:
+ignore[O006] <reason>` when a from-scratch wrapper is deliberate (e.g. custom RocksDB
+tuning, or association-list output like `rocks_backed_dict.py`'s `append_to_key` that
 `SpillableDict` does not provide).
 
 ---

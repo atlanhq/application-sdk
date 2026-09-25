@@ -80,16 +80,6 @@ paths:
     ignore:
       - 'property "workflow_sha" is not defined'
 
-  # FALSE POSITIVE — actionlint only knows secrets declared under
-  # `workflow_call.secrets`, but a caller using `secrets: inherit` passes
-  # everything it has, declared or not. `APP_REPO_READ_TOKEN` is the caller-side
-  # name (see the header comment in that file), and it sits in a `||` fallback
-  # chain that ends at `secrets.GITHUB_TOKEN`, so the worst case is an empty
-  # term the chain skips over.
-  .github/workflows/v3-readiness-check.yaml:
-    ignore:
-      - 'property "app_repo_read_token" is not defined'
-
   # FALSE POSITIVE — deliberate kill switch, not dead code left by accident.
   # The job body and its input are retained on purpose so callers that still
   # pass `unit_tests_workflow_file` keep validating; unit-test enforcement

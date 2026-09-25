@@ -107,6 +107,27 @@ gated on the SDK exposing a qualifiedName seam.  All three draft a proposal for
 human review and never auto-apply.  (These rules are backed by
 `suite.checks.prescriptions` alongside P001–P003.)
 
+P052 (pyatlan asset serialized in app code — `to_nested_bytes()`,
+`to_nested_dict()`, `pyatlan_v9` `to_atlas_format()` or the SDK's internal
+`to_atlas_format_dict()`, called directly or through a saved local alias —
+instead of through `entity_bytes`) is suggest-only too.  The proposal replaces
+the call with `entity_bytes(asset, envelope=...)` from
+`application_sdk.common.asset_serialization`, passing the app's declared
+envelope and, unless the mapper already stamps them, `connection_name` and
+`last_sync`.  The envelope must preserve the connector's released wire shape:
+the call being replaced decides it.  `to_nested_bytes()` / `to_nested_dict()`
+wrote relationship refs under `relationshipAttributes`, so that site pins
+`EnvelopeShape.PYATLAN` (a deprecated one-cycle lever) rather than silently
+flipping to the default `FLATTENED`; `to_atlas_format()` already wrote the
+flattened shape, so `FLATTENED` preserves it.  Where the line needs a key the
+model cannot hold, decode what `entity_bytes` produced and decorate that (the
+`atlan-mysql-app` `map_table` shape).  The output still changes —
+`connectionName` and the placeholder-guid strip now apply — so it is always
+`"judgment"`.  A site whose
+output is not an entity line at all (a `ConnectionRef` built from
+`to_atlas_format`) gets an inline `# conformance: ignore[P052] <reason>`
+instead.
+
 ### Requires
 
 - `scope` — repository root path.
@@ -197,6 +218,50 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   class-definition time and the app will not import.  That is the edit that
   broke nine apps; do not draft it.
 
+  **The opt-out does not govern unknown keys.**  `Input` drops keys the
+  contract does not declare (logging which ones, once) whether or not
+  `allow_unbounded_fields` is set — the flag only skips the payload-safety
+  type check.  A contract that receives more args than it reads (an AE DAG
+  node's `credential` / `credential_guid`) does **not** need the opt-out to
+  tolerate them.  A justification that says it does is wrong; once every
+  declared field is concretely typed, the opt-out comes off with nothing
+  else changed.  Do not draft "keep the opt-out" for extra AE node args.
+
+  **Narrowing a value type is a DATA change — diff the payloads, not just the
+  types.**  `ledger-guard`, `validate_payload_safety` and an import check are
+  all *structural*: they prove the retype is permitted, that the annotation is
+  a legal payload type, and that the class defines.  **None of them proves
+  that a payload the app receives today still validates.**  Replacing
+  `dict[str, Any]` with `dict[str, str | int | bool | None]` silently rejects
+  every inbound payload carrying a nested value, and that failure surfaces at
+  submission or mid-run — never in a gate, and never in the re-detect.  A fix
+  can clear the finding, keep the ledger byte-identical, import cleanly, pass
+  the whole test suite, and still break every tenant whose stored credential
+  has one nested key.
+
+  So before drafting, enumerate the shapes the field actually carries, read
+  out of the code rather than imagined:
+
+  - **the field's parser / normalizer.**  The branches it takes
+    (`isinstance(x, dict)`, `isinstance(x, str)`, a JSON-decode fallback) *are*
+    the supported shapes, and its docstring usually lists them outright.
+  - **its producers** — the generated `manifest.json` args, the handler, the
+    integration and e2e fixtures, the local-dev payload.
+  - **the sibling contracts on the same hop.**  If the `@task` contracts
+    downstream already declare the narrow type, then a payload the entrypoint
+    accepts is already dying one hop later, inside an activity, after the
+    workflow has started.  The narrowing is then *aligning* the boundary, not
+    restricting it — which is the strongest argument for the fix and is
+    invisible unless you look for it.
+
+  Then diff accept/reject across the change and put the result in the
+  proposal, one row per shape.  A shape that goes from working to rejected is
+  a **blocker** — widen the annotation until it passes, or the fix is wrong.
+  A shape that moves from "fails mid-run" to "fails at submission" is an
+  improvement, and saying so is what tells a reviewer the narrowing is safe.
+  Writing "non-scalar values are now correctly rejected" without that table is
+  an assumption wearing the costume of a verification.
+
   Then draft, in order of preference:
 
   1. **Type the field concretely (preferred)** — replace `Any` (and
@@ -218,16 +283,95 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      `from application_sdk.contracts.types import MaxItems` if missing.
      Remove the opt-out last.  Return `outcome = "fix"`.
 
-  3. **Keep the opt-out with a justified suppression** — if a field cannot
-     be concretely typed (an `@entrypoint` contract field: B005 forbids
-     changing its recorded type and `ledger-guard` is append-only), draft
-     an inline `# conformance: ignore[P001] <concise justification>` on
-     the declaration line, where the justification explains *why* unbounded
-     fields are unavoidable here (not merely that the rule is suppressed).
-     Do **not** remove `allow_unbounded_fields`.  Return `outcome = "suppress"`.
+  3. **Retire a field nothing populates** — before concluding that an
+     `@entrypoint` field is immovable, check whether it is *live*.  Grep the
+     generated `manifest.json` `dag.<node>.inputs.args` for the field name and
+     grep the repo for constructions of the contract.  A field absent from the
+     manifest and constructed nowhere is dead weight (a defensive
+     `getattr(input, "x", {})` at the read site is the usual tell).
+
+     Retirement is **two steps, in order**: mark it
+     `Field(..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`,
+     regenerate the ledger, **then remove the field from source**.  B005 skips a
+     sunset field only when it is *absent* from source — `live is None and
+     status == "sunset"` — so a sunset field that is still declared is still
+     judged on its type, and marking it alone changes nothing.  An **unmarked**
+     removal fires B005 at BLOCK tier, which is why the order matters.
+
+     Do not narrow a retired field's type "in the same edit" as a shortcut:
+     that is an ordinary retype and is judged as one.  Narrowing in place is
+     free only where `_retype_is_compatible` allows it — an inherited field, a
+     widening, or replacing `Any` with a concrete type in the **same outer
+     shape** (which payload safety requires anyway).  Return `outcome = "fix"`.
+
+  4. **Keep the opt-out with a justified suppression** — the last resort, and
+     it is reached less often than it looks.
+
+     **Do not assume a recorded field is frozen in source.**  `ledger-guard`
+     refuses a change to a *recorded* `type`; `gen-contract-ledger` never
+     deletes an entry and never rewrites a recorded type, so **narrowing the
+     annotation in source leaves the ledger entry untouched and the guard
+     passes**.  A retype that is refused when applied to the ledger file is not
+     the same as one applied to the contract.  Verify, do not infer:
+
+     ```bash
+     uv run atlan-application-sdk-conformance gen-contract-ledger
+     uv run atlan-application-sdk-conformance ledger-guard \
+       --base-ref origin/main --ledger-path contract_schema.lock.json
+     ```
+
+     Only when 1–3 are all genuinely blocked, draft an inline
+     `# conformance: ignore[P001] <concise justification>` on the declaration
+     line, where the justification explains *why* unbounded fields are
+     unavoidable here (not merely that the rule is suppressed) and names which
+     of 1–3 was tried and what refused it.  Do **not** remove
+     `allow_unbounded_fields`.  Return `outcome = "suppress"`.
+
+  **Before returning `outcome = "fix"`: trace the field to its wire and to its
+  consumers.**  A contract field is an interface with three sides, and the type
+  is only one of them.  Narrowing it changes what the app *accepts* and what
+  downstream code *receives*, neither of which the conformance gates observe —
+  `recheck-narrowest` sees the finding clear and the test suite passes if
+  nothing happens to cover the boundary.  Record each of these in `impact`:
+
+  1. **What the wire sends.**  Find the field in the generated
+     `manifest.json` (`dag.<node>.inputs.args`), then find the input that feeds
+     it in `contract/app.pkl`.  The **widget class decides the shape** — e.g.
+     `APITree` is declared `fixed type = "object"` in the contract toolkit, so
+     it sends a nested JSON object, and a narrowed annotation that only accepts
+     a flat mapping would reject a live payload.  The repo does not control this
+     shape and cannot change it from the Python side.
+  2. **What already normalises it.**  A `@field_validator(..., mode="before")`
+     runs *before* validation, so it can absorb a shape difference the
+     annotation would otherwise reject.  Widening that validator is usually how
+     a field gets narrowed safely without touching the wire contract.  Say so
+     in the proposal rather than leaving the reader to infer it.
+  3. **Every consumer, and what it does with the value.**  Grep the field name
+     across the repo.  Ask what each consumer *actually requires* — iteration
+     and truth-testing (`if not x`, `for k in x`) behave identically for a dict
+     and a list, whereas indexing or `.items()` does not.  A narrowing that
+     preserves the operations the consumers perform is safe even when the
+     concrete type changes.
+  4. **Equivalence, demonstrated rather than argued.**  Run the pre-change and
+     post-change paths over every shape the wire has carried — the widget's own
+     output, a JSON string of it, an empty value, a malformed value, and any
+     legacy shape the old validator explicitly handled — and compare the
+     *consumer's* result, not the field's value.  Anything that decides scope
+     (a filter deciding which assets a crawl covers) must produce an identical
+     selection, because a silent change there widens or narrows a customer's
+     crawl without failing anything.  Add those cases as tests in the same unit;
+     the boundary was uncovered or the narrowing would not have been risky.
+
+  Worth expecting: **the old path may be the broken one.**  In one run the
+  pre-change validator turned a bare list into `{name: True}`, which the
+  consumer then iterated — `TypeError: 'bool' object is not iterable`, raised in
+  the task rather than as a validation error.  The narrowing fixed it as a side
+  effect, and the old unit test had pinned the broken intermediate value without
+  ever feeding it to the consumer.  If a shape crashes the legacy path, that is
+  a finding to report in the proposal, not a mismatch to reconcile.
 
 - **P002 CategoryFieldOverride** — a non-canonical subclass of `AppError` (or
-  any of its 15 categorical leaves) redeclares the `category` ClassVar in its
+  any of its categorical leaves) redeclares the `category` ClassVar in its
   own body.  Read the class definition around `finding.line`, then:
 
   1. Verify that the class inherits from a canonical leaf and that the parent's
@@ -512,6 +656,43 @@ drafting.
   downstream calls on the client then become `await`-ed, so this is a restructure
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
+
+**Execution-seam rules (P031, P036)** — suggest-only, WARN-tier;
+`classification` is always `"judgment"`.  Both replace a hand-rolled
+concurrency primitive with the SDK seam that owns its lifecycle, and both need
+`result.evidence` citing the seam's own path plus the reference-app call site —
+the blind gate cannot tell a correct hop from a plausible one.
+
+- **P031 SharedDefaultExecutorOffload** — blocking work is offloaded onto
+  asyncio's **shared default** executor: `asyncio.to_thread(fn, ...)`, or
+  `loop.run_in_executor(None, fn, ...)` (the `None` is what makes it shared).
+  Temporal's Python SDK uses that same executor internally, so long blocking
+  calls there can exhaust it and deadlock the worker.  Draft a swap to the
+  SDK's dedicated sdk-blocking pool —
+  `await self.run_in_thread(fn, arg)` inside an `App`, otherwise
+  `from application_sdk.execution.heartbeat import run_in_thread`.  Keep the
+  callable **passed, not called** (`run_in_thread(fn, arg)`, never
+  `run_in_thread(fn(arg))`), and materialise any lazy iterator inside the
+  thread, exactly as P023 prescribes.  A `run_in_executor` whose first
+  argument is a *real* executor the app owns is a deliberate choice, not this
+  defect — say so and route to residue rather than rewriting it.  Mirror
+  `atlan-openapi-app app/connector.py`.  Cite as evidence
+  `application_sdk/execution/heartbeat.py` (`run_in_thread`) and that call
+  site.
+
+- **P036 HandRolledProcessIsolation** — the code builds a process-based
+  primitive directly: `ProcessPoolExecutor(...)`, `multiprocessing.Process(...)`
+  or `multiprocessing.Pool(...)`.  The SDK seam owns the pool lifecycle, the
+  timeout, and what a crashed child means for the activity — three things a
+  hand-rolled pool gets wrong silently.  Draft a swap to
+  `run_fault_isolated(...)` when a crash must fail the activity, or
+  `run_best_effort(...)` when it must not, both from
+  `application_sdk/execution/heartbeat.py`; state which semantic you assumed
+  and why, because that is the whole decision.  No reference app builds one,
+  so there is no call site to copy — cite the seam module and the two
+  functions' own contracts as evidence.  This is a restructure (the child's
+  entry function and its arguments must be picklable): route to residue with
+  the proposed shape, never a mechanical constructor swap.
 
 **SDR-readiness rules (P029/P030, P037/P038/P039, P042, P051)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on

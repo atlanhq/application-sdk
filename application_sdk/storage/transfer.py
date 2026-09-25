@@ -47,6 +47,7 @@ from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.errors import InternalError
 from application_sdk.observability.logger_adaptor import get_logger
 
 # The batch key listers are imported at top level, unlike the other
@@ -704,8 +705,12 @@ async def upload(
             # ``assert`` so it is not stripped under ``python -O`` and narrows the
             # type for the ``_upload_from_store`` call below.
             if source_resolved is None:  # pragma: no cover — structurally unreachable
-                raise RuntimeError(
-                    "reconcile requires a resolved source store but none was set"
+                raise InternalError(
+                    message=(
+                        "reconcile requires a resolved source store but none was set"
+                    ),
+                    component="storage.transfer",
+                    invariant="source_resolved is set whenever reconcile_pairs is populated",
                 )
             async with sem:
                 ok, _ = await _upload_from_store(

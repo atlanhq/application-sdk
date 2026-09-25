@@ -60,26 +60,14 @@ MAX_ROUNDS = 8
 #: (`.mothership/pr-resolve/ORCHESTRATION.md` §3d, "Fix every finding (or prove
 #: it false)"), so a separate adversarial reviewer would pay twice for one job.
 #:
-#: `grok-4.6`, dotted — that is the alias the gateway serves. The undotted
-#: form was tried and rejected: "Invalid model name passed in
-#: model=xai/grok-4-6", and `/v1/models` lists `xai/grok-4.6` and no variant.
-#:
-#: Superseded note, kept because it recorded a real finding: two live rounds
-#: died 11ms in with
-#: `Error: [DecimalError] Invalid argument: [object Object]` — decimal.js
-#: refusing a non-numeric argument — before the agent read anything. The
-#: dot was blamed. It was the wrong culprit — swapping it merely moved the
-#: failure from a crash to a 400. The real cause was an unpriced model; see
-#: `opencode_config`.
-#:
-#: The alias also contains a slash. opencode splits `--model` on the FIRST
-#: slash only, so `gateway/xai/grok-4.6` resolves to provider `gateway`, model
-#: `xai/grok-4.6` — the key in the config's `models` map is the full alias.
-REVIEW_MODEL = "xai/grok-4.6"
+#: The alias is bare (no provider prefix), so `gateway/gpt-6-sol` splits on its
+#: one slash into provider `gateway`, model `gpt-6-sol` — the key in the
+#: config's `models` map is the full alias.
+REVIEW_MODEL = "gpt-6-sol"
 
-#: Resolve runs on the mechanical model — the same role split connector-pulse
-#: uses for its mechanical lane.
-RESOLVE_MODEL = "gpt-5.6-luna"
+#: Resolve runs on the mechanical model — the same role split the sdk-resolve
+#: lane uses.
+RESOLVE_MODEL = "gpt-6-luna"
 
 #: The provider key inside `opencode.json`. A local alias only — the real
 #: endpoint arrives at runtime from LITELLM_BASE_URL and is never in this repo.
@@ -671,36 +659,17 @@ def opencode_config(
                     "baseURL": f"{base}/v1",
                     "apiKey": "{env:LITELLM_API_KEY}",
                 },
-                # Cost is DECLARED rather than left empty. This is a
-                # HYPOTHESIS under test, not a diagnosis, for the crash that
-                # killed the first three live runs:
-                #
-                #   Error: [DecimalError] Invalid argument: [object Object]
-                #
-                # What is PROVEN: it dies 11ms in, before any network call —
-                # the undotted alias got as far as a real 400 from the
-                # gateway, so the crash is local to opencode's model
-                # resolution. `[object Object]` reaching decimal.js means an
-                # OBJECT was passed where a number was wanted, and an
-                # unpopulated cost table is the obvious candidate for that
-                # object. connector-pulse's aliases resolve in opencode's
-                # bundled registry; a gateway-only alias like `xai/grok-4.6`
-                # does not, which fits.
-                #
-                # What is NOT proven: that cost is the object in question. If
-                # this run still crashes, the next suspects are opencode
-                # parsing `4.6` out of the id as a version, and the nested
-                # slash in `gateway/xai/grok-4.6`.
-                #
-                # REAL prices, not zeroes. The zeroes were collateral from the
-                # DecimalError fix above and they made opencode's own
-                # `Total Cost` $0.00 BY CONSTRUCTION — so when the /key/info
-                # fallback turned out to 403, there was no dollar figure left
-                # anywhere. Declaring the list price costs nothing and makes
-                # opencode's accounting agree with `usage_cost_usd`, which is
-                # what the summary actually prints.
+                # Every allowed model is declared, with an explicit cost, so
+                # opencode never has to resolve a gateway-only alias from its
+                # bundled registry. The cost is zero for any model missing
+                # from MODEL_PRICES_USD_PER_MTOK: opencode's own `Total Cost`
+                # is never read by this lane (dollars come from
+                # `usage_cost_usd`, which reports an unpriced model as
+                # unavailable, never as free).
                 "models": {
-                    name: {"cost": dict(MODEL_PRICES_USD_PER_MTOK[name])}
+                    name: {
+                        "cost": dict(MODEL_PRICES_USD_PER_MTOK.get(name, _ZERO_COST))
+                    }
                     for name in ALLOWED_MODELS
                 },
             }
@@ -758,40 +727,21 @@ def opencode_config(
 # --------------------------------------------------------------------------
 
 
-#: List price per MILLION tokens, in USD, for every model this lane may reach.
+#: List price per MILLION tokens, in USD, keyed by model alias.
 #:
-#: Units and values are models.dev's, which is the catalog opencode itself
-#: ships — `xai.models["grok-4.6"].cost` is `{input: 2, output: 6,
-#: cache_read: 0.5}` and `openai.models["gpt-5.6-luna"].cost` is
-#: `{input: 0.2, output: 1.2, cache_read: 0.02, cache_write: 0.25}`. Copied
-#: rather than read at runtime so a phase never depends on a cache file or a
-#: network fetch to report what it spent.
-#:
-#: These are LIST prices, not the gateway's billed rate. The lane says so
-#: wherever it prints a dollar figure. A list-price estimate that is
-#: attributable to one phase beats the alternative this replaced — the shared
-#: key's /key/info total, which 403s and, when it did not, summed every lane's
-#: traffic together.
-#:
-#: Both models charge double above a context threshold (grok-4.6 over 200K,
-#: gpt-5.6-luna over 272K). Not modelled: `opencode stats` reports totals, not
-#: a per-request context size, so there is nothing to apply the tier to. A
-#: phase that spends most of its turns over the threshold is UNDER-reported.
-MODEL_PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {
-    "xai/grok-4.6": {
-        "input": 2.0,
-        "output": 6.0,
-        "cache_read": 0.5,
-        # xai bills no separate cache-write rate. Zero is the real price here,
-        # not a placeholder.
-        "cache_write": 0.0,
-    },
-    "gpt-5.6-luna": {
-        "input": 0.2,
-        "output": 1.2,
-        "cache_read": 0.02,
-        "cache_write": 0.25,
-    },
+#: Deliberately EMPTY: no list price is recorded for the models this lane runs
+#: on, so every phase reports its dollar figure as unavailable rather than a
+#: guess. To turn dollars back on, add an entry per model with the four keys
+#: below (models.dev's units — the catalog opencode itself ships). These would
+#: be LIST prices, not the gateway's billed rate.
+MODEL_PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {}
+
+#: The cost declared to opencode for a model with no recorded price.
+_ZERO_COST: dict[str, float] = {
+    "input": 0.0,
+    "output": 0.0,
+    "cache_read": 0.0,
+    "cache_write": 0.0,
 }
 
 
@@ -833,8 +783,7 @@ def parse_opencode_usage(text: str) -> dict[str, int]:
 def usage_cost_usd(usage: dict[str, int], model: str) -> float | None:
     """Dollars for one phase, priced locally from the parsed token counts.
 
-    Computed here rather than read back from `opencode stats` even though
-    `opencode_config` now declares the same prices. Two reasons: the arithmetic
+    Computed here rather than read back from `opencode stats`: the arithmetic
     stays visible and testable in this repo, and it survives a stats line that
     reports tokens but no cost.
 

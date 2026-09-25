@@ -185,7 +185,7 @@ def test_p029_rule_metadata() -> None:
     assert rule.name == "SdrManifestMissingAgentJson"
     assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
-    assert rule.autofixable is False
+    assert rule.autofixable is True
     assert rule.rationale.strip()
     assert rule.since == "0.9.0"
     assert rule.category == "sdr-readiness"

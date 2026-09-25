@@ -13,9 +13,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L001",
         canonical_reference=(
-            'atlan-hello-world-app app/connector.py — `summarize` logs "summarize '
-            'completed record_count=%d message=%s" with the values passed positionally. '
-            "One template, so every run of that line groups together in ClickHouse."
+            "atlan-metabase-app app/connector.py — `extract_collections` logs "
+            '"extract_collections: wrote %d records" with `len(records)` passed '
+            "positionally, and every other @task in the file logs the same way. One "
+            "template per line, so every run of that line groups together in "
+            "ClickHouse."
         ),
         scope=RuleScope.BOTH,
         name="FStringInLogMessage",
@@ -56,8 +58,10 @@ RULES: tuple[RuleDefinition, ...] = (
         id="L002",
         canonical_reference=(
             "atlan-mysql-app app/handler.py — `get_logger(__name__)` at module scope, "
-            "imported from application_sdk.observability.logger_adaptor. No reference app "
-            "calls logging.getLogger, structlog.get_logger, or loguru's logger."
+            "imported from application_sdk.observability.logger_adaptor. No shipped app/ "
+            "module in the three reference apps calls logging.getLogger, "
+            "structlog.get_logger, or loguru's logger; the test files that do sit outside "
+            "what this rule scans."
         ),
         scope=RuleScope.BOTH,
         name="NonCanonicalLoggerFactory",
@@ -126,7 +130,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Whether kwargs land in indexed top-level fields or an unindexed nested dict "
@@ -145,9 +149,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L004",
         canonical_reference=(
-            "atlan-metabase-app app/handler.py — every log call inside an except block "
-            "carries exc_info=True, in `test_auth` and in each of the preflight check "
-            "helpers. The rule is about the except block, not about the level."
+            "atlan-metabase-app app/handler.py — `test_auth` and `_read_filters` log "
+            "warning(..., exc_info=True) inside their except blocks, so the trace rides "
+            "with the message. The rule inspects warning and error calls only; "
+            "`_authentication_check` logs at DEBUG through sanitize_cause_repr() with no "
+            "exc_info, a deliberate no-traceback boundary."
         ),
         scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfoLog",
@@ -182,9 +188,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L005",
         canonical_reference=(
-            "atlan-mysql-app pyproject.toml — T201 sits in the repo-wide lint select and "
-            "is ignored only for `.github/**/*.py`, where a CI script's stdout is the "
-            "point. No print() exists under app/."
+            "atlan-mysql-app app/client.py — `provide_token` reports through "
+            "`logger.debug`, never print(); no print() exists under app/ in any of the "
+            "three reference apps. The repo's pyproject.toml backs this with T201 in "
+            "the lint select, ignored only for `.github/**/*.py`, where a CI script's "
+            "stdout is the point."
         ),
         scope=RuleScope.BOTH,
         name="PrintInProductionCode",
@@ -222,7 +230,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-level",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Per-item INFO in a large loop emits O(N) records at the level operators "
@@ -281,7 +289,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-performance",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Python evaluates all function arguments before calling the log method, so an "
@@ -313,16 +321,17 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L009",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — `generate_greetings` raises "
-            "InvalidRepeatCountError with no log line before it. The raise is the record; "
-            "whichever handler catches it logs it once."
+            "atlan-metabase-app app/connector.py — `transform_data` raises "
+            "MissingTypenameInputError and `_build_client` raises "
+            "MetabaseCredentialInputError, with no log line before either. The raise is "
+            "the record; whichever handler catches it logs it once."
         ),
         scope=RuleScope.BOTH,
         name="WarnThenRaiseDuplication",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-noise",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Logging immediately before re-raising creates two records for one event (raise "
@@ -340,16 +349,17 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L010",
         canonical_reference=(
-            "atlan-mysql-app app/client.py — `get_iam_role_token` logs that AWS "
-            "credentials were staged into the environment and names none of them. Log that "
-            "a credential was used, never the credential."
+            "atlan-mysql-app app/client.py — `get_iam_role_token` logs the role ARN, host "
+            "and user, reports the external ID only as `bool(external_id)`, and never "
+            "logs the value of the token it returns. Log that a credential was used, "
+            "never the credential."
         ),
         scope=RuleScope.BOTH,
         name="CredentialInLogOutput",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="security",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.4.0",
         rationale=(
@@ -370,7 +380,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "credential *value* is CRITICAL.\n"
             "\n\nExempt: arguments assigned a redaction placeholder in the module\n"
             '(e.g. password = "[REDACTED]" if creds.get("password") else None) —\n'
-            "logging them is a presence indicator, not a value leak."
+            "logging them is a presence indicator, not a value leak.\n"
+            "\n"
+            "Also exempt: a resource identifier some source APIs call a token\n"
+            "(Mode's report_token / collection_token).  A `<noun>_token` argument is\n"
+            "silent only when BOTH hold: the noun is not an auth word (access, auth,\n"
+            "bearer, refresh, id, session, reset, secret, bot, hook, webhook, service,\n"
+            "user, personal, password, sso, …; bare `token` never qualifies), AND the\n"
+            "same function interpolates that name as a URL path segment\n"
+            '(f"/reports/{report_token}/queries").  A secret usually travels in a\n'
+            "header or query parameter; the ones that ride in a path (webhook, bot\n"
+            "and service URLs) carry an auth word, so the guard errs toward firing.\n"
+            "A resource token that is only logged — never part of a path — still\n"
+            "fires; log a name beside it, or drop it."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l010",
     ),
@@ -406,17 +428,19 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L012",
         canonical_reference=(
-            "No app builds an `extra={}` dict at all — "
-            "application_sdk/observability/logger_adaptor.py takes %-style arguments "
-            "positionally and injects the Temporal context itself, so there is no "
-            "caller-supplied key that can collide with a stdlib LogRecord attribute."
+            "atlan-openapi-app app/api_client.py — `_parse_zip` logs "
+            '"extracted spec from ZIP file=%s", name: the ZIP member\'s name travels '
+            "positionally in the %-style body, where a stdlib caller would reach for "
+            'extra={"name": ...}, a reserved LogRecord attribute. The SDK adaptor '
+            "(application_sdk/observability/logger_adaptor.py) injects the Temporal "
+            "context itself, so no caller-supplied key is needed."
         ),
         scope=RuleScope.BOTH,
         name="StdlibExtraReservedKeyCollision",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="log-crash",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "stdlib's Logger.makeRecord() raises KeyError when an extra={} key collides "
@@ -441,10 +465,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L013",
         canonical_reference=(
-            "atlan-openapi-app app/api_client.py — the logger comes from `get_logger`, "
-            "which accepts the SDK adaptor's kwargs. A stdlib logging.Logger appears "
-            "nowhere in the four reference apps, and it is the stdlib one that raises "
-            "TypeError on arbitrary kwargs."
+            "atlan-openapi-app app/api_client.py — the module-level logger comes from "
+            "`get_logger`, which accepts the SDK adaptor's kwargs. No shipped app/ module "
+            "in the three reference apps creates a stdlib logging.Logger, and it is the "
+            "stdlib one that raises TypeError on arbitrary kwargs."
         ),
         scope=RuleScope.BOTH,
         name="StdlibArbitraryKwargs",
@@ -482,7 +506,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "In structlog the first positional arg is the message (stored as 'event'). "
@@ -501,9 +525,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L015",
         canonical_reference=(
-            "atlan-hello-world-app app/run_dev.py — the app awaits `run_dev_combined` and "
-            "configures no logging of its own. Handler configuration belongs to the SDK "
-            "runtime; an app calling dictConfig is reaching past it."
+            "atlan-metabase-app app/run_dev.py — `main()` awaits "
+            "`run_dev_combined(MetabaseApp, example_input=...)`; the module imports "
+            "asyncio, the SDK launcher and the app's own connector and handler: no "
+            "`logging`, no dictConfig. Handler "
+            "configuration belongs to the SDK runtime; an app calling dictConfig is "
+            "reaching past it."
         ),
         scope=RuleScope.BOTH,
         name="DictConfigDisableExistingLoggers",
@@ -539,7 +566,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-config",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "basicConfig() is silently ignored if the root logger already has handlers. "
@@ -595,16 +622,17 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L018",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — `generate_greetings` passes its "
-            "values as positional arguments to a %-style template, not as kwargs. Kwargs "
-            "on an application log call do not reach the message a reader greps."
+            'atlan-metabase-app app/connector.py — `filter_data` logs "filter_data: '
+            'include=%s, exclude=%s" with the two filters as positional arguments to '
+            "the %-style template, not as kwargs. Kwargs on an application log call "
+            "land in an unindexed blob and never reach the message a reader greps."
         ),
         scope=RuleScope.BOTH,
         name="KwargsInApplicationLogCalls",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "The adapter auto-injects Temporal context (workflow/run/activity IDs) as the "
@@ -634,7 +662,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-config",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "structlog and loguru bind() returns a *new* logger with the bound context — "
@@ -654,9 +682,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L020",
         canonical_reference=(
-            "atlan-metabase-app pyproject.toml — LOG009 sits in the lint select list with "
-            "the comment that names the replacement, so logger.warn() cannot reach main in "
-            "that repo."
+            "atlan-metabase-app app/connector.py — `process_metabaseprocess` spells its "
+            "empty-host warning logger.warning(...), and no shipped app/ module in the "
+            "three reference apps calls .warn(). The repo's pyproject.toml also selects "
+            "LOG009, so ruff rejects a regression at edit time."
         ),
         scope=RuleScope.BOTH,
         name="DeprecatedLoggingWarn",
@@ -685,6 +714,21 @@ RULES: tuple[RuleDefinition, ...] = (
             '"G004", "T201", "LOG009"]`, which is the exact set this rule looks for. '
             "atlan-metabase-app spells the same list one rule per line, with a comment on "
             "why G002 is deliberately absent."
+        ),
+        rule_interactions=(
+            "L001 and L011 box in the order of this fix. G004 and G003 are the "
+            "ruff twins of those rules, so enabling them while L001/L011 findings "
+            "are still open makes the repo's pre-commit ruff hook fail on every "
+            "open call site, and the L021 change goes red on its own. Land L021 "
+            "with or after the L001/L011 fixes, and run "
+            "`ruff check --select G003,G004` first. L020 (`logger.warn()`) is ruff "
+            "G010, which L021 does not require, so it does not belong in this "
+            "pre-scan. T201 overlaps L005 but is broader: it also flags intentional "
+            "print() in tests/ and in .github/**/*.py CLI scripts, which a "
+            "per-file-ignores entry scopes out (atlan-mysql-app pyproject.toml); "
+            "the checker does not read per-file-ignores, so that entry still "
+            "satisfies L021. Found in a consumer app during an auto-fixable "
+            "remediation run (FND-2493)."
         ),
         scope=RuleScope.BOTH,
         name="MissingLoggingLintRules",

@@ -27,8 +27,8 @@ reassigned.
 | [B002](#b002) | `MalformedDeprecationNotice` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
 | [B003](#b003) | `OverdueDeprecationRemoval` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
 | [B004](#b004) | `UnmarkedDeprecationClaim` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
-| [B005](#b005) | `NonAdditiveContractChange` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
-| [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
+| [B005](#b005) | `NonAdditiveContractChange` | `block` | `both` | `contract-backwards-compatibility` | yes | 0.7.0 |
+| [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | yes | 0.7.0 |
 | [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `app` | `daft-removal` | — | 0.18.0 |
 | [B008](#b008) | `PrivateModuleImport` | `warn` | `app` | `sdk-private-surface` | — | 0.34.0 |
 
@@ -154,7 +154,7 @@ biased toward low false positives at WARN.
 
 ## B005 — `NonAdditiveContractChange` {#b005}
 
-**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `contract` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `contract` · **Category:** `contract-backwards-compatibility` · **Autofixable:** yes · **Since:** 0.7.0
 
 > An entrypoint contract field was removed or had its type changed
 
@@ -186,10 +186,14 @@ they hit with zero changes on their side.
   retirement marker — `deprecated` still requires the field to be present), a type that
   was WIDENED (including nested containers), an INHERITED field whose base class changed
   the type, and a move OFF `Any` that keeps the same outer shape (`Any` replaced in
-  place). To retire a field deliberately, mark it `sunset` in contract_schema.lock.json.
-  Before treating a removal as dead code, grep the whole repo — including scripts/ and
-  *.sh JSONPath args like $.extract.outputs.<field> — for readers the contract does not
-  know about.
+  place; a type alias declared at the top level of the same module, including a chain of
+  such aliases, is expanded to its target before the comparison — the ledger side is not
+  expanded, and an alias declared under `if TYPE_CHECKING:` / `try`, as a string, or as
+  a plain `X = <name>` such as `Ident = str` is not recognised, and a chain that expands
+  past a size budget is compared unexpanded). To retire a field deliberately, mark it
+  `sunset` in contract_schema.lock.json. Before treating a removal as dead code, grep
+  the whole repo — including scripts/ and *.sh JSONPath args like
+  $.extract.outputs.<field> — for readers the contract does not know about.
 
 Fires when a ledger entry for an entrypoint contract field is either:
 
@@ -220,7 +224,7 @@ status, and commit the updated ledger in the same PR.
 
 ## B006 — `StaleContractLedger` {#b006}
 
-**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `contract` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
+**Tier:** `block` · **Scope:** `both` · **Fix belongs in:** `contract` · **Category:** `contract-backwards-compatibility` · **Autofixable:** yes · **Since:** 0.7.0
 
 > An entrypoint contract field is missing from contract_schema.lock.json
 
@@ -253,6 +257,20 @@ was introduced. This includes fields introduced by inheritance — a field inher
 an in-repo base class or an SDK-provided mixin (e.g. `PublishInputMixin`) is just as
 ledger-tracked as one declared directly on the contract, so adopting a new mixin can
 also trigger this on the fields it contributes.
+
+Regenerating is the whole fix for an inherited field: **do not redeclare the base's
+fields on the subclass to 'keep' them tracked.**  The generator resolves the full
+base-class chain and records an inherited field exactly like a declared one; a
+hand-copied redeclaration adds no protection and becomes a drift site the moment the
+base changes.
+
+Turning a module-level rebinding (`MyInput = AppInputContract`) into a subclass does
+raise this once per inherited field, and that is the rule working rather than a false
+positive: the subclass is a distinct wire surface, and it is the subclass's own entries
+that B005 consults if it later changes base and drops a field.  One regeneration clears
+all of them.  The rebinding itself is guarded too — it resolves to the class it names,
+so a pkl-generated contract exposed under a domain name is ledgered under the generated
+class's name rather than skipped (FND-2605).
 
 Fix: run the exact command the finding names — in a consumer app that is `uvx
 atlan-application-sdk-conformance==<version> gen-contract-ledger`, version-pinned to the
@@ -297,10 +315,12 @@ with pyarrow-receiver exemptions) and the pandas migration changes call shapes.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/mysql.py — transformation runs through the SDK's DuckDB/pyarrow
-  path. The daft-only DataFrame calls this rule looks for (count_rows, to_pylist,
-  .names) appear in none of the four reference apps; daft was removed from the SDK in
-  3.20.0, so they are dead on any current runtime.
+- **Compliant example:** atlan-mysql-app app/mysql.py — `MySQLApp` transforms through SqlApp's transform tasks:
+  raw records mapped by its `map_*` methods and serialised with the SDK's
+  `entity_bytes`, with no DataFrame method called on them. The daft-only DataFrame calls
+  this rule looks for (count_rows, to_pylist, .names) appear in no SDK-importing module
+  of the three reference apps; daft was removed from the SDK in 3.20.0, so they are dead
+  on any current runtime.
 
 Flags daft-only DataFrame API usage in apps that consume the SDK (files importing
 `application_sdk`), where SDK >= 3.22 readers return **pandas** frames and the `[daft]`
@@ -364,10 +384,10 @@ prevent; revisit once the count nears zero.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/connector.py — every third-party import names a public module
-  (application_sdk.app, application_sdk.contracts, application_sdk.errors, httpx,
-  pyatlan_v9.model.assets). None of the four reference apps imports an
-  underscore-prefixed module or name it does not own, in app code or in tests.
+- **Compliant example:** atlan-openapi-app app/connector.py — every third-party import names a public module:
+  application_sdk.app, .contracts, .credentials, .errors, .observability and .outputs,
+  plus msgspec and orjson. No module under the three reference apps' app/ directories
+  imports an underscore-prefixed module or name it does not own.
 
 Flags any import or attribute use that reaches a private module or name the app does not
 own.  Six shapes are matched:

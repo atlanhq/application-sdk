@@ -5,7 +5,7 @@
 
 # Preflight-Gate Rules (F-series)
 
-**20 rules** · Checker: `suite.checks.preflight` (F001–F015, F019–F020: cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests) and the opt-in `--with-tests` scenario runner (F016–F018: registered pytest scenarios executed in a bounded subprocess via `conformance.preflight_testing`)
+**20 rules** · Checker: `suite.checks.preflight` (cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests, and F016 reads the scenario registrations under `tests/unit/`). No rule executes tests: F016 checks the scenario matrix is defined, and the test gate checks it passes. F017–F018 are retired
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -40,9 +40,9 @@ never reused.
 | [F013](#f013) | `PreflightCancellationCleanup` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F014](#f014) | `PreflightFailureExposure` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F015](#f015) | `PreflightRemovedGateContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
-| [F016](#f016) | `PreflightBehaviorContract` | `block` | `app` | `preflight-gate` | — | 0.27.0 |
-| [F017](#f017) | `PreflightWorkflowEnforcement` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
-| [F018](#f018) | `PreflightExitEvidence` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
+| [F016](#f016) | `PreflightBehaviorContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
+| [F017](#f017) | `PreflightWorkflowEnforcement` | `warn` | `sdk` | `preflight-gate` | — | 0.27.0 |
+| [F018](#f018) | `PreflightExitEvidence` | `warn` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [F019](#f019) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F020](#f020) | `RetiredPreflightSuppression` | `warn` | `app` | `preflight-gate` | — | 0.32.0 |
 
@@ -65,7 +65,7 @@ a name collision no test exercises and no build gate sees.
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app app/handler.py — the preflight logic is the Handler's own
-  `preflight_check` method. No @task in the four reference apps registers the activity
+  `preflight_check` method. No @task in the three reference apps registers the activity
   name 'preflight'; that name belongs to the SDK gate, and registering it shadows the
   gate itself.
 
@@ -127,9 +127,12 @@ impact: failed workflows lose actionable typed failure details.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/handler.py — a failing check is `PreflightCheck(passed=False,
-  error=AuthError(message=..., suggested_action=..., cause=e))`. A `passed=False` with
-  no typed error gives the customer a red row and no reason for it.
+- **Compliant example:** atlan-mysql-app app/handler.py — the failed auth probe in `_run_preflight_probes` is
+  `PreflightCheck(name="auth", passed=False,
+  error=PreflightAuthError(cause=e).to_failure_details())`, where PreflightAuthError
+  (app/failures.py) is an AuthError subclass that declares message and suggested_action
+  as class defaults. A `passed=False` with no typed error gives the customer a red row
+  and no reason for it.
 
 A `PreflightCheck` with proven or default `passed=False` and no typed `error=` (absent,
 or the literal `None`) is an untyped failure: the gate falls back to the generic
@@ -162,9 +165,11 @@ only guard.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/handler.py — `preflight_check` reads only fields the entrypoint's
-  Input contract declares. A metadata key the contract does not carry is one the
-  orchestrator has no way to send, so the check silently evaluates an absent value.
+- **Compliant example:** atlan-openapi-app app/handler.py — `preflight_check` reads no `input.metadata` key at
+  all: its configuration comes from `input.connection_config` (`cfg.get("import_type")`,
+  `cfg.get("spec_url")`), so there is no metadata read for the gate path to drop. A
+  metadata key the entrypoint's Input contract does not carry is one the orchestrator
+  has no way to send, so the check silently evaluates an absent value.
 
 The preflight gate does not forward the live UI form: it rebuilds
 `PreflightInput.metadata` from the extraction input's `model_dump()`
@@ -208,6 +213,13 @@ wrong level and a duplicate record.
   instead. The comment there states why: the gate levels the verdict row itself, and a
   handler-authored WARNING is both a duplicate and invisible under the customer's
   default ERROR filter.
+- **Interacts with:** Meets E004 on a broad catch inside the gate's reach. A best-effort cleanup helper called
+  from preflight_check (close a client, release a session) that catches Exception cannot
+  log at WARNING (this rule), and DEBUG does not clear E004 even through a redaction
+  helper. Use logger.error (or logger.critical) with the exception routed through a
+  redaction helper (safe_traceback, sanitize_cause_repr), or return the failure as typed
+  data. A probe arm that already returns a typed PreflightCheck clears E004 with no log
+  at all (FND-2628). Found in FND-2569.
 
 A `logger.warning(...)` call inside a `Handler.preflight_check` override logs below the
 customer log view's default ERROR filter, so a failed probe reported this way never
@@ -308,10 +320,11 @@ failed checks.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/handler.py — the verdict is derived from the same check list that
-  is returned: any failed name in `_MANDATORY_CHECKS` gives NOT_READY, otherwise the
-  advisory rows stay visible without flipping the status, so status and rows cannot
-  contradict each other.
+- **Compliant example:** atlan-mysql-app app/handler.py — `_run_preflight_probes` writes each verdict next to the
+  rows that justify it: NOT_READY carries the failed mandatory `auth` row
+  (`checks=[auth_check]`), and READY carries the passed `auth` row plus the advisory
+  connectivity row, which may fail without flipping the status. Status and rows are
+  spelled together, so they cannot contradict each other.
 
 Keep READY, PARTIAL and NOT_READY consistent with check outcomes.
 
@@ -331,10 +344,11 @@ while the gate sees different inputs.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app tests/unit/test_handler.py —
-  `test_gate_path_input_gives_the_same_verdict` builds the PreflightInput the gate
-  builds (credentials, credentials_by_name, entrypoint, timeout_seconds) and asserts the
-  handler reaches the same verdict as the setup-form path.
+- **Compliant example:** atlan-metabase-app app/connector.py — the `extract_metadata` @entrypoint constructs no
+  PreflightInput of its own and leaves preflight to the SDK gate, so on the workflow
+  path the gate's input (the selected entrypoint plus resolved credentials) is the only
+  PreflightInput the handler receives. None of the three reference apps builds a
+  PreflightInput inside an @entrypoint.
 
 Preserve the selected entrypoint and supply routable credentials before the gate.
 
@@ -377,9 +391,12 @@ timeout races.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/handler.py — `_probe_timeout` returns `max(1.0, min(30.0, budget *
-  0.8))`, so the probe's own timeout stays strictly inside the enforced gate budget; the
-  module comment explains that a floor above the budget makes the deadline decorative.
+- **Compliant example:** atlan-mysql-app app/handler.py — `preflight_check` bounds the probes with
+  `asyncio.wait_for(self._run_preflight_probes(input, deadline), timeout=deadline)`,
+  where `deadline = _probe_deadline(input.timeout_seconds)` is 80% of the budget the
+  gate hands in (no deadline when the gate supplies none). No floor or margin is added
+  on top of `input.timeout_seconds`, so the probe gives up before the gate cancels it;
+  that timeout argument is the site F012 grades.
 
 Keep probe and retry deadlines inside the remaining gate budget.
 
@@ -398,9 +415,10 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/handler.py — `preflight_check` closes its SQLClient in a `finally:
-  await client.close()`, so cleanup is awaited, bounded and runs on every exit path,
-  including the typed-failure early return.
+- **Compliant example:** atlan-mysql-app app/handler.py — `_run_preflight_probes` (which `preflight_check` runs
+  under `asyncio.wait_for`) closes its SQLClient in a `finally: await client.close()`,
+  so cleanup is awaited and runs on every exit path, including the typed-failure early
+  return.
 
 Release owned preflight resources without blocking the event loop.
 
@@ -462,22 +480,37 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## F016 — `PreflightBehaviorContract` {#f016}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
-> Execute registered real-handler scenarios for each applicable entrypoint.
+> Define every required real-handler preflight scenario for each entrypoint.
 
 **Rationale:** Customer impact: Static shape checks cannot prove verdict semantics, probe coverage,
-recovery, or resource lifetime. Missing and skipped scenarios are incomplete evidence.
+recovery, or resource lifetime, so each scenario must exist as a test the test gate
+runs. A missing scenario is a behaviour nothing verifies.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app tests/unit/test_handler.py — drives the real
-  `OpenAPIConnectorHandler.preflight_check` per verdict: READY on a reachable URL,
-  NOT_READY with typed rows on 403, connect error, redirect and missing spec_url, and no
-  signature leak on a presigned URL. Registering those under
-  `pytest.mark.preflight_conformance` is what turns them into F016 coverage.
+- **Compliant example:** atlan-openapi-app tests/unit/test_preflight_conformance.py — each required scenario
+  (healthy, mandatory_failure, recoverable_transient, hung_probe, cancellation_cleanup
+  and the rest) is a test that drives the real `OpenAPIConnectorHandler.preflight_check`
+  and is registered with `@pytest.mark.preflight_conformance(rule="F016",
+  scenario=...)`. The marker, not the file's presence, is what counts as a defined
+  scenario. atlan-metabase-app registers the same matrix once per `@entrypoint` through
+  a module-level `entrypoint_matrix(scenario)` parametrize helper.
 
-Execute registered real-handler scenarios for each applicable entrypoint.
+Every scenario in the F016 matrix must be defined, for each `@entrypoint` the app
+declares, as a pytest-collected test under `tests/unit/` (the tier the test gate always
+runs) marked `preflight_conformance(rule="F016", scenario=..., entrypoint=...)` that
+calls `assert_preflight_result` from `conformance.preflight_testing` (and
+`assert_probe_lifetime` for hung_probe, cancellation_cleanup and budget_retry) as a
+statement of the test body or of a top-level loop over a non-empty literal. The reader
+accepts the shapes the reference apps use and reports anything else rather than
+modelling it. A registration on a test that does not run (skip, a true skipif or xfail
+condition, no runnable parametrized case), a declared-unsupported one, a case whose
+entrypoint argument differs from its marker, and one outside the accepted shapes do not
+define the scenario. This rule checks the matrix is defined; whether the tests pass is
+the test gate's measure, and conformance never executes them. WARN while the fleet
+registers its scenarios; promoted to BLOCK once it has.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f016).
@@ -486,14 +519,19 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## F017 — `PreflightWorkflowEnforcement` {#f017}
 
-**Tier:** `block` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+**Tier:** `warn` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
-> Verify gate enforcement through real Temporal workflow histories.
+> Retired: SDK gate behaviour is covered by the SDK's own test suite.
 
-**Rationale:** Customer impact: Only execution history can prove extraction was never scheduled after a
-hard gate failure, including activity death.
+**Rationale:** Conformance checks that required things are defined; whether tests pass is the test
+gate's measure. An SDK-scoped rule has nothing to define that the SDK's own tests do not
+already.
 
-Verify gate enforcement through real Temporal workflow histories.
+Retired in 0.39.0 and removed in 0.40.0; F017 no longer fires. It was SDK-scoped, and
+the SDK owns both the gate and its tests, so a conformance rule over the SDK's own
+behaviour only restated those tests. The behaviour is asserted in
+tests/unit/app/test_preflight_gate.py; a suppression that still cites this id suppresses
+nothing and is reported by F020.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f017).
@@ -502,14 +540,19 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## F018 — `PreflightExitEvidence` {#f018}
 
-**Tier:** `block` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+**Tier:** `warn` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
-> Verify typed verdicts, outcome fields and safe evidence handoff on every exit.
+> Retired: SDK gate behaviour is covered by the SDK's own test suite.
 
-**Rationale:** Customer impact: Activity and workflow failures must preserve cause and status, and
-logging must not silently discard the evidence.
+**Rationale:** Conformance checks that required things are defined; whether tests pass is the test
+gate's measure. An SDK-scoped rule has nothing to define that the SDK's own tests do not
+already.
 
-Verify typed verdicts, outcome fields and safe evidence handoff on every exit.
+Retired in 0.39.0 and removed in 0.40.0; F018 no longer fires. It was SDK-scoped, and
+the SDK owns both the gate and its tests, so a conformance rule over the SDK's own
+behaviour only restated those tests. The behaviour is asserted in
+tests/unit/app/test_preflight_gate.py; a suppression that still cites this id suppresses
+nothing and is reported by F020.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f018).
@@ -526,12 +569,23 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/handler.py — `preflight_check` is an async method on the Handler
-  subclass, calls helpers defined in the same module, and builds PreflightCheck rows
-  with literal names: the shape static analysis resolves fully, so nothing on it is
-  reported as unresolved.
+- **Compliant example:** atlan-mysql-app app/handler.py — every PreflightOutput in `_run_preflight_probes` spells
+  its checks list inline, from PreflightCheck constructions or a same-class helper
+  (`_check_connectivity`), never an accumulator, so static analysis resolves every row
+  and its mandatory/advisory role. The comment above the NOT_READY return cites F019 as
+  the reason.
 
-Report unresolved preflight dispatch and contracts instead of a clean result.
+Report unresolved preflight dispatch and contracts instead of a clean result. Two kinds
+of gap are reported, and only one of them is clearable by executing tests. A
+*value-level* gap — a computed aggregation or an unresolvable row inside one, an
+expanded failure constructor, an unresolved error expression, a dynamic `passed` — names
+a property every F016 scenario asserts through `assert_preflight_result`, so it is
+dropped once the F016 matrix is fully defined; the test gate proves those assertions
+hold. A *structural* gap — an unparsed file, a preflight_check the analysis never
+resolved, a dynamically bound callback, an input contract class that is not in the
+registry — stands regardless of how many scenarios are defined, because a test does not
+tell the analysis what it failed to read; clear those by making the code statically
+resolvable.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f019).
@@ -542,7 +596,7 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.32.0
 
-> A conformance suppression cites a retired preflight id (P032-P035, P047).
+> A conformance suppression cites a retired preflight id (P032-P035, P047, F017, F018).
 
 **Rationale:** Customer impact: a reviewed, justified carve-out silently turns into an unexplained
 finding on the next conformance run, and the developer has no signal that the stale
@@ -550,15 +604,16 @@ directive is the cause.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/handler.py — its inline directives cite live ids (E004) with a named
-  owner and a review date. A directive that cited P034 now cites F003 the same way; the
-  id is the only part that changes.
+- **Compliant example:** atlan-metabase-app app/qualified_names.py — its inline conformance directives name a
+  live rule id (P028) and carry a written justification. A directive that cited P034 now
+  cites F003 the same way, justification kept; the id is the only part that changes.
 
 The preflight rules moved from the P-series to the F-series: P032-P035 became F001-F004
-and P047 became F005. The suppression parser matches ids as plain strings, so a `#
-conformance: ignore[...]` directive that still cites a retired id suppresses nothing and
-the renamed rule fires with no hint why. Cite the new id named in the message, keeping
-the justification, or delete the directive if the finding it covered is gone.
+and P047 became F005. F017 and F018 were retired with no replacement. The suppression
+parser matches ids as plain strings, so a `# conformance: ignore[...]` directive that
+still cites a retired id suppresses nothing and the renamed rule fires with no hint why.
+Cite the new id named in the message, keeping the justification, or delete the directive
+if the finding it covered is gone or its rule was retired.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f020).

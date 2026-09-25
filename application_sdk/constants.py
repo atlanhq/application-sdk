@@ -607,6 +607,73 @@ def _load_worker_liveness_max_idle_seconds() -> float:
 
 WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 
+
+#: How long a worker whose pod already restarted waits before it starts polling.
+#: The mechanism is in ``application_sdk.common.restart_marker``.
+#:
+#: This sizes the wait, it does not enable it: the marker's volume does that, so
+#: with no volume mounted the value is never read. ``0`` is the kill switch for a
+#: deployment that mounts the volume and wants the old behaviour.
+#:
+#: Sized to the eviction it is waiting on: the pod lane evicts at settleDelay
+#: (90s) and the replacement is admitted a few seconds later, so 150s covers
+#: that with margin and little more. Under-waiting is worse than not waiting,
+#: because the worker resumes on the limit that already failed moments before it
+#: would have been rescued; over-waiting only costs wall-clock on a pod that was
+#: going to be replaced anyway. An unparsable value (an unset Helm value renders
+#: as "") falls back rather than failing every worker.
+def _load_dirty_restart_max_wait_seconds() -> int:
+    raw = os.getenv("ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS", "150")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        warnings.warn(
+            f"ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS={raw!r} is not a valid integer; "
+            "falling back to 150",
+            stacklevel=2,
+        )
+        return 150
+
+
+DIRTY_RESTART_IDLE_MAX_SECONDS = _load_dirty_restart_max_wait_seconds()
+
+
+def _one_of(name: str, allowed: tuple[str, ...], default: str) -> str:
+    """Read a switch whose value is one of a fixed set of words.
+
+    An unrecognised word falls back to the default and says so, rather than
+    reaching the code that branches on it: a typo there would otherwise select
+    whichever branch happens to be the ``else``, silently and fleet-wide.
+    """
+    raw = os.getenv(name, default).strip().lower()
+    if raw in allowed:
+        return raw
+    warnings.warn(
+        f"{name}={raw!r} is not one of {allowed}; falling back to {default!r}",
+        stacklevel=2,
+    )
+    return default
+
+
+#: Whether a restarted worker asks what the restart earns before it polls again.
+#:
+#: ``api`` sends one GET to ``ATLAN_RESTART_ADVICE_URL`` naming this pod. The
+#: activity rerouter answers it: ``wait: true`` means an eviction is scheduled
+#: for this pod, so the worker holds off polling until it is replaced. ``none``,
+#: the default, never asks and resumes immediately.
+#:
+#: Nothing here talks to the apiserver, so neither setting needs anything
+#: granted to the worker. Every way of not getting a clear yes resumes polling
+#: too: no URL, no pod identity, a timeout, a refusal, or a body that will not
+#: parse - none of those establish that a replacement is coming, and holding a
+#: worker back is only worth its retry budget while one is.
+def _load_oom_restart_check() -> str:
+    return _one_of("ATLAN_OOM_RESTART_CHECK", ("api", "none"), default="none")
+
+
+OOM_RESTART_CHECK = _load_oom_restart_check()
+
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations.
 #: Enabled by default; set ATLAN_SQL_USE_SERVER_SIDE_CURSOR to any value other

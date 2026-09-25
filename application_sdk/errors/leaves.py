@@ -165,6 +165,26 @@ class InvalidInputError(AppError):
     audience: ClassVar[Audience] = Audience.USER
 
 
+class InvalidInputValueError(InvalidInputError, ValueError):
+    """:class:`InvalidInputError` that is also a :class:`ValueError`.
+
+    For public SDK entry points that raised a bare ``ValueError`` before typed
+    errors existed. Keeping ``ValueError`` in the bases preserves the behaviour
+    callers already guard against, while the failure now carries a typed
+    envelope (``INVALID_INPUT`` / ``USER``) for downstream triage.
+
+    Use plain :class:`InvalidInputError` for new APIs — this exists only so an
+    existing ``ValueError`` contract can be typed without a breaking change.
+
+    The ``INVALID_INPUT_`` prefix on the code is the convention every leaf
+    subclass follows (P003), and the distinct code makes the shim countable:
+    a non-zero rate on ``INVALID_INPUT_VALUE`` is the fleet-wide measure of how
+    much still depends on the builtin-``ValueError`` contract.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_VALUE"
+
+
 @dataclass(kw_only=True)
 class PreconditionError(AppError):
     """System state forbids the operation.

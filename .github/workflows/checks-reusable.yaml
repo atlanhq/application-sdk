@@ -40,6 +40,26 @@ on:
         type: string
         required: false
         default: ""
+      private-git-deps:
+        description: >-
+          Set true when the app pins a PRIVATE atlanhq git dependency (e.g.
+          query-redaction). `setup-deps` runs `uv sync` before any hook, and an
+          unauthenticated clone of a private atlanhq repo fails there, so with
+          this flag atlanhq remotes are rewritten to a token URL
+          (ORG_PAT_GITHUB) first. Requires the caller to pass
+          `secrets: inherit`. Managed per-repo by `bootstrap`, which reads the
+          opt-in back off the caller so a re-sync cannot delete it.
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      ORG_PAT_GITHUB:
+        required: false
+        description: >-
+          Token used to reach PRIVATE atlanhq git dependencies when
+          `private-git-deps` is true. Optional: a caller with only public deps
+          passes nothing. Declared so a caller that maps secrets explicitly is
+          validated at parse time instead of silently supplying an empty token.
 
 jobs:
   pre-commit:
@@ -48,6 +68,10 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 10
+    # Job-level, not step-level, because the `if:` guards below read it, and
+    # `secrets` cannot be referenced in an `if:` directly.
+    env:
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -67,6 +91,24 @@ jobs:
           sudo apt-get update
           # shellcheck disable=SC2086  # deliberate word splitting: package list
           sudo apt-get install -y $SYSTEM_DEPS
+
+      # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
+      # would redirect every atlanhq URL to an unauthenticated token URL and
+      # fail far from the cause. Condition stays in `if:`, never in the shell
+      # (docs/standards/ci.md). Same pair as conformance-reusable.yaml.
+      - name: "Require ORG_PAT_GITHUB when private-git-deps is set"
+        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+        run: |
+          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
+      # --global writes ~/.gitconfig, so it applies to the clone `uv sync`
+      # performs inside setup-deps.
+      - name: "Authenticate private atlanhq git dependencies"
+        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
       - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1

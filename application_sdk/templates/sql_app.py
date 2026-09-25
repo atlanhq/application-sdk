@@ -101,6 +101,7 @@ from application_sdk.common.last_sync import resolve_last_sync_details
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
+    strip_sql_block_comments,
 )
 from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.contracts.base import OutputStatus
@@ -382,13 +383,16 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
     ``category`` / ``audience`` / ``retryable`` on a generic reconstruction
     leaf.
 
-    Reconstruction is an unredacted trust boundary, so every field copied off
-    the envelope is re-redacted here. The ``FailureDetails`` denylist rejects
-    secret-named evidence *keys* only — never a nested value, and never the
-    ``message`` / ``suggested_action`` / ``cause_repr`` strings — so a
-    pre-redaction-era envelope replayed from Temporal history, a hand-built
-    ``PrimeAuthOutput``, or a future producer that forgets to redact would
-    otherwise put a live DSN back onto the wire when this error re-serialises.
+    Reconstruction re-redacts the two free-text fields it copies. This is
+    defence in depth, not the policy: ``FailureDetails`` redacts ``message`` and
+    ``suggested_action`` in a ``field_validator``, and that validator runs on
+    ``model_validate`` too, so an envelope replayed off Temporal history arrives
+    already scrubbed. Kept because it costs one idempotent pass and this is an
+    unredacted trust boundary — a hand-built ``PrimeAuthOutput`` reaches here
+    without ever having been a ``FailureDetails``. What the envelope still does
+    *not* cover is ``cause_repr`` (redacted at construction by
+    :func:`sanitize_cause_repr` instead) and nested values under an
+    evidence key, where the denylist judges the key name alone.
     """
     message = redact_secrets(details.message)
     suggested_action = (
@@ -1662,6 +1666,26 @@ class SqlApp(App):
         await client.load(credentials=creds)
         return client
 
+    def _temp_table_regex_fragment(self, sql: str) -> str:
+        """Pick the temp-table fragment for *sql*.
+
+        The column query gets ``extract_temp_table_regex_column_sql`` when the
+        app declares one: it filters on the column table's own name
+        (``C.TABLE_NAME``) rather than a joined table alias the column query
+        may not have. Every other query, and apps without a column fragment,
+        get ``extract_temp_table_regex_table_sql``. The query is recognised by
+        comparing against ``fetch_column_sql`` so ``_prepare_sql``'s signature,
+        which connector overrides mirror, is unchanged.
+        """
+        column_fragment = self.extract_temp_table_regex_column_sql
+        if (
+            column_fragment
+            and self.fetch_column_sql
+            and sql.strip() == self.fetch_column_sql.strip()
+        ):
+            return column_fragment
+        return self.extract_temp_table_regex_table_sql
+
     def _prepare_sql(self, sql: str, input: ExtractionTaskInput) -> str:
         """Substitute filter placeholders in SQL template."""
         exclude_filter = input.exclude_filter or ""
@@ -1680,11 +1704,15 @@ class SqlApp(App):
         else:
             include_regex = include_filter or ".*"
 
-        # Temp table regex
+        # Temp table regex. The fragment's own ``/* ... */`` header is stripped
+        # first: full templates often mention ``{temp_table_regex_sql}`` inside
+        # their header comment, and a nested block comment closes it early
+        # (FND-2733).
         temp_table_sql = ""
         if hasattr(input, "temp_table_regex") and input.temp_table_regex:
-            if self.extract_temp_table_regex_table_sql:
-                temp_table_sql = self.extract_temp_table_regex_table_sql.replace(
+            fragment = self._temp_table_regex_fragment(sql)
+            if fragment:
+                temp_table_sql = strip_sql_block_comments(fragment).replace(
                     "{exclude_table_regex}", input.temp_table_regex
                 )
 

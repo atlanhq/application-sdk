@@ -73,6 +73,32 @@ def _leaf_name(expr: ast.expr) -> str | None:
     return None
 
 
+def expr_sanitizes_name(expr: ast.expr, name: str) -> bool:
+    """True when *expr* passes the variable *name* through a recognised sanitizer.
+
+    Stricter than :func:`call_uses_sanitizer`: it is not enough for *some*
+    sanitizer to appear in the expression — the redaction must be applied to
+    the named variable.  ``sanitize_cause_repr(exc)`` and
+    ``f"...{errors.redact(str(exc))}"`` both count for ``name="exc"``;
+    ``redact(config)`` does not.
+
+    Used where the exemption is a claim about a *specific* value surviving in
+    redacted form (E004's severed-but-redacted re-raise), rather than about the
+    handler having logged something through a redaction boundary.
+    """
+    for node in ast.walk(expr):
+        if not isinstance(node, ast.Call):
+            continue
+        target = _leaf_name(node.func)
+        if target is None or not _name_is_sanitizer(target):
+            continue
+        for arg in [*node.args, *[kw.value for kw in node.keywords]]:
+            for inner in ast.walk(arg):
+                if isinstance(inner, ast.Name) and inner.id == name:
+                    return True
+    return False
+
+
 def call_uses_sanitizer(call: ast.Call) -> bool:
     """True when any argument of *call* flows through a recognised sanitizer.
 

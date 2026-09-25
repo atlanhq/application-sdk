@@ -31,26 +31,35 @@ from application_sdk.execution._temporal.preflight_gate import (
     _LOG_ROW_IS_ONLY_CHANNEL,
     EMPTY_CHECK_MATRIX,
     FAILURE_AUDIENCE_KEY,
+    FAILURE_CHECK_KEY,
+    FAILURE_MESSAGE_KEY,
+    FAILURE_SUGGESTED_ACTION_KEY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     INTERACTIVE_RAISE_OUTCOMES,
     PREFLIGHT_CHECK_EVENT,
     PREFLIGHT_FALLBACK_CODE,
+    PreflightClassification,
     PreflightGateInput,
+    PreflightRowOutcome,
     PreflightSurface,
     _config_from_snapshot,
+    _primary_failure,
     build_preflight_gate_activity,
     emit_preflight_check_outcome,
     emit_preflight_crash_outcome,
     gate_heartbeat_timings,
+    gate_outcome_row,
     gate_timeouts,
     input_type_supports_gate,
     is_preflight_block,
+    preflight_block_message,
     preflight_gate_activity_name,
     warn_if_partial,
 )
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.contracts import (
+    UNVERIFIABLE_CHECK_NAME,
     AuthInput,
     AuthOutput,
     AuthStatus,
@@ -61,6 +70,7 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
     SqlMetadataOutput,
+    unverifiable_preflight_result,
 )
 from application_sdk.infrastructure.credential_vault import CredentialVaultError
 from application_sdk.observability.logger_adaptor import (
@@ -1337,9 +1347,19 @@ class TestEmitPreflightCheckOutcome:
         )
         kwargs = self._emit(out, surface=PreflightSurface.HTTP).info.call_args.kwargs
         assert kwargs["reason"] == "PREFLIGHT_CHECK_FAILED"
-        assert FAILURE_AUDIENCE_KEY not in kwargs
+        # An untyped block is attributed to the same synthesized fallback the
+        # gate row's details[0] is, so it stamps that fallback's audience — the
+        # two surfaces used to disagree here (gate stamped, interactive did not).
+        assert (
+            kwargs[FAILURE_AUDIENCE_KEY]
+            == _primary_failure(out, "myapp").audience.value
+        )
 
-    def test_partial_keeps_status_reason_but_stamps_audience(self) -> None:
+    def test_partial_reason_names_the_failed_check_and_stamps_audience(self) -> None:
+        # This row used to report `partial` while the gate row reported the
+        # failed check's code for the identical verdict. A reason of `partial`
+        # says only what `outcome` on the same row already says, and hides which
+        # check failed — the run a dashboard most needs to rank.
         out = PreflightOutput(
             status=PreflightStatus.PARTIAL,
             checks=[
@@ -1351,8 +1371,20 @@ class TestEmitPreflightCheckOutcome:
         )
         kwargs = self._emit(out, surface=PreflightSurface.HTTP).info.call_args.kwargs
         assert kwargs["outcome"] == "partial"
-        assert kwargs["reason"] == "partial"
+        assert kwargs["reason"] == "AUTH"
         assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
+
+    def test_a_clean_row_keeps_the_status_as_its_reason(self) -> None:
+        # Nothing failed, so there is no primary to attribute to and the status
+        # stands. The two new keys stay off the row entirely.
+        out = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[PreflightCheck(name="auth", passed=True)],
+        )
+        kwargs = self._emit(out, surface=PreflightSurface.HTTP).info.call_args.kwargs
+        assert kwargs["reason"] == "ready"
+        assert FAILURE_CHECK_KEY not in kwargs
+        assert FAILURE_MESSAGE_KEY not in kwargs
 
     def test_defaults_omit_optional_attrs(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
@@ -2464,3 +2496,542 @@ class TestPartialDeprecation:
             warnings.simplefilter("error", DeprecationWarning)
             warn_if_partial(PreflightOutput(status=PreflightStatus.READY))
             warn_if_partial(PreflightOutput(status=PreflightStatus.NOT_READY))
+
+
+class TestOutcomeRowNamesTheFailure:
+    """The outcome row answers "which check, and why" without a second record.
+
+    ``reason`` is a code and ``check_matrix`` carries no message, so before
+    these fields the human line existed only on the adjacent "Completing
+    activity as failed" record under ``exception.message``. A production
+    escalation was filed as log loss on exactly that gap.
+    """
+
+    async def test_block_row_names_the_failing_check_and_its_message(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="credentialScopes", passed=True),
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    error=AppPermissionDeniedError(
+                        message="The admin API returned 403.",
+                        suggested_action="Grant read-only admin API access.",
+                    ),
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev.get(FAILURE_CHECK_KEY) == "scannerApiAvailability"
+        assert ev.get(FAILURE_MESSAGE_KEY) == "The admin API returned 403."
+
+    async def test_the_lifecycle_body_and_the_row_carry_one_sentence(self) -> None:
+        # The interceptor's BLOCKED line and the row's failure.message both read
+        # details[0], so a Body substring search and a JSONExtract land on the
+        # same text. The block's *rendered* message is the builder's "Preflight
+        # failed: <every failed check's line, joined>", which would repeat the
+        # token the lifecycle line already carries and, here, drag in a check
+        # the row deliberately does not name.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="secretStore",
+                    passed=False,
+                    message="Secret store lagged; retried.",
+                ),
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    error=AppPermissionDeniedError(
+                        message="The admin API returned 403."
+                    ),
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError) as raised:
+            await _verdict_gate(out)(PreflightGateInput())
+        body = preflight_block_message(raised.value)
+        assert body == _outcome_event(ml)[FAILURE_MESSAGE_KEY]
+        assert body == "The admin API returned 403."
+        assert "Secret store lagged" not in body
+        assert not body.startswith("Preflight failed")
+
+    async def test_a_block_without_details_still_yields_its_rendered_line(
+        self,
+    ) -> None:
+        # The fallback: a producer whose details[0] this reader cannot parse
+        # must cost the reader the prefix, not the sentence.
+        block = ApplicationError(
+            "Preflight failed: the scanner API denied the probe",
+            {"not": "a FailureDetails"},
+            type="PreflightFailed",
+            non_retryable=True,
+        )
+        assert (
+            preflight_block_message(block)
+            == "Preflight failed: the scanner API denied the probe"
+        )
+
+    async def test_message_is_redacted_before_it_reaches_the_row(self) -> None:
+        # Scrubbed by the FailureDetails validator, so this holds whatever route
+        # the message took to reach the row; the emit site's own redact_and_cap
+        # is the cap plus defence in depth. A driver exception routinely carries
+        # a connection string, and this pins that none of it lands as a log
+        # attribute. The sibling below covers the one string the validator
+        # genuinely never sees: a raw PreflightOutput.message.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    error=AuthError(
+                        message="connect failed: postgres://u:pw@h/db?password=hunter2"
+                    ),
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        message = _outcome_event(ml)[FAILURE_MESSAGE_KEY]
+        assert "hunter2" not in message
+        assert "u:pw@h" not in message
+        assert "connect failed" in message
+
+    async def test_overlong_message_is_capped_keeping_both_ends(self) -> None:
+        # A head-only cut would spend the budget on boilerplate and delete the
+        # sentence naming what failed, which is always at the tail.
+        message = "HEAD-MARKER" + ("x" * 4000) + "TAIL-MARKER"
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, error=AuthError(message=message)
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        emitted = _outcome_event(ml)[FAILURE_MESSAGE_KEY]
+        assert len(emitted) < len(message)
+        assert emitted.startswith("HEAD-MARKER")
+        assert emitted.endswith("TAIL-MARKER")
+        assert "chars elided" in emitted
+
+    async def test_aggregate_error_wins_but_the_name_comes_from_the_check(self) -> None:
+        # SDR inserts a non-fatal row ahead of the real failure and pins the real
+        # one on result.error, so first-failed would steal the banner. The
+        # aggregate belongs to no single check, so the name still comes from the
+        # failed check it describes.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=AppPermissionDeniedError(
+                message="Scanner API denied."
+            ).to_failure_details(),
+            checks=[
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    error=AuthError(message="a per-check line that must not win"),
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_CHECK_KEY] == "scannerApiAvailability"
+        assert ev[FAILURE_MESSAGE_KEY] == "Scanner API denied."
+
+    async def test_advisory_failure_on_a_proceeded_run_still_names_itself(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[
+                PreflightCheck(name="conn", passed=True),
+                PreflightCheck(
+                    name="version", passed=False, message="Source is a minor behind."
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "proceeded"
+        assert ev[FAILURE_CHECK_KEY] == "version"
+        assert ev[FAILURE_MESSAGE_KEY] == "Source is a minor behind."
+
+    async def test_a_clean_run_carries_neither_key(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[PreflightCheck(name="conn", passed=True)],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "proceeded"
+        assert FAILURE_CHECK_KEY not in ev
+        assert FAILURE_MESSAGE_KEY not in ev
+
+    def test_an_unverifiable_source_names_the_synthesized_check(self) -> None:
+        # The no-verdict path shapes itself as a normal verdict with one failed
+        # check, so it reports through these fields unchanged rather than
+        # needing a parallel path.
+        verdict = unverifiable_preflight_result(
+            RuntimeError("handler blew up"), "myapp"
+        )
+        row = gate_outcome_row(
+            app_name="myapp",
+            entrypoint="crawl",
+            outcome=PreflightRowOutcome.BLOCKED,
+            reason="INTERNAL",
+            checks=verdict.checks,
+            mode=PreflightGateMode.HARD,
+            classification=PreflightClassification.SOURCE_UNVERIFIABLE,
+            duration_ms=1.0,
+            budget_seconds=150,
+            attempt=1,
+            primary=_primary_failure(verdict, "myapp"),
+        )
+        assert row[FAILURE_CHECK_KEY] == UNVERIFIABLE_CHECK_NAME
+        assert "handler blew up" in row[FAILURE_MESSAGE_KEY]
+
+    def test_the_interactive_row_carries_the_same_two_keys(self) -> None:
+        # Same gap, same fix: the Config-tab surface is where support is sent
+        # when the gate row does not explain itself.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    error=AppPermissionDeniedError(
+                        message="The admin API returned 403."
+                    ),
+                )
+            ],
+        )
+        log = mock.MagicMock()
+        emit_preflight_check_outcome(
+            log, "myapp", out, surface=PreflightSurface.SDR, entrypoint="crawl"
+        )
+        kwargs = log.error.call_args.kwargs
+        assert kwargs[FAILURE_CHECK_KEY] == "scannerApiAvailability"
+        assert kwargs[FAILURE_MESSAGE_KEY] == "The admin API returned 403."
+
+    async def test_both_surfaces_agree_on_the_same_verdict(self) -> None:
+        # One helper feeds both rows precisely so support reads the same answer
+        # whichever surface they land on.
+        def _verdict() -> PreflightOutput:
+            return PreflightOutput(
+                status=PreflightStatus.NOT_READY,
+                checks=[
+                    PreflightCheck(
+                        name="scannerApiAvailability",
+                        passed=False,
+                        error=AppPermissionDeniedError(
+                            message="The admin API returned 403."
+                        ),
+                    )
+                ],
+            )
+
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(_verdict())(PreflightGateInput())
+        gate = _outcome_event(ml)
+
+        log = mock.MagicMock()
+        emit_preflight_check_outcome(
+            log, "myapp", _verdict(), surface=PreflightSurface.SDR
+        )
+        interactive = log.error.call_args.kwargs
+
+        keys = (FAILURE_CHECK_KEY, FAILURE_MESSAGE_KEY)
+        assert {k: gate[k] for k in keys} == {k: interactive[k] for k in keys}
+
+    async def test_the_same_error_on_aggregate_and_check_is_matched_by_value(
+        self,
+    ) -> None:
+        # A handler may hand the same AppError to both. PreflightOutput and
+        # PreflightCheck each coerce it independently, so the row sees two
+        # distinct FailureDetails objects describing one failure.
+        blocking = AppPermissionDeniedError(message="The admin API returned 403.")
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=blocking,
+            checks=[
+                PreflightCheck(
+                    name="advisoryFirst", passed=False, error=AuthError(message="noise")
+                ),
+                PreflightCheck(name="scannerApi", passed=False, error=blocking),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_CHECK_KEY] == "scannerApi"
+        assert ev[FAILURE_MESSAGE_KEY] == "The admin API returned 403."
+
+    async def test_an_unattributable_aggregate_omits_the_name_rather_than_guessing(
+        self,
+    ) -> None:
+        # Several checks failed and the aggregate matches none of them, so any
+        # name would be a guess. Naming the wrong check is worse than naming
+        # none: `reason` and `failure.check` would disagree and support would
+        # chase the wrong one.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=AppPermissionDeniedError(
+                message="Aggregate that describes neither check."
+            ).to_failure_details(),
+            checks=[
+                PreflightCheck(
+                    name="first", passed=False, error=AuthError(message="a")
+                ),
+                PreflightCheck(
+                    name="second", passed=False, error=AuthError(message="b")
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert FAILURE_CHECK_KEY not in ev
+        assert ev[FAILURE_MESSAGE_KEY] == "Aggregate that describes neither check."
+
+    async def test_same_code_on_two_checks_is_told_apart_by_message(self) -> None:
+        # Two checks fail the same way and only the message distinguishes them.
+        # Matching on code alone would find both, and two matches is no answer —
+        # the name would be dropped for a verdict that can be attributed exactly.
+        blocking = AuthError(message="The second credential is the expired one.")
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=blocking,
+            checks=[
+                PreflightCheck(
+                    name="primaryCredential",
+                    passed=False,
+                    error=AuthError(message="The first credential is fine, advisory."),
+                ),
+                PreflightCheck(
+                    name="secondaryCredential", passed=False, error=blocking
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_CHECK_KEY] == "secondaryCredential"
+        assert ev[FAILURE_MESSAGE_KEY] == "The second credential is the expired one."
+
+    async def test_proceeded_row_message_comes_from_the_same_check_as_reason(
+        self,
+    ) -> None:
+        # `reason` on a proceeded row is the first failed check's code. The
+        # message must come from that same check — not from an aggregate the
+        # handler happened to set — or the row contradicts itself.
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            error=AppPermissionDeniedError(message="aggregate the row must not use"),
+            checks=[
+                PreflightCheck(
+                    name="version",
+                    passed=False,
+                    error=AuthError(message="Source is a minor behind."),
+                ),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "proceeded"
+        assert ev["reason"] == "AUTH"
+        assert ev[FAILURE_CHECK_KEY] == "version"
+        assert ev[FAILURE_MESSAGE_KEY] == "Source is a minor behind."
+
+    def test_interactive_proceeded_row_agrees_with_the_gate_row(self) -> None:
+        # Same verdict shape as above, on the interactive surface: the two rows
+        # attribute a proceeded run identically, first failed check wins.
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            error=AppPermissionDeniedError(message="aggregate the row must not use"),
+            checks=[
+                PreflightCheck(
+                    name="version",
+                    passed=False,
+                    error=AuthError(message="Source is a minor behind."),
+                ),
+            ],
+        )
+        log = mock.MagicMock()
+        emit_preflight_check_outcome(log, "myapp", out, surface=PreflightSurface.SDR)
+        kwargs = log.warning.call_args.kwargs
+        assert kwargs[FAILURE_CHECK_KEY] == "version"
+        assert kwargs[FAILURE_MESSAGE_KEY] == "Source is a minor behind."
+        # reason comes off the same object as the other three, so the row cannot
+        # name one cause and rank another. The gate row emits this same code for
+        # this verdict; the two used to split here.
+        assert kwargs["reason"] == "AUTH"
+        assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
+
+    async def test_row_and_raised_error_agree_when_only_the_aggregate_message_is_set(
+        self,
+    ) -> None:
+        # An un-migrated handler puts the sentence on result.message and marks a
+        # check failed with no text of its own. details[0] and the row must
+        # carry that sentence — the raised error's message already did, and the
+        # Body line is built from it, so anything else contradicts Body.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            message="The admin API (admin/workspaces/modified) returned 403.",
+            checks=[PreflightCheck(name="scannerApiAvailability", passed=False)],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_MESSAGE_KEY] == (
+            "The admin API (admin/workspaces/modified) returned 403."
+        )
+        assert ev[FAILURE_CHECK_KEY] == "scannerApiAvailability"
+        # Same string, by construction: the error's message is the prefix plus
+        # exactly what the row carries.
+        assert excinfo.value.message == f"Preflight failed: {ev[FAILURE_MESSAGE_KEY]}"
+        assert excinfo.value.details[0].message == ev[FAILURE_MESSAGE_KEY]
+
+    async def test_untyped_message_is_redacted_in_the_raised_error_too(self) -> None:
+        # The raised error's message becomes exception.message on the adjacent
+        # record. It is built from raw PreflightOutput.message, which the
+        # envelope validator never sees — so it must be redacted where built.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            message="connect postgres://u:pw@h/db?password=hunter2 refused",
+            checks=[PreflightCheck(name="conn", passed=False)],
+        )
+        with mock.patch(_LOGGER), pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert "hunter2" not in excinfo.value.message
+        assert "u:pw@" not in excinfo.value.message
+        assert "refused" in excinfo.value.message
+
+    async def test_an_untyped_check_is_named_when_its_line_is_the_attribution(
+        self,
+    ) -> None:
+        # Two un-migrated checks failed; only the first carries text, so the
+        # fallback sentence is that check's own line. Naming it is not a guess.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    message="The admin API returned 403.",
+                ),
+                PreflightCheck(name="workspaceSelection", passed=False),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_MESSAGE_KEY] == "The admin API returned 403."
+        assert ev[FAILURE_CHECK_KEY] == "scannerApiAvailability"
+
+    async def test_two_untyped_lines_joined_name_no_single_check(self) -> None:
+        # Both failed checks carry text, so the attribution is their lines
+        # joined — a sentence that belongs to neither check alone.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="first", passed=False, message="a"),
+                PreflightCheck(name="second", passed=False, message="b"),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_MESSAGE_KEY] == "a; b"
+        assert FAILURE_CHECK_KEY not in ev
+
+    async def test_the_row_carries_the_remediation_when_the_handler_gave_one(
+        self,
+    ) -> None:
+        # The escalation's search included the remediation text. The envelope
+        # already carries it as a distinct field; the row should too.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="scannerApiAvailability",
+                    passed=False,
+                    error=AppPermissionDeniedError(
+                        message="The admin API returned 403.",
+                        suggested_action="Enable read-only admin APIs for the principal.",
+                    ),
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_SUGGESTED_ACTION_KEY] == (
+            "Enable read-only admin APIs for the principal."
+        )
+
+    async def test_no_remediation_means_no_key(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, error=AuthError(message="bad creds")
+                )
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        assert FAILURE_SUGGESTED_ACTION_KEY not in _outcome_event(ml)
+
+    async def test_a_crashing_handler_puts_its_message_on_the_block_row(self) -> None:
+        # The source_unverifiable path, through the activity itself rather than
+        # the row builder: a handler that raised instead of answering.
+        class _Crashing(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise RuntimeError("driver blew up: connection reset by peer")
+
+        gate = build_preflight_gate_activity(
+            _Crashing(), app_name="myapp", mode=PreflightGateMode.HARD, attempts=1
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await gate(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "blocked"
+        assert "driver blew up" in ev[FAILURE_MESSAGE_KEY]
+        assert ev[FAILURE_CHECK_KEY] == UNVERIFIABLE_CHECK_NAME
+
+    async def test_a_deprecated_fail_open_leaf_puts_its_message_on_the_row(
+        self,
+    ) -> None:
+        # The no_verdict row for a leaf still on the deprecated fail-open train
+        # carries the leaf's own line, read off the rendered verdict — never
+        # via leaf.to_failure_details(), which can raise for an unserialisable
+        # leaf on a path that must not.
+        class _Throttled(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise DependencyUnavailableError(
+                    message="Source API throttled: 429 after 3 retries",
+                    service="source",
+                )
+
+        gate = build_preflight_gate_activity(
+            _Throttled(), app_name="myapp", mode=PreflightGateMode.HARD, attempts=1
+        )
+        with (
+            warnings.catch_warnings(),
+            mock.patch(_LOGGER) as ml,
+        ):
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "no_verdict"
+        assert ev[FAILURE_MESSAGE_KEY] == "Source API throttled: 429 after 3 retries"

@@ -14,7 +14,12 @@ from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_direc
 from ._discovery import EXCLUDE_DIRS, discover
 from ._exc_info import has_exc_info_traceback
 from ._findings import make_finding
-from ._imports import collect_import_origins, qualify_chained_attr_call
+from ._imports import (
+    collect_import_origins,
+    collect_module_alias_targets,
+    qualify_chained_attr_call,
+    register_alias_records,
+)
 from ._io import safe_read_json, safe_read_text
 from ._pytest_collection import (
     is_collectable_test_file,
@@ -22,6 +27,7 @@ from ._pytest_collection import (
     is_test_function,
 )
 from ._scope import SDK_PACKAGE_PREFIX, detect_scope, is_sdk_package_name
+from ._sdk_app import SDK_APP_BASE_NAMES
 from ._toml_suppress import (
     SuppressionsMap,
     _is_suppressed,
@@ -33,6 +39,7 @@ __all__ = [
     "safe_read_json",
     "safe_read_text",
     "EXCLUDE_DIRS",
+    "SDK_APP_BASE_NAMES",
     "SDK_PACKAGE_PREFIX",
     "TOOL_VERSION",
     "SuppressionsMap",
@@ -40,6 +47,7 @@ __all__ = [
     "_is_suppressed",
     "_parse_directives",
     "collect_import_origins",
+    "collect_module_alias_targets",
     "detect_scope",
     "has_exc_info_traceback",
     "discover",
@@ -53,4 +61,5 @@ __all__ = [
     "parse_ignore_directive",
     "parse_toml_suppressions",
     "qualify_chained_attr_call",
+    "register_alias_records",
 ]

@@ -5,9 +5,10 @@ from conformance.suite.schema.disposition import (
     RuleScope,
 )
 
-BLOCKING = {"F006", "F007", "F016", "F017", "F018"}
+BLOCKING = {"F006", "F007"}
 SDK_SCOPED = {"F017", "F018"}
-BEHAVIORAL = {"F016", "F017", "F018"}
+#: Retired in place: documented for one release, never firing, deleted at `until`.
+RETIRED = {"F017", "F018"}
 
 
 def test_preflight_contract_rules_have_evidence_based_enforcement():
@@ -18,11 +19,15 @@ def test_preflight_contract_rules_have_evidence_based_enforcement():
             EnforcementTier.BLOCK if rule_id in BLOCKING else EnforcementTier.WARN
         )
         assert rule.scope is (RuleScope.SDK if rule_id in SDK_SCOPED else RuleScope.APP)
-        assert rule.mechanism is (
-            RuleMechanism.TEST if rule_id in BEHAVIORAL else RuleMechanism.STATIC
-        )
+        assert rule.until == ("0.40.0" if rule_id in RETIRED else None)
         assert rule.help_uri
         assert rule.rationale
+
+
+def test_no_preflight_rule_executes_tests():
+    """Conformance checks the scenarios are defined; the test gate runs them."""
+    for number in range(1, 21):
+        assert get_rule(f"F{number:03}").mechanism is RuleMechanism.STATIC
 
 
 def test_every_preflight_rule_links_to_a_packaged_investigation_section():

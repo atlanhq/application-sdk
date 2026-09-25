@@ -12,6 +12,7 @@ from ._helpers import (
     _body_has_bypassing_exit,
     _body_is_only_loop_control_no_logging,
     _body_is_only_pass,
+    _body_returns_typed_failure,
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
@@ -19,6 +20,9 @@ from ._helpers import (
     _inherits_logging_filter,
     _is_gather_call,
     _iter_shallow,
+    _return_carries_typed_failure,
+    redaction_scope,
+    typed_failure_scope,
 )
 
 
@@ -92,12 +96,29 @@ class SilentSwallowMixin:
         if not broad:
             return
         exc_type = next(iter(broad))
-        # Pass only if the handler re-raises with the trace preserved on *every*
+        # Pass only if the handler re-raises with the cause preserved on *every*
         # path (bare `raise`, `raise X(...)`, or `raise X(...) from e`): a broad
         # catch that translates-and-chains swallows nothing. A guaranteeing raise
         # alone is not enough — a preceding `return`/`break`/`continue` (swallow)
-        # or `raise ... from None` (trace-loss) bypasses it, so those disqualify.
-        if _body_always_raises(node.body) and not _body_has_bypassing_exit(node.body):
+        # or a `raise ... from None` that drops the cause bypasses it, so those
+        # disqualify. A severed raise that carries the caught exception through a
+        # redaction helper does not: it preserves the cause in the only form that
+        # is safe to emit from a frame holding a resolved credential.
+        scope = redaction_scope(node)
+        if _body_always_raises(node.body, scope) and not _body_has_bypassing_exit(
+            node.body, scope=scope
+        ):
+            return
+        # Same principle on the other arm: a handler that converts the caught
+        # exception into a typed value and hands it back swallows nothing — the
+        # failure leaves the frame as data for the caller to report, so no log
+        # level decides whether it is visible. Every exit must carry it, and an
+        # unbound `except Exception:` never can.
+        if _body_returns_typed_failure(
+            node,
+            function=self._function_stack[-1] if self._function_stack else None,
+            redaction=scope,
+        ):
             return
         # Pass if body has logger.exception() or any log call with exc_info=True
         for n in _iter_shallow(node):
@@ -166,10 +187,18 @@ class SilentSwallowMixin:
     # ── E007 ─────────────────────────────────────────────────────────────────
 
     def _check_p007(self, node: ast.ExceptHandler) -> None:
+        # A return that hands the caught exception back as typed data hides
+        # nothing: the failure leaves the frame for the caller to report. This
+        # is the same predicate E004 uses for its typed-failure exemption, so
+        # the two rules never disagree about one shape. It is applied per
+        # return, because E007 judges each return on its own.
+        scope = typed_failure_scope(node)
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
             if _any_logging_in(node.body[:i]):
+                continue
+            if scope is not None and _return_carries_typed_failure(stmt, scope):
                 continue
             self._add(
                 "E007",

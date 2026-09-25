@@ -1358,6 +1358,124 @@ class TestPrepareSql:
         result = app._prepare_sql(sql, input_)
         assert "AND t.name !~ '^tmp_'" in result
 
+    # ── FND-2733: the form's exclude_table_regex reaches the SQL ─────────
+
+    # Fragment and template shapes read from atlanhq/atlan-mysql-app
+    # (origin/main) app/sql/extract_temp_table_regex_table.sql and the header
+    # of app/sql/extract_table.sql / extract_column.sql, trimmed.
+    _FRAGMENT = (
+        "/*\n"
+        " * File: extract_temp_table_regex_table.sql\n"
+        " * Parameters:\n"
+        " *   {exclude_table_regex} - Regex pattern for table names to exclude\n"
+        " */\n"
+        "AND T.TABLE_NAME NOT REGEXP '{exclude_table_regex}'"
+    )
+    _TABLE_SQL = (
+        "/*\n"
+        " * Parameters:\n"
+        " *   {temp_table_regex_sql} - Optional SQL for filtering temporary tables\n"
+        " */\n"
+        "SELECT T.TABLE_NAME FROM information_schema.TABLES T\n"
+        "WHERE 1=1\n"
+        "{temp_table_regex_sql}\n"
+        "AND T.TABLE_TYPE IN ('BASE TABLE', 'VIEW');"
+    )
+    _COLUMN_SQL = (
+        "/*\n"
+        " * Parameters:\n"
+        " *   {temp_table_regex_sql} - Optional SQL for filtering temporary tables\n"
+        " */\n"
+        "SELECT C.COLUMN_NAME FROM information_schema.COLUMNS C\n"
+        "LEFT JOIN information_schema.TABLES T ON (C.TABLE_NAME = T.TABLE_NAME)\n"
+        "WHERE 1=1\n"
+        "{temp_table_regex_sql};"
+    )
+
+    @staticmethod
+    def _live_sql(rendered: str) -> str:
+        """The SQL a server executes: non-nesting block comments removed."""
+        import re  # noqa: PLC0415
+
+        return re.sub(r"/\*.*?\*/", "", rendered, flags=re.DOTALL)
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            # Flat, as the toolkit-generated manifest sends it.
+            {"exclude_table_regex": ".*_TMP|.*_TEMP|TMP:*|TEMP:*"},
+            # Nested legacy AE shape.
+            {"metadata": {"exclude-table-regex": ".*_TMP|.*_TEMP|TMP:*|TEMP:*"}},
+        ],
+    )
+    def test_form_exclude_table_regex_renders_into_table_and_column_sql(
+        self, app, args
+    ):
+        app.extract_temp_table_regex_table_sql = self._FRAGMENT
+        app.extract_temp_table_regex_column_sql = self._FRAGMENT.replace(
+            "T.TABLE_NAME", "C.TABLE_NAME"
+        )
+        app.fetch_table_sql = self._TABLE_SQL
+        app.fetch_column_sql = self._COLUMN_SQL
+        src = ExtractionInput.model_validate({"workflow_id": "wf", **args})
+        task_input = SqlApp.build_task_input(ExtractionTaskInput, src)
+
+        regex = "'.*_TMP|.*_TEMP|TMP:*|TEMP:*'"
+        for template, clause in (
+            (app.fetch_table_sql, f"AND T.TABLE_NAME NOT REGEXP {regex}"),
+            (app.fetch_column_sql, f"AND C.TABLE_NAME NOT REGEXP {regex}"),
+        ):
+            # _extract_entity strips the template before rendering.
+            rendered = app._prepare_sql(template.strip(), task_input)
+            live = self._live_sql(rendered)
+            assert clause in live
+            # Comments stay balanced: nothing of the header leaks into live SQL.
+            assert "*/" not in live
+            assert "Optional SQL" not in live
+
+    def test_column_query_falls_back_to_table_fragment(self, app):
+        # No column fragment declared: the column query keeps the table
+        # fragment, as before.
+        app.extract_temp_table_regex_table_sql = self._FRAGMENT
+        app.fetch_column_sql = self._COLUMN_SQL
+        rendered = app._prepare_sql(
+            self._COLUMN_SQL, _make_task_input(temp_table_regex="^tmp_")
+        )
+        assert "AND T.TABLE_NAME NOT REGEXP '^tmp_'" in self._live_sql(rendered)
+
+    def test_column_fragment_not_used_for_table_query(self, app):
+        app.extract_temp_table_regex_table_sql = "AND T.name !~ '{exclude_table_regex}'"
+        app.extract_temp_table_regex_column_sql = (
+            "AND C.name !~ '{exclude_table_regex}'"
+        )
+        app.fetch_column_sql = self._COLUMN_SQL
+        rendered = app._prepare_sql(
+            self._TABLE_SQL, _make_task_input(temp_table_regex="^tmp_")
+        )
+        assert "AND T.name !~ '^tmp_'" in self._live_sql(rendered)
+        assert "C.name" not in rendered
+
+    def test_fragment_comment_does_not_break_template_header(self, app):
+        """A nested block comment would close the template's header early.
+
+        Reproduced on MySQL 8.0 before the fix: ERROR 1064 near
+        ``AND T.TABLE_NAME NOT REGEXP ... - Optional SQL for fil``.
+        """
+        app.extract_temp_table_regex_table_sql = self._FRAGMENT
+        rendered = app._prepare_sql(
+            self._TABLE_SQL, _make_task_input(temp_table_regex="^tmp_")
+        )
+        assert "File: extract_temp_table_regex_table.sql" not in rendered
+        assert rendered.count("/*") == rendered.count("*/") == 1
+
+    def test_empty_form_value_leaves_filter_off(self, app):
+        app.extract_temp_table_regex_table_sql = self._FRAGMENT
+        src = ExtractionInput.model_validate({"exclude_table_regex": ""})
+        rendered = app._prepare_sql(
+            self._TABLE_SQL, SqlApp.build_task_input(ExtractionTaskInput, src)
+        )
+        assert "NOT REGEXP" not in rendered
+
     def test_dict_filter_normalized_to_regex(self, app):
         sql = "WHERE schema ~ '{normalized_include_regex}'"
         input_ = _make_task_input(include_filter={"^prod$": ["^public$"]})

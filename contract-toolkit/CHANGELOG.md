@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.27.0] - 2026-09-25
+
+### Features
+
+- add Entrypoint.e2eOverrides for bundle e2e harness identity (#3986) ([7fb9f91](https://github.com/atlanhq/application-sdk/commit/7fb9f91))
+
 ## [0.26.0] - 2026-09-14
 
 ### Breaking changes

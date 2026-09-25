@@ -24,6 +24,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 import e2e_tenant_app as app  # noqa: E402
 from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 
+# The lease knobs used to live on a composite action's `inputs:`; the driver's own
+# defaults are the single source now that the action is gone (FND-2674), so the
+# sizing assertions below read them from there.
+from e2e_tenant_lease import DEFAULT_TTL_SECONDS, DEFAULT_WAIT_SECONDS  # noqa: E402
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
 _SDR_ACTION = _REPO_ROOT / ".github/actions/sdr-e2e/action.yaml"
@@ -210,37 +215,65 @@ def test_prepare_tenant_leaves_tenant_exclusion_to_the_lease(jobs: dict) -> None
 
 # ── The (app, cloud) tenant lease (FND-250) ──────────────────────────────────
 
-_LEASE_ACTION = "atlanhq/application-sdk/.github/actions/e2e-tenant-lease@main"
+_LEASE_DRIVER = "application-sdk-scripts/.github/scripts/e2e_tenant_lease.py"
 
 
 def _lease_step(jobs: dict, job: str) -> dict:  # type: ignore[type-arg]
+    """The step that drives the lease — all three modes run the CHECKED-OUT
+    driver, never an action reference."""
     for step in jobs[job]["steps"]:
-        if "e2e-tenant-lease" in str(step.get("uses", "")):
+        if _LEASE_DRIVER in str(step.get("run", "")):
             return step
-    raise AssertionError(f"{job} no longer invokes the e2e-tenant-lease action")
+    raise AssertionError(f"{job} no longer invokes the lease driver")
+
+
+def _lease_env(jobs: dict, job: str) -> dict:  # type: ignore[type-arg]
+    return _lease_step(jobs, job)["env"]
 
 
 @pytest.mark.parametrize(
     ("job", "mode"), [("lease-tenant", "acquire"), ("release-tenant", "release")]
 )
-def test_the_lease_jobs_use_the_shared_action_at_main(
+def test_the_lease_jobs_run_their_own_checked_out_driver(
     jobs: dict,  # type: ignore[type-arg]
     job: str,
     mode: str,
 ) -> None:
-    """Pinned @main on purpose: every contender has to agree on the ref layout
-    and the ordering rule, so the protocol must not vary by checked-out ref."""
-    step = _lease_step(jobs, job)
-    assert step["uses"] == _LEASE_ACTION
-    assert step["with"]["mode"] == mode
+    """Every mode runs ONE version of the driver: the one this workflow was
+    called at.
+
+    These two used to be a composite action pinned @main, because `uses:` cannot
+    take an expression — which meant a PR changing the driver silently exercised
+    main's copy rather than its own, and (being checked out in isolation) the
+    action could not import the shared ref transport at all, so it carried a
+    second copy of it (FND-2674). Fetching the driver at job.workflow_sha closes
+    both, and costs nothing in agreement between contenders: every consumer calls
+    this reusable @main, so workflow_sha is the commit @main resolves to.
+    """
+    steps = jobs[job]["steps"]
+    checkout_at = _index_of(steps, "application-sdk-scripts")
+    lease_at = _index_of(steps, _LEASE_DRIVER)
+    assert checkout_at is not None and lease_at is not None
+    assert checkout_at < lease_at, "the driver must be fetched before it is run"
+    assert steps[checkout_at]["with"]["ref"] == "${{ job.workflow_sha }}"
+
+    step = steps[lease_at]
+    assert f"--mode {mode}" in step["run"]
+    assert "uses" not in step, (
+        "an action reference can only ever be @main; the lease must run the "
+        "driver this workflow was called at"
+    )
+    # docs/standards/ci.md: inputs reach the command through env, never inline
+    # ${{ }} interpolation.
+    assert "${{" not in step["run"]
 
 
 def test_the_release_keys_on_app_and_cloud(jobs: dict) -> None:  # type: ignore[type-arg]
     """Acquire and release must name the same tenants, or every run leaks its
     ticket and the next contender waits for a holder that has already gone."""
-    with_ = _lease_step(jobs, "release-tenant")["with"]
-    assert with_["app"] == "${{ inputs.app-name }}"
-    assert with_["cloud"] == "${{ matrix.cloud }}"
+    env = _lease_env(jobs, "release-tenant")
+    assert env["APP"] == "${{ inputs.app-name }}"
+    assert env["CLOUD"] == "${{ matrix.cloud }}"
 
 
 def test_the_acquire_is_one_job_over_an_ordered_cloud_set(jobs: dict) -> None:  # type: ignore[type-arg]
@@ -257,10 +290,12 @@ def test_the_acquire_is_one_job_over_an_ordered_cloud_set(jobs: dict) -> None:  
         "lease-tenant must acquire every cloud in ONE job, in order; a matrix "
         "acquires them in parallel and reintroduces hold-and-wait (FND-646)"
     )
-    with_ = _lease_step(jobs, "lease-tenant")["with"]
-    assert with_["app"] == "${{ inputs.app-name }}"
-    assert with_["clouds"] == "${{ needs.discover-e2e.outputs.cloud-list }}"
-    assert "cloud" not in with_, (
+    step = _lease_step(jobs, "lease-tenant")
+    env = step["env"]
+    assert env["APP"] == "${{ inputs.app-name }}"
+    assert env["CLOUDS"] == "${{ needs.discover-e2e.outputs.cloud-list }}"
+    assert "--clouds" in step["run"]
+    assert "--cloud " not in step["run"], (
         "passing both cloud and clouds fails the driver rather than silently "
         "preferring one; the acquire takes the set"
     )
@@ -337,14 +372,11 @@ def test_prepare_tenant_verifies_with_its_own_driver_not_mains(jobs: dict) -> No
 
     fetch = steps[checkout_at]
     assert fetch["with"]["ref"] == "${{ job.workflow_sha }}"
-    assert ".github/actions/e2e-tenant-lease" in fetch["with"]["sparse-checkout"], (
-        "the sparse checkout must include the lease action, or the verify step "
+    assert ".github/scripts" in fetch["with"]["sparse-checkout"], (
+        "the sparse checkout must include the scripts dir, or the verify step "
         "cannot run this ref's driver"
     )
-    assert (
-        "application-sdk-scripts/.github/actions/e2e-tenant-lease"
-        in (steps[verify_at]["run"])
-    )
+    assert _LEASE_DRIVER in steps[verify_at]["run"]
 
 
 def _index_of(steps: list, needle: str) -> int | None:  # type: ignore[type-arg]
@@ -492,12 +524,7 @@ def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type
     """If the runner's timeout fires first, a bare "job cancelled after Nm"
     replaces the script's error — which is the one place the holding run is
     named, and therefore the only actionable output this job produces."""
-    action = yaml.safe_load(
-        (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    wait_seconds = int(action["inputs"]["wait-seconds"]["default"])
+    wait_seconds = DEFAULT_WAIT_SECONDS
     timeout_seconds = int(jobs["lease-tenant"]["timeout-minutes"]) * 60
     assert timeout_seconds > wait_seconds
 
@@ -517,12 +544,7 @@ def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # t
     Derived from the workflow's own timeouts rather than hard-coded, so raising
     either of them forces the TTL up instead of quietly eating the margin.
     """
-    action = yaml.safe_load(
-        (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    ttl_seconds = int(action["inputs"]["ttl-seconds"]["default"])
+    ttl_seconds = DEFAULT_TTL_SECONDS
     hold_seconds = (
         sum(int(jobs[job]["timeout-minutes"]) for job in _LEASE_HELD_ACROSS) * 60
     )
@@ -544,13 +566,8 @@ def test_the_lease_wait_budget_is_the_operator_facing_signal(jobs: dict) -> None
     """The TTL is deliberately generous, so it must not be what tells a human the
     tenant is stuck — the wait budget has to fail long before it, or a blocked run
     sits silently for hours instead of reporting who holds the tenant."""
-    action = yaml.safe_load(
-        (_REPO_ROOT / ".github/actions/e2e-tenant-lease/action.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    wait_seconds = int(action["inputs"]["wait-seconds"]["default"])
-    ttl_seconds = int(action["inputs"]["ttl-seconds"]["default"])
+    wait_seconds = DEFAULT_WAIT_SECONDS
+    ttl_seconds = DEFAULT_TTL_SECONDS
     assert wait_seconds < ttl_seconds
 
 
@@ -578,7 +595,7 @@ def test_the_lease_set_and_the_install_matrix_come_from_one_discovery(
     assert outputs["cloud-matrix"] == "${{ steps.discover-clouds.outputs.matrix }}"
 
     assert (
-        _lease_step(jobs, "lease-tenant")["with"]["clouds"]
+        _lease_env(jobs, "lease-tenant")["CLOUDS"]
         == "${{ needs.discover-e2e.outputs.cloud-list }}"
     )
     assert "cloud-matrix" in jobs["prepare-tenant"]["strategy"]["matrix"]

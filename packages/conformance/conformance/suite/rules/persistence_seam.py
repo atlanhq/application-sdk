@@ -185,8 +185,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P049",
         canonical_reference=(
-            "atlan-openapi-app app/asset_mapper.py — connection_qualified_name is passed "
-            "through to the pyatlan creators, never split and validated by the app. The "
+            "atlan-openapi-app app/connector.py — `_extract_spec_async(spec_url, "
+            "connection_qualified_name, ...)` passes the value straight through to "
+            "`build_api_spec_qn` and on to `APISpec.creator()`; it never splits or parses "
+            "it. The "
             "SDK warns and proceeds on a malformed value; an app that parses and raises "
             "turns a recoverable run into a failed one."
         ),
