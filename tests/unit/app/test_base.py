@@ -1459,6 +1459,108 @@ class TestGenerateWorkflowClass:
         ]
         assert not error_calls, "Preflight block must not log at error level"
 
+    def _counting_gate_app(self):
+        """An app whose entry method counts its calls and declares gate ClassVars."""
+
+        class GatedApp(App):
+            preflight_gate_timeout_seconds = 42
+            preflight_gate_max_attempts = 2
+            preflight_gate_mode = "hard"
+            calls = 0
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                type(self).calls += 1
+                return _BLDXOutput(result="extracted")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(GatedApp, ep)
+        return GatedApp, wf_cls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("wrapped", [False, True], ids=["bare", "activity_error"])
+    async def test_preflight_block_never_reaches_the_entry_method(
+        self, wrapped: bool
+    ) -> None:
+        """A gate block — bare or as an ActivityError's cause — stops the run
+        before extraction: the entry method is never called."""
+        from temporalio.exceptions import ActivityError
+
+        from application_sdk.execution._temporal.preflight_gate import (
+            PREFLIGHT_FAILED_ERROR_TYPE,
+        )
+        from application_sdk.execution.errors import ApplicationError
+
+        GatedApp, wf_cls = self._counting_gate_app()
+        block: BaseException = ApplicationError(
+            "source unreachable", type=PREFLIGHT_FAILED_ERROR_TYPE, non_retryable=True
+        )
+        if wrapped:
+            wrapper = ActivityError(
+                "Activity task failed",
+                scheduled_event_id=1,
+                started_event_id=2,
+                identity="worker",
+                activity_type="gatedapp:preflight",
+                activity_id="1",
+                retry_state=None,
+            )
+            wrapper.__cause__ = block
+            block = wrapper
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(GatedApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+            mock.patch(
+                "application_sdk.app.base._run_preflight_gate", side_effect=block
+            ),
+            pytest.raises(type(block)) as excinfo,
+        ):
+            await wf_cls.run(mock.MagicMock(), _BLDXInput())
+
+        assert excinfo.value is block, "the block must propagate unchanged"
+        assert GatedApp.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_a_proceeding_gate_runs_the_entry_method_exactly_once(
+        self,
+    ) -> None:
+        """When the gate returns (READY, PARTIAL, soft would_block, fail-open),
+        extraction runs once, and the gate is handed the app's declared
+        budget, attempts and mode — the same ClassVars the worker reads."""
+        GatedApp, wf_cls = self._counting_gate_app()
+        gate = mock.AsyncMock(return_value=None)
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(GatedApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+            mock.patch("application_sdk.app.base._run_preflight_gate", gate),
+        ):
+            out = await wf_cls.run(mock.MagicMock(), _BLDXInput())
+
+        assert isinstance(out, _BLDXOutput) and out.result == "extracted"
+        assert GatedApp.calls == 1
+        gate.assert_awaited_once()
+        assert gate.await_args.args[3:] == (42, 2, "hard")
+
 
 # =============================================================================
 # Runtime interaction relay (BLDX-1283) — @signal / @query / @update on App

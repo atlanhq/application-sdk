@@ -1,0 +1,139 @@
+name: lens
+# lens/lock.py finds concurrent reviews of the same PR by this name — keep them in sync.
+# Quoted: unquoted, YAML reads " #" as the start of a comment and the name is just "lens".
+run-name: "lens #${{ github.event.issue.number || inputs.pr }}"
+
+# lens — the fixed-cost PR reviewer (.github/scripts/lens, config in .github/lens).
+#
+# lens reviews only when asked: a `/lens` comment from an owner/member/collaborator, or a
+# manual dispatch. A push never triggers it. Each run continues from the last one.
+#
+# Security shape (review this before enabling):
+#   * `issue_comment` runs THIS file from the default branch, with secrets. That is safe
+#     only because the job never checks out, installs or runs PR code: the checkout below is
+#     the base branch, and lens reads the PR's diff and head-side file text through the REST
+#     API as data. Do not add a step that checks out the PR head.
+#   * Who may trigger is decided in lens/event.py (tested), not in shell here, per
+#     docs/standards/ci.md. Bots and non-collaborators cannot trigger it.
+#   * lens acts on GitHub as atlan-app-fleet[bot], with a token minted per run and scoped to
+#     contents:read, pull-requests/issues/statuses:write and actions:read. It cannot push.
+#     The job's own GITHUB_TOKEN is contents:read and only checks out the base branch.
+#   * App-token comments DO trigger other workflows (GITHUB_TOKEN ones do not). lens's own
+#     comments never start with `/lens` and bots are refused in event.py, so it cannot loop.
+#   * The model key is the repo's existing LiteLLM key (secrets.LITELLM_API_KEY). lens's own
+#     $1/PR cap is enforced in code whatever the key's budget; preflight
+#     refuses to start when the key has less than a few cents left.
+#
+# Nothing here conflicts with the existing sdk-review lanes: lens uses its own trigger
+# (`/lens`), its own sticky comment and its own state marker.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to review
+        required: true
+      force:
+        description: Bypass the unchanged-head and round-cap rules (the $ cap still applies)
+        type: boolean
+        default: false
+
+# The job's own GITHUB_TOKEN only checks out the base branch. Everything lens does on GitHub
+# uses a fleet App token minted below and scoped to exactly what it needs.
+permissions:
+  contents: read
+
+# Deliberately no `concurrency:` block. GitHub can only queue a new run behind the running
+# one or cancel the running one; lens wants neither — the review in progress finishes, and a
+# request that arrives meanwhile is dropped with a note (lens/lock.py, first thing the job does).
+
+jobs:
+  review:
+    name: lens review
+    # Cheap pre-filter so ordinary comments don't start a runner; the real gate is lens/event.py.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request && startsWith(github.event.comment.body, '/lens'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the base branch (trusted code only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # lens speaks to GitHub as atlan-app-fleet[bot]. Naming any permission-* scopes the
+      # minted token to those alone, so the review never holds the App's full grant — and
+      # nothing here can push: contents stays read.
+      - name: Mint fleet App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read # PR diff and head-side file text, as data
+          permission-pull-requests: write # inline review comments
+          permission-issues: write # the sticky summary and reactions (PR comments are Issues-scope)
+          permission-statuses: write # the `lens` commit status: green/red for the reviewed head
+          permission-actions: read # lens/lock.py: is an older review of this PR still running?
+
+      - name: Review
+        working-directory: .github/scripts
+        env:
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          LENS_BOT_LOGIN: atlan-app-fleet[bot]
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
+          LENS_LITELLM_KEY: ${{ secrets.LITELLM_API_KEY }}
+          REPO: ${{ github.repository }}
+          ROOT: ${{ github.workspace }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          # Run report (every model request, bundle, timing; no prompts, code or keys):
+          # written here and to this job's summary page, then uploaded below.
+          LENS_REPORT_PATH: ${{ runner.temp }}/lens-run.json
+          # Stream every trace line to the live job log as it happens.
+          PYTHONUNBUFFERED: "1"
+        run: >-
+          python -m lens review
+          --repo "$REPO"
+          --root "$ROOT"
+          --event-name "$EVENT_NAME"
+          --event-path "$EVENT_PATH"
+
+      # The repo's upload pattern (see conformance-reusable.yaml): a finalize 403 from
+      # the artifact service fails the first attempt even though the bytes landed, so
+      # the first attempt never fails the job, and a distinctly named retry follows.
+      - name: Upload the run report
+        id: upload-report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lens-run-${{ github.event.issue.number || inputs.pr }}
+          path: ${{ runner.temp }}/lens-run.json
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Wait before the upload retry
+        if: always() && steps.upload-report.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload the run report (retry)
+        if: always() && steps.upload-report.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lens-run-${{ github.event.issue.number || inputs.pr }}-retry
+          path: ${{ runner.temp }}/lens-run.json
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true

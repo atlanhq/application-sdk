@@ -101,6 +101,7 @@ from application_sdk.common.last_sync import resolve_last_sync_details
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
+    strip_sql_block_comments,
 )
 from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.contracts.base import OutputStatus
@@ -1665,6 +1666,26 @@ class SqlApp(App):
         await client.load(credentials=creds)
         return client
 
+    def _temp_table_regex_fragment(self, sql: str) -> str:
+        """Pick the temp-table fragment for *sql*.
+
+        The column query gets ``extract_temp_table_regex_column_sql`` when the
+        app declares one: it filters on the column table's own name
+        (``C.TABLE_NAME``) rather than a joined table alias the column query
+        may not have. Every other query, and apps without a column fragment,
+        get ``extract_temp_table_regex_table_sql``. The query is recognised by
+        comparing against ``fetch_column_sql`` so ``_prepare_sql``'s signature,
+        which connector overrides mirror, is unchanged.
+        """
+        column_fragment = self.extract_temp_table_regex_column_sql
+        if (
+            column_fragment
+            and self.fetch_column_sql
+            and sql.strip() == self.fetch_column_sql.strip()
+        ):
+            return column_fragment
+        return self.extract_temp_table_regex_table_sql
+
     def _prepare_sql(self, sql: str, input: ExtractionTaskInput) -> str:
         """Substitute filter placeholders in SQL template."""
         exclude_filter = input.exclude_filter or ""
@@ -1683,11 +1704,15 @@ class SqlApp(App):
         else:
             include_regex = include_filter or ".*"
 
-        # Temp table regex
+        # Temp table regex. The fragment's own ``/* ... */`` header is stripped
+        # first: full templates often mention ``{temp_table_regex_sql}`` inside
+        # their header comment, and a nested block comment closes it early
+        # (FND-2733).
         temp_table_sql = ""
         if hasattr(input, "temp_table_regex") and input.temp_table_regex:
-            if self.extract_temp_table_regex_table_sql:
-                temp_table_sql = self.extract_temp_table_regex_table_sql.replace(
+            fragment = self._temp_table_regex_fragment(sql)
+            if fragment:
+                temp_table_sql = strip_sql_block_comments(fragment).replace(
                     "{exclude_table_regex}", input.temp_table_regex
                 )
 

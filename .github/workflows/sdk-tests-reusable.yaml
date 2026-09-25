@@ -131,9 +131,29 @@ jobs:
     name: Storage Emulator Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # Our own GHCR copy of Chainguard's MinIO, pinned by tag AND digest (the
+      # digest wins). Never point this at a vendor registry: MinIO's images
+      # vanished from Docker Hub and then quay.io within one month, digest and
+      # all, and Chainguard may withdraw theirs too. To adopt a newer MinIO,
+      # dispatch "Refresh MinIO CI mirror" (mirror-minio-image.yaml) and paste
+      # the reference it prints here and in the test_emulator_*.py docstrings.
+      # The package is private (we do not redistribute the image), readable by
+      # this repo's GITHUB_TOKEN via the package's "Manage Actions access".
+      MINIO_IMAGE: ghcr.io/atlanhq/ci-mirror/minio:RELEASE.2026-09-22T19-25-18Z@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: "./.github/actions/setup-deps"
+
+      - name: Log in to GHCR (private MinIO mirror)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Start object-store emulators
         run: |
@@ -141,18 +161,15 @@ jobs:
           # Pull images first with retry — image pulls are the main 504 surface.
           # Use ${GITHUB_WORKSPACE} (not a bare relative path) to match the style
           # used in composite actions and stay correct if CWD ever changes.
-          # quay.io, not Docker Hub: MinIO no longer publishes community images
-          # there (hub.docker.com/v2/repositories/minio/minio lists zero tags
-          # and every pull returns 'pull access denied'). quay.io carries the
-          # same pinned release tag, and is MinIO's own registry.
-          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+          # MinIO comes from our private GHCR mirror (see MINIO_IMAGE above).
+          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull "${MINIO_IMAGE}"
           "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull mcr.microsoft.com/azure-storage/azurite:3.31.0
           "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull gcr.io/cloud-devrel-public-resources/storage-testbench:v0.62.0
           "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull nginx:1.27-alpine
           # S3 → MinIO
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+            "${MINIO_IMAGE}" server /data
           # Azure → Azurite
           docker run -d --name azurite -p 10000:10000 \
             mcr.microsoft.com/azure-storage/azurite:3.31.0 \

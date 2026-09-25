@@ -363,7 +363,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # defines get/set_app_state but apps are the ones that (mis)use it as a
     # conduit (BLDX-1500). P028: hand-built qualifiedName f-strings — connectors
     # mint asset qualifiedNames; the SDK is the framework, not an asset author
-    # (BLDX-1499).
+    # (BLDX-1499). P052: asset serialization that bypasses entity_bytes —
+    # only apps map and write assets; the SDK owns the seam (FND-2725).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # P029/P030 + P037/P038/P039/P042: SDR-readiness — only apps declare
@@ -482,6 +483,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P048",
         "P049",
         "P051",
+        "P052",
         "C002",
         "D001",
         "D002",
@@ -758,6 +760,9 @@ def test_catalog_p_series_present() -> None:
     application-sdk below 3.30.0, the floor at which the interactive setup
     surfaces (test auth / preflight / metadata browsing) become available; a WARN
     readiness nudge, not a data-loss bug (DISTR-752).
+    P052 is EntitySerializationBypass — app code serializing a pyatlan asset
+    itself (to_nested_bytes / to_nested_dict / pyatlan_v9 to_atlas_format)
+    instead of through the SDK's entity_bytes seam (FND-2725).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -809,6 +814,7 @@ def test_catalog_p_series_present() -> None:
         "P049",
         "P050",
         "P051",
+        "P052",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -822,8 +828,9 @@ def test_catalog_f_series_present() -> None:
     F001–F005 were published as P032–P035 and P047 and moved to their own
     series in PR #3710 before any fleet suppression referenced them; the vacated
     P-ids are retired and never reused.  F006–F019 are the CONNECT-812 contract,
-    lifetime and behavioral rules; F016–F018 are the opt-in TEST rules.  F020
-    flags a suppression that still cites one of the five retired P-ids.
+    lifetime and behavioral rules; F016 checks the scenario matrix is defined,
+    and F017–F018 are retired in place until 0.40.0.  F020 flags a suppression
+    that still cites a retired id.
 
     There is deliberately no rule for a ``PreflightStatus.PARTIAL`` verdict: it
     is a read of a deprecated SDK enum member, which B001 already reports

@@ -7,9 +7,11 @@ write/read round-trip semantics (no delete required or performed).
 Marked ``storage_emulator`` (deselected by default; run in CI with a MinIO sidecar).
 Local:
 
+    # One-time: `docker login ghcr.io` as an account with Read on the private
+    # MinIO mirror (docs/standards/build-security.md, "CI test images").
     docker run -d --rm -p 9000:9000 \\
         -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \\
-        quay.io/minio/minio server /data
+        ghcr.io/atlanhq/ci-mirror/minio:RELEASE.2026-09-22T19-25-18Z@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1 server /data
     AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \\
         aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-customer-objectstore
     AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \\

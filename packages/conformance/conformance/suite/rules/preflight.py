@@ -495,46 +495,82 @@ _CONTRACT_RULES = (
             "cancellation_cleanup and the rest) is a test that drives the real "
             "`OpenAPIConnectorHandler.preflight_check` and is registered with "
             '`@pytest.mark.preflight_conformance(rule="F016", scenario=...)`. The marker, '
-            "not the file's presence, is what a `--with-tests` run counts as coverage."
+            "not the file's presence, is what counts as a defined scenario. "
+            "atlan-metabase-app registers the same matrix once per `@entrypoint` "
+            "through a module-level `entrypoint_matrix(scenario)` parametrize helper."
         ),
         name="PreflightBehaviorContract",
         scope=RuleScope.APP,
-        tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.TEST,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
-        short_description="Execute registered real-handler scenarios for each applicable entrypoint.",
-        full_description="Execute registered real-handler scenarios for each applicable entrypoint.",
-        rationale="Customer impact: Static shape checks cannot prove verdict semantics, probe coverage, recovery, or resource lifetime. Missing and skipped scenarios are incomplete evidence.",
+        short_description="Define every required real-handler preflight scenario for each entrypoint.",
+        full_description=(
+            "Every scenario in the F016 matrix must be defined, for each "
+            "``@entrypoint`` the app declares, as a pytest-collected test under "
+            "``tests/unit/`` (the tier the test gate always runs) marked "
+            '``preflight_conformance(rule="F016", scenario=..., entrypoint=...)`` '
+            "that calls ``assert_preflight_result`` from "
+            "``conformance.preflight_testing`` (and ``assert_probe_lifetime`` for "
+            "hung_probe, cancellation_cleanup and budget_retry) as a statement of "
+            "the test body or of a top-level loop over a non-empty literal. The "
+            "reader accepts the shapes the reference apps use and reports anything "
+            "else rather than modelling it. A registration on a test that does not "
+            "run (skip, a true skipif or xfail condition, no runnable parametrized "
+            "case), a declared-unsupported one, a case whose entrypoint argument "
+            "differs from its marker, and one outside the accepted shapes do not "
+            "define the scenario. This rule checks the matrix is defined; whether the tests "
+            "pass is the test gate's measure, and conformance never executes them. "
+            "WARN while the fleet registers its scenarios; promoted to BLOCK once "
+            "it has."
+        ),
+        rationale="Customer impact: Static shape checks cannot prove verdict semantics, probe coverage, recovery, or resource lifetime, so each scenario must exist as a test the test gate runs. A missing scenario is a behaviour nothing verifies.",
         help_uri=f"{_HELP_BASE}#f016",
     ),
     RuleDefinition(
         id="F017",
         name="PreflightWorkflowEnforcement",
         scope=RuleScope.SDK,
-        tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.TEST,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
-        short_description="Verify gate enforcement through real Temporal workflow histories.",
-        full_description="Verify gate enforcement through real Temporal workflow histories.",
-        rationale="Customer impact: Only execution history can prove extraction was never scheduled after a hard gate failure, including activity death.",
+        until="0.40.0",
+        short_description="Retired: SDK gate behaviour is covered by the SDK's own test suite.",
+        full_description=(
+            "Retired in 0.39.0 and removed in 0.40.0; F017 no longer fires. It was "
+            "SDK-scoped, and the SDK owns both the gate and its tests, so a "
+            "conformance rule over the SDK's own behaviour only restated those "
+            "tests. The behaviour is asserted in tests/unit/app/test_preflight_gate.py; "
+            "a suppression that still cites this id suppresses nothing and is "
+            "reported by F020."
+        ),
+        rationale="Conformance checks that required things are defined; whether tests pass is the test gate's measure. An SDK-scoped rule has nothing to define that the SDK's own tests do not already.",
         help_uri=f"{_HELP_BASE}#f017",
     ),
     RuleDefinition(
         id="F018",
         name="PreflightExitEvidence",
         scope=RuleScope.SDK,
-        tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.TEST,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
-        short_description="Verify typed verdicts, outcome fields and safe evidence handoff on every exit.",
-        full_description="Verify typed verdicts, outcome fields and safe evidence handoff on every exit.",
-        rationale="Customer impact: Activity and workflow failures must preserve cause and status, and logging must not silently discard the evidence.",
+        until="0.40.0",
+        short_description="Retired: SDK gate behaviour is covered by the SDK's own test suite.",
+        full_description=(
+            "Retired in 0.39.0 and removed in 0.40.0; F018 no longer fires. It was "
+            "SDK-scoped, and the SDK owns both the gate and its tests, so a "
+            "conformance rule over the SDK's own behaviour only restated those "
+            "tests. The behaviour is asserted in tests/unit/app/test_preflight_gate.py; "
+            "a suppression that still cites this id suppresses nothing and is "
+            "reported by F020."
+        ),
+        rationale="Conformance checks that required things are defined; whether tests pass is the test gate's measure. An SDK-scoped rule has nothing to define that the SDK's own tests do not already.",
         help_uri=f"{_HELP_BASE}#f018",
     ),
     RuleDefinition(
@@ -560,13 +596,14 @@ _CONTRACT_RULES = (
             "clearable by executing tests. A *value-level* gap — a computed "
             "aggregation or an unresolvable row inside one, an expanded failure "
             "constructor, an unresolved error expression, a dynamic ``passed`` — "
-            "names a property F016 asserts on "
-            "every executed scenario, so a ``--with-tests`` run whose F016 matrix "
-            "is complete and passing drops it. A *structural* gap — an unparsed "
+            "names a property every F016 scenario asserts through "
+            "``assert_preflight_result``, so it is dropped once the F016 matrix is "
+            "fully defined; the test gate proves those assertions hold. A "
+            "*structural* gap — an unparsed "
             "file, a preflight_check the analysis never resolved, a dynamically "
             "bound callback, an input contract class that is not in the registry — "
-            "stands regardless of how many scenarios pass, because execution does "
-            "not tell the analysis what it failed to read; clear those by making "
+            "stands regardless of how many scenarios are defined, because a test "
+            "does not tell the analysis what it failed to read; clear those by making "
             "the code statically resolvable."
         ),
         rationale="An undiscovered handler or unresolved contract must not be mistaken for conforming code.",
@@ -587,14 +624,16 @@ _CONTRACT_RULES = (
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.32.0",
-        short_description="A conformance suppression cites a retired preflight id (P032-P035, P047).",
+        short_description="A conformance suppression cites a retired preflight id (P032-P035, P047, F017, F018).",
         full_description=(
             "The preflight rules moved from the P-series to the F-series: P032-P035 "
-            "became F001-F004 and P047 became F005. The suppression parser matches "
+            "became F001-F004 and P047 became F005. F017 and F018 were retired "
+            "with no replacement. The suppression parser matches "
             "ids as plain strings, so a ``# conformance: ignore[...]`` directive that "
             "still cites a retired id suppresses nothing and the renamed rule fires "
             "with no hint why. Cite the new id named in the message, keeping the "
-            "justification, or delete the directive if the finding it covered is gone."
+            "justification, or delete the directive if the finding it covered is "
+            "gone or its rule was retired."
         ),
         rationale=(
             "Customer impact: a reviewed, justified carve-out silently turns into an "

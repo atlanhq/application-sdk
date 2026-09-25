@@ -1,0 +1,11 @@
+# tests: Test quality and isolation
+- Flag: a bug/security/performance fix with no regression test; a new exported API, `@task`, Handler or contract with no test; a new error branch with no `pytest.raises` case.
+- Flag: test files outside collected paths (`tests/`, `.github/scripts/tests`, a package's `tests/`).
+- Flag: a test defining an `App` or `@task` without `clean_app_registry`/`clean_task_registry`.
+- Flag: unit tests hitting real network/storage/Temporal/DB; use the `application_sdk.testing` fakes (`MockStateStore`, `MockSecretStore`, `MockCredentialStore`, `MockBinding`, `HttpFakeSource`, `app_context`).
+- Flag: a service-dependent test with no marker (`integration`, `e2e`, `s3_integration`, `storage_emulator`, …) or a mistyped one (markers aren't strict: it silently never runs).
+- Flag: a preflight verdict asserted via a patched logger instead of `capture_preflight_outcomes`; a fake generated artifact not built from a real one.
+- Flag: writes outside `tmp_path`, env changes without `monkeypatch`, process-wide patches (e.g. `asyncio.sleep`).
+- Flag: asserts that cannot fail (`assert result`, `is not None`, `len(x) > 0`); `skip` without a `reason=`; redundant `@pytest.mark.asyncio` (`asyncio_mode = "auto"`).
+- Flag: contract changes without round-trip/old-payload tests; real creds or customer values in fixtures.
+- Severity: critical for an untested new public API; high if a test cannot run or fail, leaks registry state, or hits real services; medium otherwise.

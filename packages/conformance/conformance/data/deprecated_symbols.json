@@ -352,7 +352,7 @@
       "symbol": "SqlQueryExtractor"
     },
     {
-      "kind": "method",
+      "kind": "property",
       "marker_via": "decorator",
       "message": "BaseE2ETest.client is deprecated and will be removed in v4.0. Use application_sdk.testing.harness.automation_engine.AEClient and application_sdk.testing.harness.atlas directly, reaching them from synchronous code through application_sdk.testing.harness.run_sync.",
       "migration_target": true,

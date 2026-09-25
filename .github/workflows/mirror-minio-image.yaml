@@ -1,0 +1,82 @@
+name: Refresh MinIO CI mirror
+
+# Copies Chainguard's free MinIO image into our own GHCR package,
+# ``ghcr.io/atlanhq/ci-mirror/minio``, which is the ONLY place the Storage
+# Emulator Tests (``sdk-tests-reusable.yaml``) pull MinIO from. CI never pulls
+# from a vendor registry: MinIO's images have vanished from Docker Hub and then
+# quay.io within one month (FND-2809), taking the pinned digest with them each
+# time. With our own copy, a vendor withdrawing the image only stops future
+# refreshes; it cannot break CI.
+#
+# Manual dispatch only — a refresh is a deliberate change, not a background
+# drift. Each run copies one digest (default: the current ``:latest``) under the
+# MinIO release it contains, e.g. ``RELEASE.2026-09-22T19-25-18Z``, and prints
+# the ``tag@digest`` reference to pin. It never edits the pin: adopting a new
+# MinIO release is a reviewed PR that updates ``MINIO_IMAGE`` in
+# ``sdk-tests-reusable.yaml`` and the local-run docstrings in
+# ``tests/integration/storage/test_emulator_*.py``. Mirror tags are immutable;
+# the script refuses to repoint one. Logic lives in
+# ``.github/scripts/mirror_minio_image.py`` (tested in
+# ``.github/scripts/tests/test_mirror_minio_image.py``) per docs/standards/ci.md.
+#
+# Auth: GITHUB_TOKEN with ``packages: write``. The package is org-level, so
+# this repo must hold the Write role under the package's settings -> "Manage
+# Actions access"; without it the first registry call fails as
+# ``permission_denied``. The package is deliberately private: we do not
+# redistribute a third-party image. Each repo whose CI pulls it needs its own
+# Read grant under the same setting.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_digest:
+        description: "cgr.dev/chainguard/minio digest to mirror (sha256:...). Empty = current :latest."
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Report what would be copied without copying."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-minio-image
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror MinIO into GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      # Also runs `crane auth login ghcr.io` with this job's GITHUB_TOKEN.
+      - name: Install crane
+        uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
+
+      - name: Copy into the mirror
+        id: mirror
+        env:
+          SOURCE_DIGEST: ${{ inputs.source_digest }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python3 .github/scripts/mirror_minio_image.py --source-digest "${SOURCE_DIGEST}" --dry-run "${DRY_RUN}"
+
+      # The Storage Emulator job runs on amd64, but connector repos and local
+      # runs on Apple silicon pull arm64; a copy that dropped a platform must
+      # not look like a success.
+      - name: Assert both platforms survived the copy
+        if: inputs.dry_run == false
+        env:
+          IMAGE: ${{ steps.mirror.outputs.image }}
+        run: crane manifest "${IMAGE}" | python3 .github/scripts/assert_image_platforms.py --expected linux/amd64,linux/arm64

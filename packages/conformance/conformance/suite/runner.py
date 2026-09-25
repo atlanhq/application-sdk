@@ -71,11 +71,7 @@ from conformance.suite.checks import (
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
-from conformance.suite.schema.disposition import (
-    EnforcementTier,
-    RuleMechanism,
-    RuleScope,
-)
+from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 from conformance.suite.schema.findings import Finding, findings_to_report
 
 
@@ -551,39 +547,24 @@ def main(argv: list[str] | None = None) -> int:
         "--output", metavar="FILE", help="Write SARIF to FILE (default: stdout)"
     )
     parser.add_argument("--tool-version", default=TOOL_VERSION, metavar="VERSION")
-    execution = parser.add_mutually_exclusive_group()
-    execution.add_argument(
-        "--with-tests",
-        action="store_true",
-        help="Execute registered preflight scenarios in a bounded pytest subprocess.",
-    )
-    execution.add_argument(
+    parser.add_argument(
         "--static",
         action="store_true",
-        help="Run static analysis only (default); TEST rules are reported as not evaluated.",
+        help="Static analysis only. Always the case; accepted for compatibility.",
     )
-    execution.add_argument(
-        "--preflight-report",
-        metavar="FILE",
-        help=(
-            "Grade the preflight scenarios from a report an earlier pytest run "
-            "wrote, instead of executing them here. Produce it with "
-            "`pytest -p conformance.preflight_testing --preflight-report=FILE`. "
-            "Same grading as --with-tests; the scenarios just run once, in the "
-            "job that already installs the app. An unreadable report grades as "
-            "an execution error, never as conformance."
-        ),
-    )
-    parser.add_argument(
-        "--test-timeout",
-        type=float,
-        default=120.0,
-        help="Maximum seconds for the complete preflight scenario subprocess.",
-    )
-    parser.add_argument(
-        "--test-python",
-        help="Python executable from the app's test environment (default: current interpreter).",
-    )
+    # Deprecated no-ops, kept for one release so existing callers keep
+    # parsing. The suite used to execute (or read the results of) the
+    # preflight scenarios; conformance now checks only that they are defined,
+    # and the test gate owns whether they pass. Removed in v0.40.0.
+    for flag, kwargs in (
+        ("--with-tests", {"action": "store_true"}),
+        ("--preflight-report", {"metavar": "FILE"}),
+        ("--test-timeout", {"metavar": "SECONDS"}),
+        ("--test-python", {"metavar": "PATH"}),
+    ):
+        parser.add_argument(
+            flag, help="Deprecated no-op; removed in v0.40.0.", **kwargs
+        )
     parser.add_argument(
         "--series",
         metavar="LETTERS",
@@ -636,8 +617,23 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
-    if not 0 < args.test_timeout < float("inf"):
-        parser.error("--test-timeout must be positive and finite")
+    deprecated = [
+        flag
+        for flag, value in (
+            ("--with-tests", args.with_tests),
+            ("--preflight-report", args.preflight_report),
+            ("--test-timeout", args.test_timeout),
+            ("--test-python", args.test_python),
+        )
+        if value
+    ]
+    if deprecated:
+        print(
+            f"warning: {', '.join(deprecated)} is a deprecated no-op and is removed "
+            "in v0.40.0. Conformance checks that the preflight scenarios are "
+            "defined; the test gate checks that they pass.",
+            file=sys.stderr,
+        )
 
     rule_ids: set[str] | None = None
     if args.rule:
@@ -692,27 +688,6 @@ def main(argv: list[str] | None = None) -> int:
         and (rule_ids is None or rid in rule_ids)
         and (not args.series or rid[0] in requested)
     }
-    test_rules = {
-        rid for rid in selected_rules if get_rule(rid).mechanism is RuleMechanism.TEST
-    }
-    # F019 reports value-level analysis gaps that a complete behavioural
-    # matrix closes (see ``Finding.cleared_by``).  A run that asks for F019
-    # with --with-tests therefore has to execute those scenarios even when
-    # --rule narrowed them out, or the clearing pass below has no evidence to
-    # act on.  Their own findings are dropped again by the --rule filter.
-    behavioral = bool(args.with_tests or args.preflight_report)
-    if behavioral and "F019" in selected_rules:
-        from conformance.suite.checks.preflight._common import SCENARIO_COVERAGE
-
-        test_rules |= {
-            rid
-            for rid in SCENARIO_COVERAGE
-            if rid in CATALOG and _rule_in_scope(get_rule(rid).scope, active_scope)
-        }
-    behavior_summary = {
-        rid: {"execution": "not_evaluated", "complete": False}
-        for rid in sorted(test_rules)
-    }
     if "F015" in selected_rules:
         from conformance.suite.checks.preflight._lifetime import scan_removed_config
 
@@ -721,35 +696,6 @@ def main(argv: list[str] | None = None) -> int:
             for finding in scan_removed_config(root)
             if not _is_excluded(finding.file, excluded_prefixes)
         )
-    if behavioral and test_rules:
-        from conformance.suite.checks.preflight._behavior import run_behavior
-        from conformance.suite.checks.preflight._common import (
-            build_registry,
-            entrypoint_contracts,
-        )
-
-        # The expected entrypoint set comes from the same tree the static
-        # checks scanned, so --exclude has to apply here too: a reference
-        # app cloned under an excluded scratch dir would otherwise add its
-        # entrypoints to the matrix this app is graded against.
-        paths = _drop_excluded(preflight.discover(root), root, excluded_prefixes)
-        entries = tuple(entrypoint_contracts(build_registry(paths, root))) or (
-            "default",
-        )
-        scopes = [active_scope.value] if active_scope is not None else ["app", "sdk"]
-        for scope in scopes:
-            result = run_behavior(
-                root,
-                test_rules,
-                scope,
-                args.test_timeout,
-                entries if scope == "app" else ("default",),
-                args.test_python,
-                Path(args.preflight_report) if args.preflight_report else None,
-            )
-            all_findings.extend(result.findings)
-            behavior_summary.update(result.summary)
-
     # Drop findings for rules outside the active scope.  This is the
     # finding-level counterpart to the series-level skip above: it covers
     # mixed-scope series (e.g. C, where C001 is 'both' but C002/C003 are 'app')
@@ -759,23 +705,6 @@ def main(argv: list[str] | None = None) -> int:
         for f in all_findings
         if _rule_in_scope(get_rule(f.rule_id).scope, active_scope)
     ]
-
-    # Honour the promise the F019 messages make.  A static finding that named
-    # behavioural rules in ``cleared_by`` says the property it could not
-    # resolve is one those rules assert on every executed scenario; when each
-    # of them came back complete in this run, execution closed the gap and the
-    # finding is dropped.  A finding with no ``cleared_by`` — an unparsed file,
-    # an undiscovered handler, an unresolved contract — always stands, because
-    # no scenario tells the analysis what it failed to read.
-    complete_behavior = {
-        rid for rid, entry in behavior_summary.items() if entry.get("complete")
-    }
-    if complete_behavior:
-        all_findings = [
-            f
-            for f in all_findings
-            if not (f.cleared_by and f.cleared_by <= complete_behavior)
-        ]
 
     # --rule: keep exactly the requested rules. The series module may have
     # scanned siblings in the same pass; they are out of this run's contract.
@@ -802,8 +731,6 @@ def main(argv: list[str] | None = None) -> int:
     for result in report.runs[0].results:
         if result.rule_id == "F019":
             result.properties["atlan/analysisStatus"] = "unresolved"
-    if behavior_summary:
-        report.runs[0].properties["atlan/preflightTests"] = behavior_summary
     payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True), indent=2)
 
     if args.output:

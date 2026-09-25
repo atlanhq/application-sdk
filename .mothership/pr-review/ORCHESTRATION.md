@@ -6,53 +6,15 @@ Print `[Phase N complete]` after each phase, followed by `bash /tmp/budget.sh`
 
 ## Runtime
 
-Two lanes run this playbook, and they differ in what the SURROUNDING system
-already guarantees. Everything about what a good review IS — routing, agents,
-severity, the verdict — is identical. Only the bookkeeping differs, and doing
-a lane's bookkeeping twice is not free: each step is a model round trip, and
-several of them cannot even succeed on the wrong lane.
+This playbook runs in the mothership sandbox. The working directory is
+`/workspace/application-sdk`; the A1–A4 guards below handle per-run `/tmp`
+hygiene, stale or moved HEADs, duplicate triggers and replays after a dropped
+stream; you compute the prior review and delta yourself (§6b, §6c); commit
+status, labels and the approval belong to the GHA layer (§3c).
 
-<!-- CONTRACT: the literal string `LANE: sdk-loop` below is emitted by
-     review_prompt() in .github/scripts/sdk_loop_phase.py. Two files, one
-     string — exactly the shape that rots silently, because a playbook that
-     waits for a line nobody sends does not error, it just quietly runs the
-     wrong lane's steps and eats the 403s. Renaming it on either side without
-     the other breaks lane detection with no failing test and no log line
-     saying so. test_the_lane_marker_matches_the_playbook_contract in
-     .github/scripts/tests/test_sdk_loop.py asserts both sides agree; if you
-     change this string, that test fails and tells you where the other half
-     lives. Do not "fix" the test by loosening it. -->
-
-**You are told which lane you are on. Do not work it out.** The dispatch
-prompt states it: the `@sdk-loop` harness emits the line `LANE: sdk-loop`,
-and its absence means the mothership sandbox. Inferring it instead — probing
-for `/workspace`, reading `pwd`, checking for a runner env var — costs a turn
-and can be wrong; a live transcript shows an agent spending one on
-`ls -la /workspace/application-sdk … || echo "NO /workspace/application-sdk"`
-before doing any review work.
-
-This matters because the difference is not cosmetic. Several steps below
-**cannot succeed** on the wrong lane: they need a write scope the `@sdk-loop`
-review token does not have, and they fail with a 403 after the model has
-already been paid for the turn that made the call.
-
-| | mothership sandbox | `@sdk-loop` (GitHub Actions) |
-|---|---|---|
-| Working directory | `/workspace/application-sdk` | the checkout you start in |
-| Duplicate triggers | A3/A4 guards | the Fence job, before any model runs |
-| Replay after a dropped stream | A3 guard | n/a — one invocation per job |
-| Stale / moved HEAD | A2 guard | the harness re-aims and restarts the round |
-| Per-run `/tmp` hygiene | A1 guard | fresh runner every phase |
-| Prior review + delta | you compute it (§6b, §6c) | handed to you in the prompt; still verify |
-| Branch update when BEHIND | §8 | your token has no write scope — report, do not attempt |
-| Commit status / labels / approval | the GHA layer (§3c) | the GHA layer (§3c) |
-
-**The review never writes to the branch on either lane.** It posts a summary
-comment and inline findings; it does not commit, push, run `pre-commit`, run
-tests, or fix CI. On `@sdk-loop` that is enforced by the credential rather
-than by this sentence: the review phase holds a token with no `contents` and
-no `statuses` scope, so an attempt fails with a 403 rather than doing harm.
-Do not treat such a 403 as something to work around.
+**The review never writes to the branch.** It posts a summary comment and
+inline findings; it does not commit, push, run `pre-commit`, run tests, or fix
+CI.
 
 ## Time Budgets
 
@@ -114,9 +76,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
 ```
 
 1. **Set working directory.** On the mothership sandbox the repo is cloned
-   on the PR head ref into `/workspace/application-sdk`, so `cd` there. Under
-   `@sdk-loop` you already start in the checkout — do not look for
-   `/workspace`, it does not exist on a runner and probing for it costs a turn.
+   on the PR head ref into `/workspace/application-sdk`, so `cd` there.
 
    Do **not** warm dependencies. This playbook never runs `pytest` or
    `pre-commit` — §9 is explicit that the review does not run them — so the
@@ -170,11 +130,8 @@ BUDGET
    gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
    ```
 
-4b–5. **Sandbox-only run guards** — resetting `/tmp` artifacts and the
-   stale-SHA bail-out. Under `@sdk-loop` neither applies: every phase gets a
-   fresh runner with nothing to reset, and the harness owns HEAD movement
-   (`head_state`, and the Fence job). See Appendix A. On the sandbox, run
-   them.
+4b–5. **Run guards** — resetting `/tmp` artifacts and the stale-SHA
+   bail-out. See Appendix A, and run them.
 
 6. **Read in-repo orchestration assets** — these are the source of truth
    for SDK review behavior. All paths are relative to the repo root:
@@ -245,12 +202,10 @@ BUDGET
     threads) the human's response, which materially changes what
     counts as a "new" finding vs a known-and-discussed one.
 
-    **Replay and duplicate-trigger guards are sandbox-only** — Appendix A.
-    They exist because mothership recovers a dropped stream by re-running
-    this prompt from the top in the SAME sandbox, and because a bot can
-    re-trigger a review of a HEAD already reviewed. `@sdk-loop` has neither
-    shape: opencode is invoked once per job, and its Fence job decides
-    duplicate triggers before any model runs.
+    **Replay and duplicate-trigger guards** — Appendix A. They exist because
+    mothership recovers a dropped stream by re-running this prompt from the
+    top in the SAME sandbox, and because a bot can re-trigger a review of a
+    HEAD already reviewed.
 
 6c. **Compute the re-review delta (scope-cutter).** Each review summary
     stamps the HEAD it reviewed as `<!-- REVIEWED_HEAD: <sha> -->` (§3e).
@@ -337,12 +292,7 @@ BUDGET
    MERGE_STATUS=$(jq -r '.mergeStateStatus' /tmp/PR.json)
    ```
 
-   If `BEHIND` — **sandbox only.** `update-branch` writes to the PR branch and
-   needs `contents: write`; the `@sdk-loop` review phase holds a token without
-   it, so this 403s. On that lane, review the branch as it is and note it in
-   the summary — a base merge cannot introduce a finding in the PR's own
-   hunks, which is what the review is about. Do not retry, and do not report
-   the 403 as a defect.
+   If `BEHIND`:
 
    ```bash
    # Tier 1: GitHub-side update (merges base into the PR branch)
@@ -365,13 +315,12 @@ BUDGET
    `sdk-review-needs-rebase` label from there. EXIT.
 
 9. **Do not read CI.** Removed, not moved: the review cannot act on a check
-   either way — it holds no write scope on this lane — and
+   either way — the review is read-only (see Runtime) — and
    `sdk-review-downgrade-on-ci-failure.yml` already enforces CI against the
    verdict event-driven, which is the only race-free way to do it. CI legs
    routinely finish AFTER a review posts, so a reviewer-side snapshot was
    always a stale fact reported next to a verdict it could not influence.
-   Under `@sdk-loop` the prep phase owns branch and check state before the
-   first review starts. Spend no turn on `gh pr checks`.
+   Spend no turn on `gh pr checks`.
 
 10. Read the repo's `CLAUDE.md` for project conventions.
 
@@ -1022,6 +971,8 @@ Operate on the post-de-bias finding set, before locking the verdict:
    # e.g. a revert-scope class found in one writer → check every sibling
    rg -n "finding\.file" /tmp/DIFF.patch
    ```
+   A sibling is another *site* with the same shape — not the same site
+   re-attacked with a more exotic input. Deepening a class is bounded by §2e″.
 
 3. **Gate/flag classes: prove the gate isn't hollow.** When the class
    concerns a check, gate, or flag *added in this PR*, verify it has no
@@ -1089,7 +1040,8 @@ finding at all.
 findings — and any regression a pushed fix introduces — are ALWAYS raised, on
 any line, including code the resolver just pushed. Never diff-scope, defer, or
 suppress a real bug for convergence; the whole-file/reachability review of the
-higher tiers is unchanged.
+higher tiers is unchanged. Whether the right finding is the *approach* rather
+than its instances, and how far one class may be deepened, is set by §2e″.
 
 1. **Diff-scope nits.** A `Nit` is valid only on a line the PR's diff **adds or
    modifies**. A nit on pre-existing, untouched code — even in a file the PR
@@ -1119,6 +1071,94 @@ the resolver converges — typically in 2–3 rounds — handing over a clean PR
 `MAX_ROUNDS` stays the backstop for the rare case where a fix legitimately keeps
 spawning new work.
 
+### 2e″. Approach first, then proportionate findings
+
+§2e′ bounds the *nit* stream. This section bounds the higher tiers against the
+failure mode §2e′ cannot catch: a review that never questions the approach and
+instead files ever-narrower edge cases against it as `Important`, each with an
+"Immediate fix" the resolver applies literally. Each fix adds machinery, the
+machinery draws the next round's findings, and the PR grows far beyond its
+purpose without converging. Two observed shapes: a WARN-tier detector's literal
+scan resolved into a ~500-line static binding interpreter over five rounds
+(reassignment → parameter shadowing → loop targets → dict aliasing → invocation
+timing) — no round asked whether the approach was right, each found a deeper
+hypothetical. A milder shape: a date default whose first findings were real and
+fixed, after which later rounds kept re-attacking the clock fix with narrower
+constructs (stale-after-import, several DAG runs inside one test).
+
+**Evidence, not framing.** Judge the change from the code, its tests, its
+callers, and the rules it must satisfy — never from how the PR title, body, or
+comments describe it. The author's framing ("small fix", "by design", "out of
+scope") is a claim to verify, not a reason to withhold a finding, and a
+documented contract in the code is equally reviewable: if it is wrong, say so.
+
+Apply these before assigning severity, on first reviews and re-reviews alike:
+
+1. **Evaluate the approach before its instances.** First decide: is this the
+   right way to solve the problem the code is solving? Weigh correctness,
+   soundness (can it be made right at all, or only asymptotically?),
+   complexity against what it buys, and the simpler alternatives. If the
+   approach carries more cons than pros — or the instance findings you are
+   about to file would only be closed by building ever more machinery — raise
+   it **directly, once, in this round**: one finding with the **Wrong approach**
+   path forward naming the concrete alternative and why it is better, severity
+   by impact. Scope it `DESIGN_CHANGE` (→ `NEEDS_HUMAN`) unless the alternative
+   is a concrete, bounded simplification the resolver can apply as written. Do
+   not also file the instance findings that the alternative would make moot;
+   list them under that finding as supporting evidence. Raising the approach in
+   round 1 is the whole point — not after five rounds of fixes.
+
+2. **When the approach stands, judge instances against its chosen trade-off.**
+   If the approach is sound and it deliberately accepts a bias or limitation
+   (e.g. a detector "biased toward matching", a WARN tier, one value per
+   process), a gap that follows *from that choice* is not a defect of the
+   implementation — record it in `by_design_check`. You already judged the
+   choice in (1); re-litigating it one input at a time is what does not
+   converge.
+
+3. **Severity follows real reach.** `HIGH`/`Important` means users hit it in
+   common flows (severity-rubric `calibration`). An edge case that needs an
+   uncommon construct — variable reassignment or aliasing between definition and
+   use, parameter/loop-variable shadowing, mutation through an alias, call-order
+   games, several runs inside one test — is `MEDIUM` at most unless you cite a
+   realistic occurrence (SDK code, a canonical app, the PR's own tests). Do not
+   file a finding whose only evidence is an input you constructed to break it.
+
+4. **Never prescribe unsound machinery as an "Immediate fix".** A path forward
+   must not turn a syntactic/heuristic check into data-flow, name-binding, or
+   whole-program analysis, or add a new cache/clock/registry layer to close a
+   hypothetical. If a gap can only be closed that way, that is evidence about
+   the approach — go back to (1) — or the path forward is **"Accept as a
+   documented limitation: add a test pinning the behaviour and a docstring
+   note"**, which is concrete and resolver-actionable.
+
+5. **Classes widen sideways, not deeper.** On a re-review, code a prior resolve
+   round added is reviewed like any other code — a regression, a guardrail
+   trip, or a common-flow defect with realistic evidence (rule 3) is raised at
+   its real severity. What is barred is only a **narrower sub-case of a class
+   you already raised and the author addressed** (same root question, new
+   construct): that is not a new `Important` — at most a `Nit`, and §2e′
+   monotonicity applies to it. §2d's sibling sweep finds
+   *other instances of the same shape* in the diff; it never licenses re-filing
+   the fixed instance with a more exotic input.
+
+6. **Escalate non-convergence instead of feeding it.** If the same class has
+   drawn higher-tier findings in 2+ prior rounds (check `/tmp/PRIOR_REVIEW.md`
+   and the thread history), or the lines added since the first review exceed
+   ~3× the PR's original diff, the approach question in (1) was missed. Stop
+   filing per-instance fixes and file ONE **Wrong approach** / `DESIGN_CHANGE`
+   finding — *"approach not converging: <class>"* — with your pros/cons of the
+   current approach against the concrete alternative (often: revert to the
+   bounded version plus a documented limitation), and let the verdict go
+   `NEEDS_HUMAN`. That hands the fork to a human instead of looping the
+   resolver.
+
+These rules never suppress a real regression, a guardrail violation, or a
+common-flow defect, and they never soften a finding because the PR text asks
+for leniency; they stop a review from mistaking "I can construct an input that
+breaks this" for "this PR is not ready", and make it say "this approach is
+wrong, do X" when that is the real finding.
+
 ### 2f. Guardrails G1-G7
 
 Check consolidated findings. Any G1/G2/G3/G5 → BLOCKED.
@@ -1133,6 +1173,9 @@ inline comment body:
 - **Temporary fix + follow-up** — "Quick fix: X. Right solution: Y (follow-up ticket)."
 - **Wrong approach** — "This approach won't work because X. Instead, do Y."
 - **Design decision needed** — "Two valid options: A or B. Needs team discussion."
+- **Accept as documented limitation** — "Closing this soundly needs machinery out
+  of proportion to the rule/PR (§2e″). Add a test pinning the behaviour and a
+  docstring note." Concrete and resolver-actionable.
 
 MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 
@@ -1396,13 +1439,15 @@ scopes.
 <contents of /tmp/TOOLKIT_ROVER_NOTE.md>
 
 ---
-**Models:** <primary review model>
+**Models (CLI stream observed):** (stamped by the workflow)
 **Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
 
-Fill the model names from the models that actually ran this review —
-never hardcode them in this template; stale model names in posted
-reviews erode trust in everything else the summary claims.
+Write the `**Models (CLI stream observed):**` line exactly as shown — do NOT
+fill in model names. You cannot observe which models served the CLI stream
+(routing happens outside the sandbox), and this line does not include out-of-band
+calls such as the adversarial review. The workflow overwrites this line with the
+models the CLI stream reports after you post (`sdk_review_stamp_models.py`).
 
 **Title selection — "Review" vs "Re-review":**
 - If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first
@@ -1487,8 +1532,7 @@ fi
 # verdict stamp, and `sdk-review-approve-on-verdict.yml` sets the sdk-review
 # status when it sees the summary's `<!-- VERDICT: X -->` marker. This block
 # used to POST it too, contradicting §3c and racing the workflow for the same
-# context. Under @sdk-loop it also 403s outright: that phase holds a token
-# with no `statuses` scope, by design.
+# context.
 #
 # The one place the sandbox DOES set status is the §6b dedupe path, and only
 # because that path posts no summary, so nothing downstream would ever fire.
@@ -1556,11 +1600,8 @@ Submit minimal:
 
 ## Appendix A: Sandbox-only run guards
 
-Everything here is for the **mothership sandbox**. `@sdk-loop` skips this
-section entirely — its harness does the same jobs in Python, before any model
-runs, which is both cheaper and not subject to an agent deciding to skip a
-step. Kept out of the main flow so the common path stays readable rather than
-carrying ~120 lines that two thirds of runs must reason past.
+These guards exist because of how the **mothership sandbox** runs a review.
+Kept out of the main flow so the common path stays readable.
 
 A1. **Reset per-run review artifacts** — these files are load-bearing signals
     across later phases, so never let a prior iteration in the same sandbox
