@@ -24,6 +24,11 @@ order is load-bearing for cost as well as for the log):
   f. Renovate's own ``renovate/artifacts`` commit status is ``success``
   g. atlan-ci has not already posted an APPROVED review with our signature
 
+A PR by ``connectivity-ai[bot]`` on ``bot/conformance-resync`` never reaches
+(a)–(g): :func:`process_pr` hands it to ``resync_approval_conditions``, whose
+approval rests on an independent byte-identical ``bootstrap --resync`` render
+(FND-2848). Every other PR is judged exactly as before.
+
 **Fail closed.** Every condition withholds approval on anything other than an
 affirmative signal. A missing value is never a falsy default that reads as
 "fine": an absent ``renovate/artifacts`` context classifies as ``"missing"`` and
@@ -57,6 +62,10 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+# Sibling module: the script runs as `python3 .../renovate_approval_conditions.py`,
+# so its own directory is sys.path[0] and this resolves in the reusable too.
+import resync_approval_conditions as resync
 
 # ---------------------------------------------------------------------------
 # Constants that other automation keys off. Changing any of these is a
@@ -687,6 +696,12 @@ def process_pr(
     ahead of it have passed, so a non-Renovate PR costs one API call, not six.
     """
     meta = fetch_pr_meta(repo, pr, runner)
+    # connector-pulse's conformance-resync lane PRs take their own, narrower
+    # path: approval there rests on an independent byte-identical re-render,
+    # never on the author or branch (see resync_approval_conditions). Every
+    # other PR falls through to the Renovate conditions below, unchanged.
+    if resync.is_candidate(meta):
+        return resync.process_resync_pr(repo, pr, eval_sha, meta, runner)
     author = str(((meta.get("user") or {}).get("login")) or "")
     state = str(meta.get("state") or "")
     draft = bool(meta.get("draft"))
@@ -773,7 +788,7 @@ def main(runner: Runner = subprocess.run) -> int:
         for pr in pr_numbers:
             print(f"--- Evaluating PR #{pr} ---")
             process_pr(repo, pr, eval_sha, extra_pattern, runner)
-    except GhError as exc:
+    except (GhError, resync.GhError) as exc:
         # Abort rather than continue on a partial view — the inherited
         # `set -euo pipefail` semantics. A red step is visible; the next
         # workflow_run completion re-evaluates every candidate PR anyway.

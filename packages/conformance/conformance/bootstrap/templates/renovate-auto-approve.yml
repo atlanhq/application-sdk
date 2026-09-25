@@ -13,7 +13,9 @@ on:
   workflow_run:
     workflows: [Tests, Conformance, Pre-commit Checks, Vulnerability Scan]
     types: [completed]
-    branches: ['renovate/**']
+    # bot/conformance-resync: connector-pulse's resync lane PR, approved only
+    # on an independent byte-identical re-render (resync_approval_conditions.py).
+    branches: ['renovate/**', 'bot/conformance-resync']
   workflow_dispatch:
     inputs:
       pr_number:

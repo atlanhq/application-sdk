@@ -232,3 +232,23 @@ nothing retries. A break costs rows, not runs, and nothing goes red:
   does not accept is a 422 and a dropped row, visible only as one WARNING
   carrying a status code. Adding a member on either side is additive; renaming
   one is not.
+
+## The conformance-resync lane's PR identity
+
+Another entry where the SDK is the **reader**: connector-pulse's conformance
+resync lane (`conformance-resync.yml`, FND-2848) produces these values, and the
+approval gate here keys off them.
+
+| | |
+|---|---|
+| **Produced by** | connector-pulse `src/services/conformance_resync_service.py` (`RESYNC_BRANCH`, `pr_marker`) and `scripts/conformance_resync.py` (staging rules), run as the `connectivity-ai` GitHub App |
+| **Shape** | Author `connectivity-ai[bot]`; head branch exactly `bot/conformance-resync`; PR body carrying `<!-- conformance-resync-lane suite=X.Y.Z -->`; one commit whose tree is `bootstrap --resync --json` at suite `X.Y.Z`, staging only the manifest's `touched` paths (force-added, `.bak` files removed, nothing reached through a symlinked directory) |
+| **Read by** | `resync_approval_conditions.py` (routed from `renovate_approval_conditions.process_pr`), which re-renders the PR's parent and approves only on a byte-identical tree; the `renovate-auto-approve.yml` caller template's `workflow_run.branches` filter |
+| **Pinned by** | `.github/scripts/tests/test_resync_approval_conditions.py` |
+
+Identity only routes a PR to the resync path; the approval rests on the
+re-render. A drift between the lane's staging rules and
+`stage_like_the_lane()` therefore fails **closed**: the trees differ and nothing
+is approved, so the PR waits for a human. Change the branch, marker or author in
+both repos together, and roll the caller template out with a conformance
+release before relying on the new value.
