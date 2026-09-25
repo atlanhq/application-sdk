@@ -715,7 +715,17 @@ def test_a_fix_that_removes_the_quoted_code_resolves_for_free(repo: Path):
     )
     assert res.mode == "incremental"
     assert res.resolved_free == [COMMENT and res.state.findings[0].id]
-    assert "No blocking findings" in gh.comments[0]["body"]
+    body = gh.comments[0]["body"]
+    assert "No blocking findings" in body
+    # Editing the summary in place keeps the history: what was fixed, when and how, and every round.
+    f = res.state.findings[0]
+    assert (f.round, f.fixed_round, f.fixed_by) == (1, 2, "code-gone")
+    resolved = body.split("✔️ Resolved (1)")[1].split("</details>")[0]
+    assert f.id in resolved and f.title in resolved
+    assert "| round 1 | round 2 | its code was removed or rewritten |" in resolved
+    history = body.split("🕘 Round history (2)")[1].split("</details>")[0]
+    assert "| 1 | first review | `b0..h1` | 1 | 0 | 1 |" in history
+    assert "| 2 | re-review · only commits since h1 | `h1..h2` | 0 | 1 | 0 |" in history
     # The delta review saw only the one changed line, and was told what is already known.
     user = script.requests[0]["messages"][2]["content"]
     assert "<confirmed_findings>" not in user or res.state.findings[0].id not in user
@@ -1816,7 +1826,10 @@ def test_summary_counts_and_groups_every_level_including_nits():
     )
     assert body.index("#### 🟡 Medium (1)") < body.index("#### ⚪ Low (nit) (1)")
     assert "#### 🟡 Medium (1) — blocks" not in body  # advisory levels never block
-    assert "Resolved:" in body and "Fixed one" not in body.split("Resolved:")[0]
+    # A resolved finding moves out of the open tables but keeps what it was.
+    assert "✔️ Resolved (1)" in body
+    assert "Fixed one" in body.split("✔️ Resolved (1)")[1]
+    assert "Fixed one" not in body.split("✔️ Resolved (1)")[0]
 
 
 def test_nits_are_capped_in_code_and_higher_levels_are_all_kept(repo: Path):
@@ -2822,3 +2835,78 @@ def test_re_review_reads_only_its_own_sticky_comment_among_other_bot_comments(
         "Code Coverage" not in sent
         and PRState(round=99, findings=[]).encode() not in sent
     )
+
+
+def test_a_verified_fix_records_its_round_and_how(repo: Path):
+    f = Finding("a.py", 3, "high", "bug", "Off by one", "b", "e1", round=1)
+    st = PRState(round=2, findings=[f], history=[])
+    f.status, f.fixed_round, f.fixed_by = "fixed", 2, "verified"
+    body = render_summary(RunResult("reviewed", mode="incremental", state=st))
+    assert "| round 1 | round 2 | verified fixed |" in body
+
+
+def test_state_from_before_history_was_recorded_still_renders():
+    """A PR reviewed by an older lens has findings without fixed_round/fixed_by and history rows
+    without label/base/blocking: it must decode and render, not crash."""
+    old = PRState(
+        round=1,
+        findings=[
+            Finding("a.py", 3, "high", "bug", "Off by one", "b", "e1", status="fixed")
+        ],
+        history=[
+            {
+                "round": 1,
+                "head": "h1",
+                "mode": "full",
+                "new": 1,
+                "resolved": 0,
+                "usd": 0.01,
+                "calls": 3,
+            }
+        ],
+    )
+    raw = json.loads(json.dumps(__import__("dataclasses").asdict(old)))
+    for fd in raw["findings"]:
+        del fd["fixed_round"], fd["fixed_by"]
+    blob = (
+        __import__("base64")
+        .b64encode(__import__("zlib").compress(json.dumps(raw).encode()))
+        .decode()
+    )
+    st = PRState.decode(f"<!-- lens-state:{blob} -->")
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert (
+        "| round 1 | — | — |" in body
+    )  # resolved, but when and how were never recorded
+    assert "| 1 | full | `h1` | 1 | 0 | — | $0.010 |" in body
+
+
+def test_round_history_is_bounded(repo: Path):
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    st = PRState.decode(gh.comments[0]["body"])
+    st.history = [dict(st.history[0], round=i) for i in range(1, 40)]
+    gh.comments[0]["body"] = review_mod.SUMMARY_MARKER + "\n" + st.encode()
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(Script()),
+        force=True,
+    )
+    assert len(res.state.history) == review_mod.MAX_HISTORY
+    assert res.state.history[-1]["label"] == res.mode_label

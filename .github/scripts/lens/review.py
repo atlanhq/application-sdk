@@ -41,6 +41,7 @@ from .tools import Workspace, parse_args
 from .triage import Triage, triage
 
 SUMMARY_MARKER = "<!-- lens-summary -->"
+MAX_HISTORY = 20  # rounds kept in the state and shown in the summary
 
 
 @dataclass
@@ -337,7 +338,7 @@ def run(
         if text is None and f.path not in touched:
             continue  # file untouched since: finding still stands
         if not text or not snippet_in_text(text, f.evidence):
-            f.status = "fixed"
+            f.status, f.fixed_round, f.fixed_by = "fixed", round_no, "code-gone"
             res.resolved_free.append(f.id)
 
     if res.resolved_free:
@@ -433,6 +434,9 @@ def run(
         to_verify = [f for f in state.open_findings() if f.path in touched]
         with trace.group(f"4 · verify {len(to_verify)} still-open finding(s)"):
             res.resolved_verified = _verify(client, ws, to_verify)
+            for f in to_verify:
+                if f.id in res.resolved_verified:
+                    f.fixed_round, f.fixed_by = round_no, "verified"
             trace.line(f"verified fixed: {', '.join(res.resolved_verified) or 'none'}")
 
     res.timings_ms["index"] = int((time.monotonic() - t_phase) * 1000)
@@ -570,13 +574,18 @@ def run(
         {
             "round": round_no,
             "head": head[:12],
+            "base": range_base[:12],
             "mode": mode,
+            "label": mode_label,
             "new": len(res.new_findings),
             "resolved": len(res.resolved_free) + len(res.resolved_verified),
+            "blocking": len(state.open_findings(BLOCKING)),
+            "incomplete": bool(res.failed or res.incomplete),
             "usd": round(round_ledger.spent_usd, 4),
             "calls": round_ledger.calls,
         }
     )
+    del state.history[:-MAX_HISTORY]  # bounded: /lens force can go past max_rounds
 
     if post:
         t_phase = time.monotonic()
@@ -692,6 +701,67 @@ def inline_body(f: Finding) -> str:
     return out + f"\n\n<sub>lens {f.id}</sub>"
 
 
+_FIXED_BY = {
+    "code-gone": "its code was removed or rewritten",
+    "verified": "verified fixed",
+}
+
+
+def _resolved_section(st: PRState) -> list[str]:
+    """Resolved findings keep what they were, so editing the summary in place loses nothing."""
+    fixed = sorted(
+        (f for f in st.findings if f.status == "fixed"),
+        key=lambda f: (f.fixed_round, f.id),
+    )
+    if not fixed:
+        return []
+    out = [
+        f"\n<details><summary>✔️ Resolved ({len(fixed)})</summary>\n",
+        "| id | severity | where | finding | found | resolved | how |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for f in fixed:
+        where = (
+            f"`{f.path}:{f.line or f.head_line}`"
+            if (f.line or f.head_line)
+            else f"`{f.path}`"
+        )
+        when = f"round {f.fixed_round}" if f.fixed_round else "—"
+        out.append(
+            f"| {f.id} | {_SEV_ICON[f.severity]} {f.severity} | {where} | {f.title} "
+            f"| round {f.round} | {when} | {_FIXED_BY.get(f.fixed_by, '—')} |"
+        )
+    out.append("\n</details>")
+    return out
+
+
+def _history_section(st: PRState) -> list[str]:
+    """One row per round: what kind of run it was, what it covered, and what changed."""
+    rows = [h for h in st.history if h.get("round")]
+    if not rows:
+        return []
+    out = [
+        f"\n<details><summary>🕘 Round history ({len(rows)})</summary>\n",
+        "| round | run | commits | new | resolved | blocking open | cost |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for h in rows:
+        span = (
+            f"`{h['base'][:7]}..{h['head'][:7]}`"
+            if h.get("base")
+            else f"`{h.get('head', '')[:7]}`"
+        )
+        run_kind = h.get("label") or h.get("mode", "")
+        if h.get("incomplete"):
+            run_kind += " · ⚠️ incomplete"
+        out.append(
+            f"| {h['round']} | {run_kind} | {span} | {h.get('new', 0)} | {h.get('resolved', 0)} "
+            f"| {h.get('blocking', '—')} | ${float(h.get('usd', 0)):.3f} |"
+        )
+    out.append("\n</details>")
+    return out
+
+
 def render_summary(res: RunResult) -> str:
     st = res.state or PRState()
     blocking = st.open_findings(BLOCKING)
@@ -752,9 +822,8 @@ def render_summary(res: RunResult) -> str:
                 where += " (unchanged code: same pattern)"
             lines.append(f"| {f.id} | {where} | {f.title} |")
         lines.append("")
-    fixed = [f for f in st.findings if f.status == "fixed"]
-    if fixed:
-        lines.append(f"Resolved: {', '.join(f.id for f in fixed)}")
+    lines.extend(_resolved_section(st))
+    lines.extend(_history_section(st))
     if res.unplaced:
         lines.append(
             "\n<details><summary>Findings that could not be anchored to a diff line</summary>\n"

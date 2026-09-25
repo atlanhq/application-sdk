@@ -57,7 +57,11 @@ class Finding:
     confidence: float = 0.0
     id: str = ""
     status: str = "open"  # open | fixed | wontfix | stale
-    round: int = 1
+    round: int = 1  # the round that found it
+    fixed_round: int = (
+        0  # the round that resolved it (0 = open, or resolved before this was recorded)
+    )
+    fixed_by: str = ""  # code-gone (its quoted code left the PR) | verified (the model confirmed the fix)
 
     def fingerprint(self) -> str:
         ev = " ".join((self.evidence or "").split())[:160]
