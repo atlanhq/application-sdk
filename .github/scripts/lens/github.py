@@ -123,27 +123,51 @@ class GitHub:
         return list((data or {}).get("workflow_runs") or [])
 
     # ---- writes --------------------------------------------------------
+    def set_status(
+        self, sha: str, state: str, description: str, target_url: str = ""
+    ) -> None:
+        """The `lens` commit status on `sha`: success | failure | error | pending.
+        This is the green/red signal (and what branch protection can require)."""
+        body = {"state": state, "context": "lens", "description": description[:140]}
+        if target_url:
+            body["target_url"] = target_url
+        self._call("POST", f"/repos/{self.repo}/statuses/{sha}", body)
+
+    def react(self, comment_id: int, content: str) -> None:
+        """A reaction on the `@lens` comment: 👀 started, 🚀 posted, 😕 failed/dropped.
+        Best-effort — a reaction that fails must never fail the review."""
+        try:
+            self._call(
+                "POST",
+                f"/repos/{self.repo}/issues/comments/{comment_id}/reactions",
+                {"content": content},
+            )
+        except GitHubError:
+            pass
+
     def comment(self, number: int, body: str) -> None:
         self._call(
             "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body}
         )
 
-    def upsert_comment(self, number: int, marker: str, body: str) -> None:
-        """One sticky comment per PR, edited in place — never a new one per round."""
+    def upsert_comment(self, number: int, marker: str, body: str) -> str:
+        """One sticky comment per PR, edited in place — never a new one per round.
+        Returns the comment's URL (the `lens` status links to it)."""
         for c in self.issue_comments(number):
             if (
                 marker in (c.get("body") or "")
                 and (c.get("user") or {}).get("login") in BOT_LOGINS
             ):
-                self._call(
+                out = self._call(
                     "PATCH",
                     f"/repos/{self.repo}/issues/comments/{c['id']}",
                     {"body": body},
                 )
-                return
-        self._call(
+                return str((out or {}).get("html_url") or c.get("html_url") or "")
+        out = self._call(
             "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body}
         )
+        return str((out or {}).get("html_url") or "")
 
     def review(
         self, number: int, head: str, body: str, comments: list[dict[str, Any]]

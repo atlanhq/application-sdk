@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,12 +29,21 @@ from lens.findings import Finding, PRState, merge_new  # noqa: E402
 from lens.github import GitHubError  # noqa: E402
 from lens.holistic import build_input  # noqa: E402
 from lens.index import build_index  # noqa: E402
+from lens.llm import FatalRequestError  # noqa: E402
 from lens.llm import BudgetExhausted, Client, Ledger, LLMError, Price  # noqa: E402
 from lens.lock import BUSY_NOTE, older_active_run, run_name  # noqa: E402
-from lens.review import SUMMARY_MARKER, RunResult, run  # noqa: E402
+from lens.review import (  # noqa: E402
+    SUMMARY_MARKER,
+    RunResult,
+    plan_bundles,
+    render_summary,
+    run,
+    verdict_status,
+)
 from lens.rules import RuleSet, glob_match, load_rules  # noqa: E402
 from lens.select import select_files  # noqa: E402
 from lens.tools import Workspace, find_symbol, read_file, search_code  # noqa: E402
+from lens.triage import ast_identical, triage  # noqa: E402
 
 PRICE = Price(1.0, 0.1, 4.0)
 
@@ -57,6 +67,17 @@ def fetch(client, key, timeout=None):
 def load_all(client, keys):
     return [fetch(client, k) for k in keys]
 '''
+
+# A later commit that really changes the program (so triage cannot prove it neutral)
+# while keeping the round-1 finding's quoted code in place.
+SRC_V2_NEXT = (
+    SRC_V2
+    + """
+
+def fetch_many(client, keys):
+    return {k: fetch(client, k) for k in keys}
+"""
+)
 
 DIFF = """\
 diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py
@@ -190,6 +211,7 @@ class FakeGitHub:
         self.files = files or {("application_sdk/storage/fetch.py", "h1"): SRC_V2}
         self.comments: list[dict[str, Any]] = []
         self.reviews: list[dict[str, Any]] = []
+        self.statuses: list[dict[str, Any]] = []
         self.status = "ahead"
 
     def pr(self, n):
@@ -216,7 +238,7 @@ class FakeGitHub:
         for c in self.comments:
             if marker in c["body"]:
                 c["body"] = body
-                return
+                return f"https://github.test/c/{c['id']}"
         self.comments.append(
             {
                 "id": len(self.comments) + 1,
@@ -224,14 +246,21 @@ class FakeGitHub:
                 "user": {"login": "github-actions[bot]"},
             }
         )
+        return f"https://github.test/c/{len(self.comments)}"
 
     def review(self, n, head, body, comments):
         self.reviews.append({"head": head, "comments": comments})
+
+    def set_status(self, sha, state, description, target_url=""):
+        self.statuses.append(
+            {"sha": sha, "state": state, "description": description, "url": target_url}
+        )
 
 
 def cfg_for(repo: Path) -> Config:
     cfg = Config(price=PRICE)
     cfg.raw_hash = "test"
+    cfg.preflight = False  # exercised by its own tests with a fake gateway
     return cfg
 
 
@@ -694,7 +723,9 @@ def test_later_rounds_only_admit_blocking_findings(repo: Path):
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = (
+        SRC_V2_NEXT  # a real code change, not a byte-identical file
+    )
     nit = dict(
         COMMENT,
         existing_code="    data = client.get(key)",
@@ -719,7 +750,12 @@ def test_later_rounds_only_admit_blocking_findings(repo: Path):
         rules=rules,
         client_factory=_factory(script),
     )
-    assert res.new_findings == []
+    assert any(
+        r.get("prompt_cache_key") == "lens-review" for r in script.requests
+    )  # it did review
+    assert (
+        res.new_findings == []
+    )  # ...and dropped the medium nit: round 2 admits critical/high only
     assert res.state.dry_rounds == 1
 
 
@@ -956,7 +992,9 @@ def test_approach_check_runs_once_per_pr_and_is_advisory(repo: Path):
     gh.head = "h2"
     gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = (
+        SRC_V2_NEXT  # a real code change, not a byte-identical file
+    )
     second = Script()
     run(
         gh=gh,
@@ -1298,3 +1336,501 @@ def test_cli_drops_a_request_while_another_review_runs(monkeypatch):
     root = str(Path(__file__).resolve().parents[3])
     assert cli.main(["review", "--repo", "o/r", "--pr", "7", "--root", root]) == 0
     assert posted == [BUSY_NOTE.format(url="https://x/runs/100")]
+
+
+# ---- triage: mechanical change never reaches the model ------------------------------------------------------
+
+
+def _file_diff(path, removed, added):
+    body = "".join(f"-{x}\n" for x in removed) + "".join(f"+{x}\n" for x in added)
+    return (
+        f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+        f"@@ -1,{len(removed)} +1,{len(added)} @@\n{body}"
+    )
+
+
+def test_ast_identical_ignores_formatting_comments_and_docstrings_only():
+    old = 'def f(a,b):\n    """Old doc."""\n    return a+b  # sum\n'
+    new = "def f(a, b):\n    return a + b\n"
+    assert ast_identical(old, new)
+    assert not ast_identical(old, "def f(a, b):\n    return a - b\n")
+    assert not ast_identical("def f(:\n", new)  # unparseable is never "identical"
+
+
+def test_triage_sets_aside_whitespace_imports_renames_and_duplicates():
+    files = parse_unified_diff(
+        _file_diff(
+            "a.py", ["import os", "import sys"], ["import sys", "import os"]
+        )  # imports only
+        + _file_diff("b.md", ["some   text"], ["some text"])  # whitespace only
+        + "".join(
+            _file_diff(f"r{i}.py", [f"x = get_x({i})"], [f"x = fetch_x({i})"])
+            for i in range(3)
+        )  # rename x3
+        + "".join(
+            _file_diff(f"d{i}.yaml", ["timeout: 30"], ["timeout: 60"]) for i in range(3)
+        )  # duplicate x3
+        + _file_diff("real.py", ["    return a"], ["    return a / b"])  # real change
+    )
+    t = triage(files, {}, {})
+    assert [f.path for f in t.reviewed] == [
+        "d0.yaml",
+        "real.py",
+    ]  # the duplicate is reviewed ONCE
+    assert t.renames == [("get_x", "fetch_x")]
+    assert set(t.duplicate_of) == {"d1.yaml", "d2.yaml"}
+    assert "imports only" in t.mechanical and "whitespace-only" in t.mechanical
+    assert set(t.mechanical["mechanical rename"]) == {"r0.py", "r1.py", "r2.py"}
+
+
+def test_a_one_off_swap_is_an_edit_not_a_rename():
+    files = parse_unified_diff(
+        _file_diff("x.py", ["    return retries"], ["    return timeout"])
+    )
+    assert [f.path for f in triage(files, {}, {}).reviewed] == ["x.py"]
+
+
+def test_a_file_mixing_real_and_mechanical_hunks_keeps_only_the_real_ones():
+    path = "m.py"
+    diff = (
+        f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+        "@@ -1,1 +1,1 @@\n-import os\n+import os, sys\n"
+        "@@ -10,1 +10,1 @@\n-    return a\n+    return a / b\n"
+    )
+    [fd] = triage(parse_unified_diff(diff), {}, {}).reviewed
+    assert len(fd.hunks) == 1 and "a / b" in fd.render()
+
+
+def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
+    gh = FakeGitHub()
+    diff = "".join(
+        _file_diff(
+            f"application_sdk/m{i}.py", [f"y = get_x({i})"], [f"y = fetch_x({i})"]
+        )
+        for i in range(100)
+    )
+    gh.diffs[("b0", "h1")] = diff
+    script = Script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=RuleSet([], {}),
+        client_factory=_factory(script),
+    )
+    assert (
+        script.requests == []
+    )  # no line review at all; only the (routed) approach check
+    assert len(res.triage.mechanical.get("mechanical rename") or []) == 100
+    body = gh.comments[0]["body"]
+    assert (
+        "100 file(s) with mechanical changes" in body and "`get_x` → `fetch_x`" in body
+    )
+    assert gh.statuses[-1]["state"] == "success"
+
+
+# ---- large PRs: order, packing, fair budget, partial failure --------------------------------------------------
+
+
+def _bundle_files(prefix, n, lines=40):
+    return "".join(
+        _file_diff(
+            f"{prefix}/f{i}.py",
+            [f"    old{j}_{i}" for j in range(lines)],
+            [f"    new{j}_{i} = compute({j})" for j in range(lines)],
+        )
+        for i in range(n)
+    )
+
+
+def test_riskiest_bundles_are_reviewed_first_and_packing_comes_before_skipping():
+    files = parse_unified_diff(
+        _bundle_files("tools/a", 3, lines=150)
+        + _bundle_files("application_sdk/credentials", 2, lines=150)
+        + _bundle_files("docs/x", 3, lines=150)
+    )
+    cfg = Config(price=PRICE)
+    res = RunResult("reviewed")
+    bundles = plan_bundles(files, cfg, res)
+    assert bundles[0].paths[0].startswith("application_sdk/credentials/")
+    cfg.max_bundles = 1
+    res = RunResult("reviewed")
+    bundles = plan_bundles(files, cfg, res)
+    reviewed = {p for b in bundles for p in b.paths}
+    # Re-packed larger first; whatever is still over the cap is the lowest-risk code, and named.
+    assert any(p.startswith("application_sdk/credentials/") for p in reviewed)
+    assert all("lowest-risk" in why for _, why in res.skipped_files)
+
+
+def test_a_bundle_that_spends_its_share_wraps_up_instead_of_starving_others(repo: Path):
+    ws, bundle = _ws(repo)
+    looping = [
+        response([tool_call("search_code", {"search_text": "fetch"}, i)])
+        for i in range(10)
+    ]
+    script = Script(*looping)
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    res = agent_mod.review_bundle(
+        client,
+        ws,
+        bundle,
+        RuleSet([], {}),
+        {},
+        [],
+        agent_mod.AgentLimits(),
+        budget_usd=0.005,
+    )
+    # Each call books $0.002: after 3 it has spent its share and gets one comment-only turn.
+    assert res.turns == 4 and script.requests[-1]["tool_choice"] == "required"
+
+
+def test_a_partly_failed_run_keeps_what_it_reviewed_and_retries_only_the_rest(
+    repo: Path,
+):
+    gh = FakeGitHub()
+    gh.diffs[("b0", "h1")] = _bundle_files(
+        "application_sdk/credentials", 1, lines=350
+    ) + _bundle_files("docs/x", 1, lines=350)
+
+    def by_bundle(body):
+        user = body["messages"][2]["content"] if len(body["messages"]) > 2 else ""
+        if '<file path="docs/x/f0.py">' in user:  # this bundle's own review set
+            return 503, {}, "upstream down"
+        return response([tool_call("task_done", {"state": "DONE"})])
+
+    cfg = cfg_for(repo)
+    cfg.limits.plan = 0
+    first = Script(*([by_bundle] * 12))
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        rules=RuleSet([], {}),
+        client_factory=_factory(first),
+    )
+    st = res.state
+    assert len(res.bundles) == 2  # the fixture must really need two bundles
+    assert st.reviewed_head == "h1" and st.pending_files == ["docs/x/f0.py"]
+    assert gh.statuses[-1]["state"] == "error"  # incomplete is never green
+
+    retry = Script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        rules=RuleSet([], {}),
+        client_factory=_factory(retry),
+    )
+    assert res.mode == "retry" and res.retried == ["docs/x/f0.py"]
+    review_sets = [
+        r["messages"][2]["content"]
+        for r in retry.requests
+        if r.get("prompt_cache_key") == "lens-review"
+    ]
+    assert review_sets and all('<file path="docs/x/f0.py">' in m for m in review_sets)
+    # The file that WAS reviewed last time is not paid for again.
+    assert all(
+        '<file path="application_sdk/credentials/f0.py">' not in m for m in review_sets
+    )
+    assert res.state.pending_files == []
+
+
+# ---- failed requests: fail fast, never retry our own mistakes ------------------------------------------------
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 422])
+def test_a_request_we_got_wrong_stops_the_whole_run_without_retries(status):
+    sent = Script((status, {}, '{"error": "nope"}'), response(), response())
+    c = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=sent)
+    with pytest.raises(FatalRequestError):
+        c.complete("review:a", [{"role": "user", "content": "hi"}], max_tokens=5)
+    with pytest.raises(LLMError, match="not sent"):
+        c.complete("review:b", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert len(sent.requests) == 1  # one failure; nothing retried, nothing else sent
+
+
+def test_breaker_stops_every_bundle_after_consecutive_failures():
+    sent = Script(*[(503, {}, "down")] * 20)
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=sent,
+        max_retries=2,
+        max_consecutive_failures=3,
+    )
+    with pytest.raises(LLMError):
+        c.complete("review:a", [{"role": "user", "content": "hi"}], max_tokens=5)
+    with pytest.raises(LLMError, match="not sent"):
+        c.complete("review:b", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert len(sent.requests) == 3 and c.ledger.failed_requests == 3
+
+
+def test_an_unsupported_parameter_fails_once_then_is_never_sent_again():
+    sent = Script(
+        (400, {}, '{"error": "Unsupported parameter: reasoning_effort"}'),
+        response(),
+        response(),
+    )
+    c = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=sent,
+        reasoning_effort="medium",
+    )
+    c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert "reasoning_effort" in sent.requests[0]
+    assert (
+        all("reasoning_effort" not in r for r in sent.requests[1:])
+        and len(sent.requests) == 3
+    )
+
+
+def test_rate_limits_wait_for_retry_after():
+    sent = Script((429, {"Retry-After": "7"}, "slow down"), response())
+    c = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=sent)
+    t0 = time.monotonic()  # the conftest clock: sleeps advance it
+    c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert time.monotonic() - t0 >= 7
+
+
+def _meta(
+    models=("gpt-6-luna",),
+    key_status=200,
+    max_budget=300.0,
+    spend=10.0,
+    models_status=200,
+):
+    def get(path):
+        if path == "/v1/models":
+            return models_status, json.dumps({"data": [{"id": m} for m in models]})
+        return key_status, json.dumps(
+            {"info": {"max_budget": max_budget, "spend": spend}}
+        )
+
+    return get
+
+
+@pytest.mark.parametrize(
+    "meta, expect",
+    [
+        (_meta(), None),
+        (_meta(models=("other-model",)), "not available"),
+        (_meta(models_status=401), "rejected"),
+        (_meta(spend=299.99), "budget left"),
+        (
+            _meta(key_status=404),
+            None,
+        ),  # a gateway that cannot answer is not a reason to stop
+    ],
+)
+def test_preflight_catches_bad_alias_key_and_budget_with_zero_tokens(meta, expect):
+    sent = Script()
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=sent,
+        meta_transport=meta,
+    )
+    reason = c.preflight(min_budget_usd=0.05)
+    assert (reason is None) if expect is None else (expect in reason)
+    assert sent.requests == []
+
+
+def test_a_failed_preflight_sends_no_request_and_turns_the_status_error(repo: Path):
+    gh = FakeGitHub()
+    cfg = cfg_for(repo)
+    cfg.preflight = True
+    sent = Script()
+
+    def factory(ledger):
+        return Client(
+            model="gpt-6-luna",
+            price=PRICE,
+            ledger=ledger,
+            transport=sent,
+            meta_transport=_meta(models=("x",)),
+        )
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        rules=RuleSet([], {}),
+        client_factory=factory,
+    )
+    assert sent.requests == [] and sent.approach_requests == []
+    assert res.failed and gh.statuses[-1]["state"] == "error"
+    assert (
+        PRState.decode(gh.comments[0]["body"]).reviewed_head == ""
+    )  # retried next time
+
+
+# ---- the green/red signal -----------------------------------------------------------------------------------
+
+
+def test_status_is_red_only_for_open_blocking_findings(repo: Path):
+    gh = FakeGitHub()
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(_review_script()),
+    )
+    s = gh.statuses[-1]
+    assert (
+        s["sha"] == "h1"
+        and s["state"] == "failure"
+        and "1 blocking" in s["description"]
+    )
+    assert s["url"].startswith("https://github.test/c/")
+
+    st = PRState(findings=[Finding("p.py", 1, "medium", "bug", "t", "b", "e")])
+    assert verdict_status(RunResult("reviewed", state=st))[0] == "success"
+    assert (
+        verdict_status(RunResult("reviewed", state=st, incomplete=["x"]))[0] == "error"
+    )
+
+
+def test_workflow_can_write_the_status():
+    wf = (Path(__file__).resolve().parents[2] / "workflows" / "lens.yml").read_text()
+    assert "statuses: write" in wf
+
+
+# ---- the verdict, by level --------------------------------------------------------------------------------
+
+
+def test_summary_counts_and_groups_every_level_including_nits():
+    fs = [
+        Finding("a.py", 3, "critical", "security", "Token logged", "b", "e1"),
+        Finding("a.py", 9, "high", "bug", "Off by one", "b", "e2"),
+        Finding("b.py", 1, "medium", "performance", "N+1 query", "b", "e3"),
+        Finding("b.py", 2, "low", "style", "Clearer name", "b", "e4"),
+        Finding("b.py", 4, "low", "style", "Fixed one", "b", "e5", status="fixed"),
+    ]
+    st = PRState(
+        round=1, findings=fs, ledger={"spent_usd": 0.04, "cap_usd": 1.0, "calls": 5}
+    )
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert "❌ **Changes requested** — 2 blocking" in body
+    assert "🔴 1 critical · 🟠 1 high · 🟡 1 medium · ⚪ 1 low (nit)" in body
+    assert body.index("#### 🔴 Critical (1) — blocks merge") < body.index(
+        "#### 🟠 High (1) — blocks merge"
+    )
+    assert body.index("#### 🟡 Medium (1)") < body.index("#### ⚪ Low (nit) (1)")
+    assert "#### 🟡 Medium (1) — blocks" not in body  # advisory levels never block
+    assert "Resolved:" in body and "Fixed one" not in body.split("Resolved:")[0]
+
+
+def test_nits_are_capped_in_code_and_higher_levels_are_all_kept(repo: Path):
+    ws, bundle = _ws(repo)
+    nits = [
+        dict(
+            COMMENT,
+            severity="low",
+            category="style",
+            title=f"nit {i}",
+            existing_code="    data = client.get(key)",
+        )
+        for i in range(8)
+    ]
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [COMMENT, *nits]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    res = agent_mod.review_bundle(
+        client, ws, bundle, RuleSet([], {}), {}, [], agent_mod.AgentLimits(max_nits=3)
+    )
+    assert [f.severity for f in res.findings].count("low") <= 3
+    assert any(f.severity == "high" for f in res.findings)
+
+
+# ---- invocation feedback: reactions and "nothing to do" -------------------------------------------------------
+
+
+class _CliGitHub:
+    """Records what the CLI tells the author; the review itself is stubbed out."""
+
+    reactions: list[str] = []
+    comments: list[str] = []
+
+    def __init__(self, repo):
+        pass
+
+    def react(self, comment_id, content):
+        _CliGitHub.reactions.append(content)
+
+    def comment(self, number, body):
+        _CliGitHub.comments.append(body)
+
+    def workflow_runs(self, workflow_file):
+        return []
+
+
+def _event_file(tmp_path, body="@lens"):
+    ev = {
+        "action": "created",
+        "issue": {"number": 7, "pull_request": {}},
+        "comment": {
+            "id": 555,
+            "body": body,
+            "author_association": "MEMBER",
+            "user": {"type": "User"},
+        },
+    }
+    p = tmp_path / "event.json"
+    p.write_text(json.dumps(ev))
+    return str(p)
+
+
+@pytest.mark.parametrize(
+    "outcome, expected",
+    [
+        (RunResult("reviewed"), ["eyes", "rocket"]),
+        (RunResult("skipped", reason="head abc already reviewed"), ["eyes", "+1"]),
+        (RunResult("reviewed", incomplete=["b: fatal"]), ["eyes", "confused"]),
+    ],
+)
+def test_the_author_sees_eyes_then_the_outcome(
+    monkeypatch, tmp_path, outcome, expected
+):
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    _CliGitHub.reactions, _CliGitHub.comments = [], []
+    monkeypatch.setattr(cli, "GitHub", _CliGitHub)
+    monkeypatch.setattr(cli, "run", lambda **kw: outcome)
+    monkeypatch.setenv("GITHUB_RUN_ID", "105")
+    root = str(Path(__file__).resolve().parents[3])
+    cli.main(
+        [
+            "review",
+            "--repo",
+            "o/r",
+            "--root",
+            root,
+            "--event-name",
+            "issue_comment",
+            "--event-path",
+            _event_file(tmp_path),
+        ]
+    )
+    assert _CliGitHub.reactions == expected
+    if outcome.action == "skipped":
+        assert _CliGitHub.comments == [
+            "lens: nothing to review — head abc already reviewed."
+        ]

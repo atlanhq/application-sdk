@@ -138,6 +138,13 @@ def build_input(
         + "\n".join(syms[:60])
         + "\n</changed_symbols>\n\n"
     )
+    mechanical = pr_meta.get("mechanical") or []
+    if mechanical:
+        head += (
+            "<mechanical_changes>\nProven behaviour-neutral in code (not line-reviewed):\n"
+            + "\n".join(f"- {m}" for m in mechanical)
+            + "\n</mechanical_changes>\n\n"
+        )
     # Diff excerpt: largest changes first, each file capped, until the budget is spent.
     budget = max_input_tokens - estimate_tokens(head)
     parts: list[str] = []

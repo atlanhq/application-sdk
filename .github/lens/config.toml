@@ -52,6 +52,7 @@ context_limit_tokens = 60000
 review_max_tokens = 4000
 reflect_max_tokens = 1200
 max_comments = 12
+max_nits = 5              # low-severity (nit) findings kept per bundle
 # Plan: turn 0 of the same (cached) conversation on bundles with >= plan_min_lines changed.
 plan = 1
 plan_min_lines = 60

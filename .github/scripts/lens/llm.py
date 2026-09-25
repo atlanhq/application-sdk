@@ -32,6 +32,11 @@ class BudgetExhausted(LLMError):
     """This run (or the gateway key) cannot afford the next call."""
 
 
+class FatalRequestError(LLMError):
+    """lens sent something the gateway will always refuse (bad key, alias,
+    request shape or size). The whole run stops; nothing is retried."""
+
+
 def estimate_tokens(text: str) -> int:
     # ~3.5 chars/token for code-heavy English; deliberately pessimistic so the
     # pre-call estimate errs toward refusing, not overspending.
@@ -53,6 +58,7 @@ class Ledger:
     cap_usd: float
     spent_usd: float = 0.0
     reserved_usd: float = 0.0
+    failed_requests: int = 0
     calls: int = 0
     input_tokens: int = 0
     cached_tokens: int = 0
@@ -107,6 +113,7 @@ class Ledger:
             "input_tokens": self.input_tokens,
             "cached_tokens": self.cached_tokens,
             "output_tokens": self.output_tokens,
+            "failed_requests": self.failed_requests,
             "by_stage": {k: round(v, 6) for k, v in self.by_stage.items()},
         }
 
@@ -119,6 +126,7 @@ class Ledger:
             input_tokens=int(d.get("input_tokens", 0)),
             cached_tokens=int(d.get("cached_tokens", 0)),
             output_tokens=int(d.get("output_tokens", 0)),
+            failed_requests=int(d.get("failed_requests", 0)),
             by_stage=dict(d.get("by_stage", {})),
         )
 
@@ -148,6 +156,29 @@ def _is_budget_error(body: str) -> bool:
 
 
 class Client:
+    """One model endpoint, shared by every stage and bundle of a run.
+
+    Failed requests cost money and time too, so the client is built to make
+    as few as possible:
+
+    - `preflight()` checks the key and model with the gateway's free
+      endpoints before the first completion — a wrong alias or a spent key
+      stops the run at zero requests, instead of failing N parallel calls.
+    - A circuit breaker is shared by all threads: after
+      `max_consecutive_failures` failed attempts in a row anywhere in the
+      run, every later call is refused without being sent.
+    - 429s wait for the gateway's `Retry-After` (capped), not a blind backoff.
+    - A 400 that names a parameter the gateway does not accept is learnt
+      once: that parameter is dropped (or `tool_choice: required` downgraded)
+      for the rest of the run, so it fails one request, not every request.
+    - A budget-exceeded response is never retried.
+    """
+
+    # Optional request parameters the client may drop if the gateway rejects them.
+    DROPPABLE = ("prompt_cache_key", "reasoning_effort", "temperature")
+    # Client errors: the request, key or alias is wrong. Never retried; they stop the run.
+    FATAL = frozenset({400, 401, 403, 404, 405, 413, 422})
+
     def __init__(
         self,
         *,
@@ -158,8 +189,11 @@ class Client:
         api_key: str | None = None,
         timeout_s: float = 120.0,
         max_retries: int = 2,
+        max_consecutive_failures: int = 3,
+        max_retry_after_s: float = 30.0,
         reasoning_effort: str | None = None,
         transport: Any = None,
+        meta_transport: Any = None,
     ) -> None:
         self.model = model
         self.price = price
@@ -175,9 +209,19 @@ class Client:
         )
         self.timeout_s = timeout_s
         self.max_retries = max_retries
+        self.max_consecutive_failures = max_consecutive_failures
+        self.max_retry_after_s = max_retry_after_s
         self.reasoning_effort = reasoning_effort
         self._transport = transport or self._http
-        self.send_cache_key = True
+        self._meta = meta_transport or self._http_get
+        self.unsupported: set[str] = set()
+        self.required_tool_choice_ok = True
+        self._fail_streak = 0
+        self._breaker_lock = threading.Lock()
+
+    @property
+    def send_cache_key(self) -> bool:
+        return "prompt_cache_key" not in self.unsupported
 
     # ---- pricing -------------------------------------------------------
     def worst_case_cost(
@@ -207,18 +251,16 @@ class Client:
         ) / 1e6
 
     # ---- transport -----------------------------------------------------
-    def _http(self, body: dict[str, Any]) -> tuple[int, dict[str, str], str]:
+    def _root(self) -> str:
         if not self.base_url or not self.api_key:
             raise LLMError(
                 "LiteLLM is not configured: set LITELLM_BASE_URL and LENS_LITELLM_KEY."
             )
-        url = self.base_url + (
-            "/chat/completions"
-            if self.base_url.endswith("/v1")
-            else "/v1/chat/completions"
-        )
+        return self.base_url.removesuffix("/v1")
+
+    def _http(self, body: dict[str, Any]) -> tuple[int, dict[str, str], str]:
         req = urllib.request.Request(
-            url,
+            self._root() + "/v1/chat/completions",
             data=json.dumps(body).encode(),
             headers={
                 "Content-Type": "application/json",
@@ -236,6 +278,70 @@ class Client:
         except urllib.error.HTTPError as e:
             return e.code, dict(e.headers or {}), e.read().decode("utf-8", "replace")
 
+    def _http_get(self, path: str) -> tuple[int, str]:
+        req = urllib.request.Request(
+            self._root() + path, headers={"Authorization": f"Bearer {self.api_key}"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 - fixed https base from config
+                return resp.status, resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", "replace")
+
+    # ---- preflight: zero-token checks ------------------------------------
+    def preflight(self, min_budget_usd: float) -> str | None:
+        """None when the run may start; otherwise the reason it must not.
+
+        Uses only the gateway's metadata endpoints — no completion, no tokens.
+        A check the gateway cannot answer (older LiteLLM, no permission) is
+        skipped rather than failed: preflight exists to avoid wasted requests,
+        not to add a new way for lens to break."""
+        try:
+            status, text = self._meta("/v1/models")
+        except (LLMError, TimeoutError, urllib.error.URLError, OSError) as e:
+            return f"gateway unreachable: {e}"
+        if status in (401, 403):
+            return f"the LiteLLM key was rejected (HTTP {status})"
+        if status == 200:
+            try:
+                ids = {m.get("id") for m in json.loads(text).get("data", [])}
+            except (ValueError, AttributeError):
+                ids = set()
+            if ids and self.model not in ids:
+                return f"model {self.model!r} is not available to this key"
+        try:
+            status, text = self._meta("/key/info")
+        except (TimeoutError, urllib.error.URLError, OSError):
+            return None
+        if status == 200:
+            try:
+                info = json.loads(text).get("info") or {}
+            except (ValueError, AttributeError):
+                return None
+            budget, spend = info.get("max_budget"), info.get("spend")
+            if (
+                budget is not None
+                and spend is not None
+                and float(budget) - float(spend) < min_budget_usd
+            ):
+                return f"the gateway key has ${float(budget) - float(spend):.2f} of budget left (needs ${min_budget_usd:.2f})"
+        return None
+
+    # ---- breaker -------------------------------------------------------
+    def _record(self, ok: bool) -> None:
+        with self._breaker_lock:
+            self._fail_streak = 0 if ok else self._fail_streak + 1
+            if not ok:
+                self.ledger.failed_requests += 1
+
+    def _trip(self) -> None:
+        with self._breaker_lock:
+            self._fail_streak = max(self._fail_streak, self.max_consecutive_failures)
+
+    def _breaker_open(self) -> bool:
+        with self._breaker_lock:
+            return self._fail_streak >= self.max_consecutive_failures
+
     # ---- the call ------------------------------------------------------
     def complete(
         self,
@@ -250,6 +356,10 @@ class Client:
         tool_choice: Any = "auto",
         cache_key: str | None = None,
     ) -> Completion:
+        if self._breaker_open():
+            raise LLMError(
+                f"{stage}: not sent — {self._fail_streak} consecutive failed requests; stopping this run"
+            )
         worst = self.worst_case_cost(messages, tools, max_tokens)
         if not self.ledger.reserve(worst):
             raise BudgetExhausted(
@@ -269,6 +379,62 @@ class Client:
         finally:
             self.ledger.release(worst)
 
+    def _body(
+        self,
+        messages,
+        max_tokens,
+        tools,
+        response_format,
+        temperature,
+        tool_choice,
+        cache_key,
+    ) -> dict[str, Any]:  # noqa: ANN001
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }
+        if temperature is not None and "temperature" not in self.unsupported:
+            body["temperature"] = temperature
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = (
+                "auto"
+                if tool_choice == "required" and not self.required_tool_choice_ok
+                else tool_choice
+            )
+        if response_format:
+            body["response_format"] = response_format
+        if self.reasoning_effort and "reasoning_effort" not in self.unsupported:
+            body["reasoning_effort"] = self.reasoning_effort
+        if cache_key and self.send_cache_key:
+            # Routes requests sharing a prefix to the same cache (OpenAI `prompt_cache_key`).
+            body["prompt_cache_key"] = cache_key
+        return body
+
+    def _learn_rejection(self, body: dict[str, Any], text: str) -> bool:
+        """A 400 naming a parameter we can live without: stop sending it. True if learnt."""
+        low = text.lower()
+        for p in self.DROPPABLE:
+            if p in body and p in low:
+                self.unsupported.add(p)
+                body.pop(p)
+                return True
+        if body.get("tool_choice") == "required" and "tool_choice" in low:
+            self.required_tool_choice_ok = False
+            body["tool_choice"] = "auto"
+            return True
+        return False
+
+    def _retry_after(self, headers: dict[str, str], attempt: int) -> float:
+        for k, v in headers.items():
+            if k.lower() == "retry-after":
+                try:
+                    return min(max(float(v), 0.0), self.max_retry_after_s)
+                except ValueError:
+                    break
+        return float(2 ** (attempt + 1))
+
     def _complete(
         self,
         stage,
@@ -280,31 +446,25 @@ class Client:
         tool_choice,
         cache_key,
     ) -> Completion:  # noqa: ANN001
-        body: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-        }
-        if temperature is not None:
-            body["temperature"] = temperature
-        if tools:
-            body["tools"] = tools
-            body["tool_choice"] = tool_choice
-        if response_format:
-            body["response_format"] = response_format
-        if self.reasoning_effort:
-            body["reasoning_effort"] = self.reasoning_effort
-        if cache_key and self.send_cache_key:
-            # Routes requests sharing a prefix to the same cache (OpenAI `prompt_cache_key`).
-            body["prompt_cache_key"] = cache_key
-
+        body = self._body(
+            messages,
+            max_tokens,
+            tools,
+            response_format,
+            temperature,
+            tool_choice,
+            cache_key,
+        )
         last = ""
-        for attempt in range(self.max_retries + 1):
+        attempt = 0
+        learnt = 0
+        while True:
             try:
                 status, headers, text = self._transport(body)
             except (TimeoutError, urllib.error.URLError, OSError) as e:
                 status, headers, text = 0, {}, f"transport: {e}"
             if status == 200:
+                self._record(True)
                 data = json.loads(text)
                 choice = (data.get("choices") or [{}])[0]
                 msg = choice.get("message") or {}
@@ -326,20 +486,28 @@ class Client:
                     finish_reason=choice.get("finish_reason") or "",
                     message=msg,
                 )
+            self._record(False)
             last = f"HTTP {status}: {text[:300]}"
-            if (
-                status == 400
-                and "prompt_cache_key" in body
-                and "prompt_cache_key" in text
-            ):
-                # A gateway that does not pass the parameter through: drop it for the rest of the run.
-                self.send_cache_key = False
-                body.pop("prompt_cache_key")
-                continue
             if status in (400, 429) and _is_budget_error(text):
                 raise BudgetExhausted(f"{stage}: gateway budget exhausted ({last})")
+            if (
+                status == 400
+                and learnt < len(self.DROPPABLE) + 1
+                and self._learn_rejection(body, text)
+            ):
+                learnt += 1
+                continue  # a rejected optional parameter is not transport weather: no attempt consumed
+            if status in self.FATAL:
+                # Our side is wrong (key, alias, request shape, context size). Every other
+                # bundle would send the same thing and fail the same way: open the breaker
+                # for the whole run and stop now, without a single retry.
+                self._trip()
+                raise FatalRequestError(
+                    f"{stage}: {last} — stopping the run (a request lens got wrong; retrying cannot help)"
+                )
             retryable = status == 0 or status == 429 or status >= 500
-            if not retryable or attempt == self.max_retries:
+            if not retryable or attempt >= self.max_retries or self._breaker_open():
                 break
-            time.sleep(2 ** (attempt + 1))
+            time.sleep(self._retry_after(headers, attempt))
+            attempt += 1
         raise LLMError(f"{stage}: {last}")

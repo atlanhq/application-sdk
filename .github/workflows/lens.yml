@@ -40,6 +40,7 @@ permissions:
   pull-requests: write
   issues: write
   actions: read # lens/lock.py: is an older review of this PR still running?
+  statuses: write # the `lens` commit status: green/red for the reviewed head
 
 # Deliberately no `concurrency:` block. GitHub can only queue a new run behind the running
 # one or cancel the running one; lens wants neither — the review in progress finishes, and a

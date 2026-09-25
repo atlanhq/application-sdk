@@ -28,6 +28,7 @@ class Decision:
     pr: int = 0
     force: bool = False
     reason: str = ""
+    comment_id: int = 0  # the `@lens` comment to react on (0 = none, e.g. a dispatch)
 
 
 def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
@@ -56,7 +57,12 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
                 False, int(issue["number"]), reason="bots cannot trigger lens"
             )
         force = len(words) > 1 and words[1].lower() == "force"
-        return Decision(True, int(issue["number"]), force=force)
+        return Decision(
+            True,
+            int(issue["number"]),
+            force=force,
+            comment_id=int(comment.get("id") or 0),
+        )
 
     if event_name == "workflow_dispatch":
         inputs = event.get("inputs") or {}

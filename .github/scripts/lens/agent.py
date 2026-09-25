@@ -29,7 +29,7 @@ from . import prompts
 from .bundle import Bundle
 from .diff import FileDiff, anchor
 from .findings import Finding
-from .llm import BudgetExhausted, Client, LLMError, estimate_tokens
+from .llm import BudgetExhausted, Client, FatalRequestError, LLMError, estimate_tokens
 from .rules import RuleSet
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
 
@@ -45,6 +45,7 @@ class AgentLimits:
     review_max_tokens: int = 4_000
     reflect_max_tokens: int = 1_200
     max_comments: int = 12
+    max_nits: int = 5  # low-severity findings kept per bundle (REVIEW.md-style nit cap)
     plan: int = 1  # 0 disables
     plan_min_lines: int = 60
     plan_max_tokens: int = 800
@@ -226,6 +227,7 @@ def review_bundle(
     limits: AgentLimits,
     *,
     reflect: bool = True,
+    budget_usd: float | None = None,
 ) -> BundleResult:
     res = BundleResult(label=bundle.label)
     messages: list[dict[str, Any]] = [
@@ -242,7 +244,17 @@ def review_bundle(
         if limits.plan and bundle.changed_lines >= limits.plan_min_lines:
             _plan(client, bundle, messages, limits)
             res.planned = True
-        _loop(client, ws, bundle, messages, raw_comments, res, limits, res.turn_budget)
+        _loop(
+            client,
+            ws,
+            bundle,
+            messages,
+            raw_comments,
+            res,
+            limits,
+            res.turn_budget,
+            budget_usd,
+        )
         if (
             limits.second_pass
             and res.stop == "done"
@@ -259,10 +271,13 @@ def review_bundle(
                 res,
                 limits,
                 max(res.turn_budget // 2, 3),
+                budget_usd,
             )
             res.second_pass_added = len(raw_comments) - before
     except BudgetExhausted as e:
         res.stop, res.error = "budget", str(e)
+    except FatalRequestError as e:
+        res.stop, res.error = "fatal", str(e)
     except LLMError as e:
         res.stop, res.error = "llm_error", str(e)
 
@@ -273,6 +288,9 @@ def review_bundle(
     ]
     if reflect and placed and res.stop != "budget":
         placed = _reflect(client, bundle, placed, limits, res)
+    # Nits are capped in code, never by asking: every finding at medium+ is kept.
+    nits = [f for f in placed if f.severity == "low"][: limits.max_nits]
+    placed = [f for f in placed if f.severity != "low"] + nits
     res.findings = [f for f in placed if f.line]
     res.unplaced = [f for f in placed if not f.line]
     return res
@@ -306,12 +324,21 @@ def _loop(
     res: BundleResult,
     limits: AgentLimits,
     turn_budget: int,
+    budget_usd: float | None = None,
 ) -> None:
     turns = empty = 0
     final = False
     while True:
         over = estimate_tokens(json.dumps(messages)) > limits.context_limit_tokens
-        if (turns >= turn_budget or over) and not final:
+        # This bundle's share of the budget: once spent, it must wrap up (a clean
+        # final turn), not run until the shared cap refuses someone else's call.
+        spent = sum(
+            v
+            for k, v in client.ledger.by_stage.items()
+            if k.endswith(f":{bundle.label}")
+        )
+        broke = budget_usd is not None and spent >= budget_usd * 0.85
+        if (turns >= turn_budget or over or broke) and not final:
             final = True
             messages.append({"role": "user", "content": prompts.FINAL_ROUND})
         # The tool list never changes, not even on the final turn: swapping it would

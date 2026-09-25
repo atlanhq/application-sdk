@@ -40,15 +40,17 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
+    comment_id = 0
     if args.event_name:
         event = json.loads(Path(args.event_path).read_text()) if args.event_path else {}
         d = decide(args.event_name, event, args.repo)
         if not d.run:
             print(f"lens: not running — {d.reason}")
             return 0
-        args.pr, args.force = d.pr, args.force or d.force
+        args.pr, args.force, comment_id = d.pr, args.force or d.force, d.comment_id
     if not args.pr:
         ap.error("--pr or --event-name is required")
+    live = not args.dry_run
 
     root = Path(args.root).resolve()
     cfg_dir = (
@@ -65,8 +67,15 @@ def main(argv: list[str] | None = None) -> int:
     rules = load_rules(cfg_dir)
     gh = GitHub(args.repo)
 
+    def react(content: str) -> None:
+        if live and comment_id:
+            gh.react(comment_id, content)
+
+    # 👀 as soon as the request is accepted, so the author knows lens picked it up.
+    react("eyes")
+
     own_run = int(os.environ.get("GITHUB_RUN_ID") or 0)
-    if own_run and not args.dry_run:
+    if own_run and live:
         busy = older_active_run(gh.workflow_runs(WORKFLOW_FILE), args.pr, own_run)
         if busy:
             print(
@@ -76,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.pr,
                 BUSY_NOTE.format(url=busy.get("html_url") or f"run {busy.get('id')}"),
             )
+            react("confused")
             return 0
 
     def client_factory(ledger):  # noqa: ANN001, ANN202
@@ -86,16 +96,20 @@ def main(argv: list[str] | None = None) -> int:
             reasoning_effort=cfg.reasoning_effort,
         )
 
-    res = run(
-        gh=gh,
-        number=args.pr,
-        root=root,
-        cfg=cfg,
-        rules=rules,
-        client_factory=client_factory,
-        force=args.force,
-        post=not args.dry_run,
-    )
+    try:
+        res = run(
+            gh=gh,
+            number=args.pr,
+            root=root,
+            cfg=cfg,
+            rules=rules,
+            client_factory=client_factory,
+            force=args.force,
+            post=live,
+        )
+    except Exception:
+        react("confused")
+        raise
     if args.dry_run:
         print(to_json(res))
         if res.action == "reviewed":
@@ -104,8 +118,16 @@ def main(argv: list[str] | None = None) -> int:
             )
     else:
         print(f"lens: {res.action} {res.reason}".strip())
+        if res.action == "skipped" and comment_id:
+            # Asked, but nothing to do: say why instead of leaving the author guessing.
+            gh.comment(args.pr, f"lens: nothing to review — {res.reason}.")
     for r in res.incomplete:
         print(f"lens: incomplete: {r}", file=sys.stderr)
+    react(
+        "confused"
+        if res.failed or res.incomplete
+        else ("+1" if res.action == "skipped" else "rocket")
+    )
     # A model/transport failure turns the job red. A deliberate budget stop does
     # not: the summary already says the review is incomplete and why.
     return 1 if res.failed else 0

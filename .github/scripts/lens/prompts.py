@@ -31,7 +31,7 @@ Severity
 - critical: security vulnerability, credential/data exposure, data loss or corruption, crash on a common path.
 - high: incorrect behaviour a user will hit, broken public contract, resource leak, race.
 - medium: edge case, performance problem, missing test for new behaviour, maintainability hazard.
-- low: minor clarity issue. Report low only when it is clearly worth a human's time.
+- low (nit): a small, concrete improvement — clearer name, simpler expression, a missing edge-case test. At most 5 per review, only ones clearly worth a human's time.
 
 Output
 - Report findings with ONE code_comment call containing all of them, then call task_done.

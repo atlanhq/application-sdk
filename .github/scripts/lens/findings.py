@@ -81,9 +81,10 @@ class PRState:
     dry_rounds: int = 0
     findings: list[Finding] = field(default_factory=list)
     ledger: dict[str, Any] = field(default_factory=dict)
-    approach: dict[str, Any] = field(
-        default_factory=dict
-    )  # the once-per-PR approach check
+    approach: dict[str, Any] = field(default_factory=dict)  # once-per-PR approach check
+    pending_files: list[str] = field(
+        default_factory=list
+    )  # left unreviewed by a failure
     history: list[dict[str, Any]] = field(default_factory=list)
 
     def open_findings(self, severities: tuple[str, ...] = SEVERITIES) -> list[Finding]:

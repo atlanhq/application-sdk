@@ -32,6 +32,7 @@ class Config:
     reflect: bool = True
     verify: bool = True
     approach: bool = True
+    preflight: bool = True
     exclude: list[str] = field(default_factory=list)
     limits: AgentLimits = field(default_factory=AgentLimits)
     raw_hash: str = ""
@@ -70,6 +71,7 @@ def load_config(config_dir: Path) -> Config:
     cfg.reflect = bool(st.get("reflect", cfg.reflect))
     cfg.verify = bool(st.get("verify", cfg.verify))
     cfg.approach = bool(st.get("approach", cfg.approach))
+    cfg.preflight = bool(st.get("preflight", cfg.preflight))
     a = data.get("agent", {})
     cfg.limits = AgentLimits(
         **{k: int(v) for k, v in a.items() if k in AgentLimits.__dataclass_fields__}

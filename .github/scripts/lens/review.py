@@ -28,7 +28,7 @@ from typing import Any
 
 from . import holistic, prompts
 from .agent import BundleResult, review_bundle
-from .bundle import group
+from .bundle import Bundle, group
 from .config import Config
 from .diff import parse_unified_diff, snippet_in_text
 from .findings import BLOCKING, SEVERITIES, Finding, PRState, merge_new
@@ -38,6 +38,7 @@ from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .rules import RuleSet
 from .select import DEFAULT_EXCLUDE, select_files
 from .tools import Workspace, parse_args
+from .triage import Triage, triage
 
 SUMMARY_MARKER = "<!-- lens-summary -->"
 
@@ -55,6 +56,9 @@ class RunResult:
     skipped_files: list[tuple[str, str]] = field(default_factory=list)
     bundles: list[BundleResult] = field(default_factory=list)
     ledger: Ledger | None = None
+    triage: Triage = field(default_factory=Triage)
+    retried: list[str] = field(default_factory=list)
+    preflight_error: str = ""
     incomplete: list[str] = field(
         default_factory=list
     )  # why part of the review did not happen
@@ -62,7 +66,9 @@ class RunResult:
     @property
     def failed(self) -> bool:
         """A model/transport failure, as opposed to a deliberate budget stop."""
-        return any(b.stop == "llm_error" for b in self.bundles)
+        return bool(self.preflight_error) or any(
+            b.stop in ("llm_error", "fatal") for b in self.bundles
+        )
 
 
 def _sev_at_least(sev: str, floor: str) -> bool:
@@ -102,7 +108,15 @@ def run(
 
     # ---- admission (0 model calls) --------------------------------------
     same_reviewer = state.model == cfg.model and state.config_hash == cfg.raw_hash
-    if state.reviewed_head == head and same_reviewer and not force:
+    # A head already reviewed is skipped — unless part of it was left unreviewed by a
+    # failure, in which case only those files are retried (never the whole PR again).
+    retry_only = (
+        state.reviewed_head == head
+        and same_reviewer
+        and not force
+        and bool(state.pending_files)
+    )
+    if state.reviewed_head == head and same_reviewer and not force and not retry_only:
         return RunResult(
             "skipped",
             f"head {head[:8]} already reviewed; comment `@lens force` to re-run",
@@ -132,17 +146,29 @@ def run(
         )
 
     incremental = (
-        bool(state.reviewed_head)
+        not retry_only
+        and bool(state.reviewed_head)
         and same_reviewer
         and gh.compare_status(state.reviewed_head, head) == "ahead"
     )
-    mode = "incremental" if incremental else "full"
-    range_base = state.reviewed_head if incremental else base
-    diff_text = gh.diff(range_base, head)
-    all_files = parse_unified_diff(diff_text)
-    full_files = (
-        all_files if not incremental else parse_unified_diff(gh.diff(base, head))
-    )
+    mode = "retry" if retry_only else ("incremental" if incremental else "full")
+    if retry_only:
+        full_files = parse_unified_diff(gh.diff(base, head))
+        all_files = [fd for fd in full_files if fd.path in set(state.pending_files)]
+        range_base = base
+    else:
+        range_base = state.reviewed_head if incremental else base
+        all_files = parse_unified_diff(gh.diff(range_base, head))
+        full_files = (
+            all_files if not incremental else parse_unified_diff(gh.diff(base, head))
+        )
+        # Files a previous run failed to review ride along with the new commits.
+        have = {fd.path for fd in all_files}
+        all_files += [
+            fd
+            for fd in full_files
+            if fd.path in set(state.pending_files) and fd.path not in have
+        ]
 
     round_no = state.round + 1
     res = RunResult("reviewed", mode=mode, state=state, ledger=ledger)
@@ -168,13 +194,18 @@ def run(
     # ---- scope -----------------------------------------------------------
     sel = select_files(all_files, exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude))
     res.skipped_files = sel.skipped
-    bundles = group(sel.reviewed)
-    if len(bundles) > cfg.max_bundles:
-        # Largest-change bundles first; the rest are named in the summary, not silently dropped.
-        bundles.sort(key=lambda b: -b.changed_lines)
-        for b in bundles[cfg.max_bundles :]:
-            res.skipped_files.extend((p, "bundle cap") for p in b.paths)
-        bundles = bundles[: cfg.max_bundles]
+
+    # Mechanical change is proven and set aside before any model call (triage.py):
+    # a 100-file rename or reformat costs a summary line, not 100 files of review.
+    old_text: dict[str, str | None] = {}
+    for fd in sel.reviewed[: cfg.max_changed_files]:
+        if fd.path.endswith(".py") and fd.status == "modified":
+            old_text[fd.path] = gh.file_at(fd.path, range_base)
+    res.triage = triage(
+        sel.reviewed, old_text, {k: (v or None) for k, v in head_text.items()}
+    )
+
+    bundles = plan_bundles(res.triage.reviewed, cfg, res)
 
     idx = build_index(root, overrides=head_text)
     ws = Workspace(
@@ -188,6 +219,25 @@ def run(
     client: Client = client_factory(round_ledger)
     pr_meta = {"title": pr.get("title"), "body": pr.get("body")}
 
+    # ---- preflight: zero-token checks before the FIRST request -------------
+    # A wrong alias, a rejected key or a spent gateway budget stops the run here,
+    # at zero requests, instead of failing every bundle's first call in parallel.
+    will_call = (
+        bool(res.triage.reviewed)
+        or (cfg.approach and not state.approach)
+        or (cfg.verify and round_no > 1 and state.open_findings())
+    )
+    if cfg.preflight and will_call:
+        reason = client.preflight(min_budget_usd=min(0.05, round_cap))
+        if reason:
+            res.preflight_error = reason
+            res.incomplete.append(f"not started: {reason}")
+            state.ledger = ledger.to_dict()
+            if post:
+                url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+                gh.set_status(head, *verdict_status(res), url)
+            return res
+
     # ---- verify still-open findings in touched files (1 call) -------------
     if cfg.verify and round_no > 1:
         res.resolved_verified = _verify(
@@ -198,6 +248,9 @@ def run(
     # It runs before the line review so every bundle reviews against the PR's
     # intent. It is stored in state and reused on every later invocation — a
     # re-review never pays to re-understand the PR (only `@lens force` redoes it).
+    pr_meta["mechanical"] = res.triage.summary_lines() + [
+        f"rename: {a} -> {b}" for a, b in res.triage.renames
+    ]
     if cfg.approach and (not state.approach or force) and sel.reviewed:
         ac = holistic.check(
             client, ws, full_files if incremental else sel.reviewed, pr_meta
@@ -209,9 +262,23 @@ def run(
     # ---- review ----------------------------------------------------------
     confirmed = [f for f in state.findings if f.status == "open"]
 
+    # Each bundle may spend its share of what is left (by size of real change),
+    # so one large bundle can never starve the others into an incomplete review.
+    left = round_ledger.remaining
+    weights = {b.label: max(b.changed_lines, 20) for b in bundles}
+    total_w = sum(weights.values()) or 1
+
     def one(b):  # noqa: ANN001, ANN202
         return review_bundle(
-            client, ws, b, rules, pr_meta, confirmed, cfg.limits, reflect=cfg.reflect
+            client,
+            ws,
+            b,
+            rules,
+            pr_meta,
+            confirmed,
+            cfg.limits,
+            reflect=cfg.reflect,
+            budget_usd=left * weights[b.label] / total_w,
         )
 
     with ThreadPoolExecutor(max_workers=max(1, cfg.concurrency)) as pool:
@@ -238,21 +305,31 @@ def run(
     ledger.input_tokens += round_ledger.input_tokens
     ledger.cached_tokens += round_ledger.cached_tokens
     ledger.output_tokens += round_ledger.output_tokens
+    ledger.failed_requests += round_ledger.failed_requests
     for k, v in round_ledger.by_stage.items():
         stage = k.split(":", 1)[0]
         ledger.by_stage[stage] = ledger.by_stage.get(stage, 0.0) + v
+    failed_paths: list[str] = []
+    bundle_paths = {b.label: b.paths for b in bundles}
     for b in res.bundles:
-        if b.stop in ("llm_error", "budget"):
+        if b.stop in ("llm_error", "fatal", "budget"):
             res.incomplete.append(f"{b.label}: {b.stop} — {b.error[:200]}")
+            failed_paths.extend(bundle_paths.get(b.label, []))
+    res.retried = list(state.pending_files) if retry_only else []
     # Spend is always booked. But a round in which part of the review did not
     # happen must never be recorded as a review of this head: that would make
     # the unchanged-head rule skip it and count it as a dry round — a broken
     # alias or a spent key turning into a permanent, silent "all clear".
-    if not res.incomplete:
+    # What did get reviewed is kept; only the files of failed bundles are
+    # remembered as pending, and the next `@lens` retries exactly those.
+    if res.bundles and len(failed_paths) == sum(len(b.paths) for b in bundles):
+        pass  # nothing was reviewed: leave the head unreviewed so the next run redoes it all
+    else:
         state.reviewed_head, state.reviewed_base = head, base
         state.model, state.config_hash = cfg.model, cfg.raw_hash
         state.round = round_no
         state.dry_rounds = state.dry_rounds + 1 if not res.new_findings else 0
+        state.pending_files = sorted(set(failed_paths))
     state.ledger = ledger.to_dict()
     state.history.append(
         {
@@ -269,6 +346,45 @@ def run(
     if post:
         publish(gh, number, head, res)
     return res
+
+
+RISKY_PREFIXES = (
+    "application_sdk/credentials/",
+    "application_sdk/storage/",
+    "application_sdk/handler/",
+    "application_sdk/server/",
+    ".github/workflows/",
+    ".github/actions/",
+)
+
+
+def _risk(b: Bundle) -> tuple[int, int]:
+    risky = any(p.startswith(RISKY_PREFIXES) for p in b.paths)
+    return (0 if risky else 1, -b.changed_lines)
+
+
+def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:  # noqa: ANN001
+    """Bundles in review order — riskiest first — within `max_bundles`.
+
+    Past the cap, bundles are first re-packed larger (up to half the context
+    ceiling) so every file still gets reviewed; only if that is not enough are
+    the lowest-risk bundles set aside, and each skipped file is named in the
+    summary. Ordering by risk means that whatever a short budget cuts is the
+    least important code, never the credentials path."""
+    bundles = group(files)
+    if len(bundles) > cfg.max_bundles:
+        total = sum(b.diff_tokens() for b in bundles)
+        bigger = min(
+            max(total // cfg.max_bundles + 1, 9000),
+            cfg.limits.context_limit_tokens // 2,
+        )
+        bundles = group(files, max_diff_tokens=bigger, max_files=12)
+    bundles.sort(key=_risk)
+    for b in bundles[cfg.max_bundles :]:
+        res.skipped_files.extend(
+            (p, "bundle cap (lowest-risk code, after re-packing)") for p in b.paths
+        )
+    return bundles[: cfg.max_bundles]
 
 
 def _verify(client: Client, ws: Workspace, open_: list[Finding]) -> list[str]:
@@ -322,6 +438,12 @@ def _verify(client: Client, ws: Workspace, open_: list[Finding]) -> list[str]:
 # ---- rendering ---------------------------------------------------------------
 
 _SEV_ICON = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "⚪"}
+_SEV_LABEL = {
+    "critical": "critical",
+    "high": "high",
+    "medium": "medium",
+    "low": "low (nit)",
+}
 
 
 def inline_body(f: Finding) -> str:
@@ -334,21 +456,26 @@ def inline_body(f: Finding) -> str:
 def render_summary(res: RunResult) -> str:
     st = res.state or PRState()
     blocking = st.open_findings(BLOCKING)
-    others = [f for f in st.open_findings() if f.severity not in BLOCKING]
+    by_level = {s: st.open_findings((s,)) for s in SEVERITIES}
+    counts = " · ".join(
+        f"{_SEV_ICON[s]} {len(by_level[s])} {_SEV_LABEL[s]}" for s in SEVERITIES
+    )
     if res.incomplete:
         verdict = (
             "⚠️ **Review incomplete** — part of this change was not reviewed; this is not an all-clear. "
-            "The next push (or `@lens`) retries it.\n\n"
+            "Comment `@lens` to retry the part that failed.\n\n"
             + "\n".join(f"- {r}" for r in res.incomplete)
         )
     elif blocking:
-        verdict = "❌ **Changes requested** — open blocking findings"
+        verdict = f"❌ **Changes requested** — {len(blocking)} blocking (critical/high) finding(s) open"
     else:
-        verdict = "✅ **No blocking findings**"
+        verdict = "✅ **No blocking findings** — medium and low findings are advisory"
     lines = [
         SUMMARY_MARKER,
         f"### lens review · round {st.round} ({res.mode})",
         verdict,
+        "",
+        f"**Open findings:** {counts}",
         "",
     ]
     ap = st.approach or {}
@@ -367,11 +494,18 @@ def render_summary(res: RunResult) -> str:
         lines.append("")
     elif ap.get("verdict") == "sound":
         lines.append("**Approach check** — sound.\n")
-    if blocking or others:
-        lines.append("| id | severity | where | finding |\n|---|---|---|---|")
-        for f in blocking + others:
+    for sev in SEVERITIES:
+        items = by_level[sev]
+        if not items:
+            continue
+        blocks = " — blocks merge" if sev in BLOCKING else ""
+        lines.append(
+            f"#### {_SEV_ICON[sev]} {_SEV_LABEL[sev].capitalize()} ({len(items)}){blocks}"
+        )
+        lines.append("| id | where | finding |\n|---|---|---|")
+        for f in items:
             where = f"`{f.path}:{f.line}`" if f.line else f"`{f.path}`"
-            lines.append(f"| {f.id} | {f.severity} | {where} | {f.title} |")
+            lines.append(f"| {f.id} | {where} | {f.title} |")
         lines.append("")
     fixed = [f for f in st.findings if f.status == "fixed"]
     if fixed:
@@ -383,6 +517,24 @@ def render_summary(res: RunResult) -> str:
         for f in res.unplaced:
             lines.append(f"- **{f.severity}** `{f.path}` — {f.title}: {f.body}")
         lines.append("\n</details>")
+    t = res.triage
+    mech_files = {p for ps in t.mechanical.values() for p in ps} | set(t.duplicate_of)
+    if mech_files:
+        lines.append(
+            f"\n<details><summary>{len(mech_files)} file(s) with mechanical changes — "
+            "proven behaviour-neutral in code, not sent to the model</summary>\n"
+        )
+        lines.extend(f"- {line}" for line in t.summary_lines())
+        if t.renames:
+            lines.append(
+                "- renames: " + ", ".join(f"`{a}` → `{b}`" for a, b in t.renames)
+            )
+        lines.append("\n</details>")
+    if st.pending_files:
+        lines.append(
+            f"\n**{len(st.pending_files)} file(s) could not be reviewed this run** and will be retried "
+            "by the next `@lens`: " + ", ".join(f"`{p}`" for p in st.pending_files[:20])
+        )
     if res.skipped_files:
         lines.append(
             f"\n<details><summary>{len(res.skipped_files)} file(s) not reviewed</summary>\n"
@@ -395,9 +547,11 @@ def render_summary(res: RunResult) -> str:
         if led.get("input_tokens")
         else 0.0
     )
+    failed = int(led.get("failed_requests", 0))
     lines.append(
         f"\n<sub>round {st.round} · ${led.get('spent_usd', 0):.3f} of ${led.get('cap_usd', 0):.2f} · "
-        f"{led.get('calls', 0)} model calls · {hit:.0%} prompt cache hits · {st.model}</sub>"
+        f"{led.get('calls', 0)} model calls · {failed} failed requests · "
+        f"{hit:.0%} prompt cache hits · {st.model}</sub>"
     )
     lines.append(st.encode())
     return "\n".join(lines)
@@ -431,7 +585,31 @@ def publish(gh: GitHub, number: int, head: str, res: RunResult) -> None:
                     gh.review(number, head, body, [_inline(f)])
                 except GitHubError:
                     res.unplaced.append(f)
-    gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+    url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+    state, description = verdict_status(res)
+    gh.set_status(head, state, description, url)
+
+
+def verdict_status(res: RunResult) -> tuple[str, str]:
+    """The `lens` commit status: the one green/red answer for the reviewed head.
+
+    Only open critical/high findings turn it red. Medium/low findings and the
+    approach check are advisory and never do. An incomplete review is
+    `error`, never green: part of the change was not looked at."""
+    st = res.state or PRState()
+    led = st.ledger or {}
+    cost = f"${float(led.get('spent_usd', 0)):.2f}"
+    if res.incomplete:
+        return "error", f"review incomplete — {res.incomplete[0][:90]}"
+    blocking = st.open_findings(BLOCKING)
+    if blocking:
+        ids = ", ".join(f.id for f in blocking[:4]) + ("…" if len(blocking) > 4 else "")
+        return "failure", f"{len(blocking)} blocking: {ids}"
+    minor = len(st.open_findings())
+    return (
+        "success",
+        f"no blocking findings{f' ({minor} advisory)' if minor else ''} · {cost}",
+    )
 
 
 def to_json(res: RunResult) -> str:
