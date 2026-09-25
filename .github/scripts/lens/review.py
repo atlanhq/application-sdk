@@ -2,8 +2,9 @@
 
 The round rules that make the loop converge are here, in code:
 
-- **Admission.** An unchanged head is never re-reviewed (humans included)
-  unless forced; past `max_rounds` or `max_dry_rounds`, lens stops and says so.
+- **Admission.** lens runs only when asked. An unchanged head is never
+  re-reviewed (humans included) unless forced; past `max_rounds`, lens
+  stops and says so. New commits are always reviewed below that cap.
 - **Incremental.** Round N>1 reviews only `reviewed_head..head` when the new
   head strictly descends from the old one and neither model nor config
   changed; anything else is a full review (open-code-review's fail-closed
@@ -110,15 +111,12 @@ def run(
     if state.round >= cfg.max_rounds and not force:
         return RunResult(
             "skipped",
-            f"round cap ({cfg.max_rounds}) reached; a human takes it from here",
+            f"round cap ({cfg.max_rounds}) reached; comment `@lens force` to review anyway",
             state=state,
         )
-    if state.dry_rounds >= cfg.max_dry_rounds and not force and same_reviewer:
-        return RunResult(
-            "skipped",
-            f"{state.dry_rounds} consecutive rounds found nothing new; stopping",
-            state=state,
-        )
+    # No "N clean rounds, stop" rule: lens runs only when a human asks, and a
+    # request on an unchanged head is already refused above. New commits are
+    # always reviewed, however many earlier rounds came back clean.
 
     ledger = (
         Ledger.from_dict(state.ledger, cfg.cap_usd_per_pr)

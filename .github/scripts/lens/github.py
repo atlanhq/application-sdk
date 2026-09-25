@@ -113,7 +113,21 @@ class GitHub:
                 return out
             page += 1
 
+    def workflow_runs(self, workflow_file: str) -> list[dict[str, Any]]:
+        """Recent runs of one workflow, newest first (one page is enough: a
+        run this call must see is at most minutes old)."""
+        data = self._call(
+            "GET",
+            f"/repos/{self.repo}/actions/workflows/{workflow_file}/runs?per_page=50",
+        )
+        return list((data or {}).get("workflow_runs") or [])
+
     # ---- writes --------------------------------------------------------
+    def comment(self, number: int, body: str) -> None:
+        self._call(
+            "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body}
+        )
+
     def upsert_comment(self, number: int, marker: str, body: str) -> None:
         """One sticky comment per PR, edited in place — never a new one per round."""
         for c in self.issue_comments(number):

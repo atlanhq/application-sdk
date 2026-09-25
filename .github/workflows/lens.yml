@@ -1,4 +1,6 @@
 name: lens
+# lens/lock.py finds concurrent reviews of the same PR by this name — keep them in sync.
+run-name: lens #${{ github.event.issue.number || inputs.pr }}
 
 # lens — the fixed-cost PR reviewer (.github/scripts/lens, config in .github/lens).
 #
@@ -12,7 +14,8 @@ name: lens
 #     API as data. Do not add a step that checks out the PR head.
 #   * Who may trigger is decided in lens/event.py (tested), not in shell here, per
 #     docs/standards/ci.md. Bots and non-collaborators cannot trigger it.
-#   * Permissions are the minimum to read the PR and post one summary + one review.
+#   * Permissions are the minimum to read the PR, post one summary + one review, and see
+#     whether another lens run for the same PR is still going (actions: read).
 #   * The model key is a dedicated LiteLLM key; its gateway-side max_budget is the backstop
 #     to the $1/PR cap lens enforces in code.
 #
@@ -36,12 +39,11 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  actions: read # lens/lock.py: is an older review of this PR still running?
 
-concurrency:
-  # One lens run per PR at a time. Queue rather than cancel: a cancelled run would have
-  # spent money its successor cannot see in the ledger.
-  group: lens-${{ github.event.issue.number || inputs.pr }}
-  cancel-in-progress: false
+# Deliberately no `concurrency:` block. GitHub can only queue a new run behind the running
+# one or cancel the running one; lens wants neither — the review in progress finishes, and a
+# request that arrives meanwhile is dropped with a note (lens/lock.py, first thing the job does).
 
 jobs:
   review:

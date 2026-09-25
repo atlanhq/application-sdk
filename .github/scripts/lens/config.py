@@ -24,8 +24,7 @@ class Config:
     price: Price = field(default_factory=lambda: Price(0.0, 0.0, 0.0))
     cap_usd_per_pr: float = 1.0
     first_round_share: float = 0.6
-    max_rounds: int = 3
-    max_dry_rounds: int = 2
+    max_rounds: int = 5
     later_round_min_severity: str = "high"
     max_bundles: int = 8
     concurrency: int = 4
@@ -59,7 +58,6 @@ def load_config(config_dir: Path) -> Config:
     cfg.first_round_share = float(b.get("first_round_share", cfg.first_round_share))
     r = data.get("rounds", {})
     cfg.max_rounds = int(r.get("max_rounds", cfg.max_rounds))
-    cfg.max_dry_rounds = int(r.get("max_dry_rounds", cfg.max_dry_rounds))
     cfg.later_round_min_severity = r.get(
         "later_round_min_severity", cfg.later_round_min_severity
     )

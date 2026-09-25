@@ -29,6 +29,7 @@ from lens.github import GitHubError  # noqa: E402
 from lens.holistic import build_input  # noqa: E402
 from lens.index import build_index  # noqa: E402
 from lens.llm import BudgetExhausted, Client, Ledger, LLMError, Price  # noqa: E402
+from lens.lock import BUSY_NOTE, older_active_run, run_name  # noqa: E402
 from lens.review import SUMMARY_MARKER, RunResult, run  # noqa: E402
 from lens.rules import RuleSet, glob_match, load_rules  # noqa: E402
 from lens.select import select_files  # noqa: E402
@@ -724,7 +725,7 @@ def test_later_rounds_only_admit_blocking_findings(repo: Path):
 
 def test_round_cap_and_spent_budget_stop_the_loop(repo: Path):
     gh = FakeGitHub()
-    st = PRState(reviewed_head="old", model="gpt-6-luna", config_hash="test", round=3)
+    st = PRState(reviewed_head="old", model="gpt-6-luna", config_hash="test", round=5)
     gh.comments.append(
         {
             "id": 1,
@@ -1186,3 +1187,114 @@ def test_shipped_workflow_never_checks_out_pr_head():
     wf = (Path(__file__).resolve().parents[2] / "workflows" / "lens.yml").read_text()
     assert "pull_request.head" not in wf.split("jobs:", 1)[1]
     assert "persist-credentials: false" in wf
+
+
+# ---- re-review admission -------------------------------------------------------------------------------------
+
+
+def test_new_commits_are_reviewed_however_many_rounds_came_back_clean(repo: Path):
+    gh = FakeGitHub()
+    st = PRState(
+        reviewed_head="h0",
+        model="gpt-6-luna",
+        config_hash="test",
+        round=2,
+        dry_rounds=4,
+    )
+    gh.comments.append(
+        {
+            "id": 1,
+            "body": SUMMARY_MARKER + st.encode(),
+            "user": {"login": "github-actions[bot]"},
+        }
+    )
+    gh.status = "diverged"  # h0 is not an ancestor: full review of b0..h1
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=RuleSet([], {}),
+        client_factory=_factory(Script()),
+    )
+    assert res.action == "reviewed"
+
+
+def test_round_cap_defaults_to_five():
+    assert Config().max_rounds == 5
+
+
+# ---- one review per PR at a time -------------------------------------------------------------------------------
+
+
+def _run(i, status="in_progress", pr=7):
+    return {
+        "id": i,
+        "status": status,
+        "display_title": run_name(pr),
+        "html_url": f"https://x/runs/{i}",
+    }
+
+
+def test_a_newer_request_yields_to_an_older_active_review():
+    assert older_active_run([_run(100)], pr=7, own_run_id=105)["id"] == 100
+    assert older_active_run([_run(100, status="queued")], pr=7, own_run_id=105)
+
+
+@pytest.mark.parametrize(
+    "runs",
+    [
+        [_run(110)],  # the other run is NEWER: it yields, this one proceeds
+        [_run(100, status="completed")],  # finished
+        [_run(100, pr=8)],  # another PR
+        [_run(105)],  # this run itself
+        [],
+    ],
+)
+def test_a_review_proceeds_when_no_older_review_of_this_pr_is_active(runs):
+    assert older_active_run(runs, pr=7, own_run_id=105) is None
+
+
+def test_two_simultaneous_requests_resolve_to_exactly_one_review():
+    runs = [_run(200), _run(201)]
+    proceeding = [
+        rid
+        for rid in (200, 201)
+        if older_active_run(runs, pr=7, own_run_id=rid) is None
+    ]
+    assert proceeding == [200]
+
+
+def test_workflow_names_runs_for_the_guard_and_has_no_queueing_concurrency():
+    wf = (Path(__file__).resolve().parents[2] / "workflows" / "lens.yml").read_text()
+    assert "run-name: lens #${{ github.event.issue.number || inputs.pr }}" in wf
+    assert run_name(42) == "lens #42"
+    assert (
+        "\nconcurrency:" not in wf
+    )  # GitHub would queue the new request instead of dropping it
+    assert "actions: read" in wf
+
+
+def test_cli_drops_a_request_while_another_review_runs(monkeypatch):
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    posted: list[str] = []
+
+    class BusyGitHub:
+        def __init__(self, repo):
+            pass
+
+        def workflow_runs(self, workflow_file):
+            return [_run(100)]
+
+        def comment(self, number, body):
+            posted.append(body)
+
+        def pr(self, number):  # pragma: no cover - must not be reached
+            raise AssertionError("a dropped request must not start a review")
+
+    monkeypatch.setattr(cli, "GitHub", BusyGitHub)
+    monkeypatch.setenv("GITHUB_RUN_ID", "105")
+    root = str(Path(__file__).resolve().parents[3])
+    assert cli.main(["review", "--repo", "o/r", "--pr", "7", "--root", root]) == 0
+    assert posted == [BUSY_NOTE.format(url="https://x/runs/100")]

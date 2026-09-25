@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from .config import load_config, validate
 from .event import decide
 from .github import GitHub
 from .llm import Client
+from .lock import BUSY_NOTE, WORKFLOW_FILE, older_active_run
 from .review import render_summary, run, to_json
 from .rules import load_rules
 
@@ -62,6 +64,19 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     rules = load_rules(cfg_dir)
     gh = GitHub(args.repo)
+
+    own_run = int(os.environ.get("GITHUB_RUN_ID") or 0)
+    if own_run and not args.dry_run:
+        busy = older_active_run(gh.workflow_runs(WORKFLOW_FILE), args.pr, own_run)
+        if busy:
+            print(
+                f"lens: not running — review {busy.get('id')} for #{args.pr} is still in progress"
+            )
+            gh.comment(
+                args.pr,
+                BUSY_NOTE.format(url=busy.get("html_url") or f"run {busy.get('id')}"),
+            )
+            return 0
 
     def client_factory(ledger):  # noqa: ANN001, ANN202
         return Client(
