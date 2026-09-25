@@ -260,8 +260,10 @@ dependencies = [
     { name = "pyatlan" },
     { name = "pydantic" },
     { name = "python-dotenv" },
+    { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "temporalio" },
+    { name = "urllib3" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
 
@@ -410,6 +412,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "pytest-order", marker = "extra == 'tests'", specifier = ">=1.3.0,<2.0.0" },
     { name = "python-dotenv", specifier = ">=1.1.0,<2.0.0" },
+    { name = "python-multipart", specifier = ">=0.0.27" },
     { name = "pyyaml", specifier = ">=6.0.2,<7.0.0" },
     { name = "redis", extras = ["hiredis"], marker = "extra == 'distributed-lock'", specifier = ">=5.2.0,<9.0.0" },
     { name = "rocksdict", marker = "extra == 'storage'", specifier = ">=0.3.0" },
@@ -418,6 +421,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = ">=2.0.36,<3.0.0" },
     { name = "temporalio", specifier = ">=1.25.0,<2.0.0" },
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.25.0,<2.0.0" },
+    { name = "urllib3", specifier = ">=2.7.0" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0,<0.23.0" },
 ]
 provides-extras = ["workflows", "sql", "daft", "storage", "incremental", "iam-auth", "azure", "distributed-lock", "mcp", "tests", "harness", "scale-data-generator", "sqlalchemy", "pandas"]

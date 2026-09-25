@@ -26,6 +26,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.62b1,<0.63",
     "prometheus-client>=0.20.0,<1.0",
     "fastapi[standard]>=0.141.1,<0.142.0",
+    "python-multipart>=0.0.27",  # CVE-2026-42561 (transitive via fastapi[standard])
     "pyatlan>=11.3,<12",
     "httpx-retries>=0.6.0,<0.7.0",
     "pydantic>=2.10.6,<3.0.0",
@@ -41,6 +42,7 @@ dependencies = [
     # Credentials / Workload Identity Federation (via obstore.auth.google) — the
     # GKE WI / customer-infra path obstore's built-in GCS file decoder can't do.
     "boto3>=1.38.6,<2.0.0",
+    "urllib3>=2.7.0",  # CVE-2026-44431, CVE-2026-44432 (transitive via botocore/requests)
     "azure-identity>=1.15.0",
     "google-auth>=2.0.0,<3.0.0",
     # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
