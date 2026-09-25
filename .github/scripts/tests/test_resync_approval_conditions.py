@@ -315,3 +315,26 @@ def test_stage_like_the_lane_removes_backups_and_stages_manifest_only(tmp_path):
         text=True,
     ).stdout.split()
     assert staged == ["tests.yaml"]
+
+
+def test_other_connectivity_ai_prs_are_never_approved(monkeypatch):
+    """The connectivity-ai App also opens the AI remediation lane's PRs
+    (``conformance/<rule>`` branches). They must never reach the resync path,
+    and the Renovate path refuses the author outright — so no approval."""
+    routed = []
+    monkeypatch.setattr(
+        gate.resync, "process_resync_pr", lambda *a, **k: routed.append(a[1]) or True
+    )
+    for ref in (
+        "conformance/D011",
+        "conformance/L004",
+        "bot/conformance-resync-x",
+        "main",
+    ):
+        m = meta()
+        m["head"] = {"sha": HEAD, "ref": ref, "repo": {"full_name": REPO}}
+        monkeypatch.setattr(gate, "fetch_pr_meta", lambda repo, pr, runner, m=m: m)
+        runner = FakeRunner()
+        assert gate.process_pr(REPO, "9", HEAD, "", runner) is False
+        assert not runner.approved
+    assert routed == []
