@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lens import agent as agent_mod  # noqa: E402
 from lens import context as lens_context  # noqa: E402
 from lens import holistic  # noqa: E402
+from lens import review as review_mod  # noqa: E402
 from lens.agent import BundleResult  # noqa: E402
 from lens.bundle import group  # noqa: E402
 from lens.config import Config, load_config, validate  # noqa: E402
@@ -2602,159 +2603,77 @@ def test_the_approach_check_is_told_about_public_api_changes(logger_repo: Path):
     assert "<public_api>" in text and "info/error (via _log)" in text
 
 
-# ---- the bench -----------------------------------------------------------------------------------------------
+# ---- re-review after merging the base branch into the PR ---------------------------------------------------
 
-BENCH_CASE = {
-    "source": {
-        "base": "b0",
-        "head": "h1",
-        "title": "Decode fetched bytes",
-        "body": "b",
-    },
-    "expect": [
-        {
-            "id": "decode-none",
-            "path": "application_sdk/storage/fetch.py",
-            "quote_any": ["return data.decode()"],
-            "min_severity": "high",
-            "max_severity": "high",
-        },
-        {
-            "id": "timeout-unused",
-            "path": "application_sdk/storage/fetch.py",
-            "keywords_any": ["timeout"],
-        },
-        {
-            "id": "bonus",
-            "path": "application_sdk/storage/fetch.py",
-            "keywords_any": ["docstring"],
-            "required": False,
-        },
-    ],
-    "must_not_flag": [
-        {
-            "path": "application_sdk/storage/fetch.py",
-            "quote_any": ["data = client.get(key)"],
-        }
-    ],
-    "approach": {"verdict_any": ["sound"], "mention_any": [["decode"], ["consumer"]]},
-}
+# The PR's own change (base...head): one line in fetch.py.
+PR_DIFF = (
+    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "@@ -1,3 +1,3 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n     return client.get(key)\n'
+)
+# reviewed_head..head after `git merge main`: the author's line, a line main added to the
+# same file, and a file only main changed.
+MERGED_DIFF = (
+    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "@@ -1,3 +1,4 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n+    MAIN_ONLY = 1\n     return client.get(key)\n'
+    "diff --git a/application_sdk/common/other.py b/application_sdk/common/other.py\n"
+    "--- a/application_sdk/common/other.py\n+++ b/application_sdk/common/other.py\n"
+    "@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+)
 
 
-def _bench_state(*findings, approach=None):
-    return PRState(findings=list(findings), approach=approach or {})
-
-
-def test_bench_scores_recall_precision_severity_traps_and_the_approach():
-    from lens import bench  # noqa: PLC0415 - module under test
-
-    hit = Finding(
-        "application_sdk/storage/fetch.py",
-        4,
-        "medium",
-        "bug",
-        "decode on None",
-        "b",
-        "    return data.decode()",
+def test_only_the_prs_own_change_is_kept_after_a_base_merge():
+    kept, dropped, demoted = review_mod.only_pr_changes(
+        parse_unified_diff(MERGED_DIFF), parse_unified_diff(PR_DIFF)
     )
-    trap = Finding(
-        "application_sdk/storage/fetch.py",
-        3,
-        "low",
-        "style",
-        "rename",
-        "b",
-        "    data = client.get(key)",
-    )
-    stray = Finding(
-        "application_sdk/storage/other.py", 9, "low", "style", "unrelated", "b", "x = 1"
-    )
-    st = _bench_state(
-        hit,
-        trap,
-        stray,
-        approach={
-            "verdict": "sound",
-            "problem": "fetch should decode",
-            "approach": "",
-            "concerns": [],
-        },
-    )
-    sc = bench.score_case("c", BENCH_CASE, st, [])
-    assert (
-        sc.caught == ["decode-none"]
-        and sc.missed == ["timeout-unused"]
-        and sc.bonus_caught == []
-    )
-    assert sc.severity_off == ["decode-none: got medium, expected high..high"]
-    assert len(sc.traps_hit) == 1 and len(sc.unexpected) == 1
-    assert sc.recall == 0.5 and sc.precision == pytest.approx(1 / 3)
-    assert sc.approach_ok is False and any("consumer" in n for n in sc.approach_notes)
+    assert [f.path for f in kept] == ["application_sdk/storage/fetch.py"]
+    assert dropped == ["application_sdk/common/other.py"]  # only main changed it
+    assert demoted == 1  # main's line in the PR's file is context now, not a change
+    fd = kept[0]
+    assert fd.added_lines == {1}  # just the author's line
+    assert "    MAIN_ONLY = 1" in fd.render() and "+    MAIN_ONLY" not in fd.render()
 
 
-def test_bench_runs_each_case_fresh_without_posting_and_compares_to_a_baseline(
-    repo: Path, tmp_path: Path
-):
-    from lens import bench  # noqa: PLC0415 - module under test
-
-    cases = tmp_path / "cases"
-    cases.mkdir()
-    (cases / "fetch.toml").write_text(
-        '[source]\nbase = "b0"\nhead = "h1"\ntitle = "t"\nbody = "b"\n'
-        '[[expect]]\nid = "decode-none"\npath = "application_sdk/storage/fetch.py"\nquote_any = ["return data.decode()"]\n'
-    )
+def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Path):
     gh = FakeGitHub()
-    gh.comments.append(
-        {
-            "id": 1,
-            "body": SUMMARY_MARKER
-            + PRState(
-                reviewed_head="h1", model="gpt-6-luna", config_hash="test"
-            ).encode(),
-            "user": {"login": "atlan-app-fleet[bot]"},
-        }
+    gh.diffs[("b0", "h1")] = PR_DIFF
+    gh.files[("application_sdk/storage/fetch.py", "h1")] = SRC_V1.replace(
+        "key):", "key, timeout=None):"
     )
-    scores = bench.run_bench(
+    rules = RuleSet([], {})
+    run(
         gh=gh,
+        number=1,
         root=repo,
         cfg=cfg_for(repo),
-        rules=RuleSet([], {}),
-        client_factory=_factory(_review_script()),
-        cases_dir=cases,
+        rules=rules,
+        client_factory=_factory(Script()),
     )
-    [sc] = scores
-    assert (
-        sc.caught == ["decode-none"] and sc.error == ""
-    )  # prior PR state ignored: a fresh review
-    assert gh.reviews == [] and gh.statuses == [] and gh.posted == []  # nothing posted
-    report = bench.to_json(scores, "cfg1")
-    baseline = {
-        **report,
-        "recall": 0.0,
-        "cases": [{**report["cases"][0], "caught": []}],
-    }
-    table = bench.render(report, baseline)
-    assert "| 100% (+1.000)" in table and "**+decode-none**" in table
-
-
-def test_the_shipped_bench_cases_are_well_formed():
-    import tomllib  # noqa: PLC0415
-
-    cases = sorted(
-        (Path(__file__).resolve().parents[2] / "lens" / "bench" / "cases").glob(
-            "*.toml"
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = MERGED_DIFF
+    gh.diffs[("b0", "h2")] = PR_DIFF
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = (
+        gh.files[("application_sdk/storage/fetch.py", "h1")].replace(
+            '    """Fetch one object."""\n',
+            '    """Fetch one object."""\n    MAIN_ONLY = 1\n',
         )
+        + "\n# changed again\n"
     )
-    assert cases, "at least one bench case ships"
-    for p in cases:
-        c = tomllib.loads(p.read_text())
-        assert {"base", "head", "title", "body"} <= set(c["source"]), p.name
-        assert all(
-            len(c["source"][k]) == 40 for k in ("base", "head")
-        ), f"{p.name}: pin full commit SHAs"
-        for e in c.get("expect", []):
-            assert (
-                e.get("id")
-                and e.get("path")
-                and (e.get("quote_any") or e.get("keywords_any"))
-            ), (p.name, e)
+    script = Script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+    assert res.mode == "incremental"
+    reviews = [r for r in script.requests if r.get("prompt_cache_key") == "lens-review"]
+    for r in reviews:
+        files_block = r["messages"][2]["content"].split("<review_files>", 1)[1]
+        assert "application_sdk/common/other.py" not in files_block
+        assert "+    MAIN_ONLY" not in files_block

@@ -30,7 +30,7 @@ from . import holistic, prompts, trace
 from .agent import BundleResult, review_bundle
 from .bundle import Bundle, group
 from .config import Config
-from .diff import parse_unified_diff, snippet_in_text
+from .diff import FileDiff, Hunk, Line, parse_unified_diff, snippet_in_text
 from .findings import BLOCKING, SEVERITIES, Finding, PRState, merge_new
 from .github import GitHub, GitHubError, bot_login
 from .index import build_index
@@ -76,6 +76,63 @@ class RunResult:
         return bool(self.preflight_error) or any(
             b.stop in ("llm_error", "fatal") for b in self.bundles
         )
+
+
+def only_pr_changes(
+    incremental: list[FileDiff], pr: list[FileDiff]
+) -> tuple[list[FileDiff], list[str], int]:
+    """The incremental diff restricted to the PR's own change.
+
+    Both diffs number their RIGHT side against the same PR-head file, so an
+    added line in `reviewed_head..head` is the author's only if the PR's
+    `base...head` diff adds that line too. A file the PR does not change at
+    all was changed only by a merge from the base branch and is dropped; in a
+    PR file, a line the merge added becomes plain context; a hunk left with
+    no change of the author's is dropped.
+
+    Returns (kept files, dropped paths, count of added lines demoted)."""
+    pr_by_path = {fd.path: fd for fd in pr}
+    kept: list[FileDiff] = []
+    dropped: list[str] = []
+    demoted = 0
+    for fd in incremental:
+        own = pr_by_path.get(fd.path)
+        if own is None:
+            dropped.append(fd.path)
+            continue
+        own_added = own.added_lines
+        hunks: list[Hunk] = []
+        for h in fd.hunks:
+            lines: list[Line] = []
+            mine = False
+            for ln in h.lines:
+                if ln.kind == "+" and ln.new_no not in own_added:
+                    lines.append(
+                        Line(" ", None, ln.new_no, ln.text)
+                    )  # the merge added it
+                    demoted += 1
+                else:
+                    lines.append(ln)
+                    mine = mine or ln.kind == "+"
+            if mine:
+                hunks.append(
+                    Hunk(
+                        h.old_start, h.old_len, h.new_start, h.new_len, h.header, lines
+                    )
+                )
+        if hunks:
+            kept.append(
+                FileDiff(
+                    path=fd.path,
+                    old_path=fd.old_path,
+                    status=fd.status,
+                    is_binary=fd.is_binary,
+                    hunks=hunks,
+                )
+            )
+        elif fd.hunks:
+            dropped.append(fd.path)
+    return kept, dropped, demoted
 
 
 def _sev_at_least(sev: str, floor: str) -> bool:
@@ -189,6 +246,18 @@ def run(
         full_files = (
             all_files if not incremental else parse_unified_diff(gh.diff(base, head))
         )
+        if incremental:
+            # A merge of the base branch into the PR also "descends" from the last
+            # reviewed head, so reviewed_head..head carries the base branch's changes
+            # too. Keep only what is part of THIS PR's own change.
+            all_files, merged_paths, merged_lines = only_pr_changes(
+                all_files, full_files
+            )
+            if merged_paths or merged_lines:
+                trace.line(
+                    f"excluded changes that came from merging the base branch: "
+                    f"{len(merged_paths)} file(s), {merged_lines} line(s)"
+                )
         # Files a previous run failed to review ride along with the new commits.
         have = {fd.path for fd in all_files}
         all_files += [

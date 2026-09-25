@@ -4,8 +4,8 @@
     python -m lens review --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
 
 Run from `.github/scripts` against a checkout of the BASE branch (`--root`).
-`--dry-run` prints the result as JSON and posts nothing — the mode the
-replay bench uses on historical PRs. Exit code is 0 whenever lens ran to a
+`--dry-run` prints the result as JSON and posts nothing — the way to try lens
+on any PR, including a historical one. Exit code is 0 whenever lens ran to a
 verdict or a deliberate skip; a non-zero exit means lens itself failed.
 """
 
@@ -17,7 +17,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import bench, report, trace
+from . import report, trace
 from .config import load_config, validate
 from .event import decide
 from .github import GitHub
@@ -39,20 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--config-dir", default=None, help="default: <root>/.github/lens")
     r.add_argument("--force", action="store_true")
     r.add_argument("--dry-run", action="store_true")
-    b = sub.add_parser(
-        "bench", help="review the bench cases fresh and score them (posts nothing)"
-    )
-    b.add_argument("--repo", required=True)
-    b.add_argument("--root", default=".", help="checkout of the base branch (trusted)")
-    b.add_argument("--config-dir", default=None, help="default: <root>/.github/lens")
-    b.add_argument("--cases", default=None, help="default: <config-dir>/bench/cases")
-    b.add_argument(
-        "--baseline", default=None, help="an earlier --out file to compare against"
-    )
-    b.add_argument("--out", default=None, help="write this run's scores as JSON")
     args = ap.parse_args(argv)
-    if args.cmd == "bench":
-        return _bench(args)
 
     comment_id = 0
     if args.event_name:
@@ -167,56 +154,6 @@ def main(argv: list[str] | None = None) -> int:
     # A model/transport failure turns the job red. A deliberate budget stop does
     # not: the summary already says the review is incomplete and why.
     return 1 if res.failed else 0
-
-
-def _bench(args: argparse.Namespace) -> int:
-    """Review every bench case fresh, score it, print the table (and write JSON)."""
-    root = Path(args.root).resolve()
-    cfg_dir = (
-        Path(args.config_dir).resolve()
-        if args.config_dir
-        else root / ".github" / "lens"
-    )
-    cfg = load_config(cfg_dir)
-    errs = validate(cfg)
-    if errs:
-        for e in errs:
-            print(f"lens: config error: {e}", file=sys.stderr)
-        return 2
-    rules = load_rules(cfg_dir)
-    cases = Path(args.cases).resolve() if args.cases else cfg_dir / "bench" / "cases"
-
-    def client_factory(ledger):  # noqa: ANN001, ANN202
-        client = Client(
-            model=cfg.model,
-            price=cfg.price,
-            ledger=ledger,
-            reasoning_effort=cfg.reasoning_effort,
-            api=cfg.api,
-        )
-        client.log = lambda event: print(
-            report.call_line(event), file=sys.stderr, flush=True
-        )
-        return client
-
-    scores = bench.run_bench(
-        gh=GitHub(args.repo),
-        root=root,
-        cfg=cfg,
-        rules=rules,
-        client_factory=client_factory,
-        cases_dir=cases,
-    )
-    result = bench.to_json(scores, cfg.raw_hash)
-    baseline = json.loads(Path(args.baseline).read_text()) if args.baseline else None
-    table = bench.render(result, baseline)
-    print(table)
-    bench.write(result, args.out)
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as fh:
-            fh.write(table)
-    return 0
 
 
 if __name__ == "__main__":
