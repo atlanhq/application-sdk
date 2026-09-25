@@ -568,6 +568,19 @@ def test_p023_flags_sends_on_a_named_session() -> None:
         assert len(_rule(_p023_async_task(header, stmts), "P023")) == 1, stmts
 
 
+def test_p023_flags_a_send_whose_result_rebinds_the_session_name() -> None:
+    # The value runs before the target binds, so the send is on the session.
+    header = "import requests\n"
+    session = "s = requests.Session()\n        "
+    for stmts in (
+        "s = s.get('http://x')",
+        "s: object = s.get('http://x')",
+        "if (s := s.get('http://x')):\n            pass",
+    ):
+        src = _p023_async_task(header, session + stmts)
+        assert len(_rule(src, "P023")) == 1, stmts
+
+
 def test_p023_silent_on_a_named_session_never_sent() -> None:
     header = "import requests\n"
     for stmts in (

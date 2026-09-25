@@ -423,8 +423,11 @@ class _Visitor(ast.NodeVisitor):
         if isinstance(node.ctx, ast.Store) and self._scopes:
             self._scopes[-1][node.id] = None
 
+    # Assignments visit the value before the target: the RHS runs first, so
+    # `s = s.get(u)` must resolve `s` against the session, not the new binding.
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
-        self.generic_visit(node)
+        self.visit(node.value)
+        self.visit(node.target)
         self._bind(node.target, node.value)
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
@@ -479,12 +482,17 @@ class _Visitor(ast.NodeVisitor):
             self._scopes[-1][key] = self._client_call(value)
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        self.generic_visit(node)
+        self.visit(node.value)
+        for target in node.targets:
+            self.visit(target)
         for target in node.targets:
             self._bind(target, node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        self.generic_visit(node)
+        self.visit(node.annotation)
+        if node.value is not None:
+            self.visit(node.value)
+        self.visit(node.target)
         if node.value is not None:
             self._bind(node.target, node.value)
 
