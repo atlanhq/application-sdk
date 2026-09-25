@@ -19,11 +19,11 @@ from pathlib import Path
 
 from . import report, trace
 from .config import load_config, validate
-from .event import decide
+from .event import DISMISS_USAGE, decide
 from .github import GitHub
 from .llm import Client
 from .lock import BUSY_NOTE, WORKFLOW_FILE, older_active_run
-from .review import render_summary, run, to_json
+from .review import dismiss, render_summary, run, to_json
 from .rules import load_rules
 
 
@@ -42,12 +42,18 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     comment_id = 0
+    dismissal = None
     if args.event_name:
         event = json.loads(Path(args.event_path).read_text()) if args.event_path else {}
         d = decide(args.event_name, event, args.repo)
         if not d.run:
             print(f"lens: not running — {d.reason}")
+            if d.reason == DISMISS_USAGE and d.comment_id and not args.dry_run:
+                gh = GitHub(args.repo)
+                gh.comment(d.pr, f"lens: {DISMISS_USAGE}")
+                gh.react(d.comment_id, "confused")
             return 0
+        dismissal = d if d.dismiss else None
         args.pr, args.force, comment_id = d.pr, args.force or d.force, d.comment_id
         trace.line(
             f"trigger: {args.event_name} on PR #{d.pr}"
@@ -94,6 +100,21 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     run_url = _run_url()
+    if dismissal is not None:
+        # No model call and nothing to watch: no progress note.
+        res = dismiss(
+            gh,
+            args.pr,
+            dismissal.dismiss,
+            dismissal.dismiss_reason,
+            actor=dismissal.actor,
+            pr_author=dismissal.pr_author,
+            post=live,
+            run_url=run_url,
+        )
+        print(f"lens: {res.action} {res.reason}".strip())
+        react("rocket" if res.action == "dismissed" else "confused")
+        return 0
     # A "running" note while the review is in progress, with a link to the live log. It is
     # removed once the verdict is posted (the verdict links the run too), and turned into a
     # failure note if lens itself crashes, so it never lingers as a stale "running".

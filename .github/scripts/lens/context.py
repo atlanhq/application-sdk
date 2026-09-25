@@ -269,12 +269,19 @@ class Reach:
     )  # (path, line, code)
     total: int = 0
     approximate: bool = False  # counted through shared wrapper names (bare-name match)
+    likely: int = 0  # of `total`, the calls in files that import the changed module
 
     def count(self) -> str:
+        """A count the model can quote without inflating the blast radius. Through a
+        shared name (`info`, `error`) every logger in the repo matches, so the bare-name
+        total is NOT this code's reach: only calls in files importing the module are."""
+        if not self.approximate:
+            return str(self.total)
+        names = "/".join(self.via)
         return (
-            f"~{self.total} (approximate: shared names)"
-            if self.approximate
-            else str(self.total)
+            f"{self.likely} likely (in files that import this module); the other "
+            f"{self.total - self.likely} calls only share the name(s) {names} with "
+            "unrelated code and are not this code's callers"
         )
 
 
@@ -328,6 +335,7 @@ def call_sites(ws: Workspace, s: Symbol) -> Reach:
     reach.approximate = bool(reach.via)
     module = s.path[:-3].replace("/", ".")
     importers = _importers(ws, module)
+    reach.likely = sum(1 for c, _ in targets if c.path in importers or c.path == s.path)
     targets.sort(
         key=lambda t: (
             t[0].path not in importers,
@@ -423,7 +431,7 @@ def public_api(ws: Workspace, s: Symbol, reach: Reach) -> str:
             return ""
         exposed = "/".join(wrappers) + f" (via {s.name})"
     return (
-        f"PUBLIC API behaviour change: {exposed} — {reach.count()} call site(s) in this repo. "
+        f"PUBLIC API behaviour change: {exposed} — call sites in this repo: {reach.count()}. "
         "Consumers in other repositories were NOT checked."
     )
 

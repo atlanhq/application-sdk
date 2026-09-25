@@ -433,8 +433,10 @@ def run(
             trace.line(
                 f"result: {'STOP — ' + reason if reason else 'ok, the run may start'}"
             )
-        res.notes.extend(getattr(client, "diagnostics", []))
         if reason:
+            # Preflight diagnostics reach the PR only when they stop the run; otherwise
+            # they are informational and stay in the job log (the trace above).
+            res.notes.extend(getattr(client, "diagnostics", []))
             res.preflight_error = reason
             res.incomplete.append(f"not started: {reason}")
             state.ledger = ledger.to_dict()
@@ -520,8 +522,11 @@ def run(
     res.calls = list(getattr(client, "calls", []))
     fresh: list[Finding] = []
     for br in res.bundles:
+        # A finding that is not on a diff line (unchanged code, or a line GitHub will not
+        # take a comment on) is still a finding: it is stored, counted and re-verified like
+        # any other. Only its delivery differs: the summary carries it, not an inline comment.
         fresh.extend(br.findings)
-        res.unplaced.extend(br.unplaced)
+        fresh.extend(br.unplaced)
     if round_no > 1:
         fresh = [
             f for f in fresh if _sev_at_least(f.severity, cfg.later_round_min_severity)
@@ -532,6 +537,7 @@ def run(
             if _sev_at_least(f.severity, cfg.later_round_min_severity)
         ]
     res.new_findings = merge_new(state, fresh, round_no=round_no)
+    res.unplaced = [f for f in res.new_findings if not f.line]
     with trace.group("7 · verdict"):
         for b in res.bundles:
             trace.line(
@@ -609,6 +615,99 @@ def run(
             publish(gh, number, head, res)
         res.timings_ms["publish"] = int((time.monotonic() - t_phase) * 1000)
     res.timings_ms["total"] = int((time.monotonic() - t_start) * 1000)
+    return res
+
+
+def dismiss(
+    gh: GitHub,
+    number: int,
+    ids: list[str],
+    reason: str,
+    *,
+    actor: str,
+    pr_author: str,
+    post: bool = True,
+    run_url: str = "",
+) -> RunResult:
+    """`/lens dismiss F-… <reason>`: close findings the team decided not to fix.
+
+    No model call and no review: the findings are marked dismissed with who and
+    why, the summary and the `lens` status are refreshed, and the dismissal is a
+    row in the round history. A blocking finding cannot be dismissed by the PR's
+    own author — someone else has to agree it can ship."""
+    state, _ = find_state(gh, number)
+    if state is None:
+        return RunResult(
+            "skipped", reason="lens has not reviewed this PR yet: nothing to dismiss"
+        )
+    by_id = {f.id: f for f in state.findings}
+    closed: list[str] = []
+    refused: list[str] = []
+    for fid in ids:
+        f = by_id.get(fid)
+        if f is None or f.status != "open":
+            refused.append(f"`{fid}` is not an open finding")
+            continue
+        if f.severity in BLOCKING and actor and actor == pr_author:
+            refused.append(
+                f"`{fid}` is {f.severity}: the PR author can't dismiss a blocking finding — ask a reviewer"
+            )
+            continue
+        f.status, f.fixed_round, f.fixed_by = "wontfix", state.round, "dismissed"
+        f.dismissed_by, f.dismiss_reason = actor, reason
+        closed.append(fid)
+    label = (
+        f"dismiss · {', '.join(closed)} by @{actor}"
+        if closed
+        else "dismiss · nothing closed"
+    )
+    res = RunResult(
+        "dismissed" if closed else "skipped",
+        reason="; ".join(refused),
+        mode="dismiss",
+        mode_label=label,
+        state=state,
+        run_url=run_url,
+    )
+    trace.line(
+        f"dismiss by @{actor}: closed {closed or 'none'}; refused {refused or 'none'}"
+    )
+    if closed:
+        state.history.append(
+            {
+                "round": state.round,
+                "head": state.reviewed_head[:12],
+                "base": "",
+                "mode": "dismiss",
+                "label": label,
+                "new": 0,
+                "resolved": len(closed),
+                "blocking": len(state.open_findings(BLOCKING)),
+                "incomplete": False,
+                "usd": 0.0,
+                "calls": 0,
+                "run": run_url,
+            }
+        )
+        del state.history[:-MAX_HISTORY]
+    if not post:
+        return res
+    head = str(((gh.pr(number) or {}).get("head") or {}).get("sha") or "")
+    if head and state.reviewed_head and head != state.reviewed_head:
+        res.notes.append(
+            "There are commits since the last review; comment `/lens` to review them."
+        )
+    url = (
+        gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res)) if closed else ""
+    )
+    lines = [f"- ⚠️ {r}" for r in refused]
+    if closed:
+        brief = verdict_brief(res, url)
+        gh.comment(number, "\n".join([brief, "", *lines]) if lines else brief)
+        if state.reviewed_head:
+            gh.set_status(state.reviewed_head, *verdict_status(res), url)
+    else:
+        gh.comment(number, "lens: nothing was dismissed.\n\n" + "\n".join(lines))
     return res
 
 
@@ -721,12 +820,23 @@ _FIXED_BY = {
     "code-gone": "its code was removed or rewritten",
     "verified": "verified fixed",
 }
+_CLOSE_HINT = (
+    "Fix them and comment `/lens`, or close one the team won't fix with "
+    "`/lens dismiss <id> <reason>`."
+)
+
+
+def _how(f: Finding) -> str:
+    if f.fixed_by == "dismissed":
+        why = f": {f.dismiss_reason}" if f.dismiss_reason else ""
+        return f"dismissed by @{f.dismissed_by}{why}".replace("|", "/")
+    return _FIXED_BY.get(f.fixed_by, "—")
 
 
 def _resolved_section(st: PRState) -> list[str]:
     """Resolved findings keep what they were, so editing the summary in place loses nothing."""
     fixed = sorted(
-        (f for f in st.findings if f.status == "fixed"),
+        (f for f in st.findings if f.status in ("fixed", "wontfix")),
         key=lambda f: (f.fixed_round, f.id),
     )
     if not fixed:
@@ -745,7 +855,7 @@ def _resolved_section(st: PRState) -> list[str]:
         when = f"round {f.fixed_round}" if f.fixed_round else "—"
         out.append(
             f"| {f.id} | {_SEV_ICON[f.severity]} {f.severity} | {where} | {f.title} "
-            f"| round {f.round} | {when} | {_FIXED_BY.get(f.fixed_by, '—')} |"
+            f"| round {f.round} | {when} | {_how(f)} |"
         )
     out.append("\n</details>")
     return out
@@ -794,8 +904,13 @@ def render_summary(res: RunResult) -> str:
         )
     elif blocking:
         verdict = f"❌ **Changes requested** — {len(blocking)} blocking (critical/high) finding(s) open"
+    elif st.open_findings():
+        verdict = (
+            f"🟡 **Not ready to merge** — {len(st.open_findings())} medium/low finding(s) still open. "
+            f"{_CLOSE_HINT}"
+        )
     else:
-        verdict = "✅ **No blocking findings** — medium and low findings are advisory"
+        verdict = "✅ **Ready to merge** — every finding is resolved"
     lines = [
         SUMMARY_MARKER,
         f"### lens · round {st.round} · {res.mode_label or res.mode}",
@@ -837,13 +952,16 @@ def render_summary(res: RunResult) -> str:
             )
             if f.scope == "unchanged":
                 where += " (unchanged code: same pattern)"
+            elif not f.line:
+                where += " (not on a diff line)"
             lines.append(f"| {f.id} | {where} | {f.title} |")
         lines.append("")
     lines.extend(_resolved_section(st))
     lines.extend(_history_section(st))
     if res.unplaced:
         lines.append(
-            "\n<details><summary>Findings that could not be anchored to a diff line</summary>\n"
+            f"\n<details><summary>{len(res.unplaced)} finding(s) not posted inline — "
+            "details (counted above)</summary>\n"
         )
         for f in res.unplaced:
             loc = f"{f.path}:{f.head_line}" if f.head_line else f.path
@@ -942,13 +1060,23 @@ def verdict_brief(res: RunResult, summary_url: str) -> str:
     )
     state, description = verdict_status(res)
     icon = {"success": "✅", "failure": "❌", "error": "⚠️"}.get(state, "ℹ️")
+    if state == "failure" and not st.open_findings(BLOCKING):
+        icon = "🟡"
     lines = [
         f"{icon} **lens · round {st.round} · {res.mode_label or res.mode}** — {description}",
         "",
         f"**Open findings:** {counts}",
     ]
     if res.new_findings:
-        lines.append(f"**New this round:** {len(res.new_findings)} (inline below)")
+        inline = sum(1 for f in res.new_findings if f.line)
+        where = (
+            "inline below"
+            if inline == len(res.new_findings)
+            else f"{inline} inline, the rest in the summary"
+        )
+        lines.append(f"**New this round:** {len(res.new_findings)} ({where})")
+    if state == "failure" and not st.open_findings(BLOCKING):
+        lines.append(_CLOSE_HINT)
     fixed = len(res.resolved_free) + len(res.resolved_verified)
     if fixed:
         lines.append(f"**Resolved this round:** {fixed}")
@@ -990,7 +1118,9 @@ def publish(gh: GitHub, number: int, head: str, res: RunResult) -> None:
     as the review body when there are new findings, as a comment otherwise."""
     url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
     body = verdict_brief(res, url)
-    todo = list(res.new_findings)
+    todo = [
+        f for f in res.new_findings if f.line
+    ]  # the rest are carried by the summary
     posted = False
     refused = False
     for i in range(0, len(todo), 50):
@@ -1028,9 +1158,11 @@ def publish(gh: GitHub, number: int, head: str, res: RunResult) -> None:
 def verdict_status(res: RunResult) -> tuple[str, str]:
     """The `lens` commit status: the one green/red answer for the reviewed head.
 
-    Only open critical/high findings turn it red. Medium/low findings and the
-    approach check are advisory and never do. An incomplete review is
-    `error`, never green: part of the change was not looked at."""
+    Green means ready to merge: every finding, nits included, is fixed or was
+    dismissed with a reason. Any open finding keeps it red; the description says
+    whether it is blocking or only medium/low. The approach check is advisory and
+    never turns it red. An incomplete review is `error`, never green: part of
+    the change was not looked at."""
     st = res.state or PRState()
     led = st.ledger or {}
     cost = f"${float(led.get('spent_usd', 0)):.2f}"
@@ -1040,11 +1172,11 @@ def verdict_status(res: RunResult) -> tuple[str, str]:
     if blocking:
         ids = ", ".join(f.id for f in blocking[:4]) + ("…" if len(blocking) > 4 else "")
         return "failure", f"{len(blocking)} blocking: {ids}"
-    minor = len(st.open_findings())
-    return (
-        "success",
-        f"no blocking findings{f' ({minor} advisory)' if minor else ''} · {cost}",
-    )
+    minor = st.open_findings()
+    if minor:
+        ids = ", ".join(f.id for f in minor[:3]) + ("…" if len(minor) > 3 else "")
+        return "failure", f"not ready: {len(minor)} medium/low open ({ids})"
+    return "success", f"ready to merge — every finding resolved · {cost}"
 
 
 def to_json(res: RunResult) -> str:

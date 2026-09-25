@@ -63,7 +63,11 @@ class Finding:
     fixed_round: int = (
         0  # the round that resolved it (0 = open, or resolved before this was recorded)
     )
-    fixed_by: str = ""  # code-gone (its quoted code left the PR) | verified (the model confirmed the fix)
+    fixed_by: str = (
+        ""  # code-gone | verified | dismissed (a person closed it with a reason)
+    )
+    dismissed_by: str = ""  # GitHub login of whoever ran `/lens dismiss`
+    dismiss_reason: str = ""
 
     def fingerprint(self) -> str:
         ev = " ".join((self.evidence or "").split())[:160]
