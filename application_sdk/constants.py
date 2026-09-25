@@ -406,22 +406,27 @@ STORAGE_LOCK_WAIT_PROGRESS_SECONDS = max(
     ),
 )
 
-#: Multipart part size for uploads (default 8 MiB). Raise this per deployment
-#: when the destination makes *part count* expensive rather than part size.
-#: An S3 proxy fronting GCS is the motivating case (DISTR-899): GCS has no
-#: multipart upload on the JSON API its client libraries speak, so the proxy
-#: emulates one with ``compose``, which accepts at most 32 sources. Completing
-#: an upload therefore costs one sequential round trip per part, inside a
-#: single HTTP request that sends no response bytes while it runs. A 4.77 GiB
-#: object at 8 MiB parts is 611 parts and 65-98s of silence — long enough for
-#: a 60s gateway idle timeout to cut the connection, after which the client
-#: retries and the second completion races the first.
-#: Larger parts shorten that window roughly linearly: the same object at
-#: 32 MiB is 153 parts and ~19s. Note this is *not* free — see
-#: ``STORAGE_UPLOAD_MAX_CONCURRENCY``, since peak memory is the product of the
-#: two, not this value alone.
+#: Multipart part size for uploads (default 5 MiB, the S3 non-terminal minimum).
+#: This default is chosen to keep each per-part body transfer within the
+#: body-read timeout enforced by the blobstorage Kong proxy
+#: (``/api/blobstorage``).  At the slowest observed SDR-to-proxy upload
+#: bandwidth (~260 KB/s), an 8 MiB part spans ~31 s and the proxy drops the
+#: connection every time; a 5 MiB part completes in ~19 s, leaving a ~12 s
+#: safety margin.
+#:
+#: Raise this per deployment when the destination makes *part count* expensive
+#: rather than part size.  An S3 proxy fronting GCS is the motivating case
+#: (DISTR-899): GCS has no multipart upload on the JSON API its client
+#: libraries speak, so the proxy emulates one with ``compose``, which accepts
+#: at most 32 sources.  Completing an upload therefore costs one sequential
+#: round trip per part, inside a single HTTP request that sends no response
+#: bytes while it runs.  A 4.77 GiB object at 5 MiB parts is 977 parts and
+#: 65-98 s of silence — raise this to 32 MiB (153 parts, ~19 s) on deployments
+#: where part count, not part size, is the binding constraint.
+#: Note this is *not* free — see ``STORAGE_UPLOAD_MAX_CONCURRENCY``, since
+#: peak memory is the product of the two, not this value alone.
 STORAGE_UPLOAD_PART_SIZE_BYTES = int(
-    os.getenv("ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES", str(8 * 1024 * 1024))
+    os.getenv("ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES", str(5 * 1024 * 1024))
 )
 
 #: True when a deployment has explicitly set the part size, in which case it

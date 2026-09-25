@@ -215,7 +215,7 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_OBSTORE_TIMEOUT` | `30m` | Overall per-request wall-clock backstop |
 | `ATLAN_STORAGE_RESUME_DOWNLOADS` | `true` | Resume interrupted chunked downloads from their checkpoint sidecar |
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Heartbeat log interval during long transfers (`0` disables) |
-| `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `8388608` (8 MiB) | Multipart part size for uploads. Raise it when the destination makes part *count* expensive (e.g. an S3 proxy fronting GCS, which emulates multipart with 32-source-capped `compose` round trips) |
+| `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `5242880` (5 MiB) | Multipart part size for uploads. The default is the S3 non-terminal minimum, sized to fit within the blobstorage proxy's per-part body-read timeout at typical SDR-to-proxy bandwidths. Raise it (e.g. to 32 MiB) when the destination makes part *count* expensive (e.g. an S3 proxy fronting GCS, which emulates multipart with 32-source-capped `compose` round trips) |
 | `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` | `12` | Parts uploaded concurrently. Peak upload memory is roughly part size times this — lower it alongside a larger part size to hold memory steady |
 | `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Validate every transfer's bytes (see [Transfer integrity](#transfer-integrity)) |
 | `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Emit the `{key}.sha256` sidecar that downstream verification reads |

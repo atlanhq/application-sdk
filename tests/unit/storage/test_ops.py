@@ -2253,6 +2253,42 @@ class TestUploadPartSizeConfiguration:
 
         assert writer.call_args.kwargs["max_concurrency"] == 4
 
+    def test_default_part_size_bounded_for_proxy_body_timeout(
+        self, monkeypatch
+    ) -> None:
+        """Default part size must be ≤ 5 MiB to avoid blobstorage proxy body-read timeouts.
+
+        Root-cause (a production incident): uploading a 3 M-row column.json
+        through the Kong blobstorage proxy at an SDR-constrained bandwidth
+        caused every multipart POST to be dropped exactly 31 s in, because
+        the proxy enforces a hard per-part body-read timeout.  At the observed
+        bandwidth (~260 KB/s), an 8 MiB default part takes 31 s end-to-end;
+        the proxy cut the connection on four consecutive attempts across two
+        child-run boundaries.
+
+        The S3 non-terminal minimum (5 MiB = 5_242_880 bytes) completes in
+        ~19 s at that bandwidth, clearing the proxy threshold by ~12 s.
+        This test pins the default so future edits do not silently regress it.
+        """
+        import os
+
+        # This test must see the constant's unoverridden default.
+        # Skip rather than fail if a deployment env var is present.
+        if "ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES" in os.environ:
+            pytest.skip(
+                "ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES is set; skipping default check"
+            )
+
+        from application_sdk import constants
+
+        _PROXY_SAFE_MAX = 5 * 1024 * 1024  # 5 MiB: S3 non-terminal minimum
+        assert constants.STORAGE_UPLOAD_PART_SIZE_BYTES <= _PROXY_SAFE_MAX, (
+            f"Default upload part size {constants.STORAGE_UPLOAD_PART_SIZE_BYTES} B "
+            f"exceeds the blobstorage-proxy-safe ceiling {_PROXY_SAFE_MAX} B. "
+            f"A Kong proxy with a ~31 s body-read timeout will drop any part "
+            f"whose transfer time at SDR bandwidth exceeds that window."
+        )
+
 
 class TestUploadFileRelocationClassification:
     """A mid-run bucket relocation must surface typed, not as a generic StorageError.

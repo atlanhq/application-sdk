@@ -608,7 +608,7 @@ artifacts to — and a run that cannot upload is doomed however healthy the sour
 `preflight_verify_storage = True` opts the app into probing every configured artifact store
 inside the gate, in whatever budget the handler left: a plain write, a HEAD, and a
 **multipart-forced** write. The multipart probe matters because uploads above the writer's part
-size (8 MiB by default; `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES`) go out as multipart, and a store
+size (5 MiB by default; `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES`) go out as multipart, and a store
 can accept plain PUTs while rejecting multipart initiation — GCS does exactly this for the whole
 window of a bucket relocation, a condition a production RCA traced under multi-hour extractions
 dying at their final upload. The probe is deliberately stricter than a small-artifact-only
