@@ -480,6 +480,59 @@ local explicitPackageBundleApp = (App) {
   }
 }
 
+// e2eOverrides: neither entrypoint name matches a package leaf and no
+// `packageId` is set, so without overrides both collapse onto the bundle
+// primary. `cloud` states its e2e identity explicitly; `selfhosted` does not.
+local e2eOverridesPlainApp = (App) {
+  name = "e2e-ovr-bundle"
+  displayName = "E2E Overrides Bundle"
+  icon = "https://assets.atlan.com/assets/snowflake.svg"
+  hasCredentialConfig = false
+  argoPackageNames { "@atlan/alpha"; "@atlan/beta" }
+  entrypoints {
+    new App.Entrypoint {
+      name = "cloud"
+      source = "snowflake"
+      sourceCategory = "database"
+      contract = bundleCrawlerContract
+    }
+    new App.Entrypoint {
+      name = "selfhosted"
+      source = "snowflake"
+      sourceCategory = "database"
+      contract = bundleCrawlerContract
+    }
+  }
+}
+
+local e2eOverridesApp = (App) {
+  name = "e2e-ovr-bundle"
+  displayName = "E2E Overrides Bundle"
+  icon = "https://assets.atlan.com/assets/snowflake.svg"
+  hasCredentialConfig = false
+  argoPackageNames { "@atlan/alpha"; "@atlan/beta" }
+  entrypoints {
+    new App.Entrypoint {
+      name = "cloud"
+      source = "snowflake"
+      sourceCategory = "database"
+      contract = bundleCrawlerContract
+      e2eOverrides {
+        connectorShortName = "alpha"
+        argoPackageName = "@atlan/alpha"
+        argoTemplateName = "atlan-alpha"
+        connectorConfigName = "atlan-connectors-alpha"
+      }
+    }
+    new App.Entrypoint {
+      name = "selfhosted"
+      source = "snowflake"
+      sourceCategory = "database"
+      contract = bundleCrawlerContract
+    }
+  }
+}
+
 local bundleCrawlerBase: String =
   bundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
 local bundleMinerBase: String =
@@ -494,6 +547,13 @@ local explicitCrawlerBase: String =
   explicitPackageBundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
 local explicitMinerBase: String =
   explicitPackageBundleApp.output.files["app/generated/miner/_e2e_base.py"].text
+
+local ovrCloudBase: String =
+  e2eOverridesApp.output.files["app/generated/cloud/_e2e_base.py"].text
+local ovrSelfhostedBase: String =
+  e2eOverridesApp.output.files["app/generated/selfhosted/_e2e_base.py"].text
+local plainSelfhostedBase: String =
+  e2eOverridesPlainApp.output.files["app/generated/selfhosted/_e2e_base.py"].text
 
 local apiBase: String = apiApp.output.files["app/generated/_e2e_base.py"].text
 local postgresBase: String = postgresApp.output.files["app/generated/_e2e_base.py"].text
@@ -948,6 +1008,27 @@ facts {
     explicitCrawlerBase.contains("argo_template_name = \"atlan-unrelated-crawler\"")
     explicitMinerBase.contains("argo_package_name = \"@atlan/unrelated-miner\"")
     explicitMinerBase.contains("argo_template_name = \"atlan-unrelated-miner\"")
+  }
+
+  ["e2eOverrides sets the entrypoint's generated e2e identity"] {
+    ovrCloudBase.contains("connector_short_name = \"alpha\"")
+    ovrCloudBase.contains("argo_package_name = \"@atlan/alpha\"")
+    ovrCloudBase.contains("argo_template_name = \"atlan-alpha\"")
+    ovrCloudBase.contains("connector_config_name = \"atlan-connectors-alpha\"")
+  }
+
+  ["an entrypoint without e2eOverrides is generated exactly as before"] {
+    ovrSelfhostedBase == plainSelfhostedBase
+    ovrSelfhostedBase.contains("connector_short_name = \"e2e-ovr-bundle\"")
+  }
+
+  ["e2eOverrides changes nothing outside the e2e harness"] {
+    // Every generated file other than the overridden _e2e_base.py is
+    // byte-identical to the same app without overrides.
+    e2eOverridesApp.output.files.keys == e2eOverridesPlainApp.output.files.keys
+    e2eOverridesApp.output.files.keys
+      .filter((k) -> k != "app/generated/cloud/_e2e_base.py")
+      .every((k) -> e2eOverridesApp.output.files[k].text == e2eOverridesPlainApp.output.files[k].text)
   }
 
   // ── Bundle _e2e_base.py: harness expectations derived from the pipeline ───────

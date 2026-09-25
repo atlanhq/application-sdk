@@ -431,6 +431,20 @@ All entrypoints are always routable via `?entrypoint=`. Set `packageId` on entry
 
 For multi-entrypoint apps, `packageId` also pins the stable card ID (e.g. `"@atlan/qlik-sense"`) so legacy Argo workflows that reference the app by their old `app_id` continue to resolve correctly, and existing connection references in the UI do not go blank after migration.
 
+The generated e2e harness derives each bundle entrypoint's identity from the contract. When it can't (for example, the entrypoint's name matches no `argoPackageNames` leaf, and setting `packageId` would re-key the card), state the values in `e2eOverrides` instead of hand-pinning them in the test module. It changes only that entrypoint's `_e2e_base.py`:
+
+```pkl
+new Entrypoint {
+  name = "onprem"
+  e2eOverrides {
+    connectorShortName = "mongo"
+    argoPackageName = "@atlan/mongo"
+    argoTemplateName = "atlan-mongo"
+    connectorConfigName = "atlan-connectors-mongo"
+  }
+}
+```
+
 ```pkl
 // app.pkl
 amends "@app-contract-toolkit/App.pkl"

@@ -853,6 +853,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | `categories` | Listing\<String\> | `[]` | Marketplace category tags for this entrypoint. |
 | `docsUrl` | String? | null | Documentation URL. Falls back to the app-level `docsUrl` when null. |
 | `packageId` | String? | null | Stable marketplace package ID (e.g. `"@atlan/qlik-sense"`). When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`. Required for multi-entrypoint apps to preserve backward compat with legacy Argo workflows that reference the app by its stable card ID. Entrypoints without a `packageId` are routable but do not appear as marketplace cards. |
+| `e2eOverrides` | E2EOverrides | `{}` | E2E-harness-only overrides for a bundle entrypoint. Optional `connectorShortName`, `argoPackageName`, `argoTemplateName` and `connectorConfigName` replace the values generated into `app/generated/<entrypoint>/_e2e_base.py`; an unset field keeps the derived value. Changes no other generated file: not `atlan.yaml`, the manifests or the marketplace card. Use it when an entrypoint's e2e identity can't be derived, e.g. its name matches no `argoPackageNames` leaf and `packageId` would re-key the card. |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:
