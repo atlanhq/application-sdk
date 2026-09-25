@@ -1,0 +1,14 @@
+# github-actions: Workflows and composite actions
+- Flag: `if`/`else`, loops, `case` or branching `&&`/`||` in an inlined `run:`; move it to a `.github/scripts/` Python script with a pytest (`docs/standards/ci.md`).
+- Flag: `${{ github.event.* }}` text, `inputs.*` or step outputs inlined in `run:`; pass via `env:` and quote.
+- Flag: `pull_request_target`/`workflow_run`/`issue_comment` running PR head code with secrets or write tokens.
+- Flag: missing/over-broad `permissions:`; a reusable's caller whose `permissions:` omits scopes it needs (the block is exhaustive).
+- Flag: security/release gates skippable via caller inputs, `client_payload` or empty values; release tags not ancestry-checked.
+- Flag: derived secrets written to `$GITHUB_ENV`/`$GITHUB_OUTPUT` before `::add-mask::` (per value, per line); secrets in artifacts; creds in docker `build-args`.
+- Flag: a workflow collapsed into a reusable (renames its required check); a path-filtered required check without an always-concluding gate job.
+- Flag: `concurrency:` used as a lock, or keyed on `github.ref` for dispatch paths; `with:` values that can render empty.
+- Flag: `|| true`/`continue-on-error` hiding a gate; multi-line shell without `set -euo pipefail`.
+- Flag: changes to `.github/workflow-templates/` or `packages/conformance/conformance/bootstrap/templates/` — they ship verbatim to other repos.
+- Flag: a tool download with no retry (C004 only warns).
+- Don't flag (CI enforces): action SHA-pinning (C001), artifact `-retry` naming and label-gate checks (script tests), YAML/expression errors (actionlint).
+- Severity: critical for script injection, secret exposure, untrusted code with write tokens; high for gate bypass or broken triggers/permissions; medium otherwise.
