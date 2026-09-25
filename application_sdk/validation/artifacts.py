@@ -78,6 +78,7 @@ __all__ = [
     "ENFORCEMENT_WOULD_BLOCK",
     "FORMAT_NDJSON",
     "FORMAT_PARQUET",
+    "FORMAT_PKL",
     "MODE_HARD",
     "MODE_OFF",
     "MODE_SOFT",
@@ -104,6 +105,7 @@ __all__ = [
     "FieldPathStep",
     "FieldMapDeclaration",
     "ModelDeclaration",
+    "PklModuleDeclaration",
     "artifact_enforcement",
     "artifact_validation_event_fields",
     "artifact_validation_matrix_json",
@@ -187,6 +189,15 @@ validator with its own dependency floor."""
 
 ARTIFACT_FORMATS: Final[frozenset[str]] = frozenset({FORMAT_NDJSON, FORMAT_PARQUET})
 """Runtime membership test for :data:`ArtifactFormat`."""
+
+FORMAT_PKL: Final = "pkl"
+"""A Pkl module that must amend a named, published module.
+
+Not a member of :data:`ArtifactFormat`: that vocabulary is the *field-map*
+formats, and a Pkl artifact is declared by the module it amends, never by a
+field list — see :class:`PklModuleDeclaration`. No validator ships for it,
+so dispatch reports ``unsupported`` naming the format, rather than going quiet.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +362,40 @@ class ModelDeclaration:
         return 0
 
 
-ArtifactDeclaration = Union[FieldMapDeclaration, ModelDeclaration]
+@dataclass(frozen=True)
+class PklModuleDeclaration:
+    """A declaration resolved to a Pkl module the artifact must amend.
+
+    The contract toolkit's ``PklArtifactSchema``, rendered with
+    ``format = "pkl"`` and an ``amends_module`` URI. Like
+    :class:`ModelDeclaration`, nothing is authored field by field: the amended
+    module already fixes every property, type and constraint, so it *is* the
+    declaration. Unlike a model it is not Python — it is checked by evaluating the
+    artifact, which needs the ``pkl`` CLI that worker images do not carry. The
+    consuming app evaluates it itself, and that evaluation is the check, so no
+    built-in validator claims :data:`FORMAT_PKL` and the wrapper reports
+    ``unsupported``.
+    """
+
+    amends_module: str
+    """Absolute, version-pinned ``package://…@<version>#/<module>.pkl`` URI.
+
+    The toolkit refuses anything else at generation time; the loader checks only
+    that it is a non-empty string, because re-policing the grammar here would make
+    two copies of one rule that could drift.
+    """
+
+    artifact_format: str = FORMAT_PKL
+    """Always :data:`FORMAT_PKL` from :class:`ContractSource`; carried so dispatch
+    reads it the same way it reads every other declaration's format."""
+
+    @property
+    def field_count(self) -> int:
+        """Always 0: the amended module, not a field list, is the declaration."""
+        return 0
+
+
+ArtifactDeclaration = Union[FieldMapDeclaration, ModelDeclaration, PklModuleDeclaration]
 """Tagged union of what a :class:`~application_sdk.validation.protocols.SchemaSource`
 resolves to. A union rather than one struct with optional halves, so a validator
 cannot silently treat "declared no fields" and "delegate to a model" as the same

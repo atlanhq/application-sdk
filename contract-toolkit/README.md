@@ -106,7 +106,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/fanin/`](examples/fanin/) — multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
 - [`examples/agent-e2e/`](examples/agent-e2e/) — agent/SDR e2e codegen: `_e2e_credential.py` emits both `<Name>CredentialBody` (direct) and `<Name>AgentCredentialBody` (lightweight), plus an `extraction-method` ConditionalInput whose `overrideEnum` widens the substitutions `Literal` to `["direct", "agent"]`.
 - [`examples/scheduled/`](examples/scheduled/) — cron background job via `schedules`; renders `triggers.schedules` into `manifest.json` (multiple schedules, non-UTC timezone, a `PAUSED` one). See [Schedules](docs/reference.md#schedules-background-jobs).
-- [`examples/artifact-schemas/`](examples/artifact-schemas/) — data hand-off declarations via `artifactSchemas`; renders `app/generated/artifact_schemas.json` (parquet + NDJSON, nested paths, arrays of structs via the `[]` element step, an input artifact). See [Artifact Schemas](docs/reference.md#artifact-schemas-data-hand-off-declarations).
+- [`examples/artifact-schemas/`](examples/artifact-schemas/) — data hand-off declarations via `artifactSchemas`; renders `app/generated/artifact_schemas.json` (parquet + NDJSON, nested paths, arrays of structs via the `[]` element step, an input artifact, a Pkl-module input via `PklArtifactSchema`). See [Artifact Schemas](docs/reference.md#artifact-schemas-data-hand-off-declarations).
 
 ## What Gets Generated
 
@@ -208,6 +208,14 @@ away would still pass on the leaf assertion alone.
 Every field must carry a non-empty `description`. A declaration is read by whoever is
 debugging the hand-off that just failed, and a bare `name` + `type` pair states the
 assertion without stating why it holds.
+
+Some artifacts are themselves Pkl modules, for example a typedef `.pkl` file that the
+app evaluates. Declare these with `PklArtifactSchema { amendsModule = "package://…@<version>#/<Module>.pkl" }`
+instead of a field list. The amended module already is the declaration, and the URI
+must be an absolute, version-pinned `package:` URI. The SDK loads the declaration, and
+conformance K016 accepts it. The consuming app evaluates the artifact itself, so the
+SDK ships no runtime `pkl` validator, and the hand-off reports `unsupported` and names
+the format.
 
 **Opt-in and emitted only when declared.** An app with no `artifactSchemas` block
 generates byte-identical output to before the block existed — no new file. Unlike the

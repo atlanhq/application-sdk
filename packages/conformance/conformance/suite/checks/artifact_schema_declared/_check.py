@@ -246,6 +246,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                             f"      }}\n"
                             f"    }}\n"
                             f"\n"
+                            f"If the artifact is itself a Pkl module, declare the "
+                            f"module it amends instead: "
+                            f"'new PklArtifactSchema {{ amendsModule = "
+                            f'"package://…@<version>#/<Module>.pkl" }}\'. '
                             f"Never hand-edit the generated "
                             f"'{rel_schemas_path}' — it is a pkl eval output and "
                             f"the next toolkit run reverts the edit. Internal "
