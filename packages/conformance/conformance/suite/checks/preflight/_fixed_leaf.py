@@ -1,16 +1,28 @@
 """F021 PreflightFixedLeafInBroadExcept (CONNECT-1358).
 
-Flags a broad ``except`` inside ``preflight_check`` (or a helper it reaches)
-that builds an Auth- or Permission-rooted error on a path that no test on the
-caught exception selects. Every failure in the ``try`` then reaches the
-customer as a credential or grant problem: an empty credential, a DNS failure
-and a 500 all read as "grant access". The SDK's own subclasses outside
-``application_sdk.errors`` (``SqlClientAuthFailedError``, ``CredentialError``,
-...) count too; a test pins ``_SDK_CUSTOMER_LEAVES`` to the SDK source.
+Flags a broad ``except`` inside ``preflight_check`` (or a helper it calls
+directly) that reports an Auth- or Permission-rooted error on a path that no
+test on the caught exception selects. Every failure in the ``try`` then
+reaches the customer as a credential or grant problem: an empty credential, a
+DNS failure and a 500 all read as "grant access". The SDK's own subclasses
+outside ``application_sdk.errors`` (``SqlClientAuthFailedError``,
+``CredentialError``, ...) count too; a test pins ``_SDK_CUSTOMER_LEAVES`` to
+the SDK source.
 
-Each leaf gets one of three outcomes from the conditions on its path (the
-enclosing ``if`` / ``while`` / conditional-expression arm or ``match`` case,
-and every earlier early-exit guard such as ``if C: raise`` in the same block):
+Only a leaf F021 can see being reported is judged: ``raise Leaf(...)``, or the
+``error=`` of a ``PreflightCheck`` / ``PreflightOutput`` (directly or through
+``.to_failure_details()``). Its site must sit in contexts that always run or
+are gated by a modelled condition: statement blocks of the handler, ``if`` /
+``while`` / ``match`` / ``with`` / ``try``, and call arguments, lists, tuples,
+``await`` and ``return`` around a row. A leaf that is only constructed, stored
+in a name, passed to another function, or evaluated inside a boolean operand,
+a loop body or any other context is unknown. A helper only passed as a
+callback is not followed, since passing it does not prove it runs.
+
+Each reported leaf gets one of three outcomes from the conditions on its path
+(the enclosing ``if`` / ``while`` / conditional-expression arm or ``match``
+case, and every earlier early-exit guard such as ``if C: raise`` in the same
+block):
 
 * **selected** — reaching it requires a discriminating exception predicate or
   its complement (``isinstance(exc, PermissionError)``, a comparison on
@@ -47,7 +59,7 @@ from conformance.suite.checks._ast_common import make_finding
 from conformance.suite.schema.findings import Finding
 
 from ._common import Registry, Source, iter_function_nodes, reachable_preflight_sites
-from ._contracts import _Checker, _qualified
+from ._contracts import _Checker, _qualified, _sdk
 
 _F021 = "F021"
 
@@ -74,6 +86,27 @@ _BLOCK_FIELDS = frozenset({"body", "orelse", "finalbody", "cases"})
 _EXITS = (ast.Raise, ast.Return, ast.Continue, ast.Break)
 _LOOPS = (ast.For, ast.AsyncFor, ast.While)
 _NEW_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+_ROWS = ("PreflightCheck", "PreflightOutput")
+_CONTEXTS: dict[type[ast.AST], tuple[str, ...]] = {
+    ast.ExceptHandler: ("body",),
+    ast.If: ("body", "orelse"),
+    ast.While: ("body", "orelse"),
+    ast.IfExp: ("body", "orelse"),
+    ast.Match: ("cases",),
+    ast.match_case: ("body",),
+    ast.With: ("body",),
+    ast.AsyncWith: ("body",),
+    ast.Try: ("body", "orelse", "finalbody"),
+    ast.TryStar: ("body", "orelse", "finalbody"),
+    ast.Call: ("args", "keywords"),
+    ast.keyword: ("value",),
+    ast.List: ("elts",),
+    ast.Tuple: ("elts",),
+    ast.Set: ("elts",),
+    ast.Await: ("value",),
+    ast.Return: ("value",),
+    ast.Expr: ("value",),
+}
 _OWN_SCOPE_ENDS = (
     ast.FunctionDef,
     ast.AsyncFunctionDef,
@@ -246,7 +279,9 @@ def _compare(node: ast.Compare, want: bool, env: _Env) -> _Reach:
         return _Reach.UNKNOWN
     if not any(kinds):
         return _Reach.FREE
-    if len(node.ops) == 1 and isinstance(node.ops[0], (ast.Is, ast.IsNot, ast.Eq, ast.NotEq)):
+    if len(node.ops) == 1 and isinstance(
+        node.ops[0], (ast.Is, ast.IsNot, ast.Eq, ast.NotEq)
+    ):
         left, right = operands
         if (kinds[0] is _Kind.EXCEPTION and _is_none(right)) or (
             kinds[1] is _Kind.EXCEPTION and _is_none(left)
@@ -449,11 +484,37 @@ def _case_reach(match: ast.Match, index: int, env: _Env) -> _Reach:
     return _all(_Reach.REQUIRES, guard)
 
 
+def _report_site(leaf: ast.Call, src: Source, parents: _Parents) -> ast.AST | None:
+    """The ``raise`` or preflight row that reports ``leaf``; ``None`` if unmodelled."""
+    parent, field, _ = parents[leaf]
+    if isinstance(parent, ast.Raise) and field == "exc":
+        return parent
+    if isinstance(parent, ast.Attribute) and parent.attr == "to_failure_details":
+        call, call_field, _ = parents[parent]
+        if not (isinstance(call, ast.Call) and call_field == "func" and not call.args):
+            return None
+        parent, field, _ = parents[call]
+    if isinstance(parent, ast.keyword) and parent.arg == "error":
+        row = parents[parent][0]
+        if isinstance(row, ast.Call) and any(_sdk(src, row.func, t) for t in _ROWS):
+            return row
+    return None
+
+
 def _outcome(
-    leaf: ast.Call, caught: str | None, parents: _Parents, handler: ast.ExceptHandler
+    leaf: ast.Call,
+    src: Source,
+    caught: str | None,
+    parents: _Parents,
+    handler: ast.ExceptHandler,
 ) -> _Outcome:
+    site = _report_site(leaf, src, parents)
+    if site is None:
+        return _Outcome.UNKNOWN
     conditions: list[_Reach] = []
-    for parent, field, index in _ancestry(leaf, parents, handler):
+    for parent, field, index in _ancestry(site, parents, handler):
+        if field not in _CONTEXTS.get(type(parent), ()):
+            return _Outcome.UNKNOWN
         if isinstance(parent, ast.Call) and field in ("args", "keywords"):
             if _receives(parent, _env_at(parent, caught, parents, handler)):
                 return _Outcome.UNKNOWN
@@ -488,13 +549,13 @@ def handler_outcomes(
 ) -> Iterator[tuple[Source, ast.ExceptHandler, list[tuple[ast.Call, _Outcome]]]]:
     """Every broad handler on a preflight path with its auth/permission leaves."""
     checker = _Checker(reg)
-    for src, method in reachable_preflight_sites(reg, follow_callbacks=True):
+    for src, method in reachable_preflight_sites(reg):
         for handler in iter_function_nodes(method):
             if not (isinstance(handler, ast.ExceptHandler) and _is_broad(src, handler)):
                 continue
             parents = _parents(handler)
             leaves = [
-                (node, _outcome(node, handler.name, parents, handler))
+                (node, _outcome(node, src, handler.name, parents, handler))
                 for node in _own_nodes(handler)
                 if isinstance(node, ast.Call)
                 and _customer_rooted(checker, src, node.func)

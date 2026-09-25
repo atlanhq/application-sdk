@@ -413,13 +413,8 @@ def iter_function_nodes(func: ast.AST):
         yield from iter_function_nodes(child)
 
 
-def reachable_preflight_sites(reg: Registry, *, follow_callbacks: bool = False):
-    """Follow resolved module helpers and self methods across app sources.
-
-    ``follow_callbacks`` also follows a function passed as a call argument,
-    as in ``_run_required(_check_schemas, client)``, which dispatches the
-    check through a runner the walk would otherwise stop at.
-    """
+def reachable_preflight_sites(reg: Registry):
+    """Follow resolved module helpers and self methods across app sources."""
     from ._contracts import _Checker
 
     resolver = _Checker(reg)
@@ -444,18 +439,11 @@ def reachable_preflight_sites(reg: Registry, *, follow_callbacks: bool = False):
         )
         for node in iter_function_nodes(func):
             if isinstance(node, ast.Call):
-                callees = [node.func]
-                if follow_callbacks:
-                    callees.extend(node.args)
-                    callees.extend(kw.value for kw in node.keywords)
-                for callee in callees:
-                    if not isinstance(callee, (ast.Name, ast.Attribute)):
-                        continue
-                    if isinstance(callee, ast.Name) and callee.id in bound:
-                        continue
-                    target = resolver.helper(src, func, ast.Call(callee, [], []))
-                    if target is not None:
-                        pending.append(target)
+                if isinstance(node.func, ast.Name) and node.func.id in bound:
+                    continue
+                target = resolver.helper(src, func, node)
+                if target is not None:
+                    pending.append(target)
 
 
 def entrypoint_contracts(reg: Registry) -> dict[str, str | None]:

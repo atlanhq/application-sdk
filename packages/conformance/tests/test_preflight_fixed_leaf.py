@@ -225,13 +225,67 @@ def test_fires_in_a_helper_reached_from_preflight_check(tmp_path: Path) -> None:
     assert len(_f021(tmp_path, src)) == 1
 
 
-def test_fires_in_a_check_passed_as_a_callback(tmp_path: Path) -> None:
+def test_a_check_only_passed_as_a_callback_is_not_analysed(tmp_path: Path) -> None:
     extra = "async def _check_access(client):\n" + _broad(
         "except Exception as exc:", _failed_row("AppPermissionDeniedError")
     )
     src = _handler(
         "        return await _run_required(_check_access, self.client)\n", extra
     )
+    assert _f021(tmp_path, src) == []
+
+
+def test_a_directly_called_module_check_is_analysed(tmp_path: Path) -> None:
+    extra = "async def _check_access(client):\n" + _broad(
+        "except Exception as exc:", _failed_row("AppPermissionDeniedError")
+    )
+    src = _handler("        return await _check_access(self.client)\n", extra)
+    assert len(_f021(tmp_path, src)) == 1
+
+
+_AUTH = "AuthError(message='x', suggested_action='y')"
+_INTERNAL = "InternalError(message='x', suggested_action='y')"
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        f"            {_AUTH}\n            raise {_INTERNAL}\n",
+        f"            unused = {_AUTH}\n            raise {_INTERNAL}\n",
+        f"            raise choose_error({_AUTH})\n",
+        f"            False and {_AUTH}\n            raise {_INTERNAL}\n",
+        f"            raise (isinstance(exc, PermissionError) and {_AUTH} or {_INTERNAL})\n",
+        f"            for attempt in self.attempts:\n                raise {_AUTH}\n",
+    ],
+    ids=[
+        "unused-constructor",
+        "untracked-assignment",
+        "arbitrary-wrapper",
+        "never-evaluated-operand",
+        "boolop-selection",
+        "loop-body",
+    ],
+)
+def test_unsupported_reporting_or_context_is_unknown(tmp_path: Path, row: str) -> None:
+    src = _handler(_broad("except Exception as exc:", row))
+    assert _f021(tmp_path, src) == []
+    assert _Outcome.UNKNOWN in _outcomes(tmp_path, src)
+    assert _Outcome.UNCONDITIONAL not in _outcomes(tmp_path, src)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        f"            raise {_AUTH} from exc\n",
+        f"            return PreflightOutput(checks=[PreflightCheck(name='a', passed=False, error={_AUTH})])\n",
+        f"            return PreflightOutput(error={_AUTH}.to_failure_details())\n",
+        f"            checks.append(PreflightCheck(name='a', passed=False, error={_AUTH}.to_failure_details()))\n",
+        f"            with self.lock:\n                raise {_AUTH}\n",
+    ],
+    ids=["raise-from", "row-error", "output-error", "appended-row", "with-body"],
+)
+def test_supported_reporting_shapes_fire(tmp_path: Path, row: str) -> None:
+    src = _handler(_broad("except Exception as exc:", row))
     assert len(_f021(tmp_path, src)) == 1
 
 
@@ -387,7 +441,7 @@ def test_fires_under_a_stored_guard_that_is_always_true(tmp_path: Path) -> None:
         assert len(_f021(tmp_path, src)) == 1, stored
 
 
-def test_silent_on_the_else_of_an_isinstance_pass_through(tmp_path: Path) -> None:
+def test_pass_through_assigned_to_a_name_is_unknown(tmp_path: Path) -> None:
     row = (
         "            error = exc if isinstance(exc, AppError) else AuthError(\n"
         '                message="Could not log in.", suggested_action="Check it.",\n'
@@ -397,7 +451,7 @@ def test_silent_on_the_else_of_an_isinstance_pass_through(tmp_path: Path) -> Non
         "                error=error.to_failure_details())])\n"
     )
     src = _handler(_broad("except Exception as exc:", row))
-    assert _outcomes(tmp_path, src) == [_Outcome.SELECTED]
+    assert _outcomes(tmp_path, src) == [_Outcome.UNKNOWN]
 
 
 def test_silent_on_the_else_of_a_complementary_predicate(tmp_path: Path) -> None:
@@ -510,13 +564,14 @@ def test_silent_under_a_condition_on_a_name_derived_from_the_exception(
     assert _f021(tmp_path, src) == []
 
 
-def test_fires_when_the_first_failure_is_kept_in_a_variable(tmp_path: Path) -> None:
+def test_first_failure_kept_in_a_variable_is_unknown(tmp_path: Path) -> None:
     row = (
         "            if error is None:\n"
         "                error = AuthError(message='x', suggested_action='y', cause=exc)\n"
     )
     src = _handler("        error = None\n" + _broad("except Exception as exc:", row))
-    assert len(_f021(tmp_path, src)) == 1
+    assert _f021(tmp_path, src) == []
+    assert _outcomes(tmp_path, src) == [_Outcome.UNKNOWN]
 
 
 def test_fires_when_the_row_carries_a_message_derived_from_the_exception(
@@ -674,7 +729,7 @@ def test_keyword_only_parameter_does_not_resolve_to_a_module_function(
     src = _handler(
         "        return await self._runner(check=self._ok)\n"
         "    async def _runner(self, *, check):\n"
-        "        return await run(check)\n",
+        "        return await check(self.client)\n",
         extra,
     )
     assert _f021(tmp_path, src) == []
@@ -863,7 +918,7 @@ def test_shadowing_parameters_do_not_resolve_to_a_module_function(
     src = _handler(
         "        return await self._runner(self._ok)\n"
         f"    async def _runner(self, {signature}):\n"
-        "        return await run(check)\n",
+        "        return await check(self.client)\n",
         extra,
     )
     assert _f021(tmp_path, src) == []
