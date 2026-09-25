@@ -3102,6 +3102,213 @@ def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Pat
     assert f"[Run log]({url})" in gh.reviews[-1]["body"]
 
 
+# ---- the code-owner approval (lens/approve.py, the workflow's last step) ------------------------------------------
+
+from lens import approve as approve_mod  # noqa: E402
+
+
+class _ApproveGH:
+    """The App-token client: reads and dismissals only. It must never approve."""
+
+    def __init__(
+        self, *, head="h1", state="open", draft=False, author="someone", reviews=()
+    ):
+        self._pr = {
+            "head": {"sha": head},
+            "state": state,
+            "draft": draft,
+            "user": {"login": author},
+        }
+        self._reviews = list(reviews)
+        self.dismissed: list[int] = []
+
+    def pr(self, n):
+        return self._pr
+
+    def reviews(self, n):
+        return self._reviews
+
+    def dismiss_review(self, n, review_id, message):
+        self.dismissed.append(review_id)
+
+    def approve(self, *a):  # pragma: no cover - must not be reached
+        raise AssertionError("the App token must never post the approval")
+
+
+class _Approver:
+    """The code owner's client: used for the APPROVE call only."""
+
+    def __init__(self):
+        self.approved: list[tuple[str, str]] = []
+
+    def approve(self, n, head, body):
+        self.approved.append((head, body))
+
+    def __getattr__(
+        self, name
+    ):  # pragma: no cover - any other call is a leak of the PAT's quota
+        raise AssertionError(f"the approver token was used for {name}")
+
+
+def _lens_approval(i, head, login="atlan-ci"):
+    return {
+        "id": i,
+        "user": {"login": login},
+        "state": "APPROVED",
+        "commit_id": head,
+        "body": approve_mod.SIGNATURE + " — every finding …",
+    }
+
+
+def _res(findings=(), *, action="reviewed", incomplete=(), pending=(), failed=False):
+    st = PRState(
+        reviewed_head="h1",
+        round=2,
+        findings=list(findings),
+        pending_files=list(pending),
+    )
+    return RunResult(
+        action,
+        state=st,
+        incomplete=list(incomplete),
+        preflight_error="down" if failed else "",
+    )
+
+
+def test_approval_is_decided_only_when_every_finding_at_every_level_is_closed():
+    nit = Finding("a.py", 1, "low", "style", "t", "b", "e")
+    assert approve_mod.decision_for(_res()) == {
+        "action": "approve",
+        "head": "h1",
+        "round": 2,
+    }
+    assert approve_mod.decision_for(_res([nit]))["action"] == "withdraw"  # an open nit
+    nit.status = "fixed"
+    assert approve_mod.decision_for(_res([nit]))["action"] == "approve"
+    assert (
+        approve_mod.decision_for(_res(incomplete=["b: fatal"]))["action"] == "withdraw"
+    )
+    assert approve_mod.decision_for(_res(pending=["x.py"]))["action"] == "withdraw"
+    # a failed review sets the status to error: an earlier approval must not survive it
+    assert approve_mod.decision_for(_res(failed=True))["action"] == "withdraw"
+    assert approve_mod.decision_for(_res(action="skipped"))["action"] == "none"
+    # a /lens dismiss that closes the last finding makes the reviewed head ready
+    assert approve_mod.decision_for(_res(action="dismissed"))["action"] == "approve"
+
+
+def test_a_ready_head_is_approved_by_the_code_owner_token_only():
+    gh, owner = _ApproveGH(), _Approver()
+    out = approve_mod.apply(
+        gh, owner, {"pr": 1, "action": "approve", "head": "h1", "round": 2}
+    )
+    assert out == "approved h1 as atlan-ci"
+    [(head, body)] = owner.approved
+    assert head == "h1" and body.startswith(approve_mod.SIGNATURE) and "round 2" in body
+
+
+@pytest.mark.parametrize(
+    "gh, why",
+    [
+        (_ApproveGH(head="h2"), "head moved"),
+        (_ApproveGH(draft=True), "closed or a draft"),
+        (_ApproveGH(state="closed"), "closed or a draft"),
+        (_ApproveGH(author="atlan-ci"), "authored this PR"),
+        (_ApproveGH(reviews=[_lens_approval(5, "h1")]), "already approved"),
+    ],
+)
+def test_no_approval_unless_every_condition_holds(gh, why):
+    owner = _Approver()
+    out = approve_mod.apply(
+        gh, owner, {"pr": 1, "action": "approve", "head": "h1", "round": 2}
+    )
+    assert why in out and owner.approved == []
+
+
+def test_withdraw_dismisses_only_lens_approvals_by_the_code_owner():
+    human = {
+        "id": 7,
+        "user": {"login": "a-reviewer"},
+        "state": "APPROVED",
+        "commit_id": "h1",
+        "body": "LGTM",
+    }
+    other_bot = dict(_lens_approval(8, "h1"), body="**SDK reviewer's verdict:** ready")
+    gh = _ApproveGH(
+        reviews=[_lens_approval(5, "h0"), _lens_approval(6, "h1"), human, other_bot]
+    )
+    out = approve_mod.apply(
+        gh, _Approver(), {"pr": 1, "action": "withdraw", "head": "h1"}
+    )
+    assert gh.dismissed == [5, 6] and "withdrew 2" in out
+
+
+def test_the_step_never_fails_a_finished_review(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "d.json"
+    assert approve_mod.run_step("o/r", str(p)) == 0  # no decision file
+    approve_mod.write_decision(
+        str(p), 1, {"action": "approve", "head": "h1", "round": 1}
+    )
+    monkeypatch.delenv("APPROVER_TOKEN", raising=False)
+    assert approve_mod.run_step("o/r", str(p)) == 0
+    assert "no APPROVER_TOKEN" in capsys.readouterr().out
+
+    class Boom(GitHubError):
+        pass
+
+    def raising(*a, **k):
+        raise Boom("403")
+
+    monkeypatch.setenv("APPROVER_TOKEN", "t")
+    monkeypatch.setattr(approve_mod, "apply", raising)
+    assert approve_mod.run_step("o/r", str(p)) == 0
+    assert "::warning::lens approve: could not act" in capsys.readouterr().out
+
+
+def test_the_review_writes_the_decision_for_the_last_step(monkeypatch, tmp_path):
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
+    monkeypatch.setattr(cli, "GitHub", _CliGitHub)
+    monkeypatch.setattr(cli, "run", lambda **kw: _res())
+    out = tmp_path / "approval.json"
+    monkeypatch.setenv("LENS_APPROVAL_PATH", str(out))
+    root = str(Path(__file__).resolve().parents[3])
+    cli.main(
+        [
+            "review",
+            "--repo",
+            "o/r",
+            "--root",
+            root,
+            "--event-name",
+            "issue_comment",
+            "--event-path",
+            _event_file(tmp_path),
+        ]
+    )
+    assert json.loads(out.read_text()) == {
+        "pr": 7,
+        "action": "approve",
+        "head": "h1",
+        "round": 2,
+    }
+
+
+def test_only_the_approval_step_holds_the_code_owner_token():
+    import yaml  # noqa: PLC0415
+
+    wf = yaml.safe_load((_REPO / ".github" / "workflows" / "lens.yml").read_text())
+    steps = wf["jobs"]["review"]["steps"]
+    holders = [st.get("name") for st in steps if "ORG_PAT_GITHUB" in json.dumps(st)]
+    assert holders == ["Approve as code owner (ready to merge only)"]
+    review = next(st for st in steps if st.get("id") == "review")
+    assert "APPROVER_TOKEN" not in json.dumps(review)
+    step = next(st for st in steps if st.get("name") == holders[0])
+    # A failed review exits 1 yet still decides "withdraw"; the step must run to act on it.
+    assert step["if"] == "always()"
+    assert "lens approve" in step["run"]
+
+
 # ---- the shipped cards and routing stay true to the repo --------------------------------------------------------
 # A card that cites a moved directory or a retired rule makes lens demand a change
 # that cannot exist (a prior card asked every conformance rule PR for a "paired
@@ -3454,3 +3661,31 @@ def test_a_first_review_with_findings_points_to_the_summary_instead_of_repeating
     assert review["comments"]  # the inline finding is still posted
     assert gh.posted == []
     assert "❌ **Changes requested**" in gh.comments[0]["body"]
+
+
+def test_a_failed_review_still_leaves_a_withdraw_decision(monkeypatch, tmp_path):
+    """The review step exits 1 on a model/transport failure; the decision is written
+    first, so the always() approval step withdraws an approval the error status contradicts."""
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
+    monkeypatch.setattr(cli, "GitHub", _CliGitHub)
+    monkeypatch.setattr(cli, "run", lambda **kw: _res(failed=True))
+    out = tmp_path / "approval.json"
+    monkeypatch.setenv("LENS_APPROVAL_PATH", str(out))
+    root = str(Path(__file__).resolve().parents[3])
+    code = cli.main(
+        [
+            "review",
+            "--repo",
+            "o/r",
+            "--root",
+            root,
+            "--event-name",
+            "issue_comment",
+            "--event-path",
+            _event_file(tmp_path),
+        ]
+    )
+    assert code == 1
+    assert json.loads(out.read_text())["action"] == "withdraw"

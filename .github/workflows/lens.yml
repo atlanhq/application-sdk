@@ -86,6 +86,7 @@ jobs:
           permission-actions: read # lens/lock.py: is an older review of this PR still running?
 
       - name: Review
+        id: review
         working-directory: .github/scripts
         env:
           GITHUB_TOKEN: ${{ steps.app.outputs.token }}
@@ -99,6 +100,8 @@ jobs:
           # Run report (every model request, bundle, timing; no prompts, code or keys):
           # written here and to this job's summary page, then uploaded below.
           LENS_REPORT_PATH: ${{ runner.temp }}/lens-run.json
+          # Where the review writes its approval decision for the last step.
+          LENS_APPROVAL_PATH: ${{ runner.temp }}/lens-approval.json
           # Stream every trace line to the live job log as it happens.
           PYTHONUNBUFFERED: "1"
         run: >-
@@ -107,6 +110,28 @@ jobs:
           --root "$ROOT"
           --event-name "$EVENT_NAME"
           --event-path "$EVENT_PATH"
+
+      # The code-owner approval, as in sdk-review (sdk-review-approve-on-verdict.yml):
+      # atlan-ci is a CODEOWNER and Apps cannot be, so the APPROVE carries its PAT.
+      # That PAT is spent on the APPROVE call only; the App token does the reads and
+      # dismissals. This step runs no model and reads no PR text: it acts on the
+      # review's decision after re-checking the PR (lens/approve.py). It approves only
+      # a head where every finding at every level is resolved, and withdraws lens's
+      # earlier approval when a review is not ready. The ruleset dismisses approvals
+      # on push.
+      # always(), not "review succeeded": a failed review exits 1 but still sets the
+      # `lens` status to error and writes a withdraw decision, and the approval must
+      # follow that status. A review that crashed before its verdict writes no
+      # decision, and this step then does nothing.
+      - name: Approve as code owner (ready to merge only)
+        if: always()
+        working-directory: .github/scripts
+        env:
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          APPROVER_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPO: ${{ github.repository }}
+          LENS_APPROVAL_PATH: ${{ runner.temp }}/lens-approval.json
+        run: python -m lens approve --repo "$REPO" --decision "$LENS_APPROVAL_PATH"
 
       # The repo's upload pattern (see conformance-reusable.yaml): a finalize 403 from
       # the artifact service fails the first attempt even though the bytes landed, so
