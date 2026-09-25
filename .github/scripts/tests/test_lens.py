@@ -2320,7 +2320,7 @@ def test_the_verdict_with_the_full_approach_check_is_carried_by_the_review(repo:
     assert gh.posted == []  # the review carries it; no extra comment
     body = review["body"]
     assert (
-        "❌ **lens · round 1 (full)**" in body
+        "❌ **lens · round 1 · first review**" in body
         and "🟠 1 high" in body
         and "New this round:** 1" in body
     )
@@ -2354,7 +2354,7 @@ def test_a_clean_run_posts_its_verdict_as_a_comment_at_the_bottom(repo: Path):
     )
     assert gh.reviews == []
     [brief] = gh.posted
-    assert "✅ **lens · round 1 (full)**" in brief and "Open findings:" in brief
+    assert "✅ **lens · round 1 · first review**" in brief and "Open findings:" in brief
     assert (
         "Approach check — ✅ sound" in brief
         and "*Problem:* p1" in brief
@@ -2393,7 +2393,7 @@ def test_the_job_log_traces_every_phase_turn_and_tool_call(repo: Path, capsys):
         "8 · publish",
     ):
         assert f"lens · {phase}" in log, phase
-    assert "decision: REVIEW round 1, mode=full" in log
+    assert "decision: REVIEW round 1 — first review" in log
     assert "selected  application_sdk/storage/fetch.py" in log
     assert (
         "→ find_symbol(fetch)" in log and "→ code_comment(1 comment(s) high×1)" in log
@@ -2677,3 +2677,85 @@ def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Pa
         files_block = r["messages"][2]["content"].split("<review_files>", 1)[1]
         assert "application_sdk/common/other.py" not in files_block
         assert "+    MAIN_ONLY" not in files_block
+
+
+# ---- which kind of run this is, in words ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kw, label",
+    [
+        ({"mode": "full", "reviewed_head": ""}, "first review"),
+        (
+            {"mode": "incremental", "reviewed_head": "abc1234def"},
+            "re-review · only commits since abc1234",
+        ),
+        (
+            {"mode": "retry", "reviewed_head": "abc", "pending": 2},
+            "retry · 2 file(s) left unreviewed last run",
+        ),
+        (
+            {"mode": "full", "reviewed_head": "abc", "force": True},
+            "re-review · full, because requested with force",
+        ),
+        (
+            {"mode": "full", "reviewed_head": "abc", "model_changed": True},
+            "re-review · full, because the model changed since the last review",
+        ),
+        (
+            {"mode": "full", "reviewed_head": "abc", "config_changed": True},
+            "re-review · full, because the lens config changed since the last review",
+        ),
+        (
+            {"mode": "full", "reviewed_head": "abc", "ancestry": "diverged"},
+            "re-review · full, because the branch was force-pushed or rebased",
+        ),
+    ],
+)
+def test_each_kind_of_run_says_what_it_is_and_why(kw, label):
+    base = {
+        "pending": 0,
+        "force": False,
+        "model_changed": False,
+        "config_changed": False,
+        "ancestry": "ahead",
+    }
+    assert review_mod.describe_mode(**{**base, **kw}) == label
+
+
+def test_the_label_is_shown_on_the_verdict_summary_and_log(repo: Path, capsys):
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    capsys.readouterr()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(Script()),
+    )
+    assert res.mode_label == "re-review · only commits since h1"
+    assert (
+        "### lens · round 2 · re-review · only commits since h1"
+        in gh.comments[0]["body"]
+    )
+    assert any(
+        "lens · round 2 · re-review · only commits since h1" in p for p in gh.posted
+    )
+    assert (
+        "decision: REVIEW round 2 — re-review · only commits since h1"
+        in capsys.readouterr().err
+    )

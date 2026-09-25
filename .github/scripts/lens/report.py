@@ -43,6 +43,7 @@ def build(res: RunResult) -> dict[str, Any]:
         "action": res.action,
         "reason": res.reason,
         "mode": res.mode,
+        "mode_label": res.mode_label,
         "head": res.head,
         "incomplete": res.incomplete,
         "notes": res.notes,
@@ -107,7 +108,7 @@ def markdown(report: dict[str, Any], pr: int) -> str:
     t = report["totals"]
     tm = report["timings_ms"]
     lines = [
-        f"## lens · PR #{pr} · {report['action']} ({report['mode'] or '-'})",
+        f"## lens · PR #{pr} · {report['action']} · {report.get('mode_label') or report['mode'] or '-'}",
         "",
     ]
     if report["reason"]:

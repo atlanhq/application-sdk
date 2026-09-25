@@ -61,6 +61,9 @@ class RunResult:
     notes: list[str] = field(
         default_factory=list
     )  # advisory run notes (e.g. an API fallback)
+    # What kind of run this is, in words, with the reason: "first review",
+    # "re-review · only commits since abc1234", "re-review · full, because …", "retry · …".
+    mode_label: str = ""
     # Observability: per-request records from the client and per-phase wall time.
     calls: list[dict[str, Any]] = field(default_factory=list)
     timings_ms: dict[str, int] = field(default_factory=dict)
@@ -76,6 +79,36 @@ class RunResult:
         return bool(self.preflight_error) or any(
             b.stop in ("llm_error", "fatal") for b in self.bundles
         )
+
+
+def describe_mode(
+    *,
+    mode: str,
+    reviewed_head: str,
+    pending: int,
+    force: bool,
+    model_changed: bool,
+    config_changed: bool,
+    ancestry: str,
+) -> str:
+    """The kind of run, in plain words, with the reason for a full re-review."""
+    if mode == "retry":
+        return f"retry · {pending} file(s) left unreviewed last run"
+    if not reviewed_head:
+        return "first review"
+    if mode == "incremental":
+        return f"re-review · only commits since {reviewed_head[:7]}"
+    if force:
+        why = "requested with force"
+    elif model_changed:
+        why = "the model changed since the last review"
+    elif config_changed:
+        why = "the lens config changed since the last review"
+    elif ancestry and ancestry != "ahead":
+        why = "the branch was force-pushed or rebased"
+    else:
+        why = "the last reviewed commit could not be compared"
+    return f"re-review · full, because {why}"
 
 
 def only_pr_changes(
@@ -229,13 +262,27 @@ def run(
             ledger=ledger,
         )
 
+    ancestry = (
+        gh.compare_status(state.reviewed_head, head)
+        if state.reviewed_head and same_reviewer and not retry_only
+        else ""
+    )
     incremental = (
         not retry_only
         and bool(state.reviewed_head)
         and same_reviewer
-        and gh.compare_status(state.reviewed_head, head) == "ahead"
+        and ancestry == "ahead"
     )
     mode = "retry" if retry_only else ("incremental" if incremental else "full")
+    mode_label = describe_mode(
+        mode=mode,
+        reviewed_head=state.reviewed_head,
+        pending=len(state.pending_files),
+        force=force,
+        model_changed=bool(state.model) and state.model != cfg.model,
+        config_changed=bool(state.config_hash) and state.config_hash != cfg.raw_hash,
+        ancestry=ancestry,
+    )
     if retry_only:
         full_files = parse_unified_diff(gh.diff(base, head))
         all_files = [fd for fd in full_files if fd.path in set(state.pending_files)]
@@ -267,9 +314,11 @@ def run(
         ]
 
     round_no = state.round + 1
-    res = RunResult("reviewed", mode=mode, state=state, ledger=ledger)
+    res = RunResult(
+        "reviewed", mode=mode, state=state, ledger=ledger, mode_label=mode_label
+    )
     trace.line(
-        f"decision: REVIEW round {round_no}, mode={mode}, range={range_base[:9]}..{head[:9]}, "
+        f"decision: REVIEW round {round_no} — {mode_label}; range={range_base[:9]}..{head[:9]}, "
         f"{len(all_files)} file(s) in range ({len(full_files)} in the whole PR), budget left ${ledger.remaining:.4f}"
     )
 
@@ -662,7 +711,7 @@ def render_summary(res: RunResult) -> str:
         verdict = "✅ **No blocking findings** — medium and low findings are advisory"
     lines = [
         SUMMARY_MARKER,
-        f"### lens review · round {st.round} ({res.mode})",
+        f"### lens · round {st.round} · {res.mode_label or res.mode}",
         verdict,
         "",
         f"**Open findings:** {counts}",
@@ -783,7 +832,7 @@ def verdict_brief(res: RunResult, summary_url: str) -> str:
     state, description = verdict_status(res)
     icon = {"success": "✅", "failure": "❌", "error": "⚠️"}.get(state, "ℹ️")
     lines = [
-        f"{icon} **lens · round {st.round} ({res.mode})** — {description}",
+        f"{icon} **lens · round {st.round} · {res.mode_label or res.mode}** — {description}",
         "",
         f"**Open findings:** {counts}",
     ]
