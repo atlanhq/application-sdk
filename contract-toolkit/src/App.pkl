@@ -4537,8 +4537,9 @@ class PklArtifactSchema {
   fixed format: "pkl" = "pkl"
 
   /// The module the artifact must amend. No default: the whole declaration is this
-  /// one URI. Pin the version the consumer actually evaluates against — the SDK
-  /// validator (when it lands) checks the artifact's `amends` target against it.
+  /// one URI. Pin the version the consumer actually evaluates against. The SDK ships
+  /// no runtime `pkl` validator: the consuming app evaluates the artifact itself, and
+  /// that evaluation is the check.
   amendsModule: PklModuleUri
 
   /// Free-form note for humans reading the generated artifact. Never asserted.

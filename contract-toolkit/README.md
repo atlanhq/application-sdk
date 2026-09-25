@@ -213,8 +213,9 @@ Some artifacts are themselves Pkl modules, for example a typedef `.pkl` file tha
 app evaluates. Declare these with `PklArtifactSchema { amendsModule = "package://…@<version>#/<Module>.pkl" }`
 instead of a field list. The amended module already is the declaration, and the URI
 must be an absolute, version-pinned `package:` URI. The SDK loads the declaration, and
-conformance K016 accepts it. There is no runtime validator for `pkl` yet, so the
-hand-off reports `unsupported` and names the format.
+conformance K016 accepts it. The consuming app evaluates the artifact itself, so the
+SDK ships no runtime `pkl` validator, and the hand-off reports `unsupported` and names
+the format.
 
 **Opt-in and emitted only when declared.** An app with no `artifactSchemas` block
 generates byte-identical output to before the block existed — no new file. Unlike the

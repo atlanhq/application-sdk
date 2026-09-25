@@ -797,8 +797,8 @@ artifactSchemas {
 ```
 
 The URI must be an absolute, version-pinned `package:` URI, and the toolkit refuses anything
-else. The entry satisfies K016 and the registration-time guard. The SDK has no `pkl` validator
-yet, so the outcome row reads `outcome=unsupported` and names the format. A zip that bundles
+else. The entry satisfies K016 and the registration-time guard. The consuming app evaluates
+the artifact itself, so the SDK ships no runtime `pkl` validator and the outcome row reads `outcome=unsupported` and names the format. A zip that bundles
 such a module is not a declarable shape: hand off the module itself.
 
 Declare it keyed by the **contract field name**, never by a storage path (a path-shaped key fails

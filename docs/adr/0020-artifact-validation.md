@@ -66,9 +66,10 @@ dependency).
 (`PklModuleDeclaration`, authored as the toolkit's `PklArtifactSchema`). This covers an artifact
 that is itself a `.pkl` file the app evaluates, and it applies `ModelSource`'s rule in Pkl: when
 an executable schema exists, it is the declaration. So the entry names the pinned module the
-artifact must amend and lists no fields. The entry renders `format = "pkl"`. No `pkl` validator
-ships yet, so dispatch reports `unsupported` for it, the same way the parquet × model cell is
-reported. An archive that bundles other artifacts (e.g. a zip) is deliberately not a format. The
+artifact must amend and lists no fields. The entry renders `format = "pkl"`. No runtime `pkl`
+validator ships, because worker images do not carry the `pkl` CLI. The consuming app evaluates
+the artifact itself, and dispatch reports `unsupported` for it, the same way the parquet × model
+cell is reported. An archive that bundles other artifacts (e.g. a zip) is deliberately not a format. The
 thing to declare is what the archive carries, and the hand-off should carry that directly.
 
 **There is no inline source.** No literal field map, no dict escape hatch, not even for a three-field

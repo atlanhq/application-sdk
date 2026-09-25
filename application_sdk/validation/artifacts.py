@@ -195,7 +195,7 @@ FORMAT_PKL: Final = "pkl"
 
 Not a member of :data:`ArtifactFormat`: that vocabulary is the *field-map*
 formats, and a Pkl artifact is declared by the module it amends, never by a
-field list — see :class:`PklModuleDeclaration`. No validator ships for it yet,
+field list — see :class:`PklModuleDeclaration`. No validator ships for it,
 so dispatch reports ``unsupported`` naming the format, rather than going quiet.
 """
 
@@ -371,8 +371,10 @@ class PklModuleDeclaration:
     :class:`ModelDeclaration`, nothing is authored field by field: the amended
     module already fixes every property, type and constraint, so it *is* the
     declaration. Unlike a model it is not Python — it is checked by evaluating the
-    artifact, which needs the ``pkl`` CLI — so no built-in validator claims
-    :data:`FORMAT_PKL` today and the wrapper reports ``unsupported``.
+    artifact, which needs the ``pkl`` CLI that worker images do not carry. The
+    consuming app evaluates it itself, and that evaluation is the check, so no
+    built-in validator claims :data:`FORMAT_PKL` and the wrapper reports
+    ``unsupported``.
     """
 
     amends_module: str

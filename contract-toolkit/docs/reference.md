@@ -555,10 +555,11 @@ would accept `fields` on a Pkl artifact, and it would accept a parquet schema wi
 **Scope.**
 - What changes today: this declaration satisfies conformance K016, and the SDK loads it
   as a typed declaration.
-- What does not change yet: the SDK ships no validator for `pkl`. The hand-off outcome
-  is therefore `unsupported`, and the report names the format. It is never a silent
-  pass. A validator that evaluates the artifact and checks its `amends` target is a
-  follow-up, and it needs the `pkl` CLI in the worker image.
+- What does not change: the SDK ships no runtime validator for `pkl`, and none is
+  planned, because worker images do not carry the `pkl` CLI. The consuming app
+  evaluates the artifact itself, and that evaluation is the check. The SDK's hand-off
+  outcome is therefore `unsupported`, and the report names the format. It is never a
+  silent pass.
 - An archive, such as a zip that bundles a module, is not a declarable shape. Hand off
   the module itself.
 
