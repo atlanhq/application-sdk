@@ -210,6 +210,8 @@ class Client:
 
     # Optional request parameters the client may drop if the gateway rejects them.
     DROPPABLE = ("prompt_cache_key", "reasoning_effort", "temperature")
+    # Reasoning levels, highest first: a rejected level steps down one rung.
+    EFFORT_LADDER = ("max", "xhigh", "high", "medium", "low", "none")
     # Client errors: the request, key or alias is wrong. Never retried; they stop the run.
     FATAL = frozenset({400, 401, 403, 404, 405, 413, 422})
 
@@ -221,7 +223,7 @@ class Client:
         ledger: Ledger,
         base_url: str | None = None,
         api_key: str | None = None,
-        timeout_s: float = 120.0,
+        timeout_s: float = 300.0,  # max reasoning effort is slower per call
         max_retries: int = 2,
         max_consecutive_failures: int = 3,
         max_retry_after_s: float = 30.0,
@@ -495,6 +497,26 @@ class Client:
     def _learn_rejection(self, body: dict[str, Any], text: str) -> bool:
         """A 400 naming a parameter we can live without: stop sending it. True if learnt."""
         low = text.lower()
+        # A rejected effort LEVEL steps down one level (max -> xhigh -> high -> ...)
+        # instead of dropping reasoning altogether — losing reasoning is the worst
+        # outcome for review quality, so it is the last resort, not the first.
+        effort = (body.get("reasoning") or {}).get("effort") or body.get(
+            "reasoning_effort"
+        )
+        # Only when the error names the LEVEL (e.g. "'max' is not supported"); an
+        # error about the parameter itself falls through and drops it below.
+        names_level = (
+            bool(effort)
+            and re.search(rf"\b{re.escape(str(effort))}\b", low) is not None
+        )
+        if effort and names_level and effort in self.EFFORT_LADDER[:-1]:
+            lower = self.EFFORT_LADDER[self.EFFORT_LADDER.index(effort) + 1]
+            self.reasoning_effort = lower
+            if "reasoning" in body:
+                body["reasoning"] = {"effort": lower}
+            else:
+                body["reasoning_effort"] = lower
+            return True
         if (
             "reasoning" in body
             and "reasoning" in low

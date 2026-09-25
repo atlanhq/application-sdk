@@ -4,7 +4,7 @@
 
 [model]
 name = "gpt-6-luna"
-reasoning_effort = "medium"
+reasoning_effort = "max"  # luna's highest; verified 2026-09-25: max + tools works on /v1/responses via our gateway
 # "responses" (/v1/responses): the only API on which luna reasons AND calls tools; reasoning
 # is also carried between turns. "chat" (/v1/chat/completions): tools only work with
 # reasoning_effort "none" there. If the gateway does not serve /v1/responses, lens falls back
@@ -54,14 +54,14 @@ lines_per_extra_turn = 150
 max_tool_turns_cap = 20
 max_empty_turns = 2
 context_limit_tokens = 60000
-review_max_tokens = 4000
-reflect_max_tokens = 1200
+review_max_tokens = 24000     # reasoning tokens count against this; sized for max effort
+reflect_max_tokens = 8000
 max_comments = 12
 max_nits = 5              # low-severity (nit) findings kept per bundle
 # Plan: turn 0 of the same (cached) conversation on bundles with >= plan_min_lines changed.
 plan = 1
 plan_min_lines = 60
-plan_max_tokens = 800
+plan_max_tokens = 8000
 # Second pass ("what did you miss?") on large bundles. Off until the replay bench shows it
 # finds real defects the first pass misses at an acceptable cost.
 second_pass = 0

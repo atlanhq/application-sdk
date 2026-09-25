@@ -2128,3 +2128,54 @@ def test_shipped_config_uses_luna_list_prices_on_the_responses_api():
     assert cfg.price.prompt_ceiling == pytest.approx(
         0.125
     )  # cache writes bill at 1.25x input
+
+
+def test_shipped_config_reasons_at_max_with_room_for_it():
+    cfg = load_config(Path(__file__).resolve().parents[2] / "lens")
+    assert cfg.reasoning_effort == "max"
+    # Reasoning tokens count against max_output_tokens: at max effort the limits
+    # must leave room, or a turn is cut off before it can call a tool.
+    assert cfg.limits.review_max_tokens >= 16_000
+    assert (
+        cfg.limits.reflect_max_tokens >= 4_000 and cfg.limits.plan_max_tokens >= 4_000
+    )
+
+
+def test_a_rejected_effort_level_steps_down_one_rung_instead_of_dropping_reasoning():
+    ok = _responses_reply(
+        [
+            {
+                "type": "function_call",
+                "call_id": "c",
+                "name": "task_done",
+                "arguments": "{}",
+            }
+        ]
+    )
+    sent = Script(
+        (
+            400,
+            {},
+            '{"error": "reasoning.effort \'max\' is not supported for this model"}',
+        ),
+        ok,
+    )
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=sent,
+        api="responses",
+        reasoning_effort="max",
+    )
+    c.complete(
+        "x",
+        [{"role": "user", "content": "hi"}],
+        max_tokens=5,
+        tools=agent_mod.TOOL_SCHEMAS,
+    )
+    assert sent.requests[0]["reasoning"] == {"effort": "max"}
+    assert sent.requests[1]["reasoning"] == {
+        "effort": "xhigh"
+    }  # still reasoning, one rung lower
+    assert c.reasoning_effort == "xhigh"
