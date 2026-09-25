@@ -1,0 +1,80 @@
+name: lens
+
+# lens — the fixed-cost PR reviewer (.github/scripts/lens, config in .github/lens).
+#
+# lens reviews only when asked: a `@lens` comment from an owner/member/collaborator, or a
+# manual dispatch. A push never triggers it. Each run continues from the last one.
+#
+# Security shape (review this before enabling):
+#   * `issue_comment` runs THIS file from the default branch, with secrets. That is safe
+#     only because the job never checks out, installs or runs PR code: the checkout below is
+#     the base branch, and lens reads the PR's diff and head-side file text through the REST
+#     API as data. Do not add a step that checks out the PR head.
+#   * Who may trigger is decided in lens/event.py (tested), not in shell here, per
+#     docs/standards/ci.md. Bots and non-collaborators cannot trigger it.
+#   * Permissions are the minimum to read the PR and post one summary + one review.
+#   * The model key is a dedicated LiteLLM key; its gateway-side max_budget is the backstop
+#     to the $1/PR cap lens enforces in code.
+#
+# Nothing here conflicts with the existing sdk-review lanes: lens uses its own trigger
+# (`@lens`), its own sticky comment and its own state marker.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to review
+        required: true
+      force:
+        description: Bypass the unchanged-head and round-cap rules (the $ cap still applies)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  # One lens run per PR at a time. Queue rather than cancel: a cancelled run would have
+  # spent money its successor cannot see in the ledger.
+  group: lens-${{ github.event.issue.number || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    name: lens review
+    # Cheap pre-filter so ordinary comments don't start a runner; the real gate is lens/event.py.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request && startsWith(github.event.comment.body, '@lens'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the base branch (trusted code only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Review
+        working-directory: .github/scripts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
+          LENS_LITELLM_KEY: ${{ secrets.LENS_LITELLM_KEY }}
+          REPO: ${{ github.repository }}
+          ROOT: ${{ github.workspace }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+        run: >-
+          python -m lens review
+          --repo "$REPO"
+          --root "$ROOT"
+          --event-name "$EVENT_NAME"
+          --event-path "$EVENT_PATH"

@@ -1,0 +1,11 @@
+# v3-architecture: Determinism, contracts, layering
+- Flag: in `run()`/`@entrypoint`: any I/O, `datetime.now/utcnow`, `uuid.uuid4`, `random.*`, `time.time`. Use `self.now()`/`self.uuid()`; put I/O in a `@task`.
+- Flag: `@task`/`run()` not taking one `Input` and returning one `Output`.
+- Flag: on `Input`/`Output`/`HeartbeatDetails`/`contracts/` models: field removed, renamed or retyped; new field with no default; `= []`/`{}` not `Field(default_factory=...)`; `@dataclass` on a BaseModel; v1 `class Config:`; value objects not `frozen=True`.
+- Flag: `Any`, `object`, `dict[str, Any]`, bare `dict`/`list`, `**kwargs: Any` on contract fields or `@task`/Handler/exported signatures (not `_temporal/`/`_dapr/` interop).
+- Flag: contract fields of `bytes`, unbounded `list`/`dict` without `MaxItems`, big data not in a `FileReference`.
+- Flag: `temporalio`/`dapr`/`redis` imports outside `execution/_temporal/`, `infrastructure/_dapr/`, `infrastructure/_redis/`.
+- Flag: reverse deps: `infrastructure/`→`execution/`|`app/`, `execution/`→`app/`, `contracts/`→SDK modules.
+- Flag: v2 APIs: `application_sdk.workflows|activities|handlers`, `*Interface` subclasses.
+- Flag: `run_in_thread` wrapping async `AtlanClient`.
+- Severity: critical for I/O/non-determinism in run() or field remove/rename/retype; high for direct imports, v2 APIs, reverse deps, no-default fields; medium otherwise.
