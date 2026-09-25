@@ -178,6 +178,29 @@ def _normalise(line: str) -> str:
     return line.strip().rstrip(",").strip()
 
 
+# Settings the canonical templates deliberately stopped carrying: a render
+# that drops one of these is the intended change, not a lost per-repo value.
+# Keyed by repo-relative path; matched on the YAML/JSON key. Must stay
+# identical to connector-pulse `conformance_resync_service.ACCEPTED_DROPS` —
+# a drift fails CLOSED (the lane opens a PR this gate will not approve).
+ACCEPTED_DROPS: dict[str, frozenset[str]] = {
+    ".github/workflows/tests.yaml": frozenset(
+        {"container-health-timeout-seconds", "e2e-clouds"}
+    ),
+}
+
+
+def _setting_key(line: str) -> str:
+    head = line.strip().split(":", 1)[0] if ":" in line else ""
+    return head.strip().strip('"').strip("'").lstrip("-").strip()
+
+
+def still_lost(path: str, lost: list[str]) -> list[str]:
+    """Lost lines for ``path`` minus the accepted drops."""
+    accepted = ACCEPTED_DROPS.get(path, frozenset())
+    return [line for line in lost if _setting_key(line) not in accepted]
+
+
 def lost_setting_lines(backup_text: str, new_text: str) -> list[str]:
     """Non-comment lines in the ``.bak`` absent from its replacement
     (reorder-immune). Mirrors connector-pulse's lane."""
@@ -282,12 +305,16 @@ def stage_like_the_lane(
     for bak in backups:
         original = bak.with_suffix("")
         if original.exists():
-            missing = lost_setting_lines(
-                bak.read_text(encoding="utf-8", errors="replace"),
-                original.read_text(encoding="utf-8", errors="replace"),
+            rel = str(original.relative_to(root))
+            missing = still_lost(
+                rel,
+                lost_setting_lines(
+                    bak.read_text(encoding="utf-8", errors="replace"),
+                    original.read_text(encoding="utf-8", errors="replace"),
+                ),
             )
             if missing:
-                lost[str(original.relative_to(root))] = missing
+                lost[rel] = missing
         bak.unlink()
     touched = safe_touched(manifest, root)
     if touched:

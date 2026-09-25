@@ -338,3 +338,29 @@ def test_other_connectivity_ai_prs_are_never_approved(monkeypatch):
         assert gate.process_pr(REPO, "9", HEAD, "", runner) is False
         assert not runner.approved
     assert routed == []
+
+
+def test_accepted_drops_do_not_block_but_other_losses_do(tmp_path):
+    work = str(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "tests.yaml").write_text("e2e: true\n")
+    (wf / "tests.yaml.bak").write_text(
+        'e2e: true\ne2e-clouds: "aws,azure,gcp"\ncontainer-health-timeout-seconds: 240\n'
+    )
+    (tmp_path / "renovate.json").write_text("{}\n")
+    (tmp_path / "renovate.json.bak").write_text('{\n  "automerge": false\n}\n')
+    manifest = {"touched": [".github/workflows/tests.yaml", "renovate.json"]}
+    lost = resync.stage_like_the_lane(work, manifest, subprocess.run)
+    assert ".github/workflows/tests.yaml" not in lost
+    assert lost == {"renovate.json": ['"automerge": false']}
+
+
+def test_accepted_drops_mirror_the_lane():
+    # connector-pulse conformance_resync_service.ACCEPTED_DROPS must match.
+    assert resync.ACCEPTED_DROPS == {
+        ".github/workflows/tests.yaml": frozenset(
+            {"container-health-timeout-seconds", "e2e-clouds"}
+        )
+    }
