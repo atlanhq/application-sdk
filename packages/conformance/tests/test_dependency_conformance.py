@@ -1692,6 +1692,14 @@ def test_env_dialect_entry_points_reads_installed_metadata(tmp_path: Path) -> No
         "sqlalchemy-cratedb": {"crate"},
         "some-cli": set(),
     }
+    # Scoped to declared dependencies, undeclared distributions are not read.
+    _, scoped = dependency_conformance._env_distribution_metadata(
+        [str(site)],
+        include_imports=False,
+        include_dialects=True,
+        dialect_names_for={"sqlalchemy-cratedb"},
+    )
+    assert scoped == {"sqlalchemy-cratedb": {"crate"}}
 
 
 def test_d003_skips_unresolvable_dependency_and_reports_it(

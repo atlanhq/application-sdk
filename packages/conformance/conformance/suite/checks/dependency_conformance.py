@@ -71,7 +71,7 @@ import ast
 import re
 import sys
 import tomllib
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -1662,13 +1662,18 @@ def _env_import_names(search_path: list[str]) -> dict[str, set[str]]:
 
 
 def _env_distribution_metadata(
-    search_path: list[str], *, include_imports: bool, include_dialects: bool
+    search_path: list[str],
+    *,
+    include_imports: bool,
+    include_dialects: bool,
+    dialect_names_for: Collection[str] | None = None,
 ) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     """Read requested metadata maps in one target distribution inventory.
 
     Empty entry-point sets are retained so a target distribution with no
     registration cannot fall back to a different version in the invoking
-    interpreter.
+    interpreter. *dialect_names_for* (normalised names) limits the entry-point
+    read to those distributions — D003 only asks about declared dependencies.
     """
     if not search_path:
         return {}, {}
@@ -1681,7 +1686,9 @@ def _env_distribution_metadata(
         normalised = _normalise_name(name)
         if include_imports:
             imports[normalised] = _provided_import_names(dist)
-        if include_dialects:
+        if include_dialects and (
+            dialect_names_for is None or normalised in dialect_names_for
+        ):
             dialects[normalised] = _dialect_entry_point_names(dist)
     return imports, dialects
 
@@ -2682,6 +2689,7 @@ def scan_all(
             site_packages,
             include_imports=need_imports,
             include_dialects=need_dialects,
+            dialect_names_for={_normalise_name(e.name) for e in dep_entries},
         )
     else:
         env_imports, env_dialects = {}, {}
