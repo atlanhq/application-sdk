@@ -31,7 +31,7 @@ from .agent import BundleResult, review_bundle
 from .bundle import Bundle, group
 from .config import Config
 from .diff import FileDiff, Hunk, Line, parse_unified_diff, snippet_in_text
-from .findings import BLOCKING, SEVERITIES, Finding, PRState, merge_new
+from .findings import BLOCKING, BODY_KEEP, SEVERITIES, Finding, PRState, merge_new
 from .github import GitHub, GitHubError, bot_login
 from .index import build_index
 from .llm import BudgetExhausted, Client, Ledger, LLMError
@@ -41,6 +41,7 @@ from .tools import Workspace, parse_args
 from .triage import Triage, triage
 
 SUMMARY_MARKER = "<!-- lens-summary -->"
+COMMENT_LIMIT = 64_000  # GitHub's cap is 65,536 characters; keep a margin
 MAX_HISTORY = 20  # rounds kept in the state and shown in the summary
 
 
@@ -65,6 +66,9 @@ class RunResult:
     # What kind of run this is, in words, with the reason: "first review",
     # "re-review · only commits since abc1234", "re-review · full, because …", "retry · …".
     mode_label: str = ""
+    run_url: str = (
+        ""  # the Actions run doing this review (linked from the verdict and history)
+    )
     # Observability: per-request records from the client and per-phase wall time.
     calls: list[dict[str, Any]] = field(default_factory=list)
     timings_ms: dict[str, int] = field(default_factory=dict)
@@ -196,6 +200,7 @@ def run(
     client_factory: Any,
     force: bool = False,
     post: bool = True,
+    run_url: str = "",
 ) -> RunResult:
     t_start = time.monotonic()
     pr = gh.pr(number)
@@ -316,8 +321,18 @@ def run(
 
     round_no = state.round + 1
     res = RunResult(
-        "reviewed", mode=mode, state=state, ledger=ledger, mode_label=mode_label
+        "reviewed",
+        mode=mode,
+        state=state,
+        ledger=ledger,
+        mode_label=mode_label,
+        run_url=run_url,
     )
+    if post:
+        # Pending while it runs: the checks box links straight to the live log.
+        gh.set_status(
+            head, "pending", f"reviewing · round {round_no} · {mode_label}", run_url
+        )
     trace.line(
         f"decision: REVIEW round {round_no} — {mode_label}; range={range_base[:9]}..{head[:9]}, "
         f"{len(all_files)} file(s) in range ({len(full_files)} in the whole PR), budget left ${ledger.remaining:.4f}"
@@ -583,6 +598,7 @@ def run(
             "incomplete": bool(res.failed or res.incomplete),
             "usd": round(round_ledger.spent_usd, 4),
             "calls": round_ledger.calls,
+            "run": run_url,
         }
     )
     del state.history[:-MAX_HISTORY]  # bounded: /lens force can go past max_rounds
@@ -742,8 +758,8 @@ def _history_section(st: PRState) -> list[str]:
         return []
     out = [
         f"\n<details><summary>🕘 Round history ({len(rows)})</summary>\n",
-        "| round | run | commits | new | resolved | blocking open | cost |",
-        "|---|---|---|---|---|---|---|",
+        "| round | run | commits | new | resolved | blocking open | cost | log |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for h in rows:
         span = (
@@ -754,9 +770,10 @@ def _history_section(st: PRState) -> list[str]:
         run_kind = h.get("label") or h.get("mode", "")
         if h.get("incomplete"):
             run_kind += " · ⚠️ incomplete"
+        log = f"[run]({h['run']})" if h.get("run") else "—"
         out.append(
             f"| {h['round']} | {run_kind} | {span} | {h.get('new', 0)} | {h.get('resolved', 0)} "
-            f"| {h.get('blocking', '—')} | ${float(h.get('usd', 0)):.3f} |"
+            f"| {h.get('blocking', '—')} | ${float(h.get('usd', 0)):.3f} | {log} |"
         )
     out.append("\n</details>")
     return out
@@ -870,8 +887,33 @@ def render_summary(res: RunResult) -> str:
         f"{led.get('calls', 0)} model calls · {failed} failed requests · "
         f"{hit:.0%} prompt cache hits · {st.model}</sub>"
     )
-    lines.append(st.encode())
-    return "\n".join(lines)
+    head = "\n".join(lines) + "\n"
+    # GitHub refuses a comment over 65,536 characters, and a refused edit would lose
+    # the state. Only a very large PR gets here: open findings' stored bodies are then
+    # shortened (the verify call still sees the code itself), then the Resolved table
+    # is dropped from view. The findings, their ids and the quoted code always stay.
+    for keep in (BODY_KEEP, 200, 0):
+        body = head + st.encode(body_keep=keep)
+        if len(body) <= COMMENT_LIMIT:
+            return body
+    lean = "\n".join(line for line in _without_resolved(lines)) + "\n"
+    return lean + st.encode(body_keep=0)
+
+
+def _without_resolved(lines: list[str]) -> list[str]:
+    out, skipping = [], False
+    for line in lines:
+        if line.startswith("\n<details><summary>✔️ Resolved"):
+            skipping = True
+            out.append(
+                "\n✔️ Resolved findings are not listed: this PR has too many to fit in one comment."
+            )
+            continue
+        if skipping:
+            skipping = line != "\n</details>"
+            continue
+        out.append(line)
+    return out
 
 
 def _inline(f: Finding) -> dict[str, Any]:
@@ -931,8 +973,11 @@ def verdict_brief(res: RunResult, summary_url: str) -> str:
         f"<sub>${float(led.get('spent_usd', 0)):.3f} of ${float(led.get('cap_usd', 0)):.2f} · "
         f"{led.get('calls', 0)} model calls · {led.get('failed_requests', 0)} failed requests</sub>"
     )
-    if summary_url:
-        lines.append(f"\n[Full summary]({summary_url})")
+    links = [f"[Full summary]({summary_url})"] if summary_url else []
+    if res.run_url:
+        links.append(f"[Run log]({res.run_url})")
+    if links:
+        lines.append("\n" + " · ".join(links))
     return "\n".join(lines)
 
 

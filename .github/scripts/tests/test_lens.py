@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lens import agent as agent_mod  # noqa: E402
 from lens import context as lens_context  # noqa: E402
+from lens import findings as findings_mod  # noqa: E402
 from lens import holistic  # noqa: E402
 from lens import review as review_mod  # noqa: E402
 from lens.agent import BundleResult  # noqa: E402
@@ -260,6 +261,7 @@ class FakeGitHub:
 
     def comment(self, n, body):
         self.posted.append(body)
+        return len(self.posted)
 
     def set_status(self, sha, state, description, target_url=""):
         self.statuses.append(
@@ -1868,7 +1870,8 @@ class _CliGitHub:
     """Records what the CLI tells the author; the review itself is stubbed out."""
 
     reactions: list[str] = []
-    comments: list[str] = []
+    comments: list[str] = []  # every comment ever posted, in order
+    live: dict[int, str] = {}  # comments still on the PR, by id
 
     def __init__(self, repo):
         pass
@@ -1878,6 +1881,15 @@ class _CliGitHub:
 
     def comment(self, number, body):
         _CliGitHub.comments.append(body)
+        cid = 1000 + len(_CliGitHub.comments)
+        _CliGitHub.live[cid] = body
+        return cid
+
+    def edit_comment(self, comment_id, body):
+        _CliGitHub.live[comment_id] = body
+
+    def delete_comment(self, comment_id):
+        del _CliGitHub.live[comment_id]
 
     def workflow_runs(self, workflow_file):
         return []
@@ -1912,10 +1924,13 @@ def test_the_author_sees_eyes_then_the_outcome(
 ):
     import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
 
-    _CliGitHub.reactions, _CliGitHub.comments = [], []
+    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
     monkeypatch.setattr(cli, "GitHub", _CliGitHub)
-    monkeypatch.setattr(cli, "run", lambda **kw: outcome)
+    seen = {}
+    monkeypatch.setattr(cli, "run", lambda **kw: seen.update(kw) or outcome)
     monkeypatch.setenv("GITHUB_RUN_ID", "105")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
     root = str(Path(__file__).resolve().parents[3])
     cli.main(
         [
@@ -1931,10 +1946,66 @@ def test_the_author_sees_eyes_then_the_outcome(
         ]
     )
     assert _CliGitHub.reactions == expected
+    run_url = "https://github.com/o/r/actions/runs/105"
+    assert (
+        seen["run_url"] == run_url
+    )  # the review links its verdict and history to this run
+    # While it runs, a note links the live log; once lens has answered, the note is gone.
+    assert _CliGitHub.comments[0].startswith("⏳ **lens is reviewing this PR**")
+    assert run_url in _CliGitHub.comments[0]
+    assert not any(b.startswith("⏳") for b in _CliGitHub.live.values())
     if outcome.action == "skipped":
-        assert _CliGitHub.comments == [
+        assert list(_CliGitHub.live.values()) == [
             "lens: nothing to review — head abc already reviewed."
         ]
+
+
+def test_a_crash_turns_the_running_note_into_a_failure_note(monkeypatch, tmp_path):
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
+    monkeypatch.setattr(cli, "GitHub", _CliGitHub)
+
+    def boom(**kw):
+        raise RuntimeError("lens bug")
+
+    monkeypatch.setattr(cli, "run", boom)
+    monkeypatch.setenv("GITHUB_RUN_ID", "105")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    root = str(Path(__file__).resolve().parents[3])
+    args = ["review", "--repo", "o/r", "--root", root, "--event-name", "issue_comment"]
+    with pytest.raises(RuntimeError):
+        cli.main([*args, "--event-path", _event_file(tmp_path)])
+    [note] = _CliGitHub.live.values()
+    assert note.startswith("❌ **lens failed before it could post a verdict**")
+    assert "actions/runs/105" in note
+    assert _CliGitHub.reactions == ["eyes", "confused"]
+
+
+def test_no_running_note_outside_actions(monkeypatch, tmp_path):
+    """A local run has no Actions run to link, so it posts no progress note."""
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
+    monkeypatch.setattr(cli, "GitHub", _CliGitHub)
+    monkeypatch.setattr(cli, "run", lambda **kw: RunResult("reviewed"))
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    root = str(Path(__file__).resolve().parents[3])
+    cli.main(
+        [
+            "review",
+            "--repo",
+            "o/r",
+            "--root",
+            root,
+            "--event-name",
+            "issue_comment",
+            "--event-path",
+            _event_file(tmp_path),
+        ]
+    )
+    assert _CliGitHub.comments == []
 
 
 # ---- identity: the fleet App -------------------------------------------------------------------------------
@@ -2910,3 +2981,95 @@ def test_round_history_is_bounded(repo: Path):
     )
     assert len(res.state.history) == review_mod.MAX_HISTORY
     assert res.state.history[-1]["label"] == res.mode_label
+
+
+# ---- the sticky comment always fits in one GitHub comment ---------------------------------------------------
+
+
+def test_a_huge_pr_still_fits_in_one_comment_and_keeps_every_finding():
+    import random  # noqa: PLC0415
+    import string  # noqa: PLC0415
+
+    rnd = random.Random(
+        1
+    )  # random letters compress worst: a harder case than real text
+
+    def words(n):
+        return " ".join(
+            "".join(rnd.choices(string.ascii_lowercase, k=rnd.randint(3, 9)))
+            for _ in range(n)
+        )
+
+    fs = []
+    for i in range(150):
+        f = Finding(
+            f"application_sdk/m{i % 12}/f{i}.py",
+            i + 1,
+            findings_mod.SEVERITIES[i % 4],
+            "bug",
+            words(10),
+            words(90),
+            words(15),
+            scenario=words(40),
+            suggestion=words(40),
+        )
+        if i % 2:
+            f.status, f.fixed_round, f.fixed_by = "fixed", 2, "verified"
+        fs.append(f)
+    st = PRState(round=5, findings=fs, ledger={"spent_usd": 0.4, "cap_usd": 1.0})
+    body = render_summary(RunResult("reviewed", mode="full", state=st))
+    assert len(body) <= review_mod.COMMENT_LIMIT < 65_536
+    back = PRState.decode(body)
+    assert [f.id for f in back.findings] == [f.id for f in fs]  # nothing is dropped
+    opened = [f for f in back.findings if f.status == "open"]
+    assert all(f.evidence for f in opened)  # free resolution still has the quoted code
+
+
+def test_a_normal_pr_keeps_the_full_detail():
+    f = Finding(
+        "a.py",
+        3,
+        "high",
+        "bug",
+        "Off by one",
+        "x" * 900,
+        "code()",
+        scenario="s",
+        suggestion="fix()",
+    )
+    st = PRState(round=1, findings=[f])
+    back = PRState.decode(render_summary(RunResult("reviewed", mode="full", state=st)))
+    kept = back.findings[0]
+    assert len(kept.body) == findings_mod.BODY_KEEP and kept.evidence == "code()"
+    assert (
+        kept.scenario == kept.suggestion == ""
+    )  # posted inline already; never read again
+    assert (
+        f.scenario == "s" and f.suggestion == "fix()"
+    )  # the live finding is untouched
+
+
+# ---- every run links its GitHub Actions run ------------------------------------------------------------------
+
+
+def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Path):
+    gh = FakeGitHub()
+    url = "https://github.com/o/r/actions/runs/42"
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(_review_script()),
+        run_url=url,
+    )
+    assert gh.statuses[0]["state"] == "pending" and gh.statuses[0]["url"] == url
+    assert "reviewing · round 1 · first review" in gh.statuses[0]["description"]
+    assert gh.statuses[-1]["state"] in (
+        "success",
+        "failure",
+    )  # the verdict replaces pending
+    summary = gh.comments[0]["body"]
+    assert f"| [run]({url}) |" in summary.split("🕘 Round history")[1]
+    assert f"[Run log]({url})" in gh.reviews[-1]["body"]
