@@ -1,10 +1,11 @@
 # docs: Documentation changes
 - Flag: docs contradicting code: wrong import path, signature, default, env-var name or command. Verify with `find_symbol`/`search_code` first.
-- Flag: examples using removed/deprecated APIs (`application_sdk.workflows|activities|handlers`, `ObjectStore`, `ParquetFileWriter`/`JsonFileWriter`, `call()`/`call_by_name()`), `datetime.now()`/`uuid4()` in `run()`, raw dict credentials, or bare `AppError`.
-- Flag: examples that would be defects in code: hardcoded secrets, `verify=False`, f-string SQL, mutable contract defaults, missing `from e`.
+- Flag: examples using removed or deprecated APIs. The authoritative list is `packages/conformance/conformance/data/deprecated_symbols.json`; removed modules include `application_sdk.{application,worker,services,interceptors,test_utils}` and v2 `workflows`/`activities`/`handlers` (`docs/standards/v3-readiness.md`). `obstore`'s `ObjectStore` (`self.context.storage`) is current, not removed.
+- Flag: examples that would be defects in code: hardcoded secrets, TLS `verify=False`, f-string SQL, mutable contract defaults, `datetime.now()`/`uuid4()` in `run()`, raw dict credentials, bare `AppError`, `logger.exception`.
 - Flag: customer names, tenant names, run IDs or incident IDs (use "a production incident").
-- Flag: a new env var/config key documented without purpose, default and who sets it; removed/renamed env vars still documented by the old name.
+- Flag: a new env var/config key documented without purpose, default and who sets it; a removed/renamed env var still documented by the old name, or not updated in `docs/configuration.md` and `docs/guides/deployment.md`.
 - Flag: a concept doc (`docs/concepts/*.md`) describing behaviour the same PR's code changes differently.
 - Flag: relative links or anchors to files/sections that do not exist.
-- Don't flag: prose style, wording, formatting, CHANGELOG.md.
+- Flag: any manual edit to `CHANGELOG.md` (CI generates it).
+- Don't flag: prose style, wording, formatting; history in `docs/adr/**` (ADRs keep old APIs on purpose).
 - Severity: high if docs teach an insecure or broken pattern; medium for drift; low otherwise.
