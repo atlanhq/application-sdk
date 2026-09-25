@@ -626,6 +626,17 @@ def _review_script():
     )
 
 
+def _seed_summary(gh):
+    """An earlier lens summary already on the PR, so this run's verdict goes to the bottom."""
+    gh.comments.append(
+        {
+            "id": 90,
+            "body": SUMMARY_MARKER + "\nearlier",
+            "user": {"login": "atlan-app-fleet[bot]"},
+        }
+    )
+
+
 def _factory(script):
     return lambda ledger: Client(
         model="gpt-6-luna", price=PRICE, ledger=ledger, transport=script
@@ -2387,6 +2398,7 @@ def test_workflow_uploads_the_run_report_even_on_failure():
 
 def test_the_verdict_with_the_full_approach_check_is_carried_by_the_review(repo: Path):
     gh = FakeGitHub()
+    _seed_summary(gh)  # a later run: the summary sits far above
     concern = response(
         [
             tool_call(
@@ -2431,6 +2443,7 @@ def test_the_verdict_with_the_full_approach_check_is_carried_by_the_review(repo:
 
 def test_a_clean_run_posts_its_verdict_as_a_comment_at_the_bottom(repo: Path):
     gh = FakeGitHub()
+    _seed_summary(gh)  # a later run: the summary sits far above
     script = Script(
         response([tool_call("task_done", {"state": "DONE"})]),
         approach=response(
@@ -2458,7 +2471,7 @@ def test_a_clean_run_posts_its_verdict_as_a_comment_at_the_bottom(repo: Path):
         and "*Problem:* p1" in brief
         and "*How the PR solves it:* a1" in brief
     )
-    assert "[Full summary](https://github.test/c/1)" in brief
+    assert "[Full summary](https://github.test/c/90)" in brief
 
 
 def test_the_job_log_traces_every_phase_turn_and_tool_call(repo: Path, capsys):
@@ -3066,6 +3079,7 @@ def test_a_normal_pr_keeps_the_full_detail():
 
 def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Path):
     gh = FakeGitHub()
+    _seed_summary(gh)  # a later run: the summary sits far above
     url = "https://github.com/o/r/actions/runs/42"
     run(
         gh=gh,
@@ -3103,6 +3117,7 @@ def test_a_finding_off_the_diff_is_counted_stored_and_can_block_readiness(repo: 
     """A prior run showed "0 low" in the tally while listing one low finding below it,
     and the finding was never stored, so later rounds could not track it."""
     gh = FakeGitHub()
+    _seed_summary(gh)  # a later run: the summary sits far above
     script = Script(
         response(
             [
@@ -3269,3 +3284,47 @@ def test_a_non_blocking_preflight_diagnostic_is_not_shown_on_the_pr(repo: Path):
     )
     assert res.action == "reviewed" and res.state.round == 1
     assert "Cloudflare" not in gh.comments[0]["body"]
+
+
+# ---- one verdict per run: a new summary is already at the bottom ------------------------------------------------
+
+
+def test_a_first_review_does_not_post_the_verdict_twice(repo: Path):
+    """Round 1 used to post the sticky summary and, right under it, a verdict comment
+    repeating it. The summary it creates is already the bottom comment."""
+    gh = FakeGitHub()
+    script = Script(response([tool_call("task_done", {"state": "DONE"})]))
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=RuleSet([], {}),
+        client_factory=_factory(script),
+    )
+    assert gh.posted == [] and gh.reviews == []
+    assert (
+        "✅ **Ready to merge**" in gh.comments[0]["body"]
+    )  # the verdict is in the summary
+
+
+def test_a_first_review_with_findings_points_to_the_summary_instead_of_repeating_it(
+    repo: Path,
+):
+    gh = FakeGitHub()
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(_review_script()),
+    )
+    [review] = gh.reviews
+    assert (
+        review["body"]
+        == "lens: 1 new finding(s) — the verdict is in the summary above."
+    )
+    assert review["comments"]  # the inline finding is still posted
+    assert gh.posted == []
+    assert "❌ **Changes requested**" in gh.comments[0]["body"]

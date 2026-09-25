@@ -69,6 +69,8 @@ class RunResult:
     run_url: str = (
         ""  # the Actions run doing this review (linked from the verdict and history)
     )
+    # This run creates the sticky summary, so it is already at the bottom.
+    summary_is_new: bool = False
     # Observability: per-request records from the client and per-phase wall time.
     calls: list[dict[str, Any]] = field(default_factory=list)
     timings_ms: dict[str, int] = field(default_factory=dict)
@@ -206,7 +208,7 @@ def run(
     pr = gh.pr(number)
     head = pr["head"]["sha"]
     base = pr["base"]["sha"]
-    state, _ = find_state(gh, number)
+    state, prior_summary = find_state(gh, number)
     state = state or PRState()
     with trace.group("1 · admission"):
         trace.line(
@@ -442,7 +444,8 @@ def run(
             state.ledger = ledger.to_dict()
             if post:
                 url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
-                gh.comment(number, verdict_brief(res, url))
+                if prior_summary:  # a new summary is already the bottom comment
+                    gh.comment(number, verdict_brief(res, url))
                 gh.set_status(head, *verdict_status(res), url)
             return res
 
@@ -612,6 +615,7 @@ def run(
     if post:
         t_phase = time.monotonic()
         with trace.group("8 · publish"):
+            res.summary_is_new = not prior_summary
             publish(gh, number, head, res)
         res.timings_ms["publish"] = int((time.monotonic() - t_phase) * 1000)
     res.timings_ms["total"] = int((time.monotonic() - t_start) * 1000)
@@ -1117,7 +1121,15 @@ def publish(gh: GitHub, number: int, head: str, res: RunResult) -> None:
     sinks the rest. The verdict always lands at the bottom of the conversation:
     as the review body when there are new findings, as a comment otherwise."""
     url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
-    body = verdict_brief(res, url)
+    # A summary created by this run is already at the bottom and carries the verdict,
+    # so the verdict is not repeated under it: no extra comment, and a review with
+    # inline comments gets a one-line pointer. Later runs edit the summary in place,
+    # far above, so they post the verdict at the bottom again.
+    body = (
+        f"lens: {len(res.new_findings)} new finding(s) — the verdict is in the summary above."
+        if res.summary_is_new
+        else verdict_brief(res, url)
+    )
     todo = [
         f for f in res.new_findings if f.line
     ]  # the rest are carried by the summary
@@ -1138,7 +1150,7 @@ def publish(gh: GitHub, number: int, head: str, res: RunResult) -> None:
                     refused = True
     if refused:
         url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
-    if not posted:
+    if not posted and not res.summary_is_new:
         gh.comment(number, verdict_brief(res, url))
     state, description = verdict_status(res)
     gh.set_status(head, state, description, url)
@@ -1147,7 +1159,9 @@ def publish(gh: GitHub, number: int, head: str, res: RunResult) -> None:
         f"inline comments: {len(todo) - sum(1 for f in res.unplaced if f in todo)} posted"
         + (", some refused by GitHub (moved to the summary)" if refused else "")
         + (
-            "; verdict carried by the review"
+            "; verdict in the new summary"
+            if res.summary_is_new
+            else "; verdict carried by the review"
             if posted
             else "; verdict posted as a comment"
         )
