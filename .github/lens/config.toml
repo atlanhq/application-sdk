@@ -47,11 +47,13 @@ approach = true  # understand the problem + judge the approach: once per PR, fir
 
 [agent]
 # Turn budget per bundle scales with its size: base + 1 per extra file + 1 per 150 changed
-# lines, capped. The $ cap above is the real ceiling whatever this says.
-max_tool_turns = 8
+# lines, capped. It is a safety net, not a target: the model is never told it and stops
+# itself with task_done (observed 7-9 turns; none forced). What bounds cost is the bundle's
+# $ share, context_limit_tokens and the per-PR $ cap, whatever this says.
+max_tool_turns = 16
 turns_per_extra_file = 1
 lines_per_extra_turn = 150
-max_tool_turns_cap = 20
+max_tool_turns_cap = 30
 max_empty_turns = 2
 context_limit_tokens = 60000
 review_max_tokens = 24000     # reasoning tokens count against this; sized for max effort

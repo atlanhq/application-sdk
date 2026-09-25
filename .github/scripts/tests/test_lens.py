@@ -9,6 +9,7 @@ that make a PR's reviews converge.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -626,6 +627,17 @@ def _review_script():
     )
 
 
+def _seed_summary(gh):
+    """An earlier lens summary already on the PR, so this run's verdict goes to the bottom."""
+    gh.comments.append(
+        {
+            "id": 90,
+            "body": SUMMARY_MARKER + "\nearlier",
+            "user": {"login": "atlan-app-fleet[bot]"},
+        }
+    )
+
+
 def _factory(script):
     return lambda ledger: Client(
         model="gpt-6-luna", price=PRICE, ledger=ledger, transport=script
@@ -718,7 +730,7 @@ def test_a_fix_that_removes_the_quoted_code_resolves_for_free(repo: Path):
     assert res.mode == "incremental"
     assert res.resolved_free == [COMMENT and res.state.findings[0].id]
     body = gh.comments[0]["body"]
-    assert "No blocking findings" in body
+    assert "✅ **Ready to merge** — every finding is resolved" in body
     # Editing the summary in place keeps the history: what was fixed, when and how, and every round.
     f = res.state.findings[0]
     assert (f.round, f.fixed_round, f.fixed_by) == (1, 2, "code-gone")
@@ -1159,7 +1171,7 @@ def test_a_comment_github_refuses_is_moved_to_the_summary_not_lost(repo: Path):
     )
     assert gh.reviews == []
     assert [f.title for f in res.unplaced] == ["decode() on a None result"]
-    assert "could not be anchored" in gh.comments[0]["body"]
+    assert "not posted inline" in gh.comments[0]["body"]
 
 
 def test_temperature_is_omitted_by_default():
@@ -1776,7 +1788,7 @@ def test_a_failed_preflight_sends_no_request_and_turns_the_status_error(repo: Pa
 # ---- the green/red signal -----------------------------------------------------------------------------------
 
 
-def test_status_is_red_only_for_open_blocking_findings(repo: Path):
+def test_status_is_green_only_when_every_finding_is_closed(repo: Path):
     gh = FakeGitHub()
     run(
         gh=gh,
@@ -1794,8 +1806,20 @@ def test_status_is_red_only_for_open_blocking_findings(repo: Path):
     )
     assert s["url"].startswith("https://github.test/c/")
 
-    st = PRState(findings=[Finding("p.py", 1, "medium", "bug", "t", "b", "e")])
-    assert verdict_status(RunResult("reviewed", state=st))[0] == "success"
+    # An open nit or medium is not blocking, but it is not ready to merge either.
+    for sev in ("medium", "low"):
+        f = Finding("p.py", 1, sev, "bug", "t", "b", "e")
+        st = PRState(findings=[f])
+        state, desc = verdict_status(RunResult("reviewed", state=st))
+        assert state == "failure" and desc.startswith("not ready: 1 medium/low open")
+        brief = review_mod.verdict_brief(RunResult("reviewed", state=st), "")
+        assert brief.startswith("🟡") and "/lens dismiss" in brief
+        f.status = "fixed"
+        state, desc = verdict_status(RunResult("reviewed", state=st))
+        assert state == "success" and desc.startswith("ready to merge")
+        f.status = "wontfix"  # dismissed with a reason counts as closed
+        assert verdict_status(RunResult("reviewed", state=st))[0] == "success"
+    st = PRState(findings=[])
     assert (
         verdict_status(RunResult("reviewed", state=st, incomplete=["x"]))[0] == "error"
     )
@@ -2375,6 +2399,7 @@ def test_workflow_uploads_the_run_report_even_on_failure():
 
 def test_the_verdict_with_the_full_approach_check_is_carried_by_the_review(repo: Path):
     gh = FakeGitHub()
+    _seed_summary(gh)  # a later run: the summary sits far above
     concern = response(
         [
             tool_call(
@@ -2419,6 +2444,7 @@ def test_the_verdict_with_the_full_approach_check_is_carried_by_the_review(repo:
 
 def test_a_clean_run_posts_its_verdict_as_a_comment_at_the_bottom(repo: Path):
     gh = FakeGitHub()
+    _seed_summary(gh)  # a later run: the summary sits far above
     script = Script(
         response([tool_call("task_done", {"state": "DONE"})]),
         approach=response(
@@ -2446,7 +2472,7 @@ def test_a_clean_run_posts_its_verdict_as_a_comment_at_the_bottom(repo: Path):
         and "*Problem:* p1" in brief
         and "*How the PR solves it:* a1" in brief
     )
-    assert "[Full summary](https://github.test/c/1)" in brief
+    assert "[Full summary](https://github.test/c/90)" in brief
 
 
 def test_the_job_log_traces_every_phase_turn_and_tool_call(repo: Path, capsys):
@@ -3054,6 +3080,7 @@ def test_a_normal_pr_keeps_the_full_detail():
 
 def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Path):
     gh = FakeGitHub()
+    _seed_summary(gh)  # a later run: the summary sits far above
     url = "https://github.com/o/r/actions/runs/42"
     run(
         gh=gh,
@@ -3073,3 +3100,357 @@ def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Pat
     summary = gh.comments[0]["body"]
     assert f"| [run]({url}) |" in summary.split("🕘 Round history")[1]
     assert f"[Run log]({url})" in gh.reviews[-1]["body"]
+
+
+# ---- the shipped cards and routing stay true to the repo --------------------------------------------------------
+# A card that cites a moved directory or a retired rule makes lens demand a change
+# that cannot exist (a prior card asked every conformance rule PR for a "paired
+# remediation/** change" long after remediation moved into packages/conformance).
+
+_REPO = Path(__file__).resolve().parents[3]
+_LENS = _REPO / ".github" / "lens"
+
+
+def _tracked() -> list[str]:
+    import subprocess  # noqa: PLC0415 - only these guards need git
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(_REPO), "ls-files"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip("not a git checkout")
+    return [line for line in out.splitlines() if line]
+
+
+def test_every_rules_glob_matches_a_tracked_file_and_wins_for_one():
+    files = _tracked()
+    rules = load_rules(_LENS)
+    winners: dict[str, int] = {g: 0 for g, _ in rules.entries}
+    for f in files:
+        for glob, _ in rules.entries:
+            if glob_match(f, glob):
+                winners[glob] += 1
+                break
+    matching = {g for g, _ in rules.entries if any(glob_match(f, g) for f in files)}
+    assert not [
+        g for g, _ in rules.entries if g not in matching
+    ], "globs that match no tracked file"
+    dead = [g for g, n in winners.items() if n == 0]
+    assert (
+        not dead
+    ), f"globs shadowed by earlier entries (never the first match): {dead}"
+    # A directory whose code moved away often keeps a README: that is not a live area.
+    readme_only = [
+        g
+        for g, _ in rules.entries
+        if g.endswith("/**")
+        and not any(glob_match(f, g) and not f.endswith("README.md") for f in files)
+    ]
+    assert not readme_only, f"globs that only match a leftover README: {readme_only}"
+
+
+def _card_paths(text: str) -> list[str]:
+    """Backticked repo paths a card cites (`a/b/`, `a/b.py`, `a/**/*.pkl`)."""
+    out = []
+    for tok in re.findall(r"`([^`\s]+)`", text):
+        if (
+            "/" not in tok
+            or tok.startswith(("./", "artifacts/", "http"))
+            or "{" in tok
+            or "|" in tok
+        ):
+            continue
+        out.append(
+            re.sub(r"<[^>]+>", "*", tok.rstrip("/"))
+        )  # `<area>` is a placeholder
+    return out
+
+
+def test_every_path_a_card_cites_exists():
+    files = _tracked()
+    top = {f.split("/", 1)[0] for f in files}
+    missing = []
+    for name, text in load_rules(_LENS).cards.items():
+        for ref in _card_paths(text):
+            if ref.split("/", 1)[0] not in top:
+                continue  # not a repo-root path (e.g. `suite/` prose, `x/y` ratios)
+            if any(
+                f == ref or f.startswith(ref + "/") or glob_match(f, ref) for f in files
+            ):
+                continue
+            missing.append(f"{name}: {ref}")
+    assert not missing, f"cards cite paths that do not exist: {missing}"
+
+
+def _rule_tiers() -> dict[str, str]:
+    """Rule id -> BLOCK/WARN, read from each `RuleDefinition(...)` in the catalog."""
+    rules_dir = _REPO / "packages" / "conformance" / "conformance" / "suite" / "rules"
+    tiers: dict[str, str] = {}
+    for f in rules_dir.glob("*.py"):
+        text = f.read_text(encoding="utf-8")
+        starts = [m for m in re.finditer(r'id="([A-Z]\d{3})"', text)]
+        for i, m in enumerate(starts):
+            end = starts[i + 1].start() if i + 1 < len(starts) else len(text)
+            tier = re.search(r"tier=EnforcementTier\.(\w+)", text[m.start() : end])
+            tiers[m.group(1)] = tier.group(1) if tier else "?"
+    return tiers
+
+
+def test_every_conformance_rule_id_a_card_cites_exists():
+    known = set(_rule_tiers())
+    assert known, "conformance catalog not found"
+    cited = []
+    for name, text in load_rules(_LENS).cards.items():
+        cited += [(name, i) for i in re.findall(r"\b([A-Z]\d{3})\b", text)]
+    unknown = [f"{n}: {i}" for n, i in cited if i not in known]
+    assert not unknown, f"cards cite conformance rules that do not exist: {unknown}"
+
+
+def test_dont_flag_lines_cite_only_rules_that_fail_ci():
+    """A WARN rule never fails CI on an SDK PR, so telling the reviewer not to flag it
+    leaves the problem unenforced by anyone. Only BLOCK rules may appear there."""
+    tiers = _rule_tiers()
+    wrong = []
+    for name, text in load_rules(_LENS).cards.items():
+        for line in text.splitlines():
+            if line.lstrip("- ").startswith("Don't flag"):
+                wrong += [
+                    f"{name}: {i} is {tiers.get(i)}"
+                    for i in re.findall(r"\b([A-Z]\d{3})\b", line)
+                    if tiers.get(i) != "BLOCK"
+                ]
+    assert not wrong, f"Don't-flag lines cite rules CI only warns on: {wrong}"
+
+
+# ---- a finding off the diff is still a finding -----------------------------------------------------------------
+
+OFF_DIFF = {
+    "path": "application_sdk/storage/fetch.py",
+    "existing_code": "    return [fetch(client, k) for k in keys]",  # line 8: not in the diff
+    "severity": "low",
+    "category": "bug",
+    "title": "load_all has the same unguarded decode",
+    "content": "Every key goes through fetch, so one missing key fails the whole batch.",
+}
+
+
+def test_a_finding_off_the_diff_is_counted_stored_and_can_block_readiness(repo: Path):
+    """A prior run showed "0 low" in the tally while listing one low finding below it,
+    and the finding was never stored, so later rounds could not track it."""
+    gh = FakeGitHub()
+    _seed_summary(gh)  # a later run: the summary sits far above
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [COMMENT, OFF_DIFF]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(script),
+    )
+    off = [f for f in res.state.findings if f.title == OFF_DIFF["title"]]
+    assert len(off) == 1 and off[0].line == 0 and off[0].head_line == 8  # stored
+    body = gh.comments[0]["body"]
+    assert "⚪ 1 low (nit)" in body  # counted in the tally
+    assert "#### ⚪ Low (nit) (1)" in body and off[0].id in body.split("#### ⚪ Low")[1]
+    assert "1 finding(s) not posted inline" in body  # its full text is still shown
+    # Only the diff-line finding went inline; the off-diff one never reaches the review API.
+    assert all(c["line"] for r in gh.reviews for c in r["comments"])
+    assert "1 inline, the rest in the summary" in gh.reviews[-1]["body"]
+    # Once the blocking one is fixed, the open nit still keeps the PR from "ready to merge".
+    for f in res.state.findings:
+        if f.severity == "high":
+            f.status = "fixed"
+    assert verdict_status(RunResult("reviewed", state=res.state))[0] == "failure"
+
+
+# ---- /lens dismiss ------------------------------------------------------------------------------------------------
+
+
+def _dismiss_event(body, *, actor="reviewer", author="author"):
+    return {
+        "action": "created",
+        "issue": {"number": 1, "pull_request": {}, "user": {"login": author}},
+        "comment": {
+            "id": 7,
+            "body": body,
+            "author_association": "MEMBER",
+            "user": {"type": "User", "login": actor},
+        },
+    }
+
+
+def test_dismiss_is_parsed_with_ids_and_a_required_reason():
+    d = decide(
+        "issue_comment",
+        _dismiss_event("/lens dismiss F-1a2b3c F-00ff00 we log this upstream"),
+        "o/r",
+    )
+    assert d.run and d.dismiss == ["F-1a2b3c", "F-00ff00"]
+    assert d.dismiss_reason == "we log this upstream"
+    assert (d.actor, d.pr_author) == ("reviewer", "author")
+    for bad in ("/lens dismiss F-1a2b3c", "/lens dismiss because"):
+        d = decide("issue_comment", _dismiss_event(bad), "o/r")
+        assert not d.run and "usage" in d.reason
+
+
+def _reviewed(repo):
+    gh = FakeGitHub()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(_review_script()),
+    )
+    return gh, res.state.findings[0]
+
+
+def test_a_reviewer_can_dismiss_a_finding_and_the_pr_becomes_ready(repo: Path):
+    gh, f = _reviewed(repo)
+    calls_before = len(gh.statuses)
+    res = review_mod.dismiss(
+        gh,
+        1,
+        [f.id],
+        "accepted risk, tracked separately",
+        actor="reviewer",
+        pr_author="author",
+    )
+    assert res.action == "dismissed"
+    st = PRState.decode(gh.comments[0]["body"])
+    kept = {x.id: x for x in st.findings}[f.id]
+    assert (kept.status, kept.fixed_by, kept.dismissed_by) == (
+        "wontfix",
+        "dismissed",
+        "reviewer",
+    )
+    body = gh.comments[0]["body"]
+    assert "✅ **Ready to merge**" in body
+    assert "dismissed by @reviewer: accepted risk, tracked separately" in body
+    assert "dismiss · " + f.id + " by @reviewer" in body.split("🕘 Round history")[1]
+    assert (
+        gh.statuses[-1]["state"] == "success" and len(gh.statuses) == calls_before + 1
+    )
+    assert gh.statuses[-1]["sha"] == "h1"  # the reviewed head, never an unreviewed one
+
+
+def test_the_pr_author_cannot_dismiss_a_blocking_finding(repo: Path):
+    gh, f = _reviewed(repo)
+    assert f.severity == "high"
+    before = gh.comments[0]["body"]
+    res = review_mod.dismiss(
+        gh, 1, [f.id], "not a problem", actor="author", pr_author="author"
+    )
+    assert res.action == "skipped"
+    assert gh.comments[0]["body"] == before  # nothing changed
+    assert "the PR author can't dismiss a blocking finding" in gh.posted[-1]
+
+
+def test_dismissing_an_unknown_id_changes_nothing(repo: Path):
+    gh, _ = _reviewed(repo)
+    before = gh.comments[0]["body"]
+    res = review_mod.dismiss(
+        gh, 1, ["F-000000"], "typo", actor="reviewer", pr_author="author"
+    )
+    assert res.action == "skipped" and gh.comments[0]["body"] == before
+    assert "`F-000000` is not an open finding" in gh.posted[-1]
+
+
+# ---- the approach check gets an honest blast radius ------------------------------------------------------------
+
+
+def test_shared_method_names_do_not_inflate_the_call_site_count():
+    r = lens_context.Reach(
+        via=["info", "error"], total=900, approximate=True, likely=40
+    )
+    text = r.count()
+    assert text.startswith("40 likely")
+    assert "860 calls only share the name(s) info/error with unrelated code" in text
+    assert lens_context.Reach(total=7).count() == "7"
+
+
+# ---- preflight notes stay in the log unless they stop the run -------------------------------------------------
+
+
+def test_a_non_blocking_preflight_diagnostic_is_not_shown_on_the_pr(repo: Path):
+    gh = FakeGitHub()
+
+    def factory(ledger):
+        c = _factory(_review_script())(ledger)
+        c.diagnostics = ["preflight /key/info: HTTP 403 from a Cloudflare page"]
+        c.preflight = (
+            lambda **kw: ""
+        )  # the checks that matter passed; only a diagnostic is left
+        return c
+
+    cfg = cfg_for(repo)
+    cfg.preflight = True
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=factory,
+    )
+    assert res.action == "reviewed" and res.state.round == 1
+    assert "Cloudflare" not in gh.comments[0]["body"]
+
+
+# ---- one verdict per run: a new summary is already at the bottom ------------------------------------------------
+
+
+def test_a_first_review_does_not_post_the_verdict_twice(repo: Path):
+    """Round 1 used to post the sticky summary and, right under it, a verdict comment
+    repeating it. The summary it creates is already the bottom comment."""
+    gh = FakeGitHub()
+    script = Script(response([tool_call("task_done", {"state": "DONE"})]))
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=RuleSet([], {}),
+        client_factory=_factory(script),
+    )
+    assert gh.posted == [] and gh.reviews == []
+    assert (
+        "✅ **Ready to merge**" in gh.comments[0]["body"]
+    )  # the verdict is in the summary
+
+
+def test_a_first_review_with_findings_points_to_the_summary_instead_of_repeating_it(
+    repo: Path,
+):
+    gh = FakeGitHub()
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(_review_script()),
+    )
+    [review] = gh.reviews
+    assert (
+        review["body"]
+        == "lens: 1 new finding(s) — the verdict is in the summary above."
+    )
+    assert review["comments"]  # the inline finding is still posted
+    assert gh.posted == []
+    assert "❌ **Changes requested**" in gh.comments[0]["body"]
