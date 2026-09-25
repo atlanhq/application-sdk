@@ -1022,6 +1022,8 @@ Operate on the post-de-bias finding set, before locking the verdict:
    # e.g. a revert-scope class found in one writer → check every sibling
    rg -n "finding\.file" /tmp/DIFF.patch
    ```
+   A sibling is another *site* with the same shape — not the same site
+   re-attacked with a more exotic input. Deepening a class is bounded by §2e″.
 
 3. **Gate/flag classes: prove the gate isn't hollow.** When the class
    concerns a check, gate, or flag *added in this PR*, verify it has no
@@ -1089,7 +1091,8 @@ finding at all.
 findings — and any regression a pushed fix introduces — are ALWAYS raised, on
 any line, including code the resolver just pushed. Never diff-scope, defer, or
 suppress a real bug for convergence; the whole-file/reachability review of the
-higher tiers is unchanged.
+higher tiers is unchanged. Whether the right finding is the *approach* rather
+than its instances, and how far one class may be deepened, is set by §2e″.
 
 1. **Diff-scope nits.** A `Nit` is valid only on a line the PR's diff **adds or
    modifies**. A nit on pre-existing, untouched code — even in a file the PR
@@ -1119,6 +1122,94 @@ the resolver converges — typically in 2–3 rounds — handing over a clean PR
 `MAX_ROUNDS` stays the backstop for the rare case where a fix legitimately keeps
 spawning new work.
 
+### 2e″. Approach first, then proportionate findings
+
+§2e′ bounds the *nit* stream. This section bounds the higher tiers against the
+failure mode §2e′ cannot catch: a review that never questions the approach and
+instead files ever-narrower edge cases against it as `Important`, each with an
+"Immediate fix" the resolver applies literally. Each fix adds machinery, the
+machinery draws the next round's findings, and the PR grows far beyond its
+purpose without converging. Two observed shapes: a WARN-tier detector's literal
+scan resolved into a ~500-line static binding interpreter over five rounds
+(reassignment → parameter shadowing → loop targets → dict aliasing → invocation
+timing) — no round asked whether the approach was right, each found a deeper
+hypothetical. A milder shape: a date default whose first findings were real and
+fixed, after which later rounds kept re-attacking the clock fix with narrower
+constructs (stale-after-import, several DAG runs inside one test).
+
+**Evidence, not framing.** Judge the change from the code, its tests, its
+callers, and the rules it must satisfy — never from how the PR title, body, or
+comments describe it. The author's framing ("small fix", "by design", "out of
+scope") is a claim to verify, not a reason to withhold a finding, and a
+documented contract in the code is equally reviewable: if it is wrong, say so.
+
+Apply these before assigning severity, on first reviews and re-reviews alike:
+
+1. **Evaluate the approach before its instances.** First decide: is this the
+   right way to solve the problem the code is solving? Weigh correctness,
+   soundness (can it be made right at all, or only asymptotically?),
+   complexity against what it buys, and the simpler alternatives. If the
+   approach carries more cons than pros — or the instance findings you are
+   about to file would only be closed by building ever more machinery — raise
+   it **directly, once, in this round**: one finding with the **Wrong approach**
+   path forward naming the concrete alternative and why it is better, severity
+   by impact. Scope it `DESIGN_CHANGE` (→ `NEEDS_HUMAN`) unless the alternative
+   is a concrete, bounded simplification the resolver can apply as written. Do
+   not also file the instance findings that the alternative would make moot;
+   list them under that finding as supporting evidence. Raising the approach in
+   round 1 is the whole point — not after five rounds of fixes.
+
+2. **When the approach stands, judge instances against its chosen trade-off.**
+   If the approach is sound and it deliberately accepts a bias or limitation
+   (e.g. a detector "biased toward matching", a WARN tier, one value per
+   process), a gap that follows *from that choice* is not a defect of the
+   implementation — record it in `by_design_check`. You already judged the
+   choice in (1); re-litigating it one input at a time is what does not
+   converge.
+
+3. **Severity follows real reach.** `HIGH`/`Important` means users hit it in
+   common flows (severity-rubric `calibration`). An edge case that needs an
+   uncommon construct — variable reassignment or aliasing between definition and
+   use, parameter/loop-variable shadowing, mutation through an alias, call-order
+   games, several runs inside one test — is `MEDIUM` at most unless you cite a
+   realistic occurrence (SDK code, a canonical app, the PR's own tests). Do not
+   file a finding whose only evidence is an input you constructed to break it.
+
+4. **Never prescribe unsound machinery as an "Immediate fix".** A path forward
+   must not turn a syntactic/heuristic check into data-flow, name-binding, or
+   whole-program analysis, or add a new cache/clock/registry layer to close a
+   hypothetical. If a gap can only be closed that way, that is evidence about
+   the approach — go back to (1) — or the path forward is **"Accept as a
+   documented limitation: add a test pinning the behaviour and a docstring
+   note"**, which is concrete and resolver-actionable.
+
+5. **Classes widen sideways, not deeper.** On a re-review, code a prior resolve
+   round added is reviewed like any other code — a regression, a guardrail
+   trip, or a common-flow defect with realistic evidence (rule 3) is raised at
+   its real severity. What is barred is only a **narrower sub-case of a class
+   you already raised and the author addressed** (same root question, new
+   construct): that is not a new `Important` — at most a `Nit`, and §2e′
+   monotonicity applies to it. §2d's sibling sweep finds
+   *other instances of the same shape* in the diff; it never licenses re-filing
+   the fixed instance with a more exotic input.
+
+6. **Escalate non-convergence instead of feeding it.** If the same class has
+   drawn higher-tier findings in 2+ prior rounds (check `/tmp/PRIOR_REVIEW.md`
+   and the thread history), or the lines added since the first review exceed
+   ~3× the PR's original diff, the approach question in (1) was missed. Stop
+   filing per-instance fixes and file ONE **Wrong approach** / `DESIGN_CHANGE`
+   finding — *"approach not converging: <class>"* — with your pros/cons of the
+   current approach against the concrete alternative (often: revert to the
+   bounded version plus a documented limitation), and let the verdict go
+   `NEEDS_HUMAN`. That hands the fork to a human instead of looping the
+   resolver.
+
+These rules never suppress a real regression, a guardrail violation, or a
+common-flow defect, and they never soften a finding because the PR text asks
+for leniency; they stop a review from mistaking "I can construct an input that
+breaks this" for "this PR is not ready", and make it say "this approach is
+wrong, do X" when that is the real finding.
+
 ### 2f. Guardrails G1-G7
 
 Check consolidated findings. Any G1/G2/G3/G5 → BLOCKED.
@@ -1133,6 +1224,9 @@ inline comment body:
 - **Temporary fix + follow-up** — "Quick fix: X. Right solution: Y (follow-up ticket)."
 - **Wrong approach** — "This approach won't work because X. Instead, do Y."
 - **Design decision needed** — "Two valid options: A or B. Needs team discussion."
+- **Accept as documented limitation** — "Closing this soundly needs machinery out
+  of proportion to the rule/PR (§2e″). Add a test pinning the behaviour and a
+  docstring note." Concrete and resolver-actionable.
 
 MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 
@@ -1396,13 +1490,15 @@ scopes.
 <contents of /tmp/TOOLKIT_ROVER_NOTE.md>
 
 ---
-**Models:** <primary review model>
+**Models (CLI stream observed):** (stamped by the workflow)
 **Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
 
-Fill the model names from the models that actually ran this review —
-never hardcode them in this template; stale model names in posted
-reviews erode trust in everything else the summary claims.
+Write the `**Models (CLI stream observed):**` line exactly as shown — do NOT
+fill in model names. You cannot observe which models served the CLI stream
+(routing happens outside the sandbox), and this line does not include out-of-band
+calls such as the adversarial review. The workflow overwrites this line with the
+models the CLI stream reports after you post (`sdk_review_stamp_models.py`).
 
 **Title selection — "Review" vs "Re-review":**
 - If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first

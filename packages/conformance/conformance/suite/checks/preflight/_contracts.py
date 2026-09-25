@@ -221,7 +221,7 @@ class _Checker:
                 src,
                 error,
                 "F019",
-                "Expanded failure constructor arguments are unresolved; verify message and suggested_action in an executed failed-check scenario.",
+                "Expanded failure constructor arguments are unresolved; define the F016 scenarios, whose assert_preflight_result checks message and suggested_action on every failed check.",
                 SCENARIO_COVERAGE,
             )
             return
@@ -234,7 +234,7 @@ class _Checker:
                     src,
                     error,
                     "F019",
-                    "Computed suggested_action is unresolved; verify the final failed-check action is nonblank and appropriate in an executed scenario.",
+                    "Computed suggested_action is unresolved; define the F016 scenarios, whose assert_preflight_result checks the final failed-check action is nonblank.",
                     SCENARIO_COVERAGE,
                 )
             if (
@@ -345,7 +345,7 @@ class _Checker:
                     src,
                     call,
                     "F019",
-                    "Computed preflight aggregation is unresolved: mandatory/advisory roles, short-circuiting, and retry/fallback semantics need executed handler scenarios. This is not a proven verdict violation.",
+                    "Computed preflight aggregation is unresolved: mandatory/advisory roles, short-circuiting, and retry/fallback semantics need the F016 real-handler scenarios defined. This is not a proven verdict violation.",
                     SCENARIO_COVERAGE,
                 )
             return
@@ -368,8 +368,8 @@ class _Checker:
                     "PreflightCheck construction, so its mandatory/advisory role and "
                     "verdict cannot be read from the list; wrapping an opaque "
                     "aggregation in a list display does not resolve it. Build the row "
-                    "inline or in a resolvable helper, or verify the aggregation in an "
-                    "executed handler scenario.",
+                    "inline or in a resolvable helper, or define the F016 real-handler "
+                    "scenarios that assert it.",
                     SCENARIO_COVERAGE,
                 )
         passed = [

@@ -1018,6 +1018,39 @@ class TestPreflightEndpoint:
         assert "should_block" not in body["preflight"]
         assert "status" not in body["data"]
 
+    def test_a_failed_checks_typed_error_outranks_its_message(self) -> None:
+        """On a returned verdict the typed error is the check's message in both
+        the legacy ``data`` map and the typed body; the legacy text never leaks."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="auth",
+                            passed=False,
+                            message="legacy text",
+                            error=AuthError(
+                                message="typed text", suggested_action="Rotate it."
+                            ),
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+        body = response.json()
+        assert body["data"]["auth"]["message"] == "typed text"
+        assert body["data"]["auth"]["failureMessage"] == "typed text"
+        (check,) = body["preflight"]["checks"]
+        assert check["message"] == "typed text"
+        assert check["suggested_action"] == "Rotate it."
+        assert check["error"]["category"] == "AUTH"
+        assert "legacy text" not in response.text
+
     def test_preflight_not_ready_status_surfaced(self) -> None:
         # Block-ness is derivable from status == not_ready — there is no
         # per-check blocking flag or should_block signal anymore.

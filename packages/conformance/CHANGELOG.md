@@ -2,6 +2,13 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.39.0] - 2026-09-24
+
+### Features
+
+- separate conformance from tests — F016 checks scenarios are defined, never runs them (#3963) ([51521f4](https://github.com/atlanhq/application-sdk/commit/51521f4))
+- P052 flags app-side serialization that bypasses entity_bytes (#3966) ([91d2740](https://github.com/atlanhq/application-sdk/commit/91d2740))
+
 ## [0.38.0] - 2026-09-23
 
 ### Features

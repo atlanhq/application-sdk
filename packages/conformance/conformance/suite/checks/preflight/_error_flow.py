@@ -265,7 +265,7 @@ class ErrorFlow:
                                 src,
                                 node,
                                 "F019",
-                                "Success-path error expression is unresolved; verify passed checks do not carry failure evidence in an executed scenario.",
+                                "Success-path error expression is unresolved; define the F016 scenarios, whose assert_preflight_result checks passed checks carry no failure evidence.",
                                 SCENARIO_COVERAGE,
                             )
                     continue
@@ -284,7 +284,7 @@ class ErrorFlow:
                         src,
                         node,
                         "F019",
-                        "Failed-check error is a caught exception whose except clause names no typed error, so its failure details are not verified. Narrow the clause to the AppError subclasses the probe raises, construct a typed error on this path, or execute a scenario that drives this failure.",
+                        "Failed-check error is a caught exception whose except clause names no typed error, so its failure details are not verified. Narrow the clause to the AppError subclasses the probe raises, construct a typed error on this path, or define the F016 scenario that drives this failure.",
                         SCENARIO_COVERAGE,
                     )
                 elif unresolved:
@@ -292,7 +292,7 @@ class ErrorFlow:
                         src,
                         node,
                         "F019",
-                        "Failed-check error flow is unresolved; suggested_action and typing are not verified. Execute a real-handler scenario for this output.",
+                        "Failed-check error flow is unresolved; suggested_action and typing are not verified. Define the F016 real-handler scenarios for this output.",
                         SCENARIO_COVERAGE,
                     )
             child = self.child(context, node)

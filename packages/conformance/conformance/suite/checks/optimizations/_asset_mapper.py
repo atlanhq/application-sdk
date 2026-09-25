@@ -4,7 +4,8 @@ Asset-mapper hygiene recommendations (BLDX-1492).  Both are gated on the module
 importing pyatlan asset models, so they never fire on non-connector code:
 
 * **O002** — a ``.dict()`` call in such a module; the v3 pipeline serialises
-  assets with ``asset.to_nested_bytes()``, not the pydantic ``.dict()`` form.
+  assets through the SDK's ``entity_bytes`` seam, not the pydantic ``.dict()``
+  form.
 * **O003** — a function that constructs a pyatlan asset and returns *that asset*
   but declares no return annotation; the asset-mapper pattern is typed end-to-end.
 """
@@ -18,11 +19,40 @@ from conformance.suite.schema.findings import Finding
 
 _ASSET_MODULES = ("pyatlan_v9.model.assets", "pyatlan.model.assets")
 
+#: Asset-model module per pyatlan generation.
+_GENERATION_MODULES: dict[str, str] = {
+    "legacy": "pyatlan.model.assets",
+    "v9": "pyatlan_v9.model.assets",
+}
+
 _O002_MESSAGE = (
-    "Asset serialised with .dict() — use the v9 asset.to_nested_bytes() API "
-    "instead (emits the nested-entity wire shape the asset-mapper pipeline "
-    "expects). If this .dict() is on a non-asset model, suppress with "
+    "Asset serialised with .dict() — serialize through "
+    "application_sdk.common.asset_serialization.entity_bytes instead (emits the "
+    "nested-entity wire shape the asset-mapper pipeline expects). If this "
+    ".dict() is on a non-asset model, suppress with "
     "# conformance: ignore[O002] <reason>."
+)
+# A legacy model handed to entity_bytes falls through to model_dump(), whose
+# snake_case field names are not the Atlas wire shape — so for these the
+# serialization switch cannot come first.
+_O002_LEGACY_MESSAGE = (
+    "Asset serialised with .dict() on a legacy pyatlan.model.assets model — "
+    "migrate the asset to pyatlan_v9.model.assets first (O004), then serialize "
+    "through application_sdk.common.asset_serialization.entity_bytes. Do not "
+    "switch a legacy model to entity_bytes alone: it falls through to "
+    "model_dump(), whose snake_case fields are not the Atlas wire shape. If this "
+    ".dict() is on a non-asset model, suppress with "
+    "# conformance: ignore[O002] <reason>."
+)
+_O002_MIXED_MESSAGE = (
+    "Asset serialised with .dict() in a module importing both legacy "
+    "pyatlan.model.assets and pyatlan_v9 models. If this receiver is a "
+    "pyatlan_v9 asset, serialize through "
+    "application_sdk.common.asset_serialization.entity_bytes. If it is a legacy "
+    "model, migrate it to pyatlan_v9.model.assets first (O004): entity_bytes on "
+    "a legacy model falls through to model_dump(), whose snake_case fields are "
+    "not the Atlas wire shape. If this .dict() is on a non-asset model, suppress "
+    "with # conformance: ignore[O002] <reason>."
 )
 _O003_MESSAGE = (
     "Function builds a pyatlan asset but has no return annotation — annotate it "
@@ -60,6 +90,25 @@ def _collect_asset_imports(tree: ast.AST) -> tuple[bool, frozenset[str]]:
     return imports_assets, frozenset(names)
 
 
+def _asset_generations(tree: ast.AST) -> frozenset[str]:
+    """Which pyatlan asset generations the module imports: ``legacy`` / ``v9``."""
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            modules = [node.module]
+        elif isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        else:
+            continue
+        for module in modules:
+            if module is None:
+                continue
+            for generation, root in _GENERATION_MODULES.items():
+                if module == root or module.startswith(f"{root}."):
+                    found.add(generation)
+    return frozenset(found)
+
+
 def check_o002(
     tree: ast.AST, filename: str, directives: dict[int, _IgnoreDirective]
 ) -> list[Finding]:
@@ -67,6 +116,15 @@ def check_o002(
     imports_assets, _ = _collect_asset_imports(tree)
     if not imports_assets:
         return []
+    generations = _asset_generations(tree)
+    if generations == {"legacy"}:
+        message = _O002_LEGACY_MESSAGE
+    elif "legacy" in generations:
+        # Both generations in one module: the receiver's type is not known
+        # statically, so the advice has to cover either.
+        message = _O002_MIXED_MESSAGE
+    else:
+        message = _O002_MESSAGE
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if (
@@ -79,7 +137,7 @@ def check_o002(
                     filename=filename,
                     rule_id="O002",
                     node=node,
-                    message=_O002_MESSAGE,
+                    message=message,
                     directives=directives,
                 )
             )

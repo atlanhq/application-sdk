@@ -843,6 +843,10 @@ jobs:
       # 1h credentials:read token. Harmless when the dataforge inputs are unset.
       # Mirrors the e2e job — both tiers resolve the SAME pinned instance.
       id-token: write
+      # Lets a services-script pull private CI images from GHCR, e.g. the MinIO
+      # mirror ghcr.io/atlanhq/ci-mirror/minio. The package must also grant the
+      # connector repo Read under "Manage Actions access".
+      packages: read
     outputs:
       summary: ${{ steps.integration.outputs.summary }}
     env:
@@ -1040,6 +1044,17 @@ jobs:
       # A caller test-paths override scopes THIS job only. The ternary is a
       # workflow expression in a `with:` value — not inlined conditional shell —
       # so it stays within the CI authoring rule.
+      # A services-script has no token of its own, so log in here for it. It
+      # is non-fatal: only a pull of a private image needs it, and that pull
+      # then fails loudly (`denied`/`unauthorized`) on its own.
+      - name: Log in to GHCR (private CI images for services-script)
+        continue-on-error: true
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run integration tests
         id: integration
         uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main

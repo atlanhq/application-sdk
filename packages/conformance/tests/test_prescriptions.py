@@ -2628,6 +2628,382 @@ def test_p028_no_finding_on_dynamic_prefix_embedded_qn() -> None:
     assert "P028" not in _ids(src)
 
 
+# ── P052 EntitySerializationBypass ─────────────────────────────────────────────
+
+
+def _p052(src: str, file: str = "app/connector.py") -> list:
+    return [f for f in scan_text(src, file) if f.rule_id == "P052"]
+
+
+def test_p052_fires_on_to_nested_bytes() -> None:
+    # A transform that has the asset write its own wire line.
+    src = 'out_f.write(asset.to_nested_bytes() + b"\\n")\n'
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_to_nested_dict() -> None:
+    src = "entity = map_connection(conn).to_nested_dict()\n"
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_to_atlas_format_imported_from_pyatlan_v9() -> None:
+    src = (
+        "from pyatlan_v9.model.transform import to_atlas_format\n"
+        "def f(asset):\n"
+        "    return to_atlas_format(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_aliased_to_atlas_format() -> None:
+    src = (
+        "from pyatlan_v9.model.transform import to_atlas_format as encode\n"
+        "encode(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from pyatlan_v9.model import transform\ntransform.to_atlas_format(a)\n",
+        "import pyatlan_v9.model.transform as t\nt.to_atlas_format(a)\n",
+        "import pyatlan_v9.model.transform\npyatlan_v9.model.transform.to_atlas_format(a)\n",
+    ],
+    ids=["from-module", "import-as", "dotted"],
+)
+def test_p052_fires_on_to_atlas_format_via_module(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_function_local_import() -> None:
+    src = (
+        "def f(asset):\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format\n"
+        "    return to_atlas_format(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+_P052_ENCODER_IMPORT = "from pyatlan_v9.model.transform import to_atlas_format\n"
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A parameter shadows the module-level import.
+        "def f(to_atlas_format, a):\n    return to_atlas_format(a)\n",
+        # A local helper shadows it.
+        "def f(a):\n"
+        "    def to_atlas_format(x):\n"
+        "        return x\n"
+        "    return to_atlas_format(a)\n",
+        # A later module-level rebinding shadows it for calls after it.
+        "def to_atlas_format(x):\n    return x\nto_atlas_format(1)\n",
+    ],
+    ids=["parameter", "local-def", "module-rebind"],
+)
+def test_p052_no_finding_when_encoder_is_shadowed(src: str) -> None:
+    assert _p052(_P052_ENCODER_IMPORT + src) == []
+
+
+def test_p052_import_in_one_function_does_not_leak_into_another() -> None:
+    src = (
+        "def g(a):\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format\n"
+        "    return a\n"
+        "def f(a):\n"
+        "    return to_atlas_format(a)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_unrelated_local_import_does_not_mask_module_encoder() -> None:
+    # g's import of a same-named helper is g's business; f still calls
+    # pyatlan's encoder through the module-level import.
+    src = _P052_ENCODER_IMPORT + (
+        "def g(a):\n"
+        "    from mylib.encoders import to_atlas_format\n"
+        "    return to_atlas_format(a)\n"
+        "def f(a):\n"
+        "    return to_atlas_format(a)\n"
+    )
+    fs = _p052(src)
+    assert [f.line for f in fs] == [6]
+
+
+def test_p052_class_body_binding_is_not_visible_to_methods() -> None:
+    # Python skips class scope when resolving names inside a method, so the
+    # method's call is the module-level pyatlan encoder.
+    src = _P052_ENCODER_IMPORT + (
+        "class C:\n"
+        "    to_atlas_format = staticmethod(lambda a: a)\n"
+        "    def m(self, a):\n"
+        "        return to_atlas_format(a)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from application_sdk.common.entity_envelope import to_atlas_format_dict\n"
+        "to_atlas_format_dict(asset)\n",
+        "from application_sdk.common import entity_envelope as ee\n"
+        "ee.to_atlas_format_dict(asset)\n",
+        "import application_sdk.common.entity_envelope\n"
+        "application_sdk.common.entity_envelope.to_atlas_format_dict(asset)\n",
+        # asset_serialization imports it at module level, so it resolves there
+        # too even though it is not in that module's __all__.
+        "from application_sdk.common.asset_serialization import "
+        "to_atlas_format_dict\n"
+        "to_atlas_format_dict(asset)\n",
+        "from application_sdk.common import asset_serialization as ser\n"
+        "ser.to_atlas_format_dict(asset)\n",
+    ],
+    ids=[
+        "from-import",
+        "module-alias",
+        "dotted",
+        "asset-serialization-from-import",
+        "asset-serialization-module-alias",
+    ],
+)
+def test_p052_fires_on_sdk_to_atlas_format_dict(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+def test_p052_no_finding_on_unrelated_to_atlas_format_dict() -> None:
+    src = "from mylib import to_atlas_format_dict\nto_atlas_format_dict(asset)\n"
+    assert _p052(src) == []
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "encode = asset.to_nested_bytes\nencode()\n",
+        "def f(asset):\n    encode = asset.to_nested_dict\n    return encode()\n",
+        _P052_ENCODER_IMPORT + "enc = to_atlas_format\nenc(asset)\n",
+        _P052_ENCODER_IMPORT + "enc = to_atlas_format\nenc2 = enc\nenc2(asset)\n",
+        "from pyatlan_v9.model import transform\n"
+        "t = transform\n"
+        "t.to_atlas_format(asset)\n",
+    ],
+    ids=[
+        "bound-method",
+        "bound-method-in-function",
+        "encoder-alias",
+        "alias-chain",
+        "module-alias",
+    ],
+)
+def test_p052_follows_saved_serializer_alias(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A rebinding in a branch that may not run leaves the import live.
+        _P052_ENCODER_IMPORT
+        + "if use_other:\n    to_atlas_format = other\nto_atlas_format(asset)\n",
+        # Either branch may bind it; one of them is the encoder.
+        "if flag:\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format as enc\n"
+        "else:\n"
+        "    enc = other\n"
+        "enc(asset)\n",
+        # The try-import fallback shape.
+        "try:\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format\n"
+        "except ImportError:\n"
+        "    to_atlas_format = None\n"
+        "to_atlas_format(asset)\n",
+        # A loop that runs zero times never binds its target.
+        _P052_ENCODER_IMPORT
+        + "for to_atlas_format in callbacks:\n    pass\nto_atlas_format(asset)\n",
+    ],
+    ids=["if-no-else", "if-else", "try-except", "for-target"],
+)
+def test_p052_conditional_rebinding_keeps_the_encoder_visible(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+def test_p052_unconditional_rebinding_after_a_branch_hides_it() -> None:
+    # The straight-line rebinding definitely runs last, whatever the branch did.
+    src = _P052_ENCODER_IMPORT + (
+        "if flag:\n" "    enc = to_atlas_format\n" "enc = other\n" "enc(asset)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_finally_rebinding_is_definite_after_the_try() -> None:
+    # finally always runs before the statement after the try is reached.
+    src = _P052_ENCODER_IMPORT + (
+        "try:\n"
+        "    pass\n"
+        "finally:\n"
+        "    to_atlas_format = other\n"
+        "to_atlas_format(asset)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_rebinding_in_try_body_stays_conditional_despite_finally() -> None:
+    # The try body may raise before its rebinding; finally does not change that.
+    src = _P052_ENCODER_IMPORT + (
+        "try:\n"
+        "    risky()\n"
+        "    to_atlas_format = other\n"
+        "except ValueError:\n"
+        "    pass\n"
+        "finally:\n"
+        "    cleanup()\n"
+        "to_atlas_format(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+def test_p052_rebinding_in_the_calls_own_branch_hides_it() -> None:
+    src = _P052_ENCODER_IMPORT + (
+        "if flag:\n    to_atlas_format = other\n    to_atlas_format(asset)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_late_global_rebinding_is_seen_by_a_function() -> None:
+    # f reads the module global when it is called — after the rebinding.
+    # By source line the latest binding above f is the harmless one; by
+    # runtime it is the encoder.
+    src = (
+        "enc = other\n"
+        "def f(a):\n"
+        "    return enc(a)\n"
+        "from pyatlan_v9.model.transform import to_atlas_format as enc\n"
+        "f(asset)\n"
+    )
+    fs = _p052(src)
+    assert [f.line for f in fs] == [3]
+
+
+def test_p052_comprehension_target_does_not_shadow_the_enclosing_scope() -> None:
+    # The comprehension's target lives in its own scope; the later call is
+    # still pyatlan's encoder.
+    src = _P052_ENCODER_IMPORT + (
+        "[x for to_atlas_format in callbacks]\nto_atlas_format(asset)\n"
+    )
+    fs = _p052(src)
+    assert [f.line for f in fs] == [3]
+
+
+def test_p052_comprehension_target_shadows_inside_the_comprehension() -> None:
+    src = _P052_ENCODER_IMPORT + "[to_atlas_format(a) for to_atlas_format in cbs]\n"
+    assert _p052(src) == []
+
+
+def test_p052_comprehension_reads_its_enclosing_scope_with_control_flow() -> None:
+    # The comprehension runs where it is written, after the rebinding.
+    src = _P052_ENCODER_IMPORT + (
+        "to_atlas_format = other\n[to_atlas_format(a) for a in assets]\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_comprehension_still_catches_the_encoder() -> None:
+    src = _P052_ENCODER_IMPORT + "[to_atlas_format(a) for a in assets]\n"
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize("name", ["encode", "retained"])
+def test_p052_chained_assignment_aliases_every_target(name: str) -> None:
+    src = f"encode = retained = asset.to_nested_bytes\n{name}()\n"
+    assert len(_p052(src)) == 1
+
+
+def test_p052_cyclic_alias_terminates() -> None:
+    assert _p052("a = b\nb = a\na()\n") == []
+
+
+def test_p052_no_finding_on_entity_bytes() -> None:
+    # The atlan-mysql-app shape: entity_bytes owns the wire line, the app
+    # decorates what it produced.
+    src = (
+        "import orjson\n"
+        "from application_sdk.common.asset_serialization import entity_bytes\n"
+        "def map_view(asset, envelope):\n"
+        "    entity = orjson.loads(entity_bytes(asset, envelope=envelope))\n"
+        '    entity["defaultSchemaName"] = "s"\n'
+        "    return entity\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_no_finding_on_unrelated_to_atlas_format() -> None:
+    # A same-named local helper is not pyatlan's encoder.
+    src = "def to_atlas_format(x):\n" "    return x\n" "to_atlas_format(1)\n"
+    assert _p052(src) == []
+
+
+def test_p052_no_finding_on_to_atlas_format_from_other_package() -> None:
+    src = "from mylib.encoders import to_atlas_format\nto_atlas_format(a)\n"
+    assert _p052(src) == []
+
+
+@pytest.mark.parametrize(
+    "file",
+    ["app/generated/_models.py", "main.py", "scripts/seed.py", "x.py"],
+)
+def test_p052_scoped_to_hand_written_app_source(file: str) -> None:
+    src = "asset.to_nested_bytes()\n"
+    assert _p052(src, file) == []
+
+
+def test_p052_fires_in_nested_app_package() -> None:
+    assert len(_p052("asset.to_nested_bytes()\n", "app/mappers/tables.py")) == 1
+
+
+def test_p052_justified_suppression_is_honoured() -> None:
+    # The sanctioned carve-out: a ConnectionRef, not an entity line.
+    src = (
+        "from pyatlan_v9.model.transform import to_atlas_format\n"
+        "# conformance: ignore[P052] ConnectionRef payload, not an entity line\n"
+        "ref = ConnectionRef.model_validate(to_atlas_format(conn))\n"
+    )
+    fs = _p052(src)
+    assert len(fs) == 1
+    assert fs[0].suppressed
+
+
+def test_p052_unrelated_suppression_does_not_hide_finding() -> None:
+    src = "asset.to_nested_bytes()  # conformance: ignore[P028] wrong rule\n"
+    fs = _p052(src)
+    assert len(fs) == 1
+    assert not fs[0].suppressed
+
+
+def test_p052_scan_all_uses_repo_relative_path(tmp_path: Path) -> None:
+    # scan_all passes the path relative to the repo root, so the app/ scope
+    # gate must hold on the full-suite path too, not just scan_text.
+    app = tmp_path / "app"
+    (app / "generated").mkdir(parents=True)
+    (app / "connector.py").write_text("asset.to_nested_bytes()\n", encoding="utf-8")
+    (app / "generated" / "_m.py").write_text(
+        "asset.to_nested_bytes()\n", encoding="utf-8"
+    )
+    findings = [
+        f
+        for f in scan_all(sorted(tmp_path.rglob("*.py")), tmp_path)
+        if f.rule_id == "P052"
+    ]
+    assert [f.file for f in findings] == [str(Path("app") / "connector.py")]
+
+
+def test_p052_rule_is_app_scoped_warn() -> None:
+    rule = get_rule("P052")
+    assert rule.tier is EnforcementTier.WARN
+    assert rule.scope.value == "app"
+
+
 # ── P013/P014 same-bare-name resolution ───────────────────────────────────────
 
 

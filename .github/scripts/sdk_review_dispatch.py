@@ -18,6 +18,11 @@ lines of `run:` shell that used to sit in `sdk-review.yml`; the step's
     final_cost      cost_usd, else "unknown"
     final_err_code  error code from either error source, else ""
     final_err_msg   error message, newlines flattened to spaces
+    models_used     comma-joined models the CLI stream shows answering,
+                    across every attempt, else "" (read by
+                    `sdk_review_stamp_models.py` to overwrite the summary's
+                    CLI-stream-observed models footer; out-of-band review calls
+                    are not included)
 
 Two behaviours are carried over from the shell that the resolve lane does not
 have, because the review lane needs them:
@@ -73,7 +78,7 @@ step in `.github/workflows/sdk-review.yml`):
     STARTER_STARTED_AT   this run's starter-comment timestamp; the window
                          fallback the dedupe pass uses for attribution
     GHA_RUN_URL          this run's Actions URL — the ownership key
-    GITHUB_OUTPUT        where the four outputs above are written
+    GITHUB_OUTPUT        where the five outputs above are written
     GITHUB_STEP_SUMMARY  where the run summary is rendered
 """
 
@@ -487,6 +492,8 @@ class SSEState:
         self.last_action_ts = now
         self.last_action_name = "(none yet)"
         self.idle_warned = False
+        # Models seen answering, in first-seen order (a dict as an ordered set).
+        self.models: dict[str, None] = {}
 
     def saw_life(self, now: float, name: str) -> None:
         """Re-arm the watchdog: this event is proof the sandbox is working."""
@@ -556,6 +563,35 @@ def response_tools(data: str) -> str:
         if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name")
     ]
     return ", ".join(names)
+
+
+def frame_models(data: str) -> list[str]:
+    """Models a raw CLI frame reports as having actually answered.
+
+    Two sources, both written by the CLI from the API's replies rather than
+    from anything the model says about itself:
+
+      * an `assistant` frame's `message.model` — one per turn, sub-agent turns
+        included;
+      * the terminal `result` frame's `modelUsage` keys — the per-model bill,
+        which also covers the background/fast lane no assistant frame shows.
+
+    `modelUsage` alone would do, but it rides the very last frame and the SSE
+    queue drops on overflow; the per-turn field keeps the list honest when the
+    terminal frame is lost. `<synthetic>` is the CLI's label for messages it
+    fabricates locally (e.g. an API-error turn) — no model produced those.
+    """
+    inner = _inner_frame(data)
+    if inner is None:
+        return []
+    found: list[str] = []
+    message = inner.get("message")
+    if isinstance(message, dict):
+        found.append(str(message.get("model") or ""))
+    usage = inner.get("modelUsage")
+    if isinstance(usage, dict):
+        found.extend(str(k) for k in usage)
+    return [m for m in found if m and not m.startswith("<")]
 
 
 def response_text(data: str) -> str:
@@ -661,6 +697,8 @@ def process_line(line: str, st: SSEState, now: float = 0.0) -> str | None:
         # of life for the watchdog (a model can think in a loop forever).
         return None
     if event == "response":
+        for model in frame_models(data):
+            st.models.setdefault(model, None)
         tools = response_tools(data)
         if tools:
             st.saw_life(now, tools)
@@ -1029,8 +1067,22 @@ def render_attempt_trail(attempts: Sequence[Attempt]) -> list[str]:
 # --- outcome ---------------------------------------------------------------
 
 
+def models_used(st: SSEState, attempts: Sequence[Attempt] = ()) -> str:
+    """Comma-joined models observed across every attempt, first-seen order.
+
+    A retry runs a second sandbox, possibly on a different model, and both
+    billed — so the footer names the union, not just the last attempt's.
+    """
+    seen: dict[str, None] = {}
+    for state in [a.state for a in attempts] or [st]:
+        for model in state.models:
+            seen.setdefault(model, None)
+    return ", ".join(seen)
+
+
 def render_outputs(st: SSEState, attempts: Sequence[Attempt] = ()) -> dict[str, str]:
-    """The four `$GITHUB_OUTPUT` keys, exactly as the shell computed them.
+    """The `$GITHUB_OUTPUT` keys: the shell's four, exactly as it computed them,
+    plus `models_used`.
 
     `final_err_msg` is flattened because a multi-line value would break the
     `key=value` contract. `final_status` falls back to the error code so a
@@ -1046,6 +1098,7 @@ def render_outputs(st: SSEState, attempts: Sequence[Attempt] = ()) -> dict[str, 
         "final_cost": cost or "unknown",
         "final_err_code": st.err_code,
         "final_err_msg": st.err_msg.replace("\n", " "),
+        "models_used": models_used(st, attempts),
     }
 
 
@@ -1419,7 +1472,8 @@ def main() -> int:
         print(
             f"[attempt {attempt}/{MAX_DISPATCH_ATTEMPTS}] model={model} "
             f"status={st.status or 'none'} cost_usd={st.cost or 'n/a'} "
-            f"code={st.err_code or 'none'}"
+            f"code={st.err_code or 'none'} "
+            f"models_seen={models_used(st) or 'none'}"
         )
 
         # Stream ended. Establish whether the verdict landed before anything
