@@ -332,6 +332,7 @@ class _Visitor(ast.NodeVisitor):
         self._async_stack: list[bool] = []
         self._scopes: list[dict[str, str | None]] = []
         self._class_clients: list[dict[str, str]] = []
+        self._class_floors: list[int] = []
         self._wf_depth = 0
         self._awaited: set[int] = set()
         self.findings: list[Finding] = []
@@ -369,10 +370,17 @@ class _Visitor(ast.NodeVisitor):
         # flagged, which would make the rule un-satisfiable.
         self._visit_func(node, is_async=False)
 
-    def _visit_func(self, node: ast.AST, is_async: bool) -> None:
+    def _visit_func(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+        is_async: bool,
+    ) -> None:
         in_wf = id(node) in self.workflow_ids
         self._async_stack.append(is_async)
-        self._scopes.append({})
+        args = node.args
+        params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+        params += [arg for arg in (args.vararg, args.kwarg) if arg is not None]
+        self._scopes.append({param.arg: None for param in params})
         if in_wf:
             self._wf_depth += 1
         self.generic_visit(node)
@@ -383,8 +391,40 @@ class _Visitor(ast.NodeVisitor):
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._class_clients.append(self._self_clients(node))
+        self._class_floors.append(len(self._scopes))
         self.generic_visit(node)
+        self._class_floors.pop()
         self._class_clients.pop()
+
+    def _visit_comprehension(
+        self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp
+    ) -> None:
+        self._scopes.append({})
+        for generator in node.generators:
+            self.visit(generator)
+        results = (
+            [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+        )
+        for result in results:
+            self.visit(result)
+        self._scopes.pop()
+
+    visit_ListComp = visit_SetComp = visit_DictComp = visit_GeneratorExp = (
+        _visit_comprehension
+    )
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Store) and self._scopes:
+            self._scopes[-1][node.id] = None
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self.generic_visit(node)
+        self._bind(node.target, node.value)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name and self._scopes:
+            self._scopes[-1][node.name] = None
+        self.generic_visit(node)
 
     def _self_clients(self, node: ast.ClassDef) -> dict[str, str]:
         """``self.<attr>`` names bound only to one kind of client in this class.
@@ -451,8 +491,16 @@ class _Visitor(ast.NodeVisitor):
             self.visit(stmt)
 
     def _receiver_kind(self, receiver: str) -> str | None:
-        """The client bound to ``receiver``, innermost scope first, then the class."""
-        for scope in reversed(self._scopes):
+        """The client bound to ``receiver``, innermost scope first, then the class.
+
+        A plain name follows Python's closures through every enclosing function.
+        A ``self.<attr>`` stops at the nearest class: its ``self`` is that
+        class's instance, not the one an enclosing method bound.
+        """
+        floor = 0
+        if receiver.startswith("self.") and self._class_floors:
+            floor = self._class_floors[-1]
+        for scope in reversed(self._scopes[floor:]):
             if receiver in scope:
                 return scope[receiver]
         if self._class_clients:

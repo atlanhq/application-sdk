@@ -723,6 +723,48 @@ def test_p023_self_attribute_session_ignores_nested_classes_and_rebinds() -> Non
     assert len(_rule(lazy_init, "P023")) == 1
 
 
+def test_p023_local_bindings_shadow_an_enclosing_session() -> None:
+    header = "import requests\n"
+    session = "s = requests.Session()\n        "
+    for stmts in (
+        "async def inner(s):\n            s.get('x')",
+        "async def inner(*, s):\n            s.get('x')",
+        "f = lambda s: s.get('x')",
+        "for s in items:\n            s.get('x')",
+        "for k, s in items:\n            s.get('x')",
+        "r = [s.get('x') for s in items]",
+        "try:\n            pass\n        except E as s:\n            s.get('x')",
+    ):
+        assert _rule(_p023_async_task(header, session + stmts), "P023") == [], stmts
+
+
+def test_p023_comprehension_names_do_not_leak() -> None:
+    stmts = "s = requests.Session()\n        r = [s for s in items]\n        s.get('x')"
+    assert len(_rule(_p023_async_task("import requests\n", stmts), "P023")) == 1
+
+
+def test_p023_flags_a_walrus_bound_session() -> None:
+    stmts = "if (s := requests.Session()):\n            s.get('x')"
+    assert len(_rule(_p023_async_task("import requests\n", stmts), "P023")) == 1
+
+
+def test_p023_self_lookup_stops_at_a_nested_class() -> None:
+    def nested(receiver: str, bind: str) -> str:
+        return (
+            "import requests\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input):\n"
+            f"        {bind} = requests.Session()\n"
+            "        class Inner:\n"
+            "            async def g(self):\n"
+            f"                {receiver}.get('k')\n"
+        )
+
+    assert _rule(nested("self.s", "self.s"), "P023") == []
+    assert len(_rule(nested("s", "s"), "P023")) == 1
+
+
 def test_p023_silent_on_requests_codes_lookup() -> None:
     src = _p023_async_task("import requests\n", "requests.codes.get('ok')")
     assert _rule(src, "P023") == []
