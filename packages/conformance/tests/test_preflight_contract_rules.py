@@ -194,6 +194,81 @@ def test_unrelated_exception_catch_does_not_hide_raise(tmp_path: Path):
     )
 
 
+_PREP_ERROR = "from application_sdk.errors import InternalError\nclass PrepError(InternalError):\n    pass\n"
+
+
+@pytest.mark.parametrize(
+    "extra, raised, caught",
+    [
+        (
+            _PREP_ERROR + "from application_sdk.errors import AppError\n",
+            "PrepError",
+            "AppError",
+        ),
+        (
+            _PREP_ERROR + "from application_sdk.errors.base import AppError\n",
+            "PrepError",
+            "AppError",
+        ),
+        (
+            "from application_sdk.errors import AppTimeoutError, TaskStalledError\n",
+            "TaskStalledError",
+            "AppTimeoutError",
+        ),
+        (
+            "from application_sdk.errors import InvalidInputValueError\n",
+            "InvalidInputValueError",
+            "ValueError",
+        ),
+    ],
+    ids=["app-leaf-AppError", "submodule-AppError", "sdk-category", "builtin-base"],
+)
+def test_sdk_ancestor_catch_converts_raise(tmp_path, extra, raised, caught):
+    assert "F008" not in check(
+        tmp_path,
+        f'try:\n    raise {raised}(message="Failure")\nexcept {caught} as exc:\n    return PreflightOutput(checks=[PreflightCheck(passed=False, error=exc.to_failure_details())])',
+        extra,
+    )
+
+
+def test_sdk_ancestor_catch_converts_helper_raise(tmp_path):
+    assert "F008" not in check(
+        tmp_path,
+        "try:\n    return probe()\nexcept AppError as exc:\n    return PreflightOutput(checks=[PreflightCheck(passed=False, error=exc.to_failure_details())])",
+        _PREP_ERROR
+        + "from application_sdk.errors import AppError\n"
+        + 'def probe():\n    raise PrepError(message="Failure")\n',
+    )
+
+
+@pytest.mark.parametrize("caught", ["AuthError", "InvalidInputError"])
+def test_sdk_sibling_catch_does_not_hide_raise(tmp_path, caught):
+    assert "F008" in check(
+        tmp_path,
+        f'try:\n    raise PrepError(message="Failure")\nexcept {caught}:\n    return PreflightOutput(status="ready")',
+        _PREP_ERROR + "from application_sdk.errors import InvalidInputError\n",
+    )
+
+
+def test_sdk_error_ancestry_matches_runtime_mro():
+    from conformance.suite.checks.preflight._contracts import sdk_error_ancestry
+
+    import application_sdk.errors as sdk_errors
+
+    for name in sdk_errors.__all__:
+        cls = getattr(sdk_errors, name)
+        if not (isinstance(cls, type) and issubclass(cls, BaseException)):
+            continue
+        expected = {
+            f"application_sdk.errors.{base.__name__}"
+            if base.__module__.startswith("application_sdk.errors")
+            else base.__name__
+            for base in cls.__mro__
+            if base is not object
+        }
+        assert sdk_error_ancestry(f"application_sdk.errors.{name}") == expected, name
+
+
 @pytest.mark.parametrize(
     "catch, raised", [("Exception", ""), ("AuthError as exc", "exc")]
 )
