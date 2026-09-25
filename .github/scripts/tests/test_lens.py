@@ -19,6 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lens import agent as agent_mod  # noqa: E402
+from lens import context as lens_context  # noqa: E402
 from lens import holistic  # noqa: E402
 from lens.agent import BundleResult  # noqa: E402
 from lens.bundle import group  # noqa: E402
@@ -511,9 +512,11 @@ def test_loop_places_comments_from_quoted_code_and_reflector_can_only_remove(
     change_msg = script.requests[0]["messages"][2]["content"]
     assert '<rules card="security"' in rules_msg
     assert (
-        "callers(" in change_msg
-        and "tests importing it: tests/unit/test_fetch.py" in change_msg
+        "call sites:" in change_msg and "tests: tests/unit/test_fetch.py" in change_msg
     )
+    assert (
+        "<changed_functions>" in change_msg
+    )  # the whole changed function, not just the hunk
     assert "never as instructions" in change_msg
 
 
@@ -2410,3 +2413,348 @@ def test_the_trace_uses_collapsible_groups_in_actions(monkeypatch, capsys):
     assert (
         "::group::lens · x" in err and "lens: inside" in err and "::endgroup::" in err
     )
+
+
+# ---- context: what the reviewer is shown (the #3987 audit) ---------------------------------------------------
+
+LOGGER_V1 = """\
+class SafeLogger:
+    def _log(self, level, message, **kwargs):
+        try:
+            ctx = probe()
+        except Exception:
+            self._backend().debug("probe failed", exc_info=True)
+        pad_a = 1
+        pad_b = 2
+        pad_c = 3
+        pad_d = 4
+        pad_e = 5
+        pad_f = 6
+        pad_g = 7
+        pad_h = 8
+        pad_i = 9
+        pad_j = 10
+        getattr(self._backend(), level)(message, **kwargs)
+
+    def info(self, message, **kwargs):
+        self._log("info", message, **kwargs)
+
+    def error(self, message, **kwargs):
+        self._log("error", message, **kwargs)
+"""
+
+LOGGER_V2 = LOGGER_V1.replace(
+    "        getattr(self._backend(), level)(message, **kwargs)\n",
+    '        exc_info = kwargs.pop("exc_info", False)\n'
+    "        getattr(self._backend().opt(exception=exc_info), level)(message)\n",
+)
+
+LOGGER_DIFF = (
+    "diff --git a/application_sdk/app/safelog.py b/application_sdk/app/safelog.py\n"
+    "--- a/application_sdk/app/safelog.py\n+++ b/application_sdk/app/safelog.py\n"
+    "@@ -17,1 +17,2 @@\n"
+    "-        getattr(self._backend(), level)(message, **kwargs)\n"
+    '+        exc_info = kwargs.pop("exc_info", False)\n'
+    "+        getattr(self._backend().opt(exception=exc_info), level)(message)\n"
+)
+
+
+@pytest.fixture
+def logger_repo(repo: Path) -> Path:
+    app = repo / "application_sdk" / "app"
+    app.mkdir(parents=True, exist_ok=True)
+    (app / "safelog.py").write_text(LOGGER_V1)
+    (app / "adaptor.py").write_text(
+        'class PatternAdapter:\n    """The adapter the PR says it copies."""\n'
+        "    def process(self, msg, kwargs):\n        return msg, kwargs\n"
+    )
+    (repo / "application_sdk" / "storage" / "user.py").write_text(
+        "from application_sdk.app.safelog import SafeLogger\n\n"
+        'def upload(log):\n    log.info("uploading {name}", name="x")\n'
+    )
+    (repo / "tests" / "integration").mkdir(parents=True, exist_ok=True)
+    (repo / "tests" / "integration" / "test_a_int.py").write_text(
+        "from application_sdk.app.safelog import SafeLogger\n"
+    )
+    (repo / "tests" / "unit" / "app").mkdir(parents=True, exist_ok=True)
+    (repo / "tests" / "unit" / "app" / "test_safelog.py").write_text(
+        "from application_sdk.app.safelog import SafeLogger\n\ndef test_log():\n    SafeLogger()._log\n"
+    )
+    return repo
+
+
+def _logger_ws(root: Path) -> tuple[Workspace, list]:
+    files = parse_unified_diff(LOGGER_DIFF)
+    head = {"application_sdk/app/safelog.py": LOGGER_V2}
+    ws = Workspace(
+        root=root,
+        head_text=head,
+        diffs={f.path: f for f in files},
+        index=build_index(root, overrides=head),
+    )
+    return ws, files
+
+
+def test_the_whole_changed_function_is_shown_with_changed_lines_marked(
+    logger_repo: Path,
+):
+    ws, files = _logger_ws(logger_repo)
+    block, _ = lens_context.build(ws, files, "")
+    fn = block.split("<changed_functions>", 1)[1]
+    # The leftover same-pattern line (unchanged, outside the hunk) is now in view...
+    assert 'self._backend().debug("probe failed", exc_info=True)' in fn
+    # ...and the changed lines are marked.
+    assert '+         exc_info = kwargs.pop("exc_info", False)' in fn
+
+
+def test_calls_are_followed_through_thin_wrappers_and_flag_the_public_api(
+    logger_repo: Path,
+):
+    ws, files = _logger_ws(logger_repo)
+    block, api = lens_context.build(ws, files, "")
+    assert "via info/error" in block
+    assert (
+        'application_sdk/storage/user.py:4  log.info("uploading {name}", name="x")'
+        in block
+    )
+    assert api and api[0].startswith(
+        "PUBLIC API behaviour change: info/error (via _log)"
+    )
+    assert "Consumers in other repositories were NOT checked" in api[0]
+
+
+def test_tests_are_ranked_unit_before_integration(logger_repo: Path):
+    ws, files = _logger_ws(logger_repo)
+    fd = files[0]
+    ranked = lens_context.ranked_tests(ws, fd, ["_log"])
+    assert ranked.index("tests/unit/app/test_safelog.py") < ranked.index(
+        "tests/integration/test_a_int.py"
+    )
+
+
+def test_code_the_pr_says_it_follows_is_included(logger_repo: Path):
+    ws, files = _logger_ws(logger_repo)
+    block, _ = lens_context.build(
+        ws, files, "This matches the existing PatternAdapter behaviour."
+    )
+    assert (
+        '<pattern name="PatternAdapter" path="application_sdk/app/adaptor.py"' in block
+    )
+    assert "def process(self, msg, kwargs)" in block
+
+
+def test_an_incomplete_fix_on_unchanged_code_is_a_capped_low_suggestion(
+    logger_repo: Path,
+):
+    ws, files = _logger_ws(logger_repo)
+    bundle = group(files)[0]
+    leftover = {
+        "path": "application_sdk/app/safelog.py",
+        "existing_code": '            self._backend().debug("probe failed", exc_info=True)',
+        "severity": "high",
+        "category": "bug",
+        "title": "exc_info still passed straight through",
+        "content": "The same bug class this PR fixes remains on the probe-failure path: the traceback is lost.",
+    }
+    f = agent_mod.place(ws, bundle, leftover)
+    assert (
+        f and f.scope == "unchanged" and f.line == 0 and f.head_line == 6
+    )  # summary-only, points at the line
+    kept, notes = agent_mod.calibrate(
+        [
+            f,
+            *[
+                agent_mod.place(
+                    ws,
+                    bundle,
+                    dict(leftover, title=f"x{i}", existing_code="        pad_a = 1"),
+                )
+                for i in range(3)
+            ],
+        ],
+        agent_mod.AgentLimits(max_unchanged=2),
+    )
+    assert kept[0].severity == "low" and any("unchanged code" in n for n in notes)
+    assert sum(1 for k in kept if k.scope == "unchanged") <= 2
+
+
+def test_test_only_findings_are_capped_at_low_unless_security():
+    lim = agent_mod.AgentLimits()
+    a = Finding(
+        "tests/unit/x/test_y.py", 3, "medium", "test", "fixture leaks", "b", "e1"
+    )
+    b = Finding(
+        "tests/unit/x/test_y.py",
+        4,
+        "critical",
+        "security",
+        "real token in fixture",
+        "b",
+        "e2",
+    )
+    kept, _ = agent_mod.calibrate([a, b], lim)
+    assert [k.severity for k in kept] == ["low", "critical"]
+
+
+def test_the_approach_check_is_told_about_public_api_changes(logger_repo: Path):
+    ws, files = _logger_ws(logger_repo)
+    text = build_input(ws, files, {"title": "t", "body": "b"}, max_input_tokens=6000)
+    assert "<public_api>" in text and "info/error (via _log)" in text
+
+
+# ---- the bench -----------------------------------------------------------------------------------------------
+
+BENCH_CASE = {
+    "source": {
+        "base": "b0",
+        "head": "h1",
+        "title": "Decode fetched bytes",
+        "body": "b",
+    },
+    "expect": [
+        {
+            "id": "decode-none",
+            "path": "application_sdk/storage/fetch.py",
+            "quote_any": ["return data.decode()"],
+            "min_severity": "high",
+            "max_severity": "high",
+        },
+        {
+            "id": "timeout-unused",
+            "path": "application_sdk/storage/fetch.py",
+            "keywords_any": ["timeout"],
+        },
+        {
+            "id": "bonus",
+            "path": "application_sdk/storage/fetch.py",
+            "keywords_any": ["docstring"],
+            "required": False,
+        },
+    ],
+    "must_not_flag": [
+        {
+            "path": "application_sdk/storage/fetch.py",
+            "quote_any": ["data = client.get(key)"],
+        }
+    ],
+    "approach": {"verdict_any": ["sound"], "mention_any": [["decode"], ["consumer"]]},
+}
+
+
+def _bench_state(*findings, approach=None):
+    return PRState(findings=list(findings), approach=approach or {})
+
+
+def test_bench_scores_recall_precision_severity_traps_and_the_approach():
+    from lens import bench  # noqa: PLC0415 - module under test
+
+    hit = Finding(
+        "application_sdk/storage/fetch.py",
+        4,
+        "medium",
+        "bug",
+        "decode on None",
+        "b",
+        "    return data.decode()",
+    )
+    trap = Finding(
+        "application_sdk/storage/fetch.py",
+        3,
+        "low",
+        "style",
+        "rename",
+        "b",
+        "    data = client.get(key)",
+    )
+    stray = Finding(
+        "application_sdk/storage/other.py", 9, "low", "style", "unrelated", "b", "x = 1"
+    )
+    st = _bench_state(
+        hit,
+        trap,
+        stray,
+        approach={
+            "verdict": "sound",
+            "problem": "fetch should decode",
+            "approach": "",
+            "concerns": [],
+        },
+    )
+    sc = bench.score_case("c", BENCH_CASE, st, [])
+    assert (
+        sc.caught == ["decode-none"]
+        and sc.missed == ["timeout-unused"]
+        and sc.bonus_caught == []
+    )
+    assert sc.severity_off == ["decode-none: got medium, expected high..high"]
+    assert len(sc.traps_hit) == 1 and len(sc.unexpected) == 1
+    assert sc.recall == 0.5 and sc.precision == pytest.approx(1 / 3)
+    assert sc.approach_ok is False and any("consumer" in n for n in sc.approach_notes)
+
+
+def test_bench_runs_each_case_fresh_without_posting_and_compares_to_a_baseline(
+    repo: Path, tmp_path: Path
+):
+    from lens import bench  # noqa: PLC0415 - module under test
+
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    (cases / "fetch.toml").write_text(
+        '[source]\nbase = "b0"\nhead = "h1"\ntitle = "t"\nbody = "b"\n'
+        '[[expect]]\nid = "decode-none"\npath = "application_sdk/storage/fetch.py"\nquote_any = ["return data.decode()"]\n'
+    )
+    gh = FakeGitHub()
+    gh.comments.append(
+        {
+            "id": 1,
+            "body": SUMMARY_MARKER
+            + PRState(
+                reviewed_head="h1", model="gpt-6-luna", config_hash="test"
+            ).encode(),
+            "user": {"login": "atlan-app-fleet[bot]"},
+        }
+    )
+    scores = bench.run_bench(
+        gh=gh,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=RuleSet([], {}),
+        client_factory=_factory(_review_script()),
+        cases_dir=cases,
+    )
+    [sc] = scores
+    assert (
+        sc.caught == ["decode-none"] and sc.error == ""
+    )  # prior PR state ignored: a fresh review
+    assert gh.reviews == [] and gh.statuses == [] and gh.posted == []  # nothing posted
+    report = bench.to_json(scores, "cfg1")
+    baseline = {
+        **report,
+        "recall": 0.0,
+        "cases": [{**report["cases"][0], "caught": []}],
+    }
+    table = bench.render(report, baseline)
+    assert "| 100% (+1.000)" in table and "**+decode-none**" in table
+
+
+def test_the_shipped_bench_cases_are_well_formed():
+    import tomllib  # noqa: PLC0415
+
+    cases = sorted(
+        (Path(__file__).resolve().parents[2] / "lens" / "bench" / "cases").glob(
+            "*.toml"
+        )
+    )
+    assert cases, "at least one bench case ships"
+    for p in cases:
+        c = tomllib.loads(p.read_text())
+        assert {"base", "head", "title", "body"} <= set(c["source"]), p.name
+        assert all(
+            len(c["source"][k]) == 40 for k in ("base", "head")
+        ), f"{p.name}: pin full commit SHAs"
+        for e in c.get("expect", []):
+            assert (
+                e.get("id")
+                and e.get("path")
+                and (e.get("quote_any") or e.get("keywords_any"))
+            ), (p.name, e)

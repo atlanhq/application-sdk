@@ -625,7 +625,13 @@ def render_summary(res: RunResult) -> str:
         )
         lines.append("| id | where | finding |\n|---|---|---|")
         for f in items:
-            where = f"`{f.path}:{f.line}`" if f.line else f"`{f.path}`"
+            where = (
+                f"`{f.path}:{f.line or f.head_line}`"
+                if (f.line or f.head_line)
+                else f"`{f.path}`"
+            )
+            if f.scope == "unchanged":
+                where += " (unchanged code: same pattern)"
             lines.append(f"| {f.id} | {where} | {f.title} |")
         lines.append("")
     fixed = [f for f in st.findings if f.status == "fixed"]
@@ -636,7 +642,8 @@ def render_summary(res: RunResult) -> str:
             "\n<details><summary>Findings that could not be anchored to a diff line</summary>\n"
         )
         for f in res.unplaced:
-            lines.append(f"- **{f.severity}** `{f.path}` — {f.title}: {f.body}")
+            loc = f"{f.path}:{f.head_line}" if f.head_line else f.path
+            lines.append(f"- **{f.severity}** `{loc}` — {f.title}: {f.body}")
         lines.append("\n</details>")
     t = res.triage
     mech_files = {p for ps in t.mechanical.values() for p in ps} | set(t.duplicate_of)

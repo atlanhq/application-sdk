@@ -25,9 +25,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import prompts, trace
+from . import context, prompts, trace
 from .bundle import Bundle
-from .diff import FileDiff, anchor
+from .diff import anchor, locate_in_text
 from .findings import Finding
 from .llm import (
     BudgetExhausted,
@@ -54,6 +54,7 @@ class AgentLimits:
     reflect_max_tokens: int = 8_000
     max_comments: int = 12
     max_nits: int = 5  # low-severity findings kept per bundle (REVIEW.md-style nit cap)
+    max_unchanged: int = 2  # incomplete-fix suggestions on unchanged code, per bundle
     plan: int = 1  # 0 disables
     plan_min_lines: int = 60
     plan_max_tokens: int = 8_000
@@ -83,32 +84,6 @@ class BundleResult:
 
 
 # ---- context -----------------------------------------------------------------
-
-
-def _changed_symbols(ws: Workspace, fd: FileDiff, limit: int = 6) -> list[str]:
-    """For each symbol that encloses an added line: signature, callers, tests.
-    This is the lookup a general agent would spend its first turns on."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for line in sorted(fd.added_lines):
-        s = ws.index.enclosing(fd.path, line)
-        if s is None or s.qualname in seen:
-            continue
-        seen.add(s.qualname)
-        callers = ws.index.callers_of(s.name, limit=3)
-        total = len(ws.index.callers.get(s.name, []))
-        call_txt = (
-            "; ".join(
-                f"{c.path}:{c.start}" for c in callers if c.qualname != s.qualname
-            )
-            or "none found"
-        )
-        out.append(
-            f"- {s.signature}  [{fd.path}:{s.start}-{s.end}]  callers({total}): {call_txt}"
-        )
-        if len(out) >= limit:
-            break
-    return out
 
 
 def build_rules_message(bundle: Bundle, rules: RuleSet) -> str:
@@ -150,27 +125,13 @@ def build_context(
             "against this intent; flag code that does not achieve it.\n"
             f"{pr_meta['understanding']}\n</pr_understanding>"
         )
-    ctx: list[str] = []
-    for fd in bundle.files:
-        tests = ws.index.tests_for.get(fd.path, [])
-        syms = _changed_symbols(ws, fd) if fd.path.endswith(".py") else []
-        if syms or fd.path.endswith(".py"):
-            ctx.append(
-                f"{fd.path} ({fd.status}, +{fd.additions}/-{fd.deletions}); tests importing it: "
-                + (", ".join(tests[:4]) if tests else "NONE")
-            )
-            ctx.extend(syms)
-    others = [p for p in ws.diffs if p not in bundle.paths]
-    if others:
-        ctx.append(
-            "Other files changed in this PR (read_diff to see them): "
-            + ", ".join(
-                f"{p} (+{ws.diffs[p].additions}/-{ws.diffs[p].deletions})"
-                for p in others[:30]
-            )
-        )
-    if ctx:
-        parts.append("<context>\n" + "\n".join(ctx) + "\n</context>")
+    # Callers (followed through thin wrappers), ranked tests, public-API flags,
+    # each changed function in full, and repo code the change or the PR names.
+    ctx_block, _api = context.build(
+        ws, bundle.files, f"{pr_meta.get('title') or ''}\n{pr_meta.get('body') or ''}"
+    )
+    if ctx_block:
+        parts.append(ctx_block)
 
     if confirmed:
         lines = [f"- [{f.id}] {f.path}: {f.title}" for f in confirmed[:30]]
@@ -214,12 +175,54 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
         if span:
             f.path = fd.path
             f.line, f.end_line = span
+            if not any(n in fd.added_lines for n in range(f.line, f.end_line + 1)):
+                f.scope = "unchanged"  # a diff-context line, not a changed one
             f.id = f.fingerprint()
             return f
     if path not in bundle.paths:
         return None  # outside its review set and not locatable: not this agent's finding to make
+    # Quoted from <changed_functions> outside any hunk: unchanged code, not inline-
+    # commentable. Keep where it is in the file so the summary can point at it.
+    f.head_line = locate_in_text(ws.text(path) or "", evidence)
+    if f.head_line:
+        f.scope = "unchanged"
     f.id = f.fingerprint()
     return f  # line 0: reported in the summary, not inline
+
+
+def calibrate(
+    found: list[Finding], limits: "AgentLimits"
+) -> tuple[list[Finding], list[str]]:
+    """Severity rules enforced in code, never by asking.
+
+    - Unchanged code (the incomplete-fix exception) is a suggestion: capped at
+      low, at most `max_unchanged` per bundle — a pointer, never a rabbit hole.
+    - A finding only in a test file is test hygiene: capped at low, unless it is
+      a security finding (a real credential in a fixture is still critical).
+    Returns the kept findings and a note per change made."""
+    notes: list[str] = []
+    kept: list[Finding] = []
+    unchanged = 0
+    for f in found:
+        if f.scope == "unchanged":
+            unchanged += 1
+            if unchanged > limits.max_unchanged:
+                notes.append(
+                    f"dropped {f.id}: over {limits.max_unchanged} unchanged-code suggestions"
+                )
+                continue
+            if f.severity != "low":
+                notes.append(f"{f.id}: {f.severity} → low (unchanged code)")
+                f.severity = "low"
+        elif (
+            context._is_test(f.path)
+            and f.category != "security"
+            and f.severity in ("critical", "high", "medium")
+        ):
+            notes.append(f"{f.id}: {f.severity} → low (test-only)")
+            f.severity = "low"
+        kept.append(f)
+    return kept, notes
 
 
 # ---- the loop ----------------------------------------------------------------
@@ -317,6 +320,9 @@ def review_bundle(
                 else ""
             )
         )
+    placed, calibration = calibrate(placed, limits)
+    for note in calibration:
+        trace.line(f"[{bundle.label}] severity rule: {note}")
     # Nits are capped in code, never by asking: every finding at medium+ is kept.
     nits_all = [f for f in placed if f.severity == "low"]
     nits = nits_all[: limits.max_nits]

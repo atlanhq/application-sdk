@@ -46,6 +46,10 @@ class Finding:
     body: str
     evidence: str  # verbatim code the finding is about ("existing_code")
     end_line: int = 0
+    head_line: int = (
+        0  # where the quote sits in the PR-head file, when not inline-commentable
+    )
+    scope: str = "changed"  # changed | unchanged (an incomplete-fix suggestion on unchanged code)
     scenario: str = ""
     suggestion: str = ""
     rule_id: str = ""
