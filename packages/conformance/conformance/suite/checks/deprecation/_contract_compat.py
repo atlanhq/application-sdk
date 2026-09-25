@@ -39,6 +39,7 @@ from conformance.suite.schema.disposition import RuleScope
 from conformance.suite.schema.findings import Finding
 
 from ._ledger_schema import ContractField, ContractLedger, regen_command
+from ._sdk_type_aliases import collect_sdk_imported_aliases
 
 # ── Main scan function ────────────────────────────────────────────────────────
 
@@ -401,7 +402,10 @@ def scan_contract_compat(
             rel = str(path)
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
         file_aliases[path] = aliases
-        file_type_aliases[path] = collect_type_aliases(tree)
+        file_type_aliases[path] = {
+            **collect_sdk_imported_aliases(tree),
+            **collect_type_aliases(tree),
+        }
         aliases_by_rel[rel] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
