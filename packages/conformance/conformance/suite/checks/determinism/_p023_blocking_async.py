@@ -11,7 +11,8 @@ code — the second half of the user's async-correctness ask.  Two patterns:
 
 * **Blocking sync I/O** — a synchronous call that sends a request or sleeps
   (``requests.get``/``post``/…/``request``, a send on a ``requests.Session()``
-  built inline or bound to a name in the same function,
+  built inline, bound to a name in the same function, or bound to a
+  ``self.<attr>`` in any method of the same class,
   ``urllib.request.urlopen``/``urlretrieve``,
   ``time.sleep``) and blocks the event loop instead of awaiting an async
   equivalent / offloading via ``App.run_in_thread()``.  Constructors that do no
@@ -286,6 +287,7 @@ class _Visitor(ast.NodeVisitor):
         self.workflow_ids = workflow_ids
         self._async_stack: list[bool] = []
         self._session_stack: list[set[str]] = []
+        self._class_sessions: list[set[str]] = []
         self._wf_depth = 0
         self._awaited: set[int] = set()
         self.findings: list[Finding] = []
@@ -335,6 +337,35 @@ class _Visitor(ast.NodeVisitor):
         self._session_stack.pop()
         self._async_stack.pop()
 
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._class_sessions.append(self._self_sessions(node))
+        self.generic_visit(node)
+        self._class_sessions.pop()
+
+    def _self_sessions(self, node: ast.ClassDef) -> set[str]:
+        """``self.<attr>`` names bound to a ``requests`` session in any method."""
+        found: set[str] = set()
+        for method in node.body:
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for stmt in ast.walk(method):
+                pairs: list[tuple[ast.expr, ast.expr | None]] = []
+                if isinstance(stmt, ast.Assign):
+                    pairs = [(target, stmt.value) for target in stmt.targets]
+                elif isinstance(stmt, ast.AnnAssign):
+                    pairs = [(stmt.target, stmt.value)]
+                elif isinstance(stmt, ast.With):
+                    pairs = [
+                        (item.optional_vars, item.context_expr)
+                        for item in stmt.items
+                        if item.optional_vars is not None
+                    ]
+                for target, value in pairs:
+                    key = self._binding_key(target)
+                    if key and key.startswith("self.") and self._is_session_call(value):
+                        found.add(key)
+        return found
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_func(node, is_async=False)
 
@@ -346,13 +377,19 @@ class _Visitor(ast.NodeVisitor):
             resolve_call_target(value.func, self.bindings)
         )
 
+    def _binding_key(self, target: ast.expr) -> str | None:
+        if not isinstance(target, (ast.Name, ast.Attribute)):
+            return None
+        return resolve_call_target(target, self.bindings)
+
     def _bind(self, target: ast.expr, value: ast.expr | None) -> None:
-        if not self._session_stack or not isinstance(target, ast.Name):
+        key = self._binding_key(target)
+        if not self._session_stack or key is None:
             return
         if self._is_session_call(value):
-            self._session_stack[-1].add(target.id)
+            self._session_stack[-1].add(key)
         else:
-            self._session_stack[-1].discard(target.id)
+            self._session_stack[-1].discard(key)
 
     def visit_Assign(self, node: ast.Assign) -> None:
         self.generic_visit(node)
@@ -373,12 +410,12 @@ class _Visitor(ast.NodeVisitor):
             self.visit(stmt)
 
     def _is_named_session_send(self, target: str) -> bool:
-        root, _, attr = target.partition(".")
-        return (
-            bool(self._session_stack)
-            and root in self._session_stack[-1]
-            and attr in _SESSION_SENDS
-        )
+        receiver, _, attr = target.rpartition(".")
+        if attr not in _SESSION_SENDS:
+            return False
+        if self._session_stack and receiver in self._session_stack[-1]:
+            return True
+        return bool(self._class_sessions) and receiver in self._class_sessions[-1]
 
     def _in_async(self) -> bool:
         return bool(self._async_stack) and self._async_stack[-1]

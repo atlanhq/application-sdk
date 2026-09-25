@@ -1116,7 +1116,8 @@ Only the calls that send a request are network findings. Constructors do no I/O 
 `urllib.request.Request()` — so building a session in an `async def` is silent.  A send
 on that session is flagged: inline (`requests.Session().get(...)`), or through a name
 bound from `requests.Session()` in the same function (`s = ...`, `s: ... = ...`, `with
-... as s`) and then called with `s.get` / `post` / … / `request` / `send`.
+... as s`) and then called with `s.get` / `post` / … / `request` / `send`, or through a
+`self.<attr>` bound to a session in any method of the same class (`__init__` included).
 
 Single-syscall filesystem operations (`os.remove`, `os.unlink`, `os.rmdir`) are **not**
 flagged: one inode operation does not earn a thread hop, and flagging them would bury

@@ -603,7 +603,8 @@ drafting.
   - *blocking network / sleep* — `await` an async equivalent, or offload via
     `App.run_in_thread()` inside a `@task`.  Only the send is a finding
     (`requests.get`, or `s.get`/`s.send` on a session built in the same
-    function): building a `requests.Session()` or `HTTPAdapter()` does no I/O
+    function, or on a `self.<attr>` session set in any method of the class):
+    building a `requests.Session()` or `HTTPAdapter()` does no I/O
     and is not flagged, so never move a constructor behind a sync helper to
     clear P023.
   - *tree op, data-scale I/O, whole-file, serialization* — offload with the
