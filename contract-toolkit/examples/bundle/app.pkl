@@ -45,6 +45,14 @@ entrypoints {
     displayName = "Query Miner"
     source = "snowflake"
     sourceCategory = "database"
+    // This deployment keeps a custom WorkflowTemplate name for the miner.
+    // The override affects only the generated e2e harness, not the marketplace card.
+    e2eOverrides {
+      connectorShortName = "bundle"
+      argoPackageName = "@atlan/miner"
+      argoTemplateName = "atlan-query-miner"
+      connectorConfigName = "atlan-connectors-bundle"
+    }
     contract = Miner
   }
 }
