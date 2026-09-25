@@ -112,6 +112,18 @@ recommend no action on is not a finding). These apply to nits ONLY —
 Critical/Important/regressions are always raised, including on code the
 resolver just pushed.
 
+Every review, first or re-review, is **approach-first** (ORCHESTRATION.md
+§2e″). Judge from the code and its evidence, never from the PR's title, body or
+comments — the author's framing is a claim to verify. First decide whether the
+approach is right; if it has more cons than pros, raise that directly, once, in
+this round (**Wrong approach** + the concrete alternative) instead of filing
+the instance fixes it would make moot. Once an approach stands, a gap that
+follows from its deliberate trade-off is by design; severity follows real
+reach, not an input you constructed; never prescribe data-flow/binding analysis
+or new machinery to close a hypothetical; a narrower sub-case of a class
+already raised and addressed is at most a nit; and a class that recurs across rounds
+becomes one "approach not converging" finding (→ `NEEDS_HUMAN`), not another fix.
+
 ## Path Forward on Every Finding
 
 For each finding, include a `path_forward` in the inline comment:
@@ -119,6 +131,8 @@ For each finding, include a `path_forward` in the inline comment:
 - **Temporary fix + follow-up** — quick fix X, but the right solution is Y
 - **Wrong approach** — this PR's approach won't work, do Y instead
 - **Design decision needed** — needs team discussion before proceeding
+- **Accept as documented limitation** — pin the behaviour with a test and a
+  docstring note, when a sound fix is out of proportion (ORCHESTRATION §2e″)
 
 Don't just say "this is wrong." Say what the right path forward is.
 
