@@ -729,13 +729,31 @@ def test_p023_local_bindings_shadow_an_enclosing_session() -> None:
     for stmts in (
         "async def inner(s):\n            s.get('x')",
         "async def inner(*, s):\n            s.get('x')",
-        "f = lambda s: s.get('x')",
         "for s in items:\n            s.get('x')",
         "for k, s in items:\n            s.get('x')",
         "r = [s.get('x') for s in items]",
         "try:\n            pass\n        except E as s:\n            s.get('x')",
+        "with ctx() as (a, s):\n            s.get('x')",
     ):
         assert _rule(_p023_async_task(header, session + stmts), "P023") == [], stmts
+
+
+def test_p023_class_body_names_have_their_own_scope() -> None:
+    shadow_stays_in_class = (
+        "s = requests.Session()\n"
+        "        class C:\n"
+        "            s = 1\n"
+        "        s.get('x')"
+    )
+    method_cannot_see_class_body = (
+        "class C:\n"
+        "            s = requests.Session()\n"
+        "            async def g(self):\n"
+        "                s.get('x')"
+    )
+    header = "import requests\n"
+    assert len(_rule(_p023_async_task(header, shadow_stays_in_class), "P023")) == 1
+    assert _rule(_p023_async_task(header, method_cannot_see_class_body), "P023") == []
 
 
 def test_p023_comprehension_names_do_not_leak() -> None:

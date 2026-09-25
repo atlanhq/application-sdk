@@ -333,6 +333,7 @@ class _Visitor(ast.NodeVisitor):
         self._scopes: list[dict[str, str | None]] = []
         self._class_clients: list[dict[str, str]] = []
         self._class_floors: list[int] = []
+        self._class_bodies: set[int] = set()
         self._wf_depth = 0
         self._awaited: set[int] = set()
         self.findings: list[Finding] = []
@@ -392,7 +393,12 @@ class _Visitor(ast.NodeVisitor):
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._class_clients.append(self._self_clients(node))
         self._class_floors.append(len(self._scopes))
+        body_scope: dict[str, str | None] = {}
+        self._class_bodies.add(id(body_scope))
+        self._scopes.append(body_scope)
         self.generic_visit(node)
+        self._scopes.pop()
+        self._class_bodies.discard(id(body_scope))
         self._class_floors.pop()
         self._class_clients.pop()
 
@@ -486,6 +492,7 @@ class _Visitor(ast.NodeVisitor):
         for item in node.items:
             self.visit(item.context_expr)
             if item.optional_vars is not None:
+                self.visit(item.optional_vars)
                 self._bind(item.optional_vars, item.context_expr)
         for stmt in node.body:
             self.visit(stmt)
@@ -493,14 +500,18 @@ class _Visitor(ast.NodeVisitor):
     def _receiver_kind(self, receiver: str) -> str | None:
         """The client bound to ``receiver``, innermost scope first, then the class.
 
-        A plain name follows Python's closures through every enclosing function.
-        A ``self.<attr>`` stops at the nearest class: its ``self`` is that
-        class's instance, not the one an enclosing method bound.
+        A plain name follows Python's closures through every enclosing function,
+        skipping class bodies, which a method cannot see. A ``self.<attr>``
+        stops at the nearest class: its ``self`` is that class's instance, not
+        the one an enclosing method bound.
         """
         floor = 0
         if receiver.startswith("self.") and self._class_floors:
             floor = self._class_floors[-1]
+        innermost = self._scopes[-1] if self._scopes else None
         for scope in reversed(self._scopes[floor:]):
+            if id(scope) in self._class_bodies and scope is not innermost:
+                continue
             if receiver in scope:
                 return scope[receiver]
         if self._class_clients:

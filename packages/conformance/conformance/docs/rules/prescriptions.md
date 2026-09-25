@@ -1121,8 +1121,9 @@ client is flagged: `get` / `post` / … / `request` / `send` on a `requests.Sess
 function (`s = ...`, `s: ... = ...`, `with ... as s`, `s := ...`; the nearest binding
 wins, and a parameter, loop, comprehension or `except ... as` name shadows it), or
 through a `self.<attr>` bound to one client in the methods of the same class (`__init__`
-included, an initial `None` allowed, nested classes excluded on both sides).  A
-module-level client is not tracked.
+included, an initial `None` allowed, nested classes excluded on both sides).  A class
+body is its own scope, which its methods do not see.  A module-level client is not
+tracked.
 
 Single-syscall filesystem operations (`os.remove`, `os.unlink`, `os.rmdir`) are **not**
 flagged: one inode operation does not earn a thread hop, and flagging them would bury
