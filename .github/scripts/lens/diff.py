@@ -221,11 +221,18 @@ def anchor(fd: FileDiff, snippet: str) -> tuple[int, int] | None:
     return (touching or hits)[0]
 
 
-def snippet_in_text(text: str, snippet: str) -> bool:
-    """Whether `snippet` still occurs (normalised, consecutively) in a whole file."""
+def locate_in_text(text: str, snippet: str) -> int:
+    """The first line at which `snippet` occurs (normalised, consecutively) in a
+    whole file, or 0 when it does not."""
     needle = snippet_lines(snippet)
     if not needle:
-        return False
+        return 0
     seq = [(i, _norm(t)) for i, t in enumerate(text.splitlines(), 1)]
     seq = [(n, t) for n, t in seq if t]
-    return bool(_find_run(seq, needle))
+    hits = _find_run(seq, needle)
+    return hits[0][0] if hits else 0
+
+
+def snippet_in_text(text: str, snippet: str) -> bool:
+    """Whether `snippet` still occurs (normalised, consecutively) in a whole file."""
+    return locate_in_text(text, snippet) > 0

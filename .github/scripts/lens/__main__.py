@@ -4,8 +4,8 @@
     python -m lens review --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
 
 Run from `.github/scripts` against a checkout of the BASE branch (`--root`).
-`--dry-run` prints the result as JSON and posts nothing — the mode the
-replay bench uses on historical PRs. Exit code is 0 whenever lens ran to a
+`--dry-run` prints the result as JSON and posts nothing — the way to try lens
+on any PR, including a historical one. Exit code is 0 whenever lens ran to a
 verdict or a deliberate skip; a non-zero exit means lens itself failed.
 """
 
@@ -17,6 +17,7 @@ import os
 import sys
 from pathlib import Path
 
+from . import report, trace
 from .config import load_config, validate
 from .event import decide
 from .github import GitHub
@@ -48,6 +49,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"lens: not running — {d.reason}")
             return 0
         args.pr, args.force, comment_id = d.pr, args.force or d.force, d.comment_id
+        trace.line(
+            f"trigger: {args.event_name} on PR #{d.pr}"
+            + (" (force)" if d.force else "")
+        )
     if not args.pr:
         ap.error("--pr or --event-name is required")
     live = not args.dry_run
@@ -88,14 +93,25 @@ def main(argv: list[str] | None = None) -> int:
             react("confused")
             return 0
 
+    run_url = _run_url()
+    # A "running" note while the review is in progress, with a link to the live log. It is
+    # removed once the verdict is posted (the verdict links the run too), and turned into a
+    # failure note if lens itself crashes, so it never lingers as a stale "running".
+    progress_id = _progress(gh, args.pr, run_url) if live else 0
+
     def client_factory(ledger):  # noqa: ANN001, ANN202
-        return Client(
+        client = Client(
             model=cfg.model,
             price=cfg.price,
             ledger=ledger,
             reasoning_effort=cfg.reasoning_effort,
             api=cfg.api,
         )
+        # Every model request is logged live, as it completes (counts only, no content).
+        client.log = lambda event: print(
+            report.call_line(event), file=sys.stderr, flush=True
+        )
+        return client
 
     try:
         res = run(
@@ -107,10 +123,17 @@ def main(argv: list[str] | None = None) -> int:
             client_factory=client_factory,
             force=args.force,
             post=live,
+            run_url=run_url,
         )
     except Exception:
+        _best_effort(
+            gh.edit_comment,
+            progress_id,
+            FAILED_NOTE.format(url=run_url or "the Actions log"),
+        )
         react("confused")
         raise
+    _best_effort(gh.delete_comment, progress_id)
     if args.dry_run:
         print(to_json(res))
         if res.action == "reviewed":
@@ -122,6 +145,16 @@ def main(argv: list[str] | None = None) -> int:
         if res.action == "skipped" and comment_id:
             # Asked, but nothing to do: say why instead of leaving the author guessing.
             gh.comment(args.pr, f"lens: nothing to review — {res.reason}.")
+    # Run report: the Actions job summary page and a JSON artifact (see lens.yml).
+    try:
+        report.write(
+            res,
+            args.pr,
+            os.environ.get("LENS_REPORT_PATH"),
+            os.environ.get("GITHUB_STEP_SUMMARY"),
+        )
+    except OSError as e:
+        print(f"lens: could not write the run report: {e}", file=sys.stderr)
     for n in res.notes:
         print(f"lens: note: {n}", file=sys.stderr)
     for r in res.incomplete:
@@ -134,6 +167,43 @@ def main(argv: list[str] | None = None) -> int:
     # A model/transport failure turns the job red. A deliberate budget stop does
     # not: the summary already says the review is incomplete and why.
     return 1 if res.failed else 0
+
+
+PROGRESS_NOTE = (
+    "⏳ **lens is reviewing this PR** — [watch the run live]({url}).\n\n"
+    "<sub>This note is removed when the verdict is posted. If it is still here after the run "
+    "ends, the run was cancelled or timed out: see the log, then comment `/lens` again.</sub>"
+)
+FAILED_NOTE = (
+    "❌ **lens failed before it could post a verdict** — see {url}. "
+    "Comment `/lens` to retry."
+)
+
+
+def _run_url() -> str:
+    """This Actions run's page, from the variables GitHub sets in every job."""
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    repo, run_id = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_RUN_ID")
+    return f"{server}/{repo}/actions/runs/{run_id}" if repo and run_id else ""
+
+
+def _progress(gh: GitHub, pr: int, run_url: str) -> int:
+    if not run_url:
+        return 0
+    try:
+        return gh.comment(pr, PROGRESS_NOTE.format(url=run_url))
+    except Exception as e:  # noqa: BLE001 - a progress note must never stop the review
+        print(f"lens: could not post the progress note: {e}", file=sys.stderr)
+        return 0
+
+
+def _best_effort(fn, comment_id: int, *args) -> None:  # noqa: ANN001
+    if not comment_id:
+        return
+    try:
+        fn(comment_id, *args)
+    except Exception as e:  # noqa: BLE001 - cleanup must never mask the real outcome
+        print(f"lens: progress note cleanup failed: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

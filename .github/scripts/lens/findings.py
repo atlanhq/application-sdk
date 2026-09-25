@@ -33,6 +33,8 @@ CATEGORIES = (
     "other",
 )
 STATE_MARKER = "lens-state"
+BODY_KEEP = 600  # characters of an open finding's body kept in the state
+EVIDENCE_KEEP_RESOLVED = 160  # the part the fingerprint is built from
 _STATE_RE = re.compile(r"<!--\s*" + STATE_MARKER + r":([A-Za-z0-9+/=]+)\s*-->")
 
 
@@ -46,6 +48,10 @@ class Finding:
     body: str
     evidence: str  # verbatim code the finding is about ("existing_code")
     end_line: int = 0
+    head_line: int = (
+        0  # where the quote sits in the PR-head file, when not inline-commentable
+    )
+    scope: str = "changed"  # changed | unchanged (an incomplete-fix suggestion on unchanged code)
     scenario: str = ""
     suggestion: str = ""
     rule_id: str = ""
@@ -53,7 +59,11 @@ class Finding:
     confidence: float = 0.0
     id: str = ""
     status: str = "open"  # open | fixed | wontfix | stale
-    round: int = 1
+    round: int = 1  # the round that found it
+    fixed_round: int = (
+        0  # the round that resolved it (0 = open, or resolved before this was recorded)
+    )
+    fixed_by: str = ""  # code-gone (its quoted code left the PR) | verified (the model confirmed the fix)
 
     def fingerprint(self) -> str:
         ev = " ".join((self.evidence or "").split())[:160]
@@ -92,8 +102,21 @@ class PRState:
             f for f in self.findings if f.status == "open" and f.severity in severities
         ]
 
-    def encode(self) -> str:
-        raw = json.dumps(asdict(self), separators=(",", ":")).encode()
+    def encode(self, body_keep: int = BODY_KEEP) -> str:
+        """The state as a hidden comment block, kept small: a GitHub comment holds at most
+        65,536 characters. Only what a later round reads is stored. An open finding keeps
+        its quoted code (free resolution matches it) and a capped body (the verify call
+        reads it); the scenario and suggestion were already posted inline. A resolved
+        finding keeps only what the Resolved table shows."""
+        data = asdict(self)
+        for f in data["findings"]:
+            f["scenario"] = f["suggestion"] = ""
+            if f["status"] == "open":
+                f["body"] = f["body"][:body_keep]
+            else:
+                f["body"] = ""
+                f["evidence"] = f["evidence"][:EVIDENCE_KEEP_RESOLVED]
+        raw = json.dumps(data, separators=(",", ":")).encode()
         return f"<!-- {STATE_MARKER}:{base64.b64encode(zlib.compress(raw, 9)).decode()} -->"
 
     @classmethod

@@ -96,9 +96,44 @@ jobs:
           ROOT: ${{ github.workspace }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PATH: ${{ github.event_path }}
+          # Run report (every model request, bundle, timing; no prompts, code or keys):
+          # written here and to this job's summary page, then uploaded below.
+          LENS_REPORT_PATH: ${{ runner.temp }}/lens-run.json
+          # Stream every trace line to the live job log as it happens.
+          PYTHONUNBUFFERED: "1"
         run: >-
           python -m lens review
           --repo "$REPO"
           --root "$ROOT"
           --event-name "$EVENT_NAME"
           --event-path "$EVENT_PATH"
+
+      # The repo's upload pattern (see conformance-reusable.yaml): a finalize 403 from
+      # the artifact service fails the first attempt even though the bytes landed, so
+      # the first attempt never fails the job, and a distinctly named retry follows.
+      - name: Upload the run report
+        id: upload-report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lens-run-${{ github.event.issue.number || inputs.pr }}
+          path: ${{ runner.temp }}/lens-run.json
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Wait before the upload retry
+        if: always() && steps.upload-report.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload the run report (retry)
+        if: always() && steps.upload-report.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lens-run-${{ github.event.issue.number || inputs.pr }}-retry
+          path: ${{ runner.temp }}/lens-run.json
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true

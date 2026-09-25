@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import threading
 import time
 import urllib.error
@@ -254,8 +255,15 @@ class Client:
         # records a one-time switch to chat when the gateway has no /v1/responses.
         self.api = api
         self.fell_back = ""
-        self.diagnostics: list[str] = []
-        self.stop_reason = ""  # why the breaker was opened, when a fatal error opened it  # what answered an unexpected preflight status
+        self.diagnostics: list[str] = []  # what answered an unexpected preflight status
+        self.stop_reason = (
+            ""  # why the breaker was opened, when a fatal error opened it
+        )
+        # Observability: one record per request attempt (never prompts, code or the key),
+        # plus an optional live sink the CLI points at the job log.
+        self.calls: list[dict[str, Any]] = []
+        self.log: Any = None
+        self._calls_lock = threading.Lock()
         self._transport = transport or self._http
         self._meta = meta_transport or self._http_get
         self.unsupported: set[str] = set()
@@ -658,6 +666,16 @@ class Client:
         }
         return content, tool_calls, usage, message, str(data.get("status") or "")
 
+    def _note_call(self, **event: Any) -> None:
+        with self._calls_lock:
+            event["n"] = len(self.calls) + 1
+            self.calls.append(event)
+        if self.log:
+            try:
+                self.log(event)
+            except Exception:  # noqa: BLE001 - a logging sink must never break a review
+                print("lens: (a call-log line could not be written)", file=sys.stderr)
+
     def _complete(
         self,
         stage,
@@ -689,10 +707,12 @@ class Client:
         attempt = 0
         learnt = 0
         while True:
+            t0 = time.monotonic()
             try:
                 status, headers, text = self._transport(body)
             except (TimeoutError, urllib.error.URLError, OSError) as e:
                 status, headers, text = 0, {}, f"transport: {e}"
+            latency_ms = int((time.monotonic() - t0) * 1000)
             if status == 200:
                 self._record(True)
                 data = json.loads(text)
@@ -712,6 +732,23 @@ class Client:
                             pass
                 cost = self.actual_cost(usage, reported)
                 self.ledger.book(stage, cost, usage)
+                self._note_call(
+                    stage=stage,
+                    api=self.api,
+                    status=200,
+                    attempt=attempt,
+                    latency_ms=latency_ms,
+                    input=int(usage.get("prompt_tokens") or 0),
+                    cached=int(
+                        (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+                        or 0
+                    ),
+                    output=int(usage.get("completion_tokens") or 0),
+                    reasoning=int(usage.get("reasoning_tokens") or 0),
+                    cost=round(cost, 6),
+                    tool_calls=len(msg.get("tool_calls") or []),
+                    effort=self.reasoning_effort or "",
+                )
                 return Completion(
                     content=msg.get("content") or "",
                     tool_calls=msg.get("tool_calls") or [],
@@ -722,6 +759,16 @@ class Client:
                 )
             self._record(False)
             last = f"HTTP {status}: {text[:300]}"
+            self._note_call(
+                stage=stage,
+                api=self.api,
+                status=status,
+                attempt=attempt,
+                latency_ms=latency_ms,
+                error=re.sub(r"sk-[A-Za-z0-9._-]+", "sk-…", " ".join(text.split()))[
+                    :160
+                ],
+            )
             if self.api == "responses" and status in (404, 405, 501):
                 # The gateway has no /v1/responses: switch once, for the whole run, to chat —
                 # where luna can call tools only without reasoning — and say so.
