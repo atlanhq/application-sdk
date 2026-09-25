@@ -1,11 +1,11 @@
 # security: Secrets, credentials, injection, isolation
 - Flag: hardcoded keys/tokens/passwords/private keys/DSNs; real creds in fixtures. Never quote the value.
 - Flag: logging credential objects, auth headers, DSNs with passwords, tokens, cookies, JWTs.
-- Flag: raw dict credentials instead of `CredentialRef` + `CredentialResolver`; secrets in Temporal Input/Output (pass `CredentialRef`); creds in `app_state` not `SecretStore`.
-- Flag: secret material (`*.pem|key|keytab|p12|jks`, refresh tokens) read via a storage/Dapr binding also used for data (`DEPLOYMENT_OBJECT_STORE_NAME`, `OUTPUT_*`).
-- Flag: f-string/concat SQL (dynamic identifiers need allowlist + `sql.Identifier`); `os.system`, `shell=True` with variables, `eval`/`exec`, untrusted `pickle.loads`, `yaml.load` without SafeLoader.
+- Flag: raw dict credentials instead of `CredentialRef` + `CredentialResolver` (apps don't call `SecretStore` directly); secrets in Temporal Input/Output (pass a `CredentialRef`); new use of the deprecated `CredentialRef.from_workflow_args()`.
+- Flag: secret material (`*.pem|key|keytab|p12|jks`, refresh tokens) read through a data object-store binding (`DEPLOYMENT_OBJECT_STORE_NAME`, `UPSTREAM_OBJECT_STORE_NAME`) instead of the secret store.
+- Flag: SQL built by f-string/concat from input (dynamic identifiers need an allowlist; filters go through `validate_filter_no_sql_injection`); `os.system`, `shell=True` with variables, `eval`/`exec`, untrusted `pickle.loads`, `yaml.load` without SafeLoader.
 - Flag: caller-controlled path joins without traversal checks; a string field skipping the `validate_*` validator its same-sink siblings use.
-- Flag: `tenant_id` from request body/params; storage/state keys not tenant-scoped.
-- Flag: `verify=False`, wildcard CORS, `str(e)`/tracebacks in HTTP responses (use `HandlerError`).
+- Flag: TLS verification disabled (`verify=False` on an HTTP/TLS client — not the storage integrity `verify` kwarg), wildcard CORS, `str(e)`/tracebacks in HTTP responses (raise a typed `AppError` leaf).
+- Flag: storage or state keys that don't follow the run-scoped layout (`WORKFLOW_OUTPUT_PATH_TEMPLATE` in `application_sdk/constants.py`), letting one run read another's data.
 - Flag: bodies to Atlan edge routes carrying PEM, `{{ }}`/`{% %}`/`${}` or `<placeholder>` text unencoded (WAF rejects).
-- Severity: critical for secret exposure, creds in logs/payloads, injection, cross-tenant access, shared cred/data storage; high otherwise. Never low.
+- Severity: critical for secret exposure, creds in logs/payloads, injection, cross-run access, shared cred/data storage; high otherwise. Never low.

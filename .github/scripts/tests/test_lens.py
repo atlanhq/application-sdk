@@ -9,6 +9,7 @@ that make a PR's reviews converge.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -3073,3 +3074,101 @@ def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Pat
     summary = gh.comments[0]["body"]
     assert f"| [run]({url}) |" in summary.split("🕘 Round history")[1]
     assert f"[Run log]({url})" in gh.reviews[-1]["body"]
+
+
+# ---- the shipped cards and routing stay true to the repo --------------------------------------------------------
+# A card that cites a moved directory or a retired rule makes lens demand a change
+# that cannot exist (a prior card asked every conformance rule PR for a "paired
+# remediation/** change" long after remediation moved into packages/conformance).
+
+_REPO = Path(__file__).resolve().parents[3]
+_LENS = _REPO / ".github" / "lens"
+
+
+def _tracked() -> list[str]:
+    import subprocess  # noqa: PLC0415 - only these guards need git
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(_REPO), "ls-files"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip("not a git checkout")
+    return [line for line in out.splitlines() if line]
+
+
+def test_every_rules_glob_matches_a_tracked_file_and_wins_for_one():
+    files = _tracked()
+    rules = load_rules(_LENS)
+    winners: dict[str, int] = {g: 0 for g, _ in rules.entries}
+    for f in files:
+        for glob, _ in rules.entries:
+            if glob_match(f, glob):
+                winners[glob] += 1
+                break
+    matching = {g for g, _ in rules.entries if any(glob_match(f, g) for f in files)}
+    assert not [
+        g for g, _ in rules.entries if g not in matching
+    ], "globs that match no tracked file"
+    dead = [g for g, n in winners.items() if n == 0]
+    assert (
+        not dead
+    ), f"globs shadowed by earlier entries (never the first match): {dead}"
+    # A directory whose code moved away often keeps a README: that is not a live area.
+    readme_only = [
+        g
+        for g, _ in rules.entries
+        if g.endswith("/**")
+        and not any(glob_match(f, g) and not f.endswith("README.md") for f in files)
+    ]
+    assert not readme_only, f"globs that only match a leftover README: {readme_only}"
+
+
+def _card_paths(text: str) -> list[str]:
+    """Backticked repo paths a card cites (`a/b/`, `a/b.py`, `a/**/*.pkl`)."""
+    out = []
+    for tok in re.findall(r"`([^`\s]+)`", text):
+        if (
+            "/" not in tok
+            or tok.startswith(("./", "artifacts/", "http"))
+            or "{" in tok
+            or "|" in tok
+        ):
+            continue
+        out.append(
+            re.sub(r"<[^>]+>", "*", tok.rstrip("/"))
+        )  # `<area>` is a placeholder
+    return out
+
+
+def test_every_path_a_card_cites_exists():
+    files = _tracked()
+    top = {f.split("/", 1)[0] for f in files}
+    missing = []
+    for name, text in load_rules(_LENS).cards.items():
+        for ref in _card_paths(text):
+            if ref.split("/", 1)[0] not in top:
+                continue  # not a repo-root path (e.g. `suite/` prose, `x/y` ratios)
+            if any(
+                f == ref or f.startswith(ref + "/") or glob_match(f, ref) for f in files
+            ):
+                continue
+            missing.append(f"{name}: {ref}")
+    assert not missing, f"cards cite paths that do not exist: {missing}"
+
+
+def test_every_conformance_rule_id_a_card_cites_exists():
+    rules_dir = _REPO / "packages" / "conformance" / "conformance" / "suite" / "rules"
+    known = set()
+    for f in rules_dir.glob("*.py"):
+        known |= set(re.findall(r'id="([A-Z]\d{3})"', f.read_text(encoding="utf-8")))
+    assert known, "conformance catalog not found"
+    cited = []
+    for name, text in load_rules(_LENS).cards.items():
+        cited += [(name, i) for i in re.findall(r"\b([A-Z]\d{3})\b", text)]
+    unknown = [f"{n}: {i}" for n, i in cited if i not in known]
+    assert not unknown, f"cards cite conformance rules that do not exist: {unknown}"

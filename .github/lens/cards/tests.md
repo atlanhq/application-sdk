@@ -1,12 +1,12 @@
 # tests: Test quality and isolation
-- Flag: new exported API, `@task`, Handler or contract with no test (check `search_code` first); new error branch with no `pytest.raises` case.
+- Flag: a bug, security or performance fix with no regression test; a new exported API, `@task`, Handler or contract with no test (check `search_code` first); a new error branch with no `pytest.raises` case (`docs/agents/testing.md`).
 - Flag: test files outside collected paths (`tests/`, `.github/scripts/tests`, a package's `tests/`).
-- Flag: a test defining an `App` subclass or `@task` methods without the `clean_app_registry` fixture (registry leak).
-- Flag: unit tests hitting real network/Dapr/Temporal/DB/cloud (`httpx.AsyncClient`, `boto3.client`, `DaprClient`) unmocked; use `MockStateStore`, `MockSecretStore`, `MockPubSub`, `MockHeartbeatController`.
-- Flag: integration/e2e tests without `@pytest.mark.integration`/`e2e`; unit tests carrying them.
+- Flag: a test defining an `App` subclass or `@task` methods without `clean_app_registry` / `clean_task_registry` (registry leak).
+- Flag: unit tests hitting real network/object store/Temporal/DB/cloud; use the `application_sdk.testing` fakes (`MockStateStore`, `MockSecretStore`, `MockCredentialStore`, `MockPubSub`, `MockBinding`, `HttpFakeSource`, `app_context`); `MockHeartbeatController` for heartbeat-enabled tasks.
+- Flag: a test that needs a service but carries no marker (`integration`, `e2e`, `s3_integration`, `azure_integration`, `gcs_integration`, `storage_emulator`, `load`), or a mistyped one (markers aren't strict, so it silently never runs); unit tests carrying them.
+- Flag: a preflight verdict asserted by patching a logger instead of `capture_preflight_outcomes`; a fixture standing in for a generated artifact not built from a real one (cite the source).
 - Flag: writes outside `tmp_path`, env changes without `monkeypatch`, module-level mutable state, process-wide patches (e.g. `asyncio.sleep`).
 - Flag: asserts that cannot fail (`assert result`, `is not None`, `len(x) > 0`, none); asserting private attrs over behaviour.
-- Flag: `skip`/`skipif` without a specific `reason=`; `asyncio.run()` in sync tests.
+- Flag: `skip`/`skipif` without a specific `reason=`; `asyncio.run()` in sync tests; redundant `@pytest.mark.asyncio` (`asyncio_mode = "auto"`).
 - Flag: contract changes without round-trip/old-payload tests; real creds or customer values in fixtures.
-- Don't flag: `@pytest.mark.asyncio`, coverage %.
 - Severity: critical for an untested new public API; high if a test cannot run or fail, leaks registry state, or hits real services; medium for missing cases; low otherwise.

@@ -1,10 +1,12 @@
-# conformance-rules: Conformance suite and remediation
-- Flag: a rule added/changed under `suite/rules/` or `suite/checks/` without its paired `remediation/**` change (check `read_diff`), or the reverse.
-- Flag: a new rule with no behaviour test (`tests/test_*_conformance.py`) covering a positive and a negative case, or not asserted in `tests/test_catalog.py` (ID, series, scope).
-- Flag: wrong series (E error, L logging, C CI, D dependency, P prescriptions, O optimisations, I dockerfile; S/B/T/A reserved), duplicate IDs, wrong scope (`sdk`/`app`/`both`).
-- Flag: a new BLOCK-tier rule that would fail the dogfooded run on `application_sdk/**` without fixing violations or staging at WARN.
-- Flag: false positives/negatives on forms real SDK or connector code uses. Judge the strategy first; fixes are "pin with a test + docstring note", never data-flow or name-binding resolution.
-- Flag: rules needing the resolved env (D series) placed where uvx-isolated legs run them as no-ops.
+# conformance-rules: Conformance suite (packages/conformance)
+- Layout: rules in `packages/conformance/conformance/suite/rules/`, checks in `packages/conformance/conformance/suite/checks/`, remediation guidance in `packages/conformance/conformance/programs/areas/<area>.prose.md` (+ `programs/functions/`). There is no top-level `remediation/` to pair with; never ask for one.
+- Flag: a new/changed app- or both-scoped rule with `autofixable=True` and no `**<ID> Name**` bullet in its area's `.prose.md`, or a new D rule with no prescription there (checked by `packages/conformance/tests/test_remediation_programs.py`).
+- Flag: a new rule with no behaviour test (a positive and a negative case in `packages/conformance/tests/test_<area>.py`) or not added to its series' set in `packages/conformance/tests/test_catalog.py`.
+- Flag: wrong series. In use: E error, L logging, C CI, D dependency, P prescriptions, O optimisations, I dockerfile, B deprecation, F preflight, K contract-toolkit, S security, T tests, G; wrong scope (`sdk`/`app`/`both`).
+- Flag: a BLOCK rationale that doesn't state the customer failure it prevents, or that argues for WARN; a new BLOCK rule that would fail the SDK's own run (`.github/workflows/sdk-gate.yaml`) without fixing or excluding the violations.
+- Flag: app/both rules whose `canonical_reference` isn't openapi, mysql or metabase (`docs/agents/canonical-apps.md`).
+- Flag: false positives/negatives on forms real SDK or connector code uses; pin the case with a test.
+- Flag: rule docs not regenerated (`conformance gen-rule-docs` → `packages/conformance/conformance/docs/rules/`); nothing in CI checks them.
 - Flag: SARIF messages/evidence holding secret values; fixtures with real secrets or customer names.
-- Flag: `autofixable` contradicting whether the fix is mechanical; remediation gates that can pass vacuously.
-- Severity: critical if a secret reaches SARIF; high if the rule misfires on common code, breaks the dogfood gate, or ships unpaired; medium for missing tests/catalog asserts; low otherwise.
+- Don't flag (tests enforce): duplicate or malformed IDs, `autofixable` vs prose contradictions.
+- Severity: critical if a secret reaches SARIF; high if a rule misfires on common code or breaks the SDK gate; medium for missing tests/prose/docs; low otherwise.
