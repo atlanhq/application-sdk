@@ -10,13 +10,17 @@ lens reviews only when asked — a push never spends money on its own:
   reviews only commits since the last reviewed head). `/lens force` also
   bypasses the unchanged-head and round-cap admission rules and redoes the
   approach check (the $ cap still holds — force cannot buy more budget).
+- `/lens dismiss F-1a2b3c [F-…] <reason>`: close findings the team decided not to
+  fix, with the reason on record. No model call. A blocking (critical/high) finding
+  cannot be dismissed by the PR's own author: someone else has to agree.
 - `workflow_dispatch` with a PR number: run (maintainers, from the Actions tab).
 - Anything else, including every `pull_request*` event: do not run.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Any
 
 TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
@@ -29,6 +33,16 @@ class Decision:
     force: bool = False
     reason: str = ""
     comment_id: int = 0  # the `/lens` comment to react on (0 = none, e.g. a dispatch)
+    dismiss: list[str] = field(
+        default_factory=list
+    )  # finding ids to close, for `/lens dismiss`
+    dismiss_reason: str = ""
+    actor: str = ""  # who asked
+    pr_author: str = ""
+
+
+_FINDING_ID = re.compile(r"^F-[0-9a-f]{6}$")
+DISMISS_USAGE = "usage: `/lens dismiss F-1a2b3c [F-…] <reason>` — at least one finding id and a reason"
 
 
 def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
@@ -55,6 +69,19 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
         if (comment.get("user") or {}).get("type") == "Bot":
             return Decision(
                 False, int(issue["number"]), reason="bots cannot trigger lens"
+            )
+        if len(words) > 1 and words[1].lower() == "dismiss":
+            ids = [w for w in words[2:] if _FINDING_ID.match(w)]
+            reason = " ".join(w for w in words[2:] if not _FINDING_ID.match(w)).strip()
+            return Decision(
+                bool(ids and reason),
+                int(issue["number"]),
+                reason="" if ids and reason else DISMISS_USAGE,
+                comment_id=int(comment.get("id") or 0),
+                dismiss=ids,
+                dismiss_reason=reason[:300],
+                actor=str((comment.get("user") or {}).get("login") or ""),
+                pr_author=str((issue.get("user") or {}).get("login") or ""),
             )
         force = len(words) > 1 and words[1].lower() == "force"
         return Decision(
