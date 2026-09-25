@@ -330,13 +330,19 @@ class Client:
         Uses only the gateway's metadata endpoints — no completion, no tokens.
         A check the gateway cannot answer (older LiteLLM, no permission) is
         skipped rather than failed: preflight exists to avoid wasted requests,
-        not to add a new way for lens to break."""
+        not to add a new way for lens to break.
+
+        Only a 401 means the key itself is bad. A 403 on a METADATA route means
+        this key may not call that route (LiteLLM keys can be scoped to the
+        completion routes) — observed on the first live run, with a key that
+        does serve completions. That check is skipped; if completions are
+        forbidden too, the first real call fails fast with the gateway's text."""
         try:
             status, text = self._meta("/v1/models")
         except (LLMError, TimeoutError, urllib.error.URLError, OSError) as e:
             return f"gateway unreachable: {e}"
-        if status in (401, 403):
-            return f"the LiteLLM key was rejected (HTTP {status})"
+        if status == 401:
+            return f"the LiteLLM key was rejected (HTTP 401: {text[:160]})"
         if status == 200:
             try:
                 ids = {m.get("id") for m in json.loads(text).get("data", [])}

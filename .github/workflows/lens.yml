@@ -1,6 +1,7 @@
 name: lens
 # lens/lock.py finds concurrent reviews of the same PR by this name — keep them in sync.
-run-name: lens #${{ github.event.issue.number || inputs.pr }}
+# Quoted: unquoted, YAML reads " #" as the start of a comment and the name is just "lens".
+run-name: "lens #${{ github.event.issue.number || inputs.pr }}"
 
 # lens — the fixed-cost PR reviewer (.github/scripts/lens, config in .github/lens).
 #

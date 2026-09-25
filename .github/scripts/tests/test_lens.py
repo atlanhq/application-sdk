@@ -1307,7 +1307,8 @@ def test_two_simultaneous_requests_resolve_to_exactly_one_review():
 
 def test_workflow_names_runs_for_the_guard_and_has_no_queueing_concurrency():
     wf = (Path(__file__).resolve().parents[2] / "workflows" / "lens.yml").read_text()
-    assert "run-name: lens #${{ github.event.issue.number || inputs.pr }}" in wf
+    # Quoted, or YAML truncates the name at " #" to plain "lens" (seen on the first live run).
+    assert 'run-name: "lens #${{ github.event.issue.number || inputs.pr }}"' in wf
     assert run_name(42) == "lens #42"
     assert (
         "\nconcurrency:" not in wf
@@ -1624,6 +1625,9 @@ def _meta(
         (_meta(), None),
         (_meta(models=("other-model",)), "not available"),
         (_meta(models_status=401), "rejected"),
+        # A key scoped to the completion routes gets 403 on metadata routes: not a bad key
+        # (the first live run). Skip the check; a real refusal fails the first call fast.
+        (_meta(models_status=403), None),
         (_meta(spend=299.99), "budget left"),
         (
             _meta(key_status=404),
